@@ -432,6 +432,14 @@ fn placed_tree_with_life(life: f32) -> crate::playercolor_host::PlacedDestructab
     }
 }
 
+fn placed_tree_at(x: f32, y: f32) -> crate::playercolor_host::PlacedDestructable {
+    let mut tree = placed_tree();
+    tree.creation.x = x;
+    tree.creation.y = y;
+    tree.source.position = [x, y, 0.0];
+    tree
+}
+
 fn open_harvest() -> (Vm, HandleId) {
     open_harvest_with(
         harvest_tables(),
@@ -1002,6 +1010,56 @@ fn issue_id(vm: &mut Vm, worker: HandleId, order: i32) -> Value {
         .unwrap()
 }
 
+fn move_to(vm: &mut Vm, unit: HandleId, x: f32, y: f32) -> Value {
+    vm.host()
+        .inner
+        .native(
+            "IssuePointOrderById",
+            &[
+                Value::Handle(unit),
+                Value::Int(1631),
+                Value::Real(x),
+                Value::Real(y),
+            ],
+        )
+        .unwrap()
+}
+
+fn animation_name(vm: &mut Vm, unit: HandleId) -> String {
+    let animation = vm
+        .host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap();
+    animation.model.sequences[animation.sequence.unwrap()]
+        .name
+        .clone()
+}
+
+#[derive(Debug, PartialEq)]
+struct HarvestState {
+    route: Option<Vec<[f32; 2]>>,
+    animation: String,
+    order: i32,
+    cargo: Option<f32>,
+}
+
+fn harvest_state(vm: &mut Vm, unit: HandleId) -> HarvestState {
+    let route = vm.host().inner.activity_motion_path(unit);
+    let animation = animation_name(vm, unit);
+    let order = current_order(vm, unit);
+    let cargo = vm.host().inner.harvest_cargo(unit);
+    HarvestState {
+        route,
+        animation,
+        order,
+        cargo,
+    }
+}
+
 fn advance(
     vm: &mut Vm,
     now: f64,
@@ -1072,6 +1130,96 @@ fn a_capacity_hit_retries_the_depot_route_without_chopping_again() {
         player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
         gathered + 18
     );
+}
+
+#[test]
+fn a_capacity_hit_keeps_the_depot_walk_animation_on_a_loaded_departure() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_range("9", "18", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(52.0, 32.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 46.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 100.0, 96.0);
+    start_harvest(&mut vm, worker);
+
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+    assert_eq!(current_order(&mut vm, worker), 903);
+    assert_eq!(animation_name(&mut vm, worker), "Walk");
+    let route = vm.host().inner.activity_motion_path(worker).unwrap();
+    assert!(!route.is_empty());
+}
+
+#[test]
+fn an_unreachable_tree_refusal_keeps_an_existing_move_route() {
+    let (mut vm, _) = open_harvest_with(
+        harvest_tables_for_range("9", "20", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(52.0, 32.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    assert_eq!(move_to(&mut vm, worker, 10.0, 10.0), Value::Bool(true));
+    {
+        let h = &mut vm.host().inner;
+        for at in [[26.0, 32.0], [42.0, 32.0], [32.0, 26.0], [32.0, 42.0]] {
+            position_create(h, at[0], at[1]).unwrap();
+        }
+    }
+    let before = harvest_state(&mut vm, worker);
+
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(worker), Value::Int(900)]
+            )
+            .is_err()
+    );
+    assert_eq!(harvest_state(&mut vm, worker), before);
+}
+
+#[test]
+fn a_refused_manual_return_keeps_partial_cargo_and_the_existing_move_route() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_range("9", "18", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(36.0, 32.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 100.0, 96.0);
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+
+    assert_eq!(move_to(&mut vm, worker, 10.0, 10.0), Value::Bool(true));
+    {
+        let h = &mut vm.host().inner;
+        for at in [[26.0, 32.0], [42.0, 32.0], [32.0, 26.0], [32.0, 42.0]] {
+            position_create(h, at[0], at[1]).unwrap();
+        }
+    }
+    let before = harvest_state(&mut vm, worker);
+    assert_eq!(before.cargo, Some(18.0));
+
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(worker), Value::Int(901)]
+            )
+            .is_err()
+    );
+    assert_eq!(harvest_state(&mut vm, worker), before);
 }
 
 #[test]
