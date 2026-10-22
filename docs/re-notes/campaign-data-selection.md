@@ -59,11 +59,15 @@ Map SHA-256:
 All 16 records arrived. `VersionGet` reported RoC; grunt maximum life became
 700 (the zero-selector RoC control had 680). Uther, peasant and footman collision
 sizes stayed 32, 16 and 31. The changed life agrees with the explicit-melee
-branch above. The unchanged collisions contradict the earlier proposed
-collision-zero fingerprint for the melee dataset: a zero in a compared table
-is not proof that the native collision getter returns zero. That field's actual
-consumer/merge semantics remain unqualified. Do not use it to reject this run
-or to infer that namespace mounting did not occur.
+branch above. The earlier proposed collision-zero fingerprint was a source
+inspection error, not evidence of different native field semantics. A fresh
+extraction from the selected `War3.mpq`, read with the production `pcx-slq`
+parser, gives 32/16/31 for those units in `Custom_V0`, `Custom_V1` and `Melee_V0`.
+Collision therefore does not distinguish these datasets. The extracted melee
+table's SHA-256 is
+`9e793e3c0a121c2d8a9fdad1232da93ac537468077ef5ee4ed162ae2e12b4dce`;
+the parser helper, cells and remaining source hashes stay in ignored
+`.scratch/collision-source-probe`.
 
 The chapter card was inspected before one Space input; the owned container was
 stopped after collection. Receipts are retained in ignored

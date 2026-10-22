@@ -123,10 +123,13 @@ Map SHA-256:
 All 15 checkpoints arrived. At game time 5.000, collision sizes were 32 for
 Uther, 16 for a peasant, 31 for a footman and 32 for a grunt; the grunt's maximum
 life was 700. Human02's grunt override changes food, not life. Among the three
-compared prefixed tables this agrees with `Custom_V1`: `Custom_V0` has grunt
-life 680, while `Melee_V0` has zero for those collision cells. This fingerprint
-does not establish the native selection algorithm or a rule mapping editions
-to namespaces. The unit/ability files may also have distinct selection rules.
+compared prefixed tables this agrees with both `Custom_V1` and `Melee_V0`:
+`Custom_V0` has grunt life 680. A later production-parser audit corrected the
+earlier claim of zero collision cells in `Melee_V0`; all three tables carry the
+same sampled collisions. This fingerprint does not establish the native
+selection algorithm or a rule mapping editions to namespaces. The unit/ability
+files may also have distinct selection rules; the native selector trace and
+corrected source audit are in `campaign-data-selection.md`.
 
 Edition qualification is also open: these reference invocations supplied
 `-loadfile` without an explicit engine-edition switch or a recorded `VersionGet`
