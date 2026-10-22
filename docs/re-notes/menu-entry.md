@@ -35,8 +35,12 @@ chapter caller and none is claimed here.
   `0.013`, `JUSTIFYCENTER`/`JUSTIFYMIDDLE`, `FIXEDSIZE`), resolved through the
   skin table and loaded from the install. `CampaignButtonTemplate` is a bare
   `TEXTBUTTON` with no `ButtonText` child, so there is no per-row authored text
-  frame; the shared button-label profile is the source-bound choice, not the
-  `MissionNameHeader` screen header. Label **width** is derived from the authored
+  frame; no explicit class default/inheritance binding between
+  `CampaignButtonTemplate`'s label and `StandardButtonTextTemplate` was found, so
+  choosing the shared button-label profile is a **recreation/inference** (its
+  style bytes are sourced and authored, but the relationship is not established
+  merely by template existence); the `MissionNameHeader` screen header was not
+  used as a fallback. Label **width** is derived from the authored
   `CampaignButtonTemplate` `Width` minus the authored
   `StandardCampaignButtonBackdropTemplate` `BackdropBackgroundInsets`, and the
   label honours the authored `FontJustificationH`/`V` and wraps within that width
