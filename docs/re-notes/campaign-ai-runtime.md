@@ -36,6 +36,22 @@ while using the session's existing world, handles and deterministic clock.
 The existing script VM is the execution path to reuse. Shared-world ownership,
 AI-native contracts, callback invocation and scheduling remain open.
 
+## Native loader path
+
+In the reviewed image, the `StartCampaignAI` registration at `0x4a0fb7`
+selects handler `0x4ac200`. Its dispatch reaches `0xac34d0`, which loads the
+common JASS prelude, common AI prelude and requested program through
+`0xac02d0`. The prelude operands reference the image's `common.j` and
+`common.ai` strings. The file helper first tries the supplied path through
+`0x4593b0`; if that load fails, it prepends the image's `Scripts\` token
+and retries. The runtime loader should derive those tokens from the admitted
+image rather than introduce copied prelude names or fallback content.
+
+This is native-code evidence for the path sequence, not a qualification of
+every load failure or archive precedence. The recreation's pinned resolver
+must still refuse a present but unreadable winning member. Local disassembly
+and operand receipts are retained under `.scratch/campaign-ai/native-start/`.
+
 ## Original-client scheduling probe (2026-10-23)
 
 The reviewed client above ran a diagnostic Human02 map with `-classic`;
@@ -60,8 +76,8 @@ player resource state. Initial execution reaches the first write before
 `StartCampaignAI` returns; deferring all initial execution until a later timer
 boundary would contradict this case. The samples bound the second writes to
 after 1.125 and by 1.563; they do not establish exact wake times or instruction
-scheduling between observations. Repeated starts, callbacks between programs,
-full campaign AI and native Windows behavior remain unqualified.
+scheduling between observations. Callbacks between programs, full campaign AI
+and native Windows behavior remain unqualified.
 
 The ignored local receipt is
 `.scratch/campaign-ai-scheduling-probe-r2/result.json`, with all 12 raw markers
@@ -72,6 +88,30 @@ its map-script SHA-256 is
 Four synthetic collector tests passed. An initial collection before all markers
 arrived refused; the completed collection qualified all 12. The owned client
 was stopped and its run retained.
+
+### A repeated start while the first program sleeps
+
+A second diagnostic used the same player for both start calls. Program A
+wrote 17, requested a 0.25-second sleep and later wrote 34. Program B would
+write 29, request a 1-second sleep and later write 58. The map observed 17
+immediately after each start call; A later reached 34 and retained that value
+through the final sample. It then started the identical B program on a fresh
+computer player, which reached 29 and then 58. This fresh-player control
+establishes that B could load and execute in the same run.
+
+All 12 markers reported RoC. This supports retaining the initial program and
+its continuation when a different program is requested for the same player
+while it sleeps. It does not qualify repeated starts after `main` returns,
+after loading fails, or through other AI start natives.
+
+The controlled receipt and raw markers remain under the ignored
+`.scratch/campaign-ai-repeat-probe-r2/`. Its map SHA-256 is
+`35b2d3df67340750b19ef26e8556bd8ad481c905039402e12ae694267d767d2b`;
+its script SHA-256 is
+`f1e9039d7998f2198084e750faa632746a702c5e045232f82b0a35a02f19e0ba`.
+Three synthetic collector/stimulus tests passed. The earlier repeat run without
+the fresh-player control remains preserved separately; the controlled run is
+the evidence for the conclusion above. Both owned client runs were stopped.
 
 ## Relationship to the earlier Human02 probes
 
