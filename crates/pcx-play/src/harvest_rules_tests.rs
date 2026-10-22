@@ -321,3 +321,100 @@ fn ambiguous_tree_weapon_slots_are_refused() {
     let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
     assert!(matches!(err, HarvestError::Ambiguous { .. }), "{err:?}");
 }
+
+fn selected_field(
+    fourcc: [u8; 4],
+    slk: SlkId,
+    column: &str,
+    text: &str,
+) -> pcx_sim::world::ObjectField {
+    pcx_sim::world::ObjectField {
+        metadata: Some(pcx_objects::editor::FieldDef {
+            fourcc,
+            from: slk,
+            field: column.into(),
+            slk: format!("{slk:?}"),
+            index: -1,
+            declared: "token".into(),
+            kind: pcx_objects::editor::FieldKind::Token,
+            category: String::new(),
+            source: pcx_objects::editor::FieldSource::Column {
+                slk,
+                column: column.into(),
+            },
+            measured: true,
+        }),
+        value: Ok(pcx_sim::world::FieldValue::Cell(text.into())),
+    }
+}
+
+fn selected_unit(rawcode: [u8; 4], fields: &[([u8; 4], SlkId, &str, &str)]) -> Definition {
+    let mut map = std::collections::BTreeMap::new();
+    for (fourcc, slk, column, text) in fields {
+        map.insert(*fourcc, selected_field(*fourcc, *slk, column, text));
+    }
+    Definition {
+        rawcode,
+        base_rawcode: String::from_utf8_lossy(&rawcode).into_owned(),
+        kind: pcx_objects::editor::ObjectKind::Unit,
+        fields: map,
+        modifications: Vec::new(),
+    }
+}
+
+#[test]
+fn definition_rules_use_the_selected_unit_fields() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"ua1w", SlkId::UnitWeapons, "weapsOn", "2"),
+            (*b"ua1t", SlkId::UnitWeapons, "targs1", "ground"),
+            (*b"ua1c", SlkId::UnitWeapons, "cool1", "2"),
+            (*b"ua1d", SlkId::UnitWeapons, "dmgpt1", "0.433"),
+            (*b"ua1b", SlkId::UnitWeapons, "backSw1", "0.567"),
+            (*b"ua1r", SlkId::UnitWeapons, "rangeN1", "90"),
+            (*b"ua2t", SlkId::UnitWeapons, "targs2", "tree"),
+            (*b"ua2c", SlkId::UnitWeapons, "cool2", "1.7"),
+            (*b"ua2d", SlkId::UnitWeapons, "dmgpt2", "0.3"),
+            (*b"ua2b", SlkId::UnitWeapons, "backSw2", "0.6"),
+            (*b"ua2r", SlkId::UnitWeapons, "rangeN2", "70"),
+        ],
+    );
+    let rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    assert_eq!(rules.damage, 7.0);
+    assert_eq!(rules.lumber_capacity, 25);
+    let weapon = rules.work_weapon.expect("tree weapon");
+    assert_eq!(weapon.slot, 2);
+    assert_eq!(weapon.range, 70.0);
+    assert_eq!(weapon.cool, 1.7);
+}
+
+#[test]
+fn definition_without_ability_list_is_a_contextual_refusal() {
+    let tables = stock_tables();
+    let definition = selected_unit(*b"hpea", &[]);
+    let error = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .expect_err("missing abilList");
+    match error {
+        HarvestError::Missing { column, .. } => assert_eq!(column, "abilList"),
+        other => panic!("expected missing, got {other:?}"),
+    }
+}
+
+#[test]
+fn definition_without_ahar_is_absent() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hnon",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "-")],
+    );
+    assert!(
+        HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+            .unwrap()
+            .is_none()
+    );
+}

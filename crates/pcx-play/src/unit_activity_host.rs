@@ -319,6 +319,35 @@ impl ObjectHost {
         self.unit_activity.as_ref().map(|state| state.rules.stop)
     }
 
+    pub(super) fn activity_movement_order(&self) -> Option<i32> {
+        self.unit_activity
+            .as_ref()
+            .map(|state| state.rules.movement)
+    }
+
+    pub(super) fn activity_moving(&self, unit: HandleId) -> Result<bool, Error> {
+        Ok(self
+            .executed_unit(unit)?
+            .activity
+            .as_ref()
+            .is_some_and(UnitActivity::moving))
+    }
+
+    pub(super) fn activity_waypoints_empty(&self, unit: HandleId) -> Result<bool, Error> {
+        let (path, next) = self
+            .executed_unit(unit)?
+            .activity
+            .as_ref()
+            .ok_or_else(|| {
+                self.inner.error(
+                    crate::playercolor_host::harvest_runtime::ORDER,
+                    Failure::UnitActivity("activity missing".into()),
+                )
+            })?
+            .waypoints();
+        Ok(next >= path.len())
+    }
+
     pub fn admit_unit_activity(&mut self, rules: Rules, route_work: usize) -> Result<(), Error> {
         let fail = |detail: &str| {
             self.inner
@@ -1019,6 +1048,7 @@ impl ObjectHost {
             .expect("activity")
             .follow_positions = followed;
         let result = result.and_then(|moved| {
+            self.advance_harvest(now, work)?;
             let spans = sink.as_ref().map(|s| &s.spans[s.base..]).unwrap_or(&[]);
             self.advance_unit_regen_motion(now, Some((spans, &starts)), work)?;
             self.advance_combat()?;
@@ -1154,6 +1184,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);

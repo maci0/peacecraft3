@@ -10,8 +10,9 @@
 //! fourcc/code cells; the `-` sentinel means absence, never a lookup.
 //! Missing harvest capability is reported as `None`, not as numbers from an
 //! absent `Ahar` record.
-use pcx_objects::editor::SlkId;
 use pcx_objects::editor::defaults::{DefaultTables, Family};
+use pcx_objects::editor::{FieldSource, Overlay, SlkId};
+use pcx_sim::world::{Definition, FieldValue};
 
 const AHAR: &str = "Ahar";
 const ARTN: &str = "Artn";
@@ -269,23 +270,226 @@ fn unit_abil_codes(tables: &DefaultTables, rawcode: &str) -> Result<Vec<String>,
     Ok(split_csv(&list).map(str::to_owned).collect())
 }
 
+/// Ability cell after map overrides, refusing indexed or non-scalar edits.
+///
+/// The selected-object definition has already folded the map overlay into the
+/// unit row. Ability rows are shared, so the ability overlay is applied here
+/// with the same last-write-wins order as `ability_profile`.
+fn overlay_ability_cell(
+    tables: &DefaultTables,
+    abilities: &Overlay,
+    alias: &str,
+    column: &str,
+) -> Result<String, HarvestError> {
+    let alias_bytes = fourcc_text(alias)?;
+    let (base, modifications) = crate::ability_profile::base(tables, abilities, alias_bytes)
+        .map_err(|detail| HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: column.to_string(),
+            detail,
+        })?;
+    let fields: Vec<_> = tables
+        .editor()
+        .fields()
+        .iter()
+        .filter(|field| field.from == SlkId::AbilityMetaData)
+        .filter(|field| {
+            matches!(
+                &field.source,
+                FieldSource::Column { slk: SlkId::AbilityData, column: name } if name == column
+            )
+        })
+        .collect();
+    if fields.len() > 1 {
+        return Err(HarvestError::Malformed {
+            rawcode: alias.to_string(),
+            column: column.to_string(),
+            detail: "ambiguous ability metadata field".into(),
+        });
+    }
+    if let Some(field) = fields.first()
+        && let Some(entry) = modifications
+            .iter()
+            .rev()
+            .find(|entry| entry.field == field.fourcc)
+    {
+        if entry.selectors.is_some_and(|selectors| selectors != [0, 0]) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: "indexed ability override is not a scalar harvest input".into(),
+            });
+        }
+        return Ok(render_value(&entry.value).trim().to_owned());
+    }
+    let object = ability_object(tables, base)?;
+    let cell = object
+        .cell(SlkId::AbilityData, column)
+        .map_err(|underlying| HarvestError::Missing {
+            rawcode: alias.to_string(),
+            column: column.to_string(),
+            detail: underlying.to_string(),
+        })?;
+    Ok(cell.text.trim().to_owned())
+}
+
+fn render_value(value: &pcx_objects::Value) -> String {
+    match value {
+        pcx_objects::Value::Str(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        pcx_objects::Value::Int(number) => number.to_string(),
+        pcx_objects::Value::Real(number) | pcx_objects::Value::Unreal(number) => number.to_string(),
+    }
+}
+
+fn fourcc_text(text: &str) -> Result<[u8; 4], HarvestError> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 4 {
+        return Err(HarvestError::Malformed {
+            rawcode: text.to_string(),
+            column: "rawcode".into(),
+            detail: "rawcode must be four ascii bytes".into(),
+        });
+    }
+    let mut code = [0; 4];
+    code.copy_from_slice(bytes);
+    Ok(code)
+}
+
+fn definition_text(
+    definition: &Definition,
+    slk: SlkId,
+    column: &str,
+) -> Result<String, HarvestError> {
+    let fields: Vec<_> = definition
+        .fields
+        .values()
+        .filter(|field| {
+            field.metadata.as_ref().is_some_and(|metadata| {
+                matches!(
+                    &metadata.source,
+                    FieldSource::Column { slk: field_slk, column: name }
+                        if *field_slk == slk && name == column
+                )
+            })
+        })
+        .collect();
+    if fields.is_empty() {
+        return Err(HarvestError::Missing {
+            rawcode: fourcc(definition.rawcode)?,
+            column: column.into(),
+            detail: format!("no {slk:?} {column} field in selected definition"),
+        });
+    }
+    if fields.len() > 1 {
+        return Err(HarvestError::Malformed {
+            rawcode: fourcc(definition.rawcode)?,
+            column: column.into(),
+            detail: "ambiguous selected definition field".into(),
+        });
+    }
+    match &fields[0].value {
+        Ok(FieldValue::Cell(text)) => Ok(text.trim().to_owned()),
+        Ok(FieldValue::Override(value)) => Ok(render_value(value).trim().to_owned()),
+        Err(problem) => Err(HarvestError::Missing {
+            rawcode: fourcc(definition.rawcode)?,
+            column: column.into(),
+            detail: format!("selected field unavailable: {problem:?}"),
+        }),
+    }
+}
+
+fn definition_abil_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
+    let list = definition_text(definition, SlkId::UnitAbilities, "abilList")?;
+    Ok(split_csv(&list).map(str::to_owned).collect())
+}
+
+fn definition_work_weapon(definition: &Definition) -> Result<Option<WorkWeapon>, HarvestError> {
+    let raw = fourcc(definition.rawcode)?;
+    let weaps_on = match definition_text(definition, SlkId::UnitWeapons, "weapsOn") {
+        Ok(text) => text,
+        Err(HarvestError::Missing { .. }) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mask = parse_i32(&raw, &weaps_on, "weapsOn")?;
+    if mask < 0 || mask & !0x3 != 0 {
+        return Err(HarvestError::Malformed {
+            rawcode: raw,
+            column: "weapsOn".into(),
+            detail: "weapon-slot mask must be a nonnegative 2-bit mask".into(),
+        });
+    }
+    let mut found: Option<WorkWeapon> = None;
+    for slot in [1u32, 2] {
+        if mask & (1 << (slot - 1)) == 0 {
+            continue;
+        }
+        let targs = match definition_text(definition, SlkId::UnitWeapons, &format!("targs{slot}")) {
+            Ok(text) => text,
+            Err(HarvestError::Missing { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        if !split_csv(&targs).any(|target| target == "tree") {
+            continue;
+        }
+        if found.is_some() {
+            return Err(HarvestError::Ambiguous {
+                rawcode: raw,
+                column: format!("targs{slot}"),
+                detail: "multiple weapon slots target trees".into(),
+            });
+        }
+        let cool = parse_f32(
+            &raw,
+            &definition_text(definition, SlkId::UnitWeapons, &format!("cool{slot}"))?,
+            &format!("cool{slot}"),
+        )?;
+        let damage_point = parse_f32(
+            &raw,
+            &definition_text(definition, SlkId::UnitWeapons, &format!("dmgpt{slot}"))?,
+            &format!("dmgpt{slot}"),
+        )?;
+        let backswing = parse_f32(
+            &raw,
+            &definition_text(definition, SlkId::UnitWeapons, &format!("backSw{slot}"))?,
+            &format!("backSw{slot}"),
+        )?;
+        let range = parse_f32(
+            &raw,
+            &definition_text(definition, SlkId::UnitWeapons, &format!("rangeN{slot}"))?,
+            &format!("rangeN{slot}"),
+        )?;
+        found = Some(WorkWeapon {
+            slot,
+            cool,
+            damage_point,
+            backswing,
+            range,
+        });
+    }
+    Ok(found)
+}
+
 fn resolve_ability_code(
     tables: &DefaultTables,
+    abilities: Option<&Overlay>,
     alias: &str,
 ) -> Result<Option<String>, HarvestError> {
     if alias == SENTINEL {
         return Ok(None);
     }
-    let code = ability_object(tables, alias)?
-        .cell(SlkId::AbilityData, "code")
-        .map_err(|underlying| HarvestError::Missing {
-            rawcode: alias.to_string(),
-            column: "code".to_string(),
-            detail: underlying.to_string(),
-        })?
-        .text
-        .trim()
-        .to_owned();
+    let code = match abilities {
+        Some(overlay) => overlay_ability_cell(tables, overlay, alias, "code")?,
+        None => ability_object(tables, alias)?
+            .cell(SlkId::AbilityData, "code")
+            .map_err(|underlying| HarvestError::Missing {
+                rawcode: alias.to_string(),
+                column: "code".to_string(),
+                detail: underlying.to_string(),
+            })?
+            .text
+            .trim()
+            .to_owned(),
+    };
     if code == SENTINEL {
         return Ok(None);
     }
@@ -302,11 +506,12 @@ fn resolve_ability_code(
 /// The sole alias whose resolved code equals `Ahar`, if any.
 fn find_ahar_alias(
     tables: &DefaultTables,
+    abilities: Option<&Overlay>,
     aliases: &[String],
 ) -> Result<Option<String>, HarvestError> {
     let mut found: Option<String> = None;
     for alias in aliases {
-        let Some(code) = resolve_ability_code(tables, alias)? else {
+        let Some(code) = resolve_ability_code(tables, abilities, alias)? else {
             continue;
         };
         if code != AHAR {
@@ -432,40 +637,45 @@ impl HarvestRules {
     ) -> Result<Option<Self>, HarvestError> {
         let raw = fourcc(worker_code)?;
         let aliases = unit_abil_codes(tables, &raw)?;
-        let Some(ahar_alias) = find_ahar_alias(tables, &aliases)? else {
+        let work_weapon = work_weapon_from_tables(tables, &raw)?;
+        Self::from_alias_list(tables, None, &raw, &aliases, work_weapon)
+    }
+
+    /// Rules from the map-selected unit definition, with ability overrides.
+    pub fn from_definition(
+        tables: &DefaultTables,
+        abilities: &Overlay,
+        definition: &Definition,
+    ) -> Result<Option<Self>, HarvestError> {
+        let raw = fourcc(definition.rawcode)?;
+        let aliases = definition_abil_codes(definition)?;
+        let work_weapon = definition_work_weapon(definition)?;
+        Self::from_alias_list(tables, Some(abilities), &raw, &aliases, work_weapon)
+    }
+
+    fn from_alias_list(
+        tables: &DefaultTables,
+        abilities: Option<&Overlay>,
+        raw: &str,
+        aliases: &[String],
+        work_weapon: Option<WorkWeapon>,
+    ) -> Result<Option<Self>, HarvestError> {
+        let Some(ahar_alias) = find_ahar_alias(tables, abilities, aliases)? else {
             return Ok(None);
         };
-        let damage = parse_f32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "DataA", 1)?,
-            "DataA1",
-        )?;
-        let lumber_capacity = parse_nonneg_i32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "DataB", 1)?,
-            "DataB1",
-        )?;
-        let gold_capacity = parse_nonneg_i32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "DataC", 1)?,
-            "DataC1",
-        )?;
-        let range = parse_f32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "Rng", 1)?,
-            "Rng1",
-        )?;
-        let search_radius = parse_f32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "Area", 1)?,
-            "Area1",
-        )?;
-        let work_duration = parse_f32(
-            &ahar_alias,
-            &ability_level_cell(tables, &ahar_alias, "Dur", 1)?,
-            "Dur1",
-        )?;
-        let work_weapon = work_weapon_from_tables(tables, &raw)?;
+        let cell = |stem: &str| match abilities {
+            Some(overlay) => {
+                overlay_ability_cell(tables, overlay, &ahar_alias, &format!("{stem}1"))
+            }
+            None => ability_level_cell(tables, &ahar_alias, stem, 1),
+        };
+        let damage = parse_f32(&ahar_alias, &cell("DataA")?, "DataA1")?;
+        let lumber_capacity = parse_nonneg_i32(&ahar_alias, &cell("DataB")?, "DataB1")?;
+        let gold_capacity = parse_nonneg_i32(&ahar_alias, &cell("DataC")?, "DataC1")?;
+        let range = parse_f32(&ahar_alias, &cell("Rng")?, "Rng1")?;
+        let search_radius = parse_f32(&ahar_alias, &cell("Area")?, "Area1")?;
+        let work_duration = parse_f32(&ahar_alias, &cell("Dur")?, "Dur1")?;
+        let _ = raw;
         Ok(Some(Self {
             source: source_of(tables),
             ahar_alias,
@@ -512,25 +722,40 @@ impl DepotReturn {
         building_code: [u8; 4],
     ) -> Result<Self, HarvestError> {
         let raw = fourcc(building_code)?;
+        let aliases = unit_abil_codes(tables, &raw)?;
+        Self::from_alias_list(tables, None, &aliases)
+    }
+
+    /// Depot flags from the map-selected building definition.
+    pub fn from_definition(
+        tables: &DefaultTables,
+        abilities: &Overlay,
+        definition: &Definition,
+    ) -> Result<Self, HarvestError> {
+        let aliases = definition_abil_codes(definition)?;
+        Self::from_alias_list(tables, Some(abilities), &aliases)
+    }
+
+    fn from_alias_list(
+        tables: &DefaultTables,
+        abilities: Option<&Overlay>,
+        aliases: &[String],
+    ) -> Result<Self, HarvestError> {
         let mut accepts_gold = false;
         let mut accepts_lumber = false;
-        for alias in unit_abil_codes(tables, &raw)? {
-            let Some(code) = resolve_ability_code(tables, &alias)? else {
+        for alias in aliases {
+            let Some(code) = resolve_ability_code(tables, abilities, alias)? else {
                 continue;
             };
             if code != ARTN {
                 continue;
             }
-            let gold = parse_exact_bool(
-                &alias,
-                &ability_level_cell(tables, &alias, "DataA", 1)?,
-                "DataA1",
-            )?;
-            let lumber = parse_exact_bool(
-                &alias,
-                &ability_level_cell(tables, &alias, "DataB", 1)?,
-                "DataB1",
-            )?;
+            let cell = |stem: &str| match abilities {
+                Some(overlay) => overlay_ability_cell(tables, overlay, alias, &format!("{stem}1")),
+                None => ability_level_cell(tables, alias, stem, 1),
+            };
+            let gold = parse_exact_bool(alias, &cell("DataA")?, "DataA1")?;
+            let lumber = parse_exact_bool(alias, &cell("DataB")?, "DataB1")?;
             accepts_gold |= gold;
             accepts_lumber |= lumber;
         }
