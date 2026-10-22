@@ -169,6 +169,37 @@ seven-marker controls are retained in `direct-b/` and `direct-b-tft/` beside
 the transition receipts; their absent caches are expected and do not qualify
 cross-map restoration.
 
+### Qualified receiving-map override comparison
+
+A one-selector control then changed only the second W3A `Ilif` selector
+from 0 to 1. Level 1, integer amount 200, script and other members stayed
+unchanged. The fresh RoC client now observes the diagnostic 200-point bonus.
+Selected metadata has `data=1`; its SLK `index=-1` is not evidence for a zero
+W3A Data pointer. This qualifies the tested `Ilif` edit, rather than a
+general rule for every ability field or every malformed pointer.
+
+A new single-client A→B run uses the unchanged A above and the now-qualified
+B map SHA-256
+`2b35574dddf9cbcc49375d9716f228f12374f987ba38b476e56153cdcde25939`.
+Its script is byte-identical to the earlier B. Both seven-marker phases
+validate: A stores 350/1400 and restores 1400/1400; A saves successfully;
+B's independent fresh control changes 1250 to 1450; B finds the saved unit
+and restores it at life/max life 1450/1450 with the item held. Removing that
+item returns life/max life to 1250/1250.
+
+For this tested life case, native restoration therefore uses the receiving
+map's item bonus and returns full life. Keeping the old boosted maximum or
+saved current-life ratio contradicts these observations. A correction should
+derive the restored maximum from current source definitions before publishing
+the unit and its held items. The saved format should remain readable; no
+original W3V encoding is implied. Mana, other passive classes, edited base
+units, and native Windows remain outside this comparison.
+
+Exact selector mutation and fresh control are local under
+`.scratch/cross-map-cache-probe/selector1/`; the fully qualified pair and
+all fourteen raw markers are in `selector1-transition/`. Earlier unqualified
+results remain preserved independently.
+
 The reviewed image is the `3f2ed012…70eed` client identified above, launched
 with `-classic`; both maps report RoC. Revised A map SHA-256 is
 `7cd1280d2ec73e4629e239638452be7f3dc683a0735301f1dbb0ef74132e7248`;
