@@ -28,6 +28,8 @@ native IssuePointOrder takes unit u, string s, real x, real y returns boolean
 native IssuePointOrderById takes unit u, integer n, real x, real y returns boolean
 native GetUnitCurrentOrder takes unit u returns integer
 constant native GetUnitMoveSpeed takes unit u returns real
+constant native GetUnitDefaultMoveSpeed takes unit u returns real
+native SetUnitMoveSpeed takes unit u, real speed returns nothing
 constant native GetTriggerUnit takes nothing returns unit
 native TriggerRegisterUnitInRange takes trigger t, unit u, real r, boolexpr f returns event
 globals
@@ -70,6 +72,23 @@ pub(super) fn rules() -> (
     crate::unit_activity::Rules,
 ) {
     rules_with_patrol(2122)
+}
+
+fn move_speed_rules() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    let (registry, rules) = rules();
+    let rules = rules
+        .with_move_speed_profiles(
+            &[(
+                "synthetic game misc",
+                b"[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n",
+            )],
+            4096,
+        )
+        .unwrap();
+    (registry, rules)
 }
 
 fn rules_with_patrol(
@@ -132,6 +151,16 @@ fn host(route_work: usize) -> ObjectHost {
     host_fields(route_work, &[])
 }
 fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHost {
+    host_fields_with(route_work, fields, rules())
+}
+fn host_fields_with(
+    route_work: usize,
+    fields: &[([u8; 4], ObjectField)],
+    (registry, rules): (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+) -> ObjectHost {
     use crate::file_sounds::tests::{PROPERTY_DECLARATIONS, mixed_assets};
     let extra = format!(
         "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
@@ -157,7 +186,6 @@ type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
     let h = position_host_admitting(1000, 16, MAP, &extra, fields, sounds)
         .with_locations()
         .unwrap();
-    let (registry, rules) = rules();
     let mut h = h
         .with_order_registry(registry)
         .unwrap()
@@ -171,7 +199,22 @@ fn open() -> Vm {
     open_with_fields(&[])
 }
 fn open_with_fields(fields: &[([u8; 4], ObjectField)]) -> Vm {
-    let mut h = host_fields(65536, fields);
+    open_admitting(fields, rules())
+}
+fn open_move_speed() -> Vm {
+    open_admitting(
+        &profile_fields(FieldValue::Cell("10".into()), Some("foot"), Some(false)),
+        move_speed_rules(),
+    )
+}
+fn open_admitting(
+    fields: &[([u8; 4], ObjectField)],
+    (registry, rules): (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+) -> Vm {
+    let mut h = host_fields_with(65536, fields, (registry, rules));
     let model = crate::unit_model::tests::model();
     let mut bytes = model.bytes.to_vec();
     let at = bytes
@@ -471,6 +514,20 @@ fn stop_releases_hold_and_work_failure_preserves_unit_and_occupancy_state() {
 }
 
 fn profile(value: FieldValue, movement: Option<&str>) -> ObjectHost {
+    host_fields(65536, &profile_fields(value, movement, None))
+}
+fn profile_with_structure(value: FieldValue, movement: Option<&str>, building: bool) -> ObjectHost {
+    host_fields_with(
+        65536,
+        &profile_fields(value, movement, Some(building)),
+        move_speed_rules(),
+    )
+}
+fn profile_fields(
+    value: FieldValue,
+    movement: Option<&str>,
+    building: Option<bool>,
+) -> Vec<([u8; 4], ObjectField)> {
     let mut field = geometry_field(Ok(value));
     let meta = field.metadata.as_mut().unwrap();
     meta.fourcc = *b"S001";
@@ -495,8 +552,302 @@ fn profile(value: FieldValue, movement: Option<&str>) -> ObjectHost {
         };
         fields.push((*b"M001", field));
     }
-    host_fields(65536, &fields)
+    if let Some(building) = building {
+        let mut field = geometry_field(Ok(FieldValue::Cell(
+            if building { "1" } else { "0" }.into(),
+        )));
+        let meta = field.metadata.as_mut().unwrap();
+        meta.fourcc = *b"B001";
+        meta.field = "isbldg".into();
+        meta.kind = FieldKind::Bool;
+        meta.declared = "boolean".into();
+        meta.source = FieldSource::Column {
+            slk: SlkId::UnitBalance,
+            column: "isbldg".into(),
+        };
+        fields.push((*b"B001", field));
+    }
+    fields
 }
+#[test]
+fn move_speed_natives_clamp_by_structure_and_reanchor_the_route() {
+    let mut h = profile_with_structure(FieldValue::Cell("100".into()), Some("foot"), false);
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(100.)
+    );
+    h.native(
+        "IssuePointOrder",
+        &[
+            a.clone(),
+            Value::Str("gamma".into()),
+            Value::Real(72.),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap();
+    h.next_timer_expiry(0.5, &mut 1000).unwrap();
+    h.advance_unit_activity(0.5, &mut 1000).unwrap();
+    assert_eq!(
+        h.native("GetUnitX", std::slice::from_ref(&a)).unwrap(),
+        Value::Real(66.)
+    );
+    h.native("SetUnitMoveSpeed", &[a.clone(), Value::Real(400.)])
+        .unwrap();
+    h.next_timer_expiry(0.515, &mut 1000).unwrap();
+    h.advance_unit_activity(0.515, &mut 1000).unwrap();
+    assert_eq!(
+        h.native("GetUnitX", std::slice::from_ref(&a)).unwrap(),
+        Value::Real(72.)
+    );
+    for (speed, expected) in [(0., 10.), (-50., 10.), (1000., 400.)] {
+        h.native("SetUnitMoveSpeed", &[a.clone(), Value::Real(speed)])
+            .unwrap();
+        assert_eq!(
+            h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+                .unwrap(),
+            Value::Real(expected)
+        );
+    }
+
+    let mut h = profile_with_structure(FieldValue::Cell("100".into()), Some("foot"), true);
+    let b = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&b))
+            .unwrap(),
+        Value::Real(100.)
+    );
+    h.native("SetUnitMoveSpeed", &[b.clone(), Value::Real(1000.)])
+        .unwrap();
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&b))
+            .unwrap(),
+        Value::Real(300.)
+    );
+    h.native("SetUnitMoveSpeed", &[b.clone(), Value::Real(0.)])
+        .unwrap();
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", &[b]).unwrap(),
+        Value::Real(25.)
+    );
+
+    let mut h = profile_with_structure(FieldValue::Cell("500".into()), Some("foot"), false);
+    let c = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&c))
+            .unwrap(),
+        Value::Real(400.)
+    );
+    assert_eq!(
+        h.native("GetUnitDefaultMoveSpeed", &[c]).unwrap(),
+        Value::Real(500.)
+    );
+    assert_eq!(
+        h.native("SetUnitMoveSpeed", &[Value::Null, Value::Real(1.)])
+            .unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn move_speed_native_validates_arguments_before_null_and_removed_noops() {
+    let mut h = profile_with_structure(FieldValue::Cell("100".into()), Some("foot"), false);
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    h.native(
+        "IssuePointOrder",
+        &[
+            a.clone(),
+            Value::Str("gamma".into()),
+            Value::Real(72.),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap();
+    h.next_timer_expiry(0.5, &mut 1000).unwrap();
+    h.advance_unit_activity(0.5, &mut 1000).unwrap();
+    let before = h.native("GetUnitX", std::slice::from_ref(&a)).unwrap();
+    let order = h
+        .native("GetUnitCurrentOrder", std::slice::from_ref(&a))
+        .unwrap();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let handles = h.inner().handles();
+
+    for args in [
+        vec![a.clone()],
+        vec![a.clone(), Value::Str("fast".into())],
+        vec![a.clone(), Value::Real(f32::NAN)],
+        vec![a.clone(), Value::Real(f32::INFINITY)],
+        vec![a.clone(), Value::Real(50.), Value::Real(1.)],
+        vec![Value::Null],
+        vec![Value::Null, Value::Str("fast".into())],
+        vec![Value::Null, Value::Real(f32::NAN)],
+        vec![Value::Null, Value::Real(1.), Value::Real(2.)],
+    ] {
+        assert!(
+            h.native("SetUnitMoveSpeed", &args).is_err(),
+            "malformed {args:?}"
+        );
+    }
+    for args in [
+        vec![],
+        vec![a.clone(), Value::Real(1.)],
+        vec![Value::Str("unit".into())],
+    ] {
+        assert!(
+            h.native("GetUnitMoveSpeed", &args).is_err(),
+            "malformed {args:?}"
+        );
+        assert!(
+            h.native("GetUnitDefaultMoveSpeed", &args).is_err(),
+            "malformed {args:?}"
+        );
+    }
+    assert!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&owner))
+            .is_err()
+    );
+    assert!(
+        h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&owner))
+            .is_err()
+    );
+    assert!(
+        h.native("SetUnitMoveSpeed", &[owner, Value::Real(1.)])
+            .is_err()
+    );
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(100.)
+    );
+    assert_eq!(
+        h.native("GetUnitX", std::slice::from_ref(&a)).unwrap(),
+        before
+    );
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", std::slice::from_ref(&a))
+            .unwrap(),
+        order
+    );
+    assert_eq!(
+        h.native("SetUnitMoveSpeed", &[Value::Null, Value::Real(300.)])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.inner().handles(), handles);
+
+    h.native("RemoveUnit", std::slice::from_ref(&a)).unwrap();
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(0.)
+    );
+    assert_eq!(
+        h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(0.)
+    );
+    assert_eq!(
+        h.native("SetUnitMoveSpeed", &[a.clone(), Value::Real(400.)])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.inner().handles(), handles);
+    assert!(
+        h.native("GetUnitMoveSpeed", &[a.clone(), Value::Real(1.)])
+            .is_err()
+    );
+    assert!(
+        h.native("SetUnitMoveSpeed", &[a.clone(), Value::Real(f32::NAN)])
+            .is_err()
+    );
+    assert!(
+        h.native("SetUnitMoveSpeed", &[a.clone(), Value::Str("fast".into())])
+            .is_err()
+    );
+    assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn move_speed_setter_reanchors_a_moving_walk_rate_without_disturbing_an_idle_animation() {
+    let mut vm = open_move_speed();
+    let a = unit(&vm, "A");
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 1.);
+    let set_at = 1.;
+    let before_position = position(&mut vm, a);
+    let before_order = vm
+        .host()
+        .inner
+        .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+        .unwrap();
+    let before_sample = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap()
+        .sample(1.1)
+        .unwrap()
+        .unwrap();
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(400.)])
+        .unwrap();
+    let record = vm.host().inner.executed_unit(a).unwrap();
+    let animation = record.animation.as_ref().unwrap();
+    let index = animation.sequence.unwrap();
+    let sequence = &animation.model.sequences[index];
+    let after_sample = animation.sample(1.1).unwrap().unwrap();
+    let expected = if sequence.move_speed > 0. {
+        let local = ((1.1 - set_at) * f64::from(400. / sequence.move_speed) * 1000.).floor() as u64;
+        let duration = u64::from(sequence.duration());
+        if duration == 0 {
+            0
+        } else if sequence.non_looping {
+            local.min(duration)
+        } else {
+            local % duration
+        }
+    } else {
+        100
+    };
+    assert_eq!(animation.started, set_at);
+    assert_eq!(
+        u64::from(after_sample.frame - after_sample.interval[0]),
+        expected
+    );
+    assert_ne!(after_sample, before_sample);
+    assert_eq!(record.position.unwrap(), before_position);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        before_order
+    );
+    tick(&mut vm, 1.05);
+    assert_eq!(position(&mut vm, a), [46., 16.]);
+
+    let b = unit(&vm, "B");
+    let idle = vm.host().inner.executed_unit(b).unwrap().animation.clone();
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(b), Value::Real(350.)])
+        .unwrap();
+    assert_eq!(vm.host().inner.executed_unit(b).unwrap().animation, idle);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetUnitMoveSpeed", &[Value::Handle(b)])
+            .unwrap(),
+        Value::Real(350.)
+    );
+}
+
 #[test]
 fn selected_speed_overrides_and_movement_class_control_real_displacement() {
     for (value, expected) in [

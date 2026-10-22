@@ -261,6 +261,62 @@ impl DayCycle {
     }
 }
 
+/// Unit and building move-speed limits (`Misc/MinUnitSpeed`, `Misc/MaxUnitSpeed`,
+/// `Misc/MinBldgSpeed`, `Misc/MaxBldgSpeed`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoveSpeedLimits {
+    pub min_unit: f32,
+    pub max_unit: f32,
+    pub min_building: f32,
+    pub max_building: f32,
+}
+
+impl MoveSpeedLimits {
+    pub fn read(profiles: &[(&str, &[u8])], max_bytes: usize) -> Result<Self, String> {
+        let ([min_unit, max_unit, min_building, max_building], _) = misc_scalars(
+            profiles,
+            [
+                "MinUnitSpeed",
+                "MaxUnitSpeed",
+                "MinBldgSpeed",
+                "MaxBldgSpeed",
+            ],
+            max_bytes,
+        )?;
+        let required =
+            |value: Option<f32>, key: &str| value.ok_or_else(|| format!("missing Misc/{key}"));
+        let limits = Self {
+            min_unit: required(min_unit, "MinUnitSpeed")?,
+            max_unit: required(max_unit, "MaxUnitSpeed")?,
+            min_building: required(min_building, "MinBldgSpeed")?,
+            max_building: required(max_building, "MaxBldgSpeed")?,
+        };
+        if [
+            limits.min_unit,
+            limits.max_unit,
+            limits.min_building,
+            limits.max_building,
+        ]
+        .iter()
+        .any(|value| *value < 0.)
+        {
+            return Err("Misc move speed limit is negative".into());
+        }
+        if limits.min_unit > limits.max_unit || limits.min_building > limits.max_building {
+            return Err("Misc move speed minimum exceeds maximum".into());
+        }
+        Ok(limits)
+    }
+
+    pub fn for_building(self, building: bool) -> (f32, f32) {
+        if building {
+            (self.min_building, self.max_building)
+        } else {
+            (self.min_unit, self.max_unit)
+        }
+    }
+}
+
 /// Hero attribute bonuses (`Misc/StrHitPointBonus`, `Misc/IntManaBonus`) and
 /// per-attribute regeneration rates (`Misc/StrRegenBonus`, `Misc/IntRegenBonus`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -337,6 +393,29 @@ mod tests {
         ] {
             assert!(DayCycle::read(&[("bad", invalid.as_bytes())], 256).is_err());
         }
+    }
+
+    #[test]
+    fn move_speed_limits_select_unit_and_building_pairs() {
+        let stock =
+            b"[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+        let map =
+            b"[Misc]\nMinUnitSpeed=120\nMaxUnitSpeed=350\nMinBldgSpeed=40\nMaxBldgSpeed=250\n";
+        let limits = MoveSpeedLimits::read(&[("stock", stock), ("map", map)], 512).unwrap();
+        assert_eq!(limits.for_building(false), (120.0, 350.0));
+        assert_eq!(limits.for_building(true), (40.0, 250.0));
+        for invalid in [
+            "[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25",
+            "[Misc]\nMinUnitSpeed=500\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300",
+            "[Misc]\nMinUnitSpeed=-1\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300",
+            "[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=-300",
+            "[Misc]\nMinUnitSpeed=10,20\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300",
+            "[Misc]\nMinUnitSpeed=NaN\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300",
+            "[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=inf\nMinBldgSpeed=25\nMaxBldgSpeed=300",
+        ] {
+            assert!(MoveSpeedLimits::read(&[("bad", invalid.as_bytes())], 512).is_err());
+        }
+        assert!(MoveSpeedLimits::read(&[], 512).is_err());
     }
 
     #[test]
