@@ -720,11 +720,11 @@ impl ObjectHost {
                     passive.life_regen,
                     passive.mana_regen_fraction,
                 )?;
-                if passive.strength != 0
-                    && let Some(current) = pools
-                {
+                if passive.strength != 0 {
                     let delta = self.strength_removal_delta(passive.strength)?;
-                    pools = Some(self.project_strength_life(current, delta)?);
+                    if let Some(current) = pools {
+                        pools = Some(self.project_strength_life(current, delta)?);
+                    }
                 }
             }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;
