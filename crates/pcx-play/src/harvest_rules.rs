@@ -157,6 +157,106 @@ fn object_text(
         .map(|cell| cell.text.trim().to_owned())
 }
 
+fn upgrade_overlay_source<'a>(
+    upgrades: &'a Overlay,
+    alias: &'a str,
+) -> (&'a str, &'a [pcx_objects::Mod]) {
+    match upgrades.new_object(alias) {
+        Some((base, mods)) => (base, mods),
+        None => (alias, upgrades.on(alias)),
+    }
+}
+
+fn upgrade_cell(
+    tables: &DefaultTables,
+    upgrades: &Overlay,
+    alias: &str,
+    column: &str,
+    kind: pcx_objects::editor::FieldKind,
+) -> Result<String, HarvestError> {
+    let (base, mods) = upgrade_overlay_source(upgrades, alias);
+    let matching: Vec<_> = tables
+        .editor()
+        .fields()
+        .iter()
+        .filter(|field| {
+            matches!(
+                &field.source,
+                FieldSource::Column {
+                    slk: SlkId::UpgradeData,
+                    column: name
+                } if name == column
+            )
+        })
+        .collect();
+    let field = match matching.as_slice() {
+        [] => None,
+        [field] => Some(*field),
+        _ => {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: "upgrade column maps to more than one metadata field".into(),
+            });
+        }
+    };
+    if let Some(field) = field
+        && let Some(edit) = mods.iter().rev().find(|edit| edit.field == field.fourcc)
+    {
+        let level = column
+            .strip_prefix("maxlevel")
+            .map(|_| 0)
+            .or_else(|| {
+                ["effect", "base", "mod"].iter().find_map(|prefix| {
+                    column
+                        .strip_prefix(prefix)
+                        .and_then(|suffix| suffix.parse::<u32>().ok())
+                })
+            })
+            .unwrap_or(0);
+        let selectors_supported = match (level, edit.selectors) {
+            (0, None | Some([0, 0])) => true,
+            (level, Some([selected, 0])) if level > 0 && selected == level => true,
+            _ => false,
+        };
+        if !selectors_supported {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: format!(
+                    "unsupported upgrade override selectors {:?} for level {level}",
+                    edit.selectors
+                ),
+            });
+        }
+        if !value_type_matches(edit.value_type, kind) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias.to_string(),
+                column: column.to_string(),
+                detail: "upgrade override has an incompatible value type".into(),
+            });
+        }
+        return value_text(alias, column, &edit.value);
+    }
+    object_text(tables, Family::Upgrade, base, SlkId::UpgradeData, column)
+}
+
+fn upgrade_cell_if_present(
+    tables: &DefaultTables,
+    upgrades: &Overlay,
+    alias: &str,
+    column: &str,
+    kind: pcx_objects::editor::FieldKind,
+) -> Result<Option<String>, HarvestError> {
+    match upgrade_cell(tables, upgrades, alias, column, kind) {
+        Ok(value) => Ok(Some(value)),
+        Err(HarvestError::Missing {
+            column: missing, ..
+        }) if missing == column => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn parse_i32(rawcode: &str, text: &str, column: &str) -> Result<i32, HarvestError> {
     text.parse::<i32>()
         .map_err(|detail| HarvestError::Malformed {
@@ -584,7 +684,9 @@ fn definition_text(
     }
 }
 
-fn definition_upgrade_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
+pub(crate) fn definition_upgrade_codes(
+    definition: &Definition,
+) -> Result<Vec<String>, HarvestError> {
     match definition_text(definition, SlkId::UnitBalance, "upgradeList") {
         Ok(list) => Ok(split_csv(&list)
             .filter(|code| !matches!(*code, "-" | "_"))
@@ -869,6 +971,7 @@ impl HarvestRules {
     pub fn apply_lumber_harvesting_upgrades(
         &mut self,
         tables: &DefaultTables,
+        upgrades: &Overlay,
         definition: &Definition,
         mut level: impl FnMut(i32) -> Result<i32, HarvestError>,
     ) -> Result<(), HarvestError> {
@@ -879,26 +982,27 @@ impl HarvestRules {
             if active <= 0 {
                 continue;
             }
-            let upgrade = tables
-                .object(Family::Upgrade, &alias)
-                .map_err(|underlying| HarvestError::Missing {
+            let (base, _) = upgrade_overlay_source(upgrades, &alias);
+            let upgrade = tables.object(Family::Upgrade, base).map_err(|underlying| {
+                HarvestError::Missing {
                     rawcode: alias.clone(),
                     column: "upgradeid".into(),
                     detail: underlying.to_string(),
-                })?;
-            if upgrade.rawcode() != alias {
+                }
+            })?;
+            if upgrade.rawcode() != base {
                 return Err(HarvestError::Missing {
                     rawcode: alias.clone(),
                     column: "upgradeid".into(),
                     detail: format!("resolved identity {} differs in case", upgrade.rawcode()),
                 });
             }
-            let maximum = object_text(
+            let maximum = upgrade_cell(
                 tables,
-                Family::Upgrade,
+                upgrades,
                 &alias,
-                SlkId::UpgradeData,
                 "maxlevel",
+                pcx_objects::editor::FieldKind::Int,
             )?;
             let maximum = parse_i32(&alias, &maximum, "maxlevel")?;
             if active > maximum {
@@ -909,33 +1013,32 @@ impl HarvestRules {
                 });
             }
             for slot in 1..=4 {
-                let effect = match tables
-                    .object(Family::Upgrade, &alias)
-                    .ok()
-                    .and_then(|object| {
-                        object
-                            .cell(SlkId::UpgradeData, &format!("effect{slot}"))
-                            .ok()
-                    }) {
-                    Some(cell) => cell.text.trim().to_owned(),
-                    None => continue,
+                let Some(effect) = upgrade_cell_if_present(
+                    tables,
+                    upgrades,
+                    &alias,
+                    &format!("effect{slot}"),
+                    pcx_objects::editor::FieldKind::Token,
+                )?
+                else {
+                    continue;
                 };
                 if effect != "rlum" {
                     continue;
                 }
-                let base = object_text(
+                let base = upgrade_cell(
                     tables,
-                    Family::Upgrade,
+                    upgrades,
                     &alias,
-                    SlkId::UpgradeData,
                     &format!("base{slot}"),
+                    pcx_objects::editor::FieldKind::Int,
                 )?;
-                let increment = object_text(
+                let increment = upgrade_cell(
                     tables,
-                    Family::Upgrade,
+                    upgrades,
                     &alias,
-                    SlkId::UpgradeData,
                     &format!("mod{slot}"),
+                    pcx_objects::editor::FieldKind::Int,
                 )?;
                 let base = parse_i32(&alias, &base, &format!("base{slot}"))?;
                 let increment = parse_i32(&alias, &increment, &format!("mod{slot}"))?;

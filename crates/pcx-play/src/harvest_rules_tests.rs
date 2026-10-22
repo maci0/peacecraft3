@@ -1,6 +1,7 @@
 use super::*;
 use pcx_objects::editor::SlkId;
 use pcx_objects::editor::defaults::{DefaultTables, Identity};
+use pcx_objects::{Mod, Value as ObjectValue, ValueType};
 
 fn sylk(headers: &[&str], rows: &[Vec<&str>]) -> String {
     let mut s = String::from("ID;PWXL;N;E\r\n");
@@ -227,6 +228,19 @@ fn tables_with_upgrades(
             sylk(
                 &["upgradeid", "maxlevel", "effect1", "base1", "mod1"],
                 upgrade_rows,
+            )
+            .into_bytes(),
+        ));
+        members.push((
+            SlkId::UpgradeMetaData.path().to_string(),
+            sylk(
+                &["ID", "field", "slk", "index", "type", "category"],
+                &[
+                    vec!["Umlv", "maxlevel", "UpgradeData", "-1", "int", "tech"],
+                    vec!["Uef1", "effect1", "UpgradeData", "-1", "token", "tech"],
+                    vec!["Uba1", "base1", "UpgradeData", "-1", "int", "tech"],
+                    vec!["Umd1", "mod1", "UpgradeData", "-1", "int", "tech"],
+                ],
             )
             .into_bytes(),
         ));
@@ -794,7 +808,7 @@ fn definition_with_authored_upgrades_keeps_reading_rules() {
         .unwrap()
         .expect("Ahar");
     rules
-        .apply_lumber_harvesting_upgrades(&tables, &definition, |_| Ok(0))
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| Ok(0))
         .unwrap();
     assert_eq!(rules.damage, 7.0);
     assert_eq!(rules.lumber_capacity, 25);
@@ -815,13 +829,55 @@ fn active_lumber_harvesting_upgrade_adds_authored_capacity() {
         .expect("Ahar");
     let requested = std::cell::Cell::new(0);
     rules
-        .apply_lumber_harvesting_upgrades(&tables, &definition, |tech| {
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |tech| {
             requested.set(tech);
             Ok(2)
         })
         .unwrap();
     assert_eq!(requested.get(), i32::from_be_bytes(*b"Rhlh"));
     assert_eq!(rules.lumber_capacity, 45);
+}
+
+#[test]
+fn w3q_custom_upgrade_overrides_the_base_capacity_and_maximum() {
+    let tables = upgrade_tables();
+    let mut overlay = Overlay::default();
+    overlay.custom.insert(
+        "R999".into(),
+        (
+            "Rhlh".into(),
+            vec![
+                Mod {
+                    field: *b"Umlv",
+                    value_type: ValueType::Int,
+                    selectors: Some([0, 0]),
+                    value: ObjectValue::Int(3),
+                    end_word: 0,
+                },
+                Mod {
+                    field: *b"Umd1",
+                    value_type: ValueType::Int,
+                    selectors: Some([1, 0]),
+                    value: ObjectValue::Int(15),
+                    end_word: 0,
+                },
+            ],
+        ),
+    );
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "R999"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules
+        .apply_lumber_harvesting_upgrades(&tables, &overlay, &definition, |_| Ok(3))
+        .unwrap();
+    assert_eq!(rules.lumber_capacity, 65);
 }
 
 #[test]
@@ -838,7 +894,7 @@ fn active_upgrade_level_beyond_the_authored_maximum_is_refused() {
         .unwrap()
         .expect("Ahar");
     let error = rules
-        .apply_lumber_harvesting_upgrades(&tables, &definition, |_| Ok(3))
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| Ok(3))
         .unwrap_err();
     match error {
         HarvestError::Malformed { column, detail, .. } => {
@@ -863,7 +919,7 @@ fn definition_with_an_empty_upgrade_list_keeps_reading_rules() {
         .unwrap()
         .expect("Ahar");
     rules
-        .apply_lumber_harvesting_upgrades(&tables, &definition, |_| {
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| {
             panic!("empty upgrade list must not query player levels")
         })
         .unwrap();

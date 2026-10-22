@@ -160,47 +160,64 @@ derived pathing without erasing overlapping objects or terrain restrictions.
 
 ## Runtime model
 
-`harvest_runtime` installs only when the selected order registry resolves
-`autoharvestlumber` and unit activity admits a movement order. It keeps one
-runtime worker record per unit; tree, depot, timing, damage, capacity and reach
-come from the map-selected unit definition, `Ahar`, the worker's tree weapon
-slot, `Artn` and the destructable catalog. Missing capability, an unusable tree
-set, a missing depot or malformed authored values produce a contextual error;
-the runtime does not substitute stock numbers.
+`harvest_runtime` installs only when the selected order registry resolves all
+four authored identities: `autoharvestlumber` starts a worker, `harvest` is
+reported while chopping, `resumeharvesting` is reported while an automatic
+capacity return runs, and `returnresources` is reported during an explicit
+return. Unit activity must also admit a movement order. The runtime keeps one
+worker record per unit; tree, depot, timing, damage, capacity and reach come
+from the map-selected unit definition, `Ahar`, the worker's tree weapon slot,
+`Artn` and the destructable catalog. Missing capability, an unusable tree set,
+a missing depot or malformed authored values produce a contextual error; the
+runtime does not substitute stock numbers.
 
 Selection is bounded by `Ahar.Area` and deterministic: nearest candidate wins,
-and equal squared distance breaks on the lower handle. Tree reach is the
-worker's admitted tree-weapon range when that slot exists, otherwise
-`Ahar.Rng`. Depot reach is the depot's admitted collision radius plus
-`Ahar.Rng`; it is not a copied world distance.
+and equal squared distance breaks on the lower handle. Tree reach is
+`Ahar.Rng`; the tree weapon's own range does not extend it. Depot reach is the
+depot's admitted collision radius plus `Ahar.Rng`; it is not a copied world
+distance.
 
-Work timing uses the tree weapon's `cool`, `dmgpt` and `Backsw` when the
-weapon-slot data is admitted, otherwise `Ahar.Dur` with no damage-point delay.
-Each swing applies `Ahar.DataA` damage to the tree and adds the same amount to
-carried lumber, capped at `Ahar.DataB`. A dead tree with a positive carry is
-deposited even when the carry is below capacity. The final partial swing and
-the decision to deposit incomplete carry on tree death are recreation choices;
-the controlled probe did not distinguish them from alternatives.
+Work timing requires the authored tree weapon's `cool`, `dmgpt` and `Backsw`.
+A unit without an admitted tree-targeting weapon is refused before tree
+selection; `Ahar.Dur` is not a timing fallback. Each swing applies
+`Ahar.DataA` damage to the tree and adds the same amount to carried lumber,
+capped at `Ahar.DataB`. A dead tree with a positive carry is deposited even
+when the carry is below capacity. The final partial swing and the decision to
+deposit incomplete carry on tree death are recreation choices; the controlled
+probe did not distinguish them from alternatives.
 
 The worker's selected `upgradeList` admits its authored upgrades. For each
-upgrade with an applied player level, the runtime resolves `UpgradeData` effect
-slots and adds the active `rlum` (lumber capacity) `base + mod * (level - 1)`
-to `Ahar.DataB`. An inactive upgrade leaves capacity unchanged; a malformed
-effect or a level beyond the authored maximum is a contextual refusal. Combat,
-armor and movement effects are not harvest inputs and remain unit-runtime
-responsibilities.
+upgrade with an applied player level, the runtime resolves the active object,
+including a map `war3map.w3q` custom upgrade and its base, then reads
+`UpgradeData` effect slots. The active `rlum` (lumber capacity) contributes
+`base + mod * (level - 1)` to `Ahar.DataB`. The applied level is re-read on
+every tick, so a research completed mid-cycle changes capacity before the next
+swing. A preserved dynamic-refresh observation is in ignored
+`.scratch/harvest-active-upgrade-probe/result.json`: a worker already chopping
+with partial cargo received a mid-cycle `Rhlh` level without a harvest reissue,
+and its first deposit and tree damage reflected the selected upgrade. An
+inactive upgrade leaves capacity unchanged; a malformed effect, an
+unsupported selector, or a level beyond the authored maximum is a contextual
+refusal. Combat, armor and movement effects are not harvest inputs and remain
+unit-runtime responsibilities.
 
 Deposits prepare the player's lumber bank and `PLAYER_STATE_LUMBER_GATHERED`
 rows before writing either value or firing player-state events. Both prepared
 rows are written before their events so a callback observes a coherent bank and
 counter. Stop, hold-position, non-harvest orders, unit death and removal cancel
-the worker record. A worker with no remaining reachable tree stops searching.
+the worker record but keep its partial carry attached to the unit. Reissuing
+`autoharvestlumber` resumes with that carry; an explicit `returnresources`
+routes it to a qualified depot, deposits the preserved amount and ends idle,
+while an automatic capacity return reports `resumeharvesting` and resumes
+harvesting after the deposit. A worker with no remaining reachable tree stops
+searching.
 
 Tree deaths caused by an engine-tick swing reserve and push their registered
 death events into the delivery queue at the tick boundary; they do not run
 synchronously inside `SetLife` as the destructable native evidence indicates
 for direct mutation. Nested `TriggerExecute` behavior across that boundary and
-exact nested native ordering remain unqualified here. The work phase selects
-the authored `stand work lumber` sequence and refuses a unit that has an
-animation model without it; audio and dedicated carry animation selection are
-not implemented by this runtime.
+exact nested native ordering remain unqualified here. The work phase enters
+`attack`, the nearest admitted model sequence to the probed animation start,
+and refuses a unit whose admitted model lacks it. The candidate's `stand work
+lumber` sequence is retained as the unqualified target; audio and dedicated
+carry animation selection are not implemented by this runtime.

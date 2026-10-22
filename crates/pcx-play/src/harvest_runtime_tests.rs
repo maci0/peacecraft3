@@ -68,9 +68,18 @@ fn harvest_tables_for(
     capacity: &'static str,
     duration: &'static str,
 ) -> Arc<DefaultTables> {
+    harvest_tables_for_range(damage, capacity, duration, "200")
+}
+
+fn harvest_tables_for_range(
+    damage: &'static str,
+    capacity: &'static str,
+    duration: &'static str,
+    range: &'static str,
+) -> Arc<DefaultTables> {
     let ability_rows: &[&[&str]] = &[
         &[
-            "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", "200", "600", duration,
+            "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, "600", duration,
         ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
     ];
@@ -255,10 +264,29 @@ fn harvest_rules() -> (
     use crate::camera_margins::SourceWindow;
     use crate::neutral_player::sha256;
     let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
+    let bootstrap_va = 0x301500u32;
+    let mut bootstrap = vec![0x68];
+    bootstrap.extend_from_slice(&0x301400u32.to_le_bytes());
+    bootstrap.extend_from_slice(&[0xff, 0x35]);
+    bootstrap.extend_from_slice(&0x301350u32.to_le_bytes());
+    for target in [0x301100u32, 0x301020u32] {
+        bootstrap.push(0xe8);
+        let next = bootstrap_va + bootstrap.len() as u32 + 4;
+        bootstrap.extend_from_slice(&(target as i32 - next as i32).to_le_bytes());
+    }
+    image[0x700..0x700 + bootstrap.len()].copy_from_slice(&bootstrap);
+    binding.bootstrap.va = bootstrap_va;
+    binding.bootstrap.len = bootstrap.len() as u32;
+    binding.bootstrap.digest = sha256(&bootstrap);
     let mut initializer = image[0x220..0x220 + binding.initializer.len as usize].to_vec();
     assert_eq!(&initializer[initializer.len() - 2..], &[0x5e, 0xc3]);
     initializer.truncate(initializer.len() - 2);
-    for (at, id) in [(0x680usize, 900i32), (0x6A0, 901)] {
+    for (at, id) in [
+        (0x680usize, 900i32),
+        (0x6A0, 901),
+        (0x6C0, 902),
+        (0x6E0, 903),
+    ] {
         let name_va = 0x301000 + (at as u32 - 0x200);
         let mut record = vec![0x68];
         record.extend_from_slice(&name_va.to_le_bytes());
@@ -272,6 +300,8 @@ fn harvest_rules() -> (
     initializer.extend_from_slice(&[0x5e, 0xc3]);
     image[0x680..0x692].copy_from_slice(b"autoharvestlumber\0");
     image[0x6A0..0x6B0].copy_from_slice(b"returnresources\0");
+    image[0x6C0..0x6C8].copy_from_slice(b"harvest\0");
+    image[0x6E0..0x6F1].copy_from_slice(b"resumeharvesting\0");
     image[0x220..0x220 + initializer.len()].copy_from_slice(&initializer);
     binding.initializer.len = initializer.len() as u32;
     let mut put = |at: usize, prefix: &[u8], id: i32| {
@@ -352,6 +382,17 @@ fn harvest_fields() -> Vec<([u8; 4], ObjectField)> {
     ]
 }
 
+fn harvest_fields_without_tree_weapon() -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = harvest_fields();
+    fields.retain(|(fourcc, _)| !fourcc.starts_with(b"ua2"));
+    let (_, weapon_mask) = fields
+        .iter_mut()
+        .find(|(fourcc, _)| fourcc == b"ua1w")
+        .expect("weapon mask");
+    weapon_mask.value = Ok(pcx_sim::world::FieldValue::Cell("0".into()));
+    fields
+}
+
 fn placed_tree() -> crate::playercolor_host::PlacedDestructable {
     placed_tree_with_life(80.0)
 }
@@ -415,12 +456,32 @@ fn open_harvest_with(
         .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 4 })
         .unwrap();
     h.admit_destructable_catalog(catalog).unwrap();
-    let h = h
+    let mut h = h
         .with_harvest(
             tables,
             Overlay::default(),
+            Overlay::default(),
             crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
         )
+        .unwrap();
+    let model = crate::unit_model::tests::model();
+    let mut bytes = model.bytes.to_vec();
+    let at = bytes
+        .windows(12)
+        .position(|b| b == b"Stand Defend")
+        .expect("fixture sequence");
+    bytes[at..at + 80].fill(0);
+    bytes[at..at + 6].copy_from_slice(b"Attack");
+    let model = Arc::new(
+        crate::unit_model::Model::read(
+            model.origin.clone(),
+            "synthetic-attack.mdx".into(),
+            bytes.into(),
+            4096,
+        )
+        .unwrap(),
+    );
+    h.admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
         .unwrap();
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
@@ -502,7 +563,7 @@ fn autoharvest_claims_a_tree_deposits_source_capacity_and_repeats() {
             .inner
             .native("GetUnitCurrentOrder", &[Value::Handle(worker)])
             .unwrap(),
-        Value::Int(900)
+        Value::Int(902)
     );
     assert_eq!(
         vm.host()
@@ -546,7 +607,7 @@ fn autoharvest_claims_a_tree_deposits_source_capacity_and_repeats() {
             .inner
             .native("GetUnitCurrentOrder", &[Value::Handle(worker)])
             .unwrap(),
-        Value::Int(901)
+        Value::Int(903)
     );
     assert_eq!(
         vm.host()
@@ -576,7 +637,7 @@ fn autoharvest_claims_a_tree_deposits_source_capacity_and_repeats() {
             .inner
             .native("GetUnitCurrentOrder", &[Value::Handle(worker)])
             .unwrap(),
-        Value::Int(900)
+        Value::Int(902)
     );
     let depot_record = vm.host().inner.executed_unit(depot).unwrap();
     assert_eq!(depot_record.owner, player);
@@ -622,11 +683,11 @@ fn active_lumber_upgrade_raises_the_deposited_load() {
     tick(&mut vm, 2.5);
     tick(&mut vm, 4.5);
     assert_eq!(tree_life(&mut vm, tree), 53.0);
-    assert_eq!(current_order(&mut vm, worker), 900);
+    assert_eq!(current_order(&mut vm, worker), 902);
 
     tick(&mut vm, 6.5);
     assert_eq!(tree_life(&mut vm, tree), 44.0);
-    assert_eq!(current_order(&mut vm, worker), 901);
+    assert_eq!(current_order(&mut vm, worker), 903);
 
     tick(&mut vm, 7.5);
     assert_eq!(
@@ -636,6 +697,194 @@ fn active_lumber_upgrade_raises_the_deposited_load() {
     assert_eq!(
         player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
         gathered + 30
+    );
+}
+
+#[test]
+fn harvest_orders_are_four_distinct_registry_identities() {
+    let (registry, _) = harvest_rules();
+    let orders = [
+        ("autoharvestlumber", 900),
+        ("returnresources", 901),
+        ("harvest", 902),
+        ("resumeharvesting", 903),
+    ];
+    for (name, id) in orders {
+        assert_eq!(registry.id(name), Some(id), "{name}");
+        assert_eq!(registry.name(id), Some(name), "{id}");
+    }
+    let mut ids: Vec<_> = orders.iter().map(|(_, id)| *id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4);
+}
+
+#[test]
+fn stop_preserves_partial_cargo_across_reissue_and_manual_return() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for("9", "18", "4"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+
+    issue_id(&mut vm, worker, 744);
+    assert_eq!(current_order(&mut vm, worker), 0);
+    start_harvest(&mut vm, worker);
+    assert_eq!(current_order(&mut vm, worker), 902);
+    issue_id(&mut vm, worker, 901);
+    assert_eq!(current_order(&mut vm, worker), 901);
+
+    tick(&mut vm, 3.5);
+    assert_eq!(current_order(&mut vm, worker), 0);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 18
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 18
+    );
+}
+
+#[test]
+fn a_move_order_preserves_partial_cargo_across_reissue_and_manual_return() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for("9", "18", "4"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssuePointOrderById",
+                &[
+                    Value::Handle(worker),
+                    Value::Int(1631),
+                    Value::Real(10.0),
+                    Value::Real(10.0),
+                ],
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(current_order(&mut vm, worker), 1631);
+    start_harvest(&mut vm, worker);
+    assert_eq!(current_order(&mut vm, worker), 902);
+    issue_id(&mut vm, worker, 901);
+
+    tick(&mut vm, 3.5);
+    assert_eq!(current_order(&mut vm, worker), 0);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 18
+    );
+}
+
+#[test]
+fn an_active_upgrade_applied_mid_cycle_raises_the_load_before_deposit() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let player = match vm.host().inner.native("Player", &[Value::Int(0)]).unwrap() {
+        Value::Handle(player) => player,
+        _ => panic!("player handle"),
+    };
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+
+    vm.host()
+        .inner
+        .native(
+            "SetPlayerTechResearched",
+            &[
+                Value::Handle(player),
+                Value::Int(i32::from_be_bytes(*b"Rhlh")),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    tick(&mut vm, 4.5);
+    assert_eq!(tree_life(&mut vm, tree), 53.0);
+    assert_eq!(current_order(&mut vm, worker), 902);
+    tick(&mut vm, 6.5);
+    assert_eq!(tree_life(&mut vm, tree), 44.0);
+    assert_eq!(current_order(&mut vm, worker), 903);
+    tick(&mut vm, 7.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 30
+    );
+}
+
+#[test]
+fn tree_reach_is_the_ahar_range_without_a_plus_one_heuristic() {
+    for (range, expected) in [("20", 71.0), ("19", 80.0)] {
+        let (mut vm, tree) = open_harvest_with(
+            harvest_tables_for_range("9", "20", "4", range),
+            tree_catalog(),
+            placed_tree(),
+            harvest_fields(),
+        );
+        let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+        let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+        start_harvest(&mut vm, worker);
+        tick(&mut vm, 0.5);
+        assert_eq!(tree_life(&mut vm, tree), expected, "Ahar range {range}");
+    }
+}
+
+#[test]
+fn a_missing_tree_weapon_refuses_harvest_without_changing_state() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables(),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields_without_tree_weapon(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+
+    let error = vm
+        .host()
+        .inner
+        .native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(worker), Value::Int(900)],
+        )
+        .unwrap_err();
+    assert!(error.contains("tree-targeting weapon"), "{error}");
+    assert_eq!(current_order(&mut vm, worker), 0);
+    assert_eq!(tree_life(&mut vm, tree), 80.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered
     );
 }
 
@@ -740,16 +989,17 @@ fn current_order(vm: &mut Vm, unit: HandleId) -> i32 {
 }
 
 fn start_harvest(vm: &mut Vm, worker: HandleId) {
-    assert_eq!(
-        vm.host()
-            .inner
-            .native(
-                "IssueImmediateOrderById",
-                &[Value::Handle(worker), Value::Int(900)]
-            )
-            .unwrap(),
-        Value::Bool(true)
-    );
+    assert_eq!(issue_id(vm, worker, 900), Value::Bool(true));
+}
+
+fn issue_id(vm: &mut Vm, worker: HandleId, order: i32) -> Value {
+    vm.host()
+        .inner
+        .native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(worker), Value::Int(order)],
+        )
+        .unwrap()
 }
 
 fn advance(
@@ -808,7 +1058,7 @@ fn a_capacity_hit_retries_the_depot_route_without_chopping_again() {
     assert_eq!(tree_life(&mut vm, tree), 71.0);
     assert!(advance(&mut vm, 2.5, 64).is_err());
     assert_eq!(tree_life(&mut vm, tree), 62.0);
-    assert_eq!(current_order(&mut vm, worker), 901);
+    assert_eq!(current_order(&mut vm, worker), 903);
 
     let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
     tick(&mut vm, 3.5);
@@ -842,7 +1092,7 @@ fn a_lethal_hit_retries_the_depot_route_and_credits_every_carried_unit_once() {
     tick(&mut vm, 2.5);
     assert!(advance(&mut vm, 4.5, 64).is_err());
     assert_eq!(tree_life(&mut vm, tree), 0.0);
-    assert_eq!(current_order(&mut vm, worker), 901);
+    assert_eq!(current_order(&mut vm, worker), 903);
 
     let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
     tick(&mut vm, 5.5);
