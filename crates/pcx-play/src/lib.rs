@@ -158,6 +158,8 @@ pub mod player_command_log;
 pub mod player_removal_rules;
 pub mod selection_circle;
 
+pub mod harvest_rules;
+
 pub mod inventory_layout;
 pub mod inventory_powerup;
 pub mod inventory_powerup_host;
