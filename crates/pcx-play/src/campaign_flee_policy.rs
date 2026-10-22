@@ -3,6 +3,8 @@ use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
+    order_registry::Registry,
+    unit_activity::Rules,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -210,13 +212,14 @@ impl FleePolicy {
 
         at(setter, 0, &[0x83, 0x88])?;
         let context_offset = word(setter, 2)?;
-        let context_mask = u32::from(*setter.get(6).ok_or(Error("missing flee-context mask"))?);
+        let context_mask_byte = *setter.get(6).ok_or(Error("missing flee-context mask"))?;
+        if context_mask_byte & 0x80 != 0 {
+            return Err(Error("flee-context flag mask is a negative imm8"));
+        }
+        let context_mask = u32::from(context_mask_byte);
         at(setter, 7, &[0x5d, 0xc3])?;
         at(setter, 9, &[0x83, 0xa0])?;
-        if word(setter, 11)? != context_offset
-            || context_mask.count_ones() != 1
-            || context_mask > u32::from(u8::MAX)
-        {
+        if word(setter, 11)? != context_offset || context_mask.count_ones() != 1 {
             return Err(Error("flee-context flag offset or mask is invalid"));
         }
         at(setter, 15, &[!context_mask as u8])?;
@@ -317,13 +320,13 @@ impl FleePolicy {
         at(order, 0, &[0xf6, 0x83, 0x54, 0x04, 0x00, 0x00, 0x10])?;
         at(order, 7, &[0xbe])?;
         at(order, 12, &[0x74, 0x05, 0xbe])?;
-        let route_move_order = word(order, 8)?;
-        let alternate_order = word(order, 15)?;
+        let route_move_order = word(order, 15)?;
+        let alternate_order = word(order, 8)?;
         if route_move_order == 0 || alternate_order == 0 || route_move_order == alternate_order {
             return Err(Error("route order operands are invalid"));
         }
 
-        let mut life_bands = [
+        let life_bands = [
             checked_band(band600_minimum, band600_maximum)?,
             checked_band(band500_minimum, band500_maximum)?,
             checked_band(band400_minimum, band400_maximum)?,
@@ -331,16 +334,15 @@ impl FleePolicy {
             checked_band(band200_minimum, band200_maximum)?,
             checked_band(band100_minimum, band100_maximum)?,
         ];
-        life_bands.sort_by(|a, b| a.minimum.total_cmp(&b.minimum));
         if life_bands
             .windows(2)
-            .any(|pair| pair[0].minimum >= pair[1].minimum)
+            .any(|pair| pair[0].minimum <= pair[1].minimum || pair[0].maximum <= pair[1].maximum)
         {
-            return Err(Error("life band lower bounds overlap"));
+            return Err(Error("life band order differs from the native decision"));
         }
         let minimum_move_speed = band100_minimum;
-        if minimum_move_speed <= 0.0 || life_bands[0].minimum != minimum_move_speed {
-            return Err(Error("minimum speed is not the lowest life band"));
+        if minimum_move_speed <= 0.0 || life_bands[5].minimum != minimum_move_speed {
+            return Err(Error("minimum speed is not the final native life band"));
         }
 
         Ok(Self {
@@ -355,6 +357,27 @@ impl FleePolicy {
             near_zero_distance,
             route_move_order,
         })
+    }
+
+    pub fn conditional_life_bands(&self) -> &[LifeBand] {
+        &self.life_bands[..4]
+    }
+
+    pub fn unconditional_life_bands(&self) -> &[LifeBand] {
+        &self.life_bands[4..]
+    }
+
+    pub fn validate_route_move_order(
+        &self,
+        registry: &Registry,
+        activities: &Rules,
+    ) -> Result<(), Error> {
+        let route = i32::try_from(self.route_move_order)
+            .map_err(|_| Error("route movement order is not a signed identifier"))?;
+        if activities.movement != route || registry.name(route).is_none() {
+            return Err(Error("route order is not the registered movement identity"));
+        }
+        Ok(())
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -566,33 +589,67 @@ mod tests {
         assert_eq!(policy.ordinary_life_cutoff, 173.0);
         assert_eq!(policy.default_distance, 347.0);
         assert_eq!(policy.near_zero_distance, 0.00000025);
-        assert_eq!(policy.route_move_order, 0x000d0042);
+        assert_eq!(policy.route_move_order, 0x000d0043);
         assert_eq!(
             policy.life_bands,
             [
                 LifeBand {
-                    minimum: 117.0,
-                    maximum: 123.0
-                },
-                LifeBand {
-                    minimum: 283.0,
-                    maximum: 293.0
-                },
-                LifeBand {
-                    minimum: 383.0,
-                    maximum: 393.0
-                },
-                LifeBand {
-                    minimum: 483.0,
-                    maximum: 493.0
+                    minimum: 683.0,
+                    maximum: 693.0
                 },
                 LifeBand {
                     minimum: 583.0,
                     maximum: 593.0
                 },
                 LifeBand {
+                    minimum: 483.0,
+                    maximum: 493.0
+                },
+                LifeBand {
+                    minimum: 383.0,
+                    maximum: 393.0
+                },
+                LifeBand {
+                    minimum: 283.0,
+                    maximum: 293.0
+                },
+                LifeBand {
+                    minimum: 117.0,
+                    maximum: 123.0
+                },
+            ]
+        );
+        assert_eq!(
+            policy.conditional_life_bands(),
+            [
+                LifeBand {
                     minimum: 683.0,
                     maximum: 693.0
+                },
+                LifeBand {
+                    minimum: 583.0,
+                    maximum: 593.0
+                },
+                LifeBand {
+                    minimum: 483.0,
+                    maximum: 493.0
+                },
+                LifeBand {
+                    minimum: 383.0,
+                    maximum: 393.0
+                },
+            ]
+        );
+        assert_eq!(
+            policy.unconditional_life_bands(),
+            [
+                LifeBand {
+                    minimum: 283.0,
+                    maximum: 293.0
+                },
+                LifeBand {
+                    minimum: 117.0,
+                    maximum: 123.0
                 },
             ]
         );
@@ -605,7 +662,7 @@ mod tests {
                 [0; 32]
             )
             .expect("changed band upper bound")
-            .life_bands[5]
+            .life_bands[0]
                 .maximum,
             699.0
         );
@@ -619,6 +676,54 @@ mod tests {
             )
             .expect("changed constructor default")
             .units_flee_default
+        );
+    }
+
+    #[test]
+    fn route_order_must_join_the_registered_movement_identity() {
+        use crate::{camera_margins::SourceWindow, scripts::AssetIdentity};
+
+        let policy = FleePolicy::fixture();
+        let movement = i32::try_from(policy.route_move_order).expect("synthetic route identifier");
+        let (image, binding, budget) =
+            crate::order_registry::tests::fixture([movement, movement + 1]);
+        let registry = Registry::read(&image, binding, budget, 4, 32).expect("synthetic registry");
+        let window = SourceWindow {
+            va: 0,
+            len: 0,
+            digest: [0; 32],
+        };
+        let mut activities = Rules {
+            binding: crate::unit_activity::Binding {
+                origin: AssetIdentity {
+                    edition: "synthetic".into(),
+                    version: "test".into(),
+                    source: "synthetic:flee".into(),
+                },
+                image_sha256: [0; 32],
+                hold: window,
+                stop: window,
+                movement: window,
+                patrol: window,
+            },
+            hold: movement - 3,
+            stop: movement - 2,
+            movement,
+            patrol: movement - 1,
+            follow: None,
+            move_speed: None,
+        };
+
+        assert!(
+            policy
+                .validate_route_move_order(&registry, &activities)
+                .is_ok()
+        );
+        activities.movement = movement + 2;
+        assert!(
+            policy
+                .validate_route_move_order(&registry, &activities)
+                .is_err()
         );
     }
 
@@ -654,6 +759,12 @@ mod tests {
         source[0][6] = 0x50;
         source[2][6] = 0x50;
         source[0][15] = !0x50_u8;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[0][6] = 0x80;
+        source[0][15] = !0x80_u8;
+        source[2][6] = 0x80;
         refuses(source);
 
         let mut source = synthetic_windows();
@@ -711,35 +822,48 @@ mod tests {
         assert_eq!(policy.ordinary_life_cutoff, 150.0);
         assert_eq!(policy.default_distance, 300.0);
         assert_eq!(policy.near_zero_distance, f32::from_bits(0x3456_bf95));
-        assert_eq!(policy.route_move_order, 0x000d000f);
         assert_eq!(
             policy.life_bands,
             [
                 LifeBand {
-                    minimum: 100.0,
-                    maximum: 110.0
-                },
-                LifeBand {
-                    minimum: 200.0,
-                    maximum: 210.0
-                },
-                LifeBand {
-                    minimum: 300.0,
-                    maximum: 310.0
-                },
-                LifeBand {
-                    minimum: 400.0,
-                    maximum: 410.0
+                    minimum: 600.0,
+                    maximum: 610.0
                 },
                 LifeBand {
                     minimum: 500.0,
                     maximum: 510.0
                 },
                 LifeBand {
-                    minimum: 600.0,
-                    maximum: 610.0
+                    minimum: 400.0,
+                    maximum: 410.0
+                },
+                LifeBand {
+                    minimum: 300.0,
+                    maximum: 310.0
+                },
+                LifeBand {
+                    minimum: 200.0,
+                    maximum: 210.0
+                },
+                LifeBand {
+                    minimum: 100.0,
+                    maximum: 110.0
                 },
             ]
         );
+        assert_eq!(policy.conditional_life_bands().len(), 4);
+        assert_eq!(policy.unconditional_life_bands().len(), 2);
+        let origin = crate::scripts::AssetIdentity {
+            edition: "Legacy".into(),
+            version: "1.29.2.9231".into(),
+            source: "reviewed client".into(),
+        };
+        let registry =
+            crate::campaign_client::order_registry(&image, origin.clone()).expect("order registry");
+        let activities = crate::campaign_client::unit_activity(&image, origin, &registry)
+            .expect("activity rules");
+        policy
+            .validate_route_move_order(&registry, &activities)
+            .expect("flee route order joins the movement identity");
     }
 }
