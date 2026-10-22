@@ -874,3 +874,67 @@ fn handle(value: &Value) -> HandleId {
         _ => panic!("quest native did not return a handle"),
     }
 }
+
+#[test]
+fn null_boolean_setters_preserve_state_and_do_not_consume_event_or_handle_budget() {
+    let (mut session, mut arena) = open_session("agent");
+    let quest = handle(&session.call(&mut arena, "CreateQuest", &[]).unwrap());
+    let events = session.events().to_vec();
+    let issued = arena.issued();
+    session.budget.max_events = 0;
+    for native in [
+        "QuestSetRequired",
+        "QuestSetCompleted",
+        "QuestSetDiscovered",
+        "QuestSetFailed",
+        "QuestSetEnabled",
+        "QuestItemSetCompleted",
+    ] {
+        for value in [false, true] {
+            assert_eq!(
+                session.call(&mut arena, native, &[Value::Null, Value::Bool(value)]),
+                Ok(Value::Null)
+            );
+        }
+        for args in [
+            vec![],
+            vec![Value::Null],
+            vec![Value::Null, Value::Int(1)],
+            vec![Value::Null, Value::Bool(true), Value::Bool(false)],
+        ] {
+            assert_eq!(
+                session.call(&mut arena, native, &args),
+                Err(QuestFailure::Arguments)
+            );
+        }
+    }
+    assert_eq!(arena.issued(), issued);
+    assert_eq!(session.events(), events);
+    assert_eq!(session.live_quests(), 1);
+    assert_eq!(session.live_items(), 0);
+    assert_eq!(session.quest_flag(quest, QuestFlag::Completed), Ok(false));
+    assert_eq!(session.text_used(), 0);
+}
+
+#[test]
+fn the_vm_continues_after_completing_an_unassigned_quest() {
+    let (program, host) = host(
+        "agent",
+        r#"
+globals
+quest unassigned = null
+integer continued = 0
+endglobals
+function main takes nothing returns nothing
+call QuestSetCompleted(unassigned, true)
+set continued = 9
+endfunction
+"#,
+    );
+    let mut vm = Vm::new(&program, host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("continued"), Value::Int(9));
+    assert!(vm.host().session.events().is_empty());
+    assert_eq!(vm.host().arena.issued(), 0);
+}
