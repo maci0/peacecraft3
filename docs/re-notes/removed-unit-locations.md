@@ -69,3 +69,24 @@ the first footman's real EnterRect callback finishes and disables itself without
 the old location refusal. The second callback remains enabled: its unit did not
 reach the region in this bounded run. This is a focused callback regression with
 explicit injected orders, not acceptance of both routes or campaign completion.
+
+## Rendered continuation
+
+A fresh native run of clean code commit `c6c396c` followed Main → Single Player →
+Campaign → Human → Chapter One and skipped the intro through Escape. The rendered
+world and HUD remained live beyond the former 10-second stop. F7 captures show
+23.719, 59.719 and 99.859 seconds; a physical terrain right click moved selected
+Arthas from the group to the cursor destination. The run log contains no
+`GetUnitLoc`/wrong-family refusal. Its new-game seed was 10311066; this is separate
+from the selected VM regression's controlled seed 1.
+
+The binary SHA-256 is
+`304945b65af5dfbe4ef7bfc358c3c20eb82ec922b88b1ae3e0961b98ee9f9f2f`.
+The reviewed local receipt is `.scratch/menu-entry/location-next-run/run/reviewed-result.json`
+in `review/menu-entry-20261022`; the owned app and display were stopped. The final
+all-target Clippy check and native-app WASM check also pass with the added gate.
+
+Sky illumination and cinematic-border inset diagnostics remain, as do HUD/quest
+presentation gaps. This bounded entry/control observation establishes neither
+mission completion nor original-client rendering parity. Browser campaign entry
+for the supplied 1.27 ISO remains unsupported.
