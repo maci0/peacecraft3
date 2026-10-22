@@ -163,7 +163,11 @@ impl TargetingPolicy {
         }
         at(node, 0, &[0x83, 0x48])?;
         at(node_clear, 0, &[0x83, 0x60])?;
-        if node[2] != node_clear[2] || node_clear[3] != !node[3] || node[3].count_ones() != 1 {
+        if node[2] != node_clear[2]
+            || node_clear[3] != !node[3]
+            || node[3].count_ones() != 1
+            || node[3] & 0x80 != 0
+        {
             return Err(Error("attached-unit flag differs"));
         }
         for getter in [getter_a, getter_b] {
@@ -194,8 +198,8 @@ impl TargetingPolicy {
         }
         let first = hero[6];
         let last = hero[11];
-        if first > last {
-            return Err(Error("hero rawcode range reversed"));
+        if first > last || first & 0x80 != 0 || last & 0x80 != 0 {
+            return Err(Error("hero rawcode range is not a positive imm8"));
         }
 
         at(difficulty, 0, &[0x8b, 0x40])?;
@@ -235,11 +239,17 @@ impl TargetingPolicy {
         }
         let promotion_from = difficulty[14];
         let promotion_to = word(difficulty, 35)?;
-        if promotion_to > u32::from(u8::MAX) || promotion_to <= u32::from(promotion_from) {
+        if promotion_from & 0x80 != 0
+            || promotion_to > u32::from(u8::MAX)
+            || promotion_to <= u32::from(promotion_from)
+        {
             return Err(Error("difficulty promotion is invalid"));
         }
 
         at(hero_gate, 0, &[0x83, 0x7d, 0x10])?;
+        if hero_gate[3] & 0x80 != 0 {
+            return Err(Error("hero difficulty gate is a negative imm8"));
+        }
         at(hero_score, 0, &[0x8b, 0x4d, 0x08, 0xe8])?;
         if call(hero_score, 0xb245c3, 3)? != 0x499030 || call(hero_score, 0xb245c3, 15)? != 0x69f620
         {
@@ -264,6 +274,9 @@ impl TargetingPolicy {
         }
 
         at(optional, 0, &[0x83, 0x7d, 0x10])?;
+        if optional[3] & 0x80 != 0 {
+            return Err(Error("optional difficulty gate is a negative imm8"));
+        }
         at(optional, 26, &[0x0f, 0x2f, 0x05])?;
         at(optional, 35, &[0x81, 0xcb])?;
         at(optional, 44, &[0xf6, 0x80])?;
@@ -285,6 +298,9 @@ impl TargetingPolicy {
         }
         at(classification, 12, &[0xb8])?;
         at(level, 0, &[0x83, 0x7d, 0x10])?;
+        if level[3] & 0x80 != 0 {
+            return Err(Error("level difficulty gate is a negative imm8"));
+        }
         at(level, 42, &[0x81, 0xcb])?;
         let optional_masks = [
             word(optional, 37)?,
@@ -533,6 +549,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn sign_extended_imm8_operands_cannot_be_reported_as_unsigned_policy() {
+        let refuses = |source: Vec<Vec<u8>>| {
+            assert!(
+                TargetingPolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32]
+                )
+                .is_err()
+            );
+        };
+        for (window, offset) in [(4, 11), (10, 3), (13, 3), (16, 3)] {
+            let mut source = synthetic_windows();
+            source[window][offset] |= 0x80;
+            refuses(source);
+        }
+        let mut source = synthetic_windows();
+        source[4][6] = 0x80;
+        source[4][11] = 0x90;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[7][14] = 0x82;
+        source[7][35..39].copy_from_slice(&131_u32.to_le_bytes());
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[2][3] = 0x80;
+        source[3][3] = 0x7f;
+        source[17][5] = 0x80;
+        source[18][5] = 0x80;
+        refuses(source);
     }
 
     #[test]
