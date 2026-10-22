@@ -132,3 +132,10 @@ active cancellation, independent explicit protection, expiry, cooldown controls,
 session isolation and protection acquired during attack windup. These tests do
 not qualify rendered art, edited cancellation, automatic casting or the unresolved
 production balance-table selection.
+
+The Can Deactivate name/type mapping is shipped-byte evidence:
+`Units/AbilityMetaData.slk` row `Hds1` specifies `field=Data`, `data=1`,
+`slk=AbilityData`, `index=-1`, `repeat=4`, `type=bool`, `useSpecific=AHds`.
+Its `WESTRING_AEVAL_HDS1` display key resolves to `Can Deactivate` in the
+supplied WorldEdit strings. The unqualified part is the edited runtime
+cancellation behavior, rather than the field's identity.
