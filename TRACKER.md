@@ -8,9 +8,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   launcher-change isolation. Human02 now passes the absent-research and held
   mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
   passive and the held intelligence effect on `ckng` pass the selected
-  continuation. It now refuses an unsupported effective `GetPlayerState`
-  query in `AdjustPlayerStateSimpleBJ` (`Blizzard.j:7644`). Private checks pass
-  1361 core and 606 app tests, strict native/WASM Clippy and formatting.
+  continuation. Gathered gold/lumber counters (`Blizzard.j:7652,7654`) now use
+  source-decoded setter scaling, unsigned getter division and the same
+  synchronous state-event path. The affected continuation gate still needs a
+  rerun. Core and app suites, strict native/WASM Clippy and formatting pass.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
   A controlled native `Ilif` override exposes a W3A Data-pointer correction
   still in progress; same-map native cache restore also returns full life
