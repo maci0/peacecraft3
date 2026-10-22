@@ -1273,6 +1273,7 @@ pub(crate) mod tests {
         };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_message::<MouseWheel>()
             .insert_resource(crate::launch_gui::Launcher::test_source(
                 install_dir,
                 expansion,
