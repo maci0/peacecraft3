@@ -3,8 +3,8 @@
 ## Implemented behavior
 
 A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength and agility
-of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`, and
-life regeneration from `Arel` while
+of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`,
+life regeneration from `Arel`, and a mana-regeneration fraction from `AIrm` while
 held. The unit total is the retained powerup strength plus the held passive totals, derived on
 demand from the held slots, so no add/remove state exists.
 
@@ -86,11 +86,13 @@ silent wrong stat.
   observable results are tested.
 - Life and mana behavior on drop, and on death of a passive holder, has no original runtime
   capture here. The ratio policy on drop is the same native path as the grant, with the negative
-  delta. It is a faithful derivation, not a measured observation.
+  delta. For life this is a faithful derivation, not a measured observation. The mana probe shows
+  the held contribution disappearing on drop, but not the exact native rate composition.
 - Intelligence bonuses and their mana pool (`b3feb0` route unqualified).
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`, `AIde`, `AIat` and `Arel`: life (`AIml`), mana (`AImm`), armor
-  (`AIsb`), attack speed (`AIas`), and the rest of the refused rows.
+- Passive families other than `AIab`, `AIde`, `AIat`, `Arel` and `AIrm`: life (`AIml`), mana
+  (`AIrn` auras and other classes), armor (`AIsb`), attack speed (`AIas`), and the rest of the
+  refused rows.
 - Non-hero passive equip: strength and agility still produce no hero pools, while armor and flat
   damage are accepted for any unit. Native behavior for non-hero strength/agility is not
   verified.
@@ -145,6 +147,40 @@ silent wrong stat.
   host (`held_flat_damage_stacks_transfers_and_removes`, `death_drops_held_flat_damage`,
   `damage_row_outside_admission_and_overflow_refuse_atomically`,
   `held_flat_damage_changes_real_damage`).
+
+## Mana-regeneration family (`AIrm`, Item Mana Regeneration): implemented and tested
+
+- Registration: window `0xbc9ec0` (`push "Arem"`, `push "AIrm"`, `call 0x7f6360`), the same
+  reviewed immediate-class layout and base shape as the `Arel` window. `Rules::read` decodes it as
+  an additional class window and all registered classes must be distinct.
+- Amounts: metadata row `Imrp` (`field Data`, `slk AbilityData`, `data 1` = `DataA1`, authored
+  type `real`), whose `useSpecific` list must admit the item's ability alias. The selected source
+  rows give `AIrm` `DataA1=0.5` and `AIrn` `DataA1=0.25`. The value is read at level 1 and a typed
+  `real`/`unreal` W3A override wins. The editor string is the mana-regeneration bonus as a fraction
+  of normal, and the probe below is consistent with a fraction rather than points per second.
+- Held effect: the finite, nonnegative fractions of held passive items are summed. The unit's mana
+  rate is the existing base rate plus the hero INT term, multiplied by `1 + held fraction`.
+  Negative, nonfinite, unadmitted and overflowing sums refuse the pickup before any slot, event,
+  mana or held-state write. Fractions apply to heroes and non-heroes alike because the held total
+  is derived from inventory ownership for any unit.
+- Projection: a nonzero held fraction requires the unit's vitals to be projected through the
+  current game clock before equip, drop or cleanup, for both the receiver and a donor during a
+  transfer. This uses the same boundary as the held life rate.
+- Tests: parser (`mana_fraction_comes_from_the_admitted_imrp_column`,
+  `w3a_real_override_on_the_imrp_field_wins_at_effect_level`,
+  `malformed_negative_and_overflowing_mana_fractions_refuse`); host
+  (`held_mana_fraction_scales_base_and_intelligence_rate`,
+  `held_mana_fraction_changes_refuse_stale_projection_without_moving_items`,
+  `held_mana_fraction_cleanup_refuses_stale_projection_and_clears_the_rate`).
+- Original observation: two held `rwiz` items added about `0.810` mana per second and one added
+  about `0.4045`, relative to the matched control; dropping both returned the difference to
+  approximately zero, and re-equipping one at night restored it. The increments are consistent
+  with a fraction of the unit's existing base rate, but the probe does not separate the base,
+  time-of-day and INT terms, so the exact native multiplicand remains inferred.
+- Not verified: native integer/real rounding of the multiplied rate, whether the native term
+  scales the INT contribution as implemented, auras such as `AIrn`, TFT/Reforged differences and
+  unchanged Human02 startup. The selected victory/Continue gate has not been re-run after this
+  change.
 
 ## Next selected startup refusal: life regeneration
 
@@ -212,12 +248,13 @@ Wine reference, not unchanged Human02 acceptance, TFT qualification, native
 Windows parity or a rendered comparison. Other regeneration eligibility modes,
 negative map edits and mixed unmodeled passive classes remain separate limits.
 
-The selected Human01 score/Continue gate now passes the former `rlif` refusal
-and reaches `rwiz`, whose `AIrm` passive remains unsupported at
-`Scripts\Blizzard.j:2640`. This gate stimulates the selected victory BJ and
-Continue control; it does not prove Human01 mission completion or successful
-Human02 startup. The failed run is retained locally as
-`.scratch/campaign-continuation/life-item-selected.log` (exit 101).
+The selected Human01 score/Continue gate passed the former `rlif` refusal and
+reached `rwiz`, whose `AIrm` passive was unsupported at
+`Scripts\Blizzard.j:2640` before this implementation. That gate stimulates the selected victory BJ
+and Continue control; it does not prove Human01 mission completion or successful Human02 startup.
+The failed run is retained locally as
+`.scratch/campaign-continuation/life-item-selected.log` (exit 101). The `AIrm` path is now
+implemented, and the gate has not been re-run.
 
 A separate controlled RoC run repeated the matched-hero protocol with `rwiz`.
 Map SHA-256:
@@ -229,4 +266,5 @@ All 16 records arrived. Relative to the control, two held items added about
 difference after both were dropped. Re-equipping one at night restored the
 one-item difference. These observations do not alone determine which base and
 attribute terms the percentage modifies. Exact records and limitations remain
-under `.scratch/passive-mana-probe/`; the mana passive is not yet implemented.
+under `.scratch/passive-mana-probe/`; the implemented multiplicand is inferred,
+not native-qualified.

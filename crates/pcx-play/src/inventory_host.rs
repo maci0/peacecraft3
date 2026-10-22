@@ -361,6 +361,7 @@ impl ObjectHost {
             armor: 0,
             damage: 0,
             life_regen: 0,
+            mana_regen_fraction: 0.0,
         };
         for (item, _) in self
             .executed_items()
@@ -393,6 +394,10 @@ impl ObjectHost {
                 .life_regen
                 .checked_add(passive.life_regen)
                 .ok_or_else(overflow)?;
+            bonus.mana_regen_fraction += passive.mana_regen_fraction;
+            if !bonus.mana_regen_fraction.is_finite() {
+                return Err(overflow());
+            }
         }
         Ok(bonus)
     }
@@ -439,15 +444,21 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn require_passive_regen_projection(&self, unit: HandleId, amount: i32) -> Result<(), Error> {
-        if amount != 0 {
+    fn require_passive_regen_projection(
+        &self,
+        unit: HandleId,
+        life: i32,
+        mana_fraction: f32,
+    ) -> Result<(), Error> {
+        if life != 0 || mana_fraction != 0.0 {
             let through = self
                 .executed_unit(unit)?
                 .vitals
                 .map(|vitals| vitals.regen.through);
             if through.is_none() || through != self.timer_game_time() {
                 return Err(self.inner.error("inventory", Failure::UnitActivity(
-                    "life regeneration changes require vitals projected through the current clock".into(),
+                    "passive regeneration changes require vitals projected through the current clock"
+                        .into(),
                 )));
             }
         }
@@ -498,6 +509,12 @@ impl ObjectHost {
                 )
             })?;
         }
+        if !(held.mana_regen_fraction + passive.mana_regen_fraction).is_finite() {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::UnitActivity("held passive bonus overflows".into()),
+            ));
+        }
         // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
         // stat item is refused rather than accepted as a silent no-op.
         if (passive.strength != 0 || passive.agility != 0)
@@ -514,10 +531,18 @@ impl ObjectHost {
             return Ok(false);
         };
         let pools = self.held_strength_life(unit, passive.strength)?;
-        self.require_passive_regen_projection(unit, passive.life_regen)?;
+        self.require_passive_regen_projection(
+            unit,
+            passive.life_regen,
+            passive.mana_regen_fraction,
+        )?;
         let holder = record.held_by;
         if let Some((owner, _)) = holder {
-            self.require_passive_regen_projection(owner, passive.life_regen)?;
+            self.require_passive_regen_projection(
+                owner,
+                passive.life_regen,
+                passive.mana_regen_fraction,
+            )?;
         }
         let mut changes = vec![(unit, true)];
         if let Some((owner, _)) = holder {
@@ -606,7 +631,11 @@ impl ObjectHost {
             return Ok(());
         }
         let passive = self.held_attributes(item)?;
-        self.require_passive_regen_projection(unit, passive.life_regen)?;
+        self.require_passive_regen_projection(
+            unit,
+            passive.life_regen,
+            passive.mana_regen_fraction,
+        )?;
         let pools = self.held_strength_life(unit, -passive.strength)?;
         self.reserve_item_events(&[(unit, false)])?;
         self.set_life_pools(unit, pools)?;
@@ -660,9 +689,11 @@ impl ObjectHost {
                     .error("inventory", Failure::ItemState("unit position missing"))
             })?;
             for &item in &held {
+                let passive = self.held_attributes(item)?;
                 self.require_passive_regen_projection(
                     unit,
-                    self.held_attributes(item)?.life_regen,
+                    passive.life_regen,
+                    passive.mana_regen_fraction,
                 )?;
             }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;

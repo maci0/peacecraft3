@@ -97,6 +97,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["pdmm", "AIwz", "0", "0", "0", "-"],
             &["pdmo", "AIt1", "0", "0", "0", "-"],
             &["preg", "Arel", "0", "0", "0", "-"],
+            &["pman", "AIrm", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -136,6 +137,9 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
             &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
             &["Arel", "Arel", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIrm", "AIrm", "1", "0.5", "0", "0", "0", "0", "-", "-", "_",
+            ],
             &[
                 "AIwz",
                 "AIat",
@@ -236,6 +240,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
             &["Ihpr", "Data", "AbilityData", "-1", "int", "1", "Arel", ""],
+            &["Imrp", "Data", "AbilityData", "-1", "real", "1", "AIrm", ""],
             &[
                 "Iatt",
                 "Data",
@@ -359,6 +364,7 @@ impl ObjectCatalog for PowerupItems {
                 (*b"icid", "cooldownID", "AIhe"),
                 (*b"iabi", "abilList", "AIh1"),
             ]),
+            b"pman" => rows.push((*b"iabi", "abilList", "AIrm")),
             _ => {}
         }
         let fields = rows
@@ -395,12 +401,27 @@ fn open() -> Fixture {
 }
 
 fn open_with_strength_regen(strength_regen: f32) -> Fixture {
+    open_with_regens(strength_regen, None, 0.0)
+}
+
+fn open_with_regens(
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
         .into_iter()
         .filter(|(id, _)| *id != *b"A008")
         .collect();
+    if let Some(rate) = mana_regen {
+        let field = fields
+            .iter_mut()
+            .find(|(id, _)| *id == *b"H007")
+            .expect("hero fixture regenMana field");
+        field.1.value = Ok(FieldValue::Cell(rate.into()));
+    }
     fields.push((*b"uabi", ability_field("abilList", "L000")));
     let declarations = format!(
         "{}\n{}{DECLARATIONS}{POWERUP_DECLARATIONS}",
@@ -442,6 +463,8 @@ fn open_with_strength_regen(strength_regen: f32) -> Fixture {
     .with_heal(&healing_registration(), &healing_base())
     .unwrap()
     .with_life_regen(&registration("Arel", "AREB"))
+    .unwrap()
+    .with_mana_regen(&registration("AIrm", "Arem"))
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -489,7 +512,7 @@ fn open_with_strength_regen(strength_regen: f32) -> Fixture {
         life_per_strength: LIFE_PER_STRENGTH,
         mana_per_intelligence: 15.0,
         life_regen_per_strength: strength_regen,
-        mana_regen_per_intelligence: 0.0,
+        mana_regen_per_intelligence: mana_per_intelligence,
     })
     .unwrap();
     let mut h = h
@@ -1283,6 +1306,118 @@ fn prepare_passive_regen(h: &mut ObjectHost, units: &[HandleId]) {
 fn advance_passive_regen(h: &mut ObjectHost, now: f64) {
     h.next_timer_expiry(now, &mut 1000).unwrap();
     h.advance_unit_activity(now, &mut 65536).unwrap();
+}
+
+const MANA_STATE: i32 = 2;
+
+fn set_mana(h: &mut ObjectHost, unit: HandleId, mana: f32) {
+    let state = h
+        .native("ConvertUnitState", &[Value::Int(MANA_STATE)])
+        .unwrap();
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(unit), state, Value::Real(mana)],
+    )
+    .unwrap();
+}
+
+fn mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().mana
+}
+
+fn assert_close(actual: f32, expected: f32, context: &str) {
+    assert!(
+        (actual - expected).abs() < 1e-4,
+        "{context}: {actual} != {expected}"
+    );
+}
+
+#[test]
+fn held_mana_fraction_scales_base_and_intelligence_rate() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.05);
+    let base = 2.0 + 7.0 * 0.05;
+    set_mana(&mut h, hero, 0.);
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), base, "base plus intelligence");
+    let first = item(&mut h, b"pman", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_close(mana_of(&h, hero), base * 2.5, "one half fraction");
+    let second = item(&mut h, b"pman", 0.);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 3.);
+    assert_close(mana_of(&h, hero), base * 4.5, "two half fractions");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(first)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_close(mana_of(&h, hero), base * 6.0, "drop removes one fraction");
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().mana_regen_fraction, 0.5);
+}
+
+#[test]
+fn held_mana_fraction_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.0);
+    set_mana(&mut h, hero, 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, mana)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.executed_items()
+            .find(|(id, _)| *id == mana)
+            .unwrap()
+            .1
+            .held_by
+            .is_none()
+    );
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    add(&mut h, hero, mana).unwrap();
+    advance_passive_regen(&mut h, 2.);
+    assert_close(mana_of(&h, hero), 5.0, "one and a half times base");
+    h.next_timer_expiry(3., &mut 1000).unwrap();
+    assert!(
+        h.native(
+            "UnitRemoveItem",
+            &[Value::Handle(hero), Value::Handle(mana)]
+        )
+        .is_err()
+    );
+    h.advance_unit_activity(3., &mut 65536).unwrap();
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(mana)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_close(mana_of(&h, hero), 10.0, "drop restores the base rate");
+}
+
+#[test]
+fn held_mana_fraction_cleanup_refuses_stale_projection_and_clears_the_rate() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.0);
+    set_mana(&mut h, hero, 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    add(&mut h, hero, mana).unwrap();
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), 3.0, "held fraction");
+    h.next_timer_expiry(2., &mut 1000).unwrap();
+    assert!(
+        h.forget_inventory_unit(hero, false)
+            .unwrap_err()
+            .to_string()
+            .contains("projected through")
+    );
+    h.advance_unit_activity(2., &mut 65536).unwrap();
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().mana_regen_fraction, 0.0);
+    advance_passive_regen(&mut h, 3.);
+    assert_close(mana_of(&h, hero), 8.0, "cleanup clears the held fraction");
 }
 
 #[test]

@@ -125,6 +125,15 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
                 "1",
                 tome.use_specific,
             ],
+            &[
+                "Imrp",
+                "Data",
+                "AbilityData",
+                "-1",
+                "real",
+                "1",
+                tome.use_specific,
+            ],
         ],
     );
     Arc::new(
@@ -669,6 +678,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             armor: 3,
             damage: 0,
             life_regen: 0,
+            mana_regen_fraction: 0.0,
         }
     );
 }
@@ -705,6 +715,101 @@ fn damage_tome<'a>(amount: &'a str) -> Tome<'a> {
     }
 }
 
+fn mana_tome(fraction: &str) -> Tome<'_> {
+    Tome {
+        alias: "AIrm",
+        code: "AIrm",
+        abilities: "AIrm",
+        powerup: "0",
+        usable: "0",
+        uses: "-",
+        use_specific: "AIrm,AIrn,AIxm",
+        amounts: [fraction, "0", "0"],
+    }
+}
+
+fn real_mod(field: &[u8; 4], selectors: Option<[u32; 2]>, value: f32) -> pcx_objects::Mod {
+    pcx_objects::Mod {
+        field: *field,
+        value_type: pcx_objects::ValueType::Real,
+        selectors,
+        value: pcx_objects::Value::Real(value),
+        end_word: 0,
+    }
+}
+
+fn mana_rules(fraction: &str) -> Rules {
+    rules(&mana_tome(fraction), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+}
+
+#[test]
+fn mana_fraction_comes_from_the_admitted_imrp_column() {
+    let held = mana_rules("0.5")
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.mana_regen_fraction, 0.5);
+}
+
+#[test]
+fn w3a_real_override_on_the_imrp_field_wins_at_effect_level() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIrm".into(), vec![real_mod(b"Imrp", Some([1, 0]), 0.25)]);
+    let held = rules(&mana_tome("0.5"), overlay, "AIsm")
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.mana_regen_fraction, 0.25);
+}
+
+#[test]
+fn malformed_negative_and_overflowing_mana_fractions_refuse() {
+    for fraction in ["broken", "nan", "inf"] {
+        assert!(
+            mana_rules(fraction)
+                .held_attributes(&catalog_item("tstr"))
+                .is_err(),
+            "{fraction}"
+        );
+    }
+    assert!(
+        mana_rules("-0.5")
+            .held_attributes(&catalog_item("tstr"))
+            .unwrap_err()
+            .contains("negative mana regeneration")
+    );
+    assert!(
+        rules(
+            &Tome {
+                abilities: "AIrm,AIrm",
+                ..mana_tome("3.4028235e38")
+            },
+            Overlay::default(),
+            "AIsm",
+        )
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err()
+        .contains("passive mana regeneration overflows")
+    );
+    assert!(
+        rules(&mana_tome("0.5"), Overlay::default(), "AIsm")
+            .unwrap()
+            .with_mana_regen(&window("AIsm", "Arem"))
+            .is_err()
+    );
+}
+
 #[test]
 fn flat_damage_comes_from_the_admitted_iatt_column() {
     let held = rules(&damage_tome("15"), Overlay::default(), "AIsm")
@@ -720,6 +825,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             armor: 0,
             damage: 15,
             life_regen: 0,
+            mana_regen_fraction: 0.0,
         }
     );
 }
