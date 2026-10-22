@@ -7,6 +7,8 @@ use crate::neutral_player::{
 use pcx_script::{HandleId, Value};
 use std::sync::Arc;
 
+use super::trigger_admission::PlayerStateChange;
+
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerBudget {
     pub max_slots: usize,
@@ -621,7 +623,7 @@ impl ObjectHost {
         });
         Ok(self)
     }
-    fn request_player_state(&mut self, args: &[Value]) -> Result<Value, Error> {
+    pub(super) fn request_player_state(&mut self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(SET_PLAYER_STATE, reason);
         let [player, Value::Handle(setting), Value::Int(value)] = args else {
             return Err(fail(Failure::PlayerArguments));
@@ -639,25 +641,63 @@ impl ObjectHost {
         {
             return Err(fail(Failure::OutsideDomain(enumerand)));
         }
-        let effective = self.resource_assignment(at, enumerand, *value)?;
-        let players = self
+        let assignment = self.resource_assignment(at, enumerand, *value)?;
+        let effective = assignment.map(|(stored, _)| stored);
+        let player_handle = self
             .players
-            .as_mut()
-            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
-        let limits = players
-            .state_requests
-            .as_mut()
-            .ok_or_else(|| fail(Failure::PlayerState("state requests not admitted")))?;
-        let requests = &mut players.rows[at].state_requests;
-        let stored = requests.iter().position(|(state, _)| *state == *setting);
-        if stored.is_none() {
-            if limits.records >= limits.max_records {
-                return Err(fail(Failure::Budget("player-state requests")));
+            .as_ref()
+            .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?
+            .rows[at]
+            .identity;
+        let stored = {
+            let players = self
+                .players
+                .as_mut()
+                .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+            let limits = players
+                .state_requests
+                .as_mut()
+                .ok_or_else(|| fail(Failure::PlayerState("state requests not admitted")))?;
+            let requests = &mut players.rows[at].state_requests;
+            let stored = requests.iter().position(|(state, _)| *state == *setting);
+            if stored.is_none() {
+                if limits.records >= limits.max_records {
+                    return Err(fail(Failure::Budget("player-state requests")));
+                }
+                requests
+                    .try_reserve(1)
+                    .map_err(|_| fail(Failure::Capacity))?;
             }
-            requests
-                .try_reserve(1)
-                .map_err(|_| fail(Failure::Capacity))?;
+            stored
+        };
+        if effective.is_some() {
+            let players = self
+                .players
+                .as_mut()
+                .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
+            let number = players.rows[at].number;
+            let resources = players.resources.as_mut().expect("prepared resources");
+            if !resources
+                .values
+                .iter()
+                .any(|(p, s, _)| *p == number && *s == enumerand)
+            {
+                resources
+                    .values
+                    .try_reserve(1)
+                    .map_err(|_| fail(Failure::Capacity))?;
+            }
         }
+        let change: Option<PlayerStateChange> = match assignment {
+            Some((_, visible)) => {
+                self.prepare_player_state_change(player_handle, enumerand, visible)?
+            }
+            None => None,
+        };
+        let players = self.players.as_mut().ok_or_else(|| {
+            self.inner
+                .error(SET_PLAYER_STATE, Failure::PlayerState("not admitted"))
+        })?;
         if let Some(value) = effective {
             let number = players.rows[at].number;
             let resources = players.resources.as_mut().expect("prepared resources");
@@ -668,19 +708,24 @@ impl ObjectHost {
             {
                 row.2 = value;
             } else {
-                resources
-                    .values
-                    .try_reserve(1)
-                    .map_err(|_| fail(Failure::Capacity))?;
                 resources.values.push((number, enumerand, value));
             }
         }
+        let limits = players.state_requests.as_mut().ok_or_else(|| {
+            self.inner.error(
+                SET_PLAYER_STATE,
+                Failure::PlayerState("state requests not admitted"),
+            )
+        })?;
         let requests = &mut players.rows[at].state_requests;
         if let Some(index) = stored {
             requests[index].1 = *value;
         } else {
             requests.push((*setting, *value));
             limits.records += 1;
+        }
+        if let Some(change) = change {
+            self.commit_player_state_change(change)?;
         }
         Ok(Value::Null)
     }
@@ -774,7 +819,13 @@ impl ObjectHost {
                 })
             })
     }
-    fn resource_assignment(&self, at: usize, state: i32, value: i32) -> Result<Option<i32>, Error> {
+    /// Returns the stored assignment and the effective value that `GetPlayerState` observes.
+    fn resource_assignment(
+        &self,
+        at: usize,
+        state: i32,
+        value: i32,
+    ) -> Result<Option<(i32, i32)>, Error> {
         let Some(players) = &self.players else {
             return Ok(None);
         };
@@ -784,13 +835,18 @@ impl ObjectHost {
         let Some(index) = resources.states.iter().position(|s| *s == state) else {
             return Ok(None);
         };
-        let value = match index {
+        let live = if matches!(index, 2 | 3) {
+            Some(self.live_food(
+                players.rows[at].identity,
+                if index == 2 { "fused" } else { "fmade" },
+            )?)
+        } else {
+            None
+        };
+        let stored = match index {
             0 | 1 => resources.rules.money(value),
             2 | 3 => value
-                .checked_sub(self.live_food(
-                    players.rows[at].identity,
-                    if index == 2 { "fused" } else { "fmade" },
-                )?)
+                .checked_sub(live.expect("food has live total"))
                 .ok_or_else(|| {
                     self.inner.error(
                         SET_PLAYER_STATE,
@@ -799,7 +855,16 @@ impl ObjectHost {
                 })?,
             _ => value,
         };
-        Ok(Some(value))
+        let visible = match live {
+            Some(live) => stored.checked_add(live).ok_or_else(|| {
+                self.inner.error(
+                    SET_PLAYER_STATE,
+                    Failure::PlayerState("effective food overflow"),
+                )
+            })?,
+            None => stored,
+        };
+        Ok(Some((stored, visible)))
     }
     fn resource_value(&self, at: usize, state: i32) -> Result<Option<i32>, Error> {
         let players = self.players.as_ref().expect("admitted players");
@@ -871,6 +936,19 @@ impl ObjectHost {
             ));
         }
         let state = self.source_constant_enumerand(source_global, "playerstate")?;
+        self.resource_value(at, state)
+    }
+    /// Effective value of one admitted player state, used by state-change events.
+    pub fn player_state_value(
+        &self,
+        player: HandleId,
+        state: HandleId,
+    ) -> Result<Option<i32>, Error> {
+        let at = self.player_index(&Value::Handle(player), "GetEventPlayerState")?;
+        let state = self
+            .inner
+            .symbolic_value(state, PLAYER_STATE_KIND)
+            .map_err(|e| self.inner.error("GetEventPlayerState", e.failure))?;
         self.resource_value(at, state)
     }
     /// Source-selected upkeep localization binding for an effective participant.
@@ -1531,11 +1609,16 @@ impl ObjectHost {
     }
 
     /// Reads and reserves a gold debit without writing it. The row for the owner is found or its
-    /// capacity reserved here, so [`ObjectHost::apply_gold_debit`] cannot fail.
-    pub(crate) fn prepare_gold_debit(
+    /// capacity reserved here, and any qualifying player-state change is prepared, so the write
+    /// itself only fails if that prepared state change can no longer be committed.
+    ///
+    /// `pending` events queued alongside the change share one combined reservation;
+    /// reserving them separately would only guarantee space for the larger group.
+    pub(crate) fn prepare_gold_debit_reserving(
         &mut self,
         player: HandleId,
         price: i32,
+        pending: usize,
     ) -> Result<GoldDebit, Error> {
         let fail = |reason| {
             self.inner
@@ -1565,16 +1648,18 @@ impl ObjectHost {
                 .try_reserve(1)
                 .map_err(|_| fail("resource row capacity"))?;
         }
+        let change = self.prepare_player_state_change_reserving(player, state, next, pending)?;
         Ok(GoldDebit {
             number,
             state,
             index,
             next,
+            change,
         })
     }
 
-    /// Writes a prepared debit. Its row exists or its capacity was reserved, so this is infallible.
-    pub(crate) fn apply_gold_debit(&mut self, debit: GoldDebit) {
+    /// Writes a prepared debit and commits the reserved player-state change.
+    pub(crate) fn apply_gold_debit(&mut self, debit: GoldDebit) -> Result<(), Error> {
         let players = self
             .players
             .as_mut()
@@ -1589,6 +1674,10 @@ impl ObjectHost {
                 .values
                 .push((debit.number, debit.state, debit.next)),
         }
+        if let Some(change) = debit.change {
+            self.commit_player_state_change(change)?;
+        }
+        Ok(())
     }
 }
 
@@ -1599,4 +1688,5 @@ pub(crate) struct GoldDebit {
     state: i32,
     index: Option<usize>,
     next: i32,
+    change: Option<PlayerStateChange>,
 }

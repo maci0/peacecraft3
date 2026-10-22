@@ -315,6 +315,8 @@ enum Entry {
         trigger: HandleId,
         timer: HandleId,
     },
+    /// One source-bound player-state subscription, with its last observed value.
+    RegisteredPlayerStateEvent(objects::PlayerStateEventRegistration),
     /// One source-bound game-state subscription; no evaluated comparison.
     RegisteredGameStateEvent {
         trigger: HandleId,
@@ -674,6 +676,7 @@ impl EnumHost {
             | Entry::RegisteredRegionEvent(_)
             | Entry::RegisteredTimedEvent { .. }
             | Entry::RegisteredTimerEvent { .. }
+            | Entry::RegisteredPlayerStateEvent(_)
             | Entry::RegisteredGameStateEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
             Entry::TriggerCondition(_) => "triggercondition",

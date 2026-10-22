@@ -1,8 +1,11 @@
 //! Fired trigger events and their event-response context. Engine changes
 //! (region membership, deaths) queue events; the session delivers them at
 //! script boundaries in firing order: filter, enabled check, conditions, then
-//! actions as one thread. Deferring delivery to the next boundary is a
-//! recreation choice; the original's synchronous nesting is unqualified.
+//! actions as one thread. Player-state changes admitted by
+//! `with_player_state_events` deliver before `SetPlayerState` returns only
+//! when no trigger or event delivery is already active; other events always
+//! defer to the next boundary. Both orderings are recreation choices; the
+//! original's synchronous nesting is unqualified.
 use super::{Entry, Error, Failure, ObjectHost, TriggerDelivery};
 use pcx_script::{HandleId, Value, value::FunctionId};
 use std::collections::{BTreeSet, VecDeque};
@@ -18,6 +21,8 @@ pub struct EventSubject {
     pub dialog: Option<HandleId>,
     pub button: Option<HandleId>,
     pub player: Option<HandleId>,
+    /// Player state whose change fired the event (`GetEventPlayerState`).
+    pub player_state: Option<HandleId>,
     /// Target of the spell whose effect fired the event (`GetSpellTargetUnit`).
     pub spell_target: Option<HandleId>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
@@ -58,6 +63,8 @@ pub struct FiredEvent {
 #[derive(Default)]
 pub(super) struct Delivery {
     queue: VecDeque<FiredEvent>,
+    /// Events queued by a synchronous mutation, delivered before its native returns.
+    synchronous: Option<VecDeque<FiredEvent>>,
     pub(super) subject: EventSubject,
     active: bool,
     /// Region registrations by arena event handle, with the units inside.
@@ -66,7 +73,7 @@ pub(super) struct Delivery {
     region_known: BTreeSet<HandleId>,
 }
 
-const RESPONSES: [&str; 20] = [
+const RESPONSES: [&str; 21] = [
     "GetSummoningUnit",
     "GetSummonedUnit",
     "GetLevelingUnit",
@@ -87,14 +94,36 @@ const RESPONSES: [&str; 20] = [
     "GetClickedDialog",
     "GetClickedButton",
     "GetTriggerPlayer",
+    "GetEventPlayerState",
 ];
 
 impl ObjectHost {
     pub(super) fn reserve_event_delivery(&mut self, count: usize) -> Result<(), Error> {
-        self.events
-            .queue
+        let queue = match &mut self.events.synchronous {
+            Some(queue) => queue,
+            None => &mut self.events.queue,
+        };
+        queue
             .try_reserve(count)
             .map_err(|_| self.inner.error("event delivery", Failure::Capacity))
+    }
+    /// Route events queued by the current mutation into a synchronous batch.
+    pub(super) fn delivery_active(&self) -> bool {
+        self.events.active
+    }
+    pub(super) fn begin_synchronous_delivery(&mut self) {
+        self.events.synchronous = Some(VecDeque::new());
+    }
+    pub(super) fn take_synchronous_delivery(&mut self) -> Option<VecDeque<FiredEvent>> {
+        self.events.synchronous.take()
+    }
+    /// Capacity of the queue a mutation would reserve in, for allocation tests.
+    #[cfg(test)]
+    pub(crate) fn event_queue_capacity(&self) -> usize {
+        match &self.events.synchronous {
+            Some(queue) => queue.capacity(),
+            None => self.events.queue.capacity(),
+        }
     }
     pub(super) fn check_trigger_player_response(&self, source: &str) -> Result<(), Error> {
         let name = "GetTriggerPlayer";
@@ -163,19 +192,23 @@ impl ObjectHost {
 
     /// Pushes an event into capacity that `reserve_event_delivery` already reserved. The push
     /// cannot allocate, so it has no failure path.
-    pub(super) fn push_reserved_event(
+    pub(crate) fn push_reserved_event(
         &mut self,
         trigger: HandleId,
         filter: Option<FunctionId>,
         subject: EventSubject,
         event: Option<HandleId>,
     ) {
-        self.events.queue.push_back(FiredEvent {
+        let fired = FiredEvent {
             trigger,
             filter,
             subject,
             event,
-        });
+        };
+        match &mut self.events.synchronous {
+            Some(queue) => queue.push_back(fired),
+            None => self.events.queue.push_back(fired),
+        }
     }
 
     pub(super) fn queue_event(
@@ -333,6 +366,7 @@ impl ObjectHost {
             "GetClickedDialog" => subject.dialog,
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,
+            "GetEventPlayerState" => subject.player_state,
             "GetSpellTargetUnit" => subject.spell_target,
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.

@@ -573,6 +573,9 @@ mod player_unit_event_tests;
 #[path = "player_event_tests.rs"]
 mod player_event_tests;
 
+#[path = "player_state_event_tests.rs"]
+mod player_state_event_tests;
+
 #[path = "trigger_condition_tests.rs"]
 mod trigger_conditions;
 

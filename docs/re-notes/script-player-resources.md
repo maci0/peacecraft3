@@ -54,10 +54,56 @@ This is a recreation of resource counters, not proof of the original's complete
 resource lifecycle. Food assignment adjustments and ceiling application are
 stated recreation choices; exact original death/ownership update ordering,
 construction, resurrection, food disabling and original edge-case behavior
-remain unverified. Harvesting, spending, upkeep deductions and player-state
-change event registration/delivery remain separate consumers; no registered
-player-state event is silently accepted here. Original/native/browser balance
-and rendered parity are not established by parser or counter tests.
+remain unverified. Harvesting, spending and upkeep deductions remain separate
+consumers. Original/native/browser balance and rendered parity are not
+established by parser or counter tests.
+
+## Player-state change events
+
+`ObjectHost::with_player_state_events` admits the loaded
+`TriggerRegisterPlayerStateEvent(trigger, player, playerstate, limitop, real)`
+contract on the existing trigger arena. The signature, `CreateTrigger`,
+`Player`, `ConvertPlayerState` and `ConvertLimitOp` must share their selected
+declaration source. The six `limitop` names (`LESS_THAN`,
+`LESS_THAN_OR_EQUAL`, `EQUAL`, `GREATER_THAN_OR_EQUAL`, `GREATER_THAN`,
+`NOT_EQUAL`) resolve their values through the admitted `ConvertLimitOp` domain
+rather than embedded opcode numbers; missing, duplicate or out-of-domain
+operations refuse. `playerstate` and `limitop` must descend to `handle` through
+source-matching declarations. `GetEventPlayerState` is admitted when present.
+
+Registration validates the trigger and player families, the symbolic state and
+limitop handles, the finite real threshold, and the aggregate caller bound. It
+seeds the observed value from the effective player state without firing. The
+central mutation path used by `SetPlayerState` and gold debits compares each
+intermediate effective value before it is overwritten. Every changed value that
+satisfies the selected comparison queues its own event, so a write that passes
+through a qualifying value and back still fires; equal writes and changes that
+do not satisfy the comparison do not. A script-boundary poll catches effective
+changes computed outside that path, such as live food, and records the last
+observed value. Delivery uses the existing event context, with
+`GetEventPlayerState` returning the registered state handle. States outside the
+effective resource projection refuse instead of inventing a value.
+
+`SetPlayerState` is the only mutation with synchronous delivery: when player
+state events are admitted and no trigger or event delivery is already active,
+its matching filters, conditions and actions run through the normal
+event-delivery context before the native returns; no later tick is required.
+Other event families still defer to the next script boundary. A
+`TriggerSleepAction` inside an action parks that action and lets the remaining
+matching registrations and the enclosing script continue. `SetPlayerState`
+calls made while a trigger is already executing, or while another event is
+being delivered, are not delivered recursively: they update the effective
+value and queue their events for the next delivery boundary. This ordering is
+a recreation choice; the original's exact nested delivery timing is not
+qualified here.
+
+The shipped witness is `Human02.j:3506` and `:3520`, registering gold below
+1000 and lumber below 300, with the declaration at `common.j:1284` and the
+`EVENT_PLAYER_STATE_LIMIT` response at `:1287`. Synthetic tests cover baseline
+seeding, changed and unchanged values, comparisons from selected constants,
+response context, budgets and missing operation declarations. The selected
+Human02 admission passes through this source contract; executing that map still
+stops earlier at unimplemented `SetResourceAmount`.
 
 Synthetic tests exercise changed source operands and malformed source refusal,
 initial balances, setter clamps with retained raw requests, per-player

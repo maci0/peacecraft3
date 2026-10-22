@@ -443,6 +443,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .inner
             .objects_mut()
             .poll_region_events(&mut work)?;
+        active
+            .vm
+            .host()
+            .inner
+            .objects_mut()
+            .poll_player_state_events(&mut work)?;
         self.advance_queued_events(work)
             .map(|events| delivered + events)
     }

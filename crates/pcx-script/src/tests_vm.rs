@@ -1759,6 +1759,58 @@ impl crate::Host for Threads {
 }
 
 #[test]
+fn sequential_spawn_followups_spend_fuel_without_growing_the_rust_stack() {
+    #[derive(Default)]
+    struct Followups {
+        function: Option<crate::value::FunctionId>,
+        followups: usize,
+    }
+    impl crate::Host for Followups {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(format!("unexpected native {name}"))
+        }
+        fn begin_script_call(
+            &mut self,
+            name: &str,
+            args: &[Value],
+        ) -> Result<Option<crate::ScriptCall>, String> {
+            let [Value::Code(function)] = args else {
+                return Err("callback required".into());
+            };
+            self.function = Some(*function);
+            Ok((name == "Drive").then(|| crate::ScriptCall::Spawn(vec![*function])))
+        }
+        fn after_script_spawn(&mut self) -> Result<Option<crate::ScriptCall>, String> {
+            self.followups += 1;
+            Ok(Some(crate::ScriptCall::Spawn(vec![
+                self.function.expect("script call seeded the function"),
+            ])))
+        }
+        fn leave_thread(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let program = program_of(
+        "native Drive takes code callback returns nothing
+function empty takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call Drive(function empty)
+endfunction
+",
+    );
+    let mut vm = Vm::new(&program, Followups::default());
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.to_string().contains("steps"), "{error}");
+    assert!(vm.host().followups > 0);
+    assert!(
+        vm.host().followups as u64 <= MAX_STEPS,
+        "the fuel check bounds sequential follow-ups: {}",
+        vm.host().followups
+    );
+}
+
+#[test]
 fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
     let program = program_of(THREAD_SRC);
     let id = |name| program.function_id(name).unwrap();
