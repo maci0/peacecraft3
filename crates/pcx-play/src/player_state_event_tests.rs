@@ -1053,3 +1053,46 @@ fn nested_mutation_and_condition_evaluation_match_the_native_order() {
 fn sleeping_event_resumes_its_context_and_can_deliver_a_nested_mutation() {
     assert_native_nested_ordering(true);
 }
+
+#[test]
+fn prepared_lumber_credit_writes_both_rows_before_ordered_events() {
+    let mut h = host(&common(0), 8);
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let bank = convert(&mut h, "ConvertPlayerState", 2);
+    let gathered = convert(&mut h, "ConvertPlayerState", 16);
+    let greater = convert(&mut h, "ConvertLimitOp", 4);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    register(&mut h, &trigger, &player, &bank, &greater, 0.0).unwrap();
+    register(&mut h, &trigger, &player, &gathered, &greater, 0.0).unwrap();
+    for state in [&bank, &gathered] {
+        h.native(
+            "SetPlayerState",
+            &[player.clone(), state.clone(), Value::Int(0)],
+        )
+        .unwrap();
+    }
+    assert!(h.take_fired_event().is_none());
+
+    let credit = h
+        .prepare_lumber_credit_reserving(id(&player), 10, 0)
+        .unwrap();
+    h.apply_lumber_credit(credit);
+
+    assert_eq!(
+        h.native("GetPlayerState", &[player.clone(), bank.clone()])
+            .unwrap(),
+        Value::Int(10)
+    );
+    assert_eq!(
+        h.native("GetPlayerState", &[player.clone(), gathered.clone()])
+            .unwrap(),
+        Value::Int(10)
+    );
+    let first = h.take_fired_event().expect("bank event");
+    assert_eq!(first.subject.player, Some(id(&player)));
+    assert_eq!(first.subject.player_state, Some(id(&bank)));
+    let second = h.take_fired_event().expect("gathered event");
+    assert_eq!(second.subject.player, Some(id(&player)));
+    assert_eq!(second.subject.player_state, Some(id(&gathered)));
+    assert!(h.take_fired_event().is_none());
+}

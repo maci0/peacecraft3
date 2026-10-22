@@ -204,10 +204,12 @@ local in `.scratch/mdx-peasant-probe/peasant-sound-receipt.json`, SHA-256
 
 ## Placed-tree life byte
 
-The runtime host currently retains only script-created destructable arguments
-and flags. Placed trees from `war3map.doo` enter the collision raster without
-shared-arena handles or life pools. A scan of script-created objects alone
-therefore cannot implement the original campaign's lumber order.
+The runtime host admits placed trees from `war3map.doo` as destructable handles
+with shared life pools (`admit_placed_destructables`, `PlacedDestructable`); the
+collision raster and the handle life are updated together on damage and death.
+An implementation that scanned only script-created destructables would miss the
+campaign's lumber order, so the runtime scans both admitted placed and
+script-created destructables.
 
 A controlled RoC run used five original Human02 `LTlt` records, preserving
 their positions, variations, flags, per-axis scales and unique creation IDs,
@@ -238,3 +240,42 @@ Receipts remain local at the repository root's
 `.scratch/placed-tree-life-probe/`. This is life-state evidence, not a completed
 harvesting implementation or a rendered comparison. Tree death must update
 derived pathing without erasing overlapping objects or terrain restrictions.
+
+## Runtime model
+
+`harvest_runtime` installs only when the selected order registry resolves
+`autoharvestlumber` and unit activity admits a movement order. It keeps one
+runtime worker record per unit; tree, depot, timing, damage, capacity and reach
+come from the map-selected unit definition, `Ahar`, the worker's tree weapon
+slot, `Artn` and the destructable catalog. Missing capability, an unusable tree
+set, a missing depot or malformed authored values produce a contextual error;
+the runtime does not substitute stock numbers.
+
+Selection is bounded by `Ahar.Area` and deterministic: nearest candidate wins,
+and equal squared distance breaks on the lower handle. Tree reach is the
+worker's admitted tree-weapon range when that slot exists, otherwise
+`Ahar.Rng`. Depot reach is the depot's admitted collision radius plus
+`Ahar.Rng`; it is not a copied world distance.
+
+Work timing uses the tree weapon's `cool`, `dmgpt` and `Backsw` when the
+weapon-slot data is admitted, otherwise `Ahar.Dur` with no damage-point delay.
+Each swing applies `Ahar.DataA` damage to the tree and adds the same amount to
+carried lumber, capped at `Ahar.DataB`. A dead tree with a positive carry is
+deposited even when the carry is below capacity. The final partial swing and
+the decision to deposit incomplete carry on tree death are recreation choices;
+the controlled probe did not distinguish them from alternatives.
+
+Deposits prepare the player's lumber bank and `PLAYER_STATE_LUMBER_GATHERED`
+rows before writing either value or firing player-state events. Both prepared
+rows are written before their events so a callback observes a coherent bank and
+counter. Stop, hold-position, non-harvest orders, unit death and removal cancel
+the worker record. A worker with no remaining reachable tree stops searching.
+
+Tree deaths caused by an engine-tick swing reserve and push their registered
+death events into the delivery queue at the tick boundary; they do not run
+synchronously inside `SetLife` as the destructable native evidence indicates
+for direct mutation. Nested `TriggerExecute` behavior across that boundary and
+exact nested native ordering remain unqualified here. The work phase selects
+the authored `stand work lumber` sequence and refuses a unit that has an
+animation model without it; audio and dedicated carry animation selection are
+not implemented by this runtime.

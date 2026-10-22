@@ -625,6 +625,7 @@ pub fn assemble(
     let abilities = hero_skills
         .as_ref()
         .map_or(&empty_abilities, |input| &input.abilities);
+    let harvest_abilities = abilities.clone();
     let mut object = TimerHost::checked(enum_host)?
         .with_groups(budgets.groups)?
         .with_map_config(budgets.map_config)?
@@ -826,6 +827,14 @@ pub fn assemble(
         }
         if let Some(activity) = input.activity {
             object.admit_unit_activity(activity, 65536)?;
+            object = object.with_harvest(
+                Arc::clone(&tables),
+                harvest_abilities,
+                crate::playercolor_host::harvest_runtime::Budget::new(
+                    budgets.units.max_records,
+                    65536,
+                ),
+            )?;
         }
         if let Some(rules) = input.group_orders {
             object = object.with_group_orders(rules)?;
