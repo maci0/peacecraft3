@@ -107,6 +107,18 @@ impl RestoreLifePolicy {
         {
             return Err(fail("missing or mismatched client identity"));
         }
+        let mut total = 0usize;
+        for window in [
+            &binding.body,
+            &binding.zero_initializer,
+            &binding.threshold,
+            &binding.minimum,
+        ] {
+            total = total
+                .checked_add(window.len as usize)
+                .filter(|&bytes| bytes <= budget.profile_bytes)
+                .ok_or_else(|| fail("restore windows exceed input budget"))?;
+        }
         let pe = Pe::parse(image, budget).map_err(|e| fail(&e.to_string()))?;
         let body = pe
             .window(&binding.body, true)
@@ -1460,5 +1472,30 @@ mod restore_policy_tests {
         .unwrap();
         assert_eq!(shifted_policy.life(1.0625, 50.0), 50.0);
         assert_eq!(shifted_policy.life(0.0625, 50.0), 0.75);
+    }
+
+    #[test]
+    fn restore_windows_consume_the_declared_profile_budget() {
+        let (bytes, binding) = image(0, 0.125, 0.75);
+        let needed = [
+            &binding.body,
+            &binding.zero_initializer,
+            &binding.threshold,
+            &binding.minimum,
+        ]
+        .iter()
+        .map(|window| window.len as usize)
+        .sum::<usize>();
+        let budget = |profile_bytes| RuleInputBudget {
+            image_bytes: 1 << 20,
+            profile_bytes,
+            sections: 4,
+        };
+        assert!(RestoreLifePolicy::read(&bytes, binding.clone(), budget(needed)).is_ok());
+        assert!(
+            RestoreLifePolicy::read(&bytes, binding, budget(needed - 1))
+                .unwrap_err()
+                .contains("restore windows exceed input budget")
+        );
     }
 }
