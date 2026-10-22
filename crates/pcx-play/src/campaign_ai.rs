@@ -114,6 +114,7 @@ type Loader = Box<dyn FnMut(&str) -> Result<Arc<MapScripts>, String> + Send + Sy
 pub(crate) trait AiWorld: Host {
     fn ai_clock(&self) -> Option<f64>;
     fn has_map_player_state_callbacks(&self) -> bool;
+    fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -136,6 +137,29 @@ impl AiWorld for NeutralStack {
             .inner()
             .retained_player_state_events()
             .is_ok_and(|count| count > 0)
+    }
+
+    fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String> {
+        let identity = self
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .player_identity(player)
+            .ok_or("GetUpgradeLevel: AI player identity is not admitted")?;
+        match self.native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(identity),
+                Value::Int(upgrade),
+                Value::Bool(true),
+            ],
+        )? {
+            Value::Int(level) => Ok(level),
+            _ => Err("GetUpgradeLevel: player research returned a non-integer".into()),
+        }
     }
 }
 
@@ -246,6 +270,11 @@ impl<W: AiWorld> Runtime<W> {
         }
         result.map_err(|e| format!("campaign AI player {player}: {e}"))
     }
+
+    #[cfg(test)]
+    pub(crate) fn global(&self, player: i32, name: &str) -> Option<Value> {
+        self.active.get(&player).map(|vm| vm.global(name))
+    }
 }
 
 fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
@@ -258,6 +287,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("GetAiPlayer", &[][..], "integer"),
         ("Sleep", &["real"][..], "nothing"),
         ("StartThread", &["code"][..], "nothing"),
+        ("GetUpgradeLevel", &["integer"][..], "integer"),
     ] {
         let native = scripts
             .program()
@@ -404,6 +434,15 @@ impl<W: AiWorld> Host for AiHost<W> {
                 }
                 self.world_mut()?.native(name, args)
             }
+            "GetUpgradeLevel" => {
+                let [Value::Int(upgrade)] = args else {
+                    return Err("GetUpgradeLevel: expected an integer upgrade ID".into());
+                };
+                let player = self.player;
+                Ok(Value::Int(
+                    self.world_mut()?.ai_upgrade_level(player, *upgrade)?,
+                ))
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -440,6 +479,10 @@ mod tests {
         fn has_map_player_state_callbacks(&self) -> bool {
             self.0.lock().unwrap().callbacks
         }
+
+        fn ai_upgrade_level(&mut self, _player: i32, _upgrade: i32) -> Result<i32, String> {
+            Err("test world has no admitted upgrade research".into())
+        }
     }
 
     impl Host for World {
@@ -475,7 +518,7 @@ mod tests {
     }
 
     const COMMON: &str = "type agent extends handle\ntype player extends agent\ntype playerstate extends handle\nnative Player takes integer number returns player\nnative GetPlayerState takes player whichPlayer, playerstate whichState returns integer\nnative SetPlayerState takes player whichPlayer, playerstate whichState, integer value returns nothing\n";
-    const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\n";
+    const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\n";
 
     fn program(label: &str, source: &str) -> Arc<MapScripts> {
         program_with_ai_common(label, source, AI_COMMON)
@@ -529,6 +572,10 @@ mod tests {
                 "GetAiPlayer takes nothing returns integer",
                 "GetAiPlayer takes nothing returns real",
             ),
+            AI_COMMON.replace(
+                "GetUpgradeLevel takes integer id returns integer",
+                "GetUpgradeLevel takes integer id returns real",
+            ),
         ] {
             let script = program_with_ai_common("synthetic:red.ai", body, &declaration);
             let mut runtime = Runtime::<World>::default();
@@ -551,6 +598,40 @@ mod tests {
         assert!(error.contains("declaration"), "{error}");
         assert!(world.is_some());
         assert!(shared.lock().unwrap().gold.is_empty());
+
+        let moved = format!("{COMMON}native GetUpgradeLevel takes integer id returns integer\n");
+        let ai_common = AI_COMMON.replace(
+            "native GetUpgradeLevel takes integer id returns integer\n",
+            "",
+        );
+        let script = program_with_sources("synthetic:red.ai", body, &moved, &ai_common);
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "red.ai").unwrap_err();
+        assert!(error.contains("GetUpgradeLevel"), "{error}");
+        assert!(world.is_some());
+        assert!(shared.lock().unwrap().gold.is_empty());
+    }
+
+    #[test]
+    fn upgrade_query_rejects_wrong_arity_and_type_without_touching_world() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [
+            vec![],
+            vec![Value::Real(5.0)],
+            vec![Value::Int(5), Value::Int(6)],
+        ] {
+            assert!(
+                host.native("GetUpgradeLevel", &args)
+                    .unwrap_err()
+                    .contains("integer")
+            );
+            assert!(host.world.is_some());
+            assert!(shared.lock().unwrap().gold.is_empty());
+        }
     }
 
     struct Source {
