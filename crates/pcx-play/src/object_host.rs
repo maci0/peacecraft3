@@ -60,6 +60,7 @@ pub struct ObjectHost {
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
     unit_placement: Option<crate::unit_placement::Placement>,
+    destructable_catalog: Option<destructables::DestructableCatalog>,
     map_music: Option<music::State>,
     sound_environments: Option<environments::State>,
     quests: Option<crate::quest_session::QuestSession>,
@@ -123,6 +124,18 @@ enum NativeCallback {
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
+    #[cfg(test)]
+    pub(crate) fn test_attach_placement(&mut self, placement: crate::unit_placement::Placement) {
+        self.unit_placement = Some(placement);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_placement_cell(&self, cell: usize) -> Option<u8> {
+        self.unit_placement
+            .as_ref()
+            .map(|placement| placement.test_cell(cell))
+    }
+
     pub fn with_script_numeric(mut self, policy: crate::script_numeric::NumericPolicy) -> Self {
         self.numeric = Some(policy);
         self
@@ -183,6 +196,7 @@ impl ObjectHost {
             terrain_pathing: None,
             initial_blight: None,
             unit_placement: None,
+            destructable_catalog: None,
             map_music: None,
             sound_environments: None,
             quests: None,
@@ -1064,7 +1078,10 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 
 #[path = "destructable_host.rs"]
 mod destructables;
-pub use destructables::{DestructableBudget, DestructableCreation, DestructableState};
+pub use destructables::{
+    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
+    DestructableState, DestructableStats, PlacedDestructable,
+};
 
 #[path = "unit_host.rs"]
 mod unit_creation;
