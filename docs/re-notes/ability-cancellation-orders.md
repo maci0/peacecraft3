@@ -142,6 +142,19 @@ the owned run was stopped afterward. Local receipts and captures are retained
 in ignored `dataset-stats-probe`. Wall-clock startup delays under filesystem
 contention are not performance measurements of the recreation.
 
+A follow-up kept that diagnostic's original information and override members,
+added an explicit `VersionGet` comparison against the selected `common.j`
+version constants, and again used only `-loadfile` in a fresh reference prefix.
+Map SHA-256:
+`6224d5d7ba07ec1638b0cad307e2ac8457b5d8548f588a25fb91810ca3f5a972`.
+All 16 checkpoints arrived: at 5.000 the runtime reported
+`VERSION_FROZEN_THRONE`, grunt maximum life 700 and Uther collision size 32.
+This directly qualifies this run as TFT; it does not retroactively establish
+the edition of earlier runs without that readback. The owned container was
+stopped, with local receipts retained in ignored `edition-stats-probe`.
+Neither a RoC launch nor the native dataset-selection algorithm is established
+by this result.
+
 ## Recreation shield boundary
 
 The self-cast host reads the learned rank's duration, cost, cooldown and Can
