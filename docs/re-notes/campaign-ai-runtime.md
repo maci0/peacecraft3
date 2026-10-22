@@ -36,6 +36,43 @@ while using the session's existing world, handles and deterministic clock.
 The existing script VM is the execution path to reuse. Shared-world ownership,
 AI-native contracts, callback invocation and scheduling remain open.
 
+## Original-client scheduling probe (2026-10-23)
+
+The reviewed client above ran a diagnostic Human02 map with `-classic`;
+`VersionGet` reported RoC. The map retained the original configuration and
+selected its first two computer-player slots, 0 and 3. Authored gameplay scripts
+were replaced by the diagnostic. Each embedded AI program declared its own
+same-named counter, incremented it, wrote the counter times a diagnostic amount
+to its player's gold, requested `Sleep(0.25)`, then incremented and wrote again.
+The amounts 17 and 29 are test stimuli, not game rules.
+
+| Map observation | Game clock | Player 0 gold | Player 3 gold |
+| --- | --- | --- | --- |
+| Before either start | 1.000 | 0 | 0 |
+| Immediately after the first `StartCampaignAI` returns | 1.000 | 17 | 0 |
+| Immediately after the second returns | 1.000 | 17 | 29 |
+| Later sample | 1.125 | 17 | 29 |
+| Later sample | 1.563 | 34 | 58 |
+| Final sample | 9.063 | 34 | 58 |
+
+These runtime observations support separate AI globals operating on the same
+player resource state. Initial execution reaches the first write before
+`StartCampaignAI` returns; deferring all initial execution until a later timer
+boundary would contradict this case. The samples bound the second writes to
+after 1.125 and by 1.563; they do not establish exact wake times or instruction
+scheduling between observations. Repeated starts, callbacks between programs,
+full campaign AI and native Windows behavior remain unqualified.
+
+The ignored local receipt is
+`.scratch/campaign-ai-scheduling-probe-r2/result.json`, with all 12 raw markers
+preserved beside it. The diagnostic map SHA-256 is
+`1abd9495206ce14486977cc83aa19d70b831d4d43e540cd408b4ec682f7aa9c4`;
+its map-script SHA-256 is
+`c518e5993f0338485d29492e648e52d21be67ead9d9db15af7f82b8c73c6903e`.
+Four synthetic collector tests passed. An initial collection before all markers
+arrived refused; the completed collection qualified all 12. The owned client
+was stopped and its run retained.
+
 ## Relationship to the earlier Human02 probes
 
 The selected `War3Local.mpq::Maps\Campaign\Human02.w3m` has SHA-256

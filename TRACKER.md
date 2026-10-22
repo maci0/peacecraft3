@@ -309,7 +309,8 @@ integration. A completed prototype does not close its broader milestone.
 
 The selected Human02 AI sources load through the pinned campaign recipe and
 compile with the existing VM compiler. Runtime AI support remains open; the
-source audit and bounded comparison with the earlier probe map are recorded in
+source audit, bounded comparison with the earlier probe map, and original-client
+evidence for independent AI globals and synchronous initial execution are recorded in
 [campaign-ai-runtime.md](docs/re-notes/campaign-ai-runtime.md).
 
 
