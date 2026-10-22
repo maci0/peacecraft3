@@ -77,15 +77,15 @@ type OverlayPanels<'w, 's> = Query<
 fn panel() -> Node {
     Node {
         display: Display::None,
-        width: Val::Rem(22.0),
+        width: Val::Rem(20.0),
         max_width: Val::Percent(100.0),
         min_width: Val::Px(0.0),
         flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
-        padding: UiRect::all(Val::Rem(0.75)),
+        padding: UiRect::all(Val::Rem(0.625)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(8.0)),
-        row_gap: Val::Rem(0.5),
+        border_radius: BorderRadius::all(Val::Px(6.0)),
+        row_gap: Val::Rem(0.375),
         ..default()
     }
 }
@@ -131,8 +131,8 @@ fn setup(mut commands: Commands) {
                 panel(),
                 Visibility::Hidden,
                 OverlayRoot,
-                BackgroundColor(Color::srgba(0.008, 0.012, 0.014, 0.18)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.14)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.016, 0.32)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.9, 0.10)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
@@ -148,14 +148,14 @@ fn setup(mut commands: Commands) {
                         Pickable::IGNORE,
                     ))
                     .with_children(|row| {
-                        for text in ["Performance", "F8"] {
+                        for text in ["PERFORMANCE", "F8"] {
                             row.spawn((
                                 Text::new(text),
                                 TextFont {
-                                    font_size: bevy::text::FontSize::Rem(0.75),
+                                    font_size: bevy::text::FontSize::Rem(0.65),
                                     ..default()
                                 },
-                                TextColor(Color::srgb(0.76, 0.84, 0.83)),
+                                TextColor(Color::srgb(0.71, 0.86, 0.77)),
                                 Pickable::IGNORE,
                             ));
                         }
@@ -172,7 +172,7 @@ fn setup(mut commands: Commands) {
                         row.spawn((
                             Text::new("FPS\nFrame interval"),
                             TextFont {
-                                font_size: bevy::text::FontSize::Rem(0.95),
+                                font_size: bevy::text::FontSize::Rem(0.85),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.82, 0.88, 0.85)),
@@ -186,7 +186,7 @@ fn setup(mut commands: Commands) {
                             Text::new("-\n- ms"),
                             TextLayout::justify(Justify::Right),
                             TextFont {
-                                font_size: bevy::text::FontSize::Rem(0.95),
+                                font_size: bevy::text::FontSize::Rem(0.85),
                                 ..default()
                             },
                             TextColor(Color::srgb(0.96, 0.98, 0.96)),
@@ -212,7 +212,7 @@ fn setup(mut commands: Commands) {
                     .spawn((
                         Node {
                             width: Val::Percent(100.0),
-                            height: Val::Rem(3.25),
+                            height: Val::Rem(3.0),
                             align_items: AlignItems::End,
                             overflow: Overflow::clip(),
                             ..default()
@@ -268,9 +268,9 @@ fn setup(mut commands: Commands) {
             });
             root.spawn((
                 Node {
-                    width: Val::Rem(28.0),
-                    max_width: Val::Vw(90.0),
-                    flex_shrink: 1.0,
+                    width: Val::Rem(34.0),
+                    max_width: Val::Percent(100.0),
+                    flex_shrink: 0.0,
                     margin: UiRect::right(Val::Auto),
                     max_height: Val::Vh(95.0),
                     overflow: Overflow::scroll_y(),
@@ -279,8 +279,8 @@ fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 DebugRoot,
                 ScrollPosition::default(),
-                BackgroundColor(Color::srgba(0.008, 0.012, 0.014, 0.18)),
-                BorderColor::all(Color::srgba(0.85, 0.95, 0.95, 0.14)),
+                BackgroundColor(Color::srgba(0.012, 0.018, 0.016, 0.32)),
+                BorderColor::all(Color::srgba(0.85, 0.95, 0.9, 0.10)),
                 Pickable::IGNORE,
             ))
             .with_children(|panel| {
@@ -296,32 +296,65 @@ fn setup(mut commands: Commands) {
                         Pickable::IGNORE,
                     ))
                     .with_children(|row| {
-                        for text in ["Debug", "F7 | PgUp / PgDn"] {
+                        for text in ["RENDERER / WORLD", "F7 | PgUp / PgDn"] {
                             row.spawn((
                                 Text::new(text),
                                 TextFont {
-                                    font_size: bevy::text::FontSize::Rem(0.75),
+                                    font_size: bevy::text::FontSize::Rem(0.65),
                                     ..default()
                                 },
-                                TextColor(Color::srgb(0.76, 0.84, 0.83)),
+                                TextColor(Color::srgb(0.71, 0.86, 0.77)),
                                 Pickable::IGNORE,
                             ));
                         }
                     });
-                panel.spawn((
-                    Text::new("Debug (F7)"),
-                    TextFont {
-                        font_size: bevy::text::FontSize::Rem(0.75),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.96, 0.98, 0.96)),
-                    TextShadow {
-                        offset: Vec2::splat(1.0),
-                        ..default()
-                    },
-                    Pickable::IGNORE,
-                    debug::DebugText,
-                ));
+                panel
+                    .spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_width: Val::Px(0.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Rem(0.75),
+                            row_gap: Val::Rem(0.75),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|sections| {
+                        for (index, title) in debug::SECTIONS.iter().enumerate() {
+                            sections
+                                .spawn((
+                                    Node {
+                                        flex_basis: Val::Rem(15.0),
+                                        flex_grow: 1.0,
+                                        min_width: Val::Px(0.0),
+                                        ..default()
+                                    },
+                                    Text::new(format!("{title}\n")),
+                                    TextFont {
+                                        font_size: bevy::text::FontSize::Rem(0.7),
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgb(0.71, 0.86, 0.77)),
+                                    TextShadow {
+                                        offset: Vec2::splat(1.0),
+                                        ..default()
+                                    },
+                                    Pickable::IGNORE,
+                                ))
+                                .with_children(|section| {
+                                    section.spawn((
+                                        TextSpan::new("Unavailable"),
+                                        TextFont {
+                                            font_size: bevy::text::FontSize::Rem(0.7),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.96, 0.98, 0.96)),
+                                        debug::DebugText(index),
+                                    ));
+                                });
+                        }
+                    });
             });
         });
 }
@@ -347,6 +380,11 @@ fn fit_debug(
     for (computed, transform, mut node, mut scroll) in &mut panels {
         let top = transform.to_scale_angle_translation().2.y - computed.size().y * 0.5;
         let scale = computed.inverse_scale_factor();
+        // Bound against the actual viewport even when the flex row wraps.
+        let width = Val::Px((window.physical_width() as f32 * scale - 20.0).max(0.0));
+        if node.max_width != width {
+            node.max_width = width;
+        }
         // Wrapped F7 uses only the space below F8; keyboard paging keeps every row reachable.
         let height = ((window.physical_height() as f32 - top) * scale - 10.0).max(0.0);
         let limit = Val::Px(height);
@@ -498,6 +536,7 @@ mod tests {
             .press(KeyCode::PageDown);
         world.run_system_once(fit_debug).unwrap();
         assert_eq!(world.get::<Node>(panel).unwrap().max_height, Val::Px(570.0));
+        assert_eq!(world.get::<Node>(panel).unwrap().max_width, Val::Px(460.0));
         assert_eq!(world.get::<ScrollPosition>(panel).unwrap().0.y, 400.0);
         world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
         world

@@ -19,7 +19,17 @@ pub struct DebugOverlay {
 }
 
 #[derive(Component)]
-pub(super) struct DebugText;
+pub(super) struct DebugText(pub(super) usize);
+
+pub(super) const SECTIONS: [&str; 7] = [
+    "DISPLAY",
+    "RENDERER",
+    "SCENE",
+    "RETAINED GEOMETRY | CPU",
+    "TEXTURES",
+    "DEVICE MEMORY",
+    "CAMPAIGN",
+];
 
 #[derive(SystemParam)]
 pub(super) struct Sources<'w, 's> {
@@ -37,7 +47,7 @@ pub(super) fn refresh(
     time: Res<Time<Real>>,
     debug: Res<DebugOverlay>,
     sources: Sources,
-    mut counters: Query<&mut Text, With<DebugText>>,
+    mut counters: Query<(&DebugText, &mut TextSpan)>,
     mut last: Local<f64>,
 ) {
     if !debug.visible {
@@ -48,7 +58,8 @@ pub(super) fn refresh(
         return;
     }
     *last = now;
-    let mut value = String::from("DISPLAY\n");
+    let mut sections: [String; 7] = std::array::from_fn(|_| String::new());
+    let mut value = &mut sections[0];
     if let Some(frames) = sources.frames {
         let _ = writeln!(
             value,
@@ -68,10 +79,11 @@ pub(super) fn refresh(
             window.present_mode
         );
     }
+    value = &mut sections[1];
     if let Some(adapter) = sources.adapter {
         let _ = writeln!(
             value,
-            "\nRENDERER\nGPU  {}\nBackend  {:?} | {:?}\nDriver  {}",
+            "GPU  {}\nBackend  {:?} | {:?}\nDriver  {}",
             adapter.name, adapter.backend, adapter.device_type, adapter.driver
         );
         match memory::vram(&adapter.device_pci_bus_id) {
@@ -87,9 +99,10 @@ pub(super) fn refresh(
             None => value.push_str("Whole-GPU VRAM report unavailable\n"),
         }
     }
+    value = &mut sections[2];
     let _ = writeln!(
         value,
-        "\nSCENE\nEntities         {:>10}\nMesh instances   {:>10}\nView-visible     {:>10}",
+        "Entities         {:>10}\nMesh instances   {:>10}\nView-visible     {:>10}",
         sources.entities.iter().len(),
         sources.mesh_instances.iter().len(),
         sources
@@ -98,13 +111,22 @@ pub(super) fn refresh(
             .filter(|visibility| visibility.is_some_and(|visibility| visibility.get()))
             .count(),
     );
+    value = &mut sections[3];
     if let Some(meshes) = sources.meshes {
         let mut retained = 0;
+        let mut upload_sources = 0;
+        let mut released = 0;
         let mut vertices = 0;
         let mut indices = 0;
         let mut triangles = 0;
         let mut bytes = 0;
         for (_, mesh) in meshes.iter() {
+            if mesh
+                .asset_usage
+                .contains(bevy::asset::RenderAssetUsages::RENDER_WORLD)
+            {
+                upload_sources += 1;
+            }
             if let Ok(attributes) = mesh.try_attributes() {
                 retained += 1;
                 let vertex_count = attributes
@@ -126,15 +148,18 @@ pub(super) fn refresh(
                             bevy::mesh::Indices::U32(_) => 4,
                         }
                 });
+            } else {
+                released += 1;
             }
         }
         let _ = writeln!(
             value,
-            "Mesh assets      {:>10}\n\nCPU MESH COPIES\nRetained meshes  {retained:>10}\nVertices         {vertices:>10}\nList triangles   {triangles:>10}\nIndices          {indices:>10}\nBuffers          {:>10.2} MiB\nCPU copies only | not GPU totals",
+            "Mesh assets      {:>10}\nRender eligible  {upload_sources:>10}\nCPU released     {released:>10}\nRetained meshes  {retained:>10}\nVertices         {vertices:>10}\nList triangles   {triangles:>10}\nIndices          {indices:>10}\nBuffers          {:>10.2} MiB\nSkinning / updates may need CPU copies\nCounts are assets, not GPU draw totals",
             meshes.len(),
             bytes as f64 / (1024.0 * 1024.0),
         );
     }
+    value = &mut sections[4];
     if let Some(images) = sources.images {
         let bytes: usize = images
             .iter()
@@ -143,11 +168,12 @@ pub(super) fn refresh(
             .sum();
         let _ = writeln!(
             value,
-            "\nTEXTURES\nImage assets     {:>10}\nCPU image data   {:>10.2} MiB",
+            "Image assets     {:>10}\nCPU image data   {:>10.2} MiB",
             images.len(),
             bytes as f64 / (1024.0 * 1024.0)
         );
     }
+    value = &mut sections[5];
     match sources
         .device
         .and_then(|device| device.wgpu_device().generate_allocator_report())
@@ -155,19 +181,23 @@ pub(super) fn refresh(
         Some(report) => {
             let _ = writeln!(
                 value,
-                "\nDEVICE MEMORY\nAllocated        {:>10.1} MiB\nReserved         {:>10.1} MiB\nDevice allocator | not whole-GPU VRAM",
+                "Allocated        {:>10.1} MiB\nReserved         {:>10.1} MiB\nDevice allocator | not whole-GPU VRAM",
                 report.total_allocated_bytes as f64 / (1024.0 * 1024.0),
                 report.total_reserved_bytes as f64 / (1024.0 * 1024.0)
             );
         }
         None => value.push_str("GPU memory report unavailable on this backend\n"),
     }
+    value = &mut sections[6];
     if !debug.details.is_empty() {
-        value.push_str("\nCAMPAIGN\n");
         value.push_str(&debug.details);
     }
-    for mut counter in &mut counters {
-        counter.0.clone_from(&value);
+    for (section, mut counter) in &mut counters {
+        let text = sections[section.0].trim_end();
+        counter.0.clear();
+        counter
+            .0
+            .push_str(if text.is_empty() { "Unavailable" } else { text });
     }
 }
 
@@ -200,20 +230,33 @@ mod tests {
         let _uploaded = extracted.take_gpu_data().unwrap();
         let _extracted_handle = meshes.add(extracted);
         world.insert_resource(meshes);
-        let text = world.spawn((DebugText, Text::new(""))).id();
+        let texts: Vec<_> = (0..SECTIONS.len())
+            .map(|index| world.spawn((DebugText(index), TextSpan::new(""))).id())
+            .collect();
         world.run_system_once(refresh).unwrap();
-        let output = world.get::<Text>(text).unwrap().0.clone();
+        let output = texts
+            .iter()
+            .map(|&id| world.get::<TextSpan>(id).unwrap().0.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(output.contains("Vertices                  3"), "{output}");
         assert!(output.contains("Retained meshes           1"), "{output}");
         assert!(output.contains("Mesh assets               2"), "{output}");
         assert!(output.contains("Indices                   0"), "{output}");
         assert!(output.contains("List triangles            1"), "{output}");
-        assert!(output.contains("CPU copies only | not GPU totals"));
+        assert!(output.contains("Render eligible           1"), "{output}");
+        assert!(output.contains("CPU released              1"), "{output}");
+        assert!(output.contains("Counts are assets, not GPU draw totals"));
         assert!(output.contains("GPU memory report unavailable"));
         assert!(output.contains("Tick 12"));
         world.resource_mut::<DebugOverlay>().visible = false;
         world.resource_mut::<DebugOverlay>().details = "hidden update".into();
         world.run_system_once(refresh).unwrap();
-        assert_eq!(world.get::<Text>(text).unwrap().0, output);
+        let hidden = texts
+            .iter()
+            .map(|&id| world.get::<TextSpan>(id).unwrap().0.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(hidden, output);
     }
 }
