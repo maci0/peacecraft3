@@ -34,6 +34,7 @@ constant native GetTriggerUnit takes nothing returns unit
 native TriggerRegisterUnitInRange takes trigger t, unit u, real r, boolexpr f returns event
 type playerstate extends handle
 native SetPlayerState takes player p, playerstate setting, integer value returns nothing
+constant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing
 constant native GetPlayerState takes player p, playerstate setting returns integer
 constant native ConvertPlayerState takes integer i returns playerstate
 globals
