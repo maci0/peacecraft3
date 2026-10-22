@@ -204,6 +204,13 @@ fn harvest_tables_for(
                 metadata_rows,
             ),
         ),
+        (
+            SlkId::UpgradeData.path().to_owned(),
+            sylk(
+                &["upgradeid", "maxlevel", "effect1", "base1", "mod1"],
+                &[&["Rhlh", "2", "rlum", "10", "10"]],
+            ),
+        ),
     ]))
 }
 
@@ -330,6 +337,7 @@ fn field(fourcc: [u8; 4], slk: SlkId, column: &str, text: &str) -> ([u8; 4], Obj
 fn harvest_fields() -> Vec<([u8; 4], ObjectField)> {
     vec![
         field(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar,Argl"),
+        field(*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
         field(*b"ua1w", SlkId::UnitWeapons, "weapsOn", "2"),
         field(*b"ua1t", SlkId::UnitWeapons, "targs1", "ground"),
         field(*b"ua1c", SlkId::UnitWeapons, "cool1", "2"),
@@ -403,6 +411,8 @@ fn open_harvest_with(
         .with_player_state_requests(PlayerStateRequestBudget { max_records: 8 })
         .unwrap()
         .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 4 })
         .unwrap();
     h.admit_destructable_catalog(catalog).unwrap();
     let h = h
@@ -581,6 +591,51 @@ fn autoharvest_claims_a_tree_deposits_source_capacity_and_repeats() {
             .life
             .unwrap(),
         44.0
+    );
+}
+
+#[test]
+fn active_lumber_upgrade_raises_the_deposited_load() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let player = match vm.host().inner.native("Player", &[Value::Int(0)]).unwrap() {
+        Value::Handle(player) => player,
+        _ => panic!("player handle"),
+    };
+    let lumber = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    vm.host()
+        .inner
+        .native(
+            "SetPlayerTechResearched",
+            &[
+                Value::Handle(player),
+                Value::Int(i32::from_be_bytes(*b"Rhlh")),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    start_harvest(&mut vm, worker);
+
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    tick(&mut vm, 4.5);
+    assert_eq!(tree_life(&mut vm, tree), 53.0);
+    assert_eq!(current_order(&mut vm, worker), 900);
+
+    tick(&mut vm, 6.5);
+    assert_eq!(tree_life(&mut vm, tree), 44.0);
+    assert_eq!(current_order(&mut vm, worker), 901);
+
+    tick(&mut vm, 7.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        lumber + 30
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 30
     );
 }
 
