@@ -787,8 +787,9 @@ pub use objects::{
     TriggerBudget, TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput,
     UnitAbilities, UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
     UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
-    ActiveBuff, BuffTraits,
 };
+#[cfg(test)]
+pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,

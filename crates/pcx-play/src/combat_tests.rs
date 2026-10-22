@@ -208,6 +208,7 @@ native UnitWakeUp takes unit u returns nothing
 const BUFF_DECLARATIONS: &str = r#"
 native UnitRemoveBuffs takes unit u, boolean p, boolean n returns nothing
 native UnitRemoveBuffsEx takes unit u, boolean p, boolean n, boolean m, boolean ph, boolean tl, boolean a, boolean ad returns nothing
+native RemoveUnit takes unit u returns nothing
 "#;
 
 fn open_fixture(

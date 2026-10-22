@@ -157,21 +157,28 @@ passes the previous null completion refusal at requested tick 91832, then reache
 `UnitRemoveBuffs` at requested tick 92152 (step 1406) in the authored victory
 cinematic and continues there.
 
-`UnitRemoveBuffs` and `UnitRemoveBuffsEx` are now implemented as source-backed
-active buff removal on the wrapper host. The shared helper `0x6D87A0` walks the
-unit's ability chain and evaluates vtable predicates for negative/positive
-(`0x1E0`/`0x1E4`), aura (`0x1E8`), timed life (`0x334`), magic (`0x1D8`),
-physical (`0x1DC`) and auto-dispel (`0x338`); the basic wrapper calls it with
-timed-life/aura enabled and magic/physical/auto-dispel disabled, while the Ex
-wrapper reorders its booleans into the helper's stack order. The active buff
-state is keyed per unit, cleaned up on `RemoveUnit`, and exposed through an
-`apply_unit_buff`/`active_unit_buffs` API for future buff-producing ability
-hosts. The shipped `Units\AbilityBuffData.slk` supplies the rawcode; polarity and
-resistance are native class predicates, not SLK cells, so no flags are invented.
-No dispellable buff is currently applied by any modeled ability: summons/timed
-life, sleeps, Defend and item-passive effects are intentionally not modeled as
-`UnitRemoveBuffs` buffs. Five focused tests cover the polarity gate, the Ex
-filters, and null/removed/wrong-family/wrong-arity no-write behavior.
+`UnitRemoveBuffs` and `UnitRemoveBuffsEx` are now implemented as active buff
+removal on the wrapper host, with filter control flow matching the selected
+client's shared helper `0x6D87A0`. The helper walks the unit's ability chain and
+evaluates vtable predicates for negative/positive (`0x1E0`/`0x1E4`), aura
+(`0x1E8`), timed life (`0x334`), magic (`0x1D8`), physical (`0x1DC`) and
+auto-dispel (`0x338`); the basic wrapper calls it with timed-life/aura enabled
+and magic/physical/auto-dispel disabled, while the Ex wrapper reorders its
+booleans into the helper's stack order. The active buff state is keyed per unit
+and cleaned up on `RemoveUnit`. Buff identity and class traits are not derived
+from the shipped `Units\AbilityBuffData.slk` (which carries only `alias`,
+`code`, `isEffect`, `race` and editor metadata). An internal, bounded, test-only
+buff hook backs the removal filters and lets a future producer attach state: the
+producer will supply the rawcode and class traits from its own behavior. The
+hook refuses removed units, reports application order without claiming native
+ordering, and is capped per unit; it is not a public API and ships only under
+test builds until a producer exists. No buff-producing ability is implemented
+yet; summons/timed life, sleeps, Defend and item-passive effects are currently
+unmodeled as buffs, so the removal path operates on an empty admitted buff set
+for the current abilities. This does not claim the full buff runtime is complete.
+Focused tests cover the polarity gate, the Ex filters, null/removed/wrong-family/
+wrong-arity no-write behavior, and attach-after-remove refusal and per-unit
+bounds.
 
 A bounded unchanged Human01 driver using seed 1 progresses past the former
 `UnitRemoveBuffs` frontier (step 1406 / tick 92152) and runs to step 3580, where

@@ -1143,8 +1143,7 @@ mod unit_sleep;
 pub use unit_sleep::UnitSleep;
 
 #[path = "unit_buff_host.rs"]
-mod unit_buff;
-pub use unit_buff::{ActiveBuff, BuffTraits};
+pub(crate) mod unit_buff;
 
 #[path = "camera_view_host.rs"]
 mod camera_view;
