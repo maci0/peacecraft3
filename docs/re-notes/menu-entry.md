@@ -73,10 +73,48 @@ the completed pointer click. A synthetic spawn test checks both boundaries.
 - Ignored install-gated integration: `selected_install_chapter_activation_publishes_the_production_session`
   (requires `PCX_NATIVE_CHAPTER_INSTALL` / `_MAP` / `_ADDON`).
 
-Build/check receipt:
+Corrected source checkpoint: `0f1ee38ea1f551ff4de9a5e10a5ac1ccb71329d2`,
+on top of `5b0ac54756b8832c4b5ab09a0d980b731ccf1e4b`.
 
-```
-cargo check -p pcx-objects -p peacecraft3 --tests
-cargo test -p pcx-objects --lib campaign_index
-cargo test -p peacecraft3 --bin peacecraft3 native_campaign::tests
-```
+Worktree-private checks (`CARGO_BUILD_JOBS=1`, `--locked --offline`):
+
+| Check | Result |
+|---|---|
+| `cargo test -p pcx-objects --lib campaign_index` | 8 passed |
+| `cargo test -p peacecraft3 --bin peacecraft3` | 479 passed, 45 ignored |
+| `native_campaign::tests -- --include-ignored`, selected Legacy install / Human01 / RoC | 6 passed |
+| `cargo clippy -p pcx-objects -p peacecraft3 --all-targets -- -D warnings` | exit 0 |
+| Native `peacecraft3` binary build | exit 0 |
+| WASM `pcx-objects` library and `peacecraft3` binary checks | exit 0 |
+| `rustfmt --check` on the four changed Rust files | exit 0 |
+
+## Physical functional entry observation (2026-10-22)
+
+The corrected checkpoint's native executable has SHA-256
+`36241f13d74e7847d8f4feb332f7df45862c74cbdfc888515e28e7cb0f11c811`.
+It ran on an owned Xvfb display with software Vulkan, fresh isolated profile
+storage, and the selected Legacy client `1.29.2.9231` (executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`).
+
+Pointer/key input followed configuration RoC selection, original Main menu,
+Single Player, Campaign, Human, Chapter One. It did not use the fallback
+launcher's chapter buttons. The unchanged `Maps\Campaign\Human01.w3m` opened
+with terrain, units and its opening cinematic; normal Escape input restored
+the gameplay world, HUD, inventory and command card. The source-file hashes
+remained unchanged through the run. Screenshots, input log, complete app log,
+binary/source identities and reviewed receipt remain local under
+`.scratch/menu-entry/native-run/` in the review checkout.
+
+The initial review run exposed a second consumer treating the dynamic buttons
+as unimplemented generic menu actions. `CampaignAction` now marks their actual
+owner and excludes them from generic navigation. The regression checks marked
+and unmarked controls; the corrected physical run shows no false notice.
+
+This is functional entry evidence, not continued playable-campaign acceptance.
+At game time 10 seconds, F7 and the full log show `GetUnitLoc` failing with
+`handle identifies another family`. The native already has an implementation;
+the evaluator's generic "not implemented" prefix must not be mistaken for its
+underlying cause. Removed-unit handling and the triggering callback need
+investigation. HUD clipping, scene/material fidelity, audio refusals, mission
+completion and original-client parity remain unqualified. Software-renderer
+timing is not a performance gate. Both owned app/display processes were stopped.
