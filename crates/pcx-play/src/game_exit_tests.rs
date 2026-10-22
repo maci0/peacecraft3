@@ -22,7 +22,7 @@ fn program(declaration: &str, other: &str, map: &str) -> Arc<pcx_script::Program
     )
 }
 
-fn host(program: Arc<pcx_script::Program>, max_pending: usize) -> ObjectHost {
+fn bare(program: Arc<pcx_script::Program>) -> ObjectHost {
     let enums = EnumHost::checked_selected(
         program,
         "synthetic:map",
@@ -35,11 +35,15 @@ fn host(program: Arc<pcx_script::Program>, max_pending: usize) -> ObjectHost {
         },
     )
     .unwrap();
-    ObjectHost::checked(enums)
-        .unwrap()
-        .with_game_exit(max_pending)
-        .unwrap()
+    ObjectHost::checked(enums).unwrap()
 }
+
+fn host(program: Arc<pcx_script::Program>, max_pending: usize) -> ObjectHost {
+    bare(program).with_game_exit(max_pending).unwrap()
+}
+
+#[path = "campaign_progress_host_tests.rs"]
+mod progress;
 
 #[test]
 fn admission_is_explicit_and_starts_empty() {
