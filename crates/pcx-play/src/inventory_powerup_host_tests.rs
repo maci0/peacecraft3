@@ -1279,7 +1279,7 @@ fn held_max_life_on_a_typed_override_uses_the_override_amount() {
         vec![pcx_objects::Mod {
             field: *b"Ilif",
             value_type: pcx_objects::ValueType::Int,
-            selectors: Some([1, 0]),
+            selectors: Some([1, 1]),
             value: pcx_objects::Value::Int(41),
             end_word: 0,
         }],

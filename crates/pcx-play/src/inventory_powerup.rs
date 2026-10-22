@@ -621,8 +621,13 @@ impl Rules {
             .rev()
             .find(|m| m.field == column.field && m.selectors.is_none_or(|s| s[0] == EFFECT_LEVEL))
         {
-            if entry.selectors.is_some_and(|s| s[1] != 0) {
-                return Err("indexed mana regeneration override unsupported".into());
+            if let Some([_, pointer]) = entry.selectors
+                && pointer != column.data
+            {
+                return Err(format!(
+                    "mana regeneration override data pointer {pointer} does not match metadata data column {}",
+                    column.data
+                ));
             }
             return match entry.value {
                 pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value)
@@ -712,8 +717,13 @@ impl Rules {
             .rev()
             .find(|m| m.field == column.field && m.selectors.is_none_or(|s| s[0] == EFFECT_LEVEL))
         {
-            if entry.selectors.is_some_and(|s| s[1] != 0) {
-                return Err("indexed attribute override unsupported".into());
+            if let Some([_, pointer]) = entry.selectors
+                && pointer != column.data
+            {
+                return Err(format!(
+                    "attribute override data pointer {pointer} does not match metadata data column {}",
+                    column.data
+                ));
             }
             let pcx_objects::Value::Int(n) = entry.value else {
                 return Err("noninteger attribute override".into());

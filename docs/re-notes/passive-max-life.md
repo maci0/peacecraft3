@@ -4,14 +4,20 @@
 
 Human02 equips Uther with `prvt` after `rwiz`. The selected item row names
 `AIlf`; that ability's code is `AIml`, with one level and integer `DataA1`.
-`AbilityMetaData.slk` row `Ilif` maps the amount to Data column 1. The item text
-references that same ability field. The reviewed registration window at
-`0xbc9f40` registers `AIml` against `APbo` through `0x7f6360`.
+`AbilityMetaData.slk` row `Ilif` maps the amount to Data column 1 in the
+selected source. The item text references that same ability field. The reviewed
+registration window at `0xbc9f40` registers `AIml` against `APbo` through
+`0x7f6360`.
 
 These relationships must be parsed from the selected tables, metadata, image
 and typed map overrides. The stock amount observed below is a witness, not a
-production constant. Intelligence bonuses remain a separate unsupported class
-of effect within the otherwise admitted `AIab` attribute ability.
+production constant. A level-1 W3A override applies only when its second
+selector equals `Ilif`'s metadata `data` ordinal (the `Data` letter); the
+metadata `index` column is unrelated. A mismatched pointer, including selector
+0 against data ordinal 1, refuses instead of applying the entry. General native
+ignore semantics for arbitrary mismatched pointers are not yet qualified.
+Intelligence bonuses remain a separate unsupported class of effect within the
+otherwise admitted `AIab` attribute ability.
 
 ## Original-runtime observation
 
@@ -88,7 +94,8 @@ before detaching an item or queuing its drop event.
 `APbo`, and attaches the `AIml` class with its integer `Ilif` amount column.
 The class must be distinct from the other registered passive classes.
 `held_attributes` sums nonnegative amounts with checked addition, so stacking
-cannot wrap.
+cannot wrap. Typed overrides are validated against the metadata `data` ordinal,
+not the metadata `index` or a fixed selector 0/1.
 
 Held maximum life applies to any holder with vitals, hero or non-hero.
 `reprice_max_life` shares the strength pool adjustment: the new maximum is
@@ -98,8 +105,9 @@ living holder at one hit point and a dead holder at zero. Equip, drop, transfer
 and cleanup preflight the receiver and donor projections before detaching an
 item or queuing a drop event. A dead unit still cannot pick up an item.
 
-Tests cover non-stock amounts, typed `Ilif` overrides, stacking, transfer,
-drop, cleanup, ratio rounding, living minimum one, dead pickup refusal and
-held-total overflow atomicity. The synthetic fixtures exercise those paths;
-the original-runtime samples above remain the witness for the observed stock
-amounts and transitions.
+Tests cover non-stock amounts and columns, typed `Ilif` overrides with matching
+and mismatched data pointers, stacking, transfer, drop, cleanup, ratio rounding,
+living minimum one, dead pickup refusal and held-total overflow atomicity. The
+synthetic fixture maps `Ilif` to column 2 with a decoy DataA value, so copying
+column 1 or pointer 1 fails. The original-runtime samples above remain the
+witness for the observed stock amounts and transitions.

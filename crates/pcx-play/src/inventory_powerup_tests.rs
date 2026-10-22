@@ -270,7 +270,7 @@ fn w3a_override_on_the_iint_field_wins_for_passive_intelligence() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 0]), 8)]);
+        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 2]), 8)]);
     let held = rules(
         &Tome {
             code: "AIab",
@@ -290,11 +290,37 @@ fn w3a_override_on_the_iint_field_wins_for_passive_intelligence() {
 }
 
 #[test]
+fn w3a_override_with_the_wrong_data_pointer_refuses() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 1]), 8)]);
+    let err = rules(
+        &Tome {
+            code: "AIab",
+            powerup: "0",
+            usable: "0",
+            amounts: ["0", "3", "0"],
+            ..Tome::default()
+        },
+        overlay,
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(
+        err.contains("data pointer 1 does not match metadata data column 2"),
+        "{err}"
+    );
+}
+
+#[test]
 fn w3a_override_on_the_istr_field_wins_at_effect_level() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([1, 0]), 12)]);
+        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([1, 3]), 12)]);
     let rules = rules(&Tome::default(), overlay, "AIsm").unwrap();
     assert_eq!(
         rules.strength_effect(&tstr()).unwrap().unwrap().strength(),
@@ -307,7 +333,7 @@ fn override_at_another_level_is_ignored() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([2, 0]), 12)]);
+        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([2, 3]), 12)]);
     let rules = rules(&Tome::default(), overlay, "AIsm").unwrap();
     assert_eq!(
         rules.strength_effect(&tstr()).unwrap().unwrap().strength(),
@@ -757,7 +783,8 @@ fn negative_authored_armor_refuses() {
 }
 
 /// Maximum-life fixture: `plif` holds `AIml` admitted by `Ilif`; `plx` holds `AIl9`, which is not.
-fn max_life_rules(amount: &str) -> Rules {
+/// `Ilif` maps to Data column 2, so the shipped DataA value is a decoy; `index` is unrelated.
+fn max_life_rules_with(amount: &str, overlay: Overlay) -> Rules {
     let items = sylk(
         &[
             "itemID",
@@ -775,7 +802,7 @@ fn max_life_rules(amount: &str) -> Rules {
     let abilities = sylk(
         &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
         &[
-            &["AIl1", "AIml", "1", amount, "0", "0"],
+            &["AIl1", "AIml", "1", "11", amount, "0"],
             &["AIl9", "AIml", "1", "9", "0", "0"],
         ],
     );
@@ -787,7 +814,7 @@ fn max_life_rules(amount: &str) -> Rules {
             &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
             &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
-            &["Ilif", "Data", "AbilityData", "-1", "int", "1", "AIl1,AIl2"],
+            &["Ilif", "Data", "AbilityData", "9", "int", "2", "AIl1,AIl2"],
         ],
     );
     let tables = Arc::new(
@@ -812,90 +839,6 @@ fn max_life_rules(amount: &str) -> Rules {
     );
     Rules::decode(
         tables,
-        Overlay::default(),
-        AssetIdentity {
-            source: "synthetic".into(),
-            edition: "synthetic".into(),
-            version: "test".into(),
-        },
-        [0; 32],
-        [
-            &window("AIsm", "AIxm"),
-            &window("AIab", "APbo"),
-            &window("AIde", "APbo"),
-            &window("AIat", "APbo"),
-        ],
-    )
-    .unwrap()
-    .with_max_life(&window("AIml", "APbo"))
-    .unwrap()
-}
-
-#[test]
-fn max_life_points_come_from_the_admitted_ilif_row() {
-    let held = max_life_rules("37")
-        .held_attributes(&catalog_item("plif"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(held.max_life, 37);
-}
-
-#[test]
-fn max_life_w3a_override_on_ilif_wins() {
-    let mut overlay = Overlay::default();
-    overlay
-        .mods
-        .insert("AIl1".into(), vec![int_mod(b"Ilif", Some([1, 0]), 41)]);
-    let tables = {
-        let items = sylk(
-            &[
-                "itemID",
-                "abilList",
-                "powerup",
-                "usable",
-                "perishable",
-                "uses",
-            ],
-            &[&["plif", "AIl1", "0", "0", "0", "-"]],
-        );
-        let abilities = sylk(
-            &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
-            &[&["AIl1", "AIml", "1", "37", "0", "0"]],
-        );
-        let meta = sylk(
-            &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
-            &[
-                &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
-                &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
-                &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
-                &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
-                &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
-                &["Ilif", "Data", "AbilityData", "-1", "int", "1", "AIl1"],
-            ],
-        );
-        Arc::new(
-            DefaultTables::from_bytes(
-                Identity {
-                    install: "synthetic max life".into(),
-                    edition_version: "fixture".into(),
-                },
-                &[
-                    (SlkId::ItemData.path(), &items),
-                    (SlkId::AbilityData.path(), &abilities),
-                    (SlkId::AbilityMetaData.path(), &meta),
-                ],
-                &[],
-                EditorReadLimits {
-                    max_listed_paths: 4,
-                    max_asset_bytes: 65536,
-                    max_aggregate_input_bytes: 131072,
-                },
-            )
-            .unwrap(),
-        )
-    };
-    let held = Rules::decode(
-        tables,
         overlay,
         AssetIdentity {
             source: "synthetic".into(),
@@ -913,10 +856,50 @@ fn max_life_w3a_override_on_ilif_wins() {
     .unwrap()
     .with_max_life(&window("AIml", "APbo"))
     .unwrap()
-    .held_attributes(&catalog_item("plif"))
-    .unwrap()
-    .unwrap();
+}
+
+fn max_life_rules(amount: &str) -> Rules {
+    max_life_rules_with(amount, Overlay::default())
+}
+
+#[test]
+fn max_life_points_come_from_the_admitted_ilif_row() {
+    let held = max_life_rules("37")
+        .held_attributes(&catalog_item("plif"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_life, 37);
+}
+
+#[test]
+fn max_life_w3a_override_on_ilif_wins() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIl1".into(), vec![int_mod(b"Ilif", Some([1, 2]), 41)]);
+    let held = max_life_rules_with("37", overlay)
+        .held_attributes(&catalog_item("plif"))
+        .unwrap()
+        .unwrap();
     assert_eq!(held.max_life, 41);
+}
+
+#[test]
+fn max_life_override_with_the_wrong_data_pointer_refuses() {
+    for pointer in [0, 1] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "AIl1".into(),
+            vec![int_mod(b"Ilif", Some([1, pointer]), 41)],
+        );
+        let err = max_life_rules_with("37", overlay)
+            .held_attributes(&catalog_item("plif"))
+            .unwrap_err();
+        assert!(
+            err.contains("does not match metadata data column 2"),
+            "{err}"
+        );
+    }
 }
 
 #[test]
@@ -1009,7 +992,7 @@ fn w3a_real_override_on_the_imrp_field_wins_at_effect_level() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIrm".into(), vec![real_mod(b"Imrp", Some([1, 0]), 0.25)]);
+        .insert("AIrm".into(), vec![real_mod(b"Imrp", Some([1, 1]), 0.25)]);
     let held = rules(&mana_tome("0.5"), overlay, "AIsm")
         .unwrap()
         .with_mana_regen(&window("AIrm", "Arem"))
@@ -1087,7 +1070,7 @@ fn w3a_override_on_the_iatt_field_wins_at_effect_level() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AItf".into(), vec![int_mod(b"Iatt", Some([1, 0]), 12)]);
+        .insert("AItf".into(), vec![int_mod(b"Iatt", Some([1, 1]), 12)]);
     let held = rules(&damage_tome("15"), overlay, "AIsm")
         .unwrap()
         .held_attributes(&catalog_item("tstr"))
@@ -1128,7 +1111,7 @@ fn negative_or_malformed_authored_damage_refuses() {
         vec![pcx_objects::Mod {
             field: *b"Iatt",
             value_type: pcx_objects::ValueType::Real,
-            selectors: Some([1, 0]),
+            selectors: Some([1, 1]),
             value: pcx_objects::Value::Real(1.5),
             end_word: 0,
         }],
@@ -1340,7 +1323,7 @@ fn life_regeneration_follows_registered_class_metadata_and_map_override() {
     rules
         .overlay
         .mods
-        .insert("Lr01".into(), vec![int_mod(b"Ihpr", Some([1, 0]), 19)]);
+        .insert("Lr01".into(), vec![int_mod(b"Ihpr", Some([1, 2]), 19)]);
     assert_eq!(
         rules
             .held_attributes(&catalog_item("plif"))
