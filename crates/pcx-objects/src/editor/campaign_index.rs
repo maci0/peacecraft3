@@ -35,6 +35,11 @@ pub struct IndexEntry {
     /// The section's first `Header` and `Name` values, as authored.
     pub header: Option<String>,
     pub name: Option<String>,
+    /// The authored `DefaultOpen` flag. `None` when the section omits it; the
+    /// flag's authored value otherwise (`true`/`false`), validated strictly.
+    pub default_open: Option<bool>,
+    /// The authored `Background` skin key, if the section declares one.
+    pub background: Option<String>,
     pub missions: Vec<Mission>,
 }
 
@@ -110,6 +115,12 @@ pub enum IndexError {
         member: String,
         id: String,
         index: u32,
+    },
+    #[error("{member}: section {id} DefaultOpen is not a boolean: {value:?}")]
+    InvalidDefaultOpen {
+        member: String,
+        id: String,
+        value: String,
     },
 }
 
@@ -197,10 +208,37 @@ pub fn parse_campaign_index(
                 .and_then(Result::ok)
                 .map(str::to_owned)
         };
+        let default_open = match parsed.raw_fields(&key, "defaultopen").first() {
+            None => None,
+            Some((line, raw)) => {
+                let value = defaults::profile_elements_iter(raw)
+                    .next()
+                    .and_then(Result::ok)
+                    .ok_or_else(|| IndexError::Profile {
+                        member: member.into(),
+                        line: *line,
+                        detail: "DefaultOpen has no value".into(),
+                    })?;
+                Some(match value {
+                    "0" => false,
+                    "1" => true,
+                    other => {
+                        return Err(IndexError::InvalidDefaultOpen {
+                            member: member.into(),
+                            id: id.to_owned(),
+                            value: other.into(),
+                        });
+                    }
+                })
+            }
+        };
+        let background = first("background").filter(|value| !value.is_empty());
         slots.push(CampaignSlot::Entry(IndexEntry {
             id: id.to_owned(),
             header: first("header"),
             name: first("name"),
+            default_open,
+            background,
             missions,
         }));
     }
