@@ -12,6 +12,7 @@ const QUIT_COMMON: &str = "\
 type dialog extends agent
 type button extends agent
 native EndGame takes boolean doScoreScreen returns nothing
+native ChangeLevel takes string newLevel, boolean doScoreScreen returns nothing
 constant native GetLocalPlayer takes nothing returns player
 native DialogCreate takes nothing returns dialog
 native DialogAddButton takes dialog d, string text, integer key returns button
@@ -239,6 +240,305 @@ fn simulation_clock(app: &mut App) -> Option<f64> {
 
 fn take_exit_snapshot(app: &mut App) -> Option<CampaignExitSnapshot> {
     app.world_mut().resource_mut::<CampaignExitResult>().take()
+}
+
+fn transition_app(show_scores: bool, next: Option<Vec<u8>>) -> App {
+    let mut assets = selected_score_ui();
+    if let Some(next) = next {
+        assets.insert(
+            "next chapter.w3m".into(),
+            crate::binding::Reply::Bytes(next),
+        );
+    }
+    let script = QUIT_SCRIPT.replace(
+        "call EndGame(true)",
+        &format!("call ChangeLevel(\"next chapter.w3m\", {show_scores})"),
+    );
+    transition_script_app(&script, assets)
+}
+
+fn transition_script_app(script: &str, assets: BTreeMap<String, crate::binding::Reply>) -> App {
+    let mut app = timer_app();
+    app.init_resource::<Time<Real>>();
+    campaign_runtime::install(
+        &mut app,
+        CampaignRuntime::new(Duration::from_millis(125), 8, 8),
+    );
+    peacecraft3::campaign_score::install(&mut app);
+    peacecraft3::campaign_score_assets::install(&mut app);
+    publish_with_assets(&mut app, script, 1, assets, |_| {});
+    app.update();
+    click_quit(&mut app);
+    app.update();
+    app
+}
+
+#[test]
+fn conflicting_change_level_requests_stop_without_choosing_a_destination() {
+    let script = QUIT_SCRIPT.replace(
+        "call EndGame(true)",
+        "call ChangeLevel(\"first.w3m\", true)\ncall ChangeLevel(\"second.w3m\", true)",
+    );
+    let mut app = transition_script_app(&script, selected_score_ui());
+    assert!(session_present(&mut app));
+    assert!(matches!(
+        app.world().resource::<CampaignRuntime>().last_error,
+        Some(campaign_runtime::CampaignRuntimeError::ConflictingDestinations)
+    ));
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
+    assert!(take_exit_snapshot(&mut app).is_none());
+    assert_eq!(
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .revision,
+        1
+    );
+}
+
+fn next_chapter() -> Vec<u8> {
+    fixture("globals\ninteger chapter_marker=2\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n").raw
+}
+
+fn continue_score(app: &mut App) -> campaign_runtime::CampaignTransitionRequest {
+    let request = {
+        let mut score = app.world_mut().resource_mut::<ScoreScreenState>();
+        assert_eq!(
+            press(&mut score, "ScoreScreenOkButton"),
+            Some(ActionOutcome::Continue)
+        );
+        assert!(
+            score.0.is_some(),
+            "a press must not dismiss before admission"
+        );
+        score.continuation().unwrap()
+    };
+    app.world_mut().write_message(request.clone());
+    app.update();
+    request
+}
+
+fn supply_next_chapter(app: &mut App) {
+    let bindings = app
+        .world()
+        .resource::<MapRequests>()
+        .bindings
+        .as_ref()
+        .unwrap();
+    let mut inputs = host_inputs(Arc::clone(&bindings.catalog.0));
+    inputs.timer_time = Some(10.0);
+    inputs.enumeration.names.extend([
+        "ConvertGameEvent".into(),
+        "ConvertDialogEvent".into(),
+        "ConvertGameDifficulty".into(),
+    ]);
+    let revision = bindings.revision;
+    app.insert_resource(CampaignHostSupply {
+        revision,
+        inputs: Some(inputs),
+    });
+}
+
+#[test]
+fn campaign_continuation_publishes_the_selected_next_map_and_runs_its_script() {
+    let mut app = transition_app(true, Some(next_chapter()));
+    assert!(!session_present(&mut app));
+    let request = continue_score(&mut app);
+    assert!(app.world().resource::<ScoreScreenState>().0.is_some());
+    assert!(
+        app.world()
+            .resource::<campaign_runtime::CampaignTransition>()
+            .last_error
+            .is_none()
+    );
+    let requests = app.world().resource::<MapRequests>();
+    let context = requests.admission.shared_context().unwrap();
+    assert!(!Arc::ptr_eq(&context, &request.context));
+    let bindings = requests.bindings.as_ref().unwrap();
+    assert_eq!(bindings.receipts.map.path.as_str(), "next chapter.w3m");
+    supply_next_chapter(&mut app);
+    app.update();
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none(),
+        "next startup: {:?}",
+        app.world().resource::<CampaignStartup>().last_error
+    );
+    assert_eq!(
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .global("chapter_marker"),
+        Some(Value::Int(2))
+    );
+}
+
+#[test]
+fn campaign_continuation_without_scores_does_not_wait_for_a_score_press() {
+    let app = transition_app(false, Some(next_chapter()));
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
+    assert!(
+        app.world()
+            .resource::<campaign_runtime::CampaignTransition>()
+            .last_error
+            .is_none()
+    );
+    assert_eq!(
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .revision,
+        2
+    );
+}
+
+#[test]
+fn campaign_continuation_refusal_keeps_the_score_binding_and_selected_reader() {
+    for next in [None, Some(b"malformed map".to_vec())] {
+        let mut app = transition_app(true, next);
+        let old = app
+            .world()
+            .resource::<MapRequests>()
+            .published_receipts
+            .clone()
+            .unwrap();
+        let reader = app
+            .world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&old)
+            .unwrap();
+        let request = continue_score(&mut app);
+        let requests = app.world().resource::<MapRequests>();
+        assert_eq!(requests.bindings.as_ref().unwrap().revision, 1);
+        assert!(Arc::ptr_eq(
+            &requests.admission.shared_context().unwrap(),
+            &request.context
+        ));
+        assert!(Arc::ptr_eq(
+            requests.published_receipts.as_ref().unwrap(),
+            &old
+        ));
+        assert!(Arc::ptr_eq(
+            &app.world()
+                .resource::<SelectedMapSources>()
+                .for_receipts(&old)
+                .unwrap(),
+            &reader
+        ));
+        assert!(app.world().resource::<ScoreScreenState>().0.is_some());
+        assert!(
+            app.world()
+                .resource::<campaign_runtime::CampaignTransition>()
+                .last_error
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn campaign_continuation_rejects_a_second_request_from_the_old_context() {
+    let mut app = transition_app(true, Some(next_chapter()));
+    let request = continue_score(&mut app);
+    supply_next_chapter(&mut app);
+    app.update();
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
+    let current = app
+        .world()
+        .resource::<MapRequests>()
+        .published_receipts
+        .clone()
+        .unwrap();
+    app.world_mut().write_message(request);
+    app.update();
+    assert!(matches!(
+        app.world()
+            .resource::<campaign_runtime::CampaignTransition>()
+            .last_error,
+        Some(campaign_runtime::CampaignTransitionError::StaleSession)
+    ));
+    assert!(Arc::ptr_eq(
+        app.world()
+            .resource::<MapRequests>()
+            .published_receipts
+            .as_ref()
+            .unwrap(),
+        &current
+    ));
+    assert_eq!(
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .revision,
+        2
+    );
+}
+
+#[test]
+fn campaign_continuation_keeps_the_score_until_failed_startup_can_be_retried() {
+    let mut app = transition_app(true, Some(next_chapter()));
+    let request = continue_score(&mut app);
+    supply_next_chapter(&mut app);
+    app.world_mut()
+        .resource_mut::<CampaignHostSupply>()
+        .inputs
+        .as_mut()
+        .unwrap()
+        .enumeration
+        .names
+        .clear();
+    app.update();
+    assert!(matches!(
+        app.world().resource::<CampaignStartup>().last_error,
+        Some(StartupError::Session(_))
+    ));
+    assert!(app.world().resource::<ScoreScreenState>().0.is_some());
+    assert!(!session_present(&mut app));
+    let retry = continue_score(&mut app);
+    assert!(Arc::ptr_eq(&retry.context, &request.context));
+    assert_eq!(
+        app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .revision,
+        3
+    );
+    assert!(app.world().resource::<ScoreScreenState>().0.is_some());
+    supply_next_chapter(&mut app);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
+    assert_eq!(
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .global("chapter_marker"),
+        Some(Value::Int(2))
+    );
+}
+
+#[test]
+fn campaign_continuation_retry_screen_retires_when_another_map_starts() {
+    let mut app = transition_app(true, Some(next_chapter()));
+    continue_score(&mut app);
+    assert!(app.world().resource::<ScoreScreenState>().0.is_some());
+    publish_with_assets(&mut app, IDLE_SCRIPT, 3, BTreeMap::new(), |_| {});
+    app.update();
+    assert!(session_present(&mut app));
+    assert!(app.world().resource::<ScoreScreenState>().0.is_none());
 }
 
 #[test]

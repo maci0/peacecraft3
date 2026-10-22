@@ -2587,7 +2587,13 @@ fn apply_menu_text(
     mut commands: Commands,
     mut cache: ResMut<MenuArtCache>,
     mut fonts: ResMut<Assets<Font>>,
-    labels: Query<LabelData, Without<MenuTextFilled>>,
+    labels: Query<
+        LabelData,
+        (
+            Without<MenuTextFilled>,
+            Without<crate::campaign_score_view::ScoreLabel>,
+        ),
+    >,
     disabled: Query<(), With<InteractionDisabled>>,
     mut nodes: Query<&mut Node>,
 ) {

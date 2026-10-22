@@ -106,6 +106,9 @@ pub fn load_assets(
     let Some(ScoreScreen::Refused { context, .. }) = &state.0 else {
         return;
     };
+    if assets.attempted_for(context) {
+        return;
+    }
     let ScoreScreenAssets {
         layout,
         loaded_for,

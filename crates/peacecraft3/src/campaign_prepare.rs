@@ -24,7 +24,6 @@ struct Prepared {
 struct PrepareSources<'w> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
-    launcher: Res<'w, crate::launch_gui::Launcher>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -44,11 +43,7 @@ fn prepare(
     mut seed: ResMut<CampaignSeed>,
     mut input: ResMut<CampaignInput>,
 ) {
-    let PrepareSources {
-        requests,
-        sources,
-        launcher,
-    } = selected;
+    let PrepareSources { requests, sources } = selected;
     let (Some(bindings), Some(outcome), Some(context)) = (
         requests.bindings.as_ref(),
         requests.last_outcome.as_ref(),
@@ -85,8 +80,8 @@ fn prepare(
         let reader = sources
             .for_receipts(&bindings.receipts)
             .ok_or("admitted map has no matching source reader")?;
-        let install = crate::launch_gui::selected_install(&launcher);
-        crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+        let install = std::path::Path::new(&bindings.receipts.common.provenance.source.origin);
+        crate::menu_lighting::with_client_image(Some(install), |source, image| {
             pcx_play::campaign_inputs::prepare_new_game(
                 &context,
                 &map_sources(bindings),
@@ -94,7 +89,7 @@ fn prepare(
                 image,
                 pcx_play::campaign_inputs::client_identity(image, source),
                 chosen_seed,
-                launcher.expansion(),
+                matches!(reader.mode().addon, pcx_assets::Addon::Tft),
             )
         })
         .map(|inputs| (inputs, chosen_seed))
@@ -141,10 +136,73 @@ fn choose_seed(requested: Option<i32>) -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use pcx_play::map_startup_host::MapStartupHost;
+    use peacecraft3::map_script_session::MapScriptSession;
+
     #[test]
     fn explicit_seed_retains_zero_and_signed_bits() {
         for seed in [0, -1, i32::MIN, i32::MAX] {
             assert_eq!(super::choose_seed(Some(seed)).unwrap(), seed);
         }
+    }
+
+    #[test]
+    #[ignore = "requires selected PCX_NATIVE_CHAPTER_INSTALL, MAP and ADDON inputs"]
+    fn admitted_preparation_ignores_later_launcher_install_and_edition_changes() {
+        let mut app = crate::native_campaign::tests::started_app();
+        let context = app
+            .world()
+            .resource::<MapScriptSession<MapStartupHost>>()
+            .context()
+            .unwrap()
+            .clone();
+        let requests = app.world().resource::<MapRequests>();
+        let bindings = requests.bindings.as_ref().unwrap();
+        let expected_image =
+            std::path::Path::new(&bindings.receipts.common.provenance.source.origin)
+                .join("Warcraft III.exe");
+        let reader = app
+            .world()
+            .resource::<SelectedMapSources>()
+            .for_receipts(&bindings.receipts)
+            .unwrap();
+        let expansion = matches!(reader.mode().addon, pcx_assets::Addon::Tft);
+        app.insert_resource(crate::launch_gui::Launcher::test_source(
+            "/missing-install-not-the-admitted-source".into(),
+            !expansion,
+        ));
+        app.insert_resource(Prepared::default());
+        app.update();
+        let supply = app.world().resource::<CampaignHostSupply>();
+        let inputs = supply
+            .inputs
+            .as_ref()
+            .expect("the admitted source must still prepare");
+        assert_eq!(
+            inputs.message_layout.as_ref().unwrap().origin.source,
+            expected_image.display().to_string()
+        );
+        assert_eq!(
+            inputs.post_config.version_global.as_deref(),
+            Some(if expansion {
+                "VERSION_FROZEN_THRONE"
+            } else {
+                "VERSION_REIGN_OF_CHAOS"
+            })
+        );
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_none()
+        );
+        assert!(Arc::ptr_eq(
+            app.world()
+                .resource::<MapScriptSession<MapStartupHost>>()
+                .context()
+                .unwrap(),
+            &context
+        ));
     }
 }
