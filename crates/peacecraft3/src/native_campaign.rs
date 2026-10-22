@@ -548,16 +548,24 @@ fn align_h(h: crate::menu_text::JustifyH) -> AlignItems {
 }
 
 /// A campaign/mission button label. The container carries the authored
-/// justification; the text is bounded to the button's inner content width and
-/// uses the authored size, wrapping within that width so long names stay fully
-/// visible without spilling into adjacent columns. Nothing is clipped or
-/// truncated.
+/// justification and a column flex axis; the text node keeps its natural
+/// height so the container's main-axis centering can position the glyph line.
+/// The text is bounded to the button's inner content width and uses the authored
+/// size, wrapping within that width so long names stay fully visible without
+/// spilling into adjacent columns. Nothing is clipped or truncated.
+#[derive(Clone)]
 struct CampaignLabel {
     container: Node,
     text_node: Node,
     text: Text,
     font: TextFont,
     color: TextColor,
+    /// Authored `FontDisabledColor`, used for closed campaign buttons.
+    disabled_color: TextColor,
+    /// Authored `FontShadowColor`.
+    shadow: TextShadow,
+    /// Authored `FontShadowOffset`, as the shared glue label carries it.
+    frame_shadow_offset: Vec2,
     z: ZIndex,
     layout: TextLayout,
     line: bevy::text::LineHeight,
@@ -566,27 +574,32 @@ struct CampaignLabel {
 #[cfg(test)]
 impl CampaignLabel {
     fn synthetic(text: &str, width_pct: f32) -> Self {
-        Self {
+        let mut base = Self {
             container: Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
             text_node: Node {
                 width: Val::Percent(width_pct),
-                height: Val::Percent(100.0),
                 ..default()
             },
-            text: Text(text.to_string()),
+            text: Text::default(),
             font: TextFont::default(),
             color: TextColor::default(),
+            disabled_color: TextColor::default(),
+            shadow: TextShadow::default(),
+            frame_shadow_offset: Vec2::ZERO,
             z: ZIndex(1),
             layout: TextLayout::default(),
             line: bevy::text::LineHeight::RelativeToFont(1.0),
-        }
+        };
+        base.text = Text(text.to_string());
+        base
     }
 }
 
@@ -598,11 +611,13 @@ impl CampaignLabel {
 /// the screen header frame `MissionNameHeader` would be debt.
 const LABEL_FRAME: &str = "StandardButtonTextTemplate";
 
-fn source_label(
+/// Build the shared, source-styled label geometry/font once per panel, with an
+/// empty text placeholder. Rows clone this prototype and only replace the text,
+/// so the font asset is loaded and registered once instead of once per row.
+fn campaign_label_prototype(
     install: Option<&std::path::Path>,
     fdf: &crate::fdf::Fdf,
     fonts: &mut Assets<Font>,
-    text: String,
     width_pct: f32,
 ) -> Result<CampaignLabel, String> {
     let frame = LABEL_FRAME;
@@ -620,28 +635,37 @@ fn source_label(
         .ok_or_else(|| format!("campaign label font bytes unavailable: {:?}", binding.file))?;
     let face = fonts.add(Font::from_bytes(bytes));
     let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
-    let [r, g, b, a] = style.colour;
+    let colour = |c: [f32; 4]| TextColor(Color::srgba(c[0], c[1], c[2], c[3]));
     Ok(CampaignLabel {
+        // A column flex wrapper so `justify_content` (authored vertical
+        // justification) acts on the main axis; the text node keeps its natural
+        // height so centering can place the glyph line.
         container: Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
             justify_content: justify_v(style.justify_v),
             align_items: align_h(style.justify_h),
             ..default()
         },
         text_node: Node {
             width: Val::Percent(width_pct),
-            height: Val::Percent(100.0),
             ..default()
         },
-        text: Text(text),
+        text: Text::default(),
         font: TextFont {
             font: bevy::text::FontSource::Handle(face),
             font_size: size,
             ..default()
         },
-        color: TextColor(Color::srgba(r, g, b, a)),
+        color: colour(style.colour),
+        disabled_color: colour(style.disabled),
+        shadow: TextShadow {
+            offset: Vec2::ZERO,
+            color: colour(style.shadow_colour).0,
+        },
+        frame_shadow_offset: Vec2::from(style.shadow_offset),
         z: ZIndex(1),
         layout: TextLayout::new(
             justify_h(style.justify_h),
@@ -759,6 +783,10 @@ fn spawn_campaign_button(
                 .remove::<crate::menu_screens::ScreenPosition>();
         }
         // The authored label, centred per its own justification inside the art.
+        // It is a real `GlueLabel` referencing this button so the shared state
+        // renderer applies the authored `ButtonPushedTextOffset` on press, and it
+        // is tagged `MenuTextFilled` so the shared menu text applier does not
+        // restyle an already source-styled label.
         world.entity_mut(target).with_children(|button| {
             button
                 .spawn((label.container, Pickable::IGNORE))
@@ -766,10 +794,22 @@ fn spawn_campaign_button(
                     label.text_node,
                     label.text,
                     label.font,
-                    label.color,
+                    // Closed campaign buttons use the authored disabled colour.
+                    if options.enabled {
+                        label.color
+                    } else {
+                        label.disabled_color
+                    },
+                    label.shadow,
+                    crate::glue_menu::FrameShadow(label.frame_shadow_offset),
                     label.z,
                     label.layout,
                     label.line,
+                    crate::glue_menu::GlueLabel {
+                        frame: LABEL_FRAME.to_string(),
+                        button: target,
+                    },
+                    crate::launch_gui::MenuTextFilled,
                     Pickable::IGNORE,
                 ));
         });
@@ -819,9 +859,13 @@ fn build_campaign_panel(
         height: button_h,
     };
     commands.entity(panel).despawn_related::<Children>();
+    // One source-styled prototype per panel; rows clone it and replace only the
+    // text, so the font asset is loaded and registered once.
+    let prototype = campaign_label_prototype(install, fdf, fonts, inner_width_pct)?;
     for (index, campaign) in campaigns.iter().enumerate() {
         let rect = row(index, campaign_left);
-        let label = source_label(install, fdf, fonts, campaign.title.clone(), inner_width_pct)?;
+        let mut label = prototype.clone();
+        label.text = Text(campaign.title.clone());
         spawn_campaign_button(
             commands,
             panel,
@@ -912,13 +956,8 @@ fn build_campaign_panel(
                 commands.entity(row).insert(InteractionDisabled);
             }
             commands.entity(scroller).add_child(row);
-            let label = source_label(
-                install,
-                fdf,
-                fonts,
-                format!("{}: {}", mission.header, mission.name),
-                inner_width_pct,
-            )?;
+            let mut label = prototype.clone();
+            label.text = Text(format!("{}: {}", mission.header, mission.name));
             spawn_campaign_button(
                 commands,
                 row,
@@ -1378,6 +1417,17 @@ pub(crate) mod tests {
             .single(&world)
             .unwrap();
         assert!(!world.get::<Pickable>(label).unwrap().is_hoverable);
+        // The label is a real GlueLabel referencing this button (so the shared
+        // state renderer applies ButtonPushedTextOffset on press) and is tagged
+        // MenuTextFilled (so the shared menu text applier does not restyle it).
+        let glue = world.get::<crate::glue_menu::GlueLabel>(label).unwrap();
+        assert_eq!(glue.button, entity);
+        assert_eq!(glue.frame, LABEL_FRAME);
+        assert!(
+            world
+                .get::<crate::launch_gui::MenuTextFilled>(label)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1447,10 +1497,13 @@ pub(crate) mod tests {
     }
 
     fn mission_scroller_fixture(count: usize) -> (World, Entity, Vec<Entity>) {
+        const ROW: f32 = 80.0;
+        const GAP: f32 = 40.0;
         let mut world = World::new();
         world.init_resource::<InputFocus>();
         world.init_resource::<InputFocusVisible>();
         world.init_resource::<Messages<MouseWheel>>();
+        let content_y = count as f32 * ROW + count.saturating_sub(1) as f32 * GAP;
         let scroller = world
             .commands()
             .spawn((
@@ -1460,7 +1513,7 @@ pub(crate) mod tests {
                 Hovered::default(),
                 ComputedNode {
                     size: Vec2::new(200.0, 80.0),
-                    content_size: Vec2::new(200.0, 240.0),
+                    content_size: Vec2::new(200.0, content_y),
                     inverse_scale_factor: 0.5,
                     ..default()
                 },
@@ -1475,20 +1528,21 @@ pub(crate) mod tests {
                         },
                         Hovered::default(),
                         ComputedNode {
-                            size: Vec2::new(200.0, 80.0),
+                            size: Vec2::new(200.0, ROW),
                             inverse_scale_factor: 0.5,
                             ..default()
                         },
-                        UiGlobalTransform::from_xy(100.0, 100.0 + index as f32 * 80.0),
+                        UiGlobalTransform::from_xy(100.0, 100.0 + index as f32 * (ROW + GAP)),
                     ));
                 }
             })
             .id();
         world.flush();
-        let rows: Vec<Entity> = world
+        let mut rows: Vec<Entity> = world
             .query_filtered::<Entity, With<MissionButton>>()
             .iter(&world)
             .collect();
+        rows.sort_by_key(|entity| world.get::<MissionButton>(*entity).unwrap().mission);
         (world, scroller, rows)
     }
 
@@ -1496,12 +1550,13 @@ pub(crate) mod tests {
     fn mission_scroll_reveals_the_focused_row_and_clamps_wheel() {
         let (mut world, scroller, rows) = mission_scroller_fixture(3);
         let system = world.register_system(mission_scroll);
+        // 3 rows: content = 3*80 + 2*40 = 320; max = (320-80)*0.5 = 120.
         world.resource_mut::<InputFocusVisible>().0 = true;
         world
             .resource_mut::<InputFocus>()
             .set(rows[2], FocusCause::Navigated);
         world.run_system(system).unwrap();
-        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 80.0);
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 120.0);
 
         world.resource_mut::<InputFocusVisible>().0 = false;
         world.entity_mut(scroller).insert(Hovered(true));
@@ -1515,7 +1570,7 @@ pub(crate) mod tests {
             phase: TouchPhase::Moved,
         });
         world.run_system(system).unwrap();
-        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 80.0);
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 120.0);
 
         world.get_mut::<ScrollPosition>(scroller).unwrap().0.y = 0.0;
         world.resource_mut::<Messages<MouseWheel>>().clear();
@@ -1528,6 +1583,79 @@ pub(crate) mod tests {
         });
         world.run_system(system).unwrap();
         assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 12.0);
+    }
+
+    #[test]
+    fn mission_scroll_keeps_a_visible_first_row_unmoved() {
+        let (mut world, scroller, rows) = mission_scroller_fixture(12);
+        let system = world.register_system(mission_scroll);
+        world.resource_mut::<InputFocusVisible>().0 = true;
+        world
+            .resource_mut::<InputFocus>()
+            .set(rows[0], FocusCause::Navigated);
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 0.0);
+    }
+
+    #[test]
+    fn mission_scroll_reaches_the_last_of_twelve_rows() {
+        let (mut world, scroller, rows) = mission_scroller_fixture(12);
+        let system = world.register_system(mission_scroll);
+        // content = 12*80 + 11*40 = 1400; max = (1400-80)*0.5 = 660.
+        world.resource_mut::<InputFocusVisible>().0 = true;
+        world
+            .resource_mut::<InputFocus>()
+            .set(rows[11], FocusCause::Navigated);
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 660.0);
+
+        // Wheel to the deepest row from the top.
+        world.resource_mut::<InputFocusVisible>().0 = false;
+        world.entity_mut(scroller).insert(Hovered(true));
+        world.get_mut::<ScrollPosition>(scroller).unwrap().0.y = 0.0;
+        world.resource_mut::<Messages<MouseWheel>>().clear();
+        for _ in 0..20 {
+            world.write_message(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.0,
+                y: -1.0,
+                window: Entity::PLACEHOLDER,
+                phase: TouchPhase::Moved,
+            });
+        }
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 660.0);
+    }
+
+    #[test]
+    fn mission_scroll_child_row_hover_propagates_for_wheel() {
+        let (mut world, scroller, rows) = mission_scroller_fixture(12);
+        let system = world.register_system(mission_scroll);
+        // Only a child row is hovered; the scroller itself is not.
+        world.entity_mut(scroller).insert(Hovered(false));
+        world.entity_mut(rows[4]).insert(Hovered(true));
+        world.resource_mut::<Messages<MouseWheel>>().clear();
+        world.write_message(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -1.0,
+            window: Entity::PLACEHOLDER,
+            phase: TouchPhase::Moved,
+        });
+        world.run_system(system).unwrap();
+        assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 40.0);
+    }
+
+    #[test]
+    fn label_wrapper_uses_column_axis_and_natural_text_height() {
+        let label = CampaignLabel::synthetic("Chapter One: Chasing", 92.18);
+        assert_eq!(label.container.flex_direction, FlexDirection::Column);
+        assert_eq!(label.container.justify_content, JustifyContent::Center);
+        assert_eq!(label.container.align_items, AlignItems::Center);
+        // Natural height so the wrapper's main-axis centering can place the
+        // glyph line; only the inner width is constrained.
+        assert_eq!(label.text_node.height, Val::Auto);
+        assert_eq!(label.text_node.width, Val::Percent(92.18));
     }
 
     #[test]
