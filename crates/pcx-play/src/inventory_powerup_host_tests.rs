@@ -524,12 +524,38 @@ fn open_with_regens_overlays(
     mana_regen: Option<&str>,
     mana_per_intelligence: f32,
 ) -> Fixture {
+    open_with_regens_overlays_hp(
+        inventory_overlay,
+        hero_overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+        "500",
+    )
+}
+
+fn open_with_regens_overlays_hp(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+    hp: &str,
+) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
         .into_iter()
         .filter(|(id, _)| *id != *b"A008")
         .collect();
+    let mut found = false;
+    for (id, field) in &mut fields {
+        if *id == *b"H001" {
+            field.value = Ok(FieldValue::Cell(hp.into()));
+            found = true;
+        }
+    }
+    assert!(found, "hero fixture HP");
     if fields.iter().all(|(id, _)| *id != *b"S001") {
         fields.push(column(
             b"S001",
@@ -662,13 +688,22 @@ pub(crate) fn health_fixture() -> (ObjectHost, HandleId) {
 }
 
 fn health_fixture_with_bias(bias: f32) -> (ObjectHost, HandleId) {
-    let Fixture { mut h, hero, .. } = open();
+    health_fixture_with_bias_and_hp(bias, "500")
+}
+
+fn health_fixture_with_bias_and_hp(bias: f32, hp: &str) -> (ObjectHost, HandleId) {
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays_hp(Overlay::default(), Overlay::default(), 0., None, 0., hp);
     let (rules, numeric) = crate::player_handicap::tests::health_rules_with_bias(bias);
     h = h
         .with_script_numeric(numeric)
         .with_player_health_handicap(rules)
         .unwrap();
     (h, hero)
+}
+
+pub(crate) fn health_fixture_hp1() -> (ObjectHost, HandleId) {
+    health_fixture_with_bias_and_hp(0.5, "1")
 }
 
 fn create_unit(h: &mut ObjectHost, raw: &[u8; 4], x: f32) -> HandleId {

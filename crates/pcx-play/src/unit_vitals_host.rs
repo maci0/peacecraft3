@@ -410,6 +410,22 @@ impl ObjectHost {
         }))
     }
 
+    /// Why freshly projected pools cannot be published, if they cannot.
+    /// Maximum life must be positive and finite; maximum mana may be zero.
+    pub(super) fn projected_pool_problem(vitals: &Vitals) -> Option<&'static str> {
+        if !vitals.max_life.is_finite() || vitals.max_life <= 0.0 {
+            Some("projected maximum life must be positive and finite")
+        } else if !vitals.life.is_finite() || !(0.0..=vitals.max_life).contains(&vitals.life) {
+            Some("projected life must be finite and within the maximum")
+        } else if !vitals.max_mana.is_finite() || vitals.max_mana < 0.0 {
+            Some("projected maximum mana must be finite and nonnegative")
+        } else if !vitals.mana.is_finite() || !(0.0..=vitals.max_mana).contains(&vitals.mana) {
+            Some("projected mana must be finite and within the maximum")
+        } else {
+            None
+        }
+    }
+
     fn scale_health_component(&self, value: f32, factor: f32) -> f32 {
         scale_life_component(value, factor, self.health_rounding())
     }

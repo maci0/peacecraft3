@@ -169,6 +169,10 @@ reconstructed. This is a deliberate support boundary, not native behavior: the
 observed client lets zero and negative factors drive zero or negative pools and
 death. The previously accepted zero/negative fixture was replaced by atomic
 refusal tests; native negative-pool/death semantics remain unimplemented.
+Fresh creation and cache restoration require positively finite maximum life,
+finite life within that maximum, nonnegative finite maximum mana and mana within
+that maximum before publishing a unit, so an empty owner's stored minimum clamp
+cannot create a zero-maximum unit. Zero maximum mana remains valid.
 Requests within the source threshold neither change pools nor store a new factor.
 
 Runtime tests cover existing units, threshold repeats, fresh units, flat held

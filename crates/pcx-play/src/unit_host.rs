@@ -2011,6 +2011,17 @@ impl ObjectHost {
             record.vitals =
                 Some(self.prepare_cached_restored_vitals(&record, prepared.definitions())?);
         }
+        if let Some(vitals) = record.vitals
+            && let Some(problem) = Self::projected_pool_problem(&vitals)
+        {
+            return Err(if saved.is_some() {
+                self.inner
+                    .error("RestoreUnit", Failure::GameCache(problem.into()))
+            } else {
+                self.inner
+                    .error(NATIVE, Failure::UnitActivity(problem.into()))
+            });
+        }
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),
