@@ -32,6 +32,7 @@ pub struct TargetingPolicy {
     pub optional_damage_gate: u8,
     pub optional_class_mask: u32,
     pub optional_unclassified_mask: u32,
+    pub unclassified_rawcodes: [[u8; 4]; 3],
     pub optional_level_mask: u32,
     pub optional_level_gate: u8,
 }
@@ -42,7 +43,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every game
 // rule returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 19] = [
+const WINDOWS: [(u32, usize, bool); 20] = [
     (0xabf9e2, 10, true),  // context constructor
     (0xac36ed, 22, true),  // context setter and clear
     (0xac372d, 4, true),   // attached-unit setter
@@ -62,6 +63,7 @@ const WINDOWS: [(u32, usize, bool); 19] = [
     (0xb24450, 53, true),  // optional level band
     (0x69f655, 7, true),   // attached policy getter, first resolution path
     (0x69f664, 7, true),   // attached policy getter, second resolution path
+    (0xb24704, 24, true),  // three unclassified rawcode comparisons
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -143,6 +145,7 @@ impl TargetingPolicy {
             level,
             getter_a,
             getter_b,
+            unclassified,
         ] = w
         else {
             return Err(Error("incomplete targeting windows"));
@@ -316,6 +319,25 @@ impl TargetingPolicy {
         {
             return Err(Error("optional score bands overlap or are empty"));
         }
+        let mut unclassified_rawcodes = [[0; 4]; 3];
+        for (index, rawcode) in unclassified_rawcodes.iter_mut().enumerate() {
+            let offset = index * 8;
+            at(unclassified, offset, &[0x81, 0xfe])?;
+            at(unclassified, offset + 6, &[0x74])?;
+            if (offset + 8) as isize + isize::from(unclassified[offset + 7] as i8) != 0x23 {
+                return Err(Error("unclassified comparison branch changed"));
+            }
+            *rawcode = word(unclassified, offset + 2)?.to_be_bytes();
+        }
+        if unclassified_rawcodes
+            .iter()
+            .any(|code| !code.iter().all(u8::is_ascii_graphic))
+            || unclassified_rawcodes.windows(2).any(|pair| {
+                pair[0][..3] != pair[1][..3] || pair[0][3].checked_add(1) != Some(pair[1][3])
+            })
+        {
+            return Err(Error("unclassified rawcode family changed"));
+        }
         Ok(Self {
             image_sha256,
             target_heroes_default: word(constructor, 6)? & context_mask != 0,
@@ -341,6 +363,7 @@ impl TargetingPolicy {
             optional_damage_gate: optional[3],
             optional_class_mask: optional_masks[1],
             optional_unclassified_mask: optional_masks[2],
+            unclassified_rawcodes,
             optional_level_mask: optional_masks[3],
             optional_level_gate: level[3],
         })
@@ -466,6 +489,12 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     dword(&mut w, 16, 44, 0x0008_0000);
     put(&mut w, 17, 0, &[0x8b, 0x40, 0x28, 0x83, 0xe0, 0x10, 0xc3]);
     put(&mut w, 18, 0, &[0x8b, 0x40, 0x28, 0x83, 0xe0, 0x10, 0xc3]);
+    for (index, rawcode) in [*b"xyz4", *b"xyz5", *b"xyz6"].into_iter().enumerate() {
+        let offset = index * 8;
+        put(&mut w, 19, offset, &[0x81, 0xfe]);
+        dword(&mut w, 19, offset + 2, u32::from_be_bytes(rawcode));
+        put(&mut w, 19, offset + 6, &[0x74, (0x23 - offset - 8) as u8]);
+    }
     w
 }
 
@@ -513,7 +542,39 @@ mod tests {
         assert_eq!(policy.highest_ability_rawcode, *b"abcd");
         assert_eq!(policy.optional_damage_threshold, 0.625);
         assert_eq!(policy.optional_unclassified_mask, 0x2000_0000);
+        assert_eq!(policy.unclassified_rawcodes, [*b"xyz4", *b"xyz5", *b"xyz6"]);
         let mut source = synthetic_windows();
+        for (index, rawcode) in [*b"Abc7", *b"Abc8", *b"Abc9"].into_iter().enumerate() {
+            source[19][index * 8 + 2..index * 8 + 6]
+                .copy_from_slice(&u32::from_be_bytes(rawcode).to_le_bytes());
+        }
+        assert_eq!(
+            TargetingPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0; 32]
+            )
+            .expect("changed family operands")
+            .unclassified_rawcodes,
+            [*b"Abc7", *b"Abc8", *b"Abc9"]
+        );
+        source[19][14] ^= 1;
+        assert!(
+            TargetingPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0; 32]
+            )
+            .is_err()
+        );
+        source = synthetic_windows();
+        source[19][7] ^= 1;
+        assert!(
+            TargetingPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0; 32]
+            )
+            .is_err()
+        );
+        source = synthetic_windows();
         source[5][14] ^= 1;
         assert!(
             TargetingPolicy::decode(
@@ -603,5 +664,8 @@ mod tests {
         assert!(!policy.target_heroes_default);
         assert!(policy.hero_first <= policy.hero_last);
         assert!(policy.highest_priority_mask > policy.hero_priority_mask);
+        assert!(policy.unclassified_rawcodes.windows(2).all(|pair| {
+            pair[0][..3] == pair[1][..3] && pair[0][3].checked_add(1) == Some(pair[1][3])
+        }));
     }
 }
