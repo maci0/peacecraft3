@@ -1,5 +1,6 @@
 # Ignore
 /target
+/target-menu-visual
 **/*.rs.bk
 Cargo.lock.orig
 
