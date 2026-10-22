@@ -20,6 +20,24 @@ That variant choice is a recreation convention, not established original rarity
 selection or RNG call order. The original engine's implicit seed remains a
 separate open question.
 
+`QueueUnitAnimation` appends a resolved sequence index to a bounded per-unit
+FIFO. Name resolution and a fallible queue reservation happen before any logical
+mutation; an absent name is a no-op and overflow refuses. The current clip plays
+to its authored completion boundary, then each queued clip starts exactly at the
+previous boundary. A single large simulation step drains every boundary it
+crosses. One queued clip covers one authored interval even when its SEQS record
+loops; after the queue drains, Stand is selected at the final boundary. These
+one-interval looping and Stand-fallback rules are recreation choices: queued
+capacity, loop behavior and terminal selection still need a native runtime
+comparison. The reviewed client's Queue handler at `0x4a4ae0` forwards flag `2`
+to `0x4aafc0`; Set uses flag `0`. Model admission now source-checks both
+`unit, string -> nothing` declarations. A successful explicit Set or engine
+animation selection clears queued intent; a missing sequence selection leaves
+the queue untouched. Renderer sampling remains immutable, and activity ticks
+advance the queue in place rather than cloning it. Pending queues keep an idle
+unit on the activity advance list, paid for by that list's existing per-unit
+work unit.
+
 The actor consumer reads published VM units and accepted positions, not imported
 placement ordinals or the original CreateUnit coordinates. Terrain height, class
 scale, movement height, tint and creation color remain source-derived. The

@@ -775,6 +775,44 @@ impl ObjectHost {
         self.advance_activity(now, work, Some(spans))
     }
 
+    /// Reserve room for a unit that will advance queued animation without motion.
+    /// The sorted active list is committed only after the queue append succeeds.
+    pub(super) fn reserve_animation_active(&mut self, unit: HandleId) -> Result<(), ()> {
+        let Some(state) = &mut self.unit_activity else {
+            return Ok(());
+        };
+        if state.active.binary_search(&unit).is_ok() {
+            return Ok(());
+        }
+        state.active.try_reserve(1).map_err(|_| ())
+    }
+
+    pub(super) fn commit_animation_active(&mut self, unit: HandleId) {
+        let Some(state) = &mut self.unit_activity else {
+            return;
+        };
+        if let Err(at) = state.active.binary_search(&unit) {
+            state.active.insert(at, unit);
+        }
+    }
+
+    fn advance_unit_animation(&mut self, unit: HandleId, now: f64) -> Result<(), Error> {
+        let result = match self.inner.entry_mut(unit)? {
+            Entry::Unit { record } if record.paused_since.is_none() => record
+                .animation
+                .as_mut()
+                .map(|animation| animation.advance(now)),
+            Entry::Unit { .. } => None,
+            _ => return Err(self.inner.error("unit activity", Failure::WrongFamily)),
+        };
+        if let Some(Err(detail)) = result {
+            return Err(self
+                .inner
+                .error("unit activity", Failure::UnitAnimation(detail)));
+        }
+        Ok(())
+    }
+
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.activity")
@@ -863,6 +901,7 @@ impl ObjectHost {
                 if let Ok(index) = followed.binary_search_by_key(&unit, |(id, _)| *id) {
                     self.refresh_unit_follow(unit, followed[index].1, work)?;
                 }
+                self.advance_unit_animation(unit, now)?;
                 if self
                     .executed_unit(unit)?
                     .activity
@@ -943,12 +982,18 @@ impl ObjectHost {
             Ok(moved)
         })();
         active.retain(|&unit| match self.inner.entry(unit) {
-            Ok(Entry::Unit { record }) => record.activity.as_ref().is_some_and(|a| {
-                a.motion.is_some() && !a.held
-                    || a.turn.is_some()
-                    || a.patrol.is_some()
-                    || a.follow.is_some()
-            }),
+            Ok(Entry::Unit { record }) => {
+                record
+                    .animation
+                    .as_ref()
+                    .is_some_and(crate::unit_model::Animation::needs_advance)
+                    || record.activity.as_ref().is_some_and(|a| {
+                        a.motion.is_some() && !a.held
+                            || a.turn.is_some()
+                            || a.patrol.is_some()
+                            || a.follow.is_some()
+                    })
+            }
             _ => true,
         });
         self.unit_activity.as_mut().expect("activity").active = active;

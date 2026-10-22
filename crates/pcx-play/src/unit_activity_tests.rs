@@ -136,6 +136,8 @@ fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHo
     let extra = format!(
         "{}\n{ORDERS}native RemoveUnit takes unit u returns nothing
 native SetUnitPosition takes unit u, real x, real y returns nothing
+native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native IssueTargetOrder takes unit u, string s, widget target returns boolean
 native IssueTargetOrderById takes unit u, integer n, widget target returns boolean
 type unittype extends handle
@@ -212,6 +214,37 @@ fn tick(vm: &mut Vm, now: f64) {
 }
 fn position(vm: &mut Vm, id: HandleId) -> [f32; 2] {
     vm.host().inner.executed_unit(id).unwrap().position.unwrap()
+}
+
+#[test]
+fn queued_animation_advances_on_the_simulation_clock_with_one_work_unit() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let now = vm.host().inner.timer_game_time().unwrap();
+    let host = &mut vm.host().inner;
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(a), Value::Str("Death".into())],
+    )
+    .unwrap();
+    host.native(
+        "QueueUnitAnimation",
+        &[Value::Handle(a), Value::Str("Death".into())],
+    )
+    .unwrap();
+    host.set_timer_game_time(now + 0.5).unwrap();
+    host.advance_unit_activity(now + 0.5, &mut 1).unwrap();
+    let animation = host.executed_unit(a).unwrap().animation.as_ref().unwrap();
+    assert_eq!(animation.sequence, Some(2));
+    assert_eq!(animation.started, now + 0.4);
+    assert!(animation.needs_advance());
+    host.set_timer_game_time(1.).unwrap();
+    host.advance_unit_activity(1., &mut 1).unwrap();
+    let animation = host.executed_unit(a).unwrap().animation.as_ref().unwrap();
+    assert_eq!(animation.sequence, Some(0));
+    assert_eq!(animation.started, now + 0.8);
+    assert!(!animation.has_pending());
+    assert_eq!(animation.sample(1.).unwrap().unwrap().frame, 300);
 }
 
 #[test]
