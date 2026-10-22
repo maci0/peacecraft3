@@ -375,8 +375,11 @@ Registration does not change explicit trigger-enabled state, infer a life total,
 kill or resurrect a widget, evaluate conditions or run actions. A destructable's
 creation-time dead-form flag is retained separately and is not interpreted as a
 new death transition. Item widgets are unsupported because this arena has no
-created item entries. Death detection, already-dead behavior, native duplicate
-identity, unregistration, event context/order and action delivery remain open.
+created item entries. Destructable death detection, already-dead behavior and
+synchronous action delivery are now implemented; native duplicate identity,
+unregistration, native event ordering, rendered behavior and the original
+baseline remain open. See
+[destructable death delivery](destructable-death-delivery.md).
 
 Synthetic owned-VM checks cover actual unit and destructable associations,
 repeated pairs, disabled state and unexecuted actions. Invalid-input checks leave

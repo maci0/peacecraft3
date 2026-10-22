@@ -81,7 +81,7 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 21] = [
+const RESPONSES: [&str; 23] = [
     "GetSummoningUnit",
     "GetSummonedUnit",
     "GetLevelingUnit",
@@ -103,6 +103,8 @@ const RESPONSES: [&str; 21] = [
     "GetClickedButton",
     "GetTriggerPlayer",
     "GetEventPlayerState",
+    "GetTriggerWidget",
+    "GetTriggerDestructable",
 ];
 
 impl ObjectHost {
@@ -401,6 +403,8 @@ impl ObjectHost {
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,
             "GetEventPlayerState" => subject.player_state,
+            "GetTriggerWidget" => subject.unit.or(subject.destructable),
+            "GetTriggerDestructable" => subject.destructable,
             "GetSpellTargetUnit" => subject.spell_target,
             _ if subject.unit.is_some() => subject.unit,
             // Fall through to range delivery, which owns its own responses.

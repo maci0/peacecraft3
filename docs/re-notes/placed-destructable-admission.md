@@ -85,9 +85,10 @@ script SHA-256 is
 `5909fb815a6a9a2803e4f18ada22bfac9f6afbab502d88762e2408711a9ca497`.
 Raw markers, source receipts and `result.json` remain local under
 `.scratch/destructable-life-setter-probe/` in the main checkout. The owned
-reference run is stopped. Destructable death-event delivery in the recreation
-still needs its own implementation and tests; the native receipt does not
-qualify that host path.
+reference run is stopped. Destructable death-event delivery in the recreation is
+now covered by synthetic host tests; the native receipt still does not qualify
+rendered, animation or collision parity. See
+[destructable death delivery](destructable-death-delivery.md).
 
 ## Flags 4 and 7, including the Human01 gate
 

@@ -2359,9 +2359,11 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [~] Unchanged Human01 passes three destructable death subscriptions through the
   production factory. Globals and `config` finish; `main` next refuses
   `GetRandomReal` at map span `186558..186584`.
-- [ ] Death detection/context/delivery, native random-stream fidelity, the
-  application world/clock, rendered gameplay and the 100-consecutive original
-  baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#widget-death-subscriptions).
+- [~] Destructable death detection, synchronous context delivery, collision
+  updates and engine-damage boundary queueing now pass synthetic tests. Native
+  ordering, unregistration, item widgets, rendered gameplay and the
+  100-consecutive original baseline remain open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
 
 ### 2026-10-17 — selected primary random-generator evidence
 
@@ -4054,3 +4056,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   selected-`common.j` gate with `PEACECRAFT3_COMMON_J`, all exit 0. The app-owned
   map transition, save handoff and score presentation remain open; see
   [game exit](docs/re-notes/script-game-exit.md).
+
+### 2026-10-23: Destructable death delivery
+
+- [~] Destructable death subscriptions now share a prepared transition producer
+  across script setters, kill/restore and engine damage. The selected
+  `EVENT_WIDGET_DEATH` identity is derived from `ConvertWidgetEvent`; source-qualified
+  `GetTriggerWidget` / `GetTriggerDestructable` responses, synchronous callbacks,
+  cross-family nesting, sleeping actions, conditions, callback aborts and bounded
+  nesting are covered by synthetic owned-VM tests. Core 1,416 tests pass, plus
+  strict Clippy, formatting and a workspace all-targets check. Native ordering,
+  unregistration, item widgets, death presentation, rendered/collision parity and
+  the original baseline remain open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
