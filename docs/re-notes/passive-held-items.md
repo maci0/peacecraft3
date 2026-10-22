@@ -44,7 +44,11 @@ transfer, death and level results are what the tests check.
 - Attribute metadata: `Iagi`, `Iint`, `Istr`, `Idef`, `Iatt`, `Ilif`, `Ihpr` and `Imrp`
   `useSpecific` lists must admit the item's ability alias. Amounts come from `Data{column}1`
   through `W3A` overlays. In the selected metadata, `Iint` uses Data column 2. No ID or amount
-  is written in code.
+  is written in code. A level-1 W3A entry applies only when its second selector equals the
+  field's metadata `data` ordinal, which selects the `Data` letter; the metadata `index` column
+  is unrelated. A mismatched pointer, including selector 0 where the data ordinal is not 0,
+  refuses rather than applying the entry. This keeps the controlled RoC `Ilif` selector-0
+  observation from fabricating a bonus; general native ignore semantics are not yet qualified.
 - The base class `APbo` is a native class with no ability row, so it is not checked.
 - The item's ability alias (for example `AIa4`) and its code (`AIab`) differ. The class check uses
   the code, which the registration names.
@@ -115,9 +119,12 @@ diagnostic instead of applying a silent wrong stat.
 - Registration: window `0xbc9f40` (`push "APbo"`, `push "AIml"`, `call 0x7f6360`), the same
   reviewed layout and base as `AIab`. The class must be distinct from the other registered
   classes. See `passive-max-life.md` for the original-runtime samples.
-- Amounts: metadata row `Ilif` (`field Data`, `slk AbilityData`, `data 1` = `DataA`). The
-  `useSpecific` list must admit the item's ability alias, and typed W3A overrides win. Negative
-  or unadmitted amounts refuse; held sums use checked addition.
+- Amounts: metadata row `Ilif` (`field Data`, `slk AbilityData`, `data 1` = `DataA` in the
+  selected source). The `useSpecific` list must admit the item's ability alias, and typed W3A
+  overrides win only at level 1 with the second selector equal to that metadata `data` ordinal.
+  A selector-0 or other mismatched pointer refuses instead of applying. The synthetic parser
+  fixture maps `Ilif` to column 2 and puts a decoy in DataA, so a hardcoded DataA or pointer 1
+  fails. Negative or unadmitted amounts refuse; held sums use checked addition.
 - Held effect: flat maximum-life points, summed over held passive items and derived per unit,
   hero or not. It applies whenever the holder has current vitals; a unit without vitals refuses
   a nonzero contribution.
@@ -127,8 +134,9 @@ diagnostic instead of applying a silent wrong stat.
 - Equip, drop, transfer and cleanup preflight receiver and donor pool projections before slots,
   ownership or drop events change. Held-total overflow refuses before writes.
 - Tests: parser (`max_life_points_come_from_the_admitted_ilif_row`,
-  `max_life_w3a_override_on_ilif_wins`, `negative_authored_max_life_refuses`,
-  `max_life_row_outside_the_ilif_admission_refuses`,
+  `max_life_w3a_override_on_ilif_wins`,
+  `max_life_override_with_the_wrong_data_pointer_refuses`,
+  `negative_authored_max_life_refuses`, `max_life_row_outside_the_ilif_admission_refuses`,
   `max_life_registration_requires_the_passive_base_and_a_distinct_class`); host
   (`held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio`,
   `held_max_life_applies_to_a_non_hero_and_transfers_the_pool`,
@@ -169,7 +177,8 @@ diagnostic instead of applying a silent wrong stat.
   all four classes must be distinct.
 - Amounts: metadata row `Iatt` (`field Data`, `slk AbilityData`, `data 1` = `DataA`), whose
   `useSpecific` list admits the item's ability alias. Shipped aliases include `AItf` (15) and
-  `AIat` (20); the amount is read from `DataA1`, never a constant, and typed W3A overrides win.
+  `AIat` (20); the amount is read from `DataA1`, never a constant, and a typed W3A override
+  applies at level 1 only with the matching metadata data pointer.
 - Held effect: flat attack damage, summed over held passive items and derived per unit (hero or
   not). Negative amounts, aliases outside `Iatt`, and an overflowing sum refuse the pickup before
   any write.
@@ -195,7 +204,8 @@ diagnostic instead of applying a silent wrong stat.
 - Amounts: metadata row `Imrp` (`field Data`, `slk AbilityData`, `data 1` = `DataA1`, authored
   type `real`), whose `useSpecific` list must admit the item's ability alias. The selected source
   rows give `AIrm` `DataA1=0.5` and `AIrn` `DataA1=0.25`. The value is read at level 1 and a typed
-  `real`/`unreal` W3A override wins. The editor string is the mana-regeneration bonus as a fraction
+  `real`/`unreal` W3A override with the matching data pointer wins. The editor string is the
+  mana-regeneration bonus as a fraction
   of normal, and the probe below is consistent with a fraction rather than points per second.
 - Held effect: the finite, nonnegative fractions of held passive items are summed. The unit's mana
   rate is the existing base rate plus the hero INT term, multiplied by `1 + held fraction`.
