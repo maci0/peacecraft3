@@ -779,8 +779,8 @@ impl Placement {
     /// Bounded deterministic cell routing on this same live collision cache.
     /// shortcut: A* tie order and cell-centre steering are reconstruction policy;
     /// qualify native path choice, local avoidance and steering before parity claims.
-    /// A small closed component cannot be approached from another component.
-    /// The bound limits this optional proof; an unfinished proof changes no target.
+    /// A closed component cannot be approached from another component. Reserve half
+    /// the remaining route work for forward search; an unfinished proof changes no target.
     fn isolated_route_component(
         &self,
         unit: HandleId,
@@ -789,31 +789,43 @@ impl Placement {
         radius: f32,
         work: &mut usize,
     ) -> Result<Option<BTreeSet<[i32; 2]>>, Error> {
+        use std::{cmp::Reverse, collections::BinaryHeap};
+
         if first == start {
             return Ok(None);
         }
-        let allowance = (*work).min(128);
+        let allowance = *work / 2;
         let mut left = allowance;
         let result = (|| {
-            let mut charge = || {
-                if left == 0 {
-                    false
-                } else {
-                    left -= 1;
-                    true
-                }
-            };
             let centre = |p: [i32; 2]| {
                 [
                     self.grid.origin[0] + (p[0] as f32 + 0.5) * self.rules.cell_size(),
                     self.grid.origin[1] + (p[1] as f32 + 0.5) * self.rules.cell_size(),
                 ]
             };
+            // Collision is immutable during this proof; inspect each cell centre only once.
+            let mut inspected = BTreeMap::new();
+            let mut clear = |point| -> Result<Option<bool>, Error> {
+                if let Some(&value) = inspected.get(&point) {
+                    return Ok(Some(value));
+                }
+                if left == 0 {
+                    return Ok(None);
+                }
+                left -= 1;
+                let value = self.prepare_motion(unit, centre(point), radius)?.is_some();
+                inspected.insert(point, value);
+                Ok(Some(value))
+            };
             let mut component = BTreeSet::from([first]);
-            let mut pending = vec![first];
-            while let Some(point) = pending.pop() {
+            let distance = |point: [i32; 2]| {
+                u64::from(point[0].abs_diff(start[0])) + u64::from(point[1].abs_diff(start[1]))
+            };
+            // Find a connection before flooding a large, connected component away from the mover.
+            let mut pending = BinaryHeap::from([Reverse((distance(first), first))]);
+            while let Some(Reverse((_, point))) = pending.pop() {
                 for dy in -1..=1 {
-                    for dx in -1..=1 {
+                    'neighbour: for dx in -1..=1 {
                         if dx == 0 && dy == 0 {
                             continue;
                         }
@@ -823,40 +835,28 @@ impl Placement {
                         {
                             continue;
                         }
-                        if !charge() {
-                            return Ok(None);
-                        }
                         // The forward search seeds the actual start even if its cell centre is blocked.
-                        if next != start
-                            && self.prepare_motion(unit, centre(next), radius)?.is_none()
-                        {
-                            continue;
+                        if next != start {
+                            match clear(next)? {
+                                Some(true) => {}
+                                Some(false) => continue,
+                                None => return Ok(None),
+                            }
                         }
                         if dx != 0 && dy != 0 {
-                            if !charge() {
-                                return Ok(None);
-                            }
-                            if self
-                                .prepare_motion(unit, centre([next[0], point[1]]), radius)?
-                                .is_none()
-                            {
-                                continue;
-                            }
-                            if !charge() {
-                                return Ok(None);
-                            }
-                            if self
-                                .prepare_motion(unit, centre([point[0], next[1]]), radius)?
-                                .is_none()
-                            {
-                                continue;
+                            for corner in [[next[0], point[1]], [point[0], next[1]]] {
+                                match clear(corner)? {
+                                    Some(true) => {}
+                                    Some(false) => continue 'neighbour,
+                                    None => return Ok(None),
+                                }
                             }
                         }
                         if next == start {
                             return Ok(None);
                         }
                         component.insert(next);
-                        pending.push(next);
+                        pending.push(Reverse((distance(next), next)));
                     }
                 }
             }

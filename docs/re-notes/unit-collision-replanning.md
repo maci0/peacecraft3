@@ -203,3 +203,52 @@ Private checks for this increment: 1,135 play library tests pass with 33 ignored
 318 focused unit-creation tests and the region-routing test pass. Strict
 all-target Clippy, the WASM library check and native application all-target check
 pass. Timing is report-only; the 136-work regression is deterministic.
+
+## Crowded point destinations and disconnected pockets (2026-10-22)
+
+After owner enumeration was admitted, the same unchanged-Human01 controller
+stopped at requested tick 29361. Failure context identifies villager 766 (`nvlw`),
+not a combat chase: its blocked replan consumed the remaining work before
+villager 767 could advance. Their destination is the script's caravan-removal
+rectangle. The loaded script separately controls collision-disabling and removal
+triggers; this change does not bypass those triggers or move their rectangles.
+
+A retained read-only diagnostic traversed the recreation's collision graph at
+the failure. The mover's component has 31,593 cells and reaches a closest octile
+distance of 28 from the requested goal. The earlier lower-bound candidate at
+distance 18 belongs to a separate 540-cell component. The optional 128-query
+probe could not certify that component, leaving the forward search to visit
+13,320 cells before spending the remaining work. These are local recreation
+observations, not measurements of native pathfinding or constants in the code.
+
+The optional component proof now shares the supplied route allowance, reserving
+half its remaining work for forward search and deducting only actual inspections.
+It caches clearance for each queried cell centre while collision is immutable,
+including blocked cells and diagonal corners. It visits pending cells toward
+the mover first, so a connected destination can establish its connection without
+flooding away from the mover. A completed disconnected proof excludes only its
+proven component; an incomplete proof still excludes nothing. The overall route
+and shared activity allowances are unchanged. There is no persistent clearance
+cache to survive occupancy changes, no skipped actor, and no additional RNG draw.
+
+Synthetic closed-pocket cases compare identical endpoints and identical work
+with smaller and ample allowances, check all returned segments, and retain the
+occupancy snapshot. The smaller regression exhausts its 1,000-work allowance on
+the old implementation. Existing point, seed-edge and diagonal-corner checks
+remain required. A cache-only intermediate passed that fixture but did not clear
+the campaign failure; an undirected adaptive probe regressed existing work
+checks. Both rejected attempts remain in local receipts.
+
+With the directed proof, the ordinary-input campaign itinerary passes the old
+work failure and reaches game time 507.703125, where the Warlord kills Arthas.
+The selected opening-repeat, authored Escape/control and XP-cap gates pass; the
+long controller remains a failed player route, not chapter victory. It still
+uses adaptive ordinary commands, not an identical input journal. Native route
+choice, cinematic timing, complete victory and next-map transition remain open.
+
+Final private checks: 1,140 play library tests pass with 33 ignored, including
+explicit nearest-outside-edge assertions for both synthetic pocket sizes.
+Strict all-target Clippy, the play WASM library check and the native application
+all-target check pass. The three selected-map diagnostic gates pass; the longer
+route remains a failed boss fight. No wall-time/FPS threshold or native-lockstep
+claim is used for this increment.
