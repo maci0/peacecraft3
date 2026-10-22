@@ -83,8 +83,51 @@ life, and reads current mana 200 immediately afterward. The source of that
 revival mana value is not established by this experiment and must not be copied
 as a constant.
 
-This run does not measure base-only `GetHeroInt(..., false)`, near-zero mana
-rounding, edited amounts, direct held-item transfers, dead-holder item removal,
-TFT, native Windows, or rendered parity. Pool changes and sequential cleanup
-must be preflighted before item ownership or event writes, just as for strength
+This run does not measure edited amounts, direct held-item transfers, TFT,
+native Windows, or rendered parity. Pool changes and sequential cleanup must
+be preflighted before item ownership or event writes, just as for strength
 and maximum-life passives.
+
+## Base getter and near-zero follow-up
+
+A second controlled RoC run produced all 14 expected markers. Map SHA-256 is
+`3c9f7400d3f7d2fdee4398f2626bd838bf0187ffdf292ed679a4eda6b69b501c`;
+script SHA-256 is
+`7db7c838470ee5ff9a99db7437f1c2c2a7d256722dedae76bc7f20dfa766673d`.
+Raw markers and the validated result remain local under
+`.scratch/int-mana-edge-probe/`; the owned run is stopped.
+
+`GetHeroInt(unit, false)` remains 33 through pickup, removal, death and revival.
+The effective getter is 39 with `ciri` held and returns to 33 on removal,
+including explicit removal from the dead hero. The matched control's base and
+effective getters both remain 33.
+
+Within one callback, setting current mana to 0.5 while holding the item reads
+back 0.5 / 585. Removing it yields **0 / 495**; re-equipping succeeds and leaves
+**0 / 585**. Thus the living-life minimum of one must not be applied to mana.
+The hero remains alive at full life throughout those mana operations.
+
+Killing that hero retains the item, effective INT and maximum mana. Explicit
+removal while dead clears the held slot and restores effective INT 33 and max
+mana 495. Current mana is already zero, so this case does not distinguish
+ratio adjustment, preservation or forced zero for a dead holder with nonzero
+mana. Revival succeeds after removal, again reading 200 current mana; that
+value's source remains unqualified.
+
+## Nonzero mana on dead removal
+
+A third controlled RoC run distinguishes the dead-holder policies. All 15
+markers arrived; map SHA-256 is
+`aebb8552fef808ee90d705aa2a91babbcaf466782e4145746c698d262bc04005` and
+script SHA-256 is
+`b7a237cb23c2959c4409d690b32f7a5fb0ab4ec872a2dd118de62af040626821`.
+The local result is `.scratch/int-mana-dead-probe/result.json`.
+
+Immediately before death, the hero holds `ciri` with mana **146.25 / 585**.
+`KillUnit` leaves that mana, maximum, item and effective INT unchanged, while
+life becomes zero. Explicit removal while dead then reads **124 / 495**,
+effective INT 33, an empty slot and zero life. The matched control is unchanged.
+This matches the rounded old ratio (`146.25 / 585 * 495 = 123.75`, rounded to
+124), distinguishing it from an unrounded ratio, unchanged absolute mana or
+forced zero. Therefore the dead-life rule must not be reused to zero mana when
+an intelligence item is removed.

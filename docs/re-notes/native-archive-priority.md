@@ -164,10 +164,10 @@ The selected RoC startup gate exposed an absent-upgrade query (`Rhrt`) in
 and synthetic tests alone do not establish successful unchanged chapter startup.
 The source-derived query correction subsequently passed selected Human01
 preparation, including the index-to-publication recipe identity assertion and a
-later launcher change. Selected Continue now reaches Human02's `prvt` item; the
-recreation implements that `AIlf` / `AIml` held maximum-life passive, but the
-selected continuation has not been rerun past the item. This does not establish
-successful Human02 startup or mission completion.
+later launcher change. Selected Continue subsequently passes Human02's `prvt`
+(`AIlf` / `AIml`) held maximum-life passive and refuses the intelligence effect
+on `ckng`. This does not establish successful Human02 startup or mission
+completion.
 
 Do not switch unrelated rule consumers to the selected namespace until their
 source lookup and receipt paths agree. In particular, the native RoC speed

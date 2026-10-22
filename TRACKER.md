@@ -7,10 +7,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   selected Human01 preparation gate passes, including recipe identity and later
   launcher-change isolation. Human02 now passes the absent-research and held
   mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
-  passive is implemented with synthetic coverage. The selected continuation has
-  not been rerun past that path. The continuation remains private; full chapter
+  passive passes the selected continuation, which now refuses the intelligence
+  effect on `ckng`. Private checks pass 1342 core and 606 app tests, strict
+  Clippy, WASM and formatting. Pool-clamp review corrections and held INT are
+  still in progress. The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
-  unqualified. Receipts: `.scratch/campaign-continuation/final-source-*.log`.
+  unqualified. Receipts: `.scratch/campaign-continuation/max-life-*.log`.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three

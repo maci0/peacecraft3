@@ -118,3 +118,40 @@ are absent from all shipped data.
 Exact archive/member identities, member hashes and matching parsed rows stay
 local in `.scratch/mdx-peasant-probe/peasant-sound-receipt.json`, SHA-256
 `cba4a485881d9aa5139db9a152bff49c861f6bab9a3d419e093292c1e234795b`.
+
+## Placed-tree life byte
+
+The runtime host currently retains only script-created destructable arguments
+and flags. Placed trees from `war3map.doo` enter the collision raster without
+shared-arena handles or life pools. A scan of script-created objects alone
+therefore cannot implement the original campaign's lumber order.
+
+A controlled RoC run used five original Human02 `LTlt` records, preserving
+their positions, variations, flags, per-axis scales and unique creation IDs,
+and varying only the stored life byte. There were no script-created trees.
+All 12 conditional markers validated, with one matching placed handle per
+rectangle and max life 50 from the selected destructable row:
+
+| Stored life byte | Observed current life |
+|---|---:|
+| 0 | 0 |
+| 25 | 12.5 |
+| 50 | 25 |
+| 100 | 50 |
+| 255 | 50 |
+
+This supports a percentage interpretation through 100, retaining a dead placed
+object at zero life. The 255 observation does not distinguish saturation from
+a special full-life sentinel; intermediate bytes above 100 were not measured.
+Maximum HP remains a source-table/typed-map-override value, not a copied 50.
+
+Map SHA-256 is
+`94d6c9b87054b07962201bc963622eedd5b68ba3855954964ea21112fb69f5b2`;
+script SHA-256 is
+`b8f3da220b4a18185c8e2036d0b1199a4c1e8fe102184623481e68eff237daa1`;
+diagnostic doo SHA-256 is
+`df25a3b9e0cd9a20ce41972dd5154b6d71997ae1635494a8809cec2c31dd0f97`.
+Receipts remain local at the repository root's
+`.scratch/placed-tree-life-probe/`. This is life-state evidence, not a completed
+harvesting implementation or a rendered comparison. Tree death must update
+derived pathing without erasing overlapping objects or terrain restrictions.
