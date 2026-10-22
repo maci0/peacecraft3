@@ -142,6 +142,16 @@ base copy; callers may instead use that selected copy directly. Configuration
 publishes the recipe with its exact receipts, and gameplay preparation borrows
 its pinned executable bytes instead of reopening an installation path.
 
+Each admitted archive is copied into a private file unlinked before asset bytes
+are written. Subsequent reads use that snapshot, and its SHA-256 is included in
+layer provenance. The operating budgets are 4 GiB per archive and 8 GiB per
+recipe, copied in 1 MiB chunks. Before/after source stamps detect ordinary changes
+during copying; this does not claim an atomic filesystem snapshot against every
+concurrent writer. The same-inode rewrite regression qualifies isolation after
+copy completion. Runtime unlink behavior is verified on Linux; Windows remains
+unverified, and a WASM compile check does not establish browser filesystem support.
+Failure to unlink refuses before copying any original asset bytes.
+
 The native chapter index retains that recipe through mission selection and
 publication; launching a row does not pin the install a second time. A row must
 match the current install/edition key and have a retained recipe. Refresh failure
