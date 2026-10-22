@@ -50,3 +50,28 @@ or zero limits; all eight also execute under WASI. The complete object suite,
 the existing two-install stock-default sweep, strict native/WASM Clippy and
 downstream native/WASM application checks pass. These are parser and source
 checks, not rendered campaign-menu or gameplay acceptance.
+
+## Actual native menu-entry baseline (2026-10-22)
+
+A current native build of the tree containing the mission-progress and null-quest
+changes was exercised through physical input on an owned Xvfb display, with the
+selected Legacy install and explicit llvmpipe Vulkan renderer. Its binary SHA-256
+is `49984469ea4893ed3ff524b3b4c93d5509e3107848f5b77c8bca408dc83eaf19`.
+This software-renderer run diagnoses the interaction path, not GPU performance.
+
+Selecting Reign of Chaos in the launcher, pressing Main menu, skipping the intro
+with Escape, then clicking Single Player and Campaign reaches the original
+Campaign screen. It shows source difficulty text, an `Unavailable` popup and
+Back, but no campaign or mission choices. No mission is launched. The fallback
+configuration launcher does contain the native chapter list; its existing
+internal activation gate therefore does not prove this original-menu path works.
+
+`CampaignMenu.fdf` declares CampaignSelectFrame and MissionSelectFrame but not
+their dynamic choice population. The selected localized CampaignStrings profile
+provides CampaignList order, DefaultOpen, names, map filenames and background
+skin keys. Original-menu choice population and its connection to the existing
+bounded production startup are the next work, with physical rendered entry still
+unverified. Local screenshots, process/input scope and hashes are retained under
+`.scratch/menu-entry/native-run/result.json` in the protected investigation
+checkout. No original assets or captures are committed or uploaded, and both
+owned application and display processes were stopped after capture.
