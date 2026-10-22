@@ -169,7 +169,7 @@ type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
     h.admit_unit_range_runtime("TEST_RANGE", 16).unwrap();
     h
 }
-fn open() -> Vm {
+pub(super) fn open() -> Vm {
     open_with_fields(&[])
 }
 fn open_with_fields(fields: &[([u8; 4], ObjectField)]) -> Vm {
@@ -310,6 +310,73 @@ fn pause_preserves_the_route_and_repeated_pause_does_not_stack_or_catch_up() {
             .native("IsUnitPaused", &[Value::Handle(a)])
             .unwrap(),
         Value::Bool(false)
+    );
+}
+
+#[test]
+fn paused_intervals_do_not_consume_queued_animation() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let start = vm.host().inner.timer_game_time().unwrap();
+    let host = &mut vm.host().inner;
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(a), Value::Str("Death".into())],
+    )
+    .unwrap();
+    host.native(
+        "QueueUnitAnimation",
+        &[Value::Handle(a), Value::Str("Walk".into())],
+    )
+    .unwrap();
+    tick(&mut vm, start + 0.2);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    tick(&mut vm, start + 5.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    let animation = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (animation.sequence, animation.started),
+        (Some(2), start + 4.8)
+    );
+    assert_eq!(animation.sample(start + 5.).unwrap().unwrap().frame, 2200);
+    tick(&mut vm, start + 5.2);
+    let animation = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (animation.sequence, animation.started),
+        (Some(1), start + 5.2)
+    );
+    tick(&mut vm, start + 6.);
+    let animation = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (animation.sequence, animation.started),
+        (Some(0), start + 5.8)
     );
 }
 

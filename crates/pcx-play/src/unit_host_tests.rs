@@ -213,13 +213,11 @@ fn model_admission_checks_the_queue_animation_signature() {
 
 #[test]
 fn queue_unit_animation_dispatches_and_refuses_bad_inputs_without_mutation() {
-    let (mut h, _) = animation_vm(false);
-    h.vm.init_globals().unwrap();
-    h.vm.call("main", &[]).unwrap();
-    let Value::Handle(id) = h.vm.global("U") else {
+    let mut vm = activity::open();
+    let Value::Handle(id) = vm.global("A") else {
         panic!("unit")
     };
-    let host = &mut h.vm.host().inner;
+    let host = &mut vm.host().inner;
     let before = host.inner().handles();
     host.native(
         "SetUnitAnimation",
@@ -293,6 +291,31 @@ fn queue_unit_animation_dispatches_and_refuses_bad_inputs_without_mutation() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn queue_animation_refuses_without_admitted_activity_before_mutation() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let Value::Handle(id) = h.vm.global("U") else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Death".into())],
+    )
+    .unwrap();
+    let state = host.executed_unit(id).unwrap().animation.clone();
+    let error = host
+        .native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("Walk".into())],
+        )
+        .unwrap_err();
+    assert!(error.contains("admitted unit activity"), "{error}");
+    assert_eq!(host.executed_unit(id).unwrap().animation, state);
 }
 
 #[test]

@@ -121,6 +121,12 @@ const QUEUED_LIMIT: usize = 8;
 /// Floating-point guard for authored millisecond boundaries (one nanosecond).
 const SCHEDULE_EPSILON: f64 = 1e-9;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct QueuedClip {
+    sequence: usize,
+    requested: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Animation {
     pub model: Arc<Model>,
@@ -129,8 +135,9 @@ pub struct Animation {
     pub started: f64,
     /// Sequence seconds per game second, fixed when the sequence is selected.
     rate: f64,
-    /// Authored indices waiting behind the current sequence, in call order.
-    queued: VecDeque<usize>,
+    /// Authored clips waiting behind the current sequence, in call order, with
+    /// the game time at which each was requested.
+    queued: VecDeque<QueuedClip>,
     /// The current sequence came from the queue and still owes a Stand fallback.
     queue_active: bool,
 }
@@ -220,7 +227,10 @@ impl Animation {
         self.queued
             .try_reserve(1)
             .map_err(|_| "unit animation queue storage".to_string())?;
-        self.queued.push_back(index);
+        self.queued.push_back(QueuedClip {
+            sequence: index,
+            requested: now,
+        });
         Ok(true)
     }
     pub fn has_pending(&self) -> bool {
@@ -243,25 +253,19 @@ impl Animation {
                     self.queue_active = false;
                     break;
                 };
-                self.start(next, self.started, 1.);
+                self.start(next.sequence, self.started.max(next.requested), 1.);
                 self.queue_active = true;
                 continue;
             };
-            let sequence = self
-                .model
-                .sequences
-                .get(index)
-                .ok_or("unit animation sequence missing")?;
-            let duration = u64::from(sequence.duration());
-            let at = self.started + duration as f64 / (1000. * self.rate);
-            if !at.is_finite() {
-                return Err("unit animation clock overflow".into());
-            }
-            if now + SCHEDULE_EPSILON < at {
+            let at = match self.queued.front() {
+                Some(next) => self.next_boundary(index, next.requested)?,
+                None => self.next_boundary(index, self.started)?,
+            };
+            if now < at {
                 break;
             }
             if let Some(next) = self.queued.pop_front() {
-                self.start(next, at, 1.);
+                self.start(next.sequence, at, 1.);
                 self.queue_active = true;
             } else if let Some(stand) = self.model.select("stand") {
                 self.start(stand, at, 1.);
@@ -272,6 +276,52 @@ impl Animation {
             }
         }
         Ok(())
+    }
+    /// The first completion boundary of the current clip at or after `requested`.
+    /// A late request waits for the next authored boundary instead of consuming a
+    /// clip at a boundary that already elapsed.
+    fn next_boundary(&self, index: usize, requested: f64) -> Result<f64, String> {
+        let sequence = self
+            .model
+            .sequences
+            .get(index)
+            .ok_or("unit animation sequence missing")?;
+        let duration = u64::from(sequence.duration());
+        if duration == 0 {
+            return Ok(self.started.max(requested));
+        }
+        let period = duration as f64 / (1000. * self.rate);
+        let first = self.started + period;
+        if !period.is_finite() || !first.is_finite() {
+            return Err("unit animation clock overflow".into());
+        }
+        if sequence.non_looping {
+            return Ok(first.max(requested));
+        }
+        let cycles = ((requested - self.started) / period).ceil().max(1.);
+        let at = self.started + cycles * period;
+        if !at.is_finite() {
+            return Err("unit animation clock overflow".into());
+        }
+        Ok(at)
+    }
+    /// Shift every animation timestamp that the pause covered forward by the
+    /// paused interval. Requests made during the pause take effect at resume.
+    pub(crate) fn resume_after_pause(&mut self, since: f64, now: f64) {
+        let resume = |at: f64| {
+            if at <= since {
+                at + (now - since)
+            } else if at < now {
+                now
+            } else {
+                at
+            }
+        };
+        self.created = resume(self.created);
+        self.started = resume(self.started);
+        for entry in &mut self.queued {
+            entry.requested = resume(entry.requested);
+        }
     }
     fn start(&mut self, index: usize, at: f64, rate: f64) {
         self.sequence = Some(index);
@@ -483,6 +533,32 @@ pub(crate) mod tests {
         large.queue("Stand Defend", 3.).unwrap();
         large.advance(5.).unwrap();
         assert_eq!(large, animation);
+    }
+
+    #[test]
+    fn late_enqueue_waits_for_the_next_authored_boundary_after_the_request() {
+        let mut animation = Animation::new(model(), 2.).unwrap();
+        assert!(animation.queue("Death", 4.5).unwrap());
+        animation.advance(5.1).unwrap();
+        assert_eq!((animation.sequence, animation.started), (Some(0), 2.));
+        assert!(animation.has_pending());
+        animation.advance(5.2).unwrap();
+        assert_eq!((animation.sequence, animation.started), (Some(2), 5.2));
+        assert!(!animation.has_pending());
+    }
+
+    #[test]
+    fn advancing_below_a_boundary_leaves_the_same_time_sampleable() {
+        let mut animation = Animation::new(model(), 2.).unwrap();
+        animation.select("Death", 3., None).unwrap();
+        assert!(animation.queue("Walk", 3.).unwrap());
+        let just_below = 3.4 - SCHEDULE_EPSILON / 2.;
+        animation.advance(just_below).unwrap();
+        assert_eq!((animation.sequence, animation.started), (Some(2), 3.));
+        assert!(animation.sample(just_below).is_ok());
+        animation.advance(3.4).unwrap();
+        assert_eq!((animation.sequence, animation.started), (Some(3), 3.4));
+        assert!(animation.sample(3.4).is_ok());
     }
 
     #[test]

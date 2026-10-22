@@ -70,6 +70,9 @@ impl ObjectHost {
                     if let Some(activity) = &mut record.activity {
                         activity.resume_after_pause(since, now);
                     }
+                    if let Some(animation) = &mut record.animation {
+                        animation.resume_after_pause(since, now);
+                    }
                     if let Some(combat) = &mut record.combat {
                         combat.resume_after_pause(now - since);
                     }
