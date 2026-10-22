@@ -63,6 +63,32 @@ fn int_of(expr: &str) -> i32 {
 // ----- resolution: a name error carries the map's own position ------------
 
 #[test]
+fn duplicate_map_globals_refuse_instead_of_replacing_the_first() {
+    for src in [
+        "globals\n integer repeated = 1\n integer repeated = 2\nendglobals\n",
+        "globals\n integer repeated = 1\nendglobals\nglobals\n integer repeated = 2\nendglobals\n",
+    ] {
+        let error = resolve_of(src).expect_err("duplicate globals must refuse");
+        assert!(error.message.contains("repeated"), "{}", error.message);
+        assert!(
+            error.message.contains("declared twice"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn a_map_global_still_replaces_a_prelude_global() {
+    let prelude = parse("globals\n integer shared = 2\nendglobals\n").unwrap();
+    let map = parse("globals\n integer shared = 7\nendglobals\n").unwrap();
+    let program = resolve_with(&map, &[Prelude::new("common.j", &prelude)]).unwrap();
+    let mut vm = Vm::new(&program, NullHost);
+    vm.init_globals().unwrap();
+    assert_eq!(vm.global("shared"), Value::Int(7));
+}
+
+#[test]
 fn an_unresolved_name_reports_the_maps_own_line_and_column() {
     let src = "globals\n    integer a = 0\nendglobals\nfunction f takes nothing returns nothing\n    call Missing(a)\nendfunction\n";
     let (line, col, message) = where_is(src);

@@ -2415,6 +2415,17 @@ actions, repeated-run stability and scheduler/world integration remain open.
   100-consecutive original baseline remain open. See
   [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
 
+### 2026-10-23: Duplicate map globals
+
+- [x] Script resolution now rejects repeated globals within the map script,
+  including declarations in separate globals blocks. The map-over-prelude rule
+  remains unchanged. A regression failed before the correction; the rebuilt CLI
+  rejects the preserved duplicate-observer diagnostic and accepts its corrected
+  map. Verification: 122 script tests, 1,504 core tests, 609 app tests, strict
+  affected native/WASM checks and the selected real Continue startup all pass.
+  Resolution documentation now states that assignment and return types are not
+  validated; a successful resolution is not proof of original-client compilation.
+
 ### 2026-10-17 — selected primary random-generator evidence
 
 - [~] Static registration/handler tracing on the selected executable identifies

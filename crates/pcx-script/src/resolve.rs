@@ -1,22 +1,20 @@
-//! Name resolution and the checks vanilla JASS actually enforces.
+//! Name resolution and declaration checks.
 //!
 //! # What this builds
 //!
 //! A [`Program`]: every declaration in one flat environment, every identifier
-//! in the *map's own* script resolved to one of them, and the three checks the
-//! engine's own compiler performs:
+//! in the *map's own* script resolved to one of them, with these checks:
 //!
 //! 1. an unknown type in a declaration (`type X extends Y`, `local`,
 //!    parameter, return type),
 //! 2. a wrong argument count where the declaration gives the arity,
 //! 3. `library` `requires` / `uses` ordering.
+//! 4. repeated global declarations in the map script.
 //!
-//! Anything else JASS does *not* check is not checked here. JASS is
-//! dynamically typed with a nominal `type X extends Y` handle hierarchy and no
-//! static type system, so inventing one would reject real maps for code the
-//! game accepts. Mixed `real`/`integer` operands, string comparisons and a use
-//! anywhere in a function are therefore all resolved, and the value model
-//! decides what they mean.
+//! Assignment and return types are not validated here. Resolution success is
+//! not proof that the original client compiles a script. Mixed numeric operands,
+//! string comparisons and a use anywhere in a function resolve; the value model
+//! decides their runtime behavior.
 //!
 //! # What one resolution unit is
 //!
@@ -275,6 +273,7 @@ struct Resolver<'a> {
     forward: BTreeMap<String, (usize, Span)>,
     globals: Vec<Global>,
     globals_by_name: BTreeMap<String, usize>,
+    main_globals: BTreeSet<String>,
     types: BTreeMap<String, TypeInfo>,
     main_types: BTreeSet<String>,
     containers: BTreeMap<String, Container>,
@@ -310,6 +309,7 @@ impl<'a> Resolver<'a> {
             forward: BTreeMap::new(),
             globals: Vec::new(),
             globals_by_name: BTreeMap::new(),
+            main_globals: BTreeSet::new(),
             types: BTreeMap::new(),
             main_types: BTreeSet::new(),
             containers: BTreeMap::new(),
@@ -456,9 +456,20 @@ impl<'a> Resolver<'a> {
 
     fn declare_global(&mut self, v: &'a VarDecl, source: &str, main: bool) {
         // The map's own declaration replaces a prelude one, because the map is
-        // loaded last. Two declarations inside one source leave the first in
-        // place: the engine rejects the script outright, and silently picking
-        // either half of that refusal is worse than the engine's own error.
+        // loaded last. Repeated map declarations must not silently replace one another.
+        if main && !self.main_globals.insert(v.name.as_str().to_owned()) {
+            self.pending.push(ResolveDiagnostic {
+                source_label: None,
+                error: crate::Error::resolve(
+                    v.span,
+                    format!(
+                        "global `{}` is declared twice in the map script",
+                        v.name.as_str()
+                    ),
+                ),
+            });
+            return;
+        }
         if !main && self.globals_by_name.contains_key(v.name.as_str()) {
             return;
         }
