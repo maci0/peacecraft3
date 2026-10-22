@@ -319,12 +319,6 @@ impl ObjectHost {
         self.unit_activity.as_ref().map(|state| state.rules.stop)
     }
 
-    pub(super) fn activity_movement_order(&self) -> Option<i32> {
-        self.unit_activity
-            .as_ref()
-            .map(|state| state.rules.movement)
-    }
-
     pub(super) fn activity_moving(&self, unit: HandleId) -> Result<bool, Error> {
         Ok(self
             .executed_unit(unit)?

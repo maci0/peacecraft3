@@ -3111,6 +3111,25 @@ fn position_host_admitting(
     selected: &[([u8; 4], ObjectField)],
     before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> ObjectHost {
+    position_host_admitting_placed(
+        queries,
+        memberships,
+        map,
+        declarations,
+        selected,
+        &[],
+        before_catalog,
+    )
+}
+fn position_host_admitting_placed(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+    selected: &[([u8; 4], ObjectField)],
+    placed: &[crate::playercolor_host::PlacedDestructable],
+    before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> ObjectHost {
     let mut extra = String::from(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
@@ -3250,6 +3269,7 @@ fn position_host_admitting(
         .unwrap()
         .with_destructables(crate::playercolor_host::DestructableBudget { max_records: 2 })
         .unwrap();
+    host.admit_placed_destructables(placed).unwrap();
     host = host
         .with_filters(crate::playercolor_host::FilterBudget { max_records: 16 })
         .unwrap()

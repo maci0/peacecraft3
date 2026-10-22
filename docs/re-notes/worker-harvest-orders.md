@@ -265,6 +265,14 @@ deposited even when the carry is below capacity. The final partial swing and
 the decision to deposit incomplete carry on tree death are recreation choices;
 the controlled probe did not distinguish them from alternatives.
 
+The worker's selected `upgradeList` admits its authored upgrades. For each
+upgrade with an applied player level, the runtime resolves `UpgradeData` effect
+slots and adds the active `rlum` (lumber capacity) `base + mod * (level - 1)`
+to `Ahar.DataB`. An inactive upgrade leaves capacity unchanged; a malformed
+effect or a level beyond the authored maximum is a contextual refusal. Combat,
+armor and movement effects are not harvest inputs and remain unit-runtime
+responsibilities.
+
 Deposits prepare the player's lumber bank and `PLAYER_STATE_LUMBER_GATHERED`
 rows before writing either value or firing player-state events. Both prepared
 rows are written before their events so a callback observes a coherent bank and

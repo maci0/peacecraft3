@@ -576,13 +576,28 @@ impl ObjectHost {
         current: i32,
         pending: usize,
     ) -> Result<Option<PlayerStateChange>, Error> {
+        let [change] =
+            self.prepare_player_state_changes_reserving(player, [(state, current)], pending)?;
+        Ok(change)
+    }
+
+    /// Prepare several effective-value changes for one player under a single
+    /// event reservation. Both rows are prepared before either value is
+    /// written, so a capacity refusal leaves rows, snapshots and queued events
+    /// unchanged even when both changes would fire.
+    pub(crate) fn prepare_player_state_changes_reserving<const N: usize>(
+        &mut self,
+        player: HandleId,
+        changes: [(i32, i32); N],
+        pending: usize,
+    ) -> Result<[Option<PlayerStateChange>; N], Error> {
         let ops = self
             .triggers
             .as_ref()
             .and_then(|admitted| admitted.player_state_ops);
         let Some(ops) = ops else {
             self.reserve_event_delivery(pending)?;
-            return Ok(None);
+            return Ok(std::array::from_fn(|_| None));
         };
         let admitted = self.admitted_triggers()?;
         let event = admitted.player_state_event.ok_or_else(|| {
@@ -592,44 +607,50 @@ impl ObjectHost {
             )
         })?;
         let registrations = admitted.player_state_registrations.len();
-        let mut updates = Vec::new();
-        let mut count: usize = 0;
-        for slot in 0..registrations {
-            let id = self.player_state_registration_id(slot)?;
-            let record = self.player_state_record(id)?;
-            if record.player != player || record.state_value != state || record.last == current {
-                continue;
+        let mut prepared: [Option<PlayerStateChange>; N] = std::array::from_fn(|_| None);
+        let mut total: usize = pending;
+        for (change, (state, current)) in prepared.iter_mut().zip(changes) {
+            let mut updates = Vec::new();
+            let mut count: usize = 0;
+            for slot in 0..registrations {
+                let id = self.player_state_registration_id(slot)?;
+                let record = self.player_state_record(id)?;
+                if record.player != player || record.state_value != state || record.last == current
+                {
+                    continue;
+                }
+                let fire = self
+                    .player_state_comparison(ops, record.limitop_value)?
+                    .holds(current, record.limit);
+                if fire {
+                    count += 1;
+                }
+                let index = usize::try_from(id.token() - 1)
+                    .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
+                if updates.len() == updates.capacity() {
+                    updates
+                        .try_reserve(1)
+                        .map_err(|_| self.inner.error(REGISTER, Failure::Capacity))?;
+                }
+                updates.push(PlayerStateEventUpdate {
+                    index,
+                    trigger: record.trigger,
+                    state_handle: record.state,
+                    fire,
+                });
             }
-            let fire = self
-                .player_state_comparison(ops, record.limitop_value)?
-                .holds(current, record.limit);
-            if fire {
-                count += 1;
-            }
-            let index = usize::try_from(id.token() - 1)
-                .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
-            if updates.len() == updates.capacity() {
-                updates
-                    .try_reserve(1)
-                    .map_err(|_| self.inner.error(REGISTER, Failure::Capacity))?;
-            }
-            updates.push(PlayerStateEventUpdate {
-                index,
-                trigger: record.trigger,
-                state_handle: record.state,
-                fire,
+            total = total
+                .checked_add(count)
+                .ok_or_else(|| self.inner.error(REGISTER, Failure::Capacity))?;
+            *change = Some(PlayerStateChange {
+                player,
+                current,
+                event,
+                updates,
             });
         }
-        let count = count
-            .checked_add(pending)
-            .ok_or_else(|| self.inner.error(REGISTER, Failure::Capacity))?;
-        self.reserve_event_delivery(count)?;
-        Ok(Some(PlayerStateChange {
-            player,
-            current,
-            event,
-            updates,
-        }))
+        self.reserve_event_delivery(total)?;
+        Ok(prepared)
     }
 
     /// Records the new effective value for every prepared registration and

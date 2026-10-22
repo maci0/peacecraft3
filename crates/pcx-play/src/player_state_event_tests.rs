@@ -1096,3 +1096,86 @@ fn prepared_lumber_credit_writes_both_rows_before_ordered_events() {
     assert_eq!(second.subject.player_state, Some(id(&gathered)));
     assert!(h.take_fired_event().is_none());
 }
+
+#[test]
+fn lumber_credit_reservation_refusal_leaves_rows_and_events_unchanged() {
+    let mut h = host(&common(0), 8);
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let bank = convert(&mut h, "ConvertPlayerState", 2);
+    let gathered = convert(&mut h, "ConvertPlayerState", 16);
+    let greater = convert(&mut h, "ConvertLimitOp", 4);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    register(&mut h, &trigger, &player, &bank, &greater, 0.0).unwrap();
+    register(&mut h, &trigger, &player, &gathered, &greater, 0.0).unwrap();
+    for state in [&bank, &gathered] {
+        h.native(
+            "SetPlayerState",
+            &[player.clone(), state.clone(), Value::Int(0)],
+        )
+        .unwrap();
+    }
+    while h.take_fired_event().is_some() {}
+
+    let error = h
+        .prepare_lumber_credit_reserving(id(&player), 10, usize::MAX)
+        .expect_err("event capacity must refuse the combined reservation");
+    assert!(error.to_string().contains("capacity"), "{error}");
+    assert_eq!(
+        h.native("GetPlayerState", &[player.clone(), bank]).unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(
+        h.native("GetPlayerState", &[player.clone(), gathered])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn lumber_credit_reserves_pending_and_both_state_events_together() {
+    let mut h = host(&common(0), 8);
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let bank = convert(&mut h, "ConvertPlayerState", 2);
+    let gathered = convert(&mut h, "ConvertPlayerState", 16);
+    let greater = convert(&mut h, "ConvertLimitOp", 4);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    register(&mut h, &trigger, &player, &bank, &greater, 0.0).unwrap();
+    register(&mut h, &trigger, &player, &gathered, &greater, 0.0).unwrap();
+    for state in [&bank, &gathered] {
+        h.native(
+            "SetPlayerState",
+            &[player.clone(), state.clone(), Value::Int(0)],
+        )
+        .unwrap();
+    }
+    while h.take_fired_event().is_some() {}
+
+    let before = h.event_queue_capacity();
+    let credit = h
+        .prepare_lumber_credit_reserving(id(&player), 10, 4)
+        .unwrap();
+    let reserved = h.event_queue_capacity();
+    assert!(
+        reserved >= before + 6,
+        "four pending events and two state events need one combined block"
+    );
+    for _ in 0..4 {
+        h.push_reserved_event(
+            id(&trigger),
+            None,
+            crate::playercolor_host::EventSubject::default(),
+            None,
+        );
+    }
+    h.apply_lumber_credit(credit);
+    assert_eq!(
+        h.event_queue_capacity(),
+        reserved,
+        "both rows and every event fit the combined reservation"
+    );
+    for _ in 0..6 {
+        assert!(h.take_fired_event().is_some());
+    }
+    assert!(h.take_fired_event().is_none());
+}

@@ -32,10 +32,23 @@ constant native GetUnitDefaultMoveSpeed takes unit u returns real
 native SetUnitMoveSpeed takes unit u, real speed returns nothing
 constant native GetTriggerUnit takes nothing returns unit
 native TriggerRegisterUnitInRange takes trigger t, unit u, real r, boolexpr f returns event
+type playerstate extends handle
+native SetPlayerState takes player p, playerstate setting, integer value returns nothing
+constant native GetPlayerState takes player p, playerstate setting returns integer
+constant native ConvertPlayerState takes integer i returns playerstate
 globals
 constant unitevent TEST_RANGE=ConvertUnitEvent(-47)
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
 endglobals
 "#;
+#[path = "harvest_runtime_tests.rs"]
+mod harvest;
 const SOUNDS: &str = "native CreateSound takes string file, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string eax returns sound
 native AttachSoundToUnit takes sound s, unit u returns nothing
 ";
@@ -162,6 +175,17 @@ fn host_fields(route_work: usize, fields: &[([u8; 4], ObjectField)]) -> ObjectHo
 fn host_fields_with(
     route_work: usize,
     fields: &[([u8; 4], ObjectField)],
+    rules: (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+) -> ObjectHost {
+    host_fields_with_placed(route_work, fields, &[], rules)
+}
+fn host_fields_with_placed(
+    route_work: usize,
+    fields: &[([u8; 4], ObjectField)],
+    placed: &[crate::playercolor_host::PlacedDestructable],
     (registry, rules): (
         Arc<crate::order_registry::Registry>,
         crate::unit_activity::Rules,
@@ -191,7 +215,7 @@ type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
             .with_sound_properties()
             .unwrap()
     };
-    let h = position_host_admitting(1000, 16, MAP, &extra, fields, sounds)
+    let h = position_host_admitting_placed(1000, 16, MAP, &extra, fields, placed, sounds)
         .with_locations()
         .unwrap();
     let mut h = h
