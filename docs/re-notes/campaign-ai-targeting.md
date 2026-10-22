@@ -106,3 +106,44 @@ and derive ordinal/branch relationships from the checked source. This byte trace
 does not establish every startup lobby-flag mapping or the complete target score.
 Pinned windows and relationships remain local in
 `.scratch/campaign-targeting-root-review/band-enable-setting.md`.
+
+## Creation-order discriminator with targeting disabled
+
+Three seeded runs retained the equal-distance setup and false policy. Both the
+map and AI main functions set the diagnostic seed before other calls. The control
+created hero, far hero, ordinary, far ordinary; a second map reversed those four
+creation calls without moving them; a third kept creation order and exchanged
+only the two near positions (east and north).
+
+| Variant | First attacked target | Attack events | Samples |
+| --- | --- | --- | --- |
+| control | ordinary, user data 22 | 13, all ordinary | 200 |
+| reversed creation | hero, user data 20 | 13, all hero | 200 |
+| exchanged near positions | ordinary, user data 22 | 13, all ordinary | 200 |
+
+Each run has 219 raw marker files, RoC readback, the independent bank-17 load
+witness and paused-target samples. A separate read-only audit matched original
+marker files to preserved copies and hashes, parsed their complete Preload
+wrappers, rejected duplicate payload keys, recomputed the collections, and
+checked staged map/executable identities and all 18 packed members. Script/AI
+comparisons allow only run identifiers, diagnostic seeding, the sample cap and
+the stated creation/position changes. The executable is the same reviewed
+1.29.2.9231 image above. All three containers are stopped. Loader-view evidence
+is absent for the reversed and exchanged-position runs; their complete in-game
+markers establish execution independently.
+
+The map hashes, in table order, are
+`59929dc0e3008afbebf4b18a8523cdedd618045aa7bc3636a36e9c4219ff9428`,
+`878c6b8476a0208905af92274aa69619bbcad38e02ac42776051d80253ab089f`,
+and `bb5cf20229a09ce8a15ec145a256f4e1bade1b45c34d1be3119dcc20d0c14b24`.
+Original observations remain local under
+`.scratch/campaign-targeting-enumeration-r1/`; the independent audit is in
+`.scratch/campaign-targeting-enumeration-audit/`.
+
+Within this setup, reversing creation order changes the tied choice and exchanging
+the near coordinates does not. This supports newest-first enumeration among the
+tied near candidates. It contradicts a fixed ordinary-before-hero rule; it does
+not establish the native container, every spatial query's ordering, removal or
+transfer behavior, later retargeting, or score equality outside this envelope.
+The production consumer remains unfinished. Older notes proposing a class-based
+false-policy tie rule are superseded by this observation.
