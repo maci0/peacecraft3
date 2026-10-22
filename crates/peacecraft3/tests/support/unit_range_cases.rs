@@ -210,6 +210,7 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
             cells: 1024,
             footprint_cells: 64,
             stationary_cells: 0,
+            stationary_work: 1 << 20,
             queries: 100,
         },
     )

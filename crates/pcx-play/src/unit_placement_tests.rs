@@ -493,6 +493,7 @@ pub(crate) fn placement(source: Source, queries: usize) -> Placement {
             cells: 1024,
             footprint_cells: 64,
             stationary_cells: 1 << 20,
+            stationary_work: 1 << 20,
             queries,
         },
     )

@@ -5,8 +5,12 @@ use crate::playercolor_host::{
     DestructableState, EnumHost, Failure, Limits, ObjectHost, PlacedDestructable, PlacedSource,
 };
 use crate::scripts::{AssetIdentity, ScriptAsset};
+use crate::unit_placement::{
+    Budget as PlacementBudget, Footprint, Grid, Placement, StationaryKey, StationaryStamp,
+};
 use pcx_script::{Host, Prelude, Value};
-use std::sync::Arc;
+use pcx_sim::world::Source;
+use std::{collections::BTreeMap, sync::Arc};
 
 const DECLARATIONS: &str = "type agent extends handle
 type widget extends agent
@@ -61,6 +65,91 @@ fn payload(objectid: i32, variation: i32) -> [Value; 6] {
     ]
 }
 
+fn payload_at(objectid: i32, x: f32, y: f32) -> [Value; 6] {
+    [
+        Value::Int(objectid),
+        Value::Real(x),
+        Value::Real(y),
+        Value::Real(0.0),
+        Value::Real(1.0),
+        Value::Int(0),
+    ]
+}
+
+fn cell(x: usize, y: usize) -> usize {
+    y * 32 + x
+}
+
+fn script_placement(
+    stationary_cells: usize,
+    stationary_work: usize,
+    placed: Vec<StationaryStamp>,
+) -> Placement {
+    let base = pcx_map::Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    Placement::new(
+        Grid {
+            source: Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "late script destructables".into(),
+            },
+            origin: [0.0; 2],
+            pathing: pcx_map::Pathing {
+                version: 0,
+                width: 32,
+                height: 32,
+                cells: vec![0; 1024],
+            },
+            domains: vec![5; 1024],
+        },
+        crate::unit_placement::tests::rules(2, -8192.25),
+        BTreeMap::new(),
+        PlacementBudget {
+            cells: 1024,
+            footprint_cells: 64,
+            stationary_cells,
+            stationary_work,
+            queries: 100,
+        },
+    )
+    .unwrap()
+    .with_stationary(base, placed)
+    .unwrap()
+    .with_footprint_loader(|path| match path {
+        "live.tga" => Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0]],
+        }),
+        "dead.tga" => Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[1, 0]],
+        }),
+        _ => Err(format!("{path}: missing synthetic pathing texture")),
+    })
+    .with_script_paths(|id, dead| match (id, dead) {
+        (id, false) if id == i32::from_be_bytes(*b"LTlt") => Ok("live.tga".into()),
+        (id, true) if id == i32::from_be_bytes(*b"LTlt") => Ok("dead.tga".into()),
+        (id, false) if id == i32::from_be_bytes(*b"BADD") => Ok("broken-live.tga".into()),
+        (id, true) if id == i32::from_be_bytes(*b"BADD") => Ok("broken-dead.tga".into()),
+        (id, false) if id == i32::from_be_bytes(*b"ONE1") => Ok("live.tga".into()),
+        (id, true) if id == i32::from_be_bytes(*b"ONE1") => Ok("_".into()),
+        _ => Err(format!("{id}: unknown synthetic stationary identity")),
+    })
+}
+
 fn create(host: &mut ObjectHost, objectid: i32, variation: i32) -> Result<Value, String> {
     host.native("CreateDestructable", &payload(objectid, variation))
 }
@@ -68,7 +157,7 @@ fn create(host: &mut ObjectHost, objectid: i32, variation: i32) -> Result<Value,
 fn life_declarations() -> String {
     let mut text = DECLARATIONS.to_string();
     text.push_str(
-        "native GetDestructableLife takes destructable whichDestructable returns real\nnative GetDestructableMaxLife takes destructable whichDestructable returns real\nnative SetDestructableLife takes destructable whichDestructable, real life returns nothing\nnative KillDestructable takes destructable whichDestructable returns nothing\nnative SetDestructableInvulnerable takes destructable whichDestructable, boolean flag returns nothing\nnative IsDestructableInvulnerable takes destructable whichDestructable returns boolean\n",
+        "native GetDestructableLife takes destructable whichDestructable returns real\nnative GetDestructableMaxLife takes destructable whichDestructable returns real\nnative SetDestructableLife takes destructable whichDestructable, real life returns nothing\nnative KillDestructable takes destructable whichDestructable returns nothing\nnative SetDestructableInvulnerable takes destructable whichDestructable, boolean flag returns nothing\nnative IsDestructableInvulnerable takes destructable whichDestructable returns boolean\nnative CreateDeadDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
     text
 }
@@ -737,6 +826,150 @@ fn death_toggles_only_the_script_objects_stationary_layer() {
         .unwrap();
     assert_eq!(host.test_placement_cell(100), Some(0x01));
     assert_eq!(host.test_placement_cell(200), Some(0x02));
+}
+
+#[test]
+fn late_script_creation_composes_live_and_dead_layers_over_existing_collision() {
+    let tree = i32::from_be_bytes(*b"LTlt");
+    let mut host = life_host(2);
+    host.test_attach_placement(script_placement(
+        16,
+        1 << 20,
+        vec![StationaryStamp {
+            key: StationaryKey::Placed(1),
+            live: vec![cell(8, 8)],
+            dead: Vec::new(),
+            mask: 0x02,
+            active: true,
+        }],
+    ));
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x02));
+    let created = host
+        .native("CreateDestructable", &payload_at(tree, 32.0, 32.0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("late destructable handle");
+    };
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x0a));
+    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
+    host.native("KillDestructable", &[Value::Handle(id)])
+        .unwrap();
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x02));
+    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x08));
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(5.0)],
+    )
+    .unwrap();
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x0a));
+    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
+    let dead = host
+        .native("CreateDeadDestructable", &payload_at(tree, 64.0, 64.0))
+        .unwrap();
+    let Value::Handle(dead_id) = dead else {
+        panic!("late dead destructable handle");
+    };
+    assert_eq!(host.destructable_state(dead_id).unwrap().life, Some(0.0));
+    assert_eq!(host.test_placement_cell(cell(16, 16)), Some(0x00));
+    assert_eq!(host.test_placement_cell(cell(17, 16)), Some(0x08));
+}
+
+#[test]
+fn late_script_creation_refuses_sources_and_work_without_publishing() {
+    for objectid in [i32::from_be_bytes(*b"BADD"), 0x1234_5678] {
+        let mut host = admitted(2, 8);
+        host.test_attach_placement(script_placement(16, 1 << 20, Vec::new()));
+        let before = host.inner().handles();
+        let error = host
+            .native("CreateDestructable", &payload_at(objectid, 32.0, 32.0))
+            .unwrap_err();
+        assert!(
+            error.contains("missing synthetic pathing texture")
+                || error.contains("unknown synthetic stationary identity"),
+            "{objectid:#x}: {error}"
+        );
+        assert_eq!(host.inner().handles(), before);
+        assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
+        assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
+        host.native(
+            "CreateDestructable",
+            &payload_at(i32::from_be_bytes(*b"LTlt"), 32.0, 32.0),
+        )
+        .unwrap();
+        assert_eq!(host.inner().handles(), before + 1);
+    }
+
+    let mut host = admitted(1, 8);
+    host.test_attach_placement(script_placement(16, 1, Vec::new()));
+    let before = host.inner().handles();
+    let error = host
+        .native(
+            "CreateDestructable",
+            &payload_at(i32::from_be_bytes(*b"LTlt"), 32.0, 32.0),
+        )
+        .unwrap_err();
+    assert!(error.contains("work budget"), "{error}");
+    assert_eq!(host.inner().handles(), before);
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
+    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
+
+    let mut host = admitted(2, 8);
+    host.test_attach_placement(script_placement(1, 2, Vec::new()));
+    let before = host.inner().handles();
+    let error = host
+        .native(
+            "CreateDestructable",
+            &payload_at(i32::from_be_bytes(*b"LTlt"), 32.0, 32.0),
+        )
+        .unwrap_err();
+    assert!(error.contains("stationary cell budget"), "{error}");
+    assert_eq!(host.inner().handles(), before);
+    host.native(
+        "CreateDestructable",
+        &payload_at(i32::from_be_bytes(*b"ONE1"), 32.0, 32.0),
+    )
+    .unwrap();
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x08));
+    assert_eq!(host.inner().handles(), before + 1);
+}
+
+#[test]
+fn late_script_creation_refuses_cell_and_layer_budgets_atomically() {
+    let mut host = admitted(1, 8);
+    host.test_attach_placement(script_placement(1, 1 << 20, Vec::new()));
+    let before = host.inner().handles();
+    let error = host
+        .native(
+            "CreateDestructable",
+            &payload_at(i32::from_be_bytes(*b"LTlt"), 32.0, 32.0),
+        )
+        .unwrap_err();
+    assert!(error.contains("stationary cell budget"), "{error}");
+    assert_eq!(host.inner().handles(), before);
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
+    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
+
+    let layers = (0..64)
+        .map(|n| StationaryStamp {
+            key: StationaryKey::Placed(n),
+            live: Vec::new(),
+            dead: Vec::new(),
+            mask: 0x08,
+            active: true,
+        })
+        .collect();
+    let mut host = admitted(1, 8);
+    host.test_attach_placement(script_placement(1024, 1 << 20, layers));
+    let before = host.inner().handles();
+    let error = host
+        .native(
+            "CreateDestructable",
+            &payload_at(i32::from_be_bytes(*b"LTlt"), 32.0, 32.0),
+        )
+        .unwrap_err();
+    assert!(error.contains("stationary layer budget"), "{error}");
+    assert_eq!(host.inner().handles(), before);
+    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
 }
 
 #[test]

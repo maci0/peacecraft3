@@ -173,6 +173,10 @@ impl DestructableCatalog {
             .ok_or_else(|| "stationary record is not a destructable".into())
     }
 
+    pub(crate) fn tables(&self) -> Arc<DefaultTables> {
+        Arc::clone(&self.tables)
+    }
+
     fn find(&self, name: &str) -> Result<Option<Found<'_>>, String> {
         let mut found = None;
         for (family, slk, overlay) in [
@@ -770,22 +774,20 @@ impl ObjectHost {
 
     fn create_destructable(&mut self, index: usize, args: &[Value]) -> Result<Value, Error> {
         let shape = &SHAPES[index];
-        let fail = |reason| self.inner.error(shape.name, reason);
-        if self.unit_placement.is_some() {
-            return Err(fail(Failure::DestructableState(
-                "stationary collision cache must be rebuilt before creating destructables",
-            )));
-        }
-        let creation = creation_from(shape, args).map_err(fail)?;
+        let name = shape.name;
+        let creation =
+            creation_from(shape, args).map_err(|reason| self.inner.error(name, reason))?;
         let (records, max_records) = {
-            let admitted = self
-                .destructables
-                .as_ref()
-                .ok_or_else(|| fail(Failure::DestructableState("not admitted")))?;
+            let admitted = self.destructables.as_ref().ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::DestructableState("not admitted"))
+            })?;
             (admitted.records, admitted.max_records)
         };
         if records >= max_records {
-            return Err(fail(Failure::Budget("destructable creation")));
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("destructable creation")));
         }
         let stats = self
             .destructable_catalog
@@ -793,13 +795,29 @@ impl ObjectHost {
             .map(|catalog| {
                 catalog
                     .stats(creation.objectid)
-                    .map_err(|e| self.inner.error(shape.name, Failure::DestructableSource(e)))
+                    .map_err(|e| self.inner.error(name, Failure::DestructableSource(e)))
             })
             .transpose()?;
         let max_life = stats.map(|stats| stats.max_life);
         let life = match stats {
             Some(_) if creation.dead => Some(0.0),
             Some(stats) => Some(stats.max_life),
+            None => None,
+        };
+        let prepared = match self.unit_placement.as_mut() {
+            Some(placement) => {
+                self.inner.reserve_handles(1, name)?;
+                Some(
+                    placement
+                        .prepare_script_destructable(
+                            creation.objectid,
+                            [creation.x, creation.y],
+                            creation.face,
+                            creation.dead,
+                        )
+                        .map_err(|e| self.inner.error(name, Failure::DestructableSource(e.0)))?,
+                )
+            }
             None => None,
         };
         let id = self.inner.allocate(
@@ -812,12 +830,19 @@ impl ObjectHost {
                     ..DestructableState::default()
                 },
             },
-            shape.name,
+            name,
         )?;
+        if let Some(prepared) = prepared {
+            let placement = self.unit_placement.as_mut().ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::DestructableState("not admitted"))
+            })?;
+            placement.publish_script_destructable(id, prepared);
+        }
         let Some(admitted) = self.destructables.as_mut() else {
             return Err(self
                 .inner
-                .error(shape.name, Failure::DestructableState("not admitted")));
+                .error(name, Failure::DestructableState("not admitted")));
         };
         admitted.records += 1;
         Ok(Value::Handle(id))
