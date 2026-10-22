@@ -162,6 +162,11 @@ this preserves source identity rather than silently switching its inputs.
 The selected RoC startup gate exposed an absent-upgrade query (`Rhrt`) in
 `InitSummonableCaps` after namespace selection was corrected. Source routing checks
 and synthetic tests alone do not establish successful unchanged chapter startup.
+The source-derived query correction subsequently passed selected Human01
+preparation, including the index-to-publication recipe identity assertion and a
+later launcher change. Selected Continue now reaches Human02's `prvt` item and
+refuses its unsupported `AIlf` / `AIml` max-life passive; it does not establish
+successful Human02 startup or mission completion.
 
 Do not switch unrelated rule consumers to the selected namespace until their
 source lookup and receipt paths agree. In particular, the native RoC speed

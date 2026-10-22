@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Native campaign index, map admission and Continue retain one source recipe
+  with immutable archive snapshots and source-selected data namespaces. The
+  selected Human01 preparation gate passes, including recipe identity and later
+  launcher-change isolation. Human02 now passes the absent-research and held
+  mana-regeneration paths, but startup still refuses `prvt` / `AIlf` (`AIml`)
+  max-life behavior. The continuation remains private; full chapter completion,
+  Windows snapshot runtime and native passive composition remain unqualified.
+  Receipts: `.scratch/campaign-continuation/final-source-*.log`.
+
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
   stock Misc tables (`Units/MiscData.txt`, `Units/MiscGame.txt`,
