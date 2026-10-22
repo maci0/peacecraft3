@@ -891,11 +891,20 @@ fn local_original_recipe_opens_a_complete_campaign_reader() {
         GameMode::default(),
         rules,
         &image,
-        &common,
+        None,
         "VERSION_FROZEN_THRONE",
     )
     .unwrap();
     assert_eq!(recipe.edition(), 1);
+    assert_eq!(recipe.image(), image.as_slice());
+    assert_eq!(sha256(recipe.image()), recipe.image_sha256());
+    let selected_common = recipe
+        .base_resolver()
+        .unwrap()
+        .resolve("Scripts\\common.j")
+        .unwrap();
+    assert_eq!(selected_common.bytes, common);
+    assert_eq!(sha256(&selected_common.bytes), recipe.common_sha256());
     let info = map_info(2, 0);
     assert_eq!(info.loading_id, Some(2));
     assert_eq!(info.flags, 0);
@@ -951,7 +960,7 @@ fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
         GameMode::default(),
         rules,
         &image,
-        &common,
+        Some(&common),
         "VERSION_REIGN_OF_CHAOS",
     )
     .unwrap();
@@ -1087,7 +1096,7 @@ fn local_original_recipe_refuses_a_mismatched_common_blob() {
         GameMode::default(),
         rules,
         &image,
-        &common,
+        Some(&common),
         "VERSION_FROZEN_THRONE",
     )
     .unwrap_err();
@@ -1137,27 +1146,36 @@ fn local_original_recipe_retains_its_opened_archive_generation() {
         GameMode::default(),
         rules,
         &image,
-        &common,
+        Some(&common),
         "VERSION_FROZEN_THRONE",
     )
     .unwrap();
-    let info = map_info(2, 0);
-    let before = recipe
-        .open(&info)
-        .unwrap()
-        .resolver
-        .resolve("Scripts\\common.j")
-        .unwrap()
-        .bytes;
-    std::fs::remove_file(dir.join("War3.mpq")).unwrap();
-    std::fs::write(dir.join("War3.mpq"), b"not an mpq").unwrap();
-    let after = recipe
-        .open(&info)
-        .unwrap()
-        .resolver
-        .resolve("Scripts\\common.j")
-        .unwrap()
-        .bytes;
+    let base = recipe.base_resolver().unwrap();
+    let (map_member, map_bytes, info, map_origin) = base
+        .paths()
+        .filter(|asset| asset.as_str().to_ascii_lowercase().ends_with(".w3m"))
+        .find_map(|asset| {
+            let member = asset.as_str();
+            let resolved = base.resolve(member).ok()?;
+            let info = pcx_map::Map::parse(&resolved.bytes).ok()?.info().ok()?;
+            Some((
+                member.to_string(),
+                resolved.bytes,
+                info,
+                resolved.provenance.source.origin,
+            ))
+        })
+        .expect("a base archive carries a campaign map");
+    let before = base.resolve("Scripts\\common.j").unwrap().bytes;
+    let replaced = dir.join(Path::new(&map_origin).file_name().unwrap());
+    std::fs::remove_file(&replaced).unwrap();
+    std::fs::write(&replaced, b"not an mpq").unwrap();
+    let reader = recipe.open(&info).unwrap();
+    assert_eq!(
+        reader.resolver.resolve(&map_member).unwrap().bytes,
+        map_bytes
+    );
+    let after = reader.resolver.resolve("Scripts\\common.j").unwrap().bytes;
     assert_eq!(before, after);
     assert!(
         CampaignRecipe::pin(
@@ -1165,7 +1183,7 @@ fn local_original_recipe_retains_its_opened_archive_generation() {
             GameMode::default(),
             replacement_rules,
             &image,
-            &common,
+            Some(&common),
             "VERSION_FROZEN_THRONE",
         )
         .is_err()
