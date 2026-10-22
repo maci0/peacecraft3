@@ -49,3 +49,42 @@ The scripts disable the observer and pause the attacker at completion, with
 explicit sample/event caps. Raw files, hashes and all source/build/launch
 receipts remain local in ignored `.scratch/campaign-targeting-run/`.
 Rendered presentation and native Windows remain unqualified.
+
+## Equal-center-distance comparison
+
+A second pair used the same reviewed client, RoC readback, player-zero attacker,
+paused targets and flag-only AI programs. The near hero and near ordinary unit
+were each 120 units from the attacker's center: hero east, ordinary north.
+Their different collision shapes, facing and creation order were retained and
+matched between the true and false runs. No target order was issued. The AI
+programs still made no explicit `InitAI` or `CreateCaptains` call.
+
+| Flag | First attacked target | First observed attack | Attacks through 20 seconds | Final near hero / ordinary life |
+| --- | --- | --- | --- | --- |
+| true | hero, user data 20 | 0.188 | 13, all hero | 453 / 680 |
+| false | ordinary, user data 22 | 0.313 | 13, all ordinary | 650 / 449 |
+
+Each run validated 219 marker files, including 200 sequential samples and one
+AI load witness. The player-zero bank changed from zero to 17 synchronously;
+the other bank stayed zero, both target pause readbacks stayed true, and the
+recorded flag matched its program. `GetAiPlayer` text remained empty and is
+preserved without interpreting it as an integer. Both owned runs are stopped
+and preserved: `targ-equal-r2-true-261023r` and `targ-equal-r2-false-261023r`.
+
+This pair establishes an observable automatic target-choice effect in this
+configuration without an explicit captain setup call. Together with the
+earlier nearer-hero pair, it supports a priority effect rather than blanket
+hero exclusion. It does not establish all score terms, distance/range ordering,
+attachment classes, transfer behavior or acquisition while already fighting.
+Equal center distance is not equal collision extent or equal turning time.
+
+True map SHA-256:
+`dfed03d2d43cb159d5bde3971df50afc102dbd3a5c6198b5e7da08e9e61c1933`;
+false map SHA-256:
+`f4d1cc6888dc4eb552618eb2dab404b006dbd8c6f8f049ee7026089a4c65f063`.
+Build receipts pin each script and embedded AI. All 18 members round-tripped,
+script parse/resolve and callback declaration checks passed, and four recorder
+tests cover actual emitter shape, terminal caps and malformed collections.
+The earlier equal-distance draft omitted the bounded emitter changes and was
+not launched. Raw records and receipts remain local under
+`.scratch/campaign-targeting-equal-distance-r2/`.
