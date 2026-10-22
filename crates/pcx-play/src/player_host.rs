@@ -103,8 +103,8 @@ pub(super) struct Players {
 }
 struct Resources {
     rules: crate::player_resources::Rules,
-    // Gold, lumber, food used, food supplied, food ceiling; identities come from common source.
-    states: [i32; 5],
+    // Gold, lumber, food used, food supplied, food ceiling, gold and lumber gathered.
+    states: [i32; 7],
     values: Vec<(i32, i32, i32)>,
 }
 struct StartupAlliances {
@@ -112,12 +112,14 @@ struct StartupAlliances {
     slots: usize,
     values: Vec<bool>,
 }
-const RESOURCE_GLOBALS: [&str; 5] = [
+const RESOURCE_GLOBALS: [&str; 7] = [
     "PLAYER_STATE_RESOURCE_GOLD",
     "PLAYER_STATE_RESOURCE_LUMBER",
     "PLAYER_STATE_RESOURCE_FOOD_USED",
     "PLAYER_STATE_RESOURCE_FOOD_CAP",
     "PLAYER_STATE_FOOD_CAP_CEILING",
+    "PLAYER_STATE_GOLD_GATHERED",
+    "PLAYER_STATE_LUMBER_GATHERED",
 ];
 const GET_PLAYER_STATE: &str = "GetPlayerState";
 const SET_PLAYER_STATE: &str = "SetPlayerState";
@@ -769,7 +771,7 @@ impl ObjectHost {
         {
             return Err(self.inner.error(GET_PLAYER_STATE, Failure::Source));
         }
-        let mut states = [0; 5];
+        let mut states = [0; 7];
         for (state, name) in states.iter_mut().zip(RESOURCE_GLOBALS) {
             *state = self.source_constant_enumerand(name, "playerstate")?;
         }
@@ -777,6 +779,7 @@ impl ObjectHost {
             .iter()
             .any(|s| *s < 0 || *s >= rules.initialized_states)
             || states[0..2] != rules.money_states
+            || states[5..7] != rules.gathered_states
             || states
                 .iter()
                 .enumerate()
@@ -853,6 +856,7 @@ impl ObjectHost {
                         Failure::PlayerState("food assignment overflow"),
                     )
                 })?,
+            5 | 6 => resources.rules.gathered(value),
             _ => value,
         };
         let visible = match live {
@@ -896,6 +900,8 @@ impl ObjectHost {
             })?
         } else if index < 2 {
             resources.rules.initial / resources.rules.money_scale
+        } else if matches!(index, 5 | 6) {
+            resources.rules.gathered_value(resources.rules.initial)
         } else {
             resources.rules.initial
         };

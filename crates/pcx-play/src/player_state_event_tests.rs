@@ -42,6 +42,8 @@ constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
 constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
 constant limitop LESS_THAN=ConvertLimitOp({less_than})
 constant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)
 constant limitop EQUAL=ConvertLimitOp(2)
@@ -216,6 +218,62 @@ fn state_events_seed_at_registration_then_fire_only_on_change_while_the_comparis
     )
     .unwrap();
     assert!(h.take_fired_event().is_some());
+}
+
+#[test]
+fn gathered_state_events_compare_the_effective_unsigned_value() {
+    let mut h = host(&common(0), 4);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let gathered = convert(&mut h, "ConvertPlayerState", 15);
+    let less = convert(&mut h, "ConvertLimitOp", 0);
+    let event = register(&mut h, &trigger, &player, &gathered, &less, 5.0).unwrap();
+    assert_eq!(
+        h.player_state_event_registration(id(&event)).unwrap().last,
+        1
+    );
+
+    h.native(
+        "SetPlayerState",
+        &[player.clone(), gathered.clone(), Value::Int(3)],
+    )
+    .unwrap();
+    assert!(h.take_fired_event().is_some());
+    assert_eq!(
+        h.player_state_event_registration(id(&event)).unwrap().last,
+        3
+    );
+
+    h.native(
+        "SetPlayerState",
+        &[player.clone(), gathered.clone(), Value::Int(6)],
+    )
+    .unwrap();
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(
+        h.player_state_event_registration(id(&event)).unwrap().last,
+        6
+    );
+
+    h.native(
+        "SetPlayerState",
+        &[player.clone(), gathered.clone(), Value::Int(-1)],
+    )
+    .unwrap();
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(
+        h.player_state_event_registration(id(&event)).unwrap().last,
+        429_496_728
+    );
+
+    h.native("SetPlayerState", &[player, gathered.clone(), Value::Int(4)])
+        .unwrap();
+    let fired = h.take_fired_event().expect("gathered state event");
+    assert_eq!(fired.subject.player_state, Some(id(&gathered)));
+    assert_eq!(
+        h.player_state_event_registration(id(&event)).unwrap().last,
+        4
+    );
 }
 
 #[test]

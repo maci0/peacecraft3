@@ -1189,6 +1189,8 @@ constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
 constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
 endglobals
 "#;
 

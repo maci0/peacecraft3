@@ -8,16 +8,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   launcher-change isolation. Human02 now passes the absent-research and held
   mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
   passive and the held intelligence effect on `ckng` pass the selected
-  continuation. It now refuses an unsupported effective `GetPlayerState`
-  query in `AdjustPlayerStateSimpleBJ` (`Blizzard.j:7644`). Private checks pass
-  1364 core tests, strict native/WASM Clippy and formatting; the latest app
-  runtime suite passed 606 tests before the final inventory review fixes.
+  continuation before eager placed-world admission. Gathered gold/lumber
+  counters (`Blizzard.j:7652,7654`) now use
+  source-decoded setter scaling, unsigned getter division and the same
+  synchronous state-event path. The affected continuation gate still needs a
+  rerun after private import. The combined tree/cache checks passed 1381 core
+  tests, 606 app tests, strict native/WASM Clippy and formatting before the
+  gathered-counter and ranked/inventory Data-pointer imports. The unchanged
+  Continue gate now refuses Human01 `LTg1` creation 1823, whose placed flag
+  `0x04` is outside the measured admission set; a controlled probe is pending.
   Pool-clamp corrections and ignored maximum-state writes are integrated.
   The native-qualified inventory W3A Data-pointer correction and combined-tome
   overflow preflight are integrated privately. Same-map native cache restore
   returns full life and mana in the sampled cases, and the cross-map test
   uses the receiving map's held-life bonus; the saved-pool recreation policy
-  is being corrected separately.
+  now derives full restored pools from receiving-map definitions privately.
   The continuation remains private; full chapter
   completion, Windows snapshot runtime and native passive composition remain
   unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
