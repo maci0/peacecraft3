@@ -20,9 +20,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   `SetTargetHeroes` through `StartCampaignAI` at Human02 line 1692. Startup passes;
   the opening-minute acceptance check still fails. These selected results are
   retained in `.scratch/campaign-continuation/health-harvest-final-selected.log`.
-  The latest combined core suite passes 1487 tests, and strict native/WASM
-  Clippy passes. The app suite passes 606 tests with one missing-declaration
-  synthetic AI fixture failure; its correction remains pending.
+  The latest combined core suite passes 1487 tests and the app suite passes
+  608, including upgrade queries through the production map session. Strict
+  native/WASM Clippy and formatting pass. Receipts remain local under
+  `.scratch/campaign-continuation/health-harvest-*`.
   Three controlled original-client runs now qualify partial lumber retention
   across Stop, Move and repeated nearby harvest, followed by an explicit return
   that credits both counters and ends idle. Automatic return resumes harvesting;
