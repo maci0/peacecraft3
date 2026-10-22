@@ -379,6 +379,43 @@ fn a_multi_cell_isolated_target_pocket_does_not_force_map_wide_search() {
 }
 
 #[test]
+fn script_creation_refuses_a_missing_base_before_resolving_or_loading_sources() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let loads = Arc::new(AtomicUsize::new(0));
+    let hits = Arc::clone(&loads);
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "missing base".into(),
+        },
+        100,
+    )
+    .with_footprint_loader(move |path| {
+        hits.fetch_add(1, Ordering::SeqCst);
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic texture".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0]; if path == "live.tga" { 1 } else { 2 }],
+        })
+    })
+    .with_script_paths(|_, dead| Ok(if dead { "dead.tga" } else { "live.tga" }.into()));
+    let error = p
+        .prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap_err();
+    assert!(error.0.contains("base pathing is missing"), "{error}");
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    assert!(p.stationary.is_empty());
+    assert!(p.stationary_cells.is_empty());
+}
+
+#[test]
 fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
     use std::sync::{
         Arc,

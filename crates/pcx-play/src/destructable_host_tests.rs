@@ -6,11 +6,15 @@ use crate::playercolor_host::{
 };
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use crate::unit_placement::{
-    Budget as PlacementBudget, Footprint, Grid, Placement, StationaryKey, StationaryStamp,
+    Budget as PlacementBudget, Footprint, FootprintLoader, Grid, Placement, StationaryKey,
+    StationaryStamp,
 };
 use pcx_script::{Host, Prelude, Value};
 use pcx_sim::world::Source;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 const DECLARATIONS: &str = "type agent extends handle
 type widget extends agent
@@ -147,6 +151,134 @@ fn script_placement(
         (id, false) if id == i32::from_be_bytes(*b"ONE1") => Ok("live.tga".into()),
         (id, true) if id == i32::from_be_bytes(*b"ONE1") => Ok("_".into()),
         _ => Err(format!("{id}: unknown synthetic stationary identity")),
+    })
+}
+
+#[derive(Default)]
+struct SyntheticSource {
+    remaining: usize,
+    committed: BTreeMap<String, Footprint>,
+    staged: BTreeMap<String, Footprint>,
+}
+
+struct BudgetedLoader(Arc<Mutex<SyntheticSource>>);
+
+fn synthetic_footprint(cells: Vec<[i32; 2]>) -> Footprint {
+    Footprint {
+        origin: AssetIdentity {
+            source: "synthetic".into(),
+            edition: "test".into(),
+            version: "test".into(),
+        },
+        cells,
+    }
+}
+
+impl FootprintLoader for BudgetedLoader {
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        let mut source = self.0.lock().unwrap();
+        if let Some(footprint) = source
+            .committed
+            .get(path)
+            .or_else(|| source.staged.get(path))
+        {
+            return Ok(footprint.clone());
+        }
+        let cells = match path {
+            "missing-live.tga" | "malformed-live.tga" => vec![[0, 0], [1, 0]],
+            "malformed-dead.tga" => {
+                return Err(format!("{path}: malformed synthetic pathing texture"));
+            }
+            "work-live.tga" | "work-dead.tga" => vec![[0, 0], [0, 1]],
+            "cell-live.tga" => vec![[0, 0], [1, 0]],
+            "cell-dead.tga" => vec![[0, 1]],
+            "good-live.tga" => vec![[0, 0]],
+            _ => return Err(format!("{path}: missing synthetic pathing texture")),
+        };
+        if cells.len() > source.remaining {
+            return Err(format!("{path}: synthetic source budget"));
+        }
+        source.remaining -= cells.len();
+        let footprint = synthetic_footprint(cells);
+        source.staged.insert(path.into(), footprint.clone());
+        Ok(footprint)
+    }
+
+    fn commit(&mut self, paths: &[String]) {
+        let mut source = self.0.lock().unwrap();
+        for path in paths {
+            if let Some(footprint) = source.staged.remove(path) {
+                source.committed.insert(path.clone(), footprint);
+            }
+        }
+    }
+
+    fn rollback(&mut self, paths: &[String]) {
+        let mut source = self.0.lock().unwrap();
+        for path in paths {
+            if let Some(footprint) = source.staged.remove(path) {
+                source.remaining += footprint.cells.len();
+            }
+        }
+    }
+}
+
+fn budgeted_script_placement(
+    source: Arc<Mutex<SyntheticSource>>,
+    stationary_cells: usize,
+    stationary_work: usize,
+) -> Placement {
+    let base = pcx_map::Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    Placement::new(
+        Grid {
+            source: Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "budgeted late script destructables".into(),
+            },
+            origin: [0.0; 2],
+            pathing: pcx_map::Pathing {
+                version: 0,
+                width: 32,
+                height: 32,
+                cells: vec![0; 1024],
+            },
+            domains: vec![5; 1024],
+        },
+        crate::unit_placement::tests::rules(2, -8192.25),
+        BTreeMap::new(),
+        PlacementBudget {
+            cells: 1024,
+            footprint_cells: 64,
+            stationary_cells,
+            stationary_work,
+            queries: 100,
+        },
+    )
+    .unwrap()
+    .with_stationary(base, Vec::new())
+    .unwrap()
+    .with_staged_footprint_loader(BudgetedLoader(source))
+    .with_script_paths(|id, dead| {
+        let path = match (id, dead) {
+            (id, false) if id == i32::from_be_bytes(*b"MISS") => "missing-live.tga",
+            (id, true) if id == i32::from_be_bytes(*b"MISS") => "missing-dead.tga",
+            (id, false) if id == i32::from_be_bytes(*b"MALF") => "malformed-live.tga",
+            (id, true) if id == i32::from_be_bytes(*b"MALF") => "malformed-dead.tga",
+            (id, false) if id == i32::from_be_bytes(*b"WORK") => "work-live.tga",
+            (id, true) if id == i32::from_be_bytes(*b"WORK") => "work-dead.tga",
+            (id, false) if id == i32::from_be_bytes(*b"CELL") => "cell-live.tga",
+            (id, true) if id == i32::from_be_bytes(*b"CELL") => "cell-dead.tga",
+            (id, false) if id == i32::from_be_bytes(*b"GOOD") => "good-live.tga",
+            (id, true) if id == i32::from_be_bytes(*b"GOOD") => "_",
+            _ => return Err(format!("{id}: unknown synthetic stationary identity")),
+        };
+        Ok(path.into())
     })
 }
 
@@ -937,6 +1069,73 @@ fn late_script_creation_refuses_cell_and_layer_budgets_atomically() {
     assert!(error.contains("stationary layer budget"), "{error}");
     assert_eq!(host.inner().handles(), before);
     assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
+}
+
+#[test]
+fn refused_late_creation_rolls_back_source_work_before_a_distinct_retry() {
+    let good = i32::from_be_bytes(*b"GOOD");
+    for (objectid, source_budget, stationary_cells, stationary_work, refusal) in [
+        (
+            i32::from_be_bytes(*b"MISS"),
+            3,
+            16,
+            3,
+            "missing synthetic pathing texture",
+        ),
+        (
+            i32::from_be_bytes(*b"MALF"),
+            3,
+            16,
+            3,
+            "malformed synthetic pathing texture",
+        ),
+        (i32::from_be_bytes(*b"WORK"), 4, 16, 3, "work budget"),
+        (
+            i32::from_be_bytes(*b"CELL"),
+            4,
+            1,
+            1 << 10,
+            "stationary cell budget",
+        ),
+    ] {
+        let source = Arc::new(Mutex::new(SyntheticSource {
+            remaining: source_budget,
+            ..SyntheticSource::default()
+        }));
+        let mut host = admitted(2, 8);
+        host.test_attach_placement(budgeted_script_placement(
+            Arc::clone(&source),
+            stationary_cells,
+            stationary_work,
+        ));
+        let before = host.inner().handles();
+        let error = host
+            .native("CreateDestructable", &payload_at(objectid, 32.0, 32.0))
+            .unwrap_err();
+        assert!(error.contains(refusal), "{objectid:#x}: {error}");
+        assert_eq!(host.inner().handles(), before);
+        assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
+        {
+            let source = source.lock().unwrap();
+            assert_eq!(source.remaining, source_budget, "{objectid:#x}");
+            assert!(source.staged.is_empty(), "{objectid:#x}");
+            assert!(source.committed.is_empty(), "{objectid:#x}");
+        }
+        host.native("CreateDestructable", &payload_at(good, 32.0, 32.0))
+            .unwrap();
+        assert_eq!(host.inner().handles(), before + 1, "{objectid:#x}");
+        assert_eq!(
+            host.test_placement_cell(cell(8, 8)),
+            Some(0x08),
+            "{objectid:#x}"
+        );
+        let source = source.lock().unwrap();
+        assert!(source.staged.is_empty(), "{objectid:#x}");
+        assert!(
+            source.committed.contains_key("good-live.tga"),
+            "{objectid:#x}"
+        );
+    }
 }
 
 #[test]

@@ -321,7 +321,7 @@ pub struct Placement {
     grid: Grid,
     rules: Rules,
     footprints: BTreeMap<String, Footprint>,
-    footprint_loader: Option<FootprintLoader>,
+    footprint_loader: Option<FootprintLoaderBox>,
     script_paths: Option<ScriptPathsLoader>,
     occupied: Vec<u32>,
     footprint_occupied: Vec<u32>,
@@ -334,7 +334,27 @@ pub struct Placement {
     budget: Budget,
 }
 
-type FootprintLoader = Box<dyn FnMut(&str) -> Result<Footprint, String> + Send + Sync>;
+/// Source reader for lazily decoded footprints. Loads are staged by the reader
+/// until [`Placement::prepare_script_destructable`] accepts the layer; refusing
+/// the layer calls [`FootprintLoader::rollback`] for every successful load.
+pub trait FootprintLoader: Send + Sync {
+    fn load(&mut self, path: &str) -> Result<Footprint, String>;
+    fn commit(&mut self, _paths: &[String]) {}
+    fn rollback(&mut self, _paths: &[String]) {}
+}
+
+struct ClosureLoader<F>(F);
+
+impl<F> FootprintLoader for ClosureLoader<F>
+where
+    F: FnMut(&str) -> Result<Footprint, String> + Send + Sync,
+{
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        (self.0)(path)
+    }
+}
+
+type FootprintLoaderBox = Box<dyn FootprintLoader>;
 type ScriptPathsLoader = Box<dyn Fn(i32, bool) -> Result<String, String> + Send + Sync>;
 
 #[derive(Clone, Copy)]
@@ -574,9 +594,15 @@ impl Placement {
 
     /// Load executed footprint paths through the caller's retained source reader.
     pub fn with_footprint_loader(
-        mut self,
+        self,
         loader: impl FnMut(&str) -> Result<Footprint, String> + Send + Sync + 'static,
     ) -> Self {
+        self.with_staged_footprint_loader(ClosureLoader(loader))
+    }
+
+    /// Load executed footprint paths through a source reader whose successful
+    /// loads are staged until script stationary preflight accepts the layer.
+    pub fn with_staged_footprint_loader(mut self, loader: impl FootprintLoader + 'static) -> Self {
         self.footprint_loader = Some(Box::new(loader));
         self
     }
@@ -601,8 +627,46 @@ impl Placement {
         face: f32,
         requested_dead: bool,
     ) -> Result<PreparedStationary, Error> {
+        let mut loaded = Vec::new();
+        let result = self.prepare_script_destructable_inner(
+            objectid,
+            point,
+            face,
+            requested_dead,
+            &mut loaded,
+        );
+        match result {
+            Ok(prepared) => {
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.commit(&loaded);
+                }
+                Ok(prepared)
+            }
+            Err(error) => {
+                for path in &loaded {
+                    self.footprints.remove(path);
+                }
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.rollback(&loaded);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn prepare_script_destructable_inner(
+        &mut self,
+        objectid: i32,
+        point: [f32; 2],
+        face: f32,
+        requested_dead: bool,
+        loaded: &mut Vec<String>,
+    ) -> Result<PreparedStationary, Error> {
         if point.iter().any(|v| !v.is_finite()) || !face.is_finite() {
             return Err(fail("nonfinite script stationary pose"));
+        }
+        if self.base_pathing.is_none() {
+            return Err(fail("stationary base pathing is missing"));
         }
         if self.stationary.len() >= self.budget.footprint_cells {
             return Err(fail("stationary layer budget"));
@@ -617,8 +681,8 @@ impl Placement {
                 resolver(objectid, true).map_err(fail)?,
             )
         };
-        self.ensure_footprint(&live_path)?;
-        self.ensure_footprint(&dead_path)?;
+        self.ensure_footprint_tracked(&live_path, loaded)?;
+        self.ensure_footprint_tracked(&dead_path, loaded)?;
         let mut work = 0usize;
         for path in [&live_path, &dead_path] {
             if !matches!(path.as_str(), "" | "_" | "none") {
@@ -751,6 +815,14 @@ impl Placement {
     }
 
     fn ensure_footprint(&mut self, path: &str) -> Result<(), Error> {
+        self.ensure_footprint_tracked(path, &mut Vec::new())
+    }
+
+    fn ensure_footprint_tracked(
+        &mut self,
+        path: &str,
+        loaded: &mut Vec<String>,
+    ) -> Result<(), Error> {
         if matches!(path, "" | "_" | "none") || self.footprints.contains_key(path) {
             return Ok(());
         }
@@ -758,7 +830,8 @@ impl Placement {
             .footprint_loader
             .as_mut()
             .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
-        let input = loader(path).map_err(fail)?;
+        let input = loader.load(path).map_err(fail)?;
+        loaded.push(path.into());
         let count = self
             .footprints
             .values()
