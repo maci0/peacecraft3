@@ -1239,6 +1239,7 @@ mod tests {
             requested_hero_level: None,
             requested_show_eye_candy: None,
             unit_states: Vec::new(),
+            resource_amount: None,
             invulnerable: None,
             admitted_order: None,
             abilities: None,

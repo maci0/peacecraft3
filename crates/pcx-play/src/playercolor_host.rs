@@ -268,6 +268,11 @@ enum Entry {
     /// A unit after `RemoveUnit`; its handle stays allocated.
     RemovedUnit {
         location: Option<(f64, [f32; 2])>,
+        /// Game time the removal ran, when a clock was available.
+        removed_at: Option<f64>,
+        /// Captured constructor/executed amount. `None` means the unit was not
+        /// in the `buffType=resource` family, not an authored zero.
+        resource_amount: Option<i32>,
     },
     RemovedItem,
     /// `None` after `DestroyFogModifier`.

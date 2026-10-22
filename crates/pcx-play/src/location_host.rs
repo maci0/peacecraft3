@@ -130,6 +130,7 @@ impl ObjectHost {
                     // Retiring it on clock advance models the observed deferred boundary.
                     Entry::RemovedUnit {
                         location: Some((at, point)),
+                        ..
                     } if self.timer_game_time() == Some(*at) => *point,
                     Entry::RemovedUnit { .. } => return Ok(Value::Null),
                     _ => return Err(self.inner.error(name, Failure::WrongFamily)),

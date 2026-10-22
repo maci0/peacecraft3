@@ -18,6 +18,7 @@ fn fixture_with_clock(clock: bool) -> (Vm, HandleId) {
         rules(),
         clock,
         Some(blight),
+        None,
     );
     vm.host()
         .inner

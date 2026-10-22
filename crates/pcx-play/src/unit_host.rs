@@ -41,9 +41,14 @@ const SET_INVULNERABLE: &str = "SetUnitInvulnerable";
 const GET_INVULNERABLE: &str = "BlzIsUnitInvulnerable";
 const SET_STATE: &str = "SetUnitState";
 const CONVERT_STATE: &str = "ConvertUnitState";
+const SET_RESOURCE: &str = "SetResourceAmount";
+const ADD_RESOURCE: &str = "AddResourceAmount";
+const GET_RESOURCE: &str = "GetResourceAmount";
 const ORDER: &str = "IssueImmediateOrder";
 const STATE_KIND: &str = "unitstate";
 const KIND: &str = "unit";
+/// Binary class binding: `Agld` maps to the amount-owning `Agmb` class.
+const RESOURCE_ALIAS: &str = "Agld";
 /// Caller bounds. Not a world, population, or rendering limit.
 #[derive(Clone, Copy, Debug)]
 pub struct UnitBudget {
@@ -119,6 +124,14 @@ pub struct ExecutedUnit {
     /// Executed `SetUnitState` pairs. Empty means none have run. A stored
     /// `0.0` is an executed value, not an omitted state.
     pub unit_states: Vec<ExecutedUnitState>,
+    /// Executed resource amount. `None` means the unit is not in the
+    /// `UnitData` `buffType=resource` family, or resource amounts were not
+    /// admitted. A resource unit is seeded at creation from the `Agld`
+    /// `DataA1` row (or zero when that alias is absent), matching the original
+    /// ability constructor; the `war3mapUnits.doo` placement amount is not
+    /// derived. `Some` is the exact raw integer: negative values are stored,
+    /// and `AddResourceAmount` wraps instead of clamping.
+    pub resource_amount: Option<i32>,
     /// Explicit protection set on this unit. None means its initial ability effects
     /// have not been derived; queries refuse rather than inventing that state.
     pub invulnerable: Option<bool>,
@@ -189,6 +202,10 @@ pub(super) struct Admission {
     invulnerable_query_span: Option<Span>,
     /// Present after [`ObjectHost::with_unit_states`] admits the setter.
     unit_state: Option<UnitStateLimits>,
+    /// Present after [`ObjectHost::with_resource_amounts`] admits the family.
+    resource_amounts: bool,
+    /// Authoring tables used to seed the constructor's resource slot.
+    resource_tables: Option<Arc<DefaultTables>>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
     heroes: Option<hero::Admission>,
@@ -296,6 +313,8 @@ impl ObjectHost {
             invulnerable_span,
             invulnerable_query_span,
             unit_state: None,
+            resource_amounts: false,
+            resource_tables: None,
             order: None,
             heroes: None,
             models: None,
@@ -388,6 +407,78 @@ impl ObjectHost {
             max_records: budget.max_records,
             records: 0,
         });
+        Ok(self)
+    }
+
+    /// Admit the original resource amount natives on units from [`Self::with_unit_catalog`].
+    ///
+    /// `SetResourceAmount` is the anchor: a program that omits it keeps these
+    /// natives unsupported. `GetResourceAmount` and `AddResourceAmount` are
+    /// admitted when the program declares them. Every present declaration must
+    /// share `CreateUnit`'s source, and `Add` and `Set` must be non-constant.
+    /// `unit` must extend `widget`.
+    ///
+    /// `tables` is retained to read the constructor seed at `CreateUnit`:
+    /// the `Agld` row's authored `DataA1`. The retained amount is one `i32` on
+    /// an already admitted unit, so [`UnitBudget::max_records`] bounds it;
+    /// this opt-in takes no separate budget.
+    pub fn with_resource_amounts(mut self, tables: Arc<DefaultTables>) -> Result<Self, Error> {
+        let admitted = self.units.as_ref().ok_or_else(|| {
+            self.inner
+                .error(SET_RESOURCE, Failure::UnitState("not admitted"))
+        })?;
+        if admitted.resource_amounts {
+            return Err(self
+                .inner
+                .error(SET_RESOURCE, Failure::UnitState("already admitted")));
+        }
+        if self.inner.program.natives().get(SET_RESOURCE).is_none() {
+            return Ok(self);
+        }
+        let create_source = &admitted.declaration_source;
+        Self::contract(
+            &self.inner,
+            SET_RESOURCE,
+            &["unit", "integer"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        let setter = self
+            .inner
+            .program
+            .natives()
+            .get(SET_RESOURCE)
+            .ok_or_else(|| self.inner.error(SET_RESOURCE, Failure::Signature))?;
+        if setter.source != *create_source {
+            return Err(self.inner.error(SET_RESOURCE, Failure::Source));
+        }
+        if self.inner.program.natives().get(ADD_RESOURCE).is_some() {
+            Self::contract(
+                &self.inner,
+                ADD_RESOURCE,
+                &["unit", "integer"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            let adder = self
+                .inner
+                .program
+                .natives()
+                .get(ADD_RESOURCE)
+                .ok_or_else(|| self.inner.error(ADD_RESOURCE, Failure::Signature))?;
+            if adder.source != *create_source {
+                return Err(self.inner.error(ADD_RESOURCE, Failure::Source));
+            }
+        }
+        self.optional_unit_getter(create_source, GET_RESOURCE, "integer")?;
+        let admitted = self.units.as_mut().ok_or_else(|| {
+            self.inner
+                .error(SET_RESOURCE, Failure::UnitState("not admitted"))
+        })?;
+        admitted.resource_amounts = true;
+        admitted.resource_tables = Some(tables);
         Ok(self)
     }
 
@@ -620,6 +711,14 @@ impl ObjectHost {
         }
         if name == SET_STATE && self.admitted_units().ok()?.unit_state.is_some() {
             return Some(self.set_unit_state(args));
+        }
+        if self.admitted_units().ok()?.resource_amounts {
+            match name {
+                SET_RESOURCE => return Some(self.set_resource_amount(args, false)),
+                ADD_RESOURCE => return Some(self.set_resource_amount(args, true)),
+                GET_RESOURCE => return Some(self.get_resource_amount(args)),
+                _ => {}
+            }
         }
         if name == ORDER && self.admitted_units().ok()?.order.is_some() {
             return self.issue_immediate_order(args);
@@ -1173,6 +1272,202 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    fn set_resource_amount(&mut self, args: &[Value], add: bool) -> Result<Value, Error> {
+        let name = if add { ADD_RESOURCE } else { SET_RESOURCE };
+        if matches!(args, [Value::Null, Value::Int(_)]) {
+            return Ok(Value::Null);
+        }
+        let (unit, amount, current, removed) = {
+            let [Value::Handle(unit), Value::Int(amount)] = args else {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitState("arguments do not match the unit native declaration"),
+                ));
+            };
+            match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(name, error.failure))?
+            {
+                Entry::Unit { record } => {
+                    if !self.resource_amount_family(name, &record.definition)? {
+                        return Ok(Value::Null);
+                    }
+                    (*unit, *amount, record.resource_amount, false)
+                }
+                Entry::RemovedUnit {
+                    removed_at,
+                    resource_amount,
+                    ..
+                } => {
+                    if !self.resource_retained(*removed_at) {
+                        return Ok(Value::Null);
+                    }
+                    (*unit, *amount, *resource_amount, true)
+                }
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        };
+        let current = match current {
+            Some(current) => current,
+            None if removed => return Ok(Value::Null),
+            None => {
+                return Err(self
+                    .inner
+                    .error(name, Failure::UnitState("resource slot was not seeded")));
+            }
+        };
+        if removed {
+            match self.inner.entry_mut(unit)? {
+                Entry::RemovedUnit {
+                    resource_amount, ..
+                } => {
+                    *resource_amount = Some(if add {
+                        current.wrapping_add(amount)
+                    } else {
+                        amount
+                    });
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        } else {
+            match self.inner.entry_mut(unit)? {
+                Entry::Unit { record } => {
+                    record.resource_amount = Some(if add {
+                        current.wrapping_add(amount)
+                    } else {
+                        amount
+                    });
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        }
+    }
+
+    fn get_resource_amount(&self, args: &[Value]) -> Result<Value, Error> {
+        if matches!(args, [Value::Null]) {
+            return Ok(Value::Int(0));
+        }
+        let [Value::Handle(unit)] = args else {
+            return Err(self.inner.error(
+                GET_RESOURCE,
+                Failure::UnitState("arguments do not match the unit native declaration"),
+            ));
+        };
+        match self
+            .inner
+            .entry(*unit)
+            .map_err(|error| self.inner.error(GET_RESOURCE, error.failure))?
+        {
+            Entry::Unit { record } => {
+                if self.resource_amount_family(GET_RESOURCE, &record.definition)? {
+                    Ok(Value::Int(record.resource_amount.ok_or_else(|| {
+                        self.inner.error(
+                            GET_RESOURCE,
+                            Failure::UnitState("resource slot was not seeded"),
+                        )
+                    })?))
+                } else {
+                    Ok(Value::Int(0))
+                }
+            }
+            Entry::RemovedUnit {
+                removed_at,
+                resource_amount,
+                ..
+            } => Ok(Value::Int(if self.resource_retained(*removed_at) {
+                resource_amount.unwrap_or(0)
+            } else {
+                0
+            })),
+            _ => Err(self.inner.error(GET_RESOURCE, Failure::WrongFamily)),
+        }
+    }
+
+    /// Same-tick tombstone reads/writes retain the captured resource amount.
+    /// Later ticks answer zero and ignore writes, matching the followup probe
+    /// at 5.063 and 6.063 after removal at 5.000. The exact native
+    /// reclamation phase remains unqualified.
+    fn resource_retained(&self, removed_at: Option<f64>) -> bool {
+        removed_at.is_some() && self.timer_game_time() == removed_at
+    }
+
+    /// Read the constructor seed from the original ability row.
+    ///
+    /// The client's class binding maps the asset alias `Agld` to the `Agmb`
+    /// ability class that owns the `+0x70` amount slot. That class constructor
+    /// initializes the slot from the row's `DataA1`. The other gold-mine
+    /// abilities (`Aegm`, `Abgm`) are separate classes and were observed to
+    /// start at zero, so only the bound alias supplies a seed. A resource
+    /// family without that alias starts at the constructor's zero value.
+    fn initial_resource_amount(&self, definition: &Definition) -> Result<Option<i32>, Error> {
+        if !self.resource_amount_family(NATIVE, definition)? {
+            return Ok(None);
+        }
+        let admitted = self.admitted_units()?;
+        let tables = admitted.resource_tables.as_deref().ok_or_else(|| {
+            let mut error = self.inner.error(
+                NATIVE,
+                Failure::UnitState("resource tables are not admitted"),
+            );
+            error.source_context.push_str(&format!(
+                "; unit {:?} needs the selected ability tables",
+                definition.base_rawcode
+            ));
+            error
+        })?;
+        let Some(alias) = resource_amount_alias(definition) else {
+            return Ok(Some(0));
+        };
+        let fail = |detail: String| {
+            let mut error = self.inner.error(
+                NATIVE,
+                Failure::UnitState("resource ability seed is not readable"),
+            );
+            error.source_context.push_str(&format!(
+                "; unit {:?} ability {alias:?}: {detail}",
+                definition.base_rawcode
+            ));
+            error
+        };
+        let ability = tables
+            .object(Family::Ability, alias)
+            .map_err(|error| fail(error.to_string()))?;
+        let cell = ability
+            .cell(SlkId::AbilityData, "DataA1")
+            .map_err(|error| fail(error.to_string()))?;
+        let value = cell
+            .typed(FieldKind::Int)
+            .map_err(|error| fail(error.to_string()))?;
+        let pcx_objects::editor::defaults::Value::Integer(value) = value else {
+            return Err(fail(format!("DataA1 is not an integer: {value:?}")));
+        };
+        let amount = i32::try_from(value)
+            .map_err(|_| fail(format!("DataA1 is outside the integer range: {value}")))?;
+        Ok(Some(amount))
+    }
+
+    /// The original ability read/write is reached only through the unit's
+    /// resource ability. `UnitData` `buffType` is the asset-authored family
+    /// marker: `resource` names the three gold mines; every other token does
+    /// not. A definition that cannot supply the cell is reported rather than
+    /// treated as non-resource.
+    fn resource_amount_family(&self, name: &str, definition: &Definition) -> Result<bool, Error> {
+        let token = super::unit_positions::text(definition, SlkId::UnitData, "buffType").map_err(
+            |reason| {
+                let mut error = self.inner.error(name, Failure::UnitState(reason));
+                error.source_context.push_str(&format!(
+                    "; unit {:?} has no usable UnitData buffType",
+                    definition.base_rawcode
+                ));
+                error
+            },
+        )?;
+        Ok(token.trim() == "resource")
+    }
+
     fn set_acquire_range(&mut self, args: &[Value]) -> Result<Value, Error> {
         let (id, range) = {
             let fail = |reason| self.inner.error(SET_RANGE, reason);
@@ -1323,6 +1618,11 @@ impl ObjectHost {
                 .and_then(|order| {
                     lists_admitted_alias(&definition, &order.alias).then_some((order.code, false))
                 });
+            let resource_amount = if self.admitted_units()?.resource_amounts {
+                self.initial_resource_amount(&definition)?
+            } else {
+                None
+            };
             ExecutedUnit {
                 collision_radius: Self::catalog_collision_radius(&definition),
                 definition,
@@ -1339,6 +1639,7 @@ impl ObjectHost {
                 requested_hero_level: None,
                 requested_show_eye_candy: None,
                 unit_states: Vec::new(),
+                resource_amount,
                 invulnerable: None,
                 admitted_order,
                 abilities: None,
@@ -1729,6 +2030,16 @@ fn lists_admitted_alias(definition: &Definition, alias: &str) -> bool {
             })
         })
     })
+}
+
+fn resource_amount_alias(definition: &Definition) -> Option<&str> {
+    definition
+        .fields
+        .values()
+        .filter_map(ability_list_text)
+        .flat_map(|text| text.split(','))
+        .map(str::trim)
+        .find(|token| *token == RESOURCE_ALIAS)
 }
 
 fn ability_list_text(field: &ObjectField) -> Option<&str> {
