@@ -1,6 +1,8 @@
-//! Executed `EndGame` requests. The native records the request and returns to its
-//! caller, which keeps running; the consumer decides when the session ends.
-//! Score-screen presentation is not implemented: the request carries the flag only.
+//! Executed `EndGame` and `ChangeLevel` requests. The host records each request and
+//! returns to the calling VM, which keeps running; the consumer decides when the
+//! session ends. This scheduling choice does not claim unobserved native
+//! `ChangeLevel` teardown. Score-screen presentation is not implemented: the
+//! request carries the flag only.
 use super::{Error, Failure, ObjectHost};
 use crate::{campaign_progress::Progress, game_cache::Storage};
 use pcx_script::Value;
@@ -9,15 +11,18 @@ use std::sync::Arc;
 const END_GAME: &str = "EndGame";
 const MISSION: &str = "SetMissionAvailable";
 const NEXT_LEVEL: &str = "SetNextLevel";
+const CHANGE_LEVEL: &str = "ChangeLevel";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GameExitRequest {
     /// The script's `doScoreScreen` argument.
     pub score_screen: bool,
+    /// `ChangeLevel`'s verbatim target, or `None` when this request came from `EndGame`.
+    pub next_level: Option<String>,
 }
 
 pub(super) struct GameExits {
-    admitted: [bool; 3],
+    admitted: [bool; 4],
     max_pending: usize,
     requests: Vec<GameExitRequest>,
     progress: Option<(Progress, Arc<dyn Storage>)>,
@@ -25,8 +30,9 @@ pub(super) struct GameExits {
 }
 
 impl ObjectHost {
-    /// Validates declared exit, mission-availability and next-map natives against the selected source.
-    /// Missing declarations stay unsupported; progress storage is attached separately.
+    /// Validates declared exit, mission-availability, next-map and change-level natives
+    /// against the selected source. Missing declarations stay unsupported; progress
+    /// storage is attached separately.
     pub fn with_game_exit(mut self, max_pending: usize) -> Result<Self, Error> {
         if self.game_exit.is_some() {
             return Err(self
@@ -35,11 +41,12 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<GameExitRequest>(max_pending)
             .map_err(|_| self.inner.error(END_GAME, Failure::Capacity))?;
-        let mut admitted = [false; 3];
+        let mut admitted = [false; 4];
         for (index, (name, args)) in [
             (END_GAME, &["boolean"][..]),
             (MISSION, &["integer", "integer", "boolean"][..]),
             (NEXT_LEVEL, &["string"][..]),
+            (CHANGE_LEVEL, &["string", "boolean"][..]),
         ]
         .into_iter()
         .enumerate()
@@ -149,6 +156,9 @@ impl ObjectHost {
         if name == NEXT_LEVEL && state.admitted[2] {
             return Some(self.set_next_level(args));
         }
+        if name == CHANGE_LEVEL && state.admitted[3] {
+            return Some(self.change_level(args));
+        }
         if name != END_GAME || !state.admitted[0] {
             return None;
         }
@@ -169,6 +179,7 @@ impl ObjectHost {
         }
         exits.requests.push(GameExitRequest {
             score_screen: *score_screen,
+            next_level: None,
         });
         // The calling thread continues after EndGame, as in the original native.
         Some(Ok(Value::Null))
@@ -200,14 +211,47 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    fn change_level(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [Value::Str(map), Value::Bool(score_screen)] = args else {
+            return Err(self.inner.error(
+                CHANGE_LEVEL,
+                Failure::ClockState("ChangeLevel expects a map name and boolean"),
+            ));
+        };
+        let next_level = self.bounded_map(CHANGE_LEVEL, map)?;
+        let exits = self.game_exit.as_mut().expect("admitted change level");
+        if exits.requests.len() >= exits.max_pending {
+            return Err(self
+                .inner
+                .error(CHANGE_LEVEL, Failure::Budget("game exit requests")));
+        }
+        if exits.requests.try_reserve(1).is_err() {
+            return Err(self.inner.error(CHANGE_LEVEL, Failure::Capacity));
+        }
+        exits.requests.push(GameExitRequest {
+            score_screen: *score_screen,
+            next_level: Some(next_level),
+        });
+        // The host returns to the VM caller after queueing the request.
+        Ok(Value::Null)
+    }
+
     fn set_next_level(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let fail = |detail| {
-            self.inner
-                .error(NEXT_LEVEL, Failure::CampaignProgress(detail))
-        };
         let [Value::Str(map)] = args else {
-            return Err(fail("one map name required".into()));
+            return Err(self
+                .inner
+                .error(NEXT_LEVEL, Failure::ClockState("one map name required")));
         };
+        let value = self.bounded_map(NEXT_LEVEL, map)?;
+        self.game_exit
+            .as_mut()
+            .expect("admitted next level")
+            .next_level = (!value.is_empty()).then_some(value);
+        Ok(Value::Null)
+    }
+
+    fn bounded_map(&self, name: &str, map: &str) -> Result<String, Error> {
+        let fail = |detail| self.inner.error(name, Failure::CampaignProgress(detail));
         if map.len() > crate::campaign_progress::MAX_BYTES || map.contains('\0') {
             return Err(fail("next-map name byte policy or embedded NUL".into()));
         }
@@ -216,11 +260,7 @@ impl ObjectHost {
             .try_reserve_exact(map.len())
             .map_err(|e| fail(e.to_string()))?;
         value.push_str(map);
-        self.game_exit
-            .as_mut()
-            .expect("admitted next level")
-            .next_level = (!value.is_empty()).then_some(value);
-        Ok(Value::Null)
+        Ok(value)
     }
 }
 
