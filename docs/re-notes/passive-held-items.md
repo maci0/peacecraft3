@@ -3,7 +3,8 @@
 ## Implemented behavior
 
 A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength and agility
-of its `AIab`-class abilities, flat armor from `AIde`, and flat attack damage from `AIat` while
+of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`, and
+life regeneration from `Arel` while
 held. The unit total is the retained powerup strength plus the held passive totals, derived on
 demand from the held slots, so no add/remove state exists.
 
@@ -88,7 +89,7 @@ silent wrong stat.
   delta. It is a faithful derivation, not a measured observation.
 - Intelligence bonuses and their mana pool (`b3feb0` route unqualified).
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`, `AIde` and `AIat`: life (`AIml`), mana (`AImm`), armor
+- Passive families other than `AIab`, `AIde`, `AIat` and `Arel`: life (`AIml`), mana (`AImm`), armor
   (`AIsb`), attack speed (`AIas`), and the rest of the refused rows.
 - Non-hero passive equip: strength and agility still produce no hero pools, while armor and flat
   damage are accepted for any unit. Native behavior for non-hero strength/agility is not
@@ -162,5 +163,51 @@ the source field and its unit, not eligibility, stack interaction or timing.
 The existing regeneration consumer integrates base rates and hero attributes
 on the simulation clock. A held-item contribution must respect equip/drop/
 transfer boundaries, avoid integrating a new rate over time before pickup,
-and keep native interaction with the unit's regeneration type unqualified
-until it is checked. No regeneration item is admitted by this note.
+and keep native interaction with the unit's regeneration type explicit.
+
+## Life-regeneration implementation and original observation
+
+The class and amount now follow the reviewed registration and `Ihpr` metadata,
+including typed level-one W3A overrides. Held rates are checked integer sums;
+negative, malformed, unadmitted and overflowing amounts refuse. Rates change
+neither current nor maximum life immediately. The existing logical-clock
+regeneration consumer applies the held contribution while alive and unpaused,
+clamps at maximum life, and derives ownership from current inventory records.
+Pickup, transfer and drop require existing pools to be projected to the current
+game clock before changing a nonzero held rate. This is a host boundary that
+prevents retroactive regeneration; the normal activity path projects pools
+before processing inventory orders.
+
+A controlled run on the reviewed executable used `-classic` and read back RoC.
+Map SHA-256:
+`0e860b51f81ab4d9456e30b2bfa30b0586d98c0f9d9fa9d572203a3c9504ce3f`;
+script SHA-256:
+`a9060752c9a30d3e5a5925c24a791328d382e1e996a30fd6409b180b306240a4`.
+The Human02 data stayed intact, but authored units/triggers were omitted and
+two matching fresh Demon Hunters were created. One received two rings; the
+other was the unordered control. Both began at the same life. Time of day was
+held at noon, then midnight; rings were dropped and one was re-equipped.
+All 16 bounded marker records arrived and all three pickup calls returned true.
+
+| Two-second interval | Life gain relative to control, per second |
+| --- | --- |
+| Day, two rings | approximately 4 |
+| Day, one ring | approximately 2 |
+| Day, no rings | approximately 0 |
+| Night, no rings | 0 |
+| Night, one ring re-equipped | approximately 2 |
+
+The records use three-decimal native string output; tiny differences in the
+last decimal are retained in the receipt rather than treated as exact rates.
+The selected `Custom_V0` table gives the ring ability's amount as two. The
+Demon Hunter has night-only base regeneration of 0.5 and strength 19; the
+selected Misc profile supplies strength regeneration 0.05. Control gains were
+approximately 0.95 per second by day and 1.45 at night. Thus base eligibility
+gates the unit's base rate, while the strength and held-item contributions
+continue independently. The consumer now preserves that separation.
+
+Local inputs, member hashes, exact records and derived differences are under
+`.scratch/passive-life-probe/`. This is modified-map behavior evidence on the
+Wine reference, not unchanged Human02 acceptance, TFT qualification, native
+Windows parity or a rendered comparison. Other regeneration eligibility modes,
+negative map edits and mixed unmodeled passive classes remain separate limits.

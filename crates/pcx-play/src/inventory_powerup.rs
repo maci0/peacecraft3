@@ -21,6 +21,8 @@ const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 const ARMOR_WINDOW: u32 = 0xbc9d40;
 /// Registration call for the passive flat attack-damage class (source `AIat`, base `APbo`).
 const DAMAGE_WINDOW: u32 = 0xbc9c80;
+/// Registration call for the life-regeneration class (source `Arel`, base `AREB`).
+const LIFE_REGEN_WINDOW: u32 = 0xbca040;
 /// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
 pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
@@ -57,8 +59,8 @@ impl StrengthEffect {
     }
 }
 
-/// Flat strength, agility, armor and attack damage from passive held items. Strength and agility
-/// also include retained powerup strength in a unit total. Armor points are added to unit armor
+/// Flat attributes, armor, attack damage and life regeneration from passive held items.
+/// Unit strength also includes retained powerups. Armor points are added to unit armor
 /// while held; damage is a flat addition to the unit's attack damage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AttributeBonus {
@@ -66,6 +68,8 @@ pub struct AttributeBonus {
     pub agility: i32,
     pub armor: i32,
     pub damage: i32,
+    /// Life points per game second while held, separate from base regeneration eligibility.
+    pub life_regen: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -91,18 +95,19 @@ pub struct Rules {
     armor: Column,
     damage: Column,
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
-    heal: Option<HealClass>,
+    heal: Option<AmountClass>,
+    life_regen: Option<AmountClass>,
 }
 
-/// The admitted healing class and its amount column (`Ihpg`, the `DataA` column).
+/// One admitted scalar ability class and its metadata-selected amount column.
 #[derive(Clone, Debug)]
-struct HealClass {
+struct AmountClass {
     class: String,
     amount: Column,
 }
 
 impl Rules {
-    /// Reads both registration windows from the reviewed client image and the selected tables.
+    /// Reads registration windows from the reviewed client image and selected metadata.
     pub fn read(
         tables: Arc<DefaultTables>,
         overlay: Overlay,
@@ -132,6 +137,7 @@ impl Rules {
         let passive = window(PASSIVE_WINDOW)?;
         let armor = window(ARMOR_WINDOW)?;
         let damage = window(DAMAGE_WINDOW)?;
+        let life_regen = window(LIFE_REGEN_WINDOW)?;
         let heal = pe
             .read_from(HEAL_WINDOW, true)
             .map_err(|e| fail(&e.to_string()))?
@@ -152,6 +158,7 @@ impl Rules {
             digest,
             [&powerup, &passive, &armor, &damage],
         )
+        .and_then(|rules| rules.with_life_regen(&life_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
         .map_err(|e| fail(&e))
     }
@@ -164,11 +171,34 @@ impl Rules {
             || class == self.passive_class
             || class == self.armor_class
             || class == self.damage_class
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
         {
             return Err("healing registration must name a distinct class".into());
         }
         let amount = column(&self.tables, b"Ihpg")?;
-        self.heal = Some(HealClass { class, amount });
+        self.heal = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    pub(crate) fn with_life_regen(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_window(window)?;
+        if self.life_regen.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+        {
+            return Err("life regeneration registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Ihpr")?;
+        self.life_regen = Some(AmountClass { class, amount });
         Ok(self)
     }
 
@@ -305,6 +335,7 @@ impl Rules {
             armor_class,
             damage_class,
             heal: None,
+            life_regen: None,
         })
     }
 
@@ -345,7 +376,7 @@ impl Rules {
         Ok(Some(StrengthEffect { strength }))
     }
 
-    /// Passive strength, agility, armor and flat attack damage of a held item. `None` for powerups
+    /// Passive attributes, armor, attack damage and life regeneration. `None` for powerups
     /// and usable items: a usable item is held without activation, so its abilities add no passive
     /// attribute here. Any passive ability outside the admitted classes, or an intelligence
     /// bonus, refuses.
@@ -392,6 +423,24 @@ impl Rules {
                     .damage
                     .checked_add(points)
                     .ok_or("passive damage overflows")?;
+                continue;
+            }
+            if let Some(regen) = &self.life_regen
+                && code == regen.class
+            {
+                if !regen.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!(
+                        "life regeneration metadata does not admit ability {alias}"
+                    ));
+                }
+                let points = self.amount(alias, &regen.amount)?;
+                if points < 0 {
+                    return Err(format!("negative life regeneration on {}", item.rawcode()));
+                }
+                held.life_regen = held
+                    .life_regen
+                    .checked_add(points)
+                    .ok_or("passive life regeneration overflows")?;
                 continue;
             }
             if code != self.passive_class {

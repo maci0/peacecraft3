@@ -360,6 +360,7 @@ impl ObjectHost {
             agility: 0,
             armor: 0,
             damage: 0,
+            life_regen: 0,
         };
         for (item, _) in self
             .executed_items()
@@ -387,6 +388,10 @@ impl ObjectHost {
             bonus.damage = bonus
                 .damage
                 .checked_add(passive.damage)
+                .ok_or_else(overflow)?;
+            bonus.life_regen = bonus
+                .life_regen
+                .checked_add(passive.life_regen)
                 .ok_or_else(overflow)?;
         }
         Ok(bonus)
@@ -434,6 +439,21 @@ impl ObjectHost {
         Ok(())
     }
 
+    fn require_passive_regen_projection(&self, unit: HandleId, amount: i32) -> Result<(), Error> {
+        if amount != 0 {
+            let through = self
+                .executed_unit(unit)?
+                .vitals
+                .map(|vitals| vitals.regen.through);
+            if through.is_none() || through != self.timer_game_time() {
+                return Err(self.inner.error("inventory", Failure::UnitActivity(
+                    "life regeneration changes require vitals projected through the current clock".into(),
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn add_inventory_item(
         &mut self,
         unit: HandleId,
@@ -469,6 +489,7 @@ impl ObjectHost {
             (held.agility, passive.agility),
             (held.armor, passive.armor),
             (held.damage, passive.damage),
+            (held.life_regen, passive.life_regen),
         ] {
             current.checked_add(incoming).ok_or_else(|| {
                 self.inner.error(
@@ -493,7 +514,11 @@ impl ObjectHost {
             return Ok(false);
         };
         let pools = self.held_strength_life(unit, passive.strength)?;
+        self.require_passive_regen_projection(unit, passive.life_regen)?;
         let holder = record.held_by;
+        if let Some((owner, _)) = holder {
+            self.require_passive_regen_projection(owner, passive.life_regen)?;
+        }
         let mut changes = vec![(unit, true)];
         if let Some((owner, _)) = holder {
             changes.push((owner, false));
@@ -581,6 +606,7 @@ impl ObjectHost {
             return Ok(());
         }
         let passive = self.held_attributes(item)?;
+        self.require_passive_regen_projection(unit, passive.life_regen)?;
         let pools = self.held_strength_life(unit, -passive.strength)?;
         self.reserve_item_events(&[(unit, false)])?;
         self.set_life_pools(unit, pools)?;
@@ -633,6 +659,12 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::ItemState("unit position missing"))
             })?;
+            for &item in &held {
+                self.require_passive_regen_projection(
+                    unit,
+                    self.held_attributes(item)?.life_regen,
+                )?;
+            }
             self.reserve_item_events(&vec![(unit, false); held.len()])?;
         }
         self.cancel_inventory_order(unit);

@@ -668,6 +668,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             agility: 0,
             armor: 3,
             damage: 0,
+            life_regen: 0,
         }
     );
 }
@@ -718,6 +719,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             agility: 0,
             armor: 0,
             damage: 15,
+            life_regen: 0,
         }
     );
 }
@@ -885,13 +887,18 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
         &[
             &["phea", "AIh1", "0", "1", "1", "1"],
             &["tarm", "AId1", "0", "0", "0", "-"],
+            &["plif", "Lr01", "0", "0", "0", "-"],
+            &["plix", "Lr02", "0", "0", "0", "-"],
+            &["pliv", "Lr01,Lr01", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
-        &["alias", "code", "levels", "DataA1", "Rng1"],
+        &["alias", "code", "levels", "DataA1", "Rng1", "DataB1"],
         &[
             &["AIh1", "AIhe", "1", amount, range],
             &["AId1", "AIde", "1", "1", "-"],
+            &["Lr01", "RgnX", "1", "99", "-", amount],
+            &["Lr02", "RgnX", "1", "99", "-", amount],
         ],
     );
     let meta = sylk(
@@ -903,6 +910,7 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
             &["Ihpg", "Data", "AbilityData", "-1", "int", "1", "AIh1"],
             &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+            &["Ihpr", "Data", "AbilityData", "-1", "int", "2", "Lr01"],
         ],
     );
     let tables = Arc::new(
@@ -952,6 +960,71 @@ fn healing_amount_and_range_come_from_the_admitted_source_row() {
     assert_eq!(rules.heal_effect(&catalog_item("phea")).unwrap(), Some(250));
     assert_eq!(rules.heal_range(&catalog_item("phea")).unwrap(), 100.0);
     assert_eq!(rules.heal_effect(&catalog_item("tarm")).unwrap(), None);
+}
+
+fn life_regen_rules(amount: &str) -> Rules {
+    healing_rules(amount, "100")
+        .with_life_regen(&window("RgnX", "RegB"))
+        .unwrap()
+}
+
+#[test]
+fn life_regeneration_follows_registered_class_metadata_and_map_override() {
+    let mut rules = life_regen_rules("7");
+    assert_eq!(
+        rules
+            .held_attributes(&catalog_item("plif"))
+            .unwrap()
+            .unwrap()
+            .life_regen,
+        7
+    );
+    rules
+        .overlay
+        .mods
+        .insert("Lr01".into(), vec![int_mod(b"Ihpr", Some([1, 0]), 19)]);
+    assert_eq!(
+        rules
+            .held_attributes(&catalog_item("plif"))
+            .unwrap()
+            .unwrap()
+            .life_regen,
+        19
+    );
+    assert!(
+        rules
+            .held_attributes(&catalog_item("plix"))
+            .unwrap_err()
+            .contains("metadata does not admit")
+    );
+}
+
+#[test]
+fn malformed_negative_and_overflowing_life_regeneration_refuse() {
+    for amount in ["-1", "1.5", "broken", "2147483648"] {
+        assert!(
+            life_regen_rules(amount)
+                .held_attributes(&catalog_item("plif"))
+                .is_err(),
+            "{amount}"
+        );
+    }
+    assert!(
+        life_regen_rules("2147483647")
+            .held_attributes(&catalog_item("pliv"))
+            .unwrap_err()
+            .contains("overflows")
+    );
+    assert!(
+        healing_rules("7", "100")
+            .with_life_regen(&window("AIat", "RegB"))
+            .is_err()
+    );
+    assert!(
+        life_regen_rules("7")
+            .with_life_regen(&window("RgnX", "RegB"))
+            .is_err()
+    );
 }
 
 #[test]

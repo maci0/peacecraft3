@@ -326,7 +326,7 @@ impl ObjectHost {
                 continue;
             }
             let elapsed = now - from;
-            let (life_rate, mana_rate) = self.regen_rates(unit, &bonuses)?;
+            let (life_rate, mana_rate, bonus_life_rate) = self.regen_rates(unit, &bonuses)?;
             let daytime = self.daytime_between(from, now);
             let day = || match &daytime {
                 Ok(Some(seconds)) => Ok(*seconds),
@@ -347,7 +347,8 @@ impl ObjectHost {
                 }
             };
             let life =
-                (f64::from(vitals.life) + life_rate * life_seconds).min(f64::from(vitals.max_life));
+                (f64::from(vitals.life) + life_rate * life_seconds + bonus_life_rate * elapsed)
+                    .min(f64::from(vitals.max_life));
             let mana = (f64::from(vitals.mana) + mana_rate * elapsed)
                 .clamp(0.0, f64::from(vitals.max_mana));
             next.push((unit, life as f32, mana as f32));
@@ -439,13 +440,15 @@ impl ObjectHost {
         Ok(total)
     }
 
-    /// Per-second life and mana rates: the stock `UnitBalance` columns, plus the hero
-    /// `Misc/StrRegenBonus` and `Misc/IntRegenBonus` terms from derived STR and INT.
-    fn regen_rates(&self, unit: HandleId, bonuses: &HeroVitals) -> Result<(f64, f64), Error> {
+    /// Base life, mana and unconditional bonus life rates. Base life eligibility
+    /// does not gate hero strength or held-item regeneration.
+    fn regen_rates(&self, unit: HandleId, bonuses: &HeroVitals) -> Result<(f64, f64, f64), Error> {
         let record = self.executed_unit(unit)?;
         let vitals = record.vitals.expect("filtered to vitals");
-        let mut life = f64::from(vitals.regen.life_per_second);
+        let life = f64::from(vitals.regen.life_per_second);
         let mut mana = f64::from(vitals.regen.mana_per_second);
+        let bonus = self.unit_hero_bonus(unit)?;
+        let mut bonus_life = f64::from(bonus.life_regen);
         if record.definition.rawcode[0].is_ascii_uppercase() {
             let progress = self.hero_initial_level().zip(
                 record
@@ -454,21 +457,26 @@ impl ObjectHost {
                     .and_then(|a| a.hero.as_ref())
                     .map(|h| h.level),
             );
-            let bonus = self.unit_hero_bonus(unit)?;
             let derive = |name: &str| {
                 Self::derive_hero_attribute(&record.definition, progress, bonus, name)
                     .map_err(|e| self.inner.error(REGEN, Failure::UnitActivity(e)))
             };
-            life += f64::from(derive("STR")?) * f64::from(bonuses.life_regen_per_strength);
+            bonus_life += f64::from(derive("STR")?) * f64::from(bonuses.life_regen_per_strength);
             mana += f64::from(derive("INT")?) * f64::from(bonuses.mana_regen_per_intelligence);
         }
-        if !(life.is_finite() && life >= 0.0 && mana.is_finite() && mana >= 0.0) {
+        if !(life.is_finite()
+            && life >= 0.0
+            && mana.is_finite()
+            && mana >= 0.0
+            && bonus_life.is_finite()
+            && bonus_life >= 0.0)
+        {
             return Err(self.inner.error(
                 REGEN,
                 Failure::UnitActivity("invalid regeneration rate".into()),
             ));
         }
-        Ok((life, mana))
+        Ok((life, mana, bonus_life))
     }
 
     /// `SetUnitState` on an admitted state: life and mana stay within their

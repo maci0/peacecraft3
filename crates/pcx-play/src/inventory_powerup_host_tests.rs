@@ -96,6 +96,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["pdmv", "AItf,AIwz", "0", "0", "0", "-"],
             &["pdmm", "AIwz", "0", "0", "0", "-"],
             &["pdmo", "AIt1", "0", "0", "0", "-"],
+            &["preg", "Arel", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -134,6 +135,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
             &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
             &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+            &["Arel", "Arel", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
             &[
                 "AIwz",
                 "AIat",
@@ -233,6 +235,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "",
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
+            &["Ihpr", "Data", "AbilityData", "-1", "int", "1", "Arel", ""],
             &[
                 "Iatt",
                 "Data",
@@ -388,6 +391,10 @@ struct Fixture {
 }
 
 fn open() -> Fixture {
+    open_with_strength_regen(0.)
+}
+
+fn open_with_strength_regen(strength_regen: f32) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
@@ -433,6 +440,8 @@ fn open() -> Fixture {
     )
     .unwrap()
     .with_heal(&healing_registration(), &healing_base())
+    .unwrap()
+    .with_life_regen(&registration("Arel", "AREB"))
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -479,7 +488,7 @@ fn open() -> Fixture {
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: LIFE_PER_STRENGTH,
         mana_per_intelligence: 15.0,
-        life_regen_per_strength: 0.0,
+        life_regen_per_strength: strength_regen,
         mana_regen_per_intelligence: 0.0,
     })
     .unwrap();
@@ -1259,6 +1268,194 @@ fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
 
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().life
+}
+
+fn prepare_passive_regen(h: &mut ObjectHost, units: &[HandleId]) {
+    for &unit in units {
+        set_life(h, unit, 100.);
+        assert_eq!(
+            h.unit_vitals(unit).unwrap().unwrap().regen.life_per_second,
+            0.
+        );
+    }
+}
+
+fn advance_passive_regen(h: &mut ObjectHost, now: f64) {
+    h.next_timer_expiry(now, &mut 1000).unwrap();
+    h.advance_unit_activity(now, &mut 65536).unwrap();
+}
+
+#[test]
+fn held_life_regeneration_stacks_transfers_drops_and_cleans_up() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    let first = item(&mut h, b"preg", 0.);
+    let second = item(&mut h, b"preg", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 1.);
+    assert_eq!(life_of(&h, hero), 107.);
+    assert_eq!(life_of(&h, ordinary), 100.);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_eq!(life_of(&h, hero), 121.);
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 3.);
+    assert_eq!(life_of(&h, hero), 128.);
+    assert_eq!(life_of(&h, ordinary), 107.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(second)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_eq!(life_of(&h, hero), 128.);
+    assert_eq!(life_of(&h, ordinary), 114.);
+    h.forget_inventory_unit(ordinary, false).unwrap();
+    advance_passive_regen(&mut h, 5.);
+    assert_eq!(life_of(&h, ordinary), 114.);
+    assert_eq!(h.unit_hero_bonus(ordinary).unwrap().life_regen, 0);
+}
+
+#[test]
+fn held_life_regeneration_is_partition_independent_and_clamped() {
+    let Fixture {
+        h: mut whole,
+        hero: whole_hero,
+        ..
+    } = open();
+    let Fixture {
+        h: mut split,
+        hero: split_hero,
+        ..
+    } = open();
+    for (h, hero) in [(&mut whole, whole_hero), (&mut split, split_hero)] {
+        prepare_passive_regen(h, &[hero]);
+        let regen = item(h, b"preg", 0.);
+        add(h, hero, regen).unwrap();
+    }
+    advance_passive_regen(&mut whole, 4.);
+    for time in [0.5, 1., 2., 4.] {
+        advance_passive_regen(&mut split, time);
+    }
+    assert_eq!(life_of(&whole, whole_hero), life_of(&split, split_hero));
+    assert_eq!(life_of(&whole, whole_hero), 128.);
+    let maximum = whole.unit_vitals(whole_hero).unwrap().unwrap().max_life;
+    set_life(&mut whole, whole_hero, maximum - 2.);
+    advance_passive_regen(&mut whole, 5.);
+    assert_eq!(life_of(&whole, whole_hero), maximum);
+}
+
+#[test]
+fn regeneration_item_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    let regen = item(&mut h, b"preg", 0.);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, regen)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.executed_items()
+            .find(|(id, _)| *id == regen)
+            .unwrap()
+            .1
+            .held_by
+            .is_none()
+    );
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    add(&mut h, hero, regen).unwrap();
+    assert_eq!(life_of(&h, hero), 100.);
+    h.next_timer_expiry(2., &mut 1000).unwrap();
+    let before = h
+        .executed_items()
+        .find(|(id, _)| *id == regen)
+        .unwrap()
+        .1
+        .clone();
+    assert!(
+        add(&mut h, ordinary, regen)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.native(
+            "UnitRemoveItem",
+            &[Value::Handle(hero), Value::Handle(regen)]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.executed_items().find(|(id, _)| *id == regen).unwrap().1,
+        &before
+    );
+    h.advance_unit_activity(2., &mut 65536).unwrap();
+    assert_eq!(life_of(&h, hero), 107.);
+}
+
+#[test]
+fn strength_and_item_life_regeneration_do_not_use_base_eligibility() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open_with_strength_regen(0.3);
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    advance_passive_regen(&mut h, 1.);
+    assert_eq!(life_of(&h, hero), 103.);
+    assert_eq!(life_of(&h, ordinary), 100.);
+    let regen = item(&mut h, b"preg", 0.);
+    add(&mut h, hero, regen).unwrap();
+    advance_passive_regen(&mut h, 2.);
+    assert_eq!(life_of(&h, hero), 113.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(regen)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 3.);
+    assert_eq!(life_of(&h, hero), 116.);
+}
+
+#[test]
+fn mixed_item_cleanup_refuses_stale_regeneration_before_any_drop() {
+    let Fixture { mut h, hero, .. } = open();
+    let plain = item(&mut h, b"pdm1", 0.);
+    let regen = item(&mut h, b"preg", 0.);
+    add(&mut h, hero, plain).unwrap();
+    add(&mut h, hero, regen).unwrap();
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    let unit = h.executed_unit(hero).unwrap().clone();
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        h.forget_inventory_unit(hero, false)
+            .unwrap_err()
+            .to_string()
+            .contains("projected through")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.executed_unit(hero).unwrap(), &unit);
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
 }
 
 #[test]
