@@ -13,6 +13,9 @@ use pcx_sim::world::ResolutionProblem;
 
 /// Source-shaped rows: the tome grants 7 STR through `DataC1`, one slot count through `L000`.
 const POWERUP_DECLARATIONS: &str = r#"
+constant native SetPlayerHandicap takes player p, real factor returns nothing
+constant native GetPlayerHandicap takes player p returns real
+native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 native UnitResetCooldown takes unit u returns nothing
 type gamecache extends agent
 native InitGameCache takes string filename returns gamecache
@@ -654,6 +657,16 @@ fn open_with_regens_overlays(
     Fixture { h, hero, ordinary }
 }
 
+pub(crate) fn health_fixture() -> (ObjectHost, HandleId) {
+    let Fixture { mut h, hero, .. } = open();
+    let (rules, numeric) = crate::player_handicap::tests::health_rules();
+    h = h
+        .with_script_numeric(numeric)
+        .with_player_health_handicap(rules)
+        .unwrap();
+    (h, hero)
+}
+
 fn create_unit(h: &mut ObjectHost, raw: &[u8; 4], x: f32) -> HandleId {
     let player = h.native("Player", &[Value::Int(4)]).unwrap();
     let Value::Handle(id) = h
@@ -861,6 +874,31 @@ fn retained_strength_survives_a_later_level_up() {
     assert_eq!(
         h.unit_vitals(hero).unwrap().unwrap().max_life,
         granted.max_life + (12.0 - HERO_STR) * LIFE_PER_STRENGTH
+    );
+}
+
+#[test]
+fn health_handicap_scales_powerup_and_level_strength_life_deltas() {
+    let (mut h, hero) = health_fixture();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(0.6)])
+        .unwrap();
+    let scaled = h.unit_vitals(hero).unwrap().unwrap();
+    // Base 500 plus STR 10 * 25, each component rounded after scaling.
+    assert_eq!(scaled.max_life, 450.0);
+    let tome = item(&mut h, b"tstr", 0.0);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    let granted = h.unit_vitals(hero).unwrap().unwrap();
+    assert_eq!(granted.max_life, scaled.max_life + 105.0);
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(4), Value::Bool(false)],
+    )
+    .unwrap();
+    // Level 4 raises base STR 10 to 12; the 2 * 25 gain is scaled too.
+    assert_eq!(
+        h.unit_vitals(hero).unwrap().unwrap().max_life,
+        granted.max_life + 30.0
     );
 }
 

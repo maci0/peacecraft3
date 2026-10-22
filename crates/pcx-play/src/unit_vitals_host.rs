@@ -8,7 +8,9 @@ use super::unit_activity::balance_real;
 use super::unit_creation::ExecutedUnit;
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::inventory_powerup::AttributeBonus;
-use crate::inventory_powerup_host::{reprice_life, reprice_mana, reprice_max_life};
+use crate::inventory_powerup_host::{
+    reprice_life_scaled, reprice_mana, reprice_max_life, round_life, scale_life_component,
+};
 use pcx_objects::editor::FieldSource;
 use pcx_objects::editor::misc::HeroVitals;
 use pcx_objects::editor::{FieldKind, SlkId};
@@ -154,7 +156,12 @@ impl ObjectHost {
                     name,
                 )
                 .map_err(fail)?;
-                Ok((current - base) * coefficient)
+                let change = (current - base) * coefficient;
+                Ok(if name == "STR" {
+                    scale_life_component(change, record.health_handicap)
+                } else {
+                    change
+                })
             };
             vitals = adjust_hero_vitals(
                 vitals,
@@ -166,11 +173,12 @@ impl ObjectHost {
             )
             .map_err(fail)?;
             if record.permanent_strength != 0 {
-                (vitals.life, vitals.max_life) = reprice_life(
+                (vitals.life, vitals.max_life) = reprice_life_scaled(
                     vitals.life,
                     vitals.max_life,
                     self.life_per_strength().expect("admitted vitals"),
                     record.permanent_strength,
+                    record.health_handicap,
                 )
                 .map_err(fail)?;
             }
@@ -206,11 +214,12 @@ impl ObjectHost {
                 return Err(fail("combined cached mana regeneration overflows".into()));
             }
             if passive.strength != 0 {
-                (vitals.life, vitals.max_life) = reprice_life(
+                (vitals.life, vitals.max_life) = reprice_life_scaled(
                     vitals.life,
                     vitals.max_life,
                     self.life_per_strength().expect("admitted vitals"),
                     passive.strength,
+                    record.health_handicap,
                 )
                 .map_err(fail)?;
             }
@@ -355,6 +364,7 @@ impl ObjectHost {
     pub(super) fn prepare_unit_vitals(
         &self,
         definition: &Definition,
+        health_handicap: f32,
     ) -> Result<Option<Vitals>, Error> {
         let Some(rules) = &self.unit_vitals else {
             return Ok(None);
@@ -371,10 +381,17 @@ impl ObjectHost {
                 .timer_game_time()
                 .ok_or_else(|| fail("regeneration requires the game clock".into()))?,
         };
+        if !health_handicap.is_finite() {
+            return Err(fail("invalid health handicap".into()));
+        }
+        max_life = Self::scale_health_component(max_life, health_handicap);
         if definition.rawcode[0].is_ascii_uppercase() {
             let strength = balance_real(definition, "STR").map_err(fail)?;
             let intelligence = balance_real(definition, "INT").map_err(fail)?;
-            max_life += strength * rules.bonuses.life_per_strength;
+            max_life += Self::scale_health_component(
+                strength * rules.bonuses.life_per_strength,
+                health_handicap,
+            );
             max_mana += intelligence * rules.bonuses.mana_per_intelligence;
             mana = max_mana;
         }
@@ -385,6 +402,104 @@ impl ObjectHost {
             max_mana,
             regen,
         }))
+    }
+
+    fn scale_health_component(value: f32, factor: f32) -> f32 {
+        scale_life_component(value, factor)
+    }
+
+    fn health_components(
+        &self,
+        unit: HandleId,
+        record: &ExecutedUnit,
+    ) -> Result<(f32, f32), String> {
+        let base = balance_real(&record.definition, "HP")?;
+        if !record.definition.rawcode[0].is_ascii_uppercase() {
+            return Ok((base, 0.0));
+        }
+        let bonus = self.unit_hero_bonus(unit).map_err(|e| e.to_string())?;
+        let progress = self.hero_initial_level().zip(
+            record
+                .abilities
+                .as_ref()
+                .and_then(|a| a.hero.as_ref())
+                .map(|h| h.level),
+        );
+        let strength = Self::derive_hero_attribute(&record.definition, progress, bonus, "STR")?;
+        Ok((
+            base,
+            strength
+                * self
+                    .life_per_strength()
+                    .ok_or("unit vitals are not admitted")?,
+        ))
+    }
+
+    /// Project one owner's requested raw factor onto an existing unit. The base
+    /// term follows the native ratio update; the strength term is applied as a
+    /// direct pool delta afterwards. Held flat maximum-life bonuses are untouched.
+    pub(super) fn project_health_handicap(
+        &self,
+        unit: HandleId,
+        record: &ExecutedUnit,
+        requested: f32,
+    ) -> Result<Vitals, String> {
+        let vitals = record.vitals.ok_or("unit vitals missing")?;
+        if !requested.is_finite() || !record.health_handicap.is_finite() {
+            return Err("invalid health handicap".into());
+        }
+        let (base, strength) = self.health_components(unit, record)?;
+        let base_change = Self::scale_health_component(base, requested)
+            - Self::scale_health_component(base, record.health_handicap);
+        let (life, max_life) = Self::change_health_base(vitals.life, vitals.max_life, base_change)?;
+        let strength_change = Self::scale_health_component(strength, requested)
+            - Self::scale_health_component(strength, record.health_handicap);
+        let (life, max_life) = Self::change_health_strength(life, max_life, strength_change)?;
+        Ok(Vitals {
+            life,
+            max_life,
+            ..vitals
+        })
+    }
+
+    fn change_health_base(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
+        if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
+            return Err("non-finite health handicap pool".into());
+        }
+        let next_max = max_life + change;
+        if !next_max.is_finite() {
+            return Err("health handicap maximum overflow".into());
+        }
+        let mut next_life = if life <= 0.0 || max_life <= 0.0 || next_max <= 0.0 {
+            0.0
+        } else {
+            round_life(next_max * (life / max_life))
+        };
+        if life > 0.0 && next_max > 0.0 && next_life <= 0.0 {
+            next_life = 1.0;
+        }
+        next_life = next_life.clamp(0.0, next_max.max(0.0));
+        Ok((next_life, next_max))
+    }
+
+    fn change_health_strength(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
+        if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
+            return Err("non-finite health handicap strength pool".into());
+        }
+        let next_max = max_life + change;
+        if !next_max.is_finite() {
+            return Err("health handicap maximum overflow".into());
+        }
+        let mut next_life = if life <= 0.0 || next_max <= 0.0 {
+            0.0
+        } else {
+            life + change
+        };
+        if life > 0.0 && next_max > 0.0 && next_life <= 0.0 {
+            next_life = 1.0;
+        }
+        next_life = next_life.clamp(0.0, next_max.max(0.0));
+        Ok((next_life, next_max))
     }
 
     /// Stage the vital side of a level change before changing hero counters.
@@ -418,7 +533,10 @@ impl ObjectHost {
                     - Self::derive_hero_attribute(definition, old, bonus, name)?)
                     * coefficient)
             };
-            let life = delta("STR", rules.bonuses.life_per_strength)?;
+            let life = scale_life_component(
+                delta("STR", rules.bonuses.life_per_strength)?,
+                record.health_handicap,
+            );
             let mana = delta("INT", rules.bonuses.mana_per_intelligence)?;
             adjust_hero_vitals(vitals, life, mana)
         };
@@ -429,6 +547,15 @@ impl ObjectHost {
 
     pub fn unit_vitals(&self, unit: HandleId) -> Result<Option<Vitals>, Error> {
         Ok(self.executed_unit(unit)?.vitals)
+    }
+
+    /// Test-only fixture mutation for pools that no admitted native can set.
+    #[cfg(test)]
+    pub(crate) fn set_test_life(&mut self, unit: HandleId, life: f32) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("fixture unit") else {
+            panic!("fixture unit");
+        };
+        record.vitals.as_mut().expect("fixture vitals").life = life;
     }
 
     /// Test-only fixture mutation for pools that no admitted native can set.

@@ -3,10 +3,19 @@ use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
 use crate::inventory_powerup_host::{
-    clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life, reprice_mana,
+    clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life_scaled, reprice_mana,
     reprice_max_life,
 };
 use crate::item_heal::heal_life;
+
+/// Passive item or powerup deltas applied to one unit's pools.
+#[derive(Clone, Copy)]
+struct PassiveDelta {
+    strength: i32,
+    max_life: i32,
+    intelligence: i32,
+    health_handicap: f32,
+}
 use crate::playercolor_host::UseCheck;
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_sim::world::FieldValue;
@@ -464,14 +473,19 @@ impl ObjectHost {
     }
 
     /// Project `delta` strength onto already-selected life pools.
-    fn project_strength_life(&self, pools: (f32, f32), delta: i32) -> Result<(f32, f32), Error> {
+    fn project_strength_life(
+        &self,
+        pools: (f32, f32),
+        delta: i32,
+        health_handicap: f32,
+    ) -> Result<(f32, f32), Error> {
         let life_per_strength = self.life_per_strength().ok_or_else(|| {
             self.inner.error(
                 "inventory",
                 Failure::UnitState("unit vitals required before strength changes"),
             )
         })?;
-        reprice_life(pools.0, pools.1, life_per_strength, delta)
+        reprice_life_scaled(pools.0, pools.1, life_per_strength, delta, health_handicap)
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
     }
 
@@ -502,31 +516,29 @@ impl ObjectHost {
         pools: VitalPools,
         is_hero: bool,
         dead: bool,
-        strength: i32,
-        max_life: i32,
-        intelligence: i32,
+        delta: PassiveDelta,
     ) -> Result<VitalPools, Error> {
         let mut life = (pools.life, pools.max_life);
         let mut mana = (pools.mana, pools.max_mana);
-        if strength != 0 {
+        if delta.strength != 0 {
             if !is_hero {
                 return Err(self.inner.error(
                     "inventory",
                     Failure::UnitActivity("passive strength requires a hero".into()),
                 ));
             }
-            life = self.project_strength_life(life, strength)?;
+            life = self.project_strength_life(life, delta.strength, delta.health_handicap)?;
         }
-        if max_life != 0 {
-            life = self.project_max_life(life, max_life)?;
+        if delta.max_life != 0 {
+            life = self.project_max_life(life, delta.max_life)?;
         }
-        if strength != 0 || max_life != 0 {
+        if delta.strength != 0 || delta.max_life != 0 {
             life = clamp_life_pools(life.0, life.1, dead);
         }
         // Intelligence is a hero attribute. A non-hero accepts the item but has no modeled
         // attribute or mana-pool effect, so its pools stay unchanged.
-        if is_hero && intelligence != 0 {
-            mana = self.project_intelligence_mana(mana, intelligence)?;
+        if is_hero && delta.intelligence != 0 {
+            mana = self.project_intelligence_mana(mana, delta.intelligence)?;
         }
         mana = clamp_mana_pools(mana.0, mana.1);
         Ok(VitalPools {
@@ -567,9 +579,12 @@ impl ObjectHost {
             },
             is_hero,
             dead,
-            strength,
-            max_life,
-            intelligence,
+            PassiveDelta {
+                strength,
+                max_life,
+                intelligence,
+                health_handicap: record.health_handicap,
+            },
         )
         .map(Some)
     }
@@ -791,6 +806,7 @@ impl ObjectHost {
             life_per_strength,
             effect,
             dead,
+            record.health_handicap,
         )
         .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
         // Queue the pickup before the first write: queueing is the only fallible step left.
@@ -884,11 +900,12 @@ impl ObjectHost {
                 self.inner
                     .error("inventory", Failure::ItemState("unit position missing"))
             })?;
-            let (is_hero, dead) = {
+            let (is_hero, dead, health_handicap) = {
                 let record = self.executed_unit(unit)?;
                 (
                     record.definition.rawcode[0].is_ascii_uppercase(),
                     record.combat.as_ref().is_some_and(|combat| combat.dead),
+                    record.health_handicap,
                 )
             };
             let mut pools = self.unit_vital_pools(unit)?;
@@ -926,9 +943,12 @@ impl ObjectHost {
                         current,
                         is_hero,
                         dead,
-                        strength,
-                        max_life,
-                        intelligence,
+                        PassiveDelta {
+                            strength,
+                            max_life,
+                            intelligence,
+                            health_handicap,
+                        },
                     )?);
                 }
             }

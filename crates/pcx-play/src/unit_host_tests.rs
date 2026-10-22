@@ -3458,3 +3458,124 @@ mod resource;
 
 #[path = "inventory_tests.rs"]
 mod inventory;
+
+fn health_create(h: &mut ObjectHost, x: f32) -> pcx_script::HandleId {
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let Value::Handle(id) = h
+        .native(
+            "CreateUnit",
+            &[
+                owner,
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(x),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    id
+}
+
+fn health_vm() -> (ObjectHost, pcx_script::HandleId) {
+    combat::powerup_host::health_fixture()
+}
+
+fn health_apply(h: &mut ObjectHost, factor: f32) -> f32 {
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(factor)])
+        .unwrap();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let Value::Real(stored) = h.native("GetPlayerHandicap", &[player]).unwrap() else {
+        panic!("handicap")
+    };
+    stored
+}
+
+fn life(h: &mut ObjectHost, unit: pcx_script::HandleId) -> (f32, f32) {
+    let v = h.unit_vitals(unit).unwrap().unwrap();
+    (v.life, v.max_life)
+}
+
+#[test]
+fn health_handicap_scales_components_existing_units_and_threshold_repeats() {
+    let (mut h, hero) = health_vm();
+    assert_eq!(life(&mut h, hero), (750.0, 750.0));
+    h.set_test_life(hero, 300.0);
+    assert_eq!(health_apply(&mut h, 0.6), 0.6);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 0.6005);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 1.0);
+    assert_eq!(life(&mut h, hero), (273.0, 750.0));
+}
+
+#[test]
+fn fresh_units_follow_the_owner_and_held_flat_maximum_life_is_unscaled() {
+    let (mut h, hero) = health_vm();
+    h.set_test_maximum(hero, Some(900.0), None);
+    h.set_test_life(hero, 900.0);
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (600.0, 600.0));
+    let fresh = health_create(&mut h, 32.0);
+    assert_eq!(life(&mut h, fresh), (450.0, 450.0));
+    health_apply(&mut h, 1.0);
+    assert_eq!(life(&mut h, hero), (900.0, 900.0));
+    assert_eq!(life(&mut h, fresh), (750.0, 750.0));
+}
+
+#[test]
+fn zero_and_negative_raw_factors_drive_pools_while_the_stored_factor_clamps() {
+    let (mut h, hero) = health_vm();
+    assert_eq!(health_apply(&mut h, 0.0), 0.01);
+    assert_eq!(life(&mut h, hero), (0.0, 0.0));
+    health_apply(&mut h, 1.0);
+    assert_eq!(life(&mut h, hero), (0.0, 750.0));
+    assert_eq!(health_apply(&mut h, -0.5), 0.01);
+    assert_eq!(life(&mut h, hero), (0.0, -375.0));
+    let fresh = health_create(&mut h, 32.0);
+    assert_eq!(life(&mut h, fresh), (8.0, 8.0));
+}
+
+#[test]
+fn ownership_transfer_keeps_current_maxima_and_new_owner_changes_apply_to_it() {
+    let (mut h, hero) = health_vm();
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (450.0, 450.0));
+    let other = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(hero), other, Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(life(&mut h, hero), (450.0, 450.0));
+    let Value::Handle(other) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    let Value::Handle(fresh) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(other),
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(80.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    h.native(
+        "SetPlayerHandicap",
+        &[Value::Handle(other), Value::Real(0.5)],
+    )
+    .unwrap();
+    assert_eq!(life(&mut h, hero), (375.0, 375.0));
+    assert_eq!(life(&mut h, fresh), (375.0, 375.0));
+}

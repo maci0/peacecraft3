@@ -166,6 +166,9 @@ pub struct ExecutedUnit {
     pub combat: Option<super::Combat>,
     /// Permanent strength granted by automatic powerups, added to derived STR. Zero before any grant.
     pub permanent_strength: i32,
+    /// Health factor applied to this unit's base and strength life terms.
+    /// Ownership changes retain it; a new unit uses its owner's current factor.
+    pub health_handicap: f32,
 }
 
 type ModelLoader = Box<
@@ -683,6 +686,46 @@ impl ObjectHost {
                 )),
                 _ => None,
             })
+    }
+
+    /// The factor a newly created unit inherits from its owner. Without player
+    /// admission no factor is assigned and the creation baseline is unchanged.
+    pub(super) fn owner_health_handicap(&self, owner: HandleId) -> Result<f32, Error> {
+        if self.players.is_none() {
+            return Ok(1.0);
+        }
+        Ok(self.player_settings(owner)?.health_handicap.unwrap_or(1.0))
+    }
+
+    /// Apply one owner's raw requested factor to every living-vital record first,
+    /// then commit. Unsupported unit projections refuse the whole change.
+    pub(super) fn apply_owner_health_handicap(
+        &mut self,
+        owner: HandleId,
+        requested: f32,
+    ) -> Result<(), Error> {
+        let projections = self
+            .executed_units()
+            .filter(|(_, record)| record.owner == owner && record.vitals.is_some())
+            .map(|(id, record)| {
+                self.project_health_handicap(id, record, requested)
+                    .map(|vitals| (id, vitals))
+                    .map_err(|e| {
+                        self.inner
+                            .error("SetPlayerHandicap", Failure::UnitActivity(e))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (id, vitals) in projections {
+            match self.inner.entry_mut(id)? {
+                Entry::Unit { record } => {
+                    record.vitals = Some(vitals);
+                    record.health_handicap = requested;
+                }
+                _ => unreachable!("collected unit identity"),
+            }
+        }
+        Ok(())
     }
 
     /// Retain selected model assets on the existing executed units.
@@ -1868,6 +1911,7 @@ impl ObjectHost {
                 sleep: None,
                 vitals: None,
                 permanent_strength: 0,
+                health_handicap: 1.0,
                 combat: None,
             }
         };
@@ -1885,7 +1929,8 @@ impl ObjectHost {
             record.permanent_strength = saved.permanent_strength;
         }
         record.activity = self.prepare_unit_activity(&record.definition)?;
-        record.vitals = self.prepare_unit_vitals(&record.definition)?;
+        record.health_handicap = self.owner_health_handicap(record.owner)?;
+        record.vitals = self.prepare_unit_vitals(&record.definition, record.health_handicap)?;
         record.combat = self.prepare_unit_combat(&record.definition)?;
         if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
             let model = loader(&record.definition)
