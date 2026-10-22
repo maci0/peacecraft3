@@ -145,6 +145,11 @@ impl ObjectHost {
         self.events.subject = context.subject;
     }
 
+    /// Depth of spawned or resumed threads currently active.
+    pub(super) fn spawned_thread_depth(&self) -> usize {
+        self.threads.stack.len()
+    }
+
     /// Save the caller's context before a spawned thread installs its own.
     pub(super) fn enter_spawned_thread(&mut self) {
         let saved = (self.thread_context(), self.callbacks.len());

@@ -171,6 +171,33 @@ impl<H: Host> Host for RecordingHost<H> {
     fn leave_thread(&mut self) -> Result<(), String> {
         self.inner.leave_thread()
     }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.after_script_spawn()
+    }
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        let call = self.inner.begin_script_call(name, args)?;
+        if call.is_some() && name == "SetPlayerState" {
+            let sequence = self.next_sequence();
+            self.natives.push(NativeRecord {
+                sequence,
+                tick: self.tick,
+                name: name.into(),
+                args: args.to_vec(),
+                result: Value::Null,
+            });
+        }
+        Ok(call)
+    }
+    fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        self.inner.continue_script_call(value)
+    }
+    fn abort_script_calls(&mut self) {
+        self.inner.abort_script_calls();
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         let result = self.inner.native(name, args)?;
         let sequence = self.next_sequence();

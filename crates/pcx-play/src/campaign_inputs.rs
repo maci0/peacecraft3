@@ -732,6 +732,7 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
         }),
         timer_events: 65536,
         game_state_events: 65536,
+        player_state_events: 65536,
         stock: Some(StockBudget {
             max_records: 65536,
             shop,

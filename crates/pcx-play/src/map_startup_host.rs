@@ -86,6 +86,7 @@ pub struct MapStartupBudgets {
     pub regions: Option<RegionBudget>,
     pub timer_events: usize,
     pub game_state_events: usize,
+    pub player_state_events: usize,
     /// None keeps stock slot natives unsupported.
     pub stock: Option<StockBudget>,
     /// None keeps quest and quest-item natives unsupported.
@@ -701,7 +702,8 @@ pub fn assemble(
     object = object
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
-        .with_game_state_events(budgets.game_state_events)?;
+        .with_game_state_events(budgets.game_state_events)?
+        .with_player_state_events(budgets.player_state_events)?;
     if let Some(limit) = budgets.trigger_conditions {
         object = object.with_trigger_conditions(limit)?;
     }
@@ -924,6 +926,9 @@ impl Host for MapStartupHost {
     }
     fn leave_thread(&mut self) -> Result<(), String> {
         self.inner.leave_thread()
+    }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.after_script_spawn()
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {

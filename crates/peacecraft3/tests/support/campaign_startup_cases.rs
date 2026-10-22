@@ -179,6 +179,7 @@ native CreateTrigger takes nothing returns trigger
 native TriggerRegisterUnitEvent takes trigger which, unit u, unitevent event returns event
 native TriggerRegisterTimerExpireEvent takes trigger which, timer t returns event
 native TriggerRegisterGameStateEvent takes trigger which, gamestate state, limitop op, real limit returns event
+native TriggerRegisterPlayerStateEvent takes trigger which, player p, playerstate state, limitop op, real limit returns event
 native Filter takes code predicate returns filterfunc
 native CreateForce takes nothing returns force
 native ForceAddPlayer takes force which, player p returns nothing
@@ -198,6 +199,12 @@ globals
 constant fgamestate CLOCK = ConvertFGameState(2)
 constant igamestate IGAME = ConvertIGameState(1)
 constant limitop LIM = ConvertLimitOp(0)
+constant limitop LESS_THAN = ConvertLimitOp(0)
+constant limitop LESS_THAN_OR_EQUAL = ConvertLimitOp(1)
+constant limitop EQUAL = ConvertLimitOp(2)
+constant limitop GREATER_THAN_OR_EQUAL = ConvertLimitOp(3)
+constant limitop GREATER_THAN = ConvertLimitOp(4)
+constant limitop NOT_EQUAL = ConvertLimitOp(5)
 constant unitstate USTATE = ConvertUnitState(1)
 constant camerafield CFIELD = ConvertCameraField(1)
 constant playerstate PSTATE = ConvertPlayerState(1)
@@ -318,6 +325,7 @@ fn budgets() -> MapStartupBudgets {
         regions: None,
         timer_events: 4,
         game_state_events: 4,
+        player_state_events: 4,
         stock: None,
         quests: None,
         dialogs: None,

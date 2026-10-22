@@ -100,6 +100,17 @@ pub struct ObjectHost {
     trigger_runtime: Option<trigger_runtime::State>,
     unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
+    player_state_sync: Option<std::collections::VecDeque<event_delivery::FiredEvent>>,
+    player_state_sync_active: bool,
+    player_state_spawn_depth: usize,
+    player_state_callback_depth: usize,
+    player_state_conditions: Option<PlayerStateDelivery>,
+}
+/// Remaining callbacks for the event whose conditions just ran.
+pub(super) struct PlayerStateDelivery {
+    pub(super) conditions: Vec<pcx_script::value::FunctionId>,
+    pub(super) actions: Vec<pcx_script::value::FunctionId>,
+    pub(super) next: usize,
 }
 enum NativeCallback {
     Trigger(trigger_runtime::DirectCall),
@@ -231,6 +242,11 @@ impl ObjectHost {
             trigger_runtime: None,
             unit_range_runtime: None,
             callbacks: Vec::new(),
+            player_state_sync: None,
+            player_state_sync_active: false,
+            player_state_spawn_depth: 0,
+            player_state_callback_depth: 0,
+            player_state_conditions: None,
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -665,10 +681,23 @@ impl Host for ObjectHost {
         {
             return Ok(Some(call));
         }
+        if let Some(call) = self
+            .begin_synchronous_player_state_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        if self.player_state_conditions.is_some()
+            && self.callbacks.len() == self.player_state_callback_depth
+        {
+            return self
+                .continue_player_state_call(value)
+                .map_err(|e| e.to_string());
+        }
         match self.callbacks.last() {
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
@@ -677,8 +706,12 @@ impl Host for ObjectHost {
         }
         .map_err(|e| e.to_string())
     }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.after_player_state_spawn().map_err(|e| e.to_string())
+    }
     fn abort_script_calls(&mut self) {
         self.abort_native_callbacks();
+        self.abort_player_state_delivery();
         self.abort_threads();
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
@@ -1067,8 +1100,9 @@ pub use item_use::{UseCheck, UseCommit, UseGrant};
 mod trigger_admission;
 pub use trigger_admission::{
     DeathEventRegistration, GameStateEventRegistration, PlayerEventRegistration,
-    PlayerUnitEventRegistration, TimerEventRegistration, TriggerActionRecord, TriggerBudget,
-    TriggerConditionRegistration, UnitEventRegistration, UnitInRangeRegistration,
+    PlayerStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitEventRegistration,
+    UnitInRangeRegistration,
 };
 
 #[cfg(test)]
