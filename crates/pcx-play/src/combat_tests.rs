@@ -367,6 +367,18 @@ fn step(vm: &mut Vm, until: f64) {
     }
 }
 
+fn step_refused(vm: &mut Vm, until: f64) -> String {
+    let h = &mut vm.host().inner;
+    while h.timer_game_time().unwrap() < until {
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(error) = h.advance_unit_activity(next, &mut 65536) {
+            return error.to_string();
+        }
+    }
+    panic!("expected campaign targeting refusal");
+}
+
 #[test]
 fn killed_resource_unit_retains_amount_across_later_activity() {
     let mut fields = armed("1", "normal");
@@ -3722,15 +3734,58 @@ fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
             crate::campaign_targeting_policy::TargetingPolicy::fixture(),
             difficulty,
         );
-        step(&mut vm, 1.0 / 64.0);
+        vm.host().inner.enable_combat_trace(8);
+        let error = step_refused(&mut vm, 1.0 / 64.0);
+        assert!(error.contains("campaign targeting"), "{error}");
+        assert!(error.contains("optional scorer bands"), "{error}");
         assert_eq!(acquired(&mut vm, a), None);
+        assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
     }
 
     let (mut vm, a, b) = open(&wide_acquire());
     admit_targeting(&mut vm, 4, Some(true));
     create_for(&mut vm, b, *b"pso1", 48.0, 48.0);
+    vm.host().inner.enable_combat_trace(8);
+    let error = step_refused(&mut vm, 1.0 / 64.0);
+    assert!(error.contains("campaign targeting"), "{error}");
+    assert!(error.contains("unclassified special object"), "{error}");
+    assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+}
+
+#[test]
+fn campaign_targeting_empty_candidate_sets_do_not_require_scorer_bands() {
+    let (mut vm, a, b) = open(&wide_acquire());
+    admit_targeting_with(
+        &mut vm,
+        4,
+        Some(true),
+        crate::campaign_targeting_policy::TargetingPolicy::fixture(),
+        2,
+    );
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    h.enable_combat_trace(8);
     step(&mut vm, 1.0 / 64.0);
     assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+}
+
+#[test]
+fn campaign_targeting_refuses_destroyed_and_expired_effect_history() {
+    for (live, expires_at) in [(false, None), (true, Some(0.0))] {
+        let (mut vm, a, b) = open(&wide_acquire());
+        admit_targeting(&mut vm, 4, Some(true));
+        vm.host()
+            .inner
+            .test_record_effect_history(b, live, expires_at);
+        vm.host().inner.enable_combat_trace(8);
+        let error = step_refused(&mut vm, 1.0 / 64.0);
+        assert!(error.contains("campaign targeting"), "{error}");
+        assert!(error.contains("effect history"), "{error}");
+        assert_eq!(acquired(&mut vm, a), None);
+        assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+    }
 }
 
 #[test]
@@ -3738,8 +3793,12 @@ fn campaign_targeting_refuses_neutral_aggressive_candidates_and_keeps_explicit_t
     let (mut vm, a, _) = open(&wide_acquire());
     admit_targeting(&mut vm, 4, Some(true));
     vm.host().inner.set_neutral_aggressive(5);
-    step(&mut vm, 1.0 / 64.0);
+    vm.host().inner.enable_combat_trace(8);
+    let error = step_refused(&mut vm, 1.0 / 64.0);
+    assert!(error.contains("campaign targeting"), "{error}");
+    assert!(error.contains("neutral aggressive"), "{error}");
     assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
 
     let (mut vm, a, b) = open(&wide_acquire());
     admit_targeting(&mut vm, 4, Some(true));

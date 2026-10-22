@@ -97,28 +97,47 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Automatic acquisition for an idle weapon scan. `None` means no admitted
-    /// active policy applies, so the caller keeps its prior nearest-target rule.
-    /// `Err` names a native scorer term this host cannot derive; the caller then
-    /// leaves any previous target untouched.
-    pub(super) fn campaign_acquisition(
-        &self,
-        actor: HandleId,
-        candidates: &[(HandleId, f32)],
-    ) -> Option<Result<Option<HandleId>, &'static str>> {
+    /// The admitted target-heroes flag for `actor`, or `None` when no active
+    /// campaign AI context applies and the caller keeps its prior nearest rule.
+    pub(super) fn campaign_target_heroes(&self, actor: HandleId) -> Option<bool> {
         let state = self.campaign_targeting.as_ref()?;
         let owner = self.executed_unit(actor).ok()?.owner;
         let player = self.player_settings(owner).ok()?.number;
-        let enabled = *state.active.get(&player)?;
-        Some(self.score_campaign_candidates(state, enabled, candidates))
+        state.active.get(&player).copied()
     }
 
-    fn score_campaign_candidates(
+    /// Automatic acquisition for an idle weapon scan. `Err` names a native
+    /// scorer term this host cannot derive; the caller then leaves any previous
+    /// target untouched.
+    pub(super) fn campaign_acquisition<I>(
+        &self,
+        target_heroes: bool,
+        candidates: I,
+    ) -> Result<Option<HandleId>, &'static str>
+    where
+        I: IntoIterator<Item = (HandleId, f32)>,
+    {
+        let state = self
+            .campaign_targeting
+            .as_ref()
+            .ok_or("targeting policy is not admitted")?;
+        self.score_campaign_candidates(state, target_heroes, candidates)
+    }
+
+    fn score_campaign_candidates<I>(
         &self,
         state: &State,
         target_heroes: bool,
-        candidates: &[(HandleId, f32)],
-    ) -> Result<Option<HandleId>, &'static str> {
+        candidates: I,
+    ) -> Result<Option<HandleId>, &'static str>
+    where
+        I: IntoIterator<Item = (HandleId, f32)>,
+    {
+        let mut candidates = candidates.into_iter().peekable();
+        if candidates.peek().is_none() {
+            return Ok(None);
+        }
+
         let policy = &state.policy;
         let difficulty = self
             .game_difficulty
@@ -133,7 +152,7 @@ impl ObjectHost {
         let aggressive = self.combat.as_ref().and_then(|r| r.neutral_aggressive);
         let mut best: Option<(u32, f32, u64, HandleId)> = None;
         let mut heroes = 0usize;
-        for &(candidate, gap) in candidates {
+        for (candidate, gap) in candidates {
             let record = self
                 .executed_unit(candidate)
                 .map_err(|_| "candidate is not an executed unit")?;
@@ -148,11 +167,8 @@ impl ObjectHost {
             if aggressive == Some(owner) {
                 return Err("candidate is neutral aggressive");
             }
-            if self
-                .unit_effects()
-                .any(|(_, effect)| effect.unit == candidate)
-            {
-                return Err("candidate has live effects");
+            if self.unit_has_effect_history(candidate) {
+                return Err("candidate has effect history");
             }
 
             let hero = policy.hero_first <= rawcode[0] && rawcode[0] <= policy.hero_last;
@@ -161,14 +177,6 @@ impl ObjectHost {
             if hero && target_heroes && hero_band {
                 key |= policy.hero_priority_mask;
                 heroes += 1;
-            }
-            if hero
-                && record
-                    .abilities
-                    .as_ref()
-                    .is_some_and(|a| a.level(policy.highest_ability_rawcode) != 0)
-            {
-                return Err("candidate ability bands are not admitted");
             }
             let token = candidate.token();
             let replace = match best {

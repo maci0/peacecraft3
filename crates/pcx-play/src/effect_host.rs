@@ -69,6 +69,40 @@ impl ObjectHost {
             })
     }
 
+    /// Any effect identity ever attached to `unit`, including destroyed and expired
+    /// entries, which remain in the arena.
+    pub(super) fn unit_has_effect_history(&self, unit: HandleId) -> bool {
+        self.inner.arena.iter().any(|entry| {
+            matches!(
+                entry,
+                Entry::Effect {
+                    unit: attached, ..
+                } if *attached == unit
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_record_effect_history(
+        &mut self,
+        unit: HandleId,
+        live: bool,
+        expires_at: Option<f64>,
+    ) {
+        self.inner
+            .allocate(
+                Entry::Effect {
+                    model: "synthetic-history".into(),
+                    unit,
+                    attach_point: "origin".into(),
+                    live,
+                    expires_at,
+                },
+                ADD,
+            )
+            .unwrap();
+    }
+
     /// Attaches a live effect to an executed unit. Scripts and spell art share this path.
     pub(super) fn add_unit_effect(
         &mut self,

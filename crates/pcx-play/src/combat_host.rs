@@ -625,6 +625,22 @@ impl ObjectHost {
         self.hostile_owners(attacker.owner, target.owner)
     }
 
+    fn acquisition_candidate(
+        &self,
+        unit: HandleId,
+        owner: HandleId,
+        position: [f32; 2],
+        acquire: f32,
+        id: HandleId,
+    ) -> Option<(HandleId, f32)> {
+        if id == unit {
+            return None;
+        }
+        let other = self.weapon_target(id)?;
+        let gap = distance(other.position?, position);
+        (gap <= acquire && self.hostile_owners(owner, other.owner)).then_some((id, gap))
+    }
+
     pub(super) fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
         let rules = self.combat.as_ref().expect("combat");
         let (Ok(a), Ok(b)) = (self.player_settings(attacker), self.player_settings(target)) else {
@@ -1019,6 +1035,7 @@ impl ObjectHost {
             let held = record.activity.as_ref().is_some_and(|a| a.held());
             let destination = combat.attack_destination;
             let previous_target = combat.target;
+            let owner = record.owner;
             let resume = previous_target.is_some()
                 || record
                     .activity
@@ -1033,27 +1050,34 @@ impl ObjectHost {
                 if held {
                     target = self.hold_position_target(unit, weapon.range, name, &units)?;
                 } else if weapon.acquire > 0.0 {
-                    let candidates = units
-                        .iter()
-                        .filter_map(|&(id, _)| {
-                            if id == unit {
-                                return None;
-                            }
-                            let other = self.weapon_target(id)?;
-                            let gap = distance(other.position?, position);
-                            (gap <= weapon.acquire && self.hostile(record, other))
-                                .then_some((id, gap))
-                        })
-                        .collect::<Vec<_>>();
-                    match self.campaign_acquisition(unit, &candidates) {
-                        Some(Ok(acquired)) => target = acquired,
-                        Some(Err(_)) => {}
-                        None => {
-                            target = candidates
-                                .into_iter()
-                                .min_by(|a, b| a.1.total_cmp(&b.1))
-                                .map(|(id, _)| id);
-                        }
+                    if let Some(target_heroes) = self.campaign_target_heroes(unit) {
+                        let candidates = units.iter().filter_map(|&(id, _)| {
+                            self.acquisition_candidate(unit, owner, position, weapon.acquire, id)
+                        });
+                        target = self
+                            .campaign_acquisition(target_heroes, candidates)
+                            .map_err(|reason| {
+                                self.inner.error(
+                                    name,
+                                    Failure::UnitActivity(format!(
+                                        "campaign targeting for unit {unit:?}: {reason}"
+                                    )),
+                                )
+                            })?;
+                    } else {
+                        target = units
+                            .iter()
+                            .filter_map(|&(id, _)| {
+                                self.acquisition_candidate(
+                                    unit,
+                                    owner,
+                                    position,
+                                    weapon.acquire,
+                                    id,
+                                )
+                            })
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(id, _)| id);
                     }
                 }
             }
