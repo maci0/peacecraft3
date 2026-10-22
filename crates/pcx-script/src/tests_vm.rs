@@ -233,6 +233,27 @@ fn a_scalar_used_with_an_index_is_reported() {
 }
 
 #[test]
+fn undeclared_array_bases_are_refused_for_reads_and_writes() {
+    for statement in ["return Missing[0]", "set Missing[0] = 1"] {
+        let source =
+            format!("function f takes nothing returns integer\n {statement}\nendfunction\n");
+        let (line, _, message) = where_is(&source);
+        assert_eq!(line, 2);
+        assert!(
+            message.contains("name `Missing` is not declared"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn native_functions_cannot_be_used_as_array_bases() {
+    let source = "native Leaf takes integer value returns integer\nfunction f takes nothing returns integer\n return Leaf[0]\nendfunction\n";
+    let (_, _, message) = where_is(source);
+    assert!(message.contains("`Leaf` is a function"), "{message}");
+}
+
+#[test]
 fn a_trigger_string_is_not_an_unresolved_name() {
     // Footman Frenzy ships 862 of the literal form and the corpus 34,634
     // between both spellings.

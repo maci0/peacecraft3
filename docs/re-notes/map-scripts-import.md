@@ -18,6 +18,8 @@ wrong nested arities refuse compilation, and nested native calls contribute to
 the admission statistics. Previously only the outer expression call was checked;
 an undeclared call inside its arguments could escape this gate. Synthetic
 regressions cover these refusal paths and repeated nested-native accounting.
+Array access also resolves its base: undeclared arrays and indexed native
+functions refuse during compilation, for both reads and assignment targets.
 The correction passes 118 script, 1,427 core and 607 app tests, strict native/WASM
 Clippy and formatting. Three resolver process checks cover failure exit codes,
 stderr diagnostics and nested-native statistics. The selected Continue gate

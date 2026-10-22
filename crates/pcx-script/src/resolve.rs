@@ -852,13 +852,21 @@ impl<'a> Resolver<'a> {
                                 format!("`{}` is not an array", name.as_str()),
                             ));
                         }
-                    } else if self.functions_by_name.contains_key(name.as_str()) {
+                    } else if self.functions_by_name.contains_key(name.as_str())
+                        || self.natives.get(name.as_str()).is_some()
+                    {
                         return Err(crate::Error::resolve(
                             *span,
                             format!(
                                 "`{}` is a function, and a function cannot be indexed",
                                 name.as_str()
                             ),
+                        ));
+                    } else {
+                        self.resolve_name(name, *span, scope)?;
+                        return Err(crate::Error::resolve(
+                            *span,
+                            format!("`{}` is not an array", name.as_str()),
                         ));
                     }
                     self.check_expr(scope, Some(index))?;
