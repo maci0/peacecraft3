@@ -85,3 +85,21 @@ distance and the intervals between sampled checkpoints remain separate fidelity
 questions. Local source hashes, all records and the recovered launch receipt
 are in ignored `.scratch/harvest-cycle-probe-v2`. The launch wrapper timed out
 while its existing container continued initialization; no duplicate was started.
+
+## Model presentation evidence
+
+The selected `UnitUI.slk` binds `hpea.file` to
+`units\human\Peasant\Peasant`. The corresponding binary model has SHA-256
+`34fd116662fd076e538bd9c8ea65895ed72a0e593536b84d3994012575842b90`.
+An offline read through `pcx-mdl` retains its exact sequence intervals, loop
+flags and EVTS tracks in ignored `.scratch/mdx-peasant-probe/peasant.json`.
+The parser already exposes `Mdlx::event_nodes`; no new binary parser is needed.
+
+The model contains distinct ordinary, Gold and Lumber variants of Attack,
+Walk and Stand Work. Its `SNDXAREP` event occurs within the three Stand Work
+intervals. This establishes authored event placement, not the worker order
+that selects a sequence. In particular, the presence of a Lumber suffix does
+not establish that an empty worker moving toward a tree uses that variant.
+Order-to-sequence selection, carry-state transitions and sound playback remain
+unqualified; the measured tree damage/deposit cycle does not qualify those
+presentation details.
