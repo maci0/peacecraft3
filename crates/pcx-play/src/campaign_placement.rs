@@ -5,7 +5,9 @@ use crate::{
         DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
         DestructableStats, ObjectHost, PlacedDestructable, PlacedSource,
     },
-    unit_placement::{Budget, Footprint, Grid, Placement, Rules, StationaryKey, StationaryStamp},
+    unit_placement::{
+        Budget, Footprint, FootprintLoader, Grid, Placement, Rules, StationaryKey, StationaryStamp,
+    },
 };
 use pcx_assets::{AssetPath, Resolver};
 use pcx_objects::editor::{
@@ -252,6 +254,7 @@ pub fn assemble(
         reader,
         edition: context.sources.map.edition.clone(),
         cache: BTreeMap::new(),
+        staged: BTreeMap::new(),
         remaining_bytes: 16 << 20,
         remaining_cells: FOOTPRINT_CELLS,
     };
@@ -323,7 +326,7 @@ pub fn assemble(
     )
     .and_then(|p| p.with_stationary(base, layers))
     .map(|p| {
-        p.with_footprint_loader(move |path| textures.read(path).map(|f| f.as_ref().clone()))
+        p.with_staged_footprint_loader(TextureLoader { textures })
             .with_script_paths(move |id, dead| script_paths.resolve(id, dead))
     })
     .map_err(|e| e.to_string())
@@ -455,27 +458,87 @@ fn path(
     found.ok_or_else(|| format!("{name}: missing stationary catalog record"))
 }
 
+struct Staged {
+    footprint: Arc<Footprint>,
+    bytes: usize,
+    cells: usize,
+}
+
 struct Textures {
     reader: Arc<Resolver>,
     edition: String,
     cache: BTreeMap<String, Arc<Footprint>>,
+    staged: BTreeMap<String, Staged>,
     remaining_bytes: usize,
     remaining_cells: usize,
 }
 
 impl Textures {
     fn read(&mut self, path: &str) -> Result<Arc<Footprint>, String> {
-        if path.len() > 16 << 10 {
-            return Err("footprint path budget".into());
-        }
-        let key = AssetPath::new(path)
-            .map_err(|e| e.to_string())?
-            .as_str()
-            .to_owned();
+        let key = Self::key(path)?;
         if let Some(cached) = self.cache.get(&key) {
             return Ok(Arc::clone(cached));
         }
-        if self.cache.len() >= 256 {
+        let (footprint, _, _) = self.decode(path)?;
+        self.cache.insert(key, Arc::clone(&footprint));
+        Ok(footprint)
+    }
+
+    fn stage(&mut self, path: &str) -> Result<Arc<Footprint>, String> {
+        let key = Self::key(path)?;
+        if let Some(cached) = self.cache.get(&key) {
+            return Ok(Arc::clone(cached));
+        }
+        if let Some(staged) = self.staged.get(&key) {
+            return Ok(Arc::clone(&staged.footprint));
+        }
+        let (footprint, bytes, cells) = self.decode(path)?;
+        self.staged.insert(
+            key,
+            Staged {
+                footprint: Arc::clone(&footprint),
+                bytes,
+                cells,
+            },
+        );
+        Ok(footprint)
+    }
+
+    fn commit(&mut self, paths: &[String]) {
+        for path in paths {
+            let Ok(key) = Self::key(path) else {
+                continue;
+            };
+            if let Some(staged) = self.staged.remove(&key) {
+                self.cache.insert(key, staged.footprint);
+            }
+        }
+    }
+
+    fn rollback(&mut self, paths: &[String]) {
+        for path in paths {
+            let Ok(key) = Self::key(path) else {
+                continue;
+            };
+            if let Some(staged) = self.staged.remove(&key) {
+                self.remaining_bytes = self.remaining_bytes.saturating_add(staged.bytes);
+                self.remaining_cells = self.remaining_cells.saturating_add(staged.cells);
+            }
+        }
+    }
+
+    fn key(path: &str) -> Result<String, String> {
+        if path.len() > 16 << 10 {
+            return Err("footprint path budget".into());
+        }
+        Ok(AssetPath::new(path)
+            .map_err(|e| e.to_string())?
+            .as_str()
+            .to_owned())
+    }
+
+    fn decode(&mut self, path: &str) -> Result<(Arc<Footprint>, usize, usize), String> {
+        if self.cache.len() + self.staged.len() >= 256 {
             return Err("footprint source count budget".into());
         }
         let asset = self
@@ -497,18 +560,37 @@ impl Textures {
         }
         let rgba = pcx_tga::decode_with(&asset.bytes, &header).map_err(|e| e.to_string())?;
         let cells = raster(header.width, header.height, &rgba)?;
+        let cell_count = cells.len();
         let remaining_cells = self
             .remaining_cells
-            .checked_sub(cells.len())
+            .checked_sub(cell_count)
             .ok_or("footprint aggregate cell budget")?;
-        self.remaining_bytes = self
+        let bytes = asset.bytes.len();
+        let remaining_bytes = self
             .remaining_bytes
-            .checked_sub(asset.bytes.len())
+            .checked_sub(bytes)
             .ok_or("footprint source byte budget")?;
         self.remaining_cells = remaining_cells;
-        let result = Arc::new(Footprint { origin, cells });
-        self.cache.insert(key, Arc::clone(&result));
-        Ok(result)
+        self.remaining_bytes = remaining_bytes;
+        Ok((Arc::new(Footprint { origin, cells }), bytes, cell_count))
+    }
+}
+
+struct TextureLoader {
+    textures: Textures,
+}
+
+impl FootprintLoader for TextureLoader {
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        self.textures.stage(path).map(|f| f.as_ref().clone())
+    }
+
+    fn commit(&mut self, paths: &[String]) {
+        self.textures.commit(paths);
+    }
+
+    fn rollback(&mut self, paths: &[String]) {
+        self.textures.rollback(paths);
     }
 }
 
@@ -997,6 +1079,138 @@ mod tests {
             );
             assert!(catalog.scripted_sources().is_err());
         }
+    }
+
+    struct TextureSource {
+        info: pcx_assets::SourceInfo,
+        files: BTreeMap<String, Vec<u8>>,
+    }
+
+    impl TextureSource {
+        fn new(files: &[(&str, Vec<u8>)]) -> Self {
+            Self {
+                info: pcx_assets::SourceInfo {
+                    id: "synthetic-textures".into(),
+                    kind: pcx_assets::LayerKind::Mpq,
+                    origin: "synthetic-textures.mpq".into(),
+                    version: Some("fixture".into()),
+                },
+                files: files
+                    .iter()
+                    .map(|(path, bytes)| ((*path).into(), bytes.clone()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl pcx_assets::ContentSource for TextureSource {
+        fn info(&self) -> &pcx_assets::SourceInfo {
+            &self.info
+        }
+
+        fn paths(&self) -> Result<Vec<String>, pcx_assets::SourceError> {
+            Ok(self.files.keys().cloned().collect())
+        }
+
+        fn read(
+            &self,
+            member: &str,
+        ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+            Ok(self
+                .files
+                .get(member)
+                .map(|bytes| pcx_assets::SourceContent {
+                    bytes: bytes.clone(),
+                    declared_length: bytes.len() as u64,
+                    locator: member.into(),
+                }))
+        }
+
+        fn read_bounded(
+            &self,
+            member: &str,
+            limit: u64,
+        ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+            let Some(bytes) = self.files.get(member) else {
+                return Ok(None);
+            };
+            if bytes.len() as u64 > limit {
+                return Err(pcx_assets::SourceError::Limit {
+                    requested: bytes.len() as u64,
+                    limit,
+                });
+            }
+            self.read(member)
+        }
+    }
+
+    fn texture(width: u16, height: u16, pixels: &[[u8; 3]]) -> Vec<u8> {
+        let mut bytes = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        bytes.extend(width.to_le_bytes());
+        bytes.extend(height.to_le_bytes());
+        bytes.extend([24, 0x20]);
+        for [r, g, b] in pixels {
+            bytes.extend([*b, *g, *r]);
+        }
+        bytes
+    }
+
+    fn textures(files: &[(&str, Vec<u8>)]) -> Textures {
+        Textures {
+            reader: Arc::new(
+                Resolver::new(
+                    pcx_assets::GameMode::default(),
+                    None,
+                    vec![pcx_assets::ArchiveLayer {
+                        priority: 1,
+                        source: Box::new(TextureSource::new(files)),
+                    }],
+                )
+                .unwrap(),
+            ),
+            edition: "synthetic".into(),
+            cache: BTreeMap::new(),
+            staged: BTreeMap::new(),
+            remaining_bytes: 4096,
+            remaining_cells: 8,
+        }
+    }
+
+    #[test]
+    fn staged_texture_loads_only_charge_the_retained_budget_when_committed() {
+        let mut textures = textures(&[
+            (
+                "live.tga",
+                texture(2, 2, &[[255; 3], [0; 3], [0; 3], [0; 3]]),
+            ),
+            (
+                "dead.tga",
+                texture(2, 2, &[[0; 3], [255; 3], [0; 3], [0; 3]]),
+            ),
+        ]);
+        let bytes = textures.remaining_bytes;
+        let cells = textures.remaining_cells;
+        let live = textures.stage("live.tga").unwrap();
+        assert_eq!(live.cells, vec![[-1, -1]]);
+        assert_eq!(textures.staged.len(), 1);
+        assert!(textures.cache.is_empty());
+        assert_eq!(textures.remaining_bytes, bytes - 30);
+        assert_eq!(textures.remaining_cells, cells - 1);
+        assert!(Arc::ptr_eq(&live, &textures.stage("live.tga").unwrap()));
+        assert_eq!(textures.staged.len(), 1);
+        textures.rollback(&["live.tga".into()]);
+        assert!(textures.staged.is_empty());
+        assert!(textures.cache.is_empty());
+        assert_eq!(textures.remaining_bytes, bytes);
+        assert_eq!(textures.remaining_cells, cells);
+
+        textures.stage("live.tga").unwrap();
+        textures.commit(&["LIVE.TGA".into()]);
+        assert!(textures.staged.is_empty());
+        assert!(textures.cache.contains_key("live.tga"));
+        assert_eq!(textures.remaining_cells, cells - 1);
+        textures.stage("live.tga").unwrap();
+        assert_eq!(textures.remaining_cells, cells - 1);
     }
 
     #[test]
