@@ -45,6 +45,21 @@ pub(crate) fn reprice_max_life(
         .map_err(|e| format!("max life change: {e}"))
 }
 
+/// Mana pools after a signed intelligence change, keeping the current/max ratio rounded with
+/// half upward. `mana_per_intelligence` is the selected intelligence-to-mana coefficient.
+pub(crate) fn reprice_mana(
+    mana: f32,
+    max_mana: f32,
+    mana_per_intelligence: f32,
+    intelligence_delta: i32,
+) -> Result<(f32, f32), String> {
+    if !mana_per_intelligence.is_finite() {
+        return Err("intelligence mana change: non-finite mana per intelligence".into());
+    }
+    let change = round_life(intelligence_delta as f32 * mana_per_intelligence);
+    change_mana_pools(mana, max_mana, change).map_err(|e| format!("intelligence mana change: {e}"))
+}
+
 /// Final pools stored for a holder: a living holder keeps at least one hit point, while a dead
 /// holder stays at zero. The pool projection and every write use this same clamp.
 pub(crate) fn clamp_life_pools(life: f32, max_life: f32, dead: bool) -> (f32, f32) {
@@ -54,6 +69,12 @@ pub(crate) fn clamp_life_pools(life: f32, max_life: f32, dead: bool) -> (f32, f3
         life.max(1.0).min(max_life)
     };
     (life, max_life)
+}
+
+/// Mana has no living floor: a holder may keep exactly zero current mana, including after a pool
+/// change. Death does not clear mana, so this clamp is independent of the combat state.
+pub(crate) fn clamp_mana_pools(mana: f32, max_mana: f32) -> (f32, f32) {
+    (mana.max(0.0).min(max_mana), max_mana)
 }
 
 fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
@@ -68,6 +89,21 @@ fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32)
         return Err("new maximum life is not positive".into());
     }
     Ok((round_life(new_max * (life / max_life)), new_max))
+}
+
+fn change_mana_pools(mana: f32, max_mana: f32, change: f32) -> Result<(f32, f32), String> {
+    if !mana.is_finite() || !max_mana.is_finite() || !change.is_finite() {
+        return Err("non-finite mana value".into());
+    }
+    if max_mana < 0.0 || !(0.0..=max_mana).contains(&mana) {
+        return Err("mana pools must satisfy 0 <= mana <= max_mana".into());
+    }
+    let new_max = max_mana + change;
+    if !new_max.is_finite() || new_max < 0.0 {
+        return Err("new maximum mana is negative".into());
+    }
+    let ratio = if max_mana > 0.0 { mana / max_mana } else { 0.0 };
+    Ok((round_life(new_max * ratio).min(new_max), new_max))
 }
 
 /// Applies `effect` to a hero's retained strength and life pools, or refuses without changes.
@@ -156,6 +192,23 @@ mod tests {
     fn removing_strength_scales_life_back_and_refuses_a_nonpositive_maximum() {
         assert_eq!(reprice_life(75.0, 150.0, 25.0, -2).unwrap(), (50.0, 100.0));
         assert!(reprice_life(10.0, 100.0, 25.0, -4).is_err());
+    }
+
+    #[test]
+    fn intelligence_reprices_mana_with_half_up_rounding_and_a_zero_floor() {
+        assert_eq!(reprice_mana(1.0, 4.0, 2.0, 1).unwrap(), (2.0, 6.0));
+        assert_eq!(reprice_mana(0.0, 4.0, 2.0, 1).unwrap(), (0.0, 6.0));
+        assert_eq!(reprice_mana(6.0, 6.0, 2.0, -1).unwrap(), (4.0, 4.0));
+        assert!(reprice_mana(1.0, 4.0, f32::NAN, 1).is_err());
+        assert!(reprice_mana(1.0, 4.0, 2.0, i32::MIN).is_err());
+    }
+
+    #[test]
+    fn mana_clamp_keeps_zero_and_never_touches_dead_state() {
+        assert_eq!(clamp_mana_pools(-1.0, 100.0), (0.0, 100.0));
+        assert_eq!(clamp_mana_pools(25.0, 100.0), (25.0, 100.0));
+        assert_eq!(clamp_mana_pools(125.0, 100.0), (100.0, 100.0));
+        assert_eq!(clamp_mana_pools(0.0, 0.0), (0.0, 0.0));
     }
 
     #[test]

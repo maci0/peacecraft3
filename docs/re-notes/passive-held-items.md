@@ -2,8 +2,8 @@
 
 ## Implemented behavior
 
-A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength and agility
-of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`,
+A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength, agility and
+intelligence of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`,
 maximum life from `AIml`, life regeneration from `Arel`, and a mana-regeneration fraction from
 `AIrm` while held. The unit total is the retained powerup strength plus the held passive totals,
 derived on demand from the held slots, so no add/remove state exists.
@@ -13,16 +13,20 @@ derived on demand from the held slots, so no add/remove state exists.
 - Equip and drop reprice life by the strength and maximum-life changes with the current/max
   ratio policy, the same native path the powerup grant uses (`b3dd30` → `b3fd00` → mode 1
   `6be8c0`). The ratio is rounded with half upward.
-- Transfer is a drop from the holder followed by an equip on the receiver. Strength applies only
-  to heroes; maximum life applies to any receiver with vitals.
+- Equip and drop reprice mana by the intelligence change times the admitted
+  intelligence-to-mana coefficient with the same ratio and half-up rounding. Mana may be zero,
+  so it has no living-life minimum of one.
+- Transfer is a drop from the holder followed by an equip on the receiver. Strength and
+  intelligence apply only to heroes; maximum life applies to any receiver with vitals. A pure
+  intelligence item is accepted on a non-hero but has no modeled attribute or mana effect.
 - Death drops eligible held items through the existing `forget_inventory_unit` path, which
-  reprices life and maximum life. A held item that is not dropped retains its maximum-life
-  contribution.
+  reprices life, maximum life and mana. A held item that is not dropped retains its
+  maximum-life and mana contributions. Death itself does not clear current mana, and removal
+  while dead still reprices mana by the rounded ratio instead of forcing zero.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
-- Passive rows whose abilities are outside the admitted class, or whose intelligence bonus would
-  need the unqualified mana path, refuse the pickup atomically with a diagnostic. No slot,
-  event, life or held state is written before the refusal.
+- Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
+  with a diagnostic. No slot, event, pool or held state is written before the refusal.
 
 Stored versus derived totals is an internal recreation choice. The observable equip, drop,
 transfer, death and level results are what the tests check.
@@ -36,7 +40,8 @@ transfer, death and level results are what the tests check.
   client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
 - Attribute metadata: `Iagi`, `Iint`, `Istr`, `Idef`, `Iatt`, `Ilif`, `Ihpr` and `Imrp`
   `useSpecific` lists must admit the item's ability alias. Amounts come from `Data{column}1`
-  through `W3A` overlays. No ID or amount is written in code.
+  through `W3A` overlays. In the selected metadata, `Iint` uses Data column 2. No ID or amount
+  is written in code.
 - The base class `APbo` is a native class with no ability row, so it is not checked.
 - The item's ability alias (for example `AIa4`) and its code (`AIab`) differ. The class check uses
   the code, which the registration names.
@@ -58,28 +63,24 @@ campaign placements:
 | **total passive** | **133** |
 
 Census gate `local_original_held_item_census_partitions_every_row` (`PCX_TOME_CLIENT`,
-`PCX_TOME_CATALOG`, `--ignored`) prints `census passive rows with abilities=107 supported=13`
-and, over all 273 rows, `none=140 supported=39 refused=94`. The 39 includes the 26 empty-list
-passive rows (no effect). Refusals are all passive rows with an ability list (13 + 94 = 107):
+`PCX_TOME_CATALOG`, `--ignored`) partitions every selected row. The counts below predate the
+armor, damage, maximum-life and intelligence families and are retained as the initial audit;
+rerun the gate for current counts.
 
-The counts below predate the armor, damage and maximum-life families and are retained as the initial audit;
-rerun `local_original_held_item_census_partitions_every_row` for current counts.
-
-| refusal | rows |
+| initial refusal | rows |
 |---|---|
 | passive ability of a family other than `AIab` (life, mana, attack speed, and others) | 79 |
-| `AIab` row with an intelligence bonus (mana path unqualified) | 12 |
+| `AIab` row with an intelligence bonus (then the mana path was unqualified) | 12 |
 | `AIab` alias not admitted by the attribute metadata | 3 |
 
-Campaign placement impact is not measured. These are catalog facts. The table is the initial
-audit, before armor, damage and maximum-life rows were admitted; rerun the gate for current counts. A row still
-outside the admitted families fails the pickup call with a diagnostic instead of applying a
-silent wrong stat.
+The 12 intelligence rows are now admitted through `Iint` and the mana projection path.
+Campaign placement impact is not measured. A row still outside the admitted families fails the
+pickup call with a diagnostic instead of applying a silent wrong stat.
 
 ## Original-source gates
 
 - `hval` (strength 4, agility 4 from source rows) reads as supported with those amounts.
-- `hcun` (intelligence bonus) refuses with the intelligence diagnostic.
+- `hcun` (intelligence bonus) reads as supported with a non-zero intelligence total.
 - `crys` (usable) reads as not passive.
 
 ## Not verified and not implemented
@@ -88,18 +89,18 @@ silent wrong stat.
   `0xbc6d20` and `0xbc6d50` were surveyed without confirmation. The apply callback is `0xbc5520`
   at vtable `+0x430`. This is an internal implementation detail, not a fidelity gap, because the
   observable results are tested.
-- Life and mana behavior on drop, and on death of a passive holder, has no original runtime
-  capture here. The ratio policy on drop is the same native path as the grant, with the negative
-  delta. For life this is a faithful derivation, not a measured observation. The mana probe shows
-  the held contribution disappearing on drop, but not the exact native rate composition.
-- Intelligence bonuses and their mana pool (`b3feb0` route unqualified).
+- Life behavior on drop, and on death of a passive holder, has no original runtime capture here.
+  The ratio policy on drop is the same native path as the grant, with the negative delta. For
+  life this is a faithful derivation, not a measured observation. Mana drops and dead-holder
+  removal are measured in the controlled RoC mana probes.
+- The source of the revival current-mana value is not qualified.
 - Usable item activation (`UnitUseItem`) and its charges.
 - Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `Arel` and `AIrm`: mana (`AIrn`
   auras and other classes), armor (`AIsb`), attack speed (`AIas`), and the rest of the refused
   rows.
-- Non-hero passive equip: strength and agility still produce no hero pools, while armor, flat
-  damage and maximum life are accepted for any unit with vitals. Native behavior for non-hero
-  strength/agility is not verified.
+- Non-hero passive equip: pure intelligence is accepted with no modeled effect, while strength
+  and agility still refuse. Armor, flat damage and maximum life are accepted for any unit with
+  vitals. Native behavior for non-hero strength/agility is not verified.
 - Powerup `get_items` gating and non-hero powerup targets remain documented gaps in
   `inventory-powerup.md`. They are fidelity gaps, not permission gates.
 
