@@ -2632,6 +2632,12 @@ fn position_host_admitting(
         ("GetUnitX", "unit u", "real", true),
         ("GetUnitY", "unit u", "real", true),
         (
+            "GroupEnumUnitsOfPlayer",
+            "group g, player p, boolexpr b",
+            "nothing",
+            false,
+        ),
+        (
             "GroupEnumUnitsInRect",
             "group g, rect r, boolexpr b",
             "nothing",
