@@ -103,17 +103,17 @@ pub struct ObjectHost {
     trigger_runtime: Option<trigger_runtime::State>,
     unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
-    player_state_frames: Vec<PlayerStateFrame>,
+    synchronous_frames: Vec<SynchronousFrame>,
 }
-pub(super) struct PlayerStateFrame {
+pub(super) struct SynchronousFrame {
     events: std::collections::VecDeque<event_delivery::FiredEvent>,
     active: bool,
     spawn_depth: usize,
     callback_depth: usize,
-    conditions: Option<PlayerStateDelivery>,
+    conditions: Option<SynchronousDelivery>,
 }
 /// Remaining callbacks for the event whose conditions just ran.
-pub(super) struct PlayerStateDelivery {
+pub(super) struct SynchronousDelivery {
     pub(super) conditions: Vec<pcx_script::value::FunctionId>,
     pub(super) actions: Vec<pcx_script::value::FunctionId>,
     pub(super) next: usize,
@@ -268,7 +268,7 @@ impl ObjectHost {
             trigger_runtime: None,
             unit_range_runtime: None,
             callbacks: Vec::new(),
-            player_state_frames: Vec::new(),
+            synchronous_frames: Vec::new(),
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -704,6 +704,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_synchronous_destructable_death_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_player_state_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -713,11 +719,11 @@ impl Host for ObjectHost {
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        if self.player_state_frames.last().is_some_and(|frame| {
+        if self.synchronous_frames.last().is_some_and(|frame| {
             frame.conditions.is_some() && self.callbacks.len() == frame.callback_depth
         }) {
             return self
-                .continue_player_state_call(value)
+                .continue_synchronous_call(value)
                 .map_err(|e| e.to_string());
         }
         match self.callbacks.last() {
@@ -729,12 +735,12 @@ impl Host for ObjectHost {
         .map_err(|e| e.to_string())
     }
     fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
-        self.after_player_state_spawn().map_err(|e| e.to_string())
+        self.after_synchronous_spawn().map_err(|e| e.to_string())
     }
     fn abort_script_calls(&mut self) {
-        self.abort_native_callbacks();
-        self.abort_player_state_delivery();
         self.abort_threads();
+        self.abort_native_callbacks();
+        self.abort_synchronous_delivery();
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.thread_sleep_requested(name, args)

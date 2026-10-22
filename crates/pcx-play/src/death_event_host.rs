@@ -3,6 +3,8 @@ use super::{Entry, Error, Failure, ObjectHost, loaded_type};
 use pcx_script::{HandleId, Value};
 
 pub(super) const REGISTER: &str = "TriggerRegisterDeathEvent";
+const CONVERT_EVENT: &str = "ConvertWidgetEvent";
+const DEATH_EVENT: &str = "EVENT_WIDGET_DEATH";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeathEventRegistration {
@@ -28,22 +30,23 @@ impl ObjectHost {
             false,
             Some("event"),
         )?;
-        let source = &self
+        let source = self
             .inner
             .program
             .natives()
             .get(REGISTER)
             .expect("checked contract")
-            .source;
+            .source
+            .clone();
         for name in ["CreateTrigger", "CreateUnit", "CreateDestructable"] {
             if let Some(native) = self.inner.program.natives().get(name)
-                && &native.source != source
+                && native.source != source
             {
                 return Err(self.inner.error(REGISTER, Failure::Source));
             }
         }
         for (name, parent) in [("widget", "agent"), ("unit", "widget")] {
-            loaded_type(&self.inner, REGISTER, name, parent, source)?;
+            loaded_type(&self.inner, REGISTER, name, parent, &source)?;
         }
         if self
             .inner
@@ -51,13 +54,95 @@ impl ObjectHost {
             .types()
             .any(|ty| ty.name == "destructable")
         {
-            loaded_type(&self.inner, REGISTER, "destructable", "widget", source)?;
+            loaded_type(&self.inner, REGISTER, "destructable", "widget", &source)?;
         }
+        for (name, result, kind) in [
+            ("GetTriggerWidget", "widget", "widget"),
+            ("GetTriggerDestructable", "destructable", "destructable"),
+        ] {
+            if self.inner.program.natives().get(name).is_some() {
+                Self::contract(&self.inner, name, &[], result, true, Some(kind))?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .is_none_or(|n| n.source != source)
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
+        let death_event = self.widget_death_event(&source)?;
         self.triggers
             .as_mut()
             .expect("admitted above")
             .death_event_limit = Some(max_records);
+        self.triggers.as_mut().expect("admitted above").death_event = death_event;
         Ok(self)
+    }
+
+    /// Derive the selected widget-death event handle from the source global and
+    /// its admitted conversion. Absence of the global leaves the event unset.
+    pub(crate) fn widget_death_event(&mut self, source: &str) -> Result<Option<HandleId>, Error> {
+        if !self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .any(|g| g.name == DEATH_EVENT)
+        {
+            return Ok(None);
+        }
+        Self::contract(
+            &self.inner,
+            CONVERT_EVENT,
+            &["integer"],
+            "widgetevent",
+            true,
+            None,
+        )?;
+        let conversion = self
+            .inner
+            .conversions()
+            .find(|c| c.name == CONVERT_EVENT && c.kind == "widgetevent")
+            .ok_or_else(|| self.inner.error(CONVERT_EVENT, Failure::Signature))?;
+        if conversion.source != source
+            || conversion.domain.is_empty()
+            || self
+                .inner
+                .program
+                .natives()
+                .get(CONVERT_EVENT)
+                .is_none_or(|n| n.source != source)
+        {
+            return Err(self.inner.error(CONVERT_EVENT, Failure::Source));
+        }
+        loaded_type(&self.inner, DEATH_EVENT, "widgetevent", "eventid", source)?;
+        loaded_type(&self.inner, DEATH_EVENT, "eventid", "handle", source)?;
+        let enumerand = self.source_constant_enumerand(DEATH_EVENT, "widgetevent")?;
+        Ok(Some(
+            match self
+                .inner
+                .convert_for(CONVERT_EVENT, &[Value::Int(enumerand)])
+                .map_err(|e| self.inner.error(DEATH_EVENT, e.failure))?
+            {
+                Value::Handle(event) => event,
+                _ => return Err(self.inner.error(DEATH_EVENT, Failure::Signature)),
+            },
+        ))
+    }
+
+    pub(crate) fn destructable_death_registered(&self) -> bool {
+        self.triggers.as_ref().is_some_and(|admitted| {
+            admitted.death_event_limit.is_some() && admitted.retained_death_events > 0
+        })
+    }
+
+    pub(crate) fn destructable_death_event_handle(&self) -> Option<HandleId> {
+        self.triggers
+            .as_ref()
+            .and_then(|admitted| admitted.death_event)
     }
 
     pub fn retained_death_events(&self) -> Result<usize, Error> {

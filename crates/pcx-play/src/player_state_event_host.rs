@@ -2,7 +2,7 @@
 //! value. The central player-state mutation path queues qualifying changes as
 //! they happen; a boundary poll catches effective changes computed outside that
 //! path, such as live food.
-use super::super::{PlayerStateDelivery, PlayerStateFrame};
+use super::super::{SynchronousDelivery, SynchronousFrame};
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, ScriptCall, Value};
 pub(super) const REGISTER: &str = "TriggerRegisterPlayerStateEvent";
@@ -27,72 +27,84 @@ impl ObjectHost {
         {
             return Ok(None);
         }
-        if self.player_state_frames.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
-            return Err(self
-                .inner
-                .error(SET, Failure::Budget("nested player-state callbacks")));
-        }
-        self.player_state_frames
-            .try_reserve(1)
-            .map_err(|_| self.inner.error(SET, Failure::Capacity))?;
+        self.prepare_synchronous_frame(SET)?;
         self.begin_synchronous_delivery();
         let result = self.request_player_state(args);
         let Some(events) = self.take_synchronous_delivery() else {
             return Err(self.inner.error(
-                "player state delivery",
+                "synchronous event delivery",
                 Failure::TriggerState("synchronous batch disappeared"),
             ));
         };
         result?;
-        if events.is_empty() {
-            return Ok(Some(ScriptCall::Return(Value::Null)));
+        self.begin_synchronous_events(events).map(Some)
+    }
+
+    pub(crate) fn prepare_synchronous_frame(&mut self, source: &str) -> Result<(), Error> {
+        if self.synchronous_frames.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(source, Failure::Budget("nested synchronous callbacks")));
         }
-        self.player_state_frames.push(PlayerStateFrame {
+        self.synchronous_frames
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(source, Failure::Capacity))
+    }
+
+    pub(crate) fn begin_synchronous_events(
+        &mut self,
+        events: std::collections::VecDeque<super::super::event_delivery::FiredEvent>,
+    ) -> Result<ScriptCall, Error> {
+        if events.is_empty() {
+            return Ok(ScriptCall::Return(Value::Null));
+        }
+        self.synchronous_frames.push(SynchronousFrame {
             events,
             active: false,
             spawn_depth: 0,
             callback_depth: 0,
             conditions: None,
         });
-        self.begin_next_player_state_event().map(Some)
+        self.begin_next_synchronous_event()
     }
 
-    fn begin_next_player_state_event(&mut self) -> Result<ScriptCall, Error> {
+    fn begin_next_synchronous_event(&mut self) -> Result<ScriptCall, Error> {
         loop {
             let Some(event) = self
-                .player_state_frames
+                .synchronous_frames
                 .last_mut()
                 .and_then(|frame| frame.events.pop_front())
             else {
-                self.player_state_frames.pop();
+                self.synchronous_frames.pop();
                 return Ok(ScriptCall::Return(Value::Null));
             };
             let filter = event.filter;
             let Some(delivery) = self.begin_player_state_fired_event(&event)? else {
                 continue;
             };
-            self.player_state_frames
+            self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .active = true;
             let mut conditions = Vec::new();
             let count = usize::from(filter.is_some()) + delivery.conditions.len();
-            conditions
-                .try_reserve_exact(count)
-                .map_err(|_| self.inner.error("player state delivery", Failure::Capacity))?;
+            conditions.try_reserve_exact(count).map_err(|_| {
+                self.inner
+                    .error("synchronous event delivery", Failure::Capacity)
+            })?;
             conditions.extend(filter);
             conditions.extend(delivery.conditions);
             if conditions.is_empty() {
                 if delivery.actions.is_empty() {
                     self.finish_fired_event();
-                    self.player_state_frames
+                    self.synchronous_frames
                         .last_mut()
                         .expect("active state call")
                         .active = false;
                     continue;
                 }
                 let depth = self.spawned_thread_depth();
-                self.player_state_frames
+                self.synchronous_frames
                     .last_mut()
                     .expect("active state call")
                     .spawn_depth = depth;
@@ -101,11 +113,11 @@ impl ObjectHost {
             }
             let first = conditions[0];
             let frame = self
-                .player_state_frames
+                .synchronous_frames
                 .last_mut()
                 .expect("active state call");
             frame.callback_depth = self.callbacks.len();
-            frame.conditions = Some(PlayerStateDelivery {
+            frame.conditions = Some(SynchronousDelivery {
                 conditions,
                 actions: delivery.actions,
                 next: 1,
@@ -114,38 +126,38 @@ impl ObjectHost {
         }
     }
 
-    pub(crate) fn continue_player_state_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
-        let fail = |reason| self.inner.error("player state delivery", reason);
+    pub(crate) fn continue_synchronous_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
+        let fail = |reason| self.inner.error("synchronous event delivery", reason);
         let Value::Bool(accepted) = value else {
             return Err(fail(Failure::TriggerState(
                 "player state condition did not return boolean",
             )));
         };
         let Some(frame) = self
-            .player_state_frames
+            .synchronous_frames
             .last_mut()
             .and_then(|frame| frame.conditions.as_mut())
         else {
             return Err(fail(Failure::TriggerState("no active delivery")));
         };
         if !accepted {
-            self.player_state_frames
+            self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .conditions = None;
             self.finish_fired_event();
-            self.player_state_frames
+            self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .active = false;
-            return self.begin_next_player_state_event();
+            return self.begin_next_synchronous_event();
         }
         if let Some(&next) = frame.conditions.get(frame.next) {
             frame.next += 1;
             return Ok(ScriptCall::Call(next));
         }
         let frame = self
-            .player_state_frames
+            .synchronous_frames
             .last_mut()
             .expect("active state call")
             .conditions
@@ -153,14 +165,14 @@ impl ObjectHost {
             .expect("checked active delivery");
         if frame.actions.is_empty() {
             self.finish_fired_event();
-            self.player_state_frames
+            self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .active = false;
-            self.begin_next_player_state_event()
+            self.begin_next_synchronous_event()
         } else {
             let depth = self.spawned_thread_depth();
-            self.player_state_frames
+            self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .spawn_depth = depth;
@@ -169,23 +181,23 @@ impl ObjectHost {
         }
     }
 
-    pub(crate) fn after_player_state_spawn(&mut self) -> Result<Option<ScriptCall>, Error> {
+    pub(crate) fn after_synchronous_spawn(&mut self) -> Result<Option<ScriptCall>, Error> {
         let depth = self.spawned_thread_depth();
-        if self.player_state_frames.last().is_none_or(|frame| {
+        if self.synchronous_frames.last().is_none_or(|frame| {
             !frame.active || frame.conditions.is_some() || depth != frame.spawn_depth
         }) {
             return Ok(None);
         }
         self.finish_fired_event();
-        self.player_state_frames
+        self.synchronous_frames
             .last_mut()
             .expect("active state call")
             .active = false;
-        self.begin_next_player_state_event().map(Some)
+        self.begin_next_synchronous_event().map(Some)
     }
 
-    pub(crate) fn abort_player_state_delivery(&mut self) {
-        while let Some(frame) = self.player_state_frames.pop() {
+    pub(crate) fn abort_synchronous_delivery(&mut self) {
+        while let Some(frame) = self.synchronous_frames.pop() {
             if frame.active {
                 self.finish_fired_event();
             }

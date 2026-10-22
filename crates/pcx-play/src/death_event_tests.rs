@@ -1,9 +1,15 @@
+use super::super::destructable_creation::life_catalog;
 use super::{
     Counting, EXTRAS, budget, common_source, enum_input, enumerated, slots_rule, source,
     trigger_limits, unit_limits,
 };
 use crate::map_admission::ParsedMapContext;
-use crate::playercolor_host::{DeathEventRegistration, DestructableBudget, Failure, ObjectHost};
+use crate::playercolor_host::{
+    ConditionBudget, DeathEventRegistration, DestructableBudget, EnumHost, Failure, FilterBudget,
+    Limits, ObjectHost, PlayerStateRequestBudget, TriggerRuntimeInput,
+};
+use crate::scripts::OwnedLocalizedHost;
+use pcx_script::OwnedVm;
 use pcx_script::{HandleId, Host, Value};
 use std::sync::{Arc, atomic::AtomicUsize};
 
@@ -228,4 +234,562 @@ fn opt_in_contract_source_ancestry_and_platform_limits_are_checked() {
     let (_, inner) = enum_input(&common(), EMPTY, 64);
     let h = ObjectHost::checked(inner).unwrap();
     assert!(h.with_death_events(1).is_err());
+}
+
+const DEATH_EXTRAS: &str = "\
+type destructable extends widget
+type widgetevent extends eventid
+type gameevent extends eventid
+type triggeraction extends handle
+native CreateDestructable takes integer id, real x, real y, real f, real s, integer v returns destructable
+native CreateTrigger takes nothing returns trigger
+native TriggerRegisterDeathEvent takes trigger t, widget w returns event
+native TriggerAddAction takes trigger t, code actionFunc returns triggeraction
+constant native ConvertWidgetEvent takes integer i returns widgetevent
+constant native ConvertGameEvent takes integer i returns gameevent
+constant native GetTriggeringTrigger takes nothing returns trigger
+constant native GetTriggerEventId takes nothing returns eventid
+constant native GetTriggerWidget takes nothing returns widget
+constant native GetTriggerDestructable takes nothing returns destructable
+native SetDestructableLife takes destructable d, real life returns nothing
+native KillDestructable takes destructable d returns nothing
+native DestructableRestoreLife takes destructable d, boolean birth returns nothing
+native GetDestructableLife takes destructable d returns real
+native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
+native TriggerRegisterTimerExpireEvent takes trigger t, timer which returns event
+native TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic returns event
+native DestroyTrigger takes trigger t returns nothing
+native TimerGetElapsed takes timer t returns real
+native TimerGetRemaining takes timer t returns real
+native TimerGetTimeout takes timer t returns real
+native GetExpiredTimer takes nothing returns timer
+type playerstate extends handle
+type limitop extends eventid
+type playerevent extends eventid
+constant native ConvertPlayerState takes integer i returns playerstate
+constant native ConvertLimitOp takes integer i returns limitop
+constant native ConvertPlayerEvent takes integer i returns playerevent
+constant native GetPlayerState takes player p, playerstate setting returns integer
+native SetPlayerState takes player p, playerstate setting, integer value returns nothing
+constant native GetEventPlayerState takes nothing returns playerstate
+native TriggerRegisterPlayerStateEvent takes trigger owner, player p, playerstate state, limitop op, real limit returns event
+native TriggerSleepAction takes real timeout returns nothing
+type boolexpr extends agent
+type conditionfunc extends boolexpr
+type filterfunc extends boolexpr
+type triggercondition extends agent
+native Condition takes code f returns conditionfunc
+native Filter takes code f returns filterfunc
+native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+native TriggerEvaluate takes trigger t returns boolean
+";
+
+fn death_common() -> String {
+    let mut common = common_source(&format!("{EXTRAS}{DEATH_EXTRAS}"));
+    let end = common.find("\nendglobals\n").expect("endglobals");
+    common.insert_str(
+        end,
+        "\nconstant widgetevent EVENT_WIDGET_DEATH=ConvertWidgetEvent(862)
+constant gameevent EVENT_TIMER=ConvertGameEvent(15)
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
+constant limitop LESS_THAN=ConvertLimitOp(0)
+constant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)
+constant limitop EQUAL=ConvertLimitOp(2)
+constant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)
+constant limitop GREATER_THAN=ConvertLimitOp(4)
+constant limitop NOT_EQUAL=ConvertLimitOp(5)
+constant playerevent EVENT_PLAYER_STATE_LIMIT=ConvertPlayerEvent(47)
+",
+    );
+    common
+}
+
+fn death_host(common: &str, map: &str) -> (Arc<ParsedMapContext>, ObjectHost) {
+    let ctx = super::super::context(300, common, map, "synthetic:destructable-death");
+    let enums = EnumHost::checked_selected(
+        ctx.scripts.shared_program(),
+        "synthetic:destructable-death",
+        &[
+            "ConvertPlacement",
+            "ConvertPlayerColor",
+            "ConvertRacePref",
+            "ConvertMapControl",
+            "ConvertUnitEvent",
+            "ConvertWidgetEvent",
+            "ConvertGameEvent",
+            "ConvertPlayerState",
+            "ConvertLimitOp",
+            "ConvertPlayerEvent",
+        ],
+        Limits {
+            max_handles: 256,
+            admission_steps: 2000,
+            expression_depth: 16,
+            expression_work: 4000,
+        },
+    )
+    .unwrap();
+    let mut host = ObjectHost::checked(enums)
+        .unwrap()
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_destructables(DestructableBudget { max_records: 4 })
+        .unwrap()
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 4 })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_filters(FilterBudget { max_records: 4 })
+        .unwrap()
+        .with_conditions(ConditionBudget { max_records: 4 })
+        .unwrap();
+    host.admit_destructable_catalog(life_catalog()).unwrap();
+    let host = host
+        .with_trigger_admission(trigger_limits(8, 0))
+        .unwrap()
+        .with_trigger_conditions(4)
+        .unwrap()
+        .with_timer_runtime(20.0)
+        .unwrap()
+        .with_death_events(8)
+        .unwrap()
+        .with_trigger_runtime(TriggerRuntimeInput {
+            initial_enabled: true,
+            timer_event_global: "EVENT_TIMER".into(),
+            max_timed_events: 4,
+            max_parked_threads: 4,
+        })
+        .unwrap()
+        .with_player_state_events(4)
+        .unwrap();
+    (ctx, host)
+}
+
+const DEATH_MAP: &str = "\
+globals
+trigger T=null
+destructable D=null
+integer hits=0
+real seenLife=-1.0
+boolean event_ok=false
+boolean widget_ok=false
+boolean destructable_ok=false
+endglobals
+function action takes nothing returns nothing
+ set hits=hits+1
+ set seenLife=GetDestructableLife(D)
+ set event_ok=GetTriggerEventId()==EVENT_WIDGET_DEATH
+ set widget_ok=GetTriggerWidget()==D
+ set destructable_ok=GetTriggerDestructable()==D
+endfunction
+function setup takes nothing returns nothing
+ set T=CreateTrigger()
+ call TriggerAddAction(T,function action)
+ set D=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(T,D)
+endfunction
+function kill takes nothing returns nothing
+ call KillDestructable(D)
+endfunction
+function negative takes nothing returns nothing
+ call SetDestructableLife(D,-5.0)
+endfunction
+function positive takes nothing returns nothing
+ call SetDestructableLife(D,50.0)
+endfunction
+function restore takes nothing returns nothing
+ call DestructableRestoreLife(D,false)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+fn vm_for(
+    map: &str,
+) -> (
+    Arc<ParsedMapContext>,
+    OwnedVm<OwnedLocalizedHost<ObjectHost>>,
+) {
+    let (ctx, host) = death_host(&death_common(), map);
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    (ctx, vm)
+}
+
+fn vm_for_sleep(
+    map: &str,
+) -> (
+    Arc<ParsedMapContext>,
+    OwnedVm<OwnedLocalizedHost<ObjectHost>>,
+) {
+    let (ctx, mut host) = death_host(&death_common(), map);
+    host.admit_thread_sleep(1).unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    (ctx, vm)
+}
+
+#[test]
+fn a_death_callback_runs_before_the_life_setter_returns_and_restores_context() {
+    let (_ctx, mut vm) = vm_for(DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    assert_eq!(
+        vm.global("hits"),
+        Value::Int(0),
+        "the positive setup is not a death"
+    );
+    vm.call("negative", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    assert_eq!(vm.global("seenLife"), Value::Real(0.0));
+    assert_eq!(vm.global("event_ok"), Value::Bool(true));
+    assert_eq!(vm.global("widget_ok"), Value::Bool(true));
+    assert_eq!(vm.global("destructable_ok"), Value::Bool(true));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+}
+
+#[test]
+fn already_dead_trees_do_not_fire_and_positive_life_rearms_the_next_death() {
+    let (_ctx, mut vm) = vm_for(DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    vm.call("kill", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    vm.call("positive", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    vm.call("kill", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    vm.call("restore", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    vm.call("kill", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(3));
+}
+
+#[test]
+fn engine_damage_queues_the_same_event_for_delivery_at_the_next_boundary() {
+    let (_ctx, mut vm) = vm_for(DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    let destructable = id(&vm.global("D"));
+    let event = id(&vm.global("EVENT_WIDGET_DEATH"));
+    let before = vm.host().inner.event_queue_capacity();
+    assert_eq!(
+        vm.host()
+            .inner
+            .damage_destructable(destructable, 50.0)
+            .unwrap(),
+        0.0
+    );
+    assert!(
+        vm.host().inner.event_queue_capacity() > before,
+        "the transition reserves room for every matching registration before committing"
+    );
+    assert_eq!(vm.global("hits"), Value::Int(0));
+    let fired = vm.host().inner.take_fired_event().expect("death queued");
+    assert!(vm.host().inner.begin_fired_event(&fired).unwrap().is_some());
+    assert_eq!(
+        vm.host().inner.native("GetTriggerEventId", &[]).unwrap(),
+        Value::Handle(event)
+    );
+    assert_eq!(
+        vm.host().inner.native("GetTriggerWidget", &[]).unwrap(),
+        Value::Handle(destructable)
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetTriggerDestructable", &[])
+            .unwrap(),
+        Value::Handle(destructable)
+    );
+    vm.host().inner.finish_fired_event();
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+const NESTED_MAP: &str = "\
+globals
+trigger T1=null
+trigger T2=null
+destructable A=null
+destructable B=null
+integer hits=0
+endglobals
+function outer takes nothing returns nothing
+ set hits=hits+1
+ call KillDestructable(B)
+endfunction
+function inner takes nothing returns nothing
+ set hits=hits+1
+endfunction
+function setup takes nothing returns nothing
+ set T1=CreateTrigger()
+ set T2=CreateTrigger()
+ call TriggerAddAction(T1,function outer)
+ call TriggerAddAction(T2,function inner)
+ set A=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ set B=CreateDestructable('LTlt',2.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(T1,A)
+ call TriggerRegisterDeathEvent(T2,B)
+endfunction
+function kill_outer takes nothing returns nothing
+ call KillDestructable(A)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn a_callback_can_kill_another_registered_tree_without_stealing_its_context() {
+    let (_ctx, mut vm) = vm_for(NESTED_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill_outer", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+}
+
+const DEATH_TO_STATE_MAP: &str = "\
+globals
+trigger DTH=null
+trigger STATE=null
+player P=null
+destructable TREE=null
+integer hits=0
+endglobals
+function death_action takes nothing returns nothing
+ set hits=hits+1
+ call SetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD, 10)
+endfunction
+function state_action takes nothing returns nothing
+ set hits=hits+1
+endfunction
+function setup takes nothing returns nothing
+ set DTH=CreateTrigger()
+ set STATE=CreateTrigger()
+ set P=Player(0)
+ set TREE=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerAddAction(DTH,function death_action)
+ call TriggerAddAction(STATE,function state_action)
+ call TriggerRegisterDeathEvent(DTH,TREE)
+ call TriggerRegisterPlayerStateEvent(STATE,P,PLAYER_STATE_RESOURCE_GOLD,EQUAL,10.0)
+endfunction
+function kill_tree takes nothing returns nothing
+ call KillDestructable(TREE)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn a_death_callback_can_nest_a_player_state_callback_before_returning() {
+    let (_ctx, mut vm) = vm_for(DEATH_TO_STATE_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill_tree", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+}
+
+const STATE_TO_DEATH_MAP: &str = "\
+globals
+trigger STATE=null
+trigger DTH=null
+player P=null
+destructable TREE=null
+integer hits=0
+endglobals
+function state_action takes nothing returns nothing
+ set hits=hits+1
+ call KillDestructable(TREE)
+endfunction
+function death_action takes nothing returns nothing
+ set hits=hits+1
+endfunction
+function setup takes nothing returns nothing
+ set STATE=CreateTrigger()
+ set DTH=CreateTrigger()
+ set P=Player(0)
+ set TREE=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerAddAction(STATE,function state_action)
+ call TriggerAddAction(DTH,function death_action)
+ call TriggerRegisterPlayerStateEvent(STATE,P,PLAYER_STATE_RESOURCE_GOLD,LESS_THAN,50.0)
+ call TriggerRegisterDeathEvent(DTH,TREE)
+endfunction
+function set_gold takes nothing returns nothing
+ call SetPlayerState(P, PLAYER_STATE_RESOURCE_GOLD, 30)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn a_player_state_callback_can_nest_a_death_callback_before_returning() {
+    let (_ctx, mut vm) = vm_for(STATE_TO_DEATH_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("set_gold", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+}
+
+const CONDITION_MAP: &str = "\
+globals
+trigger T=null
+destructable D=null
+conditionfunc C=null
+integer conds=0
+integer hits=0
+endglobals
+function predicate takes nothing returns boolean
+ set conds=conds+1
+ return false
+endfunction
+function action takes nothing returns nothing
+ set hits=hits+1
+endfunction
+function setup takes nothing returns nothing
+ set T=CreateTrigger()
+ set C=Condition(function predicate)
+ call TriggerAddCondition(T,C)
+ call TriggerAddAction(T,function action)
+ set D=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(T,D)
+endfunction
+function kill_tree takes nothing returns nothing
+ call KillDestructable(D)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn a_false_death_condition_skips_the_action_without_leaking_context_or_an_event() {
+    let (_ctx, mut vm) = vm_for(CONDITION_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill_tree", &[]).unwrap();
+    assert_eq!(vm.global("conds"), Value::Int(1));
+    assert_eq!(vm.global("hits"), Value::Int(0));
+    assert!(vm.host().inner.take_fired_event().is_none());
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+}
+
+const SLEEP_MAP: &str = "\
+globals
+trigger A=null
+trigger B=null
+destructable D=null
+integer order=0
+endglobals
+function first takes nothing returns nothing
+ set order=order*10+1
+ call TriggerSleepAction(2.0)
+ set order=order*10+9
+endfunction
+function second takes nothing returns nothing
+ set order=order*10+2
+endfunction
+function setup takes nothing returns nothing
+ set A=CreateTrigger()
+ set B=CreateTrigger()
+ call TriggerAddAction(A,function first)
+ call TriggerAddAction(B,function second)
+ set D=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(A,D)
+ call TriggerRegisterDeathEvent(B,D)
+endfunction
+function kill_tree takes nothing returns nothing
+ call KillDestructable(D)
+endfunction
+";
+
+#[test]
+fn a_sleeping_death_action_still_lets_the_other_registration_finish_before_return() {
+    let (_ctx, mut vm) = vm_for_sleep(SLEEP_MAP);
+    vm.call("setup", &[]).unwrap();
+    vm.call("kill_tree", &[]).unwrap();
+    assert_eq!(vm.global("order"), Value::Int(12));
+    assert_eq!(vm.host().inner.parked_thread_count(), 1);
+    let ticket = vm.host().inner.next_thread_wake(30.0).unwrap().unwrap();
+    assert_eq!(vm.host().inner.timer_game_time(), Some(22.0));
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("order"), Value::Int(129));
+    assert_eq!(vm.host().inner.parked_thread_count(), 0);
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+const ERROR_MAP: &str = "\
+globals
+trigger T=null
+destructable D=null
+integer hits=0
+endglobals
+function action takes nothing returns nothing
+ set hits=hits+1
+ call CreateUnit(Player(0), 'hfoo', 0.0, 0.0, 0.0)
+endfunction
+function setup takes nothing returns nothing
+ set T=CreateTrigger()
+ call TriggerAddAction(T,function action)
+ set D=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(T,D)
+endfunction
+function kill_tree takes nothing returns nothing
+ call KillDestructable(D)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn an_action_error_aborts_the_synchronous_delivery_and_restores_context() {
+    let (_ctx, mut vm) = vm_for(ERROR_MAP);
+    vm.call("setup", &[]).unwrap();
+    assert!(vm.call("kill_tree", &[]).is_err());
+    assert_eq!(vm.global("hits"), Value::Int(1));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+const NESTING_MAP: &str = "\
+globals
+trigger T=null
+destructable D=null
+integer hits=0
+endglobals
+function action takes nothing returns nothing
+ set hits=hits+1
+ call SetDestructableLife(D,10.0)
+ call KillDestructable(D)
+endfunction
+function setup takes nothing returns nothing
+ set T=CreateTrigger()
+ call TriggerAddAction(T,function action)
+ set D=CreateDestructable('LTlt',0.0,0.0,0.0,1.0,0)
+ call TriggerRegisterDeathEvent(T,D)
+endfunction
+function kill_tree takes nothing returns nothing
+ call KillDestructable(D)
+endfunction
+function widget_now takes nothing returns widget
+ return GetTriggerWidget()
+endfunction
+";
+
+#[test]
+fn runaway_nested_deaths_stop_at_the_shared_call_depth_budget() {
+    let (_ctx, mut vm) = vm_for(NESTING_MAP);
+    vm.call("setup", &[]).unwrap();
+    let error = vm.call("kill_tree", &[]).unwrap_err().to_string();
+    assert!(error.contains("nested past 64 spawns"), "{error}");
+    assert!(matches!(vm.global("hits"), Value::Int(n) if n > 0));
+    assert_eq!(vm.call("widget_now", &[]).unwrap(), Value::Null);
+    assert!(vm.host().inner.take_fired_event().is_none());
 }
