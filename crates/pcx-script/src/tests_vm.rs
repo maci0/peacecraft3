@@ -177,6 +177,46 @@ fn a_native_call_arity_is_checked_against_its_declaration() {
 }
 
 #[test]
+fn nested_call_arguments_are_resolved_in_initializers_returns_and_statements() {
+    let declarations = "native Wrap takes integer value returns integer\nnative Leaf takes integer value returns integer\nnative Sink takes integer value returns nothing\n";
+    for (expression, message) in [
+        ("Wrap(Missing())", "name `Missing` is not declared"),
+        ("Wrap(Leaf())", "native `Leaf` takes 1 argument, 0 given"),
+        (
+            "Wrap(Leaf(MissingValue))",
+            "name `MissingValue` is not declared",
+        ),
+    ] {
+        for body in [
+            format!("globals\n integer value = {expression}\nendglobals\n"),
+            format!(
+                "function f takes nothing returns integer\n return {expression}\nendfunction\n"
+            ),
+            format!(
+                "function f takes nothing returns nothing\n call Sink({expression})\nendfunction\n"
+            ),
+        ] {
+            let source = format!("{declarations}{body}");
+            let error = resolve_of(&source).expect_err(&source);
+            assert!(error.message.contains(message), "{}", error.render(&source));
+        }
+    }
+}
+
+#[test]
+fn nested_native_calls_are_included_in_admission_statistics() {
+    let program = program_of(
+        "native Wrap takes integer value returns integer\nnative Leaf takes integer value returns integer\nfunction f takes nothing returns integer\n return Wrap(Leaf(3) + Leaf(4))\nendfunction\n",
+    );
+    assert_eq!(
+        program.natives_called().collect::<Vec<_>>(),
+        [("Leaf", 2), ("Wrap", 1)]
+    );
+    assert_eq!(program.stats.natives_called, 2);
+    assert_eq!(program.unimplemented_natives().count(), 2);
+}
+
+#[test]
 fn a_constant_cannot_be_assigned_to() {
     let src = "globals\n    constant integer FIXED = 3\nendglobals\nfunction f takes nothing returns nothing\n    set FIXED = 4\nendfunction\n";
     let (line, _, message) = where_is(src);

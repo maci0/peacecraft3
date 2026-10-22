@@ -12,6 +12,18 @@ and render positions against that source. Prelude labels cannot alias the VM's
 reserved main-source identity `the map script`; this is a caller-identity check,
 not native script rejection behavior.
 
+Resolution walks every call argument recursively, including calls nested inside
+global initializers, return expressions and other calls. Unknown nested names and
+wrong nested arities refuse compilation, and nested native calls contribute to
+the admission statistics. Previously only the outer expression call was checked;
+an undeclared call inside its arguments could escape this gate. Synthetic
+regressions cover these refusal paths and repeated nested-native accounting.
+The correction passes 118 script, 1,427 core and 607 app tests, strict native/WASM
+Clippy and formatting. Three resolver process checks cover failure exit codes,
+stderr diagnostics and nested-native statistics. The selected Continue gate
+still publishes Human01's 152 units before Human02 refuses its unsupported
+nearby-harvest order; these compiler checks do not establish campaign completion.
+
 ## Allocation order and limits
 
 Prelude lengths and the embedded archive length are checked first, including

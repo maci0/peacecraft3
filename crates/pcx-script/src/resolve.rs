@@ -836,7 +836,11 @@ impl<'a> Resolver<'a> {
                     ));
                 };
                 self.uses += 1;
-                self.check_call(name, args.len(), *span, scope)
+                self.check_call(name, args.len(), *span, scope)?;
+                for argument in args {
+                    self.check_expr(scope, Some(argument))?;
+                }
+                Ok(())
             }
             Expr::Index { base, index, .. } => {
                 if let Expr::Ident(name, span) = base.as_ref() {
