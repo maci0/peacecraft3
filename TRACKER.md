@@ -6,10 +6,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   with immutable archive snapshots and source-selected data namespaces. The
   selected Human01 preparation gate passes, including recipe identity and later
   launcher-change isolation. Human02 now passes the absent-research and held
-  mana-regeneration paths, but startup still refuses `prvt` / `AIlf` (`AIml`)
-  max-life behavior. The continuation remains private; full chapter completion,
-  Windows snapshot runtime and native passive composition remain unqualified.
-  Receipts: `.scratch/campaign-continuation/final-source-*.log`.
+  mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
+  passive is implemented with synthetic coverage. The selected continuation has
+  not been rerun past that path. The continuation remains private; full chapter
+  completion, Windows snapshot runtime and native passive composition remain
+  unqualified. Receipts: `.scratch/campaign-continuation/final-source-*.log`.
 
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three

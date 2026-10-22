@@ -11,8 +11,15 @@ pub struct Grant {
     pub max_life: f32,
 }
 
+/// Nearest integer with half upward, matching the reviewed helper at `0x9a1d70`: add one half
+/// (`0x10db0a8`) then floor (`0x9a1520`).
+fn round_life(value: f32) -> f32 {
+    (value + 0.5).floor()
+}
+
 /// Life pools after a signed strength change, keeping the current/max ratio.
-/// `life_per_strength` is the selected `StrHitPointBonus` value.
+/// `life_per_strength` is the selected `StrHitPointBonus` value. The pool change and the retained
+/// ratio are rounded separately, as the original does.
 pub fn reprice_life(
     life: f32,
     max_life: f32,
@@ -23,16 +30,33 @@ pub fn reprice_life(
     if !life.is_finite() || !max_life.is_finite() || !life_per_strength.is_finite() {
         return Err(fail("non-finite life value"));
     }
+    let change = round_life(strength_delta as f32 * life_per_strength);
+    change_life_pools(life, max_life, change).map_err(|e| fail(&e))
+}
+
+/// Life pools after a signed maximum-life change. The new current life is the retained ratio
+/// rounded with half upward.
+pub(crate) fn reprice_max_life(
+    life: f32,
+    max_life: f32,
+    max_life_delta: i32,
+) -> Result<(f32, f32), String> {
+    change_life_pools(life, max_life, max_life_delta as f32)
+        .map_err(|e| format!("max life change: {e}"))
+}
+
+fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
+    if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
+        return Err("non-finite life value".into());
+    }
     if max_life <= 0.0 || !(0.0..=max_life).contains(&life) {
-        return Err(fail(
-            "life pools must satisfy 0 <= life <= max_life with max_life > 0",
-        ));
+        return Err("life pools must satisfy 0 <= life <= max_life with max_life > 0".into());
     }
-    let new_max = max_life + strength_delta as f32 * life_per_strength;
+    let new_max = max_life + change;
     if !new_max.is_finite() || new_max <= 0.0 {
-        return Err(fail("new maximum life is not positive"));
+        return Err("new maximum life is not positive".into());
     }
-    Ok((new_max * (life / max_life), new_max))
+    Ok((round_life(new_max * (life / max_life)), new_max))
 }
 
 /// Applies `effect` to a hero's retained strength and life pools, or refuses without changes.

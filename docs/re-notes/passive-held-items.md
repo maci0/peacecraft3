@@ -4,17 +4,20 @@
 
 A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength and agility
 of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`,
-life regeneration from `Arel`, and a mana-regeneration fraction from `AIrm` while
-held. The unit total is the retained powerup strength plus the held passive totals, derived on
-demand from the held slots, so no add/remove state exists.
+maximum life from `AIml`, life regeneration from `Arel`, and a mana-regeneration fraction from
+`AIrm` while held. The unit total is the retained powerup strength plus the held passive totals,
+derived on demand from the held slots, so no add/remove state exists.
 
 - Derived: damage (primary STR plus held flat damage), armor and speed (AGI), and the level-up
   life delta.
-- Equip and drop reprice life by the strength change with the current/max ratio policy, the
-  same native path the powerup grant uses (`b3dd30` → `b3fd00` → mode 1 `6be8c0`).
-- Transfer is a drop from the holder followed by an equip on the receiver. A non-hero receiver
-  gets no life change, because only heroes carry strength pools.
-- Death drops held items through the existing `forget_inventory_unit` path, which reprices life.
+- Equip and drop reprice life by the strength and maximum-life changes with the current/max
+  ratio policy, the same native path the powerup grant uses (`b3dd30` → `b3fd00` → mode 1
+  `6be8c0`). The ratio is rounded with half upward.
+- Transfer is a drop from the holder followed by an equip on the receiver. Strength applies only
+  to heroes; maximum life applies to any receiver with vitals.
+- Death drops eligible held items through the existing `forget_inventory_unit` path, which
+  reprices life and maximum life. A held item that is not dropped retains its maximum-life
+  contribution.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
 - Passive rows whose abilities are outside the admitted class, or whose intelligence bonus would
@@ -29,10 +32,11 @@ transfer, death and level results are what the tests check.
 - Registration: the passive constructor is the window at `0xbc9ce0` (`push 0x11b6694`,
   `push "APbo"`, `push "AIab"`, `call 0x7f6360`, `add esp,0xc`, `ret`), the same layout as the
   powerup window `0xbca0e0` (`AIsm`, base `AIxm`). `Rules::read` decodes the powerup, passive,
-  armor and damage windows from the reviewed client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
-- Attribute metadata: `Iagi`, `Iint` and `Istr` `useSpecific` lists must admit the item's
-  ability alias. Amounts come from `Data{column}1` through `W3A` overlays. No ID or amount is
-  written in code.
+  armor, damage and maximum-life (`0xbc9f40`, `AIml` against `APbo`) windows from the reviewed
+  client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
+- Attribute metadata: `Iagi`, `Iint`, `Istr`, `Idef`, `Iatt`, `Ilif`, `Ihpr` and `Imrp`
+  `useSpecific` lists must admit the item's ability alias. Amounts come from `Data{column}1`
+  through `W3A` overlays. No ID or amount is written in code.
 - The base class `APbo` is a native class with no ability row, so it is not checked.
 - The item's ability alias (for example `AIa4`) and its code (`AIab`) differ. The class check uses
   the code, which the registration names.
@@ -58,7 +62,7 @@ Census gate `local_original_held_item_census_partitions_every_row` (`PCX_TOME_CL
 and, over all 273 rows, `none=140 supported=39 refused=94`. The 39 includes the 26 empty-list
 passive rows (no effect). Refusals are all passive rows with an ability list (13 + 94 = 107):
 
-The counts below predate the armor and damage families and are retained as the initial audit;
+The counts below predate the armor, damage and maximum-life families and are retained as the initial audit;
 rerun `local_original_held_item_census_partitions_every_row` for current counts.
 
 | refusal | rows |
@@ -68,7 +72,7 @@ rerun `local_original_held_item_census_partitions_every_row` for current counts.
 | `AIab` alias not admitted by the attribute metadata | 3 |
 
 Campaign placement impact is not measured. These are catalog facts. The table is the initial
-audit, before armor and damage rows were admitted; rerun the gate for current counts. A row still
+audit, before armor, damage and maximum-life rows were admitted; rerun the gate for current counts. A row still
 outside the admitted families fails the pickup call with a diagnostic instead of applying a
 silent wrong stat.
 
@@ -90,14 +94,42 @@ silent wrong stat.
   the held contribution disappearing on drop, but not the exact native rate composition.
 - Intelligence bonuses and their mana pool (`b3feb0` route unqualified).
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`, `AIde`, `AIat`, `Arel` and `AIrm`: life (`AIml`), mana
-  (`AIrn` auras and other classes), armor (`AIsb`), attack speed (`AIas`), and the rest of the
-  refused rows.
-- Non-hero passive equip: strength and agility still produce no hero pools, while armor and flat
-  damage are accepted for any unit. Native behavior for non-hero strength/agility is not
-  verified.
+- Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `Arel` and `AIrm`: mana (`AIrn`
+  auras and other classes), armor (`AIsb`), attack speed (`AIas`), and the rest of the refused
+  rows.
+- Non-hero passive equip: strength and agility still produce no hero pools, while armor, flat
+  damage and maximum life are accepted for any unit with vitals. Native behavior for non-hero
+  strength/agility is not verified.
 - Powerup `get_items` gating and non-hero powerup targets remain documented gaps in
   `inventory-powerup.md`. They are fidelity gaps, not permission gates.
+
+## Maximum-life family (`AIml`, Item Life Bonus): implemented and tested
+
+- Registration: window `0xbc9f40` (`push "APbo"`, `push "AIml"`, `call 0x7f6360`), the same
+  reviewed layout and base as `AIab`. The class must be distinct from the other registered
+  classes. See `passive-max-life.md` for the original-runtime samples.
+- Amounts: metadata row `Ilif` (`field Data`, `slk AbilityData`, `data 1` = `DataA`). The
+  `useSpecific` list must admit the item's ability alias, and typed W3A overrides win. Negative
+  or unadmitted amounts refuse; held sums use checked addition.
+- Held effect: flat maximum-life points, summed over held passive items and derived per unit,
+  hero or not. It applies whenever the holder has current vitals; a unit without vitals refuses
+  a nonzero contribution.
+- Pool policy: `max' = max + delta`, `life' = floor(new_max × life / max + 0.5)`. A living
+  holder stays at one hit point when the rounded ratio is zero; a dead holder stays at zero. The
+  strength and maximum-life paths share this adjustment. Dead units still cannot pick up items.
+- Equip, drop, transfer and cleanup preflight receiver and donor pool projections before slots,
+  ownership or drop events change. Held-total overflow refuses before writes.
+- Tests: parser (`max_life_points_come_from_the_admitted_ilif_row`,
+  `max_life_w3a_override_on_ilif_wins`, `negative_authored_max_life_refuses`,
+  `max_life_row_outside_the_ilif_admission_refuses`,
+  `max_life_registration_requires_the_passive_base_and_a_distinct_class`); host
+  (`held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio`,
+  `held_max_life_applies_to_a_non_hero_and_transfers_the_pool`,
+  `dropping_held_max_life_restores_the_pool_and_rounds_the_ratio`,
+  `cleanup_drops_held_max_life_and_restores_the_pool`,
+  `held_max_life_total_overflow_refuses_transfer_without_writes`,
+  `held_max_life_on_a_typed_override_uses_the_override_amount`,
+  `held_max_life_keeps_a_living_holder_at_one_life`, `dead_unit_cannot_pick_up_max_life`).
 
 ## Armor family (`AIde`, Item Armor Bonus): implemented and tested
 

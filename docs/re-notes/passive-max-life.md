@@ -80,3 +80,26 @@ zero for the dead holder. It does not establish arbitrary edited amounts,
 revival with the bonus still held, native Windows or rendered parity.
 Implementation must preflight every pool adjustment in the actual removal order
 before detaching an item or queuing its drop event.
+
+
+## Implementation in the recreation
+
+`inventory_powerup::Rules::read` reads window `0xbc9f40`, requires base
+`APbo`, and attaches the `AIml` class with its integer `Ilif` amount column.
+The class must be distinct from the other registered passive classes.
+`held_attributes` sums nonnegative amounts with checked addition, so stacking
+cannot wrap.
+
+Held maximum life applies to any holder with vitals, hero or non-hero.
+`reprice_max_life` shares the strength pool adjustment: the new maximum is
+`max + delta`, the retained ratio is `new_max * life / max`, and the result is
+`floor(x + 0.5)` through the reviewed helper shape. `set_life_pools` keeps a
+living holder at one hit point and a dead holder at zero. Equip, drop, transfer
+and cleanup preflight the receiver and donor projections before detaching an
+item or queuing a drop event. A dead unit still cannot pick up an item.
+
+Tests cover non-stock amounts, typed `Ilif` overrides, stacking, transfer,
+drop, cleanup, ratio rounding, living minimum one, dead pickup refusal and
+held-total overflow atomicity. The synthetic fixtures exercise those paths;
+the original-runtime samples above remain the witness for the observed stock
+amounts and transitions.
