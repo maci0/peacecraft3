@@ -157,6 +157,29 @@ fn source_operands_drive_clamping_null_result_and_nonfinite_comparisons() {
     assert_eq!(r.null_result(), 7.0);
 }
 #[test]
+fn experience_budget_charges_one_data_operand() {
+    let (image, binding, numeric, budget) = fixture();
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    let windows = [
+        &binding.setter,
+        &binding.getter,
+        &binding.maximum_initializer,
+        &binding.null_initializer,
+    ];
+    let needed = windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 4;
+    let too_small = RuleInputBudget {
+        profile_bytes: (needed - 1) as usize,
+        ..budget
+    };
+    assert!(Rules::read(&image, binding.clone(), &numeric, too_small).is_err());
+    let exact = RuleInputBudget {
+        profile_bytes: needed as usize,
+        ..budget
+    };
+    assert!(Rules::read(&image, binding, &numeric, exact).is_ok());
+}
+
+#[test]
 fn changed_shapes_calls_destinations_limits_and_sources_refuse() {
     for change in 0..10 {
         let (mut image, mut binding, mut numeric, mut budget) = fixture();
@@ -386,7 +409,9 @@ pub(crate) fn health_fixture() -> (
     let null_initializer = put(0x1950, &init(1, loc(0x1950), field.wrapping_add(4)));
     let reset = put(0x1960, &reset);
     let rounder = put(0x1b00, &rounder);
-    let floor = put(0x1b80, &[0xcc; 232]);
+    let mut floor_code = vec![0xcc; 232];
+    floor_code[..FLOOR_CODE.len()].copy_from_slice(FLOOR_CODE);
+    let floor = put(0x1b80, &floor_code);
     put(0x1a00, &0.001_f32.to_le_bytes());
     put(0x1a04, &0.01_f32.to_le_bytes());
     put(0x1a08, &0.5_f32.to_le_bytes());
@@ -461,7 +486,7 @@ fn health_rounding_bias_and_initial_reset_link_come_from_source() {
 }
 
 #[test]
-fn health_budget_accounts_for_both_data_operands() {
+fn health_budget_accounts_for_all_three_data_operands() {
     let (image, binding, numeric, budget) = health_fixture();
     let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
     let windows = [
@@ -473,7 +498,8 @@ fn health_budget_accounts_for_both_data_operands() {
         &binding.rounder,
         &binding.floor,
     ];
-    let needed = windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 8;
+    // Threshold, minimum and rounding bias are three separate 4-byte reads.
+    let needed = windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 12;
     let too_small = RuleInputBudget {
         profile_bytes: (needed - 1) as usize,
         ..budget
@@ -484,6 +510,33 @@ fn health_budget_accounts_for_both_data_operands() {
         ..budget
     };
     assert!(HealthRules::read(&image, binding, &numeric, exact).is_ok());
+}
+
+#[test]
+fn health_bad_floor_digest_and_shape_refuse() {
+    let (image, mut binding, numeric, budget) = health_fixture();
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    binding.floor.digest[0] ^= 1;
+    assert!(HealthRules::read(&image, binding.clone(), &numeric, budget).is_err());
+
+    let (mut image, mut binding, mut numeric, budget) = health_fixture();
+    image[0x1d80 + 10] ^= 1;
+    binding.image_sha256 = sha256(&image);
+    numeric.image_sha256 = sha256(&image);
+    for w in [
+        &mut binding.setter,
+        &mut binding.getter,
+        &mut binding.maximum_initializer,
+        &mut binding.null_initializer,
+        &mut binding.reset,
+        &mut binding.rounder,
+        &mut binding.floor,
+    ] {
+        let at = 0x200 + (w.va - 0x301000) as usize;
+        w.digest = sha256(&image[at..at + w.len as usize]);
+    }
+    let numeric = NumericPolicy::read(&image, numeric, budget, 32).unwrap();
+    assert!(HealthRules::read(&image, binding, &numeric, budget).is_err());
 }
 
 #[test]

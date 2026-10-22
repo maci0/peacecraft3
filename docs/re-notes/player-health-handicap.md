@@ -152,9 +152,12 @@ setter applies its raw requested factor to existing owned units before storing
 the clamped player factor. Base HP uses the ratio update; the strength HP term,
 including held or permanent strength, follows as a direct pool delta; flat held
 maximum-life bonuses stay unscaled. Life rounding is read from the selected
-rounder (bias and floor routine), including the strength-item delta path, rather
-than fixed at half-up. Unit creation uses the owner's stored factor, while
-ownership transfer retains both the fitted factor and current maxima.
+rounder (bias and floor routine), including the scaled strength delta and the
+current/maximum ratio that follows it, rather than fixed at half-up. Admission
+charges the threshold, minimum and bias as three data operands and checks the
+selected floor routine's shape and digest. Unit creation uses the owner's stored
+factor, while ownership transfer retains both the fitted factor and current
+maxima.
 
 The live-owner requested factor is validated once before unit projection, so a
 non-finite request refuses even when the owner has no vital records. Before

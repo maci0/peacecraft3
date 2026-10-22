@@ -28,6 +28,15 @@ pub(super) fn scale_life_component(value: f32, factor: f32, rounding: Option<Lif
     }
 }
 
+/// Rounds a life value with the admitted unit-pool policy, or the legacy
+/// half-up rule when the selected source has not supplied one.
+pub(super) fn round_life_with(value: f32, rounding: Option<LifeRounding>) -> f32 {
+    match rounding {
+        Some(rounding) => rounding.round(value),
+        None => round_life(value),
+    }
+}
+
 /// Strength-item and powerup deltas round even at the identity factor. Creation's
 /// unscaled base HP uses `scale_life_component` and keeps its distinct contract.
 pub(super) fn round_scaled_life_delta(
@@ -35,10 +44,7 @@ pub(super) fn round_scaled_life_delta(
     factor: f32,
     rounding: Option<LifeRounding>,
 ) -> f32 {
-    match rounding {
-        Some(rounding) => rounding.round(value * factor),
-        None => round_life(value * factor),
-    }
+    round_life_with(value * factor, rounding)
 }
 
 /// Life pools after a signed strength change, keeping the current/max ratio.
@@ -73,7 +79,7 @@ pub(crate) fn reprice_life_scaled(
     }
     let change =
         round_scaled_life_delta(strength_delta as f32 * life_per_strength, factor, rounding);
-    change_life_pools(life, max_life, change).map_err(|e| fail(&e))
+    change_life_pools_with(life, max_life, change, rounding).map_err(|e| fail(&e))
 }
 
 /// Life pools after a signed maximum-life change. The new current life is the retained ratio
@@ -121,6 +127,15 @@ pub(crate) fn clamp_mana_pools(mana: f32, max_mana: f32) -> (f32, f32) {
 }
 
 fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32), String> {
+    change_life_pools_with(life, max_life, change, None)
+}
+
+fn change_life_pools_with(
+    life: f32,
+    max_life: f32,
+    change: f32,
+    rounding: Option<LifeRounding>,
+) -> Result<(f32, f32), String> {
     if !life.is_finite() || !max_life.is_finite() || !change.is_finite() {
         return Err("non-finite life value".into());
     }
@@ -131,7 +146,10 @@ fn change_life_pools(life: f32, max_life: f32, change: f32) -> Result<(f32, f32)
     if !new_max.is_finite() || new_max <= 0.0 {
         return Err("new maximum life is not positive".into());
     }
-    Ok((round_life(new_max * (life / max_life)), new_max))
+    Ok((
+        round_life_with(new_max * (life / max_life), rounding),
+        new_max,
+    ))
 }
 
 fn change_mana_pools(mana: f32, max_mana: f32, change: f32) -> Result<(f32, f32), String> {
@@ -198,6 +216,17 @@ mod tests {
             handicap: 1.0,
             rounding: None,
         }
+    }
+
+    #[test]
+    fn scaled_strength_ratio_uses_source_bias_not_legacy_half_up() {
+        let (rules, _) = crate::player_handicap::tests::health_rules_with_bias(0.25);
+        let source = reprice_life_scaled(25.0, 100.0, 17.75, 1, 1.0, Some(rules.rounding()));
+        assert_eq!(source, Ok((29.0, 118.0)));
+        assert_eq!(
+            reprice_life_scaled(25.0, 100.0, 17.75, 1, 1.0, None),
+            Ok((30.0, 118.0))
+        );
     }
 
     #[test]
