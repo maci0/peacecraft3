@@ -76,7 +76,7 @@ pub(super) struct Rules {
     attack_order: i32,
     /// From the selected neutral rule, set once the host is assembled.
     neutral_passive: Option<i32>,
-    neutral_aggressive: Option<i32>,
+    pub(super) neutral_aggressive: Option<i32>,
     passive: i32,
     player_death: i32,
     unit_death: i32,
@@ -1033,7 +1033,7 @@ impl ObjectHost {
                 if held {
                     target = self.hold_position_target(unit, weapon.range, name, &units)?;
                 } else if weapon.acquire > 0.0 {
-                    target = units
+                    let candidates = units
                         .iter()
                         .filter_map(|&(id, _)| {
                             if id == unit {
@@ -1044,8 +1044,17 @@ impl ObjectHost {
                             (gap <= weapon.acquire && self.hostile(record, other))
                                 .then_some((id, gap))
                         })
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .map(|(id, _)| id);
+                        .collect::<Vec<_>>();
+                    match self.campaign_acquisition(unit, &candidates) {
+                        Some(Ok(acquired)) => target = acquired,
+                        Some(Err(_)) => {}
+                        None => {
+                            target = candidates
+                                .into_iter()
+                                .min_by(|a, b| a.1.total_cmp(&b.1))
+                                .map(|(id, _)| id);
+                        }
+                    }
                 }
             }
             if target != combat.target {

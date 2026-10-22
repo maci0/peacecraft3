@@ -116,6 +116,11 @@ pub(crate) trait AiWorld: Host {
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
     fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
+    /// Registers the player as active before its AI main runs. Returns whether
+    /// this call created the context so a failed start can roll it back.
+    fn ai_activate_player(&mut self, player: i32) -> Result<bool, String>;
+    fn ai_deactivate_player(&mut self, player: i32);
+    fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -170,6 +175,38 @@ impl AiWorld for NeutralStack {
             .ok_or("campaign AI cost player identity is not admitted")?;
         objects
             .ai_unit_cost(identity, unit, column)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .activate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_deactivate_player(&mut self, player: i32) {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .deactivate_campaign_ai_player(player);
+    }
+
+    fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_target_heroes(player, enabled)
             .map_err(|e| e.to_string())
     }
 }
@@ -234,15 +271,26 @@ impl<W: AiWorld> Runtime<W> {
         {
             return Err("StartCampaignAI: AI main has wrong source or signature".into());
         }
-        let inner = world
+        let mut inner = world
             .take()
             .ok_or("StartCampaignAI: world is already lent")?;
+        let activated = match inner.ai_activate_player(player) {
+            Ok(activated) => activated,
+            Err(error) => {
+                *world = Some(inner);
+                return Err(format!("StartCampaignAI player {player}: {error}"));
+            }
+        };
         let mut vm = OwnedVm::new_owned(scripts.shared_program(), AiHost::new(player, inner));
         let result = vm.init_globals().and_then(|()| {
             let main = vm.program().function_id("main").expect("admitted AI main");
             vm.run_thread(&[main])
         });
-        *world = vm.host().world.take();
+        let mut borrowed = vm.host().world.take().expect("AI world is lent");
+        if result.is_err() && activated {
+            borrowed.ai_deactivate_player(player);
+        }
+        *world = Some(borrowed);
         result.map_err(|e| format!("StartCampaignAI player {player}: {e}"))?;
         self.active.insert(player, vm);
         Ok(())
@@ -322,6 +370,25 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             return Err(format!(
                 "StartCampaignAI: {name} AI common declaration differs"
             ));
+        }
+    }
+    if let Some(native) = scripts.program().natives().get("SetTargetHeroes") {
+        let expected = scripts
+            .digests
+            .get(1)
+            .ok_or("StartCampaignAI: AI common source is missing")?
+            .label
+            .as_str();
+        if native.source != expected
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || native.params.len() != 1
+            || native.params[0].ty.array
+            || native.params[0].ty.kind.name() != "boolean"
+            || native.ret.array
+            || native.ret.kind.name() != "nothing"
+        {
+            return Err("StartCampaignAI: SetTargetHeroes AI common declaration differs".into());
         }
     }
     Ok(())
@@ -470,6 +537,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                     self.world_mut()?.ai_unit_cost(player, *unit, column)?,
                 ))
             }
+            "SetTargetHeroes" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("SetTargetHeroes: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_target_heroes(player, *enabled)?;
+                Ok(Value::Null)
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -494,6 +569,8 @@ mod tests {
         clock: f64,
         gold: BTreeMap<u64, i32>,
         callbacks: bool,
+        active: BTreeMap<i32, bool>,
+        target_heroes: BTreeMap<i32, bool>,
     }
 
     struct World(Arc<Mutex<State>>);
@@ -512,6 +589,27 @@ mod tests {
         }
         fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
             Err("mock costs are not admitted".into())
+        }
+        fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .active
+                .insert(player, false)
+                .is_none())
+        }
+        fn ai_deactivate_player(&mut self, player: i32) {
+            self.0.lock().unwrap().active.remove(&player);
+            self.0.lock().unwrap().target_heroes.remove(&player);
+        }
+        fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.target_heroes.insert(player, enabled);
+            Ok(())
         }
     }
 
@@ -587,6 +685,62 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    const AI_TARGET: &str = "native SetTargetHeroes takes boolean flag returns nothing\n";
+
+    #[test]
+    fn set_target_heroes_requires_the_admitted_ai_common_declaration_and_active_player() {
+        let ai_common = format!("{AI_COMMON}{AI_TARGET}");
+        let body = "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\nendfunction\n";
+        let script = program_with_ai_common("synthetic:red.ai", body, &ai_common);
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "red.ai").unwrap();
+        {
+            let state = shared.lock().unwrap();
+            assert_eq!(state.active.get(&1), Some(&false));
+            assert_eq!(state.target_heroes.get(&1), Some(&true));
+        }
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn failed_ai_main_rolls_back_the_activation_and_target_flag() {
+        let ai_common = format!("{AI_COMMON}{AI_TARGET}");
+        let body = "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall GetUnitGoldCost(0)\nendfunction\n";
+        let script = program_with_ai_common("synthetic:red.ai", body, &ai_common);
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "red.ai").unwrap_err();
+        assert!(error.contains("GetUnitGoldCost"), "{error}");
+        let state = shared.lock().unwrap();
+        assert!(state.active.is_empty());
+        assert!(state.target_heroes.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn malformed_set_target_heroes_declaration_refuses_before_main_runs() {
+        let ai_common = format!(
+            "{AI_COMMON}{}",
+            AI_TARGET.replace("boolean flag", "integer flag")
+        );
+        let body = "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\nendfunction\n";
+        let script = program_with_ai_common("synthetic:red.ai", body, &ai_common);
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "red.ai").unwrap_err();
+        assert!(error.contains("SetTargetHeroes"), "{error}");
+        assert!(error.contains("declaration"), "{error}");
+        assert!(shared.lock().unwrap().active.is_empty());
+        assert!(world.is_some());
     }
 
     #[test]
