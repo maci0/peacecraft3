@@ -45,7 +45,19 @@ chapter caller and none is claimed here.
   `StandardCampaignButtonBackdropTemplate` `BackdropBackgroundInsets`, and the
   label honours the authored `FontJustificationH`/`V` and wraps within that width
   at the authored size — long mission names stay fully readable without spilling
-  into adjacent columns or being clipped/truncated.
+  into adjacent columns or being clipped/truncated. The label is a real
+  `GlueLabel` referencing its button, so the shared state renderer applies the
+  authored `ButtonPushedTextOffset` on press, and it is tagged `MenuTextFilled`
+  so the shared menu text applier does not restyle an already source-styled
+  label. (The `MenuTextFilled` marker in `launch_gui.rs` is only made
+  `pub(crate)` for this reuse; no new style pipeline is added.) The wrapper uses a
+  column flex axis and the text node keeps its natural height, so the authored
+  vertical justification (`JUSTIFYMIDDLE`) actually centres the glyph line
+  inside the button art; the authored `FontDisabledColor` is used for closed
+  campaign buttons, and the authored `FontShadowColor`/`FontShadowOffset` are
+  preserved on every label. One source-styled label prototype is built per panel
+  and cloned per row (only the text differs), so the font is loaded and
+  registered once rather than once per row.
 
 ## Recreation choices (no authored position exists)
 

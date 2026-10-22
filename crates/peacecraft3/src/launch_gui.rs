@@ -183,7 +183,7 @@ struct ResolutionChoiceColours {
 
 /// Set once a label's runs exist, so it is filled once rather than every frame.
 #[derive(Component)]
-struct MenuTextFilled;
+pub(crate) struct MenuTextFilled;
 
 // ------------------------------------------------------------- spacing/type
 
