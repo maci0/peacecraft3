@@ -115,6 +115,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_clock(&self) -> Option<f64>;
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
+    fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -160,6 +161,16 @@ impl AiWorld for NeutralStack {
             Value::Int(level) => Ok(level),
             _ => Err("GetUpgradeLevel: player research returned a non-integer".into()),
         }
+    }
+
+    fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String> {
+        let objects = self.inner().inner().inner().inner().inner().inner();
+        let identity = objects
+            .player_identity(player)
+            .ok_or("campaign AI cost player identity is not admitted")?;
+        objects
+            .ai_unit_cost(identity, unit, column)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -288,6 +299,8 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("Sleep", &["real"][..], "nothing"),
         ("StartThread", &["code"][..], "nothing"),
         ("GetUpgradeLevel", &["integer"][..], "integer"),
+        ("GetUnitGoldCost", &["integer"][..], "integer"),
+        ("GetUnitWoodCost", &["integer"][..], "integer"),
     ] {
         let native = scripts
             .program()
@@ -443,6 +456,20 @@ impl<W: AiWorld> Host for AiHost<W> {
                     self.world_mut()?.ai_upgrade_level(player, *upgrade)?,
                 ))
             }
+            "GetUnitGoldCost" | "GetUnitWoodCost" => {
+                let [Value::Int(unit)] = args else {
+                    return Err(format!("{name}: expected an integer unit ID"));
+                };
+                let column = if name == "GetUnitGoldCost" {
+                    "goldcost"
+                } else {
+                    "lumbercost"
+                };
+                let player = self.player;
+                Ok(Value::Int(
+                    self.world_mut()?.ai_unit_cost(player, *unit, column)?,
+                ))
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -483,6 +510,9 @@ mod tests {
         fn ai_upgrade_level(&mut self, _player: i32, _upgrade: i32) -> Result<i32, String> {
             Err("test world has no admitted upgrade research".into())
         }
+        fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
+            Err("mock costs are not admitted".into())
+        }
     }
 
     impl Host for World {
@@ -518,7 +548,7 @@ mod tests {
     }
 
     const COMMON: &str = "type agent extends handle\ntype player extends agent\ntype playerstate extends handle\nnative Player takes integer number returns player\nnative GetPlayerState takes player whichPlayer, playerstate whichState returns integer\nnative SetPlayerState takes player whichPlayer, playerstate whichState, integer value returns nothing\n";
-    const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\n";
+    const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
 
     fn program(label: &str, source: &str) -> Arc<MapScripts> {
         program_with_ai_common(label, source, AI_COMMON)
@@ -576,6 +606,14 @@ mod tests {
                 "GetUpgradeLevel takes integer id returns integer",
                 "GetUpgradeLevel takes integer id returns real",
             ),
+            AI_COMMON.replace(
+                "GetUnitGoldCost takes integer unitid returns integer",
+                "GetUnitGoldCost takes integer unitid returns real",
+            ),
+            AI_COMMON.replace(
+                "GetUnitWoodCost takes integer unitid returns integer",
+                "GetUnitWoodCost takes real unitid returns integer",
+            ),
         ] {
             let script = program_with_ai_common("synthetic:red.ai", body, &declaration);
             let mut runtime = Runtime::<World>::default();
@@ -616,21 +654,19 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_query_rejects_wrong_arity_and_type_without_touching_world() {
+    fn ai_queries_reject_wrong_arity_and_type_without_touching_world() {
         let shared = Arc::new(Mutex::new(State::default()));
         let mut host = AiHost::new(1, World(Arc::clone(&shared)));
-        for args in [
-            vec![],
-            vec![Value::Real(5.0)],
-            vec![Value::Int(5), Value::Int(6)],
-        ] {
-            assert!(
-                host.native("GetUpgradeLevel", &args)
-                    .unwrap_err()
-                    .contains("integer")
-            );
-            assert!(host.world.is_some());
-            assert!(shared.lock().unwrap().gold.is_empty());
+        for name in ["GetUpgradeLevel", "GetUnitGoldCost", "GetUnitWoodCost"] {
+            for args in [
+                vec![],
+                vec![Value::Real(5.0)],
+                vec![Value::Int(5), Value::Int(6)],
+            ] {
+                assert!(host.native(name, &args).unwrap_err().contains("integer"));
+                assert!(host.world.is_some());
+                assert!(shared.lock().unwrap().gold.is_empty());
+            }
         }
     }
 
