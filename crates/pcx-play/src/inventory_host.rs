@@ -773,6 +773,17 @@ impl ObjectHost {
             .vitals
             .ok_or_else(|| fail("hero vitals missing for powerup grant"))?;
         let dead = record.combat.as_ref().is_some_and(|combat| combat.dead);
+        // The grant updates retained strength, so the holder's combined bonus must fit before the
+        // pickup event, life pools or consumption change.
+        self.unit_hero_bonus(unit)?
+            .strength
+            .checked_add(effect.strength())
+            .ok_or_else(|| {
+                self.inner.error(
+                    "inventory",
+                    Failure::UnitActivity("powerup strength overflows combined hero bonus".into()),
+                )
+            })?;
         let grant = grant_strength(
             record.permanent_strength,
             vitals.life,
