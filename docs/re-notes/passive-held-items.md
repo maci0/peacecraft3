@@ -144,3 +144,23 @@ silent wrong stat.
   host (`held_flat_damage_stacks_transfers_and_removes`, `death_drops_held_flat_damage`,
   `damage_row_outside_admission_and_overflow_refuse_atomically`,
   `held_flat_damage_changes_real_damage`).
+
+## Next selected startup refusal: life regeneration
+
+The selected Human01 victory/Continue test on `5d1f3ef` passes the former
+`ratf` damage-item refusal and stops at `rlif`, whose passive ability is
+`Arel`. The diagnostic is emitted by `UnitAddItem` in `Blizzard.j:2640`.
+This is a real startup run with the selected Legacy install, not a static
+prediction. Its exit status is 101; the local receipt is
+`.scratch/campaign-continuation/held-damage-selected.log`.
+
+The reviewed image registers `Arel` at `0xbca040`, with base `AREB`, through
+the same immediate class-registration shape. Shipped metadata `Ihpr` maps
+an integer Data field to `Arel,Arll`; its editor string
+`WESTRING_AEVAL_IHPR` is `Hit Points Regenerated Per Second`. This establishes
+the source field and its unit, not eligibility, stack interaction or timing.
+The existing regeneration consumer integrates base rates and hero attributes
+on the simulation clock. A held-item contribution must respect equip/drop/
+transfer boundaries, avoid integrating a new rate over time before pickup,
+and keep native interaction with the unit's regeneration type unqualified
+until it is checked. No regeneration item is admitted by this note.
