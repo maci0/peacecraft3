@@ -90,7 +90,7 @@ impl ObjectHost {
             }),
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         };
-        self.begin_unit_enumeration(name, group, candidates, predicate)
+        self.begin_unit_enumeration("GroupEnumUnitsSelected", group, candidates, predicate)
     }
 
     pub(super) fn selection_native(

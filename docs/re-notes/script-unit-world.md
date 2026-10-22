@@ -639,6 +639,51 @@ parity or playable campaign is claimed. Immutable checks and rejected attempts
 remain under `.scratch/campaign-unit-world-root-20261019/live-world-1/`.
 
 
+## Player-owned enumeration (2026-10-22)
+
+The selected `common.j` declares `GroupEnumUnitsOfPlayer(group, player,
+boolexpr)`. Its `Blizzard.j` helpers `GetUnitsOfPlayerMatching` and
+`GetUnitsOfPlayerAll` create a group, enumerate it and destroy the expression.
+An ordinary-input route through unchanged Human01 reached this previously
+unsupported enumeration at requested tick 28475, after the ledger reward.
+
+The host now reuses the rectangle/selection predicate pipeline for this query.
+Candidates are extant executed units whose current owner equals the validated
+player. Hidden and dead unit records remain candidates; removed tombstones do
+not. Ownership transfers affect the next query. The destination is replaced,
+and `Filter` and `Condition` callbacks execute on the same owned VM, with nested
+`GetFilterUnit` context restored on return or error. Null filters require no
+callback. Null or invalid players refuse explicitly; their native behavior is
+not qualified. The optional declaration must match its loaded signature/source
+when placement is admitted.
+
+Creation-order snapshots, including eligibility fixed before predicates run,
+are recreation choices shared with the existing enumeration path. Native
+enumeration order and mutation during predicates remain unqualified. Filtered
+queries preserve earlier callback effects if a later callback fails. Unfiltered
+replacement preflights membership capacity before clearing the destination;
+this also corrects that ordering in the shared selection path. No RNG draw or
+gameplay allowance is added.
+
+Synthetic tests exercise current ownership, hidden and removed identities,
+nested predicates followed by real `ForGroup` callbacks, refusal without losing
+the previous group, and native-specific predicate diagnostics with context
+unwinding. These do not establish native or rendered equivalence.
+
+The retained unchanged-Human01 controller now passes the former query refusal
+and reaches requested tick 29361 (step 425), where shared unit activity work is
+exhausted. It does not reach chapter victory. The controller still uses ordinary
+orders and read-only failure inspection; adaptive commands are not an identical
+input-journal comparison. The later work failure remains a separate blocker.
+
+Private validation: 1,139 play library tests pass with 33 ignored; the focused
+enumeration suite passes all 11 cases. Strict all-target Clippy, the play WASM
+library check and native application all-target check pass. The selected-map
+opening repeat, authored Escape/control restoration and authored XP-cap gates
+pass. The longer controller fails at the work frontier above, so its combined
+run is recorded as three passing gates and one failing route, not a green
+campaign acceptance result.
+
 ## Filtered rectangle predicates (2026-10-19)
 
 Rectangle queries now evaluate loaded `Filter` and `Condition` callbacks on the

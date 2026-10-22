@@ -50,6 +50,155 @@ fn vm(script: &str, members: usize, declarations: &str) -> Vm {
 }
 
 #[test]
+fn player_enumeration_uses_current_owner_including_hidden_but_not_removed_units() {
+    let mut v = vm(
+        r#"
+function run takes nothing returns nothing
+call GroupAddUnit(TARGET, C)
+call SetUnitOwner(C, Player(5), false)
+call ShowUnit(A, false)
+call RemoveUnit(B)
+call GroupEnumUnitsOfPlayer(TARGET, Player(4), null)
+call GroupEnumUnitsOfPlayer(INNER, Player(5), null)
+endfunction
+"#,
+        8,
+        "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\nnative ShowUnit takes unit u, boolean show returns nothing\nnative RemoveUnit takes unit u returns nothing\n",
+    );
+    v.call("run", &[]).unwrap();
+    for (group, member) in [("TARGET", "A"), ("INNER", "C")] {
+        let group = v.global(group);
+        let member = v.global(member);
+        assert_eq!(
+            v.host()
+                .inner
+                .native("FirstOfGroup", std::slice::from_ref(&group))
+                .unwrap(),
+            member
+        );
+        v.host()
+            .inner
+            .native("GroupRemoveUnit", &[group.clone(), member])
+            .unwrap();
+        assert_eq!(
+            v.host().inner.native("FirstOfGroup", &[group]).unwrap(),
+            Value::Null
+        );
+    }
+}
+
+#[test]
+fn nested_player_filters_restore_candidates_and_feed_the_real_group_callback() {
+    let mut v = vm(
+        r#"
+function InnerOwner takes nothing returns boolean
+set INNER_HITS = INNER_HITS + 1
+if GetFilterUnit() != B then
+set OK = false
+endif
+return true
+endfunction
+function OuterOwner takes nothing returns boolean
+local unit before = GetFilterUnit()
+set HITS = HITS + 1
+if before != A and before != C then
+set OK = false
+endif
+call GroupEnumUnitsOfPlayer(INNER, Player(5), Condition(function InnerOwner))
+if GetFilterUnit() != before then
+set OK = false
+endif
+return before == C
+endfunction
+function Visit takes nothing returns nothing
+if GetEnumUnit() != C or GetFilterUnit() != null then
+set OK = false
+endif
+set HITS = HITS + 10
+endfunction
+function run takes nothing returns nothing
+call GroupAddUnit(TARGET, B)
+call GroupEnumUnitsOfPlayer(TARGET, Player(4), Filter(function OuterOwner))
+call ForGroup(TARGET, function Visit)
+endfunction
+"#,
+        8,
+        "",
+    );
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("HITS"), Value::Int(12));
+    assert_eq!(v.global("INNER_HITS"), Value::Int(2));
+    assert_eq!(v.global("OK"), Value::Bool(true));
+    for name in ["GetFilterUnit", "GetEnumUnit"] {
+        assert_eq!(v.host().inner.native(name, &[]).unwrap(), Value::Null);
+    }
+}
+
+#[test]
+fn player_query_preflight_preserves_destination_on_budget_and_identity_failure() {
+    let mut v = vm("", 1, "");
+    let group = v.global("TARGET");
+    let b = v.global("B");
+    let owner = v.host().inner.native("Player", &[Value::Int(4)]).unwrap();
+    v.host()
+        .inner
+        .native("GroupAddUnit", &[group.clone(), b.clone()])
+        .unwrap();
+    for subject in [owner, b.clone(), Value::Null] {
+        assert!(
+            v.host()
+                .inner
+                .native(
+                    "GroupEnumUnitsOfPlayer",
+                    &[group.clone(), subject, Value::Null]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            v.host()
+                .inner
+                .native("FirstOfGroup", std::slice::from_ref(&group))
+                .unwrap(),
+            b
+        );
+        assert_eq!(v.host().inner.memberships(), 1);
+    }
+}
+
+#[test]
+fn player_predicate_failure_names_its_native_and_unwinds_before_reuse() {
+    let mut v = vm(
+        r#"
+function BadOwner takes nothing returns boolean
+return 7
+endfunction
+function bad takes nothing returns nothing
+call GroupEnumUnitsOfPlayer(TARGET, Player(4), Filter(function BadOwner))
+endfunction
+function run takes nothing returns nothing
+call GroupEnumUnitsOfPlayer(TARGET, Player(5), null)
+endfunction
+"#,
+        8,
+        "",
+    );
+    let error = v.call("bad", &[]).unwrap_err().to_string();
+    assert!(error.contains("GroupEnumUnitsOfPlayer"), "{error}");
+    assert!(
+        error.contains("predicate did not return boolean"),
+        "{error}"
+    );
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+    v.call("run", &[]).unwrap();
+    let group = v.global("TARGET");
+    let b = v.global("B");
+    assert_eq!(v.host().inner.native("FirstOfGroup", &[group]).unwrap(), b);
+}
+
+#[test]
 fn owner_predicate_runs_on_the_same_vm_and_group_is_cleared_before_callbacks() {
     let mut v = vm(
         r#"

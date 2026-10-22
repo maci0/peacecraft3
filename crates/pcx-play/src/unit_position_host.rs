@@ -5,6 +5,7 @@ use pcx_script::{HandleId, ScriptCall, Value, value::FunctionId};
 use pcx_sim::world::{Definition, FieldValue};
 
 pub(super) struct Enumeration {
+    native: &'static str,
     group: HandleId,
     candidates: Vec<HandleId>,
     next: usize,
@@ -44,13 +45,22 @@ impl ObjectHost {
                 &["group", "rect", "boolexpr"][..],
                 "nothing",
             ),
+            (
+                "GroupEnumUnitsOfPlayer",
+                &["group", "player", "boolexpr"][..],
+                "nothing",
+            ),
         ] {
+            if name == "GroupEnumUnitsOfPlayer" && self.inner.program.natives().get(name).is_none()
+            {
+                continue;
+            }
             Self::contract(
                 &self.inner,
                 name,
                 parameters,
                 result,
-                name != "GroupEnumUnitsInRect",
+                matches!(name, "GetUnitX" | "GetUnitY"),
                 None,
             )?;
             if self
@@ -160,16 +170,21 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<ScriptCall>, Error> {
-        if name != "GroupEnumUnitsInRect" || self.unit_placement.is_none() {
+        let name = match name {
+            "GroupEnumUnitsInRect" => "GroupEnumUnitsInRect",
+            "GroupEnumUnitsOfPlayer" => "GroupEnumUnitsOfPlayer",
+            _ => return Ok(None),
+        };
+        if self.unit_placement.is_none() || self.inner.program.natives().get(name).is_none() {
             return Ok(None);
         }
         if matches!(args, [_, _, Value::Null]) {
             return Ok(None);
         }
-        let [group, Value::Handle(rect), Value::Handle(filter)] = args else {
+        let [group, Value::Handle(subject), Value::Handle(filter)] = args else {
             return Err(self.inner.error(
                 name,
-                Failure::UnitState("group, rectangle and boolean expression required"),
+                Failure::UnitState("group, query handle and boolean expression required"),
             ));
         };
         let predicate = match self.inner.entry(*filter)? {
@@ -177,27 +192,54 @@ impl ObjectHost {
             Entry::Condition { .. } => self.condition_callback(*filter)?.function,
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         };
-        let (group, candidates) = self.rectangle_candidates(group, *rect)?;
+        let (group, candidates) = if name == "GroupEnumUnitsOfPlayer" {
+            self.player_candidates(group, *subject)?
+        } else {
+            self.rectangle_candidates(group, *subject)?
+        };
         self.begin_unit_enumeration(name, group, candidates, Some(predicate))
+    }
+
+    fn player_candidates(
+        &self,
+        group: &Value,
+        player: HandleId,
+    ) -> Result<(HandleId, Vec<HandleId>), Error> {
+        let name = "GroupEnumUnitsOfPlayer";
+        let group = self.inner.id(self.group_index(group, name)?, name)?;
+        self.player_settings(player)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let mut candidates = Vec::new();
+        for (index, entry) in self.inner.arena.iter().enumerate() {
+            // shortcut: snapshot extant units in creation order; qualify native mutation/order traces before changing this policy.
+            if matches!(entry, Entry::Unit { record } if record.owner == player) {
+                candidates
+                    .try_reserve(1)
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                candidates.push(self.inner.id(index, name)?);
+            }
+        }
+        Ok((group, candidates))
     }
 
     /// Replace `group` with `candidates` that pass `predicate`, in order. Without a
     /// predicate every candidate joins immediately.
     pub(super) fn begin_unit_enumeration(
         &mut self,
-        name: &str,
+        name: &'static str,
         group: HandleId,
         candidates: Vec<HandleId>,
         predicate: Option<FunctionId>,
     ) -> Result<Option<ScriptCall>, Error> {
         let Some(predicate) = predicate.filter(|_| !candidates.is_empty()) else {
-            self.members.retain(|(g, _)| *g != group);
-            if self.members.len() + candidates.len() > self.group_limit.unwrap_or(0) {
+            let retained = self.members.iter().filter(|(g, _)| *g != group).count();
+            if candidates.len() > self.group_limit.unwrap_or(0).saturating_sub(retained) {
                 return Err(self.inner.error(name, Failure::Budget("group membership")));
             }
             self.members
                 .try_reserve(candidates.len())
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            self.members.retain(|(g, _)| *g != group);
             self.members
                 .extend(candidates.into_iter().map(|unit| (group, unit)));
             return Ok(Some(ScriptCall::Return(Value::Null)));
@@ -213,6 +255,7 @@ impl ObjectHost {
         self.members.retain(|(g, _)| *g != group);
         // shortcut: new births during a predicate join the next query; qualify mutable spatial iteration before extending it.
         self.callbacks.push(NativeCallback::Rectangle(Enumeration {
+            native: name,
             group,
             candidates,
             next: 1,
@@ -222,7 +265,10 @@ impl ObjectHost {
     }
 
     pub(super) fn continue_rectangle_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
-        let name = "GroupEnumUnitsInRect";
+        let name = match self.callbacks.last() {
+            Some(NativeCallback::Rectangle(frame)) => frame.native,
+            _ => "unit enumeration",
+        };
         let Value::Bool(accepted) = value else {
             return Err(self
                 .inner
@@ -231,7 +277,7 @@ impl ObjectHost {
         let Some(NativeCallback::Rectangle(frame)) = self.callbacks.last() else {
             return Err(self
                 .inner
-                .error(name, Failure::UnitState("no active rectangle predicate")));
+                .error(name, Failure::UnitState("no active unit predicate")));
         };
         let group = frame.group;
         let candidate = frame.candidates[frame.next - 1];
@@ -287,12 +333,16 @@ impl ObjectHost {
                     .error(name, Failure::UnitState("no arguments expected")))
             });
         }
-        if !matches!(name, "GetUnitX" | "GetUnitY" | "GroupEnumUnitsInRect") {
+        if !matches!(
+            name,
+            "GetUnitX" | "GetUnitY" | "GroupEnumUnitsInRect" | "GroupEnumUnitsOfPlayer"
+        ) {
             return None;
         }
+        self.inner.program.natives().get(name)?;
         Some((|| {
             let fail = |detail| self.inner.error(name, Failure::UnitState(detail));
-            if name != "GroupEnumUnitsInRect" {
+            if matches!(name, "GetUnitX" | "GetUnitY") {
                 let [Value::Handle(id)] = args else {
                     return Err(fail("one executed unit required"));
                 };
@@ -303,12 +353,16 @@ impl ObjectHost {
                     .ok_or_else(|| fail("accepted unit position missing"))?;
                 return Ok(Value::Real(position[usize::from(name == "GetUnitY")]));
             }
-            let [group, Value::Handle(rect), Value::Null] = args else {
+            let [group, Value::Handle(subject), Value::Null] = args else {
                 return Err(fail(
-                    "filtered rectangle enumeration requires the owned VM callback path",
+                    "filtered unit enumeration requires the owned VM callback path",
                 ));
             };
-            let (group, found) = self.rectangle_candidates(group, *rect)?;
+            let (group, found) = if name == "GroupEnumUnitsOfPlayer" {
+                self.player_candidates(group, *subject)?
+            } else {
+                self.rectangle_candidates(group, *subject)?
+            };
             let retained = self.members.iter().filter(|(g, _)| *g != group).count();
             if found.len() > self.group_limit.unwrap_or(0).saturating_sub(retained) {
                 return Err(self.inner.error(name, Failure::Budget("group membership")));
