@@ -3549,16 +3549,50 @@ fn fresh_units_follow_the_owner_and_held_flat_maximum_life_is_unscaled() {
 }
 
 #[test]
-fn zero_and_negative_raw_factors_drive_pools_while_the_stored_factor_clamps() {
+fn destructive_raw_factors_refuse_atomically_without_death_semantics() {
     let (mut h, hero) = health_vm();
-    assert_eq!(health_apply(&mut h, 0.0), 0.01);
-    assert_eq!(life(&mut h, hero), (0.0, 0.0));
-    health_apply(&mut h, 1.0);
-    assert_eq!(life(&mut h, hero), (0.0, 750.0));
-    assert_eq!(health_apply(&mut h, -0.5), 0.01);
-    assert_eq!(life(&mut h, hero), (0.0, -375.0));
-    let fresh = health_create(&mut h, 32.0);
-    assert_eq!(life(&mut h, fresh), (8.0, 8.0));
+    let ordinary = health_create(&mut h, 32.0);
+    let before_hero = life(&mut h, hero);
+    let before_ordinary = life(&mut h, ordinary);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    for factor in [0.0, -0.5] {
+        assert!(
+            h.native("SetPlayerHandicap", &[player.clone(), Value::Real(factor)])
+                .is_err()
+        );
+        assert_eq!(life(&mut h, hero), before_hero);
+        assert_eq!(life(&mut h, ordinary), before_ordinary);
+        let Value::Real(stored) = h
+            .native("GetPlayerHandicap", std::slice::from_ref(&player))
+            .unwrap()
+        else {
+            panic!("handicap")
+        };
+        assert_eq!(stored, 1.0);
+    }
+}
+
+#[test]
+fn nonfinite_health_factors_refuse_for_live_owners_even_without_units() {
+    let (mut h, hero) = health_vm();
+    let empty = h.native("Player", &[Value::Int(5)]).unwrap();
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(1.0)
+    );
+    for factor in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            h.native("SetPlayerHandicap", &[empty.clone(), Value::Real(factor)])
+                .is_err()
+        );
+        assert_eq!(
+            h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+                .unwrap(),
+            Value::Real(1.0)
+        );
+    }
+    assert_eq!(life(&mut h, hero), (750.0, 750.0));
 }
 
 #[test]

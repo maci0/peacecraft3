@@ -647,6 +647,7 @@ pub(crate) fn host_inputs(
         numeric: None,
         destructable_restore: None,
         experience_handicap: None,
+        health_handicap: None,
         hero_skills: None,
         enumeration: EnumContracts {
             context: "synthetic admitted map enumeration".into(),

@@ -2,6 +2,7 @@
 //! Native path: STR `b3dd30` -> `b3fd00` -> mode 1 `6be8c0`, which keeps the current/max ratio.
 //! Unlike `SetHeroLevel` mode 2, the current pool is not set to the new absolute missing amount.
 use super::inventory_powerup::StrengthEffect;
+use crate::player_handicap::LifeRounding;
 
 /// One hero's retained permanent strength plus its life pools after the grant.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -11,19 +12,32 @@ pub struct Grant {
     pub max_life: f32,
 }
 
-/// Nearest integer with half upward, matching the reviewed helper at `0x9a1d70`: add one half
-/// (`0x10db0a8`) then floor (`0x9a1520`).
+/// Legacy half-up rounding for paths that have not yet admitted the selected
+/// unit-pool rounder. New health and strength paths pass `LifeRounding` instead.
 pub(super) fn round_life(value: f32) -> f32 {
     (value + 0.5).floor()
 }
 
 /// One health component after the owner's handicap factor. The native unit-pool
 /// callback rounds the scaled component before it computes the pool delta.
-pub(super) fn scale_life_component(value: f32, factor: f32) -> f32 {
+pub(super) fn scale_life_component(value: f32, factor: f32, rounding: Option<LifeRounding>) -> f32 {
     if factor == 1.0 {
         value
     } else {
-        round_life(value * factor)
+        round_scaled_life_delta(value, factor, rounding)
+    }
+}
+
+/// Strength-item and powerup deltas round even at the identity factor. Creation's
+/// unscaled base HP uses `scale_life_component` and keeps its distinct contract.
+pub(super) fn round_scaled_life_delta(
+    value: f32,
+    factor: f32,
+    rounding: Option<LifeRounding>,
+) -> f32 {
+    match rounding {
+        Some(rounding) => rounding.round(value * factor),
+        None => round_life(value * factor),
     }
 }
 
@@ -36,7 +50,7 @@ pub fn reprice_life(
     life_per_strength: f32,
     strength_delta: i32,
 ) -> Result<(f32, f32), String> {
-    reprice_life_scaled(life, max_life, life_per_strength, strength_delta, 1.0)
+    reprice_life_scaled(life, max_life, life_per_strength, strength_delta, 1.0, None)
 }
 
 /// Strength life change after the owner's health handicap. `factor` scales the
@@ -47,6 +61,7 @@ pub(crate) fn reprice_life_scaled(
     life_per_strength: f32,
     strength_delta: i32,
     factor: f32,
+    rounding: Option<LifeRounding>,
 ) -> Result<(f32, f32), String> {
     let fail = |why: &str| format!("strength life change: {why}");
     if !life.is_finite()
@@ -56,7 +71,8 @@ pub(crate) fn reprice_life_scaled(
     {
         return Err(fail("non-finite life value"));
     }
-    let change = scale_life_component(strength_delta as f32 * life_per_strength, factor);
+    let change =
+        round_scaled_life_delta(strength_delta as f32 * life_per_strength, factor, rounding);
     change_life_pools(life, max_life, change).map_err(|e| fail(&e))
 }
 
@@ -133,6 +149,12 @@ fn change_mana_pools(mana: f32, max_mana: f32, change: f32) -> Result<(f32, f32)
     Ok((round_life(new_max * ratio).min(new_max), new_max))
 }
 
+#[derive(Clone, Copy)]
+pub struct HealthScale {
+    pub handicap: f32,
+    pub rounding: Option<LifeRounding>,
+}
+
 /// Applies `effect` to a hero's retained strength and life pools, or refuses without changes.
 pub fn grant_strength(
     retained: i32,
@@ -141,7 +163,7 @@ pub fn grant_strength(
     life_per_strength: f32,
     effect: StrengthEffect,
     dead: bool,
-    health_handicap: f32,
+    scale: HealthScale,
 ) -> Result<Grant, String> {
     let strength = retained
         .checked_add(effect.strength())
@@ -151,7 +173,8 @@ pub fn grant_strength(
         max_life,
         life_per_strength,
         effect.strength(),
-        health_handicap,
+        scale.handicap,
+        scale.rounding,
     )
     .map_err(|e| format!("powerup strength grant: {e}"))?;
     let (life, max_life) = clamp_life_pools(life, max_life, dead);
@@ -170,9 +193,16 @@ mod tests {
         StrengthEffect { strength }
     }
 
+    fn scale() -> HealthScale {
+        HealthScale {
+            handicap: 1.0,
+            rounding: None,
+        }
+    }
+
     #[test]
     fn percentage_of_life_is_kept_when_maximum_grows() {
-        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2), false, 1.0).unwrap();
+        let grant = grant_strength(0, 50.0, 100.0, 25.0, effect(2), false, scale()).unwrap();
         assert_eq!(
             grant,
             Grant {
@@ -185,7 +215,7 @@ mod tests {
 
     #[test]
     fn retained_strength_accumulates_across_grants() {
-        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1), false, 1.0).unwrap();
+        let first = grant_strength(0, 100.0, 100.0, 25.0, effect(1), false, scale()).unwrap();
         let second = grant_strength(
             first.strength,
             first.life,
@@ -193,7 +223,7 @@ mod tests {
             25.0,
             effect(1),
             false,
-            1.0,
+            scale(),
         )
         .unwrap();
         assert_eq!(
@@ -209,18 +239,18 @@ mod tests {
     #[test]
     fn zero_strength_keeps_pools_and_refuses_bad_pools_atomically() {
         assert_eq!(
-            grant_strength(3, 40.0, 80.0, 25.0, effect(0), false, 1.0).unwrap(),
+            grant_strength(3, 40.0, 80.0, 25.0, effect(0), false, scale()).unwrap(),
             Grant {
                 strength: 3,
                 life: 40.0,
                 max_life: 80.0
             }
         );
-        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1), false, 1.0).is_err());
-        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1), false, 1.0).is_err());
-        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1), false, 1.0).is_err());
-        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1), false, 1.0).is_err());
-        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1), false, 1.0).is_err());
+        assert!(grant_strength(0, 90.0, 80.0, 25.0, effect(1), false, scale()).is_err());
+        assert!(grant_strength(0, 10.0, 0.0, 25.0, effect(1), false, scale()).is_err());
+        assert!(grant_strength(0, f32::NAN, 80.0, 25.0, effect(1), false, scale()).is_err());
+        assert!(grant_strength(i32::MAX, 10.0, 80.0, 25.0, effect(1), false, scale()).is_err());
+        assert!(grant_strength(0, 10.0, 80.0, -100.0, effect(1), false, scale()).is_err());
     }
 
     #[test]
@@ -248,9 +278,9 @@ mod tests {
 
     #[test]
     fn grants_clamp_tiny_living_life_to_one_and_dead_life_to_zero() {
-        let living = grant_strength(0, 0.1, 100.0, 25.0, effect(1), false, 1.0).unwrap();
+        let living = grant_strength(0, 0.1, 100.0, 25.0, effect(1), false, scale()).unwrap();
         assert_eq!(living.life, 1.0);
-        let dead = grant_strength(0, 0.1, 100.0, 25.0, effect(1), true, 1.0).unwrap();
+        let dead = grant_strength(0, 0.1, 100.0, 25.0, effect(1), true, scale()).unwrap();
         assert_eq!(dead.life, 0.0);
     }
 }

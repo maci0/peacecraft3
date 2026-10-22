@@ -112,7 +112,7 @@ impl ObjectHost {
             }
         }
         let players = self.players.as_mut().expect("checked players");
-        let initial = rules.null_result();
+        let initial = rules.initial_result();
         for row in &mut players.rows {
             if row.health_handicap.is_none() {
                 row.health_handicap = Some(initial);
@@ -120,6 +120,14 @@ impl ObjectHost {
         }
         players.health_handicap = Some(rules);
         Ok(self)
+    }
+
+    pub(crate) fn health_rounding(&self) -> Option<crate::player_handicap::LifeRounding> {
+        self.players
+            .as_ref()?
+            .health_handicap
+            .as_ref()
+            .map(crate::player_handicap::HealthRules::rounding)
     }
 
     pub(super) fn health_handicap_native(

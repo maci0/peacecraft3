@@ -704,18 +704,55 @@ impl ObjectHost {
         owner: HandleId,
         requested: f32,
     ) -> Result<(), Error> {
-        let projections = self
+        let fail = |detail: &str| {
+            self.inner.error(
+                "SetPlayerHandicap",
+                Failure::UnitActivity(detail.to_string()),
+            )
+        };
+        if !requested.is_finite() {
+            return Err(fail("finite health handicap required"));
+        }
+        let owned: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, record)| record.owner == owner && record.vitals.is_some())
-            .map(|(id, record)| {
-                self.project_health_handicap(id, record, requested)
-                    .map(|vitals| (id, vitals))
-                    .map_err(|e| {
-                        self.inner
-                            .error("SetPlayerHandicap", Failure::UnitActivity(e))
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|(id, _)| id)
+            .collect();
+        if owned.is_empty() {
+            return Ok(());
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| fail("health handicap requires the game clock"))?;
+        let bonuses = self
+            .vitals_bonuses()
+            .ok_or_else(|| fail("health handicap requires admitted vitals"))?;
+        let rounding = self.health_rounding();
+        let mut work = usize::MAX;
+        let mut projections = Vec::with_capacity(owned.len());
+        for id in owned {
+            let record = self.executed_unit(id)?;
+            let mut vitals = record.vitals.expect("filtered to vitals");
+            if let Some((life, mana)) =
+                self.project_regen_unit(id, &bonuses, now, None, &mut work)?
+            {
+                vitals.life = life;
+                vitals.mana = mana;
+                vitals.regen.through = now;
+            }
+            let projected = self
+                .project_health_handicap(id, record, vitals, requested, rounding)
+                .map_err(|e| {
+                    self.inner
+                        .error("SetPlayerHandicap", Failure::UnitActivity(e))
+                })?;
+            if projected.max_life <= 0.0 || (vitals.life > 0.0 && projected.life <= 0.0) {
+                return Err(fail(
+                    "destructive health handicap requires a death transition",
+                ));
+            }
+            projections.push((id, projected));
+        }
         for (id, vitals) in projections {
             match self.inner.entry_mut(id)? {
                 Entry::Unit { record } => {

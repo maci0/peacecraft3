@@ -485,8 +485,15 @@ impl ObjectHost {
                 Failure::UnitState("unit vitals required before strength changes"),
             )
         })?;
-        reprice_life_scaled(pools.0, pools.1, life_per_strength, delta, health_handicap)
-            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+        reprice_life_scaled(
+            pools.0,
+            pools.1,
+            life_per_strength,
+            delta,
+            health_handicap,
+            self.health_rounding(),
+        )
+        .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
     }
 
     /// Project `delta` maximum life onto already-selected life pools.
@@ -806,7 +813,10 @@ impl ObjectHost {
             life_per_strength,
             effect,
             dead,
-            record.health_handicap,
+            crate::inventory_powerup_host::HealthScale {
+                handicap: record.health_handicap,
+                rounding: self.health_rounding(),
+            },
         )
         .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))?;
         // Queue the pickup before the first write: queueing is the only fallible step left.

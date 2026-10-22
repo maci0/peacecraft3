@@ -35,11 +35,30 @@ pub struct HealthBinding {
     pub getter: SourceWindow,
     pub maximum_initializer: SourceWindow,
     pub null_initializer: SourceWindow,
+    pub reset: SourceWindow,
+    pub rounder: SourceWindow,
+    pub floor: SourceWindow,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("player health handicap {0}")]
 pub struct HealthError(pub String);
+
+/// Nearest-integer policy from the unit-pool callback's own rounder: add the
+/// selected bias then floor through the selected routine.
+#[derive(Clone, Copy, Debug)]
+pub struct LifeRounding {
+    bias: f32,
+}
+
+impl LifeRounding {
+    pub fn round(self, value: f32) -> f32 {
+        (value + self.bias).floor()
+    }
+    pub fn bias(self) -> f32 {
+        self.bias
+    }
+}
 
 #[derive(Debug)]
 pub struct HealthRules {
@@ -48,6 +67,8 @@ pub struct HealthRules {
     minimum: f32,
     maximum: f32,
     null: f32,
+    initial: f32,
+    rounding: LifeRounding,
 }
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
@@ -100,7 +121,7 @@ impl Rules {
             &binding.null_initializer,
         ];
         if image.len() > budget.image_bytes
-            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 4
+            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 8
                 > budget.profile_bytes as u64
         {
             return Err(fail("input budget exceeded"));
@@ -233,9 +254,12 @@ impl HealthRules {
             &binding.getter,
             &binding.maximum_initializer,
             &binding.null_initializer,
+            &binding.reset,
+            &binding.rounder,
+            &binding.floor,
         ];
         if image.len() > budget.image_bytes
-            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 4
+            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 8
                 > budget.profile_bytes as u64
         {
             return Err(fail("input budget exceeded"));
@@ -256,6 +280,8 @@ impl HealthRules {
         let code = |w| pe.window(w, true).map_err(|e| fail(&e.to_string()));
         let setter = code(&binding.setter)?;
         let getter = code(&binding.getter)?;
+        let reset = code(&binding.reset)?;
+        let rounder = code(&binding.rounder)?;
         let setter_shape = shape_with_gaps(
             setter,
             192,
@@ -333,10 +359,39 @@ impl HealthRules {
             ],
             &[(7, 4), (19, 4)],
         );
+        let reset_shape = shape_with_gaps(
+            reset,
+            67,
+            &[
+                (0, &[0x8d, 0x8e]),
+                (56, &[0x8b, 0x01, 0x6a, 0x01, 0x68]),
+                (65, &[0xff, 0x10]),
+            ],
+            &[(2, 4), (61, 4)],
+        );
+        let rounder_shape = shape_with_gaps(
+            rounder,
+            40,
+            &[
+                (0, &[0x55, 0x8b, 0xec, 0x51, 0x68]),
+                (9, &[0xff, 0x75, 0x0c, 0x8d, 0x45, 0xfc, 0x50, 0xe8]),
+                (21, &[0x50, 0xff, 0x75, 0x08, 0xe8]),
+                (
+                    30,
+                    &[0x8b, 0x45, 0x08, 0x83, 0xc4, 0x14, 0x8b, 0xe5, 0x5d, 0xc3],
+                ),
+            ],
+            &[(5, 4), (17, 4), (26, 4)],
+        );
         if !setter_shape
             || !getter_shape
+            || !reset_shape
+            || !rounder_shape
             || word(setter, 30) != word(getter, 27)
             || word(setter, 169).and_then(|v| v.checked_add(4)) != word(getter, 27)
+            || word(reset, 2) != word(setter, 169)
+            || word(reset, 61) != word(getter, 19)
+            || call(rounder, binding.rounder.va, 25) != Some(binding.floor.va)
         {
             return Err(fail("unsupported wrapper shape or relationship"));
         }
@@ -352,8 +407,13 @@ impl HealthRules {
                 binding.null_initializer.va,
             )
             .ok_or_else(|| fail("null real initializer"))?;
-        if Some(max_address) != word(setter, 155) || Some(null_address) != word(getter, 19) {
-            return Err(fail("initializer destination does not match wrapper"));
+        if Some(max_address) != word(setter, 155)
+            || Some(null_address) != word(getter, 19)
+            || Some(null_address) != word(reset, 61)
+        {
+            return Err(fail(
+                "initializer and reset destinations do not match wrapper",
+            ));
         }
         let threshold_address =
             word(setter, 59).ok_or_else(|| fail("truncated change threshold"))?;
@@ -374,12 +434,25 @@ impl HealthRules {
             )
             .ok_or_else(|| fail("truncated minimum"))?,
         );
+        let bias_address = word(rounder, 5).ok_or_else(|| fail("truncated rounding bias"))?;
+        let rounding = LifeRounding {
+            bias: f32::from_bits(
+                word(
+                    pe.read_from(bias_address, false)
+                        .map_err(|e| fail(&e.to_string()))?,
+                    0,
+                )
+                .ok_or_else(|| fail("truncated rounding bias"))?,
+            ),
+        };
         if !threshold.is_finite()
             || threshold <= 0.0
             || !minimum.is_finite()
             || !maximum.is_finite()
             || minimum > maximum
             || !null.is_finite()
+            || !rounding.bias.is_finite()
+            || rounding.bias < 0.0
         {
             return Err(fail("invalid source limits"));
         }
@@ -389,6 +462,8 @@ impl HealthRules {
             minimum,
             maximum,
             null,
+            initial: null,
+            rounding,
         })
     }
     pub fn origin(&self) -> &AssetIdentity {
@@ -408,6 +483,13 @@ impl HealthRules {
     }
     pub fn null_result(&self) -> f32 {
         self.null
+    }
+    /// Factor installed by the property reset path, not inferred from the null-player return.
+    pub fn initial_result(&self) -> f32 {
+        self.initial
+    }
+    pub fn rounding(&self) -> LifeRounding {
+        self.rounding
     }
     pub fn changes(&self, stored: f32, requested: f32) -> bool {
         let difference = (requested - stored).abs();
