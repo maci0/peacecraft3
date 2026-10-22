@@ -37,6 +37,17 @@ reserved events. Harvest can prepare before updating carry, then commit after
 those writes. Destination toggles for stationary collision layers are likewise
 infallible at commit because their layers are already retained.
 
+The selected `common.j` declares restoration as `(destructable, real life,
+boolean birth)`. The initial synthetic fixture incorrectly omitted `life`;
+the selected Human01 factory gate exposed that mismatch. The corrected path
+supports the measured dead-target, full-catalog-life, `birth=false` case.
+Other amounts, live targets and birth animation refuse before mutation until
+their remaining behavior is admitted. The reviewed handler `0x48f6f0` forwards
+both arguments to `0x6d2a30`; that path also has a special near-zero amount and
+a lower-bound branch. Those values must be derived from image operands before
+extending the support boundary. Local disassembly remains under the ignored
+`.scratch/destructable-restore-native/` directory.
+
 Script death natives deliver matching callbacks synchronously before returning:
 the host takes the reserved batch, installs the event context, and continues
 through the shared synchronous frame machinery used by player-state events. A
