@@ -348,6 +348,8 @@ pub struct MapInfo {
     pub third_string: Option<String>,
     /// Three strings written from `VERSION_LOADING_STRINGS`.
     pub loading_strings: Option<[String; 3]>,
+    /// Legacy field name: the game-data-set selector read into native header
+    /// offset `0x1e44`, not a discarded loading-screen identifier. Retained raw.
     pub loading_id: Option<u32>,
     pub loading_path: Option<String>,
     pub fog_style: Option<u32>,
@@ -623,8 +625,8 @@ impl MapInfo {
             .then(|| c.string())
             .transpose()?;
 
-        // The three loading strings, plus a u32 the game discards for
-        // VERSION_LOADING_STRINGS >= 0x11.
+        // The game-data-set selector and the following prologue strings.
+        // The legacy public field name is preserved for callers.
         let loading_id = (version >= 0x11).then(|| c.u32()).transpose()?;
         let loading_path = (version >= 0x14).then(|| c.string()).transpose()?;
         let loading_strings = if version >= VERSION_LOADING_STRINGS {
