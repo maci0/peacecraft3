@@ -53,3 +53,38 @@ Other flag values, decorative doodad behavior, rendering/visibility effects,
 native Windows, and late scripted creation after the collision cache is
 built remain separate qualification work. This does not prove an arbitrary
 bit-mask rule or a full harvest cycle.
+
+## Script life writes and repeated death deliveries
+
+A separate controlled run of the same reviewed client reports RoC and creates
+one scripted `LTlt`, with no placed instances. The script saves its observed
+maximum life, then separates each action and observation by a timer callback.
+All ten bounded markers validate. The observed maximum is 50 throughout:
+
+| Action | Observed life | Cumulative death callbacks |
+| --- | ---: | ---: |
+| Create | 50 | 0 |
+| Set life to twice the saved maximum | 50 | 0 |
+| Set life to half the saved maximum | 25 | 0 |
+| Set life to negative saved maximum | 0 | 1 |
+| Set life to saved maximum after death | 50 | 1 |
+| Kill after the positive write | 0 | 2 |
+| Explicitly restore life to saved maximum | 50 | 2 |
+| Kill after explicit restoration | 0 | 3 |
+
+The repeated callback after the positive write supports observable death
+rearming; this is stronger than a positive getter alone. These observations
+support clamped life writes and repeated death delivery for this tested tree.
+They do not establish collision, animation, other destructable classes, or
+native internal state. Values in this table are observations, not runtime
+constants; the recreation obtains maximum life from the selected catalog.
+
+Diagnostic map SHA-256 is
+`663feaaa938bea40df5f6be7f06bb283b22e303b4f50d7c5fd0dfbb9b6d5594d`;
+script SHA-256 is
+`5909fb815a6a9a2803e4f18ada22bfac9f6afbab502d88762e2408711a9ca497`.
+Raw markers, source receipts and `result.json` remain local under
+`.scratch/destructable-life-setter-probe/` in the main checkout. The owned
+reference run is stopped. Destructable death-event delivery in the recreation
+still needs its own implementation and tests; the native receipt does not
+qualify that host path.
