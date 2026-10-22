@@ -160,6 +160,15 @@ restores the cached unit. However, B's fresh control receives the original
 cross-map **override comparison remains unqualified**; successful restore
 alone does not establish which modified definition would win.
 
+Fresh-client controls then loaded the identical B map separately in RoC and
+TFT, with each edition confirmed by `VersionGet`. Both again produced a
+150-point item bonus. Thus neither transition data retention nor RoC mode
+alone explains the ineffective override. Its W3A wire/application semantics
+need qualification before another cross-map comparison. Those additional
+seven-marker controls are retained in `direct-b/` and `direct-b-tft/` beside
+the transition receipts; their absent caches are expected and do not qualify
+cross-map restoration.
+
 The reviewed image is the `3f2ed012…70eed` client identified above, launched
 with `-classic`; both maps report RoC. Revised A map SHA-256 is
 `7cd1280d2ec73e4629e239638452be7f3dc683a0735301f1dbb0ef74132e7248`;
