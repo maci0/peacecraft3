@@ -61,6 +61,7 @@ pub struct ObjectHost {
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
     unit_placement: Option<crate::unit_placement::Placement>,
     destructable_catalog: Option<destructables::DestructableCatalog>,
+    placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
     map_music: Option<music::State>,
     sound_environments: Option<environments::State>,
     quests: Option<crate::quest_session::QuestSession>,
@@ -136,6 +137,11 @@ impl ObjectHost {
             .map(|placement| placement.test_cell(cell))
     }
 
+    /// Complete authored `.doo` record retained for one placed handle.
+    pub fn placed_source(&self, id: HandleId) -> Option<destructables::PlacedSource> {
+        self.placed_sources.get(&id).copied()
+    }
+
     pub fn with_script_numeric(mut self, policy: crate::script_numeric::NumericPolicy) -> Self {
         self.numeric = Some(policy);
         self
@@ -197,6 +203,7 @@ impl ObjectHost {
             initial_blight: None,
             unit_placement: None,
             destructable_catalog: None,
+            placed_sources: std::collections::BTreeMap::new(),
             map_music: None,
             sound_environments: None,
             quests: None,
@@ -1080,7 +1087,7 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 mod destructables;
 pub use destructables::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, DestructableStats, PlacedDestructable,
+    DestructableState, DestructableStats, PlacedDestructable, PlacedSource,
 };
 
 #[path = "unit_host.rs"]

@@ -7,8 +7,8 @@
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use pcx_objects::editor::{
-    FieldSource, Overlay, SlkId,
-    defaults::{DefaultTables, Family},
+    FieldDef, FieldKind, FieldSource, Overlay, SlkId,
+    defaults::{DefaultTables, Family, Object, Unresolved},
 };
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Value};
@@ -61,11 +61,26 @@ pub struct DestructableBudget {
 }
 
 /// Where a destructable entered the session. Placed objects keep the authored
-/// creation number that also keys their collision layer.
+/// creation number that also keys their collision layer. The complete authored
+/// `.doo` record is retained separately by handle; the creation scalars here are
+/// the shared script-facing projection, not the full placed origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DestructableOrigin {
     Placed { creation_number: u32 },
     Script,
+}
+
+/// The complete authored `.doo` record for a placed destructable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacedSource {
+    pub creation_number: u32,
+    pub type_id: [u8; 4],
+    pub variation: u32,
+    pub position: [f32; 3],
+    pub angle: f32,
+    pub scale: [f32; 3],
+    pub flags: u8,
+    pub life: u8,
 }
 
 /// One executed creation. Coordinates, facing and scale are the call's finite reals.
@@ -86,14 +101,15 @@ pub struct DestructableCreation {
 }
 
 /// Script-changed runtime state; `dead` starts from the creation variant.
-/// Life is zero until the selected object catalog supplies the record's HP.
+/// Life is `None` until the selected object catalog supplies the record's HP,
+/// so no caller can observe a fabricated zero total.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DestructableState {
     pub invulnerable: bool,
     pub dead: bool,
     pub hidden: bool,
-    pub life: f32,
-    pub max_life: f32,
+    pub life: Option<f32>,
+    pub max_life: Option<f32>,
 }
 
 /// Source-derived destructable fields used by the life natives and create path.
@@ -129,57 +145,22 @@ impl DestructableCatalog {
     ) -> Result<Option<DestructableStats>, String> {
         let id = objectid.to_be_bytes();
         let name = std::str::from_utf8(&id).map_err(|_| "non-UTF8 destructable identity")?;
-        let mut found = None;
-        for (family, slk, overlay) in [
-            (
-                Family::Destructable,
-                SlkId::DestructableData,
-                &self.destructables,
-            ),
-            (Family::Doodad, SlkId::Doodads, &self.decorations),
-        ] {
-            let (base, mods) = overlay.new_object(name).unwrap_or((name, overlay.on(name)));
-            if overlay.new_object(base).is_some() {
-                return Err(format!("{name}: custom destructable base chain"));
-            }
-            let Ok(object) = self.tables.object(family, base) else {
-                continue;
-            };
-            if found.is_some() {
-                return Err(format!("{name}: ambiguous destructable family"));
-            }
-            if mods.len() > 4096 {
-                return Err(format!("{name}: destructable modification budget"));
-            }
-            found = Some((family, slk, object, mods));
-        }
-        let Some((family, slk, object, mods)) = found else {
+        let Some((family, slk, object, mods)) = self.find(name)? else {
             return Err(format!("{name}: missing destructable catalog record"));
         };
         if family != Family::Destructable {
             return Ok(None);
         }
-        let max_life = numeric_column(
-            self.tables.editor(),
-            family,
-            slk,
-            "HP",
-            object.cell(slk, "HP").map_err(|e| e.to_string())?.text,
-            mods,
-            name,
-        )?;
+        let max_life = numeric_field(self.tables.editor(), object, family, slk, "HP", mods, name)?;
         if !max_life.is_finite() || max_life <= 0.0 {
             return Err(format!("{name}: invalid authored HP"));
         }
-        let targ = column(
+        let targ = text_field(
             self.tables.editor(),
+            object,
             family,
             slk,
             "targType",
-            object
-                .cell(slk, "targType")
-                .map_err(|e| e.to_string())?
-                .text,
             mods,
             name,
         )?;
@@ -191,17 +172,58 @@ impl DestructableCatalog {
         self.stats_if_destructable(objectid)?
             .ok_or_else(|| "stationary record is not a destructable".into())
     }
+
+    fn find(&self, name: &str) -> Result<Option<Found<'_>>, String> {
+        let mut found = None;
+        for (family, slk, overlay) in [
+            (
+                Family::Destructable,
+                SlkId::DestructableData,
+                &self.destructables,
+            ),
+            (Family::Doodad, SlkId::Doodads, &self.decorations),
+        ] {
+            let custom = overlay.new_object(name);
+            let (base, mods) = custom.unwrap_or((name, overlay.on(name)));
+            if overlay.new_object(base).is_some() {
+                return Err(format!("{name}: custom destructable base chain"));
+            }
+            let present = custom.is_some() || overlay.mods.contains_key(name);
+            match self.tables.object(family, base) {
+                Ok(object) => {
+                    if object.rawcode() != base {
+                        return Err(format!(
+                            "{name}: catalog lookup resolved case-insensitively to {}",
+                            object.rawcode()
+                        ));
+                    }
+                    if found.is_some() {
+                        return Err(format!("{name}: ambiguous destructable family"));
+                    }
+                    if mods.len() > 4096 {
+                        return Err(format!("{name}: destructable modification budget"));
+                    }
+                    found = Some((family, slk, object, mods));
+                }
+                Err(Unresolved::Object { .. }) if !present => {}
+                Err(error) => {
+                    return Err(format!("{name}: malformed catalog record: {error}"));
+                }
+            }
+        }
+        Ok(found)
+    }
 }
 
-fn column<'a>(
+type Found<'a> = (Family, SlkId, Object<'a>, &'a [pcx_objects::Mod]);
+
+fn definition<'a>(
     editor: &'a pcx_objects::editor::Editor,
     family: Family,
     slk: SlkId,
     column: &str,
-    base: &'a str,
-    mods: &'a [pcx_objects::Mod],
     name: &str,
-) -> Result<&'a str, String> {
+) -> Result<&'a FieldDef, String> {
     let mut fields = editor.fields().iter().filter(|f| {
         f.from == family.metadata()
             && matches!(&f.source, FieldSource::Column { slk: s, column: c } if *s == slk && c == column)
@@ -212,66 +234,121 @@ fn column<'a>(
     if fields.next().is_some() || !matches!(metadata.index, -1 | 0) {
         return Err(format!("{name}: unsupported {column} metadata"));
     }
-    let Some(edit) = mods.iter().rev().find(|m| m.field == metadata.fourcc) else {
-        return Ok(base);
-    };
-    if edit.selectors.is_some_and(|s| s != [0, 0]) {
-        return Err(format!("{name}: unsupported {column} edit"));
+    if !metadata.measured {
+        return Err(format!("{name}: unmeasured {column} metadata"));
     }
-    match &edit.value {
-        pcx_objects::Value::Str(raw) => {
-            std::str::from_utf8(raw).map_err(|_| format!("{name}: non-UTF8 {column}"))
-        }
-        _ => Err(format!("{name}: nontext {column}")),
-    }
+    Ok(metadata)
 }
 
-fn numeric_column(
+fn chosen_mod<'a>(
+    mods: &'a [pcx_objects::Mod],
+    definition: &FieldDef,
+    name: &str,
+    column: &str,
+) -> Result<Option<&'a pcx_objects::Mod>, String> {
+    let Some(edit) = mods.iter().rev().find(|m| m.field == definition.fourcc) else {
+        return Ok(None);
+    };
+    if edit.selectors.is_some_and(|s| s != [0, 0]) {
+        return Err(format!("{name}: unsupported {column} edit selectors"));
+    }
+    if edit.value_type.word() != definition.kind.wire_word() {
+        return Err(format!(
+            "{name}: {column} edit has {:?} wire type, metadata declares {}",
+            edit.value_type, definition.kind
+        ));
+    }
+    Ok(Some(edit))
+}
+
+fn numeric_field(
     editor: &pcx_objects::editor::Editor,
+    object: Object<'_>,
     family: Family,
     slk: SlkId,
-    column_name: &str,
-    base: &str,
+    column: &str,
     mods: &[pcx_objects::Mod],
     name: &str,
 ) -> Result<f32, String> {
-    let mut fields = editor.fields().iter().filter(|f| {
-        f.from == family.metadata()
-            && matches!(&f.source, FieldSource::Column { slk: s, column: c } if *s == slk && c == column_name)
-    });
-    let metadata = fields
-        .next()
-        .ok_or_else(|| format!("{name}: missing {column_name} metadata"))?;
-    if fields.next().is_some() || !matches!(metadata.index, -1 | 0) {
-        return Err(format!("{name}: unsupported {column_name} metadata"));
+    let definition = definition(editor, family, slk, column, name)?;
+    if !matches!(
+        definition.kind,
+        FieldKind::Int | FieldKind::Real | FieldKind::Unreal
+    ) {
+        return Err(format!(
+            "{name}: unsupported {column} metadata type {}",
+            definition.kind
+        ));
     }
-    mods.iter()
-        .rev()
-        .find(|m| m.field == metadata.fourcc)
-        .map(|edit| {
-            if edit.selectors.is_some_and(|s| s != [0, 0]) {
-                return Err(format!("{name}: unsupported {column_name} edit"));
-            }
-            match &edit.value {
-                pcx_objects::Value::Int(value) => Ok(*value as f32),
-                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value) => Ok(*value),
-                pcx_objects::Value::Str(raw) => std::str::from_utf8(raw)
-                    .map_err(|_| format!("{name}: non-UTF8 {column_name}"))?
-                    .parse::<f32>()
-                    .map_err(|_| format!("{name}: invalid {column_name}")),
-            }
-        })
-        .unwrap_or_else(|| {
-            base.parse::<f32>()
-                .map_err(|_| format!("{name}: invalid {column_name}"))
-        })
+    let mapped = object
+        .field(definition.fourcc)
+        .map_err(|error| format!("{name}: {column}: {error}"))?;
+    let base = match (definition.kind, mapped.value) {
+        (FieldKind::Int, pcx_objects::editor::defaults::Value::Integer(value)) => value as f64,
+        (
+            FieldKind::Real | FieldKind::Unreal,
+            pcx_objects::editor::defaults::Value::Real(value),
+        ) => value,
+        _ => return Err(format!("{name}: invalid authored {column}")),
+    };
+    let value = match chosen_mod(mods, definition, name, column)? {
+        None => base,
+        Some(edit) => match (definition.kind, &edit.value) {
+            (FieldKind::Int, pcx_objects::Value::Int(value)) => f64::from(*value),
+            (
+                FieldKind::Real | FieldKind::Unreal,
+                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value),
+            ) => f64::from(*value),
+            _ => return Err(format!("{name}: invalid {column} edit value")),
+        },
+    };
+    if !value.is_finite() {
+        return Err(format!("{name}: nonfinite authored {column}"));
+    }
+    Ok(value as f32)
+}
+
+fn text_field(
+    editor: &pcx_objects::editor::Editor,
+    object: Object<'_>,
+    family: Family,
+    slk: SlkId,
+    column: &str,
+    mods: &[pcx_objects::Mod],
+    name: &str,
+) -> Result<String, String> {
+    let definition = definition(editor, family, slk, column, name)?;
+    if definition.kind != FieldKind::Token {
+        return Err(format!(
+            "{name}: unsupported {column} metadata type {}",
+            definition.kind
+        ));
+    }
+    let mapped = object
+        .field(definition.fourcc)
+        .map_err(|error| format!("{name}: {column}: {error}"))?;
+    let base = match mapped.value {
+        pcx_objects::editor::defaults::Value::Text(value)
+        | pcx_objects::editor::defaults::Value::Marker(value) => value.to_owned(),
+        _ => return Err(format!("{name}: invalid authored {column}")),
+    };
+    match chosen_mod(mods, definition, name, column)? {
+        None => Ok(base),
+        Some(edit) => match &edit.value {
+            pcx_objects::Value::Str(raw) => std::str::from_utf8(raw)
+                .map(str::to_owned)
+                .map_err(|_| format!("{name}: non-UTF8 {column}")),
+            _ => Err(format!("{name}: invalid {column} edit value")),
+        },
+    }
 }
 
 /// One placed destructable, preflighted by the map reader.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlacedDestructable {
     pub creation: DestructableCreation,
     pub state: DestructableState,
+    pub source: PlacedSource,
 }
 
 const RUNTIME: [(&str, &[&str], &str); 10] = [
@@ -427,13 +504,15 @@ impl ObjectHost {
         ids.try_reserve_exact(rows.len())
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         for row in rows {
-            ids.push(self.inner.allocate(
+            let id = self.inner.allocate(
                 Entry::Destructable {
                     creation: row.creation,
                     state: row.state,
                 },
                 name,
-            )?);
+            )?;
+            self.placed_sources.insert(id, row.source);
+            ids.push(id);
         }
         if let Some(admitted) = self.destructables.as_mut() {
             admitted.records = total;
@@ -455,12 +534,18 @@ impl ObjectHost {
             let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
                 return Err(self.inner.error(name, Failure::WrongFamily));
             };
+            let (Some(max_life), Some(current)) = (state.max_life, state.life) else {
+                return Err(self
+                    .inner
+                    .error(name, Failure::DestructableState("catalog HP not resolved")));
+            };
             if state.invulnerable {
-                return Ok(state.life);
+                return Ok(current);
             }
-            state.life = (state.life - amount).max(0.0);
-            state.dead |= state.life <= 0.0;
-            (creation.origin, state.life, !state.dead)
+            let life = (current - amount).max(0.0).min(max_life);
+            state.life = Some(life);
+            state.dead |= life <= 0.0;
+            (creation.origin, life, !state.dead)
         };
         self.sync_destructable_collision(id, origin, changed)?;
         Ok(life)
@@ -554,6 +639,9 @@ impl ObjectHost {
         let (target, rest) = args
             .split_first()
             .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+        if !runtime_signature(name, rest) {
+            return Err(self.inner.error(name, Failure::Signature));
+        }
         let id = match target {
             Value::Handle(id) => *id,
             Value::Null => {
@@ -591,19 +679,25 @@ impl ObjectHost {
                     (creation.origin, Value::Null, false)
                 }
                 ("KillDestructable", []) => {
+                    let Some(max_life) = state.max_life else {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::DestructableState("catalog HP not resolved")));
+                    };
                     let changed = !state.dead;
-                    state.life = 0.0;
+                    state.life = Some(0.0f32.min(max_life));
                     state.dead = true;
                     (creation.origin, Value::Null, changed)
                 }
                 ("SetDestructableLife", [Value::Real(value)]) => {
-                    if !value.is_finite() {
+                    let Some(max_life) = state.max_life else {
                         return Err(self
                             .inner
-                            .error(name, Failure::DestructableState("finite life required")));
-                    }
-                    state.life = value.clamp(0.0, state.max_life.max(0.0));
-                    state.dead = state.life <= 0.0;
+                            .error(name, Failure::DestructableState("catalog HP not resolved")));
+                    };
+                    let life = value.clamp(0.0, max_life.max(0.0));
+                    state.life = Some(life);
+                    state.dead = life <= 0.0;
                     (creation.origin, Value::Null, true)
                 }
                 ("IsDestructableInvulnerable", []) => {
@@ -614,9 +708,21 @@ impl ObjectHost {
                 ("GetDestructableTypeId", []) => {
                     (creation.origin, Value::Int(creation.objectid), false)
                 }
-                ("GetDestructableLife", []) => (creation.origin, Value::Real(state.life), false),
+                ("GetDestructableLife", []) => {
+                    let Some(life) = state.life else {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::DestructableState("catalog HP not resolved")));
+                    };
+                    (creation.origin, Value::Real(life), false)
+                }
                 ("GetDestructableMaxLife", []) => {
-                    (creation.origin, Value::Real(state.max_life), false)
+                    let Some(max_life) = state.max_life else {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::DestructableState("catalog HP not resolved")));
+                    };
+                    (creation.origin, Value::Real(max_life), false)
                 }
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             }
@@ -690,8 +796,12 @@ impl ObjectHost {
                     .map_err(|e| self.inner.error(shape.name, Failure::DestructableSource(e)))
             })
             .transpose()?;
-        let max_life = stats.map_or(0.0, |stats| stats.max_life);
-        let life = if creation.dead { 0.0 } else { max_life };
+        let max_life = stats.map(|stats| stats.max_life);
+        let life = match stats {
+            Some(_) if creation.dead => Some(0.0),
+            Some(stats) => Some(stats.max_life),
+            None => None,
+        };
         let id = self.inner.allocate(
             Entry::Destructable {
                 creation,
@@ -711,6 +821,23 @@ impl ObjectHost {
         };
         admitted.records += 1;
         Ok(Value::Handle(id))
+    }
+}
+
+fn runtime_signature(name: &str, rest: &[Value]) -> bool {
+    match name {
+        "SetDestructableInvulnerable" | "ShowDestructable" => {
+            matches!(rest, [Value::Bool(_)])
+        }
+        "KillDestructable"
+        | "IsDestructableInvulnerable"
+        | "GetDestructableX"
+        | "GetDestructableY"
+        | "GetDestructableTypeId"
+        | "GetDestructableLife"
+        | "GetDestructableMaxLife" => rest.is_empty(),
+        "SetDestructableLife" => matches!(rest, [Value::Real(value)] if value.is_finite()),
+        _ => false,
     }
 }
 

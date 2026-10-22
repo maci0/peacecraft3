@@ -2,7 +2,7 @@ use super::{COMMON, budget, context, object, slots_rule};
 use crate::file_sounds::{Assets, Budget as SoundBudget, SoundInput};
 use crate::playercolor_host::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, EnumHost, Failure, Limits, ObjectHost, PlacedDestructable,
+    DestructableState, EnumHost, Failure, Limits, ObjectHost, PlacedDestructable, PlacedSource,
 };
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use pcx_script::{Host, Prelude, Value};
@@ -73,60 +73,85 @@ fn life_declarations() -> String {
     text
 }
 
-fn life_catalog() -> DestructableCatalog {
-    let table = |headers: &[&str], rows: &[&[&str]]| {
-        let mut text = String::from("ID;PWXL;N;E\r\n");
-        for (y, row) in std::iter::once(headers)
-            .chain(rows.iter().copied())
-            .enumerate()
-        {
-            for (x, value) in row.iter().enumerate() {
-                text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, value));
-            }
+fn slk_table(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
+    let mut text = String::from("ID;PWXL;N;E\r\n");
+    for (y, row) in std::iter::once(headers)
+        .chain(rows.iter().copied())
+        .enumerate()
+    {
+        for (x, value) in row.iter().enumerate() {
+            text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, value));
         }
-        text.push_str("E\r\n");
-        text.into_bytes()
-    };
-    let data = table(
-        &["DestructableID", "HP", "targType"],
-        &[&["LTlt", "50", "tree,ground"]],
-    );
-    let metadata = table(
+    }
+    text.push_str("E\r\n");
+    text.into_bytes()
+}
+
+fn catalog_from(
+    rows: &[&[&str]],
+    metadata_rows: &[&[&str]],
+    decoration_rows: Option<&[&[&str]]>,
+    destructable_edits: pcx_objects::editor::Overlay,
+    decoration_edits: pcx_objects::editor::Overlay,
+) -> DestructableCatalog {
+    let data = slk_table(&["DestructableID", "HP", "targType"], rows);
+    let metadata = slk_table(
         &["ID", "field", "slk", "type", "index", "category"],
-        &[
-            &["Ahpv", "HP", "DestructableData", "int", "0", "stats"],
-            &[
-                "Atgt",
-                "targType",
-                "DestructableData",
-                "string",
-                "0",
-                "combat",
-            ],
-        ],
+        metadata_rows,
     );
+    let mut input = vec![
+        (pcx_objects::editor::SlkId::DestructableData.path(), data),
+        (
+            pcx_objects::editor::SlkId::DestructableMetaData.path(),
+            metadata,
+        ),
+    ];
+    if let Some(rows) = decoration_rows {
+        input.push((
+            pcx_objects::editor::SlkId::Doodads.path(),
+            slk_table(&["doodID", "pathTex"], rows),
+        ));
+    }
+    let bytes: Vec<(&str, &[u8])> = input
+        .iter()
+        .map(|(path, data)| (*path, data.as_slice()))
+        .collect();
     let tables = pcx_objects::editor::defaults::DefaultTables::from_bytes(
         pcx_objects::editor::defaults::Identity {
             install: "synthetic".into(),
             edition_version: "synthetic".into(),
         },
-        &[
-            (pcx_objects::editor::SlkId::DestructableData.path(), &data),
-            (
-                pcx_objects::editor::SlkId::DestructableMetaData.path(),
-                &metadata,
-            ),
-        ],
+        &bytes,
         &[],
         pcx_objects::editor::EditorReadLimits {
-            max_listed_paths: 4,
+            max_listed_paths: 8,
             max_asset_bytes: 4096,
-            max_aggregate_input_bytes: 8192,
+            max_aggregate_input_bytes: 16384,
         },
     )
     .unwrap();
-    DestructableCatalog::new(
-        Arc::new(tables),
+    DestructableCatalog::new(Arc::new(tables), destructable_edits, decoration_edits)
+}
+
+fn tree_metadata() -> Vec<&'static [&'static str]> {
+    vec![
+        &["Ahpv", "HP", "DestructableData", "int", "0", "stats"],
+        &[
+            "Atgt",
+            "targType",
+            "DestructableData",
+            "string",
+            "0",
+            "combat",
+        ],
+    ]
+}
+
+fn life_catalog() -> DestructableCatalog {
+    catalog_from(
+        &[&["LTlt", "50", "tree,ground"]],
+        &tree_metadata(),
+        None,
         pcx_objects::editor::Overlay::default(),
         pcx_objects::editor::Overlay::default(),
     )
@@ -155,9 +180,19 @@ fn placed_row(creation_number: u32, dead: bool) -> PlacedDestructable {
         },
         state: DestructableState {
             dead,
-            life: if dead { 0.0 } else { 50.0 },
-            max_life: 50.0,
+            life: if dead { Some(0.0) } else { Some(50.0) },
+            max_life: Some(50.0),
             ..DestructableState::default()
+        },
+        source: PlacedSource {
+            creation_number,
+            type_id: *b"LTlt",
+            variation: 0,
+            position: [1.0, 2.0, 3.0],
+            angle: 0.0,
+            scale: [1.0, 1.0, 1.0],
+            flags: 0,
+            life: if dead { 0 } else { 100 },
         },
     }
 }
@@ -175,6 +210,288 @@ fn catalog_exposes_the_authored_tree_classification_and_refuses_unknown_ids() {
     );
 }
 
+fn hp_edit(value_type: pcx_objects::ValueType, value: pcx_objects::Value) -> pcx_objects::Mod {
+    pcx_objects::Mod {
+        field: *b"Ahpv",
+        value_type,
+        selectors: Some([0, 0]),
+        value,
+        end_word: 0,
+    }
+}
+
+#[test]
+fn catalog_enforces_typed_metadata_exact_case_and_present_malformed_records() {
+    let ltlt = i32::from_be_bytes(*b"LTlt");
+    let rows: Vec<&[&str]> = vec![&["LTlt", "50", "tree,ground"]];
+    let wrong_hp_type: Vec<&[&str]> = vec![
+        &["Ahpv", "HP", "DestructableData", "string", "0", "stats"],
+        &[
+            "Atgt",
+            "targType",
+            "DestructableData",
+            "string",
+            "0",
+            "combat",
+        ],
+    ];
+    let error = catalog_from(
+        &rows,
+        &wrong_hp_type,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    )
+    .stats(ltlt)
+    .unwrap_err();
+    assert!(error.contains("unsupported HP metadata type"), "{error}");
+
+    let missing_hp: Vec<&[&str]> = vec![&[
+        "Atgt",
+        "targType",
+        "DestructableData",
+        "string",
+        "0",
+        "combat",
+    ]];
+    let error = catalog_from(
+        &rows,
+        &missing_hp,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    )
+    .stats(ltlt)
+    .unwrap_err();
+    assert!(error.contains("missing HP metadata"), "{error}");
+
+    let duplicate_hp: Vec<&[&str]> = vec![
+        &["Ahpv", "HP", "DestructableData", "int", "0", "stats"],
+        &["Ahp2", "HP", "DestructableData", "int", "1", "stats"],
+        &[
+            "Atgt",
+            "targType",
+            "DestructableData",
+            "string",
+            "0",
+            "combat",
+        ],
+    ];
+    let error = catalog_from(
+        &rows,
+        &duplicate_hp,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    )
+    .stats(ltlt)
+    .unwrap_err();
+    assert!(error.contains("unsupported HP metadata"), "{error}");
+
+    let mut edits = pcx_objects::editor::Overlay::default();
+    edits.mods.insert(
+        "LTlt".into(),
+        vec![hp_edit(
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"75".to_vec()),
+        )],
+    );
+    let error = catalog_from(
+        &rows,
+        &tree_metadata(),
+        None,
+        edits,
+        pcx_objects::editor::Overlay::default(),
+    )
+    .stats(ltlt)
+    .unwrap_err();
+    assert!(error.contains("HP edit has Str wire type"), "{error}");
+
+    let mut edits = pcx_objects::editor::Overlay::default();
+    edits.mods.insert(
+        "LTlt".into(),
+        vec![hp_edit(
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(75),
+        )],
+    );
+    assert_eq!(
+        catalog_from(
+            &rows,
+            &tree_metadata(),
+            None,
+            edits,
+            pcx_objects::editor::Overlay::default(),
+        )
+        .stats(ltlt)
+        .unwrap()
+        .max_life,
+        75.0
+    );
+
+    let mut edits = pcx_objects::editor::Overlay::default();
+    edits.custom.insert(
+        "L001".into(),
+        (
+            "LTlt".into(),
+            vec![hp_edit(
+                pcx_objects::ValueType::Int,
+                pcx_objects::Value::Int(30),
+            )],
+        ),
+    );
+    let custom = catalog_from(
+        &rows,
+        &tree_metadata(),
+        None,
+        edits,
+        pcx_objects::editor::Overlay::default(),
+    );
+    assert_eq!(
+        custom.stats(i32::from_be_bytes(*b"L001")).unwrap().max_life,
+        30.0
+    );
+    let case = custom.stats(i32::from_be_bytes(*b"ltlt")).unwrap_err();
+    assert!(case.contains("case-insensitively"), "{case}");
+
+    let mut edits = pcx_objects::editor::Overlay::default();
+    edits.mods.insert("LTlt".into(), Vec::new());
+    let malformed = catalog_from(
+        &[],
+        &tree_metadata(),
+        None,
+        edits,
+        pcx_objects::editor::Overlay::default(),
+    )
+    .stats(ltlt)
+    .unwrap_err();
+    assert!(
+        malformed.contains("malformed catalog record"),
+        "{malformed}"
+    );
+}
+
+#[test]
+fn absent_destructable_is_none_but_a_present_decoration_is_not_an_error() {
+    let decoration = catalog_from(
+        &[],
+        &tree_metadata(),
+        Some(&[&["LTlt", "tree.blp"]]),
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    );
+    assert_eq!(
+        decoration
+            .stats_if_destructable(i32::from_be_bytes(*b"LTlt"))
+            .unwrap(),
+        None
+    );
+    let absent = catalog_from(
+        &[],
+        &tree_metadata(),
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    );
+    let missing = absent
+        .stats_if_destructable(i32::from_be_bytes(*b"LTlt"))
+        .unwrap_err();
+    assert!(
+        missing.contains("missing destructable catalog record"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn missing_catalog_refuses_life_operations_without_inventing_hp() {
+    let mut host = host_from(&life_declarations(), "", 8)
+        .with_destructables(DestructableBudget { max_records: 1 })
+        .unwrap();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("destructable handle");
+    };
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!(state.life, None);
+    assert_eq!(state.max_life, None);
+    assert!(!state.dead);
+    for name in [
+        "GetDestructableLife",
+        "GetDestructableMaxLife",
+        "KillDestructable",
+    ] {
+        let error = host.native(name, &[Value::Handle(id)]).unwrap_err();
+        assert!(error.contains("catalog HP not resolved"), "{name}: {error}");
+    }
+    let error = host
+        .native(
+            "SetDestructableLife",
+            &[Value::Handle(id), Value::Real(1.0)],
+        )
+        .unwrap_err();
+    assert!(error.contains("catalog HP not resolved"), "{error}");
+    let error = host.damage_destructable(id, 1.0).unwrap_err();
+    assert_eq!(
+        error.failure,
+        Failure::DestructableState("catalog HP not resolved")
+    );
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!(state.life, None);
+    assert!(!state.dead);
+}
+
+#[test]
+fn runtime_validates_the_complete_signature_before_a_null_target() {
+    let mut host = life_host(1);
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("destructable handle");
+    };
+    for (name, args) in [
+        ("SetDestructableLife", vec![Value::Null]),
+        ("KillDestructable", vec![Value::Null, Value::Bool(true)]),
+        ("GetDestructableLife", vec![Value::Null, Value::Int(1)]),
+        ("SetDestructableInvulnerable", vec![Value::Null]),
+    ] {
+        let error = host.native(name, &args).unwrap_err();
+        assert!(
+            error.contains("incompatible native/type declaration"),
+            "{name}: {error}"
+        );
+    }
+    assert_eq!(
+        host.native("GetDestructableLife", &[Value::Null]).unwrap(),
+        Value::Real(0.0)
+    );
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!(state.life, Some(50.0));
+    for (name, args) in [
+        ("SetDestructableLife", vec![Value::Handle(id)]),
+        ("SetDestructableInvulnerable", vec![Value::Handle(id)]),
+        (
+            "KillDestructable",
+            vec![Value::Handle(id), Value::Bool(true)],
+        ),
+    ] {
+        let error = host.native(name, &args).unwrap_err();
+        assert!(
+            error.contains("incompatible native/type declaration"),
+            "{name}: {error}"
+        );
+    }
+    assert_eq!(host.destructable_state(id).unwrap(), state);
+    let wrong_family = host
+        .native("GetDestructableLife", &[Value::Int(0)])
+        .unwrap_err();
+    assert!(wrong_family.contains("another family"), "{wrong_family}");
+}
+
 #[test]
 fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
     let mut host = life_host(4);
@@ -189,8 +506,8 @@ fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
         host.destructable_state(id).unwrap(),
         DestructableState {
             dead: false,
-            life: 50.0,
-            max_life: 50.0,
+            life: Some(50.0),
+            max_life: Some(50.0),
             ..DestructableState::default()
         }
     );
@@ -209,13 +526,13 @@ fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
         &[Value::Handle(id), Value::Real(12.5)],
     )
     .unwrap();
-    assert_eq!(host.destructable_state(id).unwrap().life, 12.5);
+    assert_eq!(host.destructable_state(id).unwrap().life, Some(12.5));
     host.native(
         "SetDestructableLife",
         &[Value::Handle(id), Value::Real(500.0)],
     )
     .unwrap();
-    assert_eq!(host.destructable_state(id).unwrap().life, 50.0);
+    assert_eq!(host.destructable_state(id).unwrap().life, Some(50.0));
     host.native(
         "SetDestructableLife",
         &[Value::Handle(id), Value::Real(0.0)],
@@ -223,7 +540,7 @@ fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
     .unwrap();
     let dead = host.destructable_state(id).unwrap();
     assert!(dead.dead);
-    assert_eq!(dead.life, 0.0);
+    assert_eq!(dead.life, Some(0.0));
     host.native(
         "SetDestructableLife",
         &[Value::Handle(id), Value::Real(10.0)],
@@ -234,7 +551,7 @@ fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
         .unwrap();
     let killed = host.destructable_state(id).unwrap();
     assert!(killed.dead);
-    assert_eq!(killed.life, 0.0);
+    assert_eq!(killed.life, Some(0.0));
     let dead_created = host
         .native("CreateDestructable", &payload(objectid, 0))
         .unwrap();
@@ -254,7 +571,10 @@ fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
             &[Value::Handle(id), Value::Real(f32::NAN)],
         )
         .unwrap_err();
-    assert!(malformed.contains("finite life"), "{malformed}");
+    assert!(
+        malformed.contains("incompatible native/type declaration"),
+        "{malformed}"
+    );
 }
 
 #[test]
@@ -303,13 +623,32 @@ fn placed_admission_is_atomic_and_preserves_the_authored_life() {
         .unwrap();
     assert_eq!(ids.len(), 1);
     let state = host.destructable_state(ids[0]).unwrap();
-    assert_eq!(state.life, 50.0);
-    assert_eq!(state.max_life, 50.0);
+    assert_eq!(state.life, Some(50.0));
+    assert_eq!(state.max_life, Some(50.0));
     assert!(!state.dead);
     assert_eq!(
         host.destructable_creation(ids[0]).unwrap().origin,
         DestructableOrigin::Placed { creation_number: 3 }
     );
+    let source = host.placed_source(ids[0]).expect("placed source");
+    assert_eq!(source.creation_number, 3);
+    assert_eq!(source.type_id, *b"LTlt");
+    assert_eq!(source.position, [1.0, 2.0, 3.0]);
+    assert_eq!(source.scale, [1.0, 1.0, 1.0]);
+    assert_eq!(source.life, 100);
+}
+
+#[test]
+fn placed_handles_retain_the_complete_authored_doo_record() {
+    let mut host = life_host(1);
+    let mut row = placed_row(77, false);
+    row.source.flags = 2;
+    row.source.variation = 9;
+    row.source.angle = 1.25;
+    row.source.scale = [1.5, 2.0, 3.0];
+    row.source.life = 37;
+    let ids = host.admit_placed_destructables(&[row]).unwrap();
+    assert_eq!(host.placed_source(ids[0]), Some(row.source));
 }
 
 #[test]
@@ -653,9 +992,14 @@ fn variants_share_one_budget_and_absent_or_bad_declarations_stay_isolated() {
         .unwrap_err();
     assert!(refused.contains("unsupported"), "{refused}");
     assert_eq!(host.destructable_creation(id).unwrap().variation, 3);
-    // The declared kill native now marks the runtime state.
-    host.native("KillDestructable", &[Value::Handle(id)])
-        .unwrap();
+    // Without a catalog there is no effective life to kill.
+    let unresolved = host
+        .native("KillDestructable", &[Value::Handle(id)])
+        .unwrap_err();
+    assert!(
+        unresolved.contains("catalog HP not resolved"),
+        "{unresolved}"
+    );
     assert!(host.destructable_state(id).unwrap().dead);
     let broken = declarations.replace(
         "native CreateDestructableZ takes integer objectid, real x, real y, real z, real face, real scale, integer variation returns destructable",
