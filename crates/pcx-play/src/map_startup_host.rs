@@ -305,6 +305,7 @@ pub struct MapStartupInputs {
     pub player_removal_rules: Option<crate::player_removal_rules::Rules>,
     pub cheats: Option<crate::cheat_rules::Rules>,
     pub dialog_layout: Option<crate::dialog_layout::Rules>,
+    pub message_layout: Option<crate::message_layout::Rules>,
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
@@ -562,6 +563,7 @@ pub fn assemble(
         player_removal_rules,
         cheats,
         dialog_layout,
+        message_layout,
         clock,
         timer_time,
         trigger_runtime,
@@ -758,6 +760,9 @@ pub fn assemble(
     }
     if let Some(rules) = dialog_layout {
         object = object.with_dialog_layout(rules)?;
+    }
+    if let Some(rules) = message_layout {
+        object = object.with_message_layout(rules)?;
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);

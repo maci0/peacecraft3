@@ -238,12 +238,31 @@ fn project(
     if visible == state.visible {
         return;
     }
-    let result = paint(
-        &mut commands,
-        &entries,
-        state.style.as_ref().expect("loaded style"),
-        state.font.as_ref().expect("loaded font"),
-    );
+    let Some(layout) = session
+        .host()
+        .and_then(|host| host.objects().message_layout())
+        .cloned()
+    else {
+        state.last_error =
+            Some("message frame geometry was not admitted with this map session".into());
+        return;
+    };
+    let result = entries
+        .last()
+        .ok_or_else(|| "no live messages".to_string())
+        .and_then(|entry| {
+            let [x, y] = entry.position;
+            layout.placement(x, y)
+        })
+        .and_then(|placement| {
+            paint(
+                &mut commands,
+                &entries,
+                state.style.as_ref().expect("loaded style"),
+                state.font.as_ref().expect("loaded font"),
+                placement,
+            )
+        });
     match result {
         Ok(root) => {
             remove_root(&mut commands, &mut state);
@@ -270,17 +289,24 @@ pub(crate) fn paint(
     entries: &[TimedMessage],
     style: &MessageStyle,
     font: &Handle<Font>,
+    placement: pcx_play::message_layout::Placement,
 ) -> Result<Entity, String> {
-    // shortcut: relative placement uses the campaign view; qualify native message-frame
-    // margins and wrapping before claiming rendered original-game parity.
     let height_vh = style.height / crate::mainmenu::FRAME_H * 100.;
     if !height_vh.is_finite() || height_vh <= 0.0 {
         return Err("message font height is unrepresentable".into());
     }
-    let [x, y] = entries.last().ok_or("no live messages")?.position;
-    let position = [x * 100., y * 100.];
-    if position.iter().any(|v| !v.is_finite()) {
-        return Err("message position is unrepresentable".into());
+    let [viewport_x, viewport_y] = placement.viewport;
+    let [left, bottom, width, height] = [
+        placement.left / viewport_x * 100.,
+        placement.bottom / viewport_y * 100.,
+        placement.width / viewport_x * 100.,
+        placement.height / viewport_y * 100.,
+    ];
+    if viewport_x <= 0.
+        || viewport_y <= 0.
+        || [left, bottom, width, height].iter().any(|v| !v.is_finite())
+    {
+        return Err("message placement is unrepresentable".into());
     }
     let parsed = entries
         .iter()
@@ -293,10 +319,10 @@ pub(crate) fn paint(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: percent(position[0]),
-                bottom: percent(position[1]),
-                width: percent((100. - position[0]).max(0.)),
-                max_height: percent((100. - position[1]).max(0.)),
+                left: percent(left),
+                bottom: percent(bottom),
+                width: percent(width),
+                max_height: percent(height),
                 flex_direction: FlexDirection::ColumnReverse,
                 overflow: Overflow::clip(),
                 ..default()
@@ -410,6 +436,13 @@ mod tests {
                         height: 0.03,
                     },
                     &Handle::default(),
+                    pcx_play::message_layout::Placement {
+                        left: 0.051875,
+                        bottom: 0.2305,
+                        width: 0.5,
+                        height: 0.25,
+                        viewport: [0.8, 0.6],
+                    },
                 )
                 .unwrap();
             })
@@ -430,7 +463,39 @@ mod tests {
                             font_path: "synthetic.ttf".into(),
                             height: f32::MAX
                         },
-                        &Handle::default()
+                        &Handle::default(),
+                        pcx_play::message_layout::Placement {
+                            left: 0.051875,
+                            bottom: 0.2305,
+                            width: 0.5,
+                            height: 0.25,
+                            viewport: [0.8, 0.6],
+                        },
+                    )
+                    .is_err()
+                );
+                assert!(
+                    paint(
+                        &mut commands,
+                        &[TimedMessage {
+                            sequence: 3,
+                            position: [0., 0.],
+                            text: "x".into(),
+                            started_at: 0.,
+                            expires_at: 1.
+                        }],
+                        &MessageStyle {
+                            font_path: "synthetic.ttf".into(),
+                            height: 0.03
+                        },
+                        &Handle::default(),
+                        pcx_play::message_layout::Placement {
+                            left: 0.051875,
+                            bottom: 0.2305,
+                            width: 0.5,
+                            height: 0.25,
+                            viewport: [0., 0.6],
+                        },
                     )
                     .is_err()
                 );
@@ -439,11 +504,22 @@ mod tests {
         let world = app.world_mut();
         let mut roots = world.query_filtered::<&Node, With<CampaignHud>>();
         let root = roots.single(world).unwrap();
-        assert_eq!(root.left, percent(20.));
+        let Val::Percent(left) = root.left else {
+            panic!("relative message placement");
+        };
+        assert!((left - 6.484375).abs() < 0.00001);
         let Val::Percent(bottom) = root.bottom else {
             panic!("relative message placement");
         };
-        assert!((bottom - 30.).abs() < 0.00001);
+        assert!((bottom - 38.416667).abs() < 0.00001);
+        let Val::Percent(width) = root.width else {
+            panic!("relative message width");
+        };
+        assert!((width - 62.5).abs() < 0.00001);
+        let Val::Percent(max_height) = root.max_height else {
+            panic!("relative message height");
+        };
+        assert!((max_height - 41.666668).abs() < 0.00001);
         let mut spans = world.query::<(&TextSpan, &TextColor, &TextFont)>();
         let spans: Vec<_> = spans.iter(world).collect();
         assert_eq!(spans.len(), 3);
@@ -456,5 +532,156 @@ mod tests {
             panic!("relative font size");
         };
         assert!((size - 5.).abs() < 0.00001);
+    }
+    #[cfg(feature = "test-fixtures")]
+    fn show_synthetic_component_message(host: &mut MapStartupHost, position: [f32; 2], text: &str) {
+        use pcx_script::{Host, Value};
+        let objects = host.objects_mut();
+        let local = objects
+            .native("GetLocalPlayer", &[])
+            .expect("synthetic component message requires a local player");
+        objects
+            .native(
+                "DisplayTimedTextToPlayer",
+                &[
+                    local,
+                    Value::Real(position[0]),
+                    Value::Real(position[1]),
+                    Value::Real(3600.),
+                    Value::Str(text.into()),
+                ],
+            )
+            .expect("synthetic component message must be admitted");
+    }
+    /// Component test for host-bound layout admission. The timed text is injected
+    /// through each published host's own natives; it is not mission evidence.
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an admitted local chapter map"]
+    fn launcher_changes_and_lookalike_sessions_cannot_rebind_message_layout() {
+        let mut app = crate::native_campaign::tests::started_app();
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let host = session.host().expect("published first host");
+            show_synthetic_component_message(host, [0.25, 0.4], "synthetic component A");
+        }
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<crate::glue_menu::BackdropImage>>();
+        install(&mut app);
+        for _ in 0..6 {
+            app.update();
+        }
+        let (root, left) = {
+            let state = app.world().resource::<CampaignMessages>();
+            assert!(
+                state.last_error.is_none(),
+                "messages: {:?}",
+                state.last_error
+            );
+            let root = state
+                .root
+                .expect("synthetic component message must display");
+            let node = app.world().get::<Node>(root).unwrap();
+            let Val::Percent(left) = node.left else {
+                panic!("relative message placement");
+            };
+            (root, left)
+        };
+        let expansion = std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() == Ok("tft");
+        app.insert_resource(crate::launch_gui::Launcher::test_source(
+            "/pcx-missing-client".to_string(),
+            expansion,
+        ));
+        for _ in 0..3 {
+            app.update();
+        }
+        {
+            let state = app.world().resource::<CampaignMessages>();
+            assert!(
+                state.last_error.is_none(),
+                "launcher change: {:?}",
+                state.last_error
+            );
+            assert_eq!(state.root, Some(root));
+            let node = app.world().get::<Node>(root).unwrap();
+            assert_eq!(node.left, percent(left));
+        }
+        let mut next = crate::native_campaign::tests::started_app();
+        let mut replacement = next
+            .world_mut()
+            .remove_resource::<MapScriptSession<MapStartupHost>>()
+            .unwrap();
+        {
+            let host = replacement.host().expect("published second host");
+            show_synthetic_component_message(host, [0.75, 0.9], "synthetic component B");
+        }
+        let next_requests = next.world_mut().remove_resource::<MapRequests>().unwrap();
+        let next_sources = next
+            .world_mut()
+            .remove_resource::<SelectedMapSources>()
+            .unwrap();
+        let old_context = app
+            .world()
+            .resource::<MapRequests>()
+            .admission
+            .shared_context()
+            .unwrap();
+        assert!(!std::sync::Arc::ptr_eq(
+            &old_context,
+            replacement.context().unwrap()
+        ));
+        app.insert_resource(replacement);
+        app.update();
+        assert!(app.world().get_entity(root).is_err());
+        assert!(
+            app.world().resource::<CampaignMessages>().root.is_none(),
+            "a lookalike session cannot reuse the previous layout"
+        );
+        let expected = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects();
+            let now = objects
+                .timer_game_time()
+                .expect("selected map has game time");
+            let message = objects
+                .messages()
+                .expect("admitted messages")
+                .visible(now)
+                .last()
+                .expect("synthetic replacement message");
+            assert_eq!(message.text, "synthetic component B");
+            let position = message.position;
+            let layout = objects.message_layout().expect("admitted message layout");
+            let placement = layout.placement(position[0], position[1]).unwrap();
+            (
+                percent(placement.left / placement.viewport[0] * 100.),
+                percent(placement.bottom / placement.viewport[1] * 100.),
+            )
+        };
+        app.insert_resource(next_requests)
+            .insert_resource(next_sources);
+        for _ in 0..6 {
+            app.update();
+        }
+        let state = app.world().resource::<CampaignMessages>();
+        assert!(
+            state.last_error.is_none(),
+            "replacement messages: {:?}",
+            state.last_error
+        );
+        let new_root = state
+            .root
+            .expect("replacement session must mount its own messages");
+        assert_ne!(new_root, root);
+        let node = app.world().get::<Node>(new_root).unwrap();
+        assert_eq!(node.left, expected.0);
+        assert_eq!(node.bottom, expected.1);
     }
 }

@@ -694,6 +694,7 @@ pub(crate) fn host_inputs(
         resources: None,
         cheats: None,
         dialog_layout: None,
+        message_layout: None,
         sound_parameters: Banks::read(
             &[],
             sound_parameters::BanksBudget {
