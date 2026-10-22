@@ -878,6 +878,19 @@ impl Placement {
         radius: f32,
         work: &mut usize,
     ) -> Result<Vec<[f32; 2]>, Error> {
+        self.route_within(unit, start, target, radius, 0.0, work)
+    }
+
+    /// Reach any clear position in the target region; zero reach preserves point orders.
+    pub(crate) fn route_within(
+        &self,
+        unit: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+        reach: f32,
+        work: &mut usize,
+    ) -> Result<Vec<[f32; 2]>, Error> {
         use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
         #[derive(PartialEq)]
         struct Open {
@@ -900,11 +913,20 @@ impl Placement {
                     .then_with(|| other.travelled.total_cmp(&self.travelled))
             }
         }
-        if self.segment_clear(unit, start, target, radius, work)? {
+        if !reach.is_finite() || reach < 0.0 {
+            return Err(fail("invalid route reach"));
+        }
+        let in_range = |point: [f32; 2]| {
+            ((point[0] - target[0]).powi(2) + (point[1] - target[1]).powi(2)).sqrt() <= reach
+        };
+        let approach = approach_point(start, target, reach);
+        if (reach == 0.0 || in_range(approach))
+            && self.segment_clear(unit, start, approach, radius, work)?
+        {
             let mut path = Vec::new();
             path.try_reserve_exact(1)
                 .map_err(|_| fail("route storage"))?;
-            path.push(target);
+            path.push(approach);
             return Ok(path);
         }
         // Exhausted work ends the search; the unit then goes as near as it got.
@@ -920,7 +942,7 @@ impl Placement {
         if !charge(work) {
             return Err(fail("movement route work exhausted"));
         }
-        let target_clear = self.prepare_motion(unit, target, radius)?.is_some();
+        let target_clear = reach == 0.0 && self.prepare_motion(unit, target, radius)?.is_some();
         let start_cell = self.cell(start)?;
         let target_cell = self.cell(target)?;
         let index = |p: [i32; 2]| {
@@ -942,11 +964,19 @@ impl Placement {
             ]
         };
         let heuristic = |p: [i32; 2]| {
+            if reach > 0.0 {
+                let point = centre(p);
+                return ((f64::from(point[0]) - f64::from(target[0]))
+                    .hypot(f64::from(point[1]) - f64::from(target[1]))
+                    - f64::from(reach))
+                .max(0.0)
+                    / f64::from(self.rules.cell_size());
+            }
             let dx = (i64::from(p[0]) - i64::from(target_cell[0])).unsigned_abs() as f64;
             let dy = (i64::from(p[1]) - i64::from(target_cell[1])).unsigned_abs() as f64;
             dx.max(dy) + (std::f64::consts::SQRT_2 - 1.) * dx.min(dy)
         };
-        let nearest = if target_clear {
+        let nearest = if target_clear || reach > 0.0 {
             0.0
         } else {
             // Visit destination cells in octile-distance order, ignoring connectivity.
@@ -1027,12 +1057,18 @@ impl Placement {
             if (remaining, open.travelled) < (best.0, best.1) {
                 best = (remaining, open.travelled, open.cell);
             }
-            if Some(open.cell) == end && target_clear {
+            if (reach > 0.0
+                && in_range(centre(xy(open.cell)))
+                && self
+                    .prepare_motion(unit, centre(xy(open.cell)), radius)?
+                    .is_some())
+                || (Some(open.cell) == end && target_clear)
+            {
                 best = (0.0, open.travelled, open.cell);
                 arrived = true;
                 break;
             }
-            if !target_clear && remaining <= nearest {
+            if reach == 0.0 && !target_clear && remaining <= nearest {
                 break;
             }
             let point = xy(open.cell);
@@ -1099,11 +1135,15 @@ impl Placement {
         }
         path.reverse();
         match path.last_mut() {
-            Some(last) if arrived => *last = target,
+            Some(last) if arrived && reach == 0.0 => *last = target,
             Some(_) => {}
             None if arrived => {
                 path.try_reserve(1).map_err(|_| fail("route storage"))?;
-                path.push(target);
+                path.push(if reach > 0.0 {
+                    centre(xy(best.2))
+                } else {
+                    target
+                });
             }
             // Already as near as the unit can get: stay put.
             None => {
@@ -1140,4 +1180,31 @@ impl Placement {
             self.stamps.push((unit, prepared));
         }
     }
+}
+
+/// Nearest approach on the existing attack-reach circle, rounded inward.
+pub(crate) fn approach_point(from: [f32; 2], target: [f32; 2], reach: f32) -> [f32; 2] {
+    if reach == 0.0 {
+        return target;
+    }
+    let delta = [
+        f64::from(from[0]) - f64::from(target[0]),
+        f64::from(from[1]) - f64::from(target[1]),
+    ];
+    let length = delta[0].hypot(delta[1]);
+    if length <= f64::from(reach) {
+        return from;
+    }
+    let ratio = f64::from(reach) / length;
+    [0, 1].map(|axis| {
+        let point = (f64::from(target[axis]) + delta[axis] * ratio) as f32;
+        // One representable step avoids asking for another route due to outward rounding.
+        if point < target[axis] {
+            point.next_up()
+        } else if point > target[axis] {
+            point.next_down()
+        } else {
+            point
+        }
+    })
 }

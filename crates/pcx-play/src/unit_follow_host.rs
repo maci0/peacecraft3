@@ -179,6 +179,7 @@ impl ObjectHost {
             return Ok(None);
         }
         Ok(Some(Box::new(Motion {
+            reach: 0.0,
             goal,
             path,
             next: 0,

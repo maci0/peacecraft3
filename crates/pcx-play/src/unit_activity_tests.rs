@@ -1199,6 +1199,36 @@ fn obstruction_after_long_travel_grants_no_distance_on_the_replan_tick() {
     assert!(resumed != stopped, "the unit resumes on the new route");
 }
 
+#[test]
+fn successful_replan_defers_its_zero_distance_projection_until_the_next_tick() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    vm.call("move", &[]).unwrap();
+    tick(&mut vm, 2.0);
+    position_create(&mut vm.host().inner, 48.0, 16.0).unwrap();
+    let h = &mut vm.host().inner;
+    assert!(h.next_timer_expiry(10.0, &mut 1000).unwrap().is_none());
+    // The blocked segment and successful route use 136 work. The old loop then
+    // spent two more on a zero-time loop/check; those cannot advance the unit.
+    let mut work = 136;
+    h.advance_unit_activity(10.0, &mut work).unwrap();
+    assert_eq!(work, 0);
+    assert_eq!(position(&mut vm, a), [42.0, 16.0]);
+    let state = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(state.moving());
+    assert_eq!(state.destination(), Some([72.0, 16.0]));
+    tick(&mut vm, 12.0);
+    assert_ne!(position(&mut vm, a), [42.0, 16.0]);
+}
+
 /// One projection through the span handoff; returns the work it spent.
 fn tick_spans(
     vm: &mut Vm,
