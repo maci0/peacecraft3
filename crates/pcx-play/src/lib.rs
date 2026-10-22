@@ -65,6 +65,7 @@ pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_placement;
 pub mod campaign_progress;
+pub mod campaign_targeting_policy;
 pub mod cinematics;
 pub mod command_layout;
 pub mod custom_scripts;
