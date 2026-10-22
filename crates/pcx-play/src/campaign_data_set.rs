@@ -149,7 +149,7 @@ impl ContentSource for ArchiveInventorySource {
 /// `common.j` edition and the install/mode policy are fixed here, so a later
 /// map header selects only the dataset and namespace from values already held;
 /// no path or executable is reopened to rediscover them.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CampaignRecipe {
     dir: PathBuf,
     mode: GameMode,
@@ -158,15 +158,33 @@ pub struct CampaignRecipe {
     common_sha256: Sha256Digest,
     huffman: pcx_mpq::huffman::HuffmanTable,
     generation: Arc<ArchiveGeneration>,
+    image: Arc<[u8]>,
+}
+
+impl fmt::Debug for CampaignRecipe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CampaignRecipe")
+            .field("dir", &self.dir)
+            .field("mode", &self.mode)
+            .field("rules", &self.rules)
+            .field("edition", &self.edition)
+            .field("common_sha256", &self.common_sha256)
+            .field("image_bytes", &self.image.len())
+            .field("generation", &self.generation)
+            .finish()
+    }
 }
 
 impl CampaignRecipe {
+    /// Pin one verified image and archive generation. `common` is optional
+    /// confirmation for callers that already supplied the selected bytes; the
+    /// archive-selected `common.j` is always read and its digest retained.
     pub fn pin(
         dir: &Path,
         mode: GameMode,
         rules: ImageRules,
         image: &[u8],
-        common: &[u8],
+        common: Option<&[u8]>,
         edition_global: &str,
     ) -> Result<Self, Error> {
         if sha256(image) != rules.image_sha256 {
@@ -180,7 +198,10 @@ impl CampaignRecipe {
         refuse_unresolved_locale(dir, &rules)?;
         let generation = Arc::new(open_campaign_inventory(dir, &rules, &huffman)?);
         let selected_common = read_selected_common(&generation, &rules, &huffman)?;
-        let common_sha256 = matching_common_sha256(common, &selected_common)?;
+        let common_sha256 = match common {
+            Some(common) => matching_common_sha256(common, &selected_common)?,
+            None => sha256(&selected_common),
+        };
         let edition = edition_from_common(&selected_common, edition_global)?;
         rules.selected_mounts(edition)?;
         Ok(Self {
@@ -191,7 +212,21 @@ impl CampaignRecipe {
             common_sha256,
             huffman,
             generation,
+            image: Arc::from(image),
         })
+    }
+
+    /// Resolve from the base mounts only, before a map header has selected a
+    /// namespace. This reads the retained generation; it never reopens the
+    /// install, executable or archives.
+    pub fn base_resolver(&self) -> Result<Resolver, Error> {
+        let generation = LayerGeneration {
+            image_sha256: self.rules.image_sha256,
+            common_sha256: self.common_sha256,
+            edition: self.edition,
+        };
+        let layers = base_layers(&self.generation, &self.rules, &self.huffman, &generation)?;
+        Ok(Resolver::new(self.mode, None, layers)?)
     }
 
     /// Build a complete bounded reader for one admitted map header from the
@@ -231,6 +266,9 @@ impl CampaignRecipe {
     }
     pub fn image_sha256(&self) -> Sha256Digest {
         self.rules.image_sha256
+    }
+    pub fn image(&self) -> &[u8] {
+        &self.image
     }
 }
 
@@ -1416,20 +1454,7 @@ fn campaign_layers(
         edition: selection.edition,
     };
     let mut path_count = generation.raw_paths;
-    let mut layers = Vec::new();
-    for mount in &rules.base {
-        let Some(opened) = find_opened(&generation.opened, &mount.archive) else {
-            continue;
-        };
-        layers.push(build_layer(
-            opened,
-            mount.priority,
-            opened.raw.clone(),
-            None,
-            huffman,
-            &layer_generation,
-        )?);
-    }
+    let mut layers = base_layers(generation, rules, huffman, &layer_generation)?;
     for mount in selected_mounts {
         let Some(opened) = find_opened(&generation.opened, &mount.archive) else {
             continue;
@@ -1446,6 +1471,29 @@ fn campaign_layers(
             Some(&selection.prefix),
             huffman,
             &layer_generation,
+        )?);
+    }
+    Ok(layers)
+}
+
+fn base_layers(
+    generation: &ArchiveGeneration,
+    rules: &ImageRules,
+    huffman: &pcx_mpq::huffman::HuffmanTable,
+    layer_generation: &LayerGeneration,
+) -> Result<Vec<ArchiveLayer>, Error> {
+    let mut layers = Vec::new();
+    for mount in &rules.base {
+        let Some(opened) = find_opened(&generation.opened, &mount.archive) else {
+            continue;
+        };
+        layers.push(build_layer(
+            opened,
+            mount.priority,
+            opened.raw.clone(),
+            None,
+            huffman,
+            layer_generation,
         )?);
     }
     Ok(layers)
