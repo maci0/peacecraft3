@@ -1,13 +1,21 @@
 //! Native campaign chapter selection from the selected install.
 //!
 //! Chapters come from that install's `UI\CampaignStrings.txt` (Reign of Chaos)
-//! or `UI\CampaignStrings_exp.txt` (The Frozen Throne). Choosing one configures
-//! its map through the same bounded binding path the browser uses, then requests
-//! it; the campaign startup path takes over from there. The source mounts every
+//! or `UI\CampaignStrings_exp.txt` (The Frozen Throne). The campaign index keeps
+//! the authored `CampaignList` order, each campaign's `DefaultOpen` availability
+//! and background skin, and its mission rows. Choosing a mission configures its
+//! map through the same bounded binding path the browser uses, then requests it;
+//! the campaign startup path takes over from there. The source mounts every
 //! present archive in the client's default priority (campaign maps live in the
 //! local archives for both editions), with Huffman weights read from the selected
 //! client executable. Edition-specific `_V0`/`_V1` data variants are not selected
 //! yet; that remains an open fidelity question.
+//!
+//! The real `CampaignMenu` screen is bound here (native only): two authored
+//! frames from the FDF host the dynamic campaign and mission lists. The source
+//! FDF declares no button anchors for those lists, so item geometry comes from
+//! the authored `CampaignButtonTemplate` and placement inside the hosted frames
+//! is a labelled recreation choice (see `docs/re-notes/menu-entry.md`).
 use crate::launch::{Addon, AssetMode, Behaviour, GameMode};
 use bevy::{prelude::*, ui_widgets::Button};
 use pcx_assets::{ArchiveLayer, ContentSource, Resolver};
@@ -30,6 +38,31 @@ const INDEX_LIMITS: IndexLimits = IndexLimits {
     max_missions_per_campaign: 128,
 };
 
+/// One mission row (`Header`, `Name`, map filename) as authored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Mission {
+    pub header: String,
+    pub name: String,
+    pub map: String,
+}
+
+/// One campaign section of the selected index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Campaign {
+    /// The section key (`CampaignList` id), not a display string.
+    pub key: String,
+    /// The section's `Header` value.
+    pub header: String,
+    /// The section's `Name` value, the campaign's display title.
+    pub title: String,
+    /// The authored `DefaultOpen` availability. It is not completion.
+    pub default_open: bool,
+    /// The authored `Background` skin key, resolved through war3skins.txt.
+    pub background: Option<String>,
+    pub missions: Vec<Mission>,
+}
+
+/// Flat chapter view for the fallback launcher card; derived from the same parse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Chapter {
     pub campaign: String,
@@ -38,10 +71,13 @@ pub(crate) struct Chapter {
     pub map: String,
 }
 
-/// Chapters of the selected install and edition, refreshed when either changes.
+/// Campaigns of the selected install and edition, refreshed when either changes.
 #[derive(Resource, Default)]
 pub(crate) struct Chapters {
     key: Option<(PathBuf, GameMode)>,
+    /// Structured campaigns for the real `CampaignMenu` screen.
+    pub campaigns: Vec<Campaign>,
+    /// Flat chapter rows for the fallback launcher card.
     pub entries: Vec<Chapter>,
     pub error: Option<String>,
     /// Configuration request in flight and the binding revision it carries.
@@ -49,18 +85,49 @@ pub(crate) struct Chapters {
     revision: u64,
 }
 
-#[derive(Component)]
-pub(crate) struct ChapterButton(pub usize);
+/// Selection state for the real `CampaignMenu` screen.
+#[derive(Resource, Default)]
+pub(crate) struct CampaignMenuState {
+    /// The selected campaign index, or `None` before any selection.
+    pub selected_campaign: Option<usize>,
+    /// Source identity the mounted panel was last built for: install, edition,
+    /// index revision and selected campaign.
+    built_for: Option<(PathBuf, GameMode, u64, Option<usize>)>,
+}
 
 #[derive(Component)]
+pub(crate) struct CampaignPanel;
+
+#[derive(Component)]
+pub(crate) struct CampaignButton(pub usize);
+
+#[derive(Component)]
+pub(crate) struct MissionButton {
+    pub campaign: usize,
+    pub mission: usize,
+}
+
+/// The fallback launcher card's flat list container.
+#[derive(Component)]
 pub(crate) struct ChapterList;
+
+#[derive(Component)]
+pub(crate) struct ChapterButton(pub usize);
 
 pub(crate) fn install(app: &mut App) {
     let inbox = ConfigurationInbox::default();
     peacecraft3::browser_configuration::install(app, inbox);
-    app.init_resource::<Chapters>().add_systems(
+    app.init_resource::<Chapters>().init_resource::<CampaignMenuState>().add_systems(
         Update,
-        (refresh, populate, launch, request)
+        (
+            refresh,
+            populate,
+            launch,
+            request,
+            render_campaign_panel,
+            select_campaign,
+            launch_mission,
+        )
             .chain()
             .run_if(crate::button_actions::input_allowed)
             .before(MapRequestSet::Deliver)
@@ -97,31 +164,63 @@ fn asset_mode(mode: GameMode) -> Result<pcx_assets::GameMode, String> {
     })
 }
 
-fn read_chapters(dir: &Path, mode: &GameMode) -> Result<Vec<Chapter>, String> {
+/// Parse structured campaigns (and their flat chapter view) from validated text.
+fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapter>), String> {
+    let index =
+        parse_campaign_index(member, text.as_bytes(), INDEX_LIMITS).map_err(|e| e.to_string())?;
+    let mut campaigns = Vec::new();
+    let mut chapters = Vec::new();
+    for slot in index.slots {
+        let CampaignSlot::Entry(entry) = slot else {
+            continue;
+        };
+        let label = entry
+            .name
+            .as_ref()
+            .or(entry.header.as_ref())
+            .cloned()
+            .unwrap_or_else(|| entry.id.clone());
+        let title = entry.name.clone().unwrap_or_else(|| entry.id.clone());
+        let default_open = entry.default_open == Some(true);
+        let background = entry.background.clone();
+        let missions: Vec<Mission> = entry
+            .missions
+            .iter()
+            .map(|m| Mission {
+                header: m.header.clone(),
+                name: m.name.clone(),
+                map: m.map_file.clone(),
+            })
+            .collect();
+        for mission in &missions {
+            chapters.push(Chapter {
+                campaign: label.clone(),
+                header: mission.header.clone(),
+                name: mission.name.clone(),
+                map: mission.map.clone(),
+            });
+        }
+        campaigns.push(Campaign {
+            key: entry.id.clone(),
+            header: entry.header.clone().unwrap_or_default(),
+            title,
+            default_open,
+            background,
+            missions,
+        });
+    }
+    Ok((campaigns, chapters))
+}
+
+fn read_campaigns(dir: &Path, mode: &GameMode) -> Result<(Vec<Campaign>, Vec<Chapter>), String> {
     let source = InstallSource::open(dir)?;
     let member = index_member(mode);
     let content = source
         .read_bounded(member, INDEX_LIMITS.max_bytes as u64)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("{member} is absent from the selected install"))?;
-    let index =
-        parse_campaign_index(member, &content.bytes, INDEX_LIMITS).map_err(|e| e.to_string())?;
-    let mut chapters = Vec::new();
-    for slot in index.slots {
-        let CampaignSlot::Entry(entry) = slot else {
-            continue;
-        };
-        let campaign = entry.name.or(entry.header).unwrap_or(entry.id);
-        for mission in entry.missions {
-            chapters.push(Chapter {
-                campaign: campaign.clone(),
-                header: mission.header,
-                name: mission.name,
-                map: mission.map_file,
-            });
-        }
-    }
-    Ok(chapters)
+    let text = std::str::from_utf8(&content.bytes).map_err(|e| e.to_string())?;
+    parse_campaigns(member, text)
 }
 
 fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chapters>) {
@@ -132,12 +231,14 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
     if chapters.key.as_ref() == Some(&key) {
         return;
     }
-    match read_chapters(&key.0, &key.1) {
-        Ok(entries) => {
+    match read_campaigns(&key.0, &key.1) {
+        Ok((campaigns, entries)) => {
+            chapters.campaigns = campaigns;
             chapters.entries = entries;
             chapters.error = None;
         }
         Err(error) => {
+            chapters.campaigns.clear();
             chapters.entries.clear();
             chapters.error = Some(error);
         }
@@ -145,7 +246,7 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
     chapters.key = Some(key);
 }
 
-/// Fill each chapter list container once per chapter set.
+/// Fill the fallback launcher card's flat chapter list once per chapter set.
 fn populate(
     mut commands: Commands,
     chapters: Res<Chapters>,
@@ -270,6 +371,28 @@ fn configuration(
     })
 }
 
+/// Launch one selected mission through the shared configuration/map-request path.
+fn enqueue_chapter(
+    launcher: &crate::launch_gui::Launcher,
+    inbox: &ConfigurationInbox,
+    chapters: &mut Chapters,
+    chapter: &Chapter,
+) {
+    let Some(dir) = crate::launch_gui::selected_install(launcher) else {
+        chapters.error = Some("no selected install".into());
+        return;
+    };
+    chapters.revision += 1;
+    let revision = chapters.revision;
+    match configuration(&dir, launcher.mode(), chapter, revision)
+        .and_then(|request| inbox.enqueue(request).map_err(|e| e.to_string()))
+    {
+        Ok(id) => chapters.pending = Some((id, revision)),
+        Err(error) => chapters.error = Some(error),
+    }
+}
+
+/// The fallback launcher card's flat chapter launch.
 fn launch(
     actions: Res<crate::button_actions::ButtonActions>,
     buttons: Query<&ChapterButton>,
@@ -287,18 +410,55 @@ fn launch(
         let Some(chapter) = chapters.entries.get(button.0).cloned() else {
             continue;
         };
-        let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
-            chapters.error = Some("no selected install".into());
+        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+    }
+}
+
+/// Select a campaign on the real `CampaignMenu` screen. Selection never launches.
+fn select_campaign(
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&CampaignButton>,
+    mut state: ResMut<CampaignMenuState>,
+    chapters: Res<Chapters>,
+) {
+    for entity in &actions.entities {
+        let Ok(button) = buttons.get(*entity) else {
             continue;
         };
-        chapters.revision += 1;
-        let revision = chapters.revision;
-        match configuration(&dir, launcher.mode(), &chapter, revision)
-            .and_then(|request| inbox.enqueue(request).map_err(|e| e.to_string()))
-        {
-            Ok(id) => chapters.pending = Some((id, revision)),
-            Err(error) => chapters.error = Some(error),
+        if button.0 < chapters.campaigns.len() {
+            state.selected_campaign = Some(button.0);
         }
+    }
+}
+
+/// Launch the selected mission from the real `CampaignMenu` screen.
+fn launch_mission(
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&MissionButton>,
+    launcher: Res<crate::launch_gui::Launcher>,
+    inbox: Res<ConfigurationInbox>,
+    mut chapters: ResMut<Chapters>,
+) {
+    for entity in &actions.entities {
+        let Ok(mission) = buttons.get(*entity) else {
+            continue;
+        };
+        if chapters.pending.is_some() {
+            continue;
+        }
+        let Some(campaign) = chapters.campaigns.get(mission.campaign) else {
+            continue;
+        };
+        let Some(mission) = campaign.missions.get(mission.mission) else {
+            continue;
+        };
+        let chapter = Chapter {
+            campaign: campaign.title.clone(),
+            header: mission.header.clone(),
+            name: mission.name.clone(),
+            map: mission.map.clone(),
+        };
+        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
     }
 }
 
@@ -333,15 +493,268 @@ fn request(
     }
 }
 
+/// A label styled from an authored FDF text frame: source face, size and colour.
+fn source_label(
+    install: Option<&std::path::Path>,
+    fdf: &crate::fdf::Fdf,
+    fonts: &mut Assets<Font>,
+    frame: &str,
+    text: String,
+) -> Result<(Text, TextFont, TextColor, ZIndex), String> {
+    let style = crate::menu_text::render_style_with_parent(fdf, frame, frame)
+        .map_err(|e| format!("campaign label {frame}: {e}"))?;
+    let install = install.ok_or_else(|| "no selected install for campaign labels".to_string())?;
+    let skin_bytes = crate::mainmenu::art_bytes(Some(install), crate::mainmenu::SKIN_TABLE)
+        .ok_or_else(|| "missing menu skin table".to_string())?;
+    let skin = std::str::from_utf8(&skin_bytes).map_err(|e| e.to_string())?;
+    let binding = crate::mainmenu::menu_font_file(skin, &style.font)
+        .map_err(|e| format!("campaign label font {:?}: {e}", style.font))?;
+    let served = crate::mainmenu::served_font_name(&binding.file)
+        .ok_or_else(|| format!("campaign label font has no served name: {:?}", binding.file))?;
+    let bytes = crate::mainmenu::art_bytes_named(Some(install), &binding.file, &served)
+        .ok_or_else(|| format!("campaign label font bytes unavailable: {:?}", binding.file))?;
+    let face = fonts.add(Font::from_bytes(bytes));
+    let size = bevy::text::FontSize::Vh(style.height / crate::mainmenu::FRAME_H * 100.0);
+    let [r, g, b, a] = style.colour;
+    Ok((
+        Text(text),
+        TextFont {
+            font: bevy::text::FontSource::Handle(face),
+            font_size: size,
+            ..default()
+        },
+        TextColor(Color::srgba(r, g, b, a)),
+        ZIndex(1),
+    ))
+}
+
+/// The authored `CampaignButtonTemplate` geometry, in frame units.
+fn template_geometry(fdf: &crate::fdf::Fdf) -> Result<(f32, f32), String> {
+    let viewport = (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H);
+    let rect = fdf
+        .rect("CampaignButtonTemplate", viewport)
+        .map_err(|e| e.to_string())?;
+    Ok((rect.width, rect.height))
+}
+
+/// Spawn one campaign/mission button using the shared `GlueButton` renderer.
+///
+/// The authored `CampaignButtonTemplate` supplies the backdrop, pushed/disabled
+/// and mouse-over art and offsets; a source-styled label is added as the button
+/// node's child. The node is placed at the absolute frame `rect`.
+fn spawn_campaign_button(
+    commands: &mut Commands,
+    panel: Entity,
+    fdf: &crate::fdf::Fdf,
+    install: Option<&std::path::Path>,
+    fonts: &mut Assets<Font>,
+    rect: crate::fdf::Rect,
+    text: String,
+    component: impl Bundle + Send + Sync + 'static,
+) -> Result<(), String> {
+    let button = crate::glue_menu::button(fdf, "CampaignButtonTemplate")
+        .map_err(|e| e.to_string())?;
+    let item = crate::glue_menu::Item {
+        frame: "CampaignButtonTemplate".to_string(),
+        rect,
+        kind: crate::glue_menu::Kind::Button(Box::new(button)),
+    };
+    let label = source_label(install, fdf, fonts, "MissionNameHeader", text)?;
+    let wrapper = commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        })
+        .id();
+    commands.entity(panel).add_child(wrapper);
+    crate::glue_menu::spawn(commands, wrapper, std::slice::from_ref(&item));
+    let frame = "CampaignButtonTemplate".to_string();
+    commands.queue(move |world: &mut World| {
+        let Some(children) = world.get::<Children>(wrapper) else {
+            return;
+        };
+        let Some(target) = children.iter().find_map(|child| {
+            world
+                .get::<Name>(child)
+                .is_some_and(|name| name.as_str() == frame)
+                .then_some(child)
+        }) else {
+            return;
+        };
+        world.entity_mut(target).insert(component);
+        world.entity_mut(target).with_children(|button| {
+            button.spawn(label);
+        });
+    });
+    Ok(())
+}
+
+/// Build the campaign and mission lists into the panel.
+///
+/// The FDF declares no list anchors, so the campaign and mission columns sit at
+/// a labelled recreation offset and stack by the authored
+/// `CampaignButtonTemplate` geometry; each item is rendered with the shared
+/// `GlueButton` renderer so its art and offsets come from source. See
+/// `docs/re-notes/menu-entry.md`.
+fn build_campaign_panel(
+    commands: &mut Commands,
+    panel: Entity,
+    fdf: &crate::fdf::Fdf,
+    install: Option<&std::path::Path>,
+    fonts: &mut Assets<Font>,
+    campaigns: &[Campaign],
+    selected: Option<usize>,
+) -> Result<(), String> {
+    let (button_w, button_h) = template_geometry(fdf)?;
+    if button_w <= 0.0 || button_h <= 0.0 {
+        return Err(format!(
+            "CampaignButtonTemplate geometry is not positive: {button_w}x{button_h}"
+        ));
+    }
+    let gap = button_h * 0.25;
+    let campaign_left = crate::mainmenu::FRAME_W * 0.04;
+    let mission_left = crate::mainmenu::FRAME_W * 0.45;
+    let top_start = crate::mainmenu::FRAME_H * 0.30;
+    let row = |index: usize, left: f32| crate::fdf::Rect {
+        left,
+        bottom: crate::mainmenu::FRAME_H - top_start - (index as f32 + 1.0) * button_h
+            - index as f32 * gap,
+        width: button_w,
+        height: button_h,
+    };
+    commands.entity(panel).despawn_related::<Children>();
+    let mut campaign_index = 0;
+    for (index, campaign) in campaigns.iter().enumerate() {
+        if selected == Some(index) {
+            continue;
+        }
+        let rect = row(campaign_index, campaign_left);
+        match spawn_campaign_button(
+            commands,
+            panel,
+            fdf,
+            install,
+            fonts,
+            rect,
+            campaign.title.clone(),
+            CampaignButton(index),
+        ) {
+            Ok(()) => campaign_index += 1,
+            Err(error) => warn!("campaign button: {error}"),
+        }
+    }
+    if let Some(sel) = selected
+        && let Some(campaign) = campaigns.get(sel)
+    {
+        for (index, mission) in campaign.missions.iter().enumerate() {
+            let rect = row(index, mission_left);
+            match spawn_campaign_button(
+                commands,
+                panel,
+                fdf,
+                install,
+                fonts,
+                rect,
+                format!("{}: {}", mission.header, mission.name),
+                MissionButton {
+                    campaign: sel,
+                    mission: index,
+                },
+            ) {
+                Ok(()) => {}
+                Err(error) => warn!("campaign mission button: {error}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build the real `CampaignMenu` screen's dynamic campaign and mission lists.
+fn render_campaign_panel(
+    mut commands: Commands,
+    launcher: Res<crate::launch_gui::Launcher>,
+    navigation: Res<crate::menu_screens::Navigation>,
+    mut chapters: ResMut<Chapters>,
+    mut state: ResMut<CampaignMenuState>,
+    mut fonts: ResMut<Assets<Font>>,
+    layers: Query<Entity, With<crate::launch_gui::MenuLayer>>,
+    panels: Query<Entity, With<CampaignPanel>>,
+) {
+    let active = navigation.screen == crate::menu_screens::Screen::Campaign;
+    let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
+        return;
+    };
+    if !active {
+        if state.built_for.take().is_some() || state.selected_campaign.take().is_some() {
+            for panel in &panels {
+                commands.entity(panel).despawn();
+            }
+        }
+        return;
+    }
+    let signature = (dir.clone(), launcher.mode(), chapters.revision, state.selected_campaign);
+    if state.built_for.as_ref() == Some(&signature) {
+        return;
+    }
+    let (fdf, _) = match crate::launch_gui::read_screen_fdf(
+        Some(&dir),
+        crate::menu_screens::Screen::Campaign,
+    ) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            chapters.error = Some(format!("campaign panel: {error}"));
+            return;
+        }
+    };
+    let panel = if let Ok(panel) = panels.single() {
+        panel
+    } else {
+        let Ok(layer) = layers.single() else {
+            return;
+        };
+        let panel = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                CampaignPanel,
+            ))
+            .id();
+        commands.entity(layer).add_child(panel);
+        panel
+    };
+    if let Err(error) = build_campaign_panel(
+        &mut commands,
+        panel,
+        &fdf,
+        Some(&dir),
+        &mut fonts,
+        &chapters.campaigns,
+        state.selected_campaign,
+    ) {
+        chapters.error = Some(format!("campaign panel: {error}"));
+        return;
+    }
+    state.built_for = Some(signature);
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::ui_widgets::Activate;
     use pcx_play::map_startup_host::MapStartupHost;
     use peacecraft3::{
         campaign_startup::{CampaignSeed, CampaignStartup},
         map_script_session::MapScriptSession,
     };
+
+    const FIXTURE: &str = "[Index]\nCampaignList=\"Tutorial\",\"Human\"\n[Tutorial]\nHeader=\"Prologue\"\nName=\"Exodus\"\nDefaultOpen=1\nBackground=\"TutorialBackdrop\"\nMission0=\"Chapter One\",\"Chasing\",\"Maps\\Prologue01.w3m\"\nMission1=\"Chapter Two\",\"Departures\",\"Maps\\Prologue02.w3m\"\n[Human]\nHeader=\"Human Campaign\"\nName=\"The Scourge\"\nMission0=\"Chapter One\",\"Defense\",\"Maps\\Human01.w3m\"\n";
 
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP and PCX_NATIVE_CHAPTER_ADDON"]
@@ -375,7 +788,6 @@ pub(crate) mod tests {
         install(&mut app);
         app.add_systems(Update, crate::button_actions::clear);
         app.world_mut().resource_mut::<CampaignSeed>().requested = Some(1);
-        app.world_mut().spawn((Node::default(), ChapterList));
         app.update();
 
         let chapters = app.world().resource::<Chapters>();
@@ -384,19 +796,32 @@ pub(crate) mod tests {
             "chapter index: {:?}",
             chapters.error
         );
-        let index = chapters
-            .entries
+        let campaign = chapters
+            .campaigns
             .iter()
-            .position(|entry| entry.map.eq_ignore_ascii_case(&map))
+            .position(|entry| {
+                entry
+                    .missions
+                    .iter()
+                    .any(|m| m.map.eq_ignore_ascii_case(&map))
+            })
             .expect("requested map must come from the selected install's campaign index");
+        let mission = chapters.campaigns[campaign]
+            .missions
+            .iter()
+            .position(|m| m.map.eq_ignore_ascii_case(&map))
+            .unwrap();
+        // Activate is the widget's keyboard/pointer boundary; physical picking is
+        // a separate gate. The mission button is the only launch trigger; merely
+        // selecting a campaign never launches.
         let button = app
             .world_mut()
-            .query::<(Entity, &ChapterButton)>()
-            .iter(app.world())
-            .find(|(_, button)| button.0 == index)
-            .unwrap()
-            .0;
-        // Activate is the widget's keyboard/pointer boundary; physical picking is a separate gate.
+            .spawn((
+                Button,
+                MissionButton { campaign, mission },
+                Node::default(),
+            ))
+            .id();
         app.world_mut().trigger(Activate { entity: button });
         for _ in 0..6 {
             app.update();
@@ -427,7 +852,7 @@ pub(crate) mod tests {
             session
                 .context()
                 .is_some_and(|published| std::sync::Arc::ptr_eq(published, &context)),
-            "the activated chapter must publish the admitted context"
+            "the activated mission must publish the admitted context"
         );
         assert_eq!(app.world().resource::<CampaignSeed>().prepared, Some(1));
         let units = app
@@ -441,5 +866,60 @@ pub(crate) mod tests {
         assert!(units > 0, "unchanged chapter main must create units");
         println!("chapter={map} seed=1 executed_units={units} published=true");
         app
+    }
+
+    #[test]
+    fn campaign_parse_preserves_order_and_default_open_and_mission_rows() {
+        let (campaigns, chapters) = parse_campaigns("UI\\CampaignStrings.txt", FIXTURE).unwrap();
+        assert_eq!(campaigns.len(), 2);
+        assert_eq!(campaigns[0].key, "Tutorial");
+        assert!(campaigns[0].default_open);
+        assert_eq!(campaigns[0].background.as_deref(), Some("TutorialBackdrop"));
+        assert_eq!(campaigns[0].missions.len(), 2);
+        assert_eq!(campaigns[0].missions[0].map, "Maps\\Prologue01.w3m");
+        assert!(!campaigns[1].default_open);
+        assert_eq!(campaigns[1].title, "The Scourge");
+        assert_eq!(campaigns[1].missions[0].name, "Defense");
+        assert_eq!(chapters.len(), 3);
+        assert_eq!(chapters[0].campaign, "Exodus");
+        assert_eq!(chapters[2].map, "Maps\\Human01.w3m");
+    }
+
+    #[test]
+    fn malformed_default_open_is_refused_instead_of_treated_closed() {
+        let text = "[Index]\nCampaignList=\"One\"\n[One]\nDefaultOpen=banana\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
+        let error = parse_campaigns("member", text).unwrap_err();
+        assert!(error.contains("DefaultOpen"), "{error}");
+        let absent = "[Index]\nCampaignList=\"One\"\n[One]\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
+        let (campaigns, _) = parse_campaigns("member", absent).unwrap();
+        assert!(!campaigns[0].default_open, "absent DefaultOpen stays closed");
+    }
+
+    #[test]
+    fn mission_row_background_key_does_not_match_prefix_fields() {
+        let text = "[Index]\nCampaignList=\"One\"\n[One]\nDefaultOpen=1\nBackground=\"HumanBackdrop\"\nBackgroundFogStyle=0\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
+        let (campaigns, _) = parse_campaigns("member", text).unwrap();
+        assert_eq!(campaigns[0].background.as_deref(), Some("HumanBackdrop"));
+        assert!(campaigns[0].default_open);
+    }
+
+    #[test]
+    fn selecting_a_campaign_never_launches() {
+        let (campaigns, _) = parse_campaigns("member", FIXTURE).unwrap();
+        let mut world = World::new();
+        world.insert_resource(Chapters {
+            campaigns,
+            ..default()
+        });
+        let btn = world.spawn((Button, CampaignButton(0))).id();
+        world.insert_resource(CampaignMenuState::default());
+        world.insert_resource(crate::button_actions::ButtonActions {
+            entities: vec![btn],
+        });
+        world.run_system_once(select_campaign).unwrap();
+        let state = world.resource::<CampaignMenuState>();
+        assert_eq!(state.selected_campaign, Some(0));
+        let chapters = world.resource::<Chapters>();
+        assert!(chapters.pending.is_none(), "campaign selection must not launch");
     }
 }
