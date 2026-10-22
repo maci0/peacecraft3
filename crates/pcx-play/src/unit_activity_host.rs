@@ -848,9 +848,16 @@ impl ObjectHost {
             let mut moved = 0;
             for &unit in &active {
                 *work = work.checked_sub(1).ok_or_else(|| {
+                    let previous = active
+                        .binary_search(&unit)
+                        .ok()
+                        .and_then(|index| index.checked_sub(1))
+                        .map(|index| active[index]);
                     self.inner.error(
                         "unit activity",
-                        Failure::UnitActivity("unit tick work exhausted".into()),
+                        Failure::UnitActivity(format!(
+                            "unit tick work exhausted before {unit:?} at {now}; previous active unit {previous:?}",
+                        )),
                     )
                 })?;
                 if let Ok(index) = followed.binary_search_by_key(&unit, |(id, _)| *id) {

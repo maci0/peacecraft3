@@ -261,6 +261,64 @@ fn pocket_proof_preserves_seed_edges_and_diagonal_corner_blocking() {
 }
 
 #[test]
+fn a_multi_cell_isolated_target_pocket_does_not_force_map_wide_search() {
+    for (half_width, limit) in [(4, 1000), (7, 2048)] {
+        let mut p = placement(
+            Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "multi-cell goal pocket".into(),
+            },
+            10000,
+        );
+        let start = [16., 16.];
+        let target = [64., 64.];
+        let stamp = p.prepare(start, Some(0.), "_", 0.).unwrap();
+        p.commit(id(1), stamp);
+        for y in 16 - half_width..=16 + half_width {
+            for x in 16 - half_width..=16 + half_width {
+                if x == 16 - half_width
+                    || x == 16 + half_width
+                    || y == 16 - half_width
+                    || y == 16 + half_width
+                    || (x == 16 && y == 16)
+                {
+                    p.grid.pathing.cells[y * 32 + x] = p.rules.mask;
+                }
+            }
+        }
+        let before = p.occupied.clone();
+        let mut work = limit;
+        let path = p.route(id(1), start, target, 0., &mut work).unwrap();
+        assert!(
+            work > 0,
+            "pocket half-width {half_width} exhausted {limit} work"
+        );
+        let mut ample = 100000;
+        assert_eq!(p.route(id(1), start, target, 0., &mut ample).unwrap(), path);
+        assert_eq!(
+            limit - work,
+            100000 - ample,
+            "work depends on the map, not the allowance"
+        );
+        let end = p.cell(*path.last().unwrap()).unwrap();
+        let offset = end.map(|axis| (axis - 16).abs());
+        assert_eq!(
+            offset[0].max(offset[1]),
+            i32::try_from(half_width + 1).unwrap(),
+            "the endpoint must reach the nearest outside edge of the closed ring"
+        );
+        assert_eq!(offset[0].min(offset[1]), 0);
+        let mut from = start;
+        for to in path {
+            assert!(p.segment_clear(id(1), from, to, 0., &mut 1000).unwrap());
+            from = to;
+        }
+        assert_eq!(p.occupied, before);
+    }
+}
+
+#[test]
 fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
     use std::sync::{
         Arc,
