@@ -50,11 +50,19 @@ values; nothing about item size, art or text is invented.
 - Campaign backgrounds (`Background` skin), fog/cursor/ambient keys are parsed
   and kept but not applied to the screen yet.
 - Campaign unlock persistence (`DefaultOpen` is initial availability only;
-  completion-based unlocks are not modelled).
+  completion-based unlocks are not modelled). Initially closed campaigns are
+  disabled in the list and refused at selection/mission activation.
+- Mission rows are exposed without mission-specific unlock filtering; this is
+  an entry-path implementation, not qualified original progression UI.
 - Exact list coordinates and scroll behaviour are not sourced from the client.
 - Edition `_V0`/`_V1` data variants remain unselected (unchanged).
 
 ## Verification
+
+Dynamic rows do not carry `ScreenPosition`: the generic FDF layout pass resolves
+that component against the template origin, which would collapse every row onto
+one position. Container and label nodes ignore picking so the button receives
+the completed pointer click. A synthetic spawn test checks both boundaries.
 
 - Unit tests (synthetic fixtures, no install required):
   - `campaign_parse_preserves_order_and_default_open_and_mission_rows`

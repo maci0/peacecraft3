@@ -423,6 +423,10 @@ pub fn supported(name: &str) -> bool {
 #[derive(Component)]
 pub struct ScreenPosition(pub String);
 
+/// Dynamic campaign controls are handled by the chapter selector, not screen navigation.
+#[derive(Component)]
+pub(crate) struct CampaignAction;
+
 #[derive(Component)]
 pub struct SettingControl {
     pub name: String,

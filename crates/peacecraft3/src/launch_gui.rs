@@ -3460,6 +3460,7 @@ pub(crate) struct MenuClickQueries<'w, 's> {
             &'static crate::glue_menu::GlueButton,
             Has<InteractionDisabled>,
         ),
+        Without<crate::menu_screens::CampaignAction>,
     >,
     menu: Query<'w, 's, Entity, With<MenuLayer>>,
     cogs: Query<'w, 's, Entity, With<SettingsCog>>,
@@ -4346,6 +4347,38 @@ mod menu_tests {
         press(&mut world, "SinglePlayerButton");
         world.run_system_once(apply_menu_clicks).unwrap();
         assert!(world.get_entity(layer).is_ok());
+    }
+
+    #[test]
+    fn campaign_controls_do_not_also_run_generic_menu_navigation() {
+        let mut world = World::new();
+        let entry = press(&mut world, "CampaignButtonTemplate");
+        world
+            .entity_mut(entry)
+            .insert(crate::menu_screens::CampaignAction);
+        world.run_system_once(apply_menu_clicks).unwrap();
+        assert!(
+            world
+                .resource::<crate::menu_screens::Navigation>()
+                .notice
+                .is_empty()
+        );
+        assert_eq!(
+            world
+                .resource::<crate::button_actions::ButtonActions>()
+                .entities,
+            [entry]
+        );
+        world
+            .entity_mut(entry)
+            .remove::<crate::menu_screens::CampaignAction>();
+        world.run_system_once(apply_menu_clicks).unwrap();
+        assert!(
+            world
+                .resource::<crate::menu_screens::Navigation>()
+                .notice
+                .contains("not available")
+        );
     }
 
     /// The edition button switches between the two editions.
