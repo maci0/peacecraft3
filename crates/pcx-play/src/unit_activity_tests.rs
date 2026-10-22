@@ -74,19 +74,25 @@ pub(super) fn rules() -> (
     rules_with_patrol(2122)
 }
 
+const STOCK_MOVE_SPEED_MISC: &str =
+    "[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+
 fn move_speed_rules() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    move_speed_rules_with(STOCK_MOVE_SPEED_MISC)
+}
+
+fn move_speed_rules_with(
+    profile: &'static str,
+) -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,
 ) {
     let (registry, rules) = rules();
     let rules = rules
-        .with_move_speed_profiles(
-            &[(
-                "synthetic game misc",
-                b"[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n",
-            )],
-            4096,
-        )
+        .with_move_speed_profiles(&[("synthetic game misc", profile.as_bytes())], 4096)
         .unwrap();
     (registry, rules)
 }
@@ -752,6 +758,47 @@ fn move_speed_natives_clamp_by_structure_and_reanchor_the_route() {
 }
 
 #[test]
+fn non_stock_move_speed_limits_clamp_finite_negative_inputs_without_a_copied_floor() {
+    let profile =
+        "[Misc]\nMinUnitSpeed=37.5\nMaxUnitSpeed=412.5\nMinBldgSpeed=41.25\nMaxBldgSpeed=311.5\n";
+    let fields = profile_fields(FieldValue::Cell("100".into()), Some("foot"), Some(false));
+    let mut h = host_fields_with(65536, &fields, move_speed_rules_with(profile));
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(100.)
+    );
+    for (input, expected) in [(-50., 37.5), (0., 37.5), (1000., 412.5)] {
+        h.native("SetUnitMoveSpeed", &[a.clone(), Value::Real(input)])
+            .unwrap();
+        assert_eq!(
+            h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+                .unwrap(),
+            Value::Real(expected)
+        );
+        assert_eq!(
+            h.native("GetUnitDefaultMoveSpeed", std::slice::from_ref(&a))
+                .unwrap(),
+            Value::Real(100.)
+        );
+    }
+
+    let fields = profile_fields(FieldValue::Cell("100".into()), Some("foot"), Some(true));
+    let mut h = host_fields_with(65536, &fields, move_speed_rules_with(profile));
+    let b = position_create(&mut h, 16., 16.).unwrap();
+    for (input, expected) in [(-50., 41.25), (1000., 311.5)] {
+        h.native("SetUnitMoveSpeed", &[b.clone(), Value::Real(input)])
+            .unwrap();
+        assert_eq!(
+            h.native("GetUnitMoveSpeed", std::slice::from_ref(&b))
+                .unwrap(),
+            Value::Real(expected)
+        );
+    }
+}
+
+#[test]
 fn move_speed_native_validates_arguments_before_null_and_removed_noops() {
     let mut h = profile_with_structure(FieldValue::Cell("100".into()), Some("foot"), false);
     let a = position_create(&mut h, 16., 16.).unwrap();
@@ -946,6 +993,63 @@ fn move_speed_setter_reanchors_a_moving_walk_rate_without_disturbing_an_idle_ani
             .unwrap(),
         Value::Real(350.)
     );
+}
+
+#[test]
+fn move_speed_reselect_interrupts_queued_animation_and_keeps_the_unit_scheduled() {
+    let mut vm = open_move_speed();
+    let a = unit(&vm, "A");
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 1.);
+    vm.host()
+        .inner
+        .native(
+            "QueueUnitAnimation",
+            &[Value::Handle(a), Value::Str("Death".into())],
+        )
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .has_pending()
+    );
+    let before = position(&mut vm, a);
+    let order = vm
+        .host()
+        .inner
+        .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+        .unwrap();
+
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(400.)])
+        .unwrap();
+    let record = vm.host().inner.executed_unit(a).unwrap();
+    let animation = record.animation.as_ref().unwrap();
+    assert_eq!(animation.started, 1.);
+    assert_eq!(
+        animation.model.sequences[animation.sequence.unwrap()]
+            .name
+            .to_ascii_lowercase(),
+        "walk"
+    );
+    assert!(!animation.has_pending());
+    assert_eq!(record.position.unwrap(), before);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        order
+    );
+
+    tick(&mut vm, 1.25);
+    assert_ne!(position(&mut vm, a), before);
 }
 
 #[test]
