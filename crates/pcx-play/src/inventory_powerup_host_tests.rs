@@ -1185,6 +1185,7 @@ fn armor_transfer_moves_the_points_to_the_receiver() {
 fn held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio() {
     let Fixture { mut h, hero, .. } = open();
     set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let mana = (mana_of(&h, hero), max_mana_of(&h, hero));
     let first = item(&mut h, b"plif", 0.0);
     assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
     assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
@@ -1193,6 +1194,11 @@ fn held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio() {
     assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
     assert_eq!(max_life_of(&h, hero), HERO_LIFE + 44.0);
     assert_eq!(life_of(&h, hero), 398.0);
+    assert_eq!(
+        (mana_of(&h, hero), max_mana_of(&h, hero)),
+        mana,
+        "life-only items leave both mana pools"
+    );
 }
 
 #[test]
@@ -1724,6 +1730,62 @@ fn held_intelligence_adds_mana_pool_and_is_removed_with_ratio_rounding() {
     assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
     assert_close(max_mana_of(&h, hero), base_max, "dropped maximum");
     assert_close(mana_of(&h, hero), 53.0, "dropped ratio rounds half upward");
+}
+
+#[test]
+fn pure_intelligence_equip_and_drop_leave_tiny_positive_life_untouched() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.5);
+    let life = (life_of(&h, hero), max_life_of(&h, hero));
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "equip leaves both life pools"
+    );
+    assert_close(mana_of(&h, hero), 75.0, "equip reprices current mana");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "drop leaves both life pools"
+    );
+    assert_close(mana_of(&h, hero), 53.0, "drop reprices current mana");
+}
+
+#[test]
+fn pure_intelligence_cleanup_keeps_tiny_life_and_matches_sequential_mana() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.5);
+    let life = (life_of(&h, hero), max_life_of(&h, hero));
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let first = item(&mut h, b"pint", 0.0);
+    let second = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "equip leaves both life pools"
+    );
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "cleanup leaves both life pools"
+    );
+    assert_close(max_mana_of(&h, hero), base_max, "cleanup restores maximum");
+    assert_close(mana_of(&h, hero), 53.0, "cleanup sequential ratio");
 }
 
 #[test]

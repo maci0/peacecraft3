@@ -93,7 +93,7 @@ cannot wrap.
 Held maximum life applies to any holder with vitals, hero or non-hero.
 `reprice_max_life` shares the strength pool adjustment: the new maximum is
 `max + delta`, the retained ratio is `new_max * life / max`, and the result is
-`floor(x + 0.5)` through the reviewed helper shape. `set_life_pools` keeps a
+`floor(x + 0.5)` through the reviewed helper shape. The life projection keeps a
 living holder at one hit point and a dead holder at zero. Equip, drop, transfer
 and cleanup preflight the receiver and donor projections before detaching an
 item or queuing a drop event. A dead unit still cannot pick up an item.

@@ -60,8 +60,9 @@ pub(crate) fn reprice_mana(
     change_mana_pools(mana, max_mana, change).map_err(|e| format!("intelligence mana change: {e}"))
 }
 
-/// Final pools stored for a holder: a living holder keeps at least one hit point, while a dead
-/// holder stays at zero. The pool projection and every write use this same clamp.
+/// Final pools prepared by a projection: a living holder keeps at least one hit point, while a
+/// dead holder stays at zero. The write stores the prepared projection as-is, so a pool whose
+/// delta was zero is not re-clamped.
 pub(crate) fn clamp_life_pools(life: f32, max_life: f32, dead: bool) -> (f32, f32) {
     let life = if dead {
         0.0
