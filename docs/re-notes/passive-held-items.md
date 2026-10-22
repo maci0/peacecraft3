@@ -16,6 +16,9 @@ derived on demand from the held slots, so no add/remove state exists.
 - Equip and drop reprice mana by the intelligence change times the admitted
   intelligence-to-mana coefficient with the same ratio and half-up rounding. Mana may be zero,
   so it has no living-life minimum of one.
+- The projected pools are written as prepared. A pure-intelligence change preserves current and
+  maximum life exactly, including a living holder below one life, and a pure life change preserves
+  unrelated current mana.
 - Transfer is a drop from the holder followed by an equip on the receiver. Strength and
   intelligence apply only to heroes; maximum life applies to any receiver with vitals. A pure
   intelligence item is accepted on a non-hero but has no modeled attribute or mana effect.
@@ -74,8 +77,11 @@ rerun the gate for current counts.
 | `AIab` alias not admitted by the attribute metadata | 3 |
 
 The 12 intelligence rows are now admitted through `Iint` and the mana projection path.
-Campaign placement impact is not measured. A row still outside the admitted families fails the
-pickup call with a diagnostic instead of applying a silent wrong stat.
+Host tests include `held_intelligence_adds_mana_pool_and_is_removed_with_ratio_rounding`,
+`pure_intelligence_equip_and_drop_leave_tiny_positive_life_untouched` and
+`pure_intelligence_cleanup_keeps_tiny_life_and_matches_sequential_mana`. Campaign placement
+impact is not measured. A row still outside the admitted families fails the pickup call with a
+diagnostic instead of applying a silent wrong stat.
 
 ## Original-source gates
 

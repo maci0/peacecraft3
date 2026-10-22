@@ -602,20 +602,13 @@ impl ObjectHost {
         let Some(pools) = pools else {
             return Ok(());
         };
-        let dead = self
-            .executed_unit(unit)?
-            .combat
-            .as_ref()
-            .is_some_and(|combat| combat.dead);
-        let (life, max_life) = clamp_life_pools(pools.life, pools.max_life, dead);
-        let (mana, max_mana) = clamp_mana_pools(pools.mana, pools.max_mana);
         if let Entry::Unit { record } = self.inner.entry_mut(unit)?
             && let Some(vitals) = &mut record.vitals
         {
-            vitals.life = life;
-            vitals.max_life = max_life;
-            vitals.mana = mana;
-            vitals.max_mana = max_mana;
+            vitals.life = pools.life;
+            vitals.max_life = pools.max_life;
+            vitals.mana = pools.mana;
+            vitals.max_mana = pools.max_mana;
         }
         Ok(())
     }
