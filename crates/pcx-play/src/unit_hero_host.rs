@@ -1145,6 +1145,11 @@ impl ObjectHost {
                 (kind, field.kind, entry.value_type),
                 (FieldKind::Int, FieldKind::Int, pcx_objects::ValueType::Int)
                     | (
+                        FieldKind::Bool,
+                        FieldKind::Bool,
+                        pcx_objects::ValueType::Int
+                    )
+                    | (
                         FieldKind::Real | FieldKind::Unreal,
                         FieldKind::Real | FieldKind::Unreal,
                         pcx_objects::ValueType::Real | pcx_objects::ValueType::Unreal
@@ -1176,9 +1181,10 @@ impl ObjectHost {
             .level_cell(stem, rank as u32)
             .map_err(|e| e.to_string())?;
         match cell.typed(kind).map_err(|e| e.to_string())? {
-            defaults::Value::Integer(_) | defaults::Value::Real(_) | defaults::Value::Text(_) => {
-                Ok(cell.text.trim().to_owned())
-            }
+            defaults::Value::Integer(_)
+            | defaults::Value::Real(_)
+            | defaults::Value::Text(_)
+            | defaults::Value::Boolean(_) => Ok(cell.text.trim().to_owned()),
             _ => Err(format!("{alias:?}: missing {stem}{rank}")),
         }
     }

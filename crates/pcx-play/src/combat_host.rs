@@ -598,8 +598,13 @@ impl ObjectHost {
     }
 
     fn weapon_target(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
+        // Effective protection = explicit `SetUnitInvulnerable` OR an active
+        // Divine Shield contribution.
+        let shielded = self
+            .timer_game_time()
+            .is_some_and(|now| self.divine_shield_protects(unit, now));
         self.live(unit)
-            .filter(|record| record.invulnerable != Some(true))
+            .filter(|record| record.invulnerable != Some(true) && !shielded)
     }
 
     fn hostile(&self, attacker: &super::ExecutedUnit, target: &super::ExecutedUnit) -> bool {

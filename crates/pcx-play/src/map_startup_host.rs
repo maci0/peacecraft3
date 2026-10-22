@@ -776,6 +776,7 @@ pub fn assemble(
     }
     let mut placement_rules = None;
     if let Some(input) = post_config.new_game {
+        let had_orders = input.orders.is_some();
         if let Some(orders) = input.orders {
             object = object.with_order_registry(orders)?;
         }
@@ -817,6 +818,9 @@ pub fn assemble(
             }
             if let (true, Some(art)) = (object.has_hero_skills(), holy_light_art.as_deref()) {
                 object.admit_holy_light(art)?;
+            }
+            if object.has_hero_skills() && had_orders {
+                object.admit_divine_shield()?;
             }
         }
         if let Some(rules) = input.research {

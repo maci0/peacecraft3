@@ -20,6 +20,7 @@ pub struct ObjectHost {
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
+    divine_shield: divine_shield::State,
     volume_groups: Option<volume_groups::State>,
     camera_view: Option<camera_view::CameraView>,
     scene: Option<scene::Environment>,
@@ -192,6 +193,7 @@ impl ObjectHost {
             volume_groups: None,
             unit_vitals: None,
             unit_buffs: unit_buff::State::default(),
+            divine_shield: divine_shield::State::default(),
             events: event_delivery::Delivery::default(),
             combat: None,
             combat_trace: None,
@@ -1164,6 +1166,9 @@ pub use unit_sleep::UnitSleep;
 
 #[path = "unit_buff_host.rs"]
 pub(crate) mod unit_buff;
+
+#[path = "divine_shield_host.rs"]
+pub(crate) mod divine_shield;
 
 #[path = "camera_view_host.rs"]
 mod camera_view;

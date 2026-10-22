@@ -40,10 +40,10 @@ hashes and all record hashes. The container was stopped after capture.
 
 ## Implementation boundary
 
-These observations qualify only the fresh-unit requests above. They do not
+That first run qualifies only the fresh-unit requests above. It does not
 justify returning false for every unimplemented cancellation, or returning true
-without a state change. Shield activation, active cancellation, duration,
-mana/cooldown changes, militia conversion and rendered effects remain unmeasured.
+without a state change. It does not measure activation, active cancellation,
+duration, mana/cooldown changes, militia conversion or rendered effects.
 Ability values and order associations must still come from the selected ranked
 ability rows, profiles and map overrides; the experiment does not replace those
 inputs with constants.
@@ -103,3 +103,32 @@ or silently selecting a table from the observed duration. The map's game-data
 selection and native namespace policy still need to be derived before claiming
 production duration fidelity. The existing ranked-cell reader can consume the
 selected table once that policy is qualified.
+
+A controlled follow-up changed only the version-18 Human02 information word
+currently exposed as `MapInfo.loading_id` from zero to one, plus the diagnostic
+run identifier. The staged map SHA-256 was
+`4651017750ea452fec9825656c7ac29b70df3c0723c8ae219eda67a5a58a1496`.
+All 39 records arrived, including the final checkpoint: rank-three activation
+at 5.000 again spent 25 mana and started a 65-second cooldown, and the natural
+shield still read false at 41.750. This change did not discriminate the
+35-second and 45-second table variants or establish a namespace mapping.
+The private container was stopped and the receipt retained in ignored
+`dataset-probe/result.json`. The meaning and consumer of that information word
+remain a separate source-policy question.
+
+## Recreation shield boundary
+
+The self-cast host reads the learned rank's duration, cost, cooldown and Can
+Deactivate field from the admitted ability tables and overrides. Stock
+cancellation returns false; the edited Can Deactivate branch is a recreation
+choice pending a native edited-ability comparison. Shield protection contributes
+separately from explicit `SetUnitInvulnerable`, including combat impact checks.
+Cooldown query, end and reset use the same cast deadline, without ending the
+shield. Protection is computed from the game clock, avoiding a per-tick scan;
+one retained entry per caster is replaced on recast and removed on unit removal.
+
+Ten synthetic tests cover ranked values, malformed admission/arguments, mana,
+active cancellation, independent explicit protection, expiry, cooldown controls,
+session isolation and protection acquired during attack windup. These tests do
+not qualify rendered art, edited cancellation, automatic casting or the unresolved
+production balance-table selection.
