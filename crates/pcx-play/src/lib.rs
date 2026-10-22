@@ -150,6 +150,7 @@ pub(crate) fn is_valid_name(s: &str) -> bool {
 }
 
 pub mod player_resources;
+mod player_unit_cost;
 
 pub mod cheat_rules;
 pub mod dialog_layout;

@@ -108,6 +108,7 @@ struct Resources {
     rules: crate::player_resources::Rules,
     // Gold, lumber, food used, food supplied, food ceiling, gold and lumber gathered.
     states: [i32; 7],
+    hero_tokens: Option<i32>,
     values: Vec<(i32, i32, i32)>,
 }
 struct StartupAlliances {
@@ -779,11 +780,28 @@ impl ObjectHost {
         for (state, name) in states.iter_mut().zip(RESOURCE_GLOBALS) {
             *state = self.source_constant_enumerand(name, "playerstate")?;
         }
+        let hero_tokens = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .any(|global| global.name == "PLAYER_STATE_RESOURCE_HERO_TOKENS")
+            .then(|| {
+                self.source_constant_enumerand("PLAYER_STATE_RESOURCE_HERO_TOKENS", "playerstate")
+            })
+            .transpose()?;
         if states
             .iter()
             .any(|s| *s < 0 || *s >= rules.initialized_states)
             || states[0..2] != rules.money_states
             || states[5..7] != rules.gathered_states
+            || hero_tokens.is_some_and(|state| {
+                state < 0 || state >= rules.initialized_states || states.contains(&state)
+            })
+            || rules
+                .unit_cost
+                .as_ref()
+                .is_ok_and(|policy| hero_tokens.is_some_and(|state| policy.hero_state != state))
             || states
                 .iter()
                 .enumerate()
@@ -794,6 +812,7 @@ impl ObjectHost {
         self.players.as_mut().expect("players").resources = Some(Resources {
             rules,
             states,
+            hero_tokens,
             values: Vec::new(),
         });
         Ok(self)
@@ -839,7 +858,12 @@ impl ObjectHost {
         let Some(resources) = &players.resources else {
             return Ok(None);
         };
-        let Some(index) = resources.states.iter().position(|s| *s == state) else {
+        let index = resources
+            .states
+            .iter()
+            .position(|s| *s == state)
+            .or_else(|| (resources.hero_tokens == Some(state)).then_some(7));
+        let Some(index) = index else {
             return Ok(None);
         };
         let live = if matches!(index, 2 | 3) {
@@ -879,7 +903,12 @@ impl ObjectHost {
         let Some(resources) = &players.resources else {
             return Ok(None);
         };
-        let Some(index) = resources.states.iter().position(|s| *s == state) else {
+        let index = resources
+            .states
+            .iter()
+            .position(|s| *s == state)
+            .or_else(|| (resources.hero_tokens == Some(state)).then_some(7));
+        let Some(index) = index else {
             return Ok(None);
         };
         let player = &players.rows[at];
@@ -939,7 +968,9 @@ impl ObjectHost {
         source_global: &str,
     ) -> Result<Option<i32>, Error> {
         let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE)?;
-        if !RESOURCE_GLOBALS.contains(&source_global) {
+        if !RESOURCE_GLOBALS.contains(&source_global)
+            && source_global != "PLAYER_STATE_RESOURCE_HERO_TOKENS"
+        {
             return Err(self.inner.error(
                 GET_PLAYER_STATE,
                 Failure::PlayerState("unsupported resource setting"),
@@ -947,6 +978,64 @@ impl ObjectHost {
         }
         let state = self.source_constant_enumerand(source_global, "playerstate")?;
         self.resource_value(at, state)
+    }
+    /// Read the AI player's admitted cost without creating a unit or a player identity.
+    pub(crate) fn ai_unit_cost(
+        &self,
+        player: HandleId,
+        rawcode: i32,
+        column: &str,
+    ) -> Result<i32, Error> {
+        let name = if column == "goldcost" {
+            "GetUnitGoldCost"
+        } else {
+            "GetUnitWoodCost"
+        };
+        let fail = |why| self.inner.error(name, Failure::PlayerState(why));
+        if !matches!(column, "goldcost" | "lumbercost") {
+            return Err(fail("unknown unit cost column"));
+        }
+        let at = self.player_index(&Value::Handle(player), name)?;
+        let resources = self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("player resources not admitted"))?;
+        let policy = resources
+            .rules
+            .unit_cost
+            .as_ref()
+            .map_err(|_| fail("selected unit cost policy unsupported"))?;
+        let tokens = self
+            .resource_value(
+                at,
+                resources
+                    .hero_tokens
+                    .ok_or_else(|| fail("hero token source state missing"))?,
+            )?
+            .ok_or_else(|| fail("hero tokens not admitted"))?;
+        if policy.zero_cost(rawcode, tokens) {
+            return Ok(0);
+        }
+        let requested = rawcode.to_be_bytes();
+        let definition = match self.unit_catalog()?.resolve(requested) {
+            Ok(value) => value,
+            Err(pcx_sim::world::ResolutionProblem::MissingRawcode(_)) => return Ok(0),
+            Err(problem) => {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitCatalog {
+                        requested,
+                        problem: Box::new(problem),
+                    },
+                ));
+            }
+        };
+        if definition.rawcode != requested {
+            return Err(fail("cost catalog resolved another rawcode"));
+        }
+        crate::player_unit_cost::amount(&definition, column)
+            .map_err(|_| fail("unit cost definition unsupported"))
     }
     /// Effective value of one admitted player state, used by state-change events.
     pub fn player_state_value(

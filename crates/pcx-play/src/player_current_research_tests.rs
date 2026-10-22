@@ -93,6 +93,10 @@ impl AiWorld for AiResearchWorld {
             _ => Err("GetUpgradeLevel: player research returned a non-integer".into()),
         }
     }
+
+    fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
+        Err("unit costs are outside this research fixture".into())
+    }
 }
 
 #[test]
@@ -113,7 +117,7 @@ fn campaign_ai_upgrade_query_uses_live_admitted_player_research_without_side_eff
             .unwrap();
     }
     let source = "globals\ninteger first=0\ninteger unknown=0\ninteger later=0\ninteger repeated=0\nendglobals\nfunction main takes nothing returns nothing\nset first=GetUpgradeLevel(5)\nset unknown=GetUpgradeLevel(6)\ncall Sleep(1.0)\nset later=GetUpgradeLevel(5)\nset repeated=GetUpgradeLevel(5)\nendfunction\n";
-    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\n";
+    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
     let script = |name: &'static str| {
         Arc::new(
             MapScripts::compile(

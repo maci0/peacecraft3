@@ -18,6 +18,7 @@ pub struct Rules {
     pub(crate) money_maximum: i32,
     pub(crate) gathered_states: [i32; 2],
     pub(crate) gathered_scale: i32,
+    pub(crate) unit_cost: Result<crate::player_unit_cost::Policy, String>,
     upkeep: Result<upkeep::Upkeep, String>,
     food_limit: Option<i32>,
     food_defaults: Vec<i32>,
@@ -43,11 +44,20 @@ impl Rules {
             money_maximum: i32::MAX,
             gathered_states: [15, 16],
             gathered_scale: 1,
+            unit_cost: Err("synthetic cost policy is not admitted".into()),
             upkeep: Err("synthetic upkeep is not admitted".into()),
             food_limit: None,
             food_defaults: vec![0],
             food_marker_default: 0,
         }
+    }
+
+    pub fn synthetic_fixture_with_unit_cost(hero_state: i32) -> Self {
+        let mut rules = Self::synthetic_fixture();
+        rules.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(
+            hero_state, b'A', b'Z', 1,
+        ));
+        rules
     }
 }
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -615,6 +625,7 @@ impl Rules {
             money_maximum: maximum,
             gathered_states: [gathered_first, gathered_first + gathered_offset],
             gathered_scale: gathered_get_scale,
+            unit_cost: crate::player_unit_cost::Policy::selected(image),
             food_limit,
             food_defaults: food_defaults.clone(),
             food_marker_default,
