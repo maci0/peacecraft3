@@ -925,6 +925,27 @@ fn health_rounding_bias_governs_scaled_strength_item_deltas() {
 }
 
 #[test]
+fn equipped_strength_delta_ratio_uses_admitted_rounding() {
+    let (mut h, hero) = health_fixture_with_bias(0.25);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(0.5)])
+        .unwrap();
+    let life = life_state(&mut h);
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(hero), life, Value::Real(29.0)],
+    )
+    .unwrap();
+    let tome = item(&mut h, b"tstr", 0.0);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    let granted = h.unit_vitals(hero).unwrap().unwrap();
+    // 29/375 * 462 is 35.728; the source bias 0.25 keeps 35 while half-up
+    // would produce 36.
+    assert_eq!(granted.max_life, 462.0);
+    assert_eq!(granted.life, 35.0);
+}
+
+#[test]
 fn grant_keeps_the_life_percentage_not_the_absolute_missing_amount() {
     let Fixture { mut h, hero, .. } = open();
     let life = life_state(&mut h);
