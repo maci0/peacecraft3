@@ -33,6 +33,8 @@ pub enum MapStartupError {
     Neutral(#[from] NeutralError),
     #[error("startup observation `{0}` is not an admitted handle")]
     Observation(String),
+    #[error("startup placement: {0}")]
+    Placement(String),
 }
 
 impl From<HostError> for MapStartupError {

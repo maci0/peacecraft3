@@ -30,6 +30,66 @@ fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
 }
 
 #[test]
+fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_each_other() {
+    let mut base = Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    base.cells[100] = 0x01;
+    base.cells[200] = 0x01;
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "stationary".into(),
+        },
+        1000,
+    )
+    .with_stationary(
+        base,
+        vec![
+            StationaryStamp {
+                key: StationaryKey::Placed(1),
+                live: vec![100, 10],
+                dead: vec![200],
+                mask: 0x04,
+                active: true,
+            },
+            StationaryStamp {
+                key: StationaryKey::Placed(2),
+                live: vec![100],
+                dead: vec![],
+                mask: 0x08,
+                active: true,
+            },
+            StationaryStamp {
+                key: StationaryKey::Placed(3),
+                live: vec![200],
+                dead: vec![100],
+                mask: 0x10,
+                active: false,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(p.grid.pathing.cells[100], 0x1d);
+    assert_eq!(p.grid.pathing.cells[10], 0x04);
+    assert_eq!(p.grid.pathing.cells[200], 0x01);
+    assert!(p.set_placed_active(1, false).unwrap());
+    assert_eq!(p.grid.pathing.cells[100], 0x19);
+    assert_eq!(p.grid.pathing.cells[10], 0x00);
+    assert_eq!(p.grid.pathing.cells[200], 0x05);
+    assert!(p.set_placed_active(2, false).unwrap());
+    assert_eq!(p.grid.pathing.cells[100], 0x11);
+    assert!(p.set_placed_active(3, true).unwrap());
+    assert_eq!(p.grid.pathing.cells[100], 0x01);
+    assert_eq!(p.grid.pathing.cells[200], 0x15);
+    assert!(!p.set_placed_active(99, true).unwrap());
+}
+
+#[test]
 fn overlapping_dynamic_footprints_preserve_other_owners_and_static_pathing() {
     let mut p = placement(
         Source {
@@ -432,6 +492,7 @@ pub(crate) fn placement(source: Source, queries: usize) -> Placement {
         Budget {
             cells: 1024,
             footprint_cells: 64,
+            stationary_cells: 1 << 20,
             queries,
         },
     )

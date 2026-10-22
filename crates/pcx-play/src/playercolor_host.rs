@@ -102,6 +102,8 @@ pub enum Failure {
     RegionState(&'static str),
     #[error("destructable creation: {0}")]
     DestructableState(&'static str),
+    #[error("destructable source: {0}")]
+    DestructableSource(String),
     #[error("unit creation: {0}")]
     UnitState(&'static str),
     #[error("hero skills: {0}")]
@@ -588,6 +590,20 @@ impl EnumHost {
             .map(HandleId::new)
             .ok_or_else(|| self.error(name, Failure::Capacity))
     }
+    /// Reserve `count` arena slots without issuing identities, for atomic
+    /// multi-object admission.
+    pub(crate) fn reserve_handles(&mut self, count: usize, name: &str) -> Result<(), Error> {
+        let remaining = self
+            .max_handles
+            .checked_sub(self.arena.len())
+            .ok_or_else(|| self.error(name, Failure::Capacity))?;
+        if count > remaining {
+            return Err(self.error(name, Failure::Capacity));
+        }
+        self.arena
+            .try_reserve(count)
+            .map_err(|_| self.error(name, Failure::Capacity))
+    }
     fn allocate(&mut self, entry: Entry, name: &str) -> Result<HandleId, Error> {
         if self.arena.len() >= self.max_handles {
             return Err(self.error(name, Failure::Capacity));
@@ -784,11 +800,12 @@ pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
 pub use objects::{
     AcceptedSpan, AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState,
     CineFilter, ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration,
-    DestructableBudget, DestructableCreation, Environment, ExecutedItem, ExecutedUnit,
-    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
-    GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget,
-    LabelSoundFlags, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
-    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
+    DestructableStats, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
+    FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
+    GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig,
+    MapConfigBudget, MapMusicSelection, MessageBudget, MessageState, ObjectHost,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerScoreCounter,
     PlayerScoreSnapshot, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
     PresentationState, QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind,
@@ -803,7 +820,7 @@ pub use objects::{
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
-    GameExitRequest, HeroEvent, Indicator, MinimapPing, PurchaseOutcome, PurchaseRefusal, Relation,
-    ScriptDialog, SummonContext, Vitals, Weapon,
+    GameExitRequest, HeroEvent, Indicator, MinimapPing, PlacedDestructable, PurchaseOutcome,
+    PurchaseRefusal, Relation, ScriptDialog, SummonContext, Vitals, Weapon,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};

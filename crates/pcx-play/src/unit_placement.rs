@@ -268,8 +268,38 @@ pub struct Footprint {
 pub struct Budget {
     pub cells: usize,
     pub footprint_cells: usize,
+    /// Total live+dead layer cells retained for stationary destructables.
+    pub stationary_cells: usize,
     /// Deterministic cell/occupancy queries per creation, independent of wall time.
     pub queries: usize,
+}
+
+/// Identity of one stationary destructable whose collision can change.
+///
+/// Placed objects are keyed by their authored creation number; script objects by
+/// their arena handle. Both share the same overlay path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StationaryKey {
+    Placed(u32),
+    Destructable(HandleId),
+}
+
+/// One destructable's live and dead footprint cells over a shared base raster.
+#[derive(Clone, Debug)]
+pub struct StationaryStamp {
+    pub key: StationaryKey,
+    pub live: Vec<usize>,
+    pub dead: Vec<usize>,
+    pub mask: u8,
+    pub active: bool,
+}
+
+#[derive(Debug)]
+struct StationaryLayer {
+    live: Vec<usize>,
+    dead: Vec<usize>,
+    mask: u8,
+    active: bool,
 }
 
 pub struct Placement {
@@ -281,6 +311,9 @@ pub struct Placement {
     occupied: Vec<u32>,
     footprint_occupied: Vec<u32>,
     stamps: Vec<(HandleId, Prepared)>,
+    stationary: BTreeMap<StationaryKey, StationaryLayer>,
+    stationary_cells: BTreeMap<usize, Vec<(StationaryKey, bool)>>,
+    base_pathing: Option<Pathing>,
     budget: Budget,
 }
 
@@ -306,6 +339,11 @@ pub(crate) struct Prepared {
 pub(crate) mod tests;
 
 impl Placement {
+    #[cfg(test)]
+    pub(crate) fn test_cell(&self, cell: usize) -> u8 {
+        self.grid.pathing.cells[cell]
+    }
+
     pub fn source(&self) -> &Source {
         &self.source
     }
@@ -364,8 +402,131 @@ impl Placement {
             occupied,
             footprint_occupied,
             stamps: Vec::new(),
+            stationary: BTreeMap::new(),
+            stationary_cells: BTreeMap::new(),
+            base_pathing: None,
             budget,
         })
+    }
+
+    /// Compose stationary destructables over an already decoration-stamped base.
+    ///
+    /// Each layer owns only its footprint cells. Recomposing a cell starts from
+    /// the base and ORs every active layer touching that cell, so killing one
+    /// tree cannot erase an overlapping tree or a terrain bit.
+    pub fn with_stationary(
+        mut self,
+        base: Pathing,
+        stamps: Vec<StationaryStamp>,
+    ) -> Result<Self, Error> {
+        let count = self.grid.pathing.cells.len();
+        if base.width != self.grid.pathing.width
+            || base.height != self.grid.pathing.height
+            || base.cells.len() != count
+        {
+            return Err(fail("stationary base dimensions"));
+        }
+        if stamps.len() > self.budget.footprint_cells {
+            return Err(fail("stationary layer budget"));
+        }
+        let cells = stamps.iter().try_fold(0usize, |total, stamp| {
+            total
+                .checked_add(stamp.live.len())?
+                .checked_add(stamp.dead.len())
+        });
+        if cells.is_none_or(|cells| cells > self.budget.stationary_cells) {
+            return Err(fail("stationary cell budget"));
+        }
+        self.base_pathing = Some(base);
+        for mut stamp in stamps {
+            if stamp.mask == 0 || stamp.live.iter().chain(&stamp.dead).any(|&i| i >= count) {
+                return Err(fail("stationary layer mask or cell range"));
+            }
+            stamp.live.sort_unstable();
+            stamp.live.dedup();
+            stamp.dead.sort_unstable();
+            stamp.dead.dedup();
+            if self.stationary.contains_key(&stamp.key) {
+                return Err(fail("duplicate stationary key"));
+            }
+            for &i in &stamp.live {
+                self.stationary_cells
+                    .entry(i)
+                    .or_default()
+                    .push((stamp.key, true));
+            }
+            for &i in &stamp.dead {
+                self.stationary_cells
+                    .entry(i)
+                    .or_default()
+                    .push((stamp.key, false));
+            }
+            self.stationary.insert(
+                stamp.key,
+                StationaryLayer {
+                    live: stamp.live,
+                    dead: stamp.dead,
+                    mask: stamp.mask,
+                    active: stamp.active,
+                },
+            );
+        }
+        let cells: Vec<usize> = self.stationary_cells.keys().copied().collect();
+        self.recompose(&cells);
+        Ok(self)
+    }
+
+    /// Toggle one placed tree. `Ok(false)` means the state did not change.
+    pub fn set_placed_active(&mut self, creation: u32, active: bool) -> Result<bool, Error> {
+        self.set_stationary_active(StationaryKey::Placed(creation), active)
+    }
+
+    /// Toggle one script-created destructable.
+    pub fn set_destructable_active(&mut self, id: HandleId, active: bool) -> Result<bool, Error> {
+        self.set_stationary_active(StationaryKey::Destructable(id), active)
+    }
+
+    pub fn set_stationary_active(
+        &mut self,
+        key: StationaryKey,
+        active: bool,
+    ) -> Result<bool, Error> {
+        let (changed, cells) = {
+            let Some(layer) = self.stationary.get_mut(&key) else {
+                return Ok(false);
+            };
+            let changed = layer.active != active;
+            let mut cells = Vec::new();
+            cells
+                .try_reserve(layer.live.len().saturating_add(layer.dead.len()))
+                .map_err(|_| fail("stationary cell allocation"))?;
+            cells.extend_from_slice(&layer.live);
+            cells.extend_from_slice(&layer.dead);
+            layer.active = active;
+            (changed, cells)
+        };
+        if changed {
+            self.recompose(&cells);
+        }
+        Ok(changed)
+    }
+
+    fn recompose(&mut self, cells: &[usize]) {
+        let Some(base) = &self.base_pathing else {
+            return;
+        };
+        for &i in cells {
+            let mut value = base.cells[i];
+            if let Some(keys) = self.stationary_cells.get(&i) {
+                for &(key, live) in keys {
+                    let layer = &self.stationary[&key];
+                    if layer.active == live {
+                        value |= layer.mask;
+                    }
+                }
+            }
+            self.grid.pathing.cells[i] = value;
+        }
     }
 
     /// Load executed footprint paths through the caller's retained source reader.

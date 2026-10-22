@@ -46,6 +46,7 @@ pub fn create_host(
     cache: Arc<dyn crate::game_cache::Storage>,
 ) -> Result<MapStartupHost, MapStartupError> {
     let edition = ctx.sources.map.edition.clone();
+    let tables = Arc::clone(&inputs.defend.tables);
     let mut host = map_startup_host::assemble(ctx, inputs)?;
     crate::campaign_cache::attach(&mut host, cache)?;
     if no_occlusion {
@@ -61,12 +62,23 @@ pub fn create_host(
         Some(reader) => {
             let placement_reader = Arc::clone(&reader);
             let placement_context = Arc::clone(host.context());
+            let catalog = crate::campaign_placement::Catalog::read(
+                &placement_context,
+                &placement_map,
+                tables,
+            )
+            .map_err(MapStartupError::Placement)?;
+            host.objects_mut()
+                .admit_destructable_catalog(catalog.objects().clone())?;
+            let placed = catalog.placed().map_err(MapStartupError::Placement)?;
+            let _ = host.objects_mut().admit_placed_destructables(&placed)?;
             host = host.with_placement_loader(move |objects, rules, tables| {
                 crate::campaign_placement::assemble(
                     &placement_context,
                     &placement_map,
                     Arc::clone(&placement_reader),
                     tables,
+                    &catalog,
                     objects,
                     rules,
                 )

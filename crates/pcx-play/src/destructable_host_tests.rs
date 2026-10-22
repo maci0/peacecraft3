@@ -1,7 +1,8 @@
 use super::{COMMON, budget, context, object, slots_rule};
 use crate::file_sounds::{Assets, Budget as SoundBudget, SoundInput};
 use crate::playercolor_host::{
-    DestructableBudget, DestructableCreation, EnumHost, Failure, Limits, ObjectHost,
+    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
+    DestructableState, EnumHost, Failure, Limits, ObjectHost, PlacedDestructable,
 };
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use pcx_script::{Host, Prelude, Value};
@@ -64,6 +65,308 @@ fn create(host: &mut ObjectHost, objectid: i32, variation: i32) -> Result<Value,
     host.native("CreateDestructable", &payload(objectid, variation))
 }
 
+fn life_declarations() -> String {
+    let mut text = DECLARATIONS.to_string();
+    text.push_str(
+        "native GetDestructableLife takes destructable whichDestructable returns real\nnative GetDestructableMaxLife takes destructable whichDestructable returns real\nnative SetDestructableLife takes destructable whichDestructable, real life returns nothing\nnative KillDestructable takes destructable whichDestructable returns nothing\nnative SetDestructableInvulnerable takes destructable whichDestructable, boolean flag returns nothing\nnative IsDestructableInvulnerable takes destructable whichDestructable returns boolean\n",
+    );
+    text
+}
+
+fn life_catalog() -> DestructableCatalog {
+    let table = |headers: &[&str], rows: &[&[&str]]| {
+        let mut text = String::from("ID;PWXL;N;E\r\n");
+        for (y, row) in std::iter::once(headers)
+            .chain(rows.iter().copied())
+            .enumerate()
+        {
+            for (x, value) in row.iter().enumerate() {
+                text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, value));
+            }
+        }
+        text.push_str("E\r\n");
+        text.into_bytes()
+    };
+    let data = table(
+        &["DestructableID", "HP", "targType"],
+        &[&["LTlt", "50", "tree,ground"]],
+    );
+    let metadata = table(
+        &["ID", "field", "slk", "type", "index", "category"],
+        &[
+            &["Ahpv", "HP", "DestructableData", "int", "0", "stats"],
+            &[
+                "Atgt",
+                "targType",
+                "DestructableData",
+                "string",
+                "0",
+                "combat",
+            ],
+        ],
+    );
+    let tables = pcx_objects::editor::defaults::DefaultTables::from_bytes(
+        pcx_objects::editor::defaults::Identity {
+            install: "synthetic".into(),
+            edition_version: "synthetic".into(),
+        },
+        &[
+            (pcx_objects::editor::SlkId::DestructableData.path(), &data),
+            (
+                pcx_objects::editor::SlkId::DestructableMetaData.path(),
+                &metadata,
+            ),
+        ],
+        &[],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 4,
+            max_asset_bytes: 4096,
+            max_aggregate_input_bytes: 8192,
+        },
+    )
+    .unwrap();
+    DestructableCatalog::new(
+        Arc::new(tables),
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    )
+}
+
+fn life_host(max_records: usize) -> ObjectHost {
+    let mut host = host_from(&life_declarations(), "", 8)
+        .with_destructables(DestructableBudget { max_records })
+        .unwrap();
+    host.admit_destructable_catalog(life_catalog()).unwrap();
+    host
+}
+
+fn placed_row(creation_number: u32, dead: bool) -> PlacedDestructable {
+    PlacedDestructable {
+        creation: DestructableCreation {
+            origin: DestructableOrigin::Placed { creation_number },
+            objectid: i32::from_be_bytes(*b"LTlt"),
+            x: 1.0,
+            y: 2.0,
+            z: Some(3.0),
+            face: 0.0,
+            scale: 1.0,
+            variation: 0,
+            dead,
+        },
+        state: DestructableState {
+            dead,
+            life: if dead { 0.0 } else { 50.0 },
+            max_life: 50.0,
+            ..DestructableState::default()
+        },
+    }
+}
+
+#[test]
+fn catalog_exposes_the_authored_tree_classification_and_refuses_unknown_ids() {
+    let catalog = life_catalog();
+    let stats = catalog.stats(i32::from_be_bytes(*b"LTlt")).unwrap();
+    assert_eq!(stats.max_life, 50.0);
+    assert!(stats.tree);
+    let missing = catalog.stats(i32::from_be_bytes(*b"hfoo")).unwrap_err();
+    assert!(
+        missing.contains("missing destructable catalog record"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn script_creation_uses_the_catalog_life_and_shared_death_mutation() {
+    let mut host = life_host(4);
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("destructable handle");
+    };
+    assert_eq!(
+        host.destructable_state(id).unwrap(),
+        DestructableState {
+            dead: false,
+            life: 50.0,
+            max_life: 50.0,
+            ..DestructableState::default()
+        }
+    );
+    assert_eq!(
+        host.native("GetDestructableLife", &[Value::Handle(id)])
+            .unwrap(),
+        Value::Real(50.0)
+    );
+    assert_eq!(
+        host.native("GetDestructableMaxLife", &[Value::Handle(id)])
+            .unwrap(),
+        Value::Real(50.0)
+    );
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(12.5)],
+    )
+    .unwrap();
+    assert_eq!(host.destructable_state(id).unwrap().life, 12.5);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(500.0)],
+    )
+    .unwrap();
+    assert_eq!(host.destructable_state(id).unwrap().life, 50.0);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(0.0)],
+    )
+    .unwrap();
+    let dead = host.destructable_state(id).unwrap();
+    assert!(dead.dead);
+    assert_eq!(dead.life, 0.0);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(10.0)],
+    )
+    .unwrap();
+    assert!(!host.destructable_state(id).unwrap().dead);
+    host.native("KillDestructable", &[Value::Handle(id)])
+        .unwrap();
+    let killed = host.destructable_state(id).unwrap();
+    assert!(killed.dead);
+    assert_eq!(killed.life, 0.0);
+    let dead_created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(dead_id) = dead_created else {
+        panic!("dead handle");
+    };
+    let _ = host
+        .native(
+            "SetDestructableLife",
+            &[Value::Handle(dead_id), Value::Real(0.0)],
+        )
+        .unwrap();
+    assert!(host.destructable_state(dead_id).unwrap().dead);
+    let malformed = host
+        .native(
+            "SetDestructableLife",
+            &[Value::Handle(id), Value::Real(f32::NAN)],
+        )
+        .unwrap_err();
+    assert!(malformed.contains("finite life"), "{malformed}");
+}
+
+#[test]
+fn invulnerability_and_damage_share_the_same_state_path() {
+    let mut host = life_host(1);
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("destructable handle");
+    };
+    host.native(
+        "SetDestructableInvulnerable",
+        &[Value::Handle(id), Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(host.damage_destructable(id, 10.0).unwrap(), 50.0);
+    assert_eq!(
+        host.damage_destructable(id, -1.0).unwrap_err().failure,
+        Failure::DestructableState("finite nonnegative damage")
+    );
+    assert_eq!(host.damage_destructable(id, 20.0).unwrap(), 50.0);
+    host.native(
+        "SetDestructableInvulnerable",
+        &[Value::Handle(id), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(host.damage_destructable(id, 20.0).unwrap(), 30.0);
+    assert!(!host.destructable_state(id).unwrap().dead);
+    assert_eq!(host.damage_destructable(id, 30.0).unwrap(), 0.0);
+    assert!(host.destructable_state(id).unwrap().dead);
+}
+
+#[test]
+fn placed_admission_is_atomic_and_preserves_the_authored_life() {
+    let mut host = life_host(1);
+    let before = host.inner().handles();
+    let refused = host
+        .admit_placed_destructables(&[placed_row(1, false), placed_row(2, true)])
+        .unwrap_err();
+    assert_eq!(refused.failure, Failure::Budget("destructable creation"));
+    assert_eq!(host.inner().handles(), before);
+    let ids = host
+        .admit_placed_destructables(&[placed_row(3, false)])
+        .unwrap();
+    assert_eq!(ids.len(), 1);
+    let state = host.destructable_state(ids[0]).unwrap();
+    assert_eq!(state.life, 50.0);
+    assert_eq!(state.max_life, 50.0);
+    assert!(!state.dead);
+    assert_eq!(
+        host.destructable_creation(ids[0]).unwrap().origin,
+        DestructableOrigin::Placed { creation_number: 3 }
+    );
+}
+
+#[test]
+fn death_toggles_only_the_script_objects_stationary_layer() {
+    let mut host = life_host(1);
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let created = host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap();
+    let Value::Handle(id) = created else {
+        panic!("destructable handle");
+    };
+    let mut base = pcx_map::Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    base.cells[100] = 0x01;
+    let placement = crate::unit_placement::tests::placement(
+        pcx_sim::world::Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "death".into(),
+        },
+        1000,
+    )
+    .with_stationary(
+        base,
+        vec![crate::unit_placement::StationaryStamp {
+            key: crate::unit_placement::StationaryKey::Destructable(id),
+            live: vec![100],
+            dead: vec![200],
+            mask: 0x02,
+            active: true,
+        }],
+    )
+    .unwrap();
+    host.test_attach_placement(placement);
+    assert_eq!(host.test_placement_cell(100), Some(0x03));
+    assert_eq!(host.test_placement_cell(200), Some(0x00));
+    host.damage_destructable(id, 50.0).unwrap();
+    assert_eq!(host.test_placement_cell(100), Some(0x01));
+    assert_eq!(host.test_placement_cell(200), Some(0x02));
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(5.0)],
+    )
+    .unwrap();
+    assert_eq!(host.test_placement_cell(100), Some(0x03));
+    assert_eq!(host.test_placement_cell(200), Some(0x00));
+    host.native("KillDestructable", &[Value::Handle(id)])
+        .unwrap();
+    assert_eq!(host.test_placement_cell(100), Some(0x01));
+    assert_eq!(host.test_placement_cell(200), Some(0x02));
+}
+
 #[test]
 fn executed_payload_and_declaration_source_stay_on_the_destructable_identity() {
     let mut host = admitted(2, 8);
@@ -85,6 +388,7 @@ fn executed_payload_and_declaration_source_stay_on_the_destructable_identity() {
     assert_eq!(
         host.destructable_creation(id).unwrap(),
         DestructableCreation {
+            origin: DestructableOrigin::Script,
             objectid: -7,
             x: 1.5,
             y: -2.25,
@@ -323,6 +627,7 @@ fn variants_share_one_budget_and_absent_or_bad_declarations_stay_isolated() {
     assert_eq!(
         host.destructable_creation(id).unwrap(),
         DestructableCreation {
+            origin: DestructableOrigin::Script,
             objectid: -2,
             x: 0.0,
             y: 1.0,
@@ -484,6 +789,7 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
     assert_eq!(
         host.inner.destructable_creation(base).unwrap(),
         DestructableCreation {
+            origin: DestructableOrigin::Script,
             objectid: -7,
             x: 1.5,
             y: -2.25,

@@ -6,8 +6,13 @@
 //! height, life total, pathing cell, or world object.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
+use pcx_objects::editor::{
+    FieldSource, Overlay, SlkId,
+    defaults::{DefaultTables, Family},
+};
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Value};
+use std::sync::Arc;
 
 const KIND: &str = "destructable";
 const BASE: &[&str] = &["integer", "real", "real", "real", "real", "integer"];
@@ -55,12 +60,21 @@ pub struct DestructableBudget {
     pub max_records: usize,
 }
 
+/// Where a destructable entered the session. Placed objects keep the authored
+/// creation number that also keys their collision layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestructableOrigin {
+    Placed { creation_number: u32 },
+    Script,
+}
+
 /// One executed creation. Coordinates, facing and scale are the call's finite reals.
 /// Facing is retained in the declared real, not converted from the source comment.
 /// `z` is `None` when the creating native has no `z` parameter. `dead` is the
 /// source-requested dead form, not a computed life or a later kill.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DestructableCreation {
+    pub origin: DestructableOrigin,
     pub objectid: i32,
     pub x: f32,
     pub y: f32,
@@ -72,14 +86,195 @@ pub struct DestructableCreation {
 }
 
 /// Script-changed runtime state; `dead` starts from the creation variant.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Life is zero until the selected object catalog supplies the record's HP.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DestructableState {
     pub invulnerable: bool,
     pub dead: bool,
     pub hidden: bool,
+    pub life: f32,
+    pub max_life: f32,
 }
 
-const RUNTIME: [(&str, &[&str], &str); 7] = [
+/// Source-derived destructable fields used by the life natives and create path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DestructableStats {
+    pub max_life: f32,
+    pub tree: bool,
+}
+
+/// The selected object tables plus this map's `.w3b`/`.w3d` overlays.
+#[derive(Clone)]
+pub struct DestructableCatalog {
+    tables: Arc<DefaultTables>,
+    destructables: Overlay,
+    decorations: Overlay,
+}
+
+impl DestructableCatalog {
+    pub fn new(tables: Arc<DefaultTables>, destructables: Overlay, decorations: Overlay) -> Self {
+        Self {
+            tables,
+            destructables,
+            decorations,
+        }
+    }
+
+    /// Resolve one destructable rawcode; `None` means the rawcode names a
+    /// decoration rather than a destructable. A record can be a custom object
+    /// whose base chain must already end in a shipped row.
+    pub fn stats_if_destructable(
+        &self,
+        objectid: i32,
+    ) -> Result<Option<DestructableStats>, String> {
+        let id = objectid.to_be_bytes();
+        let name = std::str::from_utf8(&id).map_err(|_| "non-UTF8 destructable identity")?;
+        let mut found = None;
+        for (family, slk, overlay) in [
+            (
+                Family::Destructable,
+                SlkId::DestructableData,
+                &self.destructables,
+            ),
+            (Family::Doodad, SlkId::Doodads, &self.decorations),
+        ] {
+            let (base, mods) = overlay.new_object(name).unwrap_or((name, overlay.on(name)));
+            if overlay.new_object(base).is_some() {
+                return Err(format!("{name}: custom destructable base chain"));
+            }
+            let Ok(object) = self.tables.object(family, base) else {
+                continue;
+            };
+            if found.is_some() {
+                return Err(format!("{name}: ambiguous destructable family"));
+            }
+            if mods.len() > 4096 {
+                return Err(format!("{name}: destructable modification budget"));
+            }
+            found = Some((family, slk, object, mods));
+        }
+        let Some((family, slk, object, mods)) = found else {
+            return Err(format!("{name}: missing destructable catalog record"));
+        };
+        if family != Family::Destructable {
+            return Ok(None);
+        }
+        let max_life = numeric_column(
+            self.tables.editor(),
+            family,
+            slk,
+            "HP",
+            object.cell(slk, "HP").map_err(|e| e.to_string())?.text,
+            mods,
+            name,
+        )?;
+        if !max_life.is_finite() || max_life <= 0.0 {
+            return Err(format!("{name}: invalid authored HP"));
+        }
+        let targ = column(
+            self.tables.editor(),
+            family,
+            slk,
+            "targType",
+            object
+                .cell(slk, "targType")
+                .map_err(|e| e.to_string())?
+                .text,
+            mods,
+            name,
+        )?;
+        let tree = targ.split(',').any(|kind| kind.trim() == "tree");
+        Ok(Some(DestructableStats { max_life, tree }))
+    }
+
+    pub fn stats(&self, objectid: i32) -> Result<DestructableStats, String> {
+        self.stats_if_destructable(objectid)?
+            .ok_or_else(|| "stationary record is not a destructable".into())
+    }
+}
+
+fn column<'a>(
+    editor: &'a pcx_objects::editor::Editor,
+    family: Family,
+    slk: SlkId,
+    column: &str,
+    base: &'a str,
+    mods: &'a [pcx_objects::Mod],
+    name: &str,
+) -> Result<&'a str, String> {
+    let mut fields = editor.fields().iter().filter(|f| {
+        f.from == family.metadata()
+            && matches!(&f.source, FieldSource::Column { slk: s, column: c } if *s == slk && c == column)
+    });
+    let metadata = fields
+        .next()
+        .ok_or_else(|| format!("{name}: missing {column} metadata"))?;
+    if fields.next().is_some() || !matches!(metadata.index, -1 | 0) {
+        return Err(format!("{name}: unsupported {column} metadata"));
+    }
+    let Some(edit) = mods.iter().rev().find(|m| m.field == metadata.fourcc) else {
+        return Ok(base);
+    };
+    if edit.selectors.is_some_and(|s| s != [0, 0]) {
+        return Err(format!("{name}: unsupported {column} edit"));
+    }
+    match &edit.value {
+        pcx_objects::Value::Str(raw) => {
+            std::str::from_utf8(raw).map_err(|_| format!("{name}: non-UTF8 {column}"))
+        }
+        _ => Err(format!("{name}: nontext {column}")),
+    }
+}
+
+fn numeric_column(
+    editor: &pcx_objects::editor::Editor,
+    family: Family,
+    slk: SlkId,
+    column_name: &str,
+    base: &str,
+    mods: &[pcx_objects::Mod],
+    name: &str,
+) -> Result<f32, String> {
+    let mut fields = editor.fields().iter().filter(|f| {
+        f.from == family.metadata()
+            && matches!(&f.source, FieldSource::Column { slk: s, column: c } if *s == slk && c == column_name)
+    });
+    let metadata = fields
+        .next()
+        .ok_or_else(|| format!("{name}: missing {column_name} metadata"))?;
+    if fields.next().is_some() || !matches!(metadata.index, -1 | 0) {
+        return Err(format!("{name}: unsupported {column_name} metadata"));
+    }
+    mods.iter()
+        .rev()
+        .find(|m| m.field == metadata.fourcc)
+        .map(|edit| {
+            if edit.selectors.is_some_and(|s| s != [0, 0]) {
+                return Err(format!("{name}: unsupported {column_name} edit"));
+            }
+            match &edit.value {
+                pcx_objects::Value::Int(value) => Ok(*value as f32),
+                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value) => Ok(*value),
+                pcx_objects::Value::Str(raw) => std::str::from_utf8(raw)
+                    .map_err(|_| format!("{name}: non-UTF8 {column_name}"))?
+                    .parse::<f32>()
+                    .map_err(|_| format!("{name}: invalid {column_name}")),
+            }
+        })
+        .unwrap_or_else(|| {
+            base.parse::<f32>()
+                .map_err(|_| format!("{name}: invalid {column_name}"))
+        })
+}
+
+/// One placed destructable, preflighted by the map reader.
+#[derive(Clone, Copy, Debug)]
+pub struct PlacedDestructable {
+    pub creation: DestructableCreation,
+    pub state: DestructableState,
+}
+
+const RUNTIME: [(&str, &[&str], &str); 10] = [
     (
         "SetDestructableInvulnerable",
         &["destructable", "boolean"],
@@ -91,6 +286,9 @@ const RUNTIME: [(&str, &[&str], &str); 7] = [
     ("GetDestructableX", &["destructable"], "real"),
     ("GetDestructableY", &["destructable"], "real"),
     ("GetDestructableTypeId", &["destructable"], "integer"),
+    ("GetDestructableLife", &["destructable"], "real"),
+    ("GetDestructableMaxLife", &["destructable"], "real"),
+    ("SetDestructableLife", &["destructable", "real"], "nothing"),
 ];
 
 pub(super) struct Admission {
@@ -172,6 +370,102 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Attach the selected object catalog used by life natives and creation.
+    pub fn admit_destructable_catalog(
+        &mut self,
+        catalog: DestructableCatalog,
+    ) -> Result<(), Error> {
+        if self.destructable_catalog.is_some() {
+            return Err(self.inner.error(
+                SHAPES[0].name,
+                Failure::DestructableState("catalog already admitted"),
+            ));
+        }
+        self.destructable_catalog = Some(catalog);
+        Ok(())
+    }
+
+    /// Admit source-derived placed destructables in one preflighted batch.
+    ///
+    /// The caller must run this before the collision cache is assembled. Records,
+    /// handle capacity and arena space are checked before the first allocation so
+    /// a map-source refusal cannot leave half the objects admitted.
+    pub fn admit_placed_destructables(
+        &mut self,
+        rows: &[PlacedDestructable],
+    ) -> Result<Vec<HandleId>, Error> {
+        let name = SHAPES[0].name;
+        if self.unit_placement.is_some() {
+            return Err(self.inner.error(
+                name,
+                Failure::DestructableState(
+                    "stationary collision cache must be built after placed destructables",
+                ),
+            ));
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (records, max_records) = {
+            let admitted = self.destructables.as_ref().ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::DestructableState("not admitted"))
+            })?;
+            (admitted.records, admitted.max_records)
+        };
+        let total = records.checked_add(rows.len()).ok_or_else(|| {
+            self.inner
+                .error(name, Failure::Budget("destructable creation"))
+        })?;
+        if total > max_records {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("destructable creation")));
+        }
+        self.inner.reserve_handles(rows.len(), name)?;
+        let mut ids = Vec::new();
+        ids.try_reserve_exact(rows.len())
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        for row in rows {
+            ids.push(self.inner.allocate(
+                Entry::Destructable {
+                    creation: row.creation,
+                    state: row.state,
+                },
+                name,
+            )?);
+        }
+        if let Some(admitted) = self.destructables.as_mut() {
+            admitted.records = total;
+        }
+        Ok(ids)
+    }
+
+    /// Apply damage through the same state and collision path as a kill.
+    /// `invulnerable` leaves both life and collision untouched.
+    pub fn damage_destructable(&mut self, id: HandleId, amount: f32) -> Result<f32, Error> {
+        let name = SHAPES[0].name;
+        if !amount.is_finite() || amount < 0.0 {
+            return Err(self.inner.error(
+                name,
+                Failure::DestructableState("finite nonnegative damage"),
+            ));
+        }
+        let (origin, life, changed) = {
+            let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
+                return Err(self.inner.error(name, Failure::WrongFamily));
+            };
+            if state.invulnerable {
+                return Ok(state.life);
+            }
+            state.life = (state.life - amount).max(0.0);
+            state.dead |= state.life <= 0.0;
+            (creation.origin, state.life, !state.dead)
+        };
+        self.sync_destructable_collision(id, origin, changed)?;
+        Ok(life)
+    }
+
     /// Base `CreateDestructable` declaration retained at admission.
     /// The record itself is not a world object.
     pub fn destructable_declaration(&self) -> Result<(&str, Span), Error> {
@@ -212,6 +506,26 @@ impl ObjectHost {
         })
     }
 
+    pub fn destructables_with_handles(
+        &self,
+    ) -> impl Iterator<Item = (HandleId, DestructableCreation, DestructableState)> + '_ {
+        self.inner
+            .arena
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let Entry::Destructable { creation, state } = entry else {
+                    return None;
+                };
+                let token = u64::try_from(index).ok()?.checked_add(1)?;
+                Some((
+                    HandleId::new(std::num::NonZeroU64::new(token)?),
+                    *creation,
+                    *state,
+                ))
+            })
+    }
+
     pub fn destructable_state(&self, id: HandleId) -> Result<DestructableState, Error> {
         match self.inner.entry(id)? {
             Entry::Destructable { state, .. } => Ok(*state),
@@ -237,17 +551,18 @@ impl ObjectHost {
     /// A null destructable is ignored by setters and reads as zero/false, as
     /// with other widget natives in this host.
     fn destructable_runtime(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
-        let (target, flag) = match args {
-            [target] => (target, None),
-            [target, Value::Bool(flag)] => (target, Some(*flag)),
-            _ => return Err(self.inner.error(name, Failure::Signature)),
-        };
+        let (target, rest) = args
+            .split_first()
+            .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
         let id = match target {
             Value::Handle(id) => *id,
             Value::Null => {
                 return Ok(match name {
                     "IsDestructableInvulnerable" => Value::Bool(false),
-                    "GetDestructableX" | "GetDestructableY" => Value::Real(0.0),
+                    "GetDestructableX"
+                    | "GetDestructableY"
+                    | "GetDestructableLife"
+                    | "GetDestructableMaxLife" => Value::Real(0.0),
                     "GetDestructableTypeId" => Value::Int(0),
                     _ => Value::Null,
                 });
@@ -262,27 +577,81 @@ impl ObjectHost {
         ) {
             return Err(self.inner.error(name, Failure::WrongFamily));
         }
-        let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
-            unreachable!("checked destructable entry");
+        let (origin, value, changed) = {
+            let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
+                unreachable!("checked destructable entry");
+            };
+            match (name, rest) {
+                ("SetDestructableInvulnerable", [Value::Bool(flag)]) => {
+                    state.invulnerable = *flag;
+                    (creation.origin, Value::Null, false)
+                }
+                ("ShowDestructable", [Value::Bool(flag)]) => {
+                    state.hidden = !flag;
+                    (creation.origin, Value::Null, false)
+                }
+                ("KillDestructable", []) => {
+                    let changed = !state.dead;
+                    state.life = 0.0;
+                    state.dead = true;
+                    (creation.origin, Value::Null, changed)
+                }
+                ("SetDestructableLife", [Value::Real(value)]) => {
+                    if !value.is_finite() {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::DestructableState("finite life required")));
+                    }
+                    state.life = value.clamp(0.0, state.max_life.max(0.0));
+                    state.dead = state.life <= 0.0;
+                    (creation.origin, Value::Null, true)
+                }
+                ("IsDestructableInvulnerable", []) => {
+                    (creation.origin, Value::Bool(state.invulnerable), false)
+                }
+                ("GetDestructableX", []) => (creation.origin, Value::Real(creation.x), false),
+                ("GetDestructableY", []) => (creation.origin, Value::Real(creation.y), false),
+                ("GetDestructableTypeId", []) => {
+                    (creation.origin, Value::Int(creation.objectid), false)
+                }
+                ("GetDestructableLife", []) => (creation.origin, Value::Real(state.life), false),
+                ("GetDestructableMaxLife", []) => {
+                    (creation.origin, Value::Real(state.max_life), false)
+                }
+                _ => return Err(self.inner.error(name, Failure::Signature)),
+            }
         };
-        Ok(match (name, flag) {
-            ("SetDestructableInvulnerable", Some(flag)) => {
-                state.invulnerable = flag;
-                Value::Null
+        if changed {
+            self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?)?;
+        }
+        Ok(value)
+    }
+
+    fn destructable_dead(&self, id: HandleId, name: &str) -> Result<bool, Error> {
+        match self.inner.entry(id) {
+            Ok(Entry::Destructable { state, .. }) => Ok(state.dead),
+            _ => Err(self.inner.error(name, Failure::WrongFamily)),
+        }
+    }
+
+    fn sync_destructable_collision(
+        &mut self,
+        id: HandleId,
+        origin: DestructableOrigin,
+        active: bool,
+    ) -> Result<(), Error> {
+        let Some(placement) = self.unit_placement.as_mut() else {
+            return Ok(());
+        };
+        let result = match origin {
+            DestructableOrigin::Placed { creation_number } => {
+                placement.set_placed_active(creation_number, active)
             }
-            ("ShowDestructable", Some(flag)) => {
-                state.hidden = !flag;
-                Value::Null
-            }
-            ("KillDestructable", None) => {
-                state.dead = true;
-                Value::Null
-            }
-            ("IsDestructableInvulnerable", None) => Value::Bool(state.invulnerable),
-            ("GetDestructableX", None) => Value::Real(creation.x),
-            ("GetDestructableY", None) => Value::Real(creation.y),
-            ("GetDestructableTypeId", None) => Value::Int(creation.objectid),
-            _ => return Err(self.inner.error(name, Failure::Signature)),
+            DestructableOrigin::Script => placement.set_destructable_active(id, active),
+        };
+        result.map(|_| ()).map_err(|e| {
+            self.inner
+                .error(SHAPES[0].name, Failure::DestructableSource(e.0))
         })
     }
 
@@ -312,11 +681,24 @@ impl ObjectHost {
         if records >= max_records {
             return Err(fail(Failure::Budget("destructable creation")));
         }
+        let stats = self
+            .destructable_catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .stats(creation.objectid)
+                    .map_err(|e| self.inner.error(shape.name, Failure::DestructableSource(e)))
+            })
+            .transpose()?;
+        let max_life = stats.map_or(0.0, |stats| stats.max_life);
+        let life = if creation.dead { 0.0 } else { max_life };
         let id = self.inner.allocate(
             Entry::Destructable {
                 creation,
                 state: DestructableState {
                     dead: creation.dead,
+                    life,
+                    max_life,
                     ..DestructableState::default()
                 },
             },
@@ -349,6 +731,7 @@ fn creation_from(shape: &Shape, args: &[Value]) -> Result<DestructableCreation, 
             return Err(mismatch);
         };
         Ok(DestructableCreation {
+            origin: DestructableOrigin::Script,
             objectid: *objectid,
             x: finite_real(x)?,
             y: finite_real(y)?,
@@ -371,6 +754,7 @@ fn creation_from(shape: &Shape, args: &[Value]) -> Result<DestructableCreation, 
             return Err(mismatch);
         };
         Ok(DestructableCreation {
+            origin: DestructableOrigin::Script,
             objectid: *objectid,
             x: finite_real(x)?,
             y: finite_real(y)?,

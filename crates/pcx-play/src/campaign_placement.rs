@@ -1,19 +1,147 @@
 //! Selected-source creation collision cache on the existing executed identities.
 use crate::{
     map_admission::ParsedMapContext,
-    playercolor_host::ObjectHost,
-    unit_placement::{Budget, Footprint, Grid, Placement, Rules},
+    playercolor_host::{
+        DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
+        ObjectHost, PlacedDestructable,
+    },
+    unit_placement::{Budget, Footprint, Grid, Placement, Rules, StationaryKey, StationaryStamp},
 };
 use pcx_assets::{AssetPath, Resolver};
 use pcx_objects::editor::{
     FieldSource, Overlay, SlkId,
     defaults::{DefaultTables, Family},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 const CELLS: usize = 4 << 20;
 const FOOTPRINT_CELLS: usize = 1 << 16;
 const STATIONARY_WORK: usize = 4 << 20;
+const STATIONARY_CELLS: usize = 1 << 20;
+
+/// Selected map members needed by placed objects: the `.doo` instances and the
+/// object catalogs they resolve against.
+#[derive(Clone)]
+pub struct Catalog {
+    objects: DestructableCatalog,
+    doodads: Vec<pcx_map::Doodad>,
+    destructables: Overlay,
+    decorations: Overlay,
+}
+
+impl Catalog {
+    pub fn read(
+        context: &ParsedMapContext,
+        map_bytes: &[u8],
+        tables: Arc<DefaultTables>,
+    ) -> Result<Self, String> {
+        let map = pcx_map::Map::parse(map_bytes).map_err(|e| e.to_string())?;
+        let extract = |member: &'static str| {
+            map.extract_checked(
+                &context.map_digest.label,
+                member,
+                pcx_mpq::checked::ReadBudget {
+                    max_archive_bytes: 64 << 20,
+                    max_archive_table_bytes: 8 << 20,
+                    max_raw_packed_bytes: 16 << 20,
+                    max_decoded_bytes: 16 << 20,
+                },
+            )
+            .map_err(|e| e.to_string())
+        };
+        let doodad_bytes = extract("war3map.doo")?.ok_or("missing placement doodads")?;
+        let count = doodad_bytes
+            .get(12..16)
+            .ok_or("truncated placement doodad count")?;
+        if u32::from_le_bytes(count.try_into().unwrap()) > 100000 {
+            return Err("placement stationary count budget".into());
+        }
+        let doodads = pcx_map::Doodads::from_bytes(doodad_bytes).map_err(|e| e.to_string())?;
+        if doodads.instances().len() > 100000 || !doodads.terrain_doodads().is_empty() {
+            return Err("placement stationary count or unsupported terrain doodads".into());
+        }
+        let overlay = |member: &'static str| -> Result<Overlay, String> {
+            extract(member)?
+                .map(|raw| {
+                    pcx_objects::ObjectFile::parse(member, &raw)
+                        .map(|f| Overlay::of(&f))
+                        .map_err(|e| e.to_string())
+                })
+                .transpose()
+                .map(Option::unwrap_or_default)
+        };
+        let destructables = overlay("war3map.w3b")?;
+        let decorations = overlay("war3map.w3d")?;
+        Ok(Self {
+            objects: DestructableCatalog::new(tables, destructables.clone(), decorations.clone()),
+            doodads: doodads.instances().to_vec(),
+            destructables,
+            decorations,
+        })
+    }
+
+    pub fn objects(&self) -> &DestructableCatalog {
+        &self.objects
+    }
+
+    pub fn doodads(&self) -> &[pcx_map::Doodad] {
+        &self.doodads
+    }
+
+    /// Source life byte is the percentage of authored maximum HP, capped at
+    /// 100. Four initially dead records carry byte zero.
+    pub fn placed(&self) -> Result<Vec<PlacedDestructable>, String> {
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(self.doodads.len())
+            .map_err(|_| "placed destructable allocation")?;
+        for instance in &self.doodads {
+            let objectid = i32::from_be_bytes(instance.type_id);
+            let Some(stats) = self.objects.stats_if_destructable(objectid)? else {
+                continue;
+            };
+            if instance.position.iter().any(|v| !v.is_finite())
+                || !instance.angle.is_finite()
+                || !instance.scale[0].is_finite()
+            {
+                return Err("nonfinite placed destructable pose".into());
+            }
+            let variation = i32::try_from(instance.variation)
+                .map_err(|_| "placed destructable variation range")?;
+            let percent = f32::from(instance.life.min(100)) / 100.0;
+            let dead = instance.life == 0;
+            let life = if dead { 0.0 } else { stats.max_life * percent };
+            rows.push(PlacedDestructable {
+                creation: DestructableCreation {
+                    origin: DestructableOrigin::Placed {
+                        creation_number: instance.creation_number,
+                    },
+                    objectid,
+                    x: instance.position[0],
+                    y: instance.position[1],
+                    z: Some(instance.position[2]),
+                    face: instance.angle.to_degrees(),
+                    scale: instance.scale[0],
+                    variation,
+                    dead,
+                },
+                state: DestructableState {
+                    dead,
+                    life,
+                    max_life: stats.max_life,
+                    ..DestructableState::default()
+                },
+            });
+        }
+        Ok(rows)
+    }
+
+    fn path(&self, tables: &DefaultTables, id: [u8; 4], dead: bool) -> Result<String, String> {
+        path(tables, &self.destructables, &self.decorations, id, dead)
+    }
+}
 
 /// Called immediately before the first executed unit, after stationary creations.
 pub fn assemble(
@@ -21,6 +149,7 @@ pub fn assemble(
     map_bytes: &[u8],
     reader: Arc<Resolver>,
     tables: &DefaultTables,
+    catalog: &Catalog,
     objects: &ObjectHost,
     rules: &Rules,
 ) -> Result<Placement, String> {
@@ -41,29 +170,6 @@ pub fn assemble(
     let terrain =
         pcx_map::Terrain::from_bytes(extract("war3map.w3e")?.ok_or("missing placement terrain")?)
             .map_err(|e| e.to_string())?;
-    let doodad_bytes = extract("war3map.doo")?.ok_or("missing placement doodads")?;
-    let count = doodad_bytes
-        .get(12..16)
-        .ok_or("truncated placement doodad count")?;
-    if u32::from_le_bytes(count.try_into().unwrap()) > 100000 {
-        return Err("placement stationary count budget".into());
-    }
-    let doodads = pcx_map::Doodads::from_bytes(doodad_bytes).map_err(|e| e.to_string())?;
-    if doodads.instances().len() > 100000 || !doodads.terrain_doodads().is_empty() {
-        return Err("placement stationary count or unsupported terrain doodads".into());
-    }
-    let overlay = |member: &'static str| -> Result<Overlay, String> {
-        extract(member)?
-            .map(|raw| {
-                pcx_objects::ObjectFile::parse(member, &raw)
-                    .map(|f| Overlay::of(&f))
-                    .map_err(|e| e.to_string())
-            })
-            .transpose()
-            .map(Option::unwrap_or_default)
-    };
-    let destructables = overlay("war3map.w3b")?;
-    let decorations = overlay("war3map.w3d")?;
     let (x, y) = terrain.origin();
     let domains = domains(&terrain, &context.world.pathing)?;
     let mut grid = Grid {
@@ -80,14 +186,18 @@ pub fn assemble(
         remaining_cells: FOOTPRINT_CELLS,
     };
     let mut work = STATIONARY_WORK;
-    for instance in doodads.instances() {
-        let path = path(
-            tables,
-            &destructables,
-            &decorations,
-            instance.type_id,
-            instance.life == 0,
-        )?;
+    let placed: BTreeSet<u32> = objects
+        .destructables_with_handles()
+        .filter_map(|(_, creation, _)| match creation.origin {
+            DestructableOrigin::Placed { creation_number } => Some(creation_number),
+            DestructableOrigin::Script => None,
+        })
+        .collect();
+    for instance in catalog.doodads() {
+        if placed.contains(&instance.creation_number) {
+            continue;
+        }
+        let path = catalog.path(tables, instance.type_id, instance.life == 0)?;
         stamp(
             &mut grid,
             rules,
@@ -98,24 +208,43 @@ pub fn assemble(
             &mut work,
         )?;
     }
-    for instance in objects.executed_destructables() {
-        let path = path(
-            tables,
-            &destructables,
-            &decorations,
-            instance.objectid.to_be_bytes(),
-            instance.dead,
-        )?;
-        stamp(
-            &mut grid,
+    let mut layers = Vec::new();
+    for (id, instance, state) in objects.destructables_with_handles() {
+        let live = catalog.path(tables, instance.objectid.to_be_bytes(), false)?;
+        let dead = catalog.path(tables, instance.objectid.to_be_bytes(), true)?;
+        let key = match instance.origin {
+            DestructableOrigin::Placed { creation_number } => {
+                StationaryKey::Placed(creation_number)
+            }
+            DestructableOrigin::Script => StationaryKey::Destructable(id),
+        };
+        let live = footprint_cells(
+            &grid,
             rules,
             &mut textures,
-            &path,
+            &live,
             [instance.x, instance.y],
             f64::from(instance.face) / 90.0,
             &mut work,
         )?;
+        let dead = footprint_cells(
+            &grid,
+            rules,
+            &mut textures,
+            &dead,
+            [instance.x, instance.y],
+            f64::from(instance.face) / 90.0,
+            &mut work,
+        )?;
+        layers.push(StationaryStamp {
+            key,
+            live,
+            dead,
+            mask: rules.ground_mask(),
+            active: !state.dead,
+        });
     }
+    let base = grid.pathing.clone();
     Placement::new(
         grid,
         rules.clone(),
@@ -123,9 +252,11 @@ pub fn assemble(
         Budget {
             cells: CELLS,
             footprint_cells: FOOTPRINT_CELLS,
+            stationary_cells: STATIONARY_CELLS,
             queries: 1 << 16,
         },
     )
+    .and_then(|p| p.with_stationary(base, layers))
     .map(|p| p.with_footprint_loader(move |path| textures.read(path).map(|f| f.as_ref().clone())))
     .map_err(|e| e.to_string())
 }
@@ -306,17 +437,17 @@ fn raster(width: u16, height: u16, rgba: &[u8]) -> Result<Vec<[i32; 2]>, String>
     Ok(result)
 }
 
-fn stamp(
-    grid: &mut Grid,
+fn footprint_cells(
+    grid: &Grid,
     rules: &Rules,
     textures: &mut Textures,
     path: &str,
     point: [f32; 2],
     turns: f64,
     work: &mut usize,
-) -> Result<(), String> {
+) -> Result<Vec<usize>, String> {
     if matches!(path, "" | "_" | "none") {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if !turns.is_finite() || point.iter().any(|x| !x.is_finite()) {
         return Err("nonfinite stationary footprint pose".into());
@@ -334,6 +465,10 @@ fn stamp(
     }
     // shortcut: nearest quarter-turn static raster, validated for the retained creation stream; qualify arbitrary-angle rasterization before widening fidelity claims.
     let quarter = turns.round_ties_even().rem_euclid(4.0) as u8;
+    let mut cells = Vec::new();
+    cells
+        .try_reserve_exact(footprint.cells.len())
+        .map_err(|_| "stationary cell allocation")?;
     for &[x, y] in &footprint.cells {
         let (x, y) = match quarter {
             0 => (i64::from(x), i64::from(y)),
@@ -347,9 +482,26 @@ fn stamp(
             && x < i64::from(grid.pathing.width)
             && y < i64::from(grid.pathing.height)
         {
-            grid.pathing.cells[y as usize * grid.pathing.width as usize + x as usize] |=
-                rules.ground_mask();
+            cells.push(y as usize * grid.pathing.width as usize + x as usize);
         }
+    }
+    cells.sort_unstable();
+    cells.dedup();
+    Ok(cells)
+}
+
+fn stamp(
+    grid: &mut Grid,
+    rules: &Rules,
+    textures: &mut Textures,
+    path: &str,
+    point: [f32; 2],
+    turns: f64,
+    work: &mut usize,
+) -> Result<(), String> {
+    let cells = footprint_cells(grid, rules, textures, path, point, turns, work)?;
+    for i in cells {
+        grid.pathing.cells[i] |= rules.ground_mask();
     }
     Ok(())
 }
@@ -484,6 +636,131 @@ mod tests {
         assert!(path(&tables, &edits, &empty, *b"S002", false).is_err());
         assert!(path(&tables, &edits, &empty, *b"S404", false).is_err());
     }
+
+    fn slk_table(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
+        let mut text = String::from("ID;PWXL;N;E\r\n");
+        for (y, row) in std::iter::once(headers)
+            .chain(rows.iter().copied())
+            .enumerate()
+        {
+            for (x, value) in row.iter().enumerate() {
+                text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, value));
+            }
+        }
+        text.push_str("E\r\n");
+        text.into_bytes()
+    }
+
+    fn catalog_with_life(max_life: &str) -> Catalog {
+        let data = slk_table(
+            &["DestructableID", "HP", "targType"],
+            &[&["LTlt", max_life, "tree,ground"]],
+        );
+        let metadata = slk_table(
+            &["ID", "field", "slk", "type", "index", "category"],
+            &[
+                &["Ahpv", "HP", "DestructableData", "int", "0", "stats"],
+                &[
+                    "Atgt",
+                    "targType",
+                    "DestructableData",
+                    "string",
+                    "0",
+                    "combat",
+                ],
+            ],
+        );
+        let tables = DefaultTables::from_bytes(
+            pcx_objects::editor::defaults::Identity {
+                install: "synthetic".into(),
+                edition_version: "synthetic".into(),
+            },
+            &[
+                (SlkId::DestructableData.path(), &data),
+                (SlkId::DestructableMetaData.path(), &metadata),
+            ],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 4,
+                max_asset_bytes: 4096,
+                max_aggregate_input_bytes: 8192,
+            },
+        )
+        .unwrap();
+        Catalog {
+            objects: DestructableCatalog::new(
+                Arc::new(tables),
+                Overlay::default(),
+                Overlay::default(),
+            ),
+            doodads: Vec::new(),
+            destructables: Overlay::default(),
+            decorations: Overlay::default(),
+        }
+    }
+
+    fn doodad(creation_number: u32, life: u8) -> pcx_map::Doodad {
+        pcx_map::Doodad {
+            type_id: *b"LTlt",
+            variation: 0,
+            position: [100.0, 200.0, 0.0],
+            angle: 0.0,
+            scale: [1.0; 3],
+            flags: 0,
+            life,
+            creation_number,
+        }
+    }
+
+    #[test]
+    fn placed_life_is_the_authored_percent_of_the_catalog_maximum() {
+        let mut catalog = catalog_with_life("50");
+        catalog.doodads = vec![
+            doodad(1, 0),
+            doodad(2, 25),
+            doodad(3, 100),
+            doodad(4, 200),
+            doodad(5, 255),
+        ];
+        let rows = catalog.placed().unwrap();
+        assert_eq!(rows.len(), 5);
+        for (row, life) in rows.iter().zip([0.0, 12.5, 50.0, 50.0, 50.0]) {
+            assert_eq!(row.state.max_life, 50.0);
+            assert_eq!(row.state.life, life);
+            assert_eq!(row.state.dead, life == 0.0);
+            assert_eq!(row.creation.objectid, i32::from_be_bytes(*b"LTlt"));
+            assert_eq!(row.creation.x, 100.0);
+            assert_eq!(row.creation.y, 200.0);
+        }
+        assert_eq!(
+            rows[0].creation.origin,
+            DestructableOrigin::Placed { creation_number: 1 }
+        );
+        assert_eq!(
+            rows[4].creation.origin,
+            DestructableOrigin::Placed { creation_number: 5 }
+        );
+    }
+
+    #[test]
+    fn placed_life_refuses_unknown_or_invalid_records_before_producing_rows() {
+        let mut catalog = catalog_with_life("0");
+        catalog.doodads = vec![doodad(1, 100)];
+        assert!(catalog.placed().is_err());
+        let mut catalog = catalog_with_life("50");
+        catalog.doodads = vec![pcx_map::Doodad {
+            type_id: *b"LTlt",
+            variation: 0,
+            position: [f32::NAN, 0.0, 0.0],
+            angle: 0.0,
+            scale: [1.0; 3],
+            flags: 0,
+            life: 100,
+            creation_number: 1,
+        }];
+        assert!(catalog.placed().is_err());
+    }
+
     #[test]
     fn footprint_raster_uses_authored_pixels_and_rejects_partial_or_nonbinary_data() {
         let mut rgba = vec![0; 16];
