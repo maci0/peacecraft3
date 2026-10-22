@@ -211,3 +211,22 @@ Local inputs, member hashes, exact records and derived differences are under
 Wine reference, not unchanged Human02 acceptance, TFT qualification, native
 Windows parity or a rendered comparison. Other regeneration eligibility modes,
 negative map edits and mixed unmodeled passive classes remain separate limits.
+
+The selected Human01 score/Continue gate now passes the former `rlif` refusal
+and reaches `rwiz`, whose `AIrm` passive remains unsupported at
+`Scripts\Blizzard.j:2640`. This gate stimulates the selected victory BJ and
+Continue control; it does not prove Human01 mission completion or successful
+Human02 startup. The failed run is retained locally as
+`.scratch/campaign-continuation/life-item-selected.log` (exit 101).
+
+A separate controlled RoC run repeated the matched-hero protocol with `rwiz`.
+Map SHA-256:
+`7374aeed7be4dd946097f4b5fdd743aed4de1257439648526e1b05f7e756b57a`;
+script SHA-256:
+`e600439fc832220361da96a5a47bc50bd87ac5f215ec1ccb677faa0b057806bc`.
+All 16 records arrived. Relative to the control, two held items added about
+0.810 mana per second and one added about 0.4045, with approximately zero
+difference after both were dropped. Re-equipping one at night restored the
+one-item difference. These observations do not alone determine which base and
+attribute terms the percentage modifies. Exact records and limitations remain
+under `.scratch/passive-mana-probe/`; the mana passive is not yet implemented.
