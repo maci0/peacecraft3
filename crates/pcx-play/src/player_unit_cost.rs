@@ -94,7 +94,7 @@ impl Policy {
         if first > last {
             return Err("cost upper range is invalid".into());
         }
-        Ok((first, last, body[0x7d], i32::from(body[0x85])))
+        Ok((first, last, body[0x7d], i32::from(body[0x85] as i8)))
     }
 
     pub(crate) fn zero_cost(&self, rawcode: i32, tokens: i32) -> bool {
@@ -122,18 +122,25 @@ pub(crate) fn amount(definition: &Definition, column: &str) -> Result<i32, Strin
     if definition.kind != ObjectKind::Unit {
         return Err("cost rawcode is not a unit".into());
     }
-    let mut fields = definition.fields.iter().filter(|(id, field)| {
+    let mut fields = definition.fields.iter().filter(|(_, field)| {
         field.metadata.as_ref().is_some_and(|meta| {
-            meta.fourcc == **id
-                && meta.from == SlkId::UnitMetaData
-                && matches!(meta.index, -1 | 0)
-                && meta.kind == FieldKind::Int
-                && matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column: c } if c == column)
+            matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column: c } if c == column)
         })
     });
-    let (_, field) = fields.next().ok_or("unit cost metadata missing")?;
+    let (id, field) = fields.next().ok_or("unit cost metadata missing")?;
     if fields.next().is_some() {
         return Err("unit cost metadata ambiguous".into());
+    }
+    let meta = field.metadata.as_ref().expect("selected metadata");
+    if meta.fourcc != *id
+        || meta.from != SlkId::UnitMetaData
+        || meta.slk != "UnitBalance"
+        || meta.field != column
+        || !matches!(meta.index, -1 | 0)
+        || meta.kind != FieldKind::Int
+        || FieldKind::of(&meta.declared) != FieldKind::Int
+    {
+        return Err("unit cost metadata relationship unsupported".into());
     }
     let value = match field
         .value
@@ -231,8 +238,45 @@ mod tests {
         assert!(!policy.zero_cost(i32::from_be_bytes(*b"Axyz"), 3));
         body[0x7d] = 0x71;
         assert_ne!(Policy::branch((&body, va)).unwrap().2, slot);
+        body[0x7d] = 0x70;
+        body[0x85] = (-3i8) as u8;
+        assert_eq!(Policy::branch((&body, va)).unwrap().3, -3);
+        assert!(Policy::fixture(3, first, last, -3).zero_cost(i32::from_be_bytes(*b"Hxyz"), -2));
+        assert!(!Policy::fixture(3, first, last, -3).zero_cost(i32::from_be_bytes(*b"Hxyz"), -4));
         body[0x86] = 0x73;
         assert!(Policy::branch((&body, va)).is_err());
+    }
+
+    #[test]
+    fn malformed_or_ambiguous_cost_relationships_refuse() {
+        let valid = definition(
+            FieldValue::Cell("125".into()),
+            FieldValue::Cell("13".into()),
+        );
+        let mut duplicate = valid.clone();
+        let mut conflicting = duplicate.fields[b"ugol"].clone();
+        conflicting.metadata.as_mut().unwrap().kind = FieldKind::Real;
+        duplicate.fields.insert(*b"BAD1", conflicting);
+        assert!(amount(&duplicate, "goldcost").is_err());
+
+        for corrupt in [
+            (2, FieldKind::Int, "int"),
+            (-1, FieldKind::Real, "real"),
+            (-1, FieldKind::Int, "real"),
+        ] {
+            let mut definition = valid.clone();
+            let meta = definition
+                .fields
+                .get_mut(b"ugol")
+                .unwrap()
+                .metadata
+                .as_mut()
+                .unwrap();
+            meta.index = corrupt.0;
+            meta.kind = corrupt.1;
+            meta.declared = corrupt.2.into();
+            assert!(amount(&definition, "goldcost").is_err());
+        }
     }
 
     #[test]
