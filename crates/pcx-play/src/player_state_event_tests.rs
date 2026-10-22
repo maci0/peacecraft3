@@ -8,9 +8,11 @@ use std::sync::Arc;
 const PLAYER_STATE: &str = "type playerstate extends handle
 type limitop extends eventid
 type gameevent extends eventid
+type playerevent extends eventid
 constant native ConvertPlayerState takes integer i returns playerstate
 constant native ConvertLimitOp takes integer i returns limitop
 constant native ConvertGameEvent takes integer i returns gameevent
+constant native ConvertPlayerEvent takes integer i returns playerevent
 constant native GetPlayerState takes player p, playerstate setting returns integer
 native SetPlayerState takes player p, playerstate setting, integer value returns nothing
 constant native GetEventPlayerState takes nothing returns playerstate
@@ -47,6 +49,7 @@ constant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)
 constant limitop GREATER_THAN=ConvertLimitOp(4)
 constant limitop NOT_EQUAL=ConvertLimitOp(5)
 constant gameevent EVT=ConvertGameEvent(13 + 2)
+constant playerevent EVENT_PLAYER_STATE_LIMIT=ConvertPlayerEvent(47)
 "
         ),
     );
@@ -68,6 +71,7 @@ fn base_map(common: &str, map: &str) -> (Arc<crate::map_admission::ParsedMapCont
         "ConvertPlayerState",
         "ConvertLimitOp",
         "ConvertGameEvent",
+        "ConvertPlayerEvent",
     ];
     let enums = EnumHost::checked_selected(
         ctx.scripts.shared_program(),
@@ -212,6 +216,64 @@ fn state_events_seed_at_registration_then_fire_only_on_change_while_the_comparis
     )
     .unwrap();
     assert!(h.take_fired_event().is_some());
+}
+
+#[test]
+fn state_event_context_is_the_source_limit_event_not_the_registration() {
+    let mut h = host(&common(0), 4);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let gold = convert(&mut h, "ConvertPlayerState", 1);
+    let less = convert(&mut h, "ConvertLimitOp", 0);
+    let registration = register(&mut h, &trigger, &player, &gold, &less, 50.0).unwrap();
+    h.native(
+        "SetPlayerState",
+        &[player.clone(), gold.clone(), Value::Int(30)],
+    )
+    .unwrap();
+    let fired = h.take_fired_event().expect("player state event");
+    assert!(h.begin_fired_event(&fired).unwrap().is_some());
+    let source = h.native("ConvertPlayerEvent", &[Value::Int(47)]).unwrap();
+    let context = h.native("GetTriggerEventId", &[]).unwrap();
+    assert_eq!(context, source);
+    assert_ne!(context, registration);
+    assert_eq!(
+        h.native("GetEventPlayerState", &[]).unwrap(),
+        Value::Handle(id(&gold))
+    );
+    h.finish_fired_event();
+}
+
+#[test]
+fn state_limit_event_admission_requires_the_source_constant_and_is_atomic() {
+    let missing = common(0).replace(
+        "EVENT_PLAYER_STATE_LIMIT=",
+        "EVENT_PLAYER_STATE_LIMIT_RENAMED=",
+    );
+    assert!(matches!(
+        base(&missing).1.with_player_state_events(4),
+        Err(error) if error.failure
+            == crate::playercolor_host::Failure::UnitState("missing selected constant")
+    ));
+}
+
+#[test]
+fn state_limit_event_admission_rejects_a_cross_source_conversion() {
+    let malformed = common(0).replace(
+        "native TriggerRegisterPlayerStateEvent takes trigger owner, player p, playerstate state, limitop op, real limit returns event\n",
+        "",
+    );
+    let map = "native TriggerRegisterPlayerStateEvent takes trigger owner, player p, playerstate state, limitop op, real limit returns event\n// synthetic map";
+    assert!(matches!(
+        base_map(&malformed, map).1.with_player_state_events(4),
+        Err(error) if error.failure == crate::playercolor_host::Failure::Source
+    ));
+}
+
+#[test]
+fn state_limit_conversion_rejects_unselected_source_enumerands() {
+    let mut h = host(&common(0), 4);
+    assert!(h.native("ConvertPlayerEvent", &[Value::Int(48)]).is_err());
 }
 
 #[test]

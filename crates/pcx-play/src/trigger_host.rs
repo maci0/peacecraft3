@@ -105,6 +105,7 @@ pub(super) struct Admission {
     player_state_event_limit: Option<usize>,
     retained_player_state_events: usize,
     player_state_ops: Option<[i32; 6]>,
+    player_state_event: Option<HandleId>,
     player_state_registrations: Vec<HandleId>,
 }
 
@@ -244,6 +245,7 @@ impl ObjectHost {
             player_state_event_limit: None,
             retained_player_state_events: 0,
             player_state_ops: None,
+            player_state_event: None,
             player_state_registrations: Vec::new(),
         });
         Ok(self)
