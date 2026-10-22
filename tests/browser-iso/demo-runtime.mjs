@@ -147,8 +147,8 @@ try {
   await commit({ name: 'base.iso', mimeType: 'application/x-iso9660-image', buffer: Buffer.from(isoFixture([
     { name: 'WAR3.MPQ;1', bytes: mpqFixture(base) },
     { name: 'WAR3X.MPQ;1', bytes: mpqFixture(conflicting) },
-  ])) }, 2, 2);
-  assert.match(await page.evaluate(() => new TextDecoder().decode(peacecraft3.archive_member('UI\\FrameDef\\GlobalStrings.fdf'))), /Conflicting label/);
+  ])) }, 2, 1);
+  assert.match(await page.evaluate(() => new TextDecoder().decode(peacecraft3.archive_member('UI\\FrameDef\\GlobalStrings.fdf'))), /Synthetic label/);
   assert.deepEqual(await page.evaluate(() => peacecraft3.local_menu_editions()), ['roc']);
   assert.deepEqual(await page.locator('#demo-edition option').evaluateAll(options => options.map(o => o.value)), ['roc']);
   const rejected = await page.evaluate(() => {
