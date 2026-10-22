@@ -180,3 +180,48 @@ path would fail, while session storage succeeds and leaves the sentinel hash
 unchanged. The gate checks equal and unequal saved profile identities, stored
 values, unchanged initial identity after saving and isolation between sessions.
 These are recreation storage/identity checks, not original-client cache parity.
+
+## Explicit mission availability and next-map requests (2026-10-22)
+
+The source-declared `SetMissionAvailable` now persists the executed campaign and
+mission indices and boolean. Unknown entries stay unknown: this does not supply
+an invented fresh-profile unlock table. The selected common declaration is
+validated against the timer declaration's source; malformed or duplicate
+contracts refuse admission. Negative indices and excessive record/byte counts
+refuse as recreation input policies, not measured native exceptional behavior.
+
+The existing native file/browser local-storage transport carries a bounded,
+recreation-owned `PCXPROFILE1` envelope only once mission progress exists. It has
+two separately framed sections: the existing game-cache bytes and `PCXPROGRESS1`
+explicit mission assignments. Legacy cache-only bytes remain readable and are
+written unchanged when no progress section exists. This is not an original W3V
+or original player-profile importer. Older builds cannot read the new envelope.
+
+Both channels share one transaction lock per attached profile pair. An update
+loads the physical profile, replaces its section, validates the complete bounded
+envelope, and uses the physical storage's atomic save. The new in-memory mission
+value publishes only after that save succeeds. Mission writes preserve the last
+saved cache section; they do not flush unsaved working hero/cache changes.
+`SaveGameCache` preserves the progress section. This does not establish
+cross-process or independently attached host transaction isolation.
+
+Headless startup accepts and exports the same envelope through its existing
+explicit session-owned profile bytes. It never accesses the machine profile.
+Synthetic tests cover independent writes, saved values, legacy compatibility,
+malformed/truncated/duplicate records, failed-save preservation, read limits and
+concurrent section updates through one attached pair.
+
+`SetNextLevel` retains the source map path on the current host, verbatim, and
+returns to the script. Empty clears that request; embedded NUL and excessive
+bytes refuse as application policies. This request is session-local: it does not
+load another map or end the game. UI availability filtering, fresh-profile
+unlock defaults and a consumer that performs the actual chapter transition
+remain open. Neither setter proves completed campaign progression.
+
+An ordinary-player private controller on unchanged Human01 recruits the authored
+footmen, defeats the Warlord group and reaches the authored next-level preparation.
+Before this change it refused at requested tick 91768 on `SetMissionAvailable`.
+It now advances to requested tick 91832, where the script completes the unassigned
+`udg_QuestOrcs` and the current quest host rejects the null argument. The script
+actually creates `udg_QuestVillage`; no quest alias or original-map edit was made.
+This is headless recreation evidence, not native or rendered campaign acceptance.

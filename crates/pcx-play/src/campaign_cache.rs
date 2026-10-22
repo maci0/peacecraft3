@@ -5,6 +5,9 @@ use crate::{
 };
 use std::sync::{Arc, Mutex};
 
+#[path = "campaign_profile.rs"]
+mod profile;
+
 const BUDGET: Budget = Budget {
     caches: 1024,
     entries: 16384,
@@ -17,17 +20,18 @@ pub fn attach(
     host: &mut MapStartupHost,
     storage: Arc<dyn Storage>,
 ) -> Result<(), crate::playercolor_host::Error> {
+    let (cache, progress) = profile::split(storage);
     if host
         .context()
         .scripts
         .program()
         .natives()
         .get("InitGameCache")
-        .is_none()
+        .is_some()
     {
-        return Ok(());
+        host.objects_mut().admit_game_caches(cache, BUDGET)?;
     }
-    host.objects_mut().admit_game_caches(storage, BUDGET)
+    host.objects_mut().admit_campaign_progress_storage(progress)
 }
 
 /// Application persistence; headless sessions supply their own storage instead.
@@ -41,7 +45,7 @@ pub(crate) struct SessionStorage(Mutex<Option<Vec<u8>>>);
 impl SessionStorage {
     pub fn new(bytes: Option<&[u8]>) -> Result<Self, String> {
         if let Some(bytes) = bytes {
-            crate::game_cache::Profile::decode(bytes, BUDGET)?;
+            profile::validate(bytes)?;
         }
         Ok(Self(Mutex::new(bytes.map(Self::copy).transpose()?)))
     }

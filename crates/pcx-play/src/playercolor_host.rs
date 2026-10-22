@@ -50,6 +50,8 @@ pub enum Failure {
     SettingsState(&'static str),
     #[error("game cache: {0}")]
     GameCache(String),
+    #[error("campaign progress: {0}")]
+    CampaignProgress(String),
     #[error("campaign presentation: {0}")]
     Presentation(&'static str),
     #[error("script text messages: {0}")]

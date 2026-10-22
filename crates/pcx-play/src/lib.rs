@@ -62,6 +62,7 @@ pub mod campaign_client;
 pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_placement;
+pub mod campaign_progress;
 pub mod cinematics;
 pub mod command_layout;
 pub mod custom_scripts;
