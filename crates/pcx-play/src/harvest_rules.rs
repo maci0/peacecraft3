@@ -5,26 +5,39 @@
 //! classification and the depot `Artn` return flags. It runs no gameplay
 //! harvesting algorithm — that is deferred until a native trace qualifies it.
 //!
-//! Rows read (shipped tables):
-//! - `Units\AbilityData.slk` `Ahar`: `DataA` (damage to tree), `DataB`
-//!   (lumber capacity), `DataC` (gold capacity), `Rng`, `Area`, `Dur`.
-//! - `Units\UnitAbilities.slk` worker `abilList` and building `abilList`.
-//! - `Units\DestructableData.slk` tree `targType`/`HP`.
-//! - `Artn` return ability (aliases `Argd`/`Argl`/`Arlm`) `DataA` (accepts
-//!   gold), `DataB` (accepts lumber).
+//! Identities and class codes are case-sensitive, matching the shipped
+//! fourcc/code cells; the `-` sentinel means absence, never a lookup.
+//! Missing harvest capability is reported as `None`, not as numbers from an
+//! absent `Ahar` record.
 use pcx_objects::editor::defaults::{DefaultTables, Family};
 use pcx_objects::editor::SlkId;
+
+const AHAR: &str = "Ahar";
+const ARTN: &str = "Artn";
+const SENTINEL: &str = "-";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HarvestRules {
     pub source: String,
-    pub has_harvest: bool,
+    pub ahar_alias: String,
     pub damage: f32,
     pub lumber_capacity: i32,
     pub gold_capacity: i32,
     pub search_radius: f32,
     pub range: f32,
     pub work_duration: f32,
+    /// The worker's tree-targeting weapon slot, when admitted by `UnitWeapons`.
+    pub work_weapon: Option<WorkWeapon>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkWeapon {
+    pub slot: u32,
+    pub cool: f32,
+    pub damage_point: f32,
+    pub backswing: f32,
+    pub range: f32,
+    pub rng_buff: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,18 +56,22 @@ pub struct DepotReturn {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HarvestError {
-    Missing { rawcode: String, column: String },
+    Missing { rawcode: String, column: String, detail: String },
     Malformed { rawcode: String, column: String, detail: String },
+    Ambiguous { rawcode: String, column: String, detail: String },
 }
 
 impl std::fmt::Display for HarvestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing { rawcode, column } => {
-                write!(f, "harvest source missing {column} for {rawcode}")
+            Self::Missing { rawcode, column, detail } => {
+                write!(f, "harvest source missing {column} for {rawcode}: {detail}")
             }
             Self::Malformed { rawcode, column, detail } => {
                 write!(f, "harvest source malformed {column} for {rawcode}: {detail}")
+            }
+            Self::Ambiguous { rawcode, column, detail } => {
+                write!(f, "harvest source ambiguous {column} for {rawcode}: {detail}")
             }
         }
     }
@@ -68,18 +85,34 @@ fn source_of(tables: &DefaultTables) -> String {
     )
 }
 
-fn cell_text(tables: &DefaultTables, family: Family, rawcode: &str, slk: SlkId, column: &str) -> Result<String, HarvestError> {
-    let object = tables.object(family, rawcode).map_err(|_| HarvestError::Missing {
+fn fourcc(rawcode: [u8; 4]) -> Result<String, HarvestError> {
+    std::str::from_utf8(&rawcode).map(str::to_owned).map_err(|detail| HarvestError::Malformed {
+        rawcode: format!("{rawcode:?}"),
+        column: "rawcode".to_string(),
+        detail: detail.to_string(),
+    })
+}
+
+fn object_text(
+    tables: &DefaultTables,
+    family: Family,
+    rawcode: &str,
+    slk: SlkId,
+    column: &str,
+) -> Result<String, HarvestError> {
+    let object = tables.object(family, rawcode).map_err(|underlying| HarvestError::Missing {
         rawcode: rawcode.to_string(),
         column: column.to_string(),
+        detail: underlying.to_string(),
     })?;
-    object.cell(slk, column).map_err(|_| HarvestError::Missing {
+    object.cell(slk, column).map_err(|underlying| HarvestError::Missing {
         rawcode: rawcode.to_string(),
         column: column.to_string(),
+        detail: underlying.to_string(),
     }).map(|cell| cell.text.trim().to_owned())
 }
 
-fn number_i32(_tables: &DefaultTables, rawcode: &str, text: &str, column: &str) -> Result<i32, HarvestError> {
+fn parse_i32(rawcode: &str, text: &str, column: &str) -> Result<i32, HarvestError> {
     text.parse::<i32>().map_err(|detail| HarvestError::Malformed {
         rawcode: rawcode.to_string(),
         column: column.to_string(),
@@ -87,7 +120,20 @@ fn number_i32(_tables: &DefaultTables, rawcode: &str, text: &str, column: &str) 
     })
 }
 
-fn number_f32(_tables: &DefaultTables, rawcode: &str, text: &str, column: &str) -> Result<f32, HarvestError> {
+fn parse_nonneg_i32(rawcode: &str, text: &str, column: &str) -> Result<i32, HarvestError> {
+    let value = parse_i32(rawcode, text, column)?;
+    if value >= 0 {
+        Ok(value)
+    } else {
+        Err(HarvestError::Malformed {
+            rawcode: rawcode.to_string(),
+            column: column.to_string(),
+            detail: "must be nonnegative".to_string(),
+        })
+    }
+}
+
+fn parse_f32(rawcode: &str, text: &str, column: &str) -> Result<f32, HarvestError> {
     let value: f32 = text.parse::<f32>().map_err(|detail| HarvestError::Malformed {
         rawcode: rawcode.to_string(),
         column: column.to_string(),
@@ -104,74 +150,193 @@ fn number_f32(_tables: &DefaultTables, rawcode: &str, text: &str, column: &str) 
     }
 }
 
-fn ability_level_cell(tables: &DefaultTables, rawcode: &str, stem: &str, level: u32) -> Result<String, HarvestError> {
-    let object = tables.object(Family::Ability, rawcode).map_err(|_| HarvestError::Missing {
-        rawcode: rawcode.to_string(),
-        column: format!("{stem}{level}"),
-    })?;
-    object.level_cell(stem, level).map_err(|_| HarvestError::Missing {
-        rawcode: rawcode.to_string(),
-        column: format!("{stem}{level}"),
-    }).map(|cell| cell.text.trim().to_owned())
+/// Boolean `AbilityData` cell: only the literal `0`/`1` are accepted.
+fn parse_exact_bool(rawcode: &str, text: &str, column: &str) -> Result<bool, HarvestError> {
+    match text {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(HarvestError::Malformed {
+            rawcode: rawcode.to_string(),
+            column: column.to_string(),
+            detail: format!("expected 0 or 1, got {text:?}"),
+        }),
+    }
 }
 
-fn ability_codes(tables: &DefaultTables, rawcode: &str) -> Result<Vec<String>, HarvestError> {
-    let list = cell_text(tables, Family::Unit, rawcode, SlkId::UnitAbilities, "abilList")?;
-    Ok(list.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect())
+fn split_csv(text: &str) -> impl Iterator<Item = &str> {
+    text.split(',').map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn ability_row_text(tables: &DefaultTables, alias: &str, column: &str) -> Result<String, HarvestError> {
+    let table = tables.editor().table(SlkId::AbilityData).ok_or_else(|| HarvestError::Missing {
+        rawcode: alias.to_string(),
+        column: column.to_string(),
+        detail: "AbilityData table absent".to_string(),
+    })?;
+    for row in table.rows() {
+        if row.by_name("alias").map(str::trim) == Some(alias) {
+            return row.by_name(column).map(str::trim).map(str::to_owned).ok_or_else(|| {
+                HarvestError::Missing {
+                    rawcode: alias.to_string(),
+                    column: column.to_string(),
+                    detail: "cell absent in resolved ability row".to_string(),
+                }
+            });
+        }
+    }
+    Err(HarvestError::Missing {
+        rawcode: alias.to_string(),
+        column: column.to_string(),
+        detail: "no ability row with this alias".to_string(),
+    })
+}
+
+fn ability_level_cell(tables: &DefaultTables, alias: &str, stem: &str, level: u32) -> Result<String, HarvestError> {
+    ability_row_text(tables, alias, &format!("{stem}{level}"))
+}
+
+fn unit_abil_codes(tables: &DefaultTables, rawcode: &str) -> Result<Vec<String>, HarvestError> {
+    let list = object_text(tables, Family::Unit, rawcode, SlkId::UnitAbilities, "abilList")?;
+    Ok(split_csv(&list).map(str::to_owned).collect())
+}
+
+fn resolve_ability_code(tables: &DefaultTables, alias: &str) -> Result<Option<String>, HarvestError> {
+    if alias == SENTINEL {
+        return Ok(None);
+    }
+    let code = ability_row_text(tables, alias, "code")?;
+    if code == SENTINEL {
+        return Ok(None);
+    }
+    Ok(Some(code))
+}
+
+/// The sole alias whose resolved code equals `Ahar`, if any.
+fn find_ahar_alias(tables: &DefaultTables, aliases: &[String]) -> Result<Option<String>, HarvestError> {
+    let mut found: Option<String> = None;
+    for alias in aliases {
+        let Some(code) = resolve_ability_code(tables, alias)? else {
+            continue;
+        };
+        if code != AHAR {
+            continue;
+        }
+        if found.is_some() {
+            return Err(HarvestError::Ambiguous {
+                rawcode: alias.clone(),
+                column: "abilList".to_string(),
+                detail: "multiple abilities resolve to Ahar".to_string(),
+            });
+        }
+        found = Some(alias.clone());
+    }
+    Ok(found)
+}
+
+fn work_weapon_from_tables(
+    tables: &DefaultTables,
+    worker_code: &str,
+) -> Result<Option<WorkWeapon>, HarvestError> {
+    let weaps_on = match object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, "weapsOn") {
+        Ok(text) => text,
+        Err(HarvestError::Missing { .. }) => return Ok(None),
+        Err(other) => return Err(other),
+    };
+    let count = parse_i32(worker_code, &weaps_on, "weapsOn")?;
+    let mut found: Option<WorkWeapon> = None;
+    for slot in 1..=count {
+        let targs = object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("targs{slot}"))?;
+        if !split_csv(&targs).any(|t| t == "tree") {
+            continue;
+        }
+        if found.is_some() {
+            return Err(HarvestError::Ambiguous {
+                rawcode: worker_code.to_string(),
+                column: format!("targs{slot}"),
+                detail: "multiple weapon slots target trees".to_string(),
+            });
+        }
+        let cool = parse_f32(worker_code, &object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("cool{slot}"))?, &format!("cool{slot}"))?;
+        let damage_point = parse_f32(worker_code, &object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("dmgpt{slot}"))?, &format!("dmgpt{slot}"))?;
+        let backswing = parse_f32(worker_code, &object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("backSw{slot}"))?, &format!("backSw{slot}"))?;
+        let range = parse_f32(worker_code, &object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("rangeN{slot}"))?, &format!("rangeN{slot}"))?;
+        let rng_buff = match object_text(tables, Family::Unit, worker_code, SlkId::UnitWeapons, &format!("RngBuff{slot}")) {
+            Ok(text) if text != SENTINEL && !text.is_empty() => {
+                Some(parse_f32(worker_code, &text, &format!("RngBuff{slot}"))?)
+            }
+            _ => None,
+        };
+        found = Some(WorkWeapon {
+            slot: slot as u32,
+            cool,
+            damage_point,
+            backswing,
+            range,
+            rng_buff,
+        });
+    }
+    Ok(found)
 }
 
 impl HarvestRules {
-    pub fn from_tables(tables: &DefaultTables, worker_code: [u8; 4]) -> Result<Self, HarvestError> {
-        let raw = String::from_utf8_lossy(&worker_code).into_owned();
-        let abilities = ability_codes(tables, &raw)?;
-        let has_harvest = abilities.iter().any(|a| a.eq_ignore_ascii_case("Ahar"));
-        let damage = number_f32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "DataA", 1)?, "DataA1")?;
-        let lumber_capacity = number_i32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "DataB", 1)?, "DataB1")?;
-        let gold_capacity = number_i32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "DataC", 1)?, "DataC1")?;
-        let range = number_f32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "Rng", 1)?, "Rng1")?;
-        let search_radius = number_f32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "Area", 1)?, "Area1")?;
-        let work_duration = number_f32(tables, "Ahar", &ability_level_cell(tables, "Ahar", "Dur", 1)?, "Dur1")?;
-        Ok(Self {
+    /// `Ok(None)` when the worker has no `Ahar` capability.
+    pub fn from_tables(tables: &DefaultTables, worker_code: [u8; 4]) -> Result<Option<Self>, HarvestError> {
+        let raw = fourcc(worker_code)?;
+        let aliases = unit_abil_codes(tables, &raw)?;
+        let Some(ahar_alias) = find_ahar_alias(tables, &aliases)? else {
+            return Ok(None);
+        };
+        let damage = parse_f32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "DataA", 1)?, "DataA1")?;
+        let lumber_capacity = parse_nonneg_i32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "DataB", 1)?, "DataB1")?;
+        let gold_capacity = parse_nonneg_i32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "DataC", 1)?, "DataC1")?;
+        let range = parse_f32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "Rng", 1)?, "Rng1")?;
+        let search_radius = parse_f32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "Area", 1)?, "Area1")?;
+        let work_duration = parse_f32(&ahar_alias, &ability_level_cell(tables, &ahar_alias, "Dur", 1)?, "Dur1")?;
+        let work_weapon = work_weapon_from_tables(tables, &raw)?;
+        Ok(Some(Self {
             source: source_of(tables),
-            has_harvest,
+            ahar_alias,
             damage,
             lumber_capacity,
             gold_capacity,
             search_radius,
             range,
             work_duration,
-        })
+            work_weapon,
+        }))
     }
 }
 
 impl TreeClass {
     pub fn from_tables(tables: &DefaultTables, tree_code: [u8; 4]) -> Result<Self, HarvestError> {
-        let raw = String::from_utf8_lossy(&tree_code).into_owned();
-        let targ = cell_text(tables, Family::Destructable, &raw, SlkId::DestructableData, "targType")?;
-        let hp_text = cell_text(tables, Family::Destructable, &raw, SlkId::DestructableData, "HP")?;
-        let hp = number_f32(tables, &raw, &hp_text, "HP")?;
+        let raw = fourcc(tree_code)?;
+        let targ = object_text(tables, Family::Destructable, &raw, SlkId::DestructableData, "targType")?;
+        let hp_text = object_text(tables, Family::Destructable, &raw, SlkId::DestructableData, "HP")?;
+        let hp = parse_f32(&raw, &hp_text, "HP")?;
         Ok(Self {
             source: source_of(tables),
             hp,
-            is_tree: targ.eq_ignore_ascii_case("tree"),
+            is_tree: split_csv(&targ).any(|t| t == "tree"),
         })
     }
 }
 
 impl DepotReturn {
     pub fn from_tables(tables: &DefaultTables, building_code: [u8; 4]) -> Result<Self, HarvestError> {
-        let raw = String::from_utf8_lossy(&building_code).into_owned();
+        let raw = fourcc(building_code)?;
         let mut accepts_gold = false;
         let mut accepts_lumber = false;
-        for ability in ability_codes(tables, &raw)? {
-            let code = cell_text(tables, Family::Ability, &ability, SlkId::AbilityData, "code")?;
-            if !code.eq_ignore_ascii_case("Artn") {
+        for alias in unit_abil_codes(tables, &raw)? {
+            let Some(code) = resolve_ability_code(tables, &alias)? else {
+                continue;
+            };
+            if code != ARTN {
                 continue;
             }
-            let gold = number_i32(tables, &ability, &ability_level_cell(tables, &ability, "DataA", 1)?, "DataA1")?;
-            let lumber = number_i32(tables, &ability, &ability_level_cell(tables, &ability, "DataB", 1)?, "DataB1")?;
-            accepts_gold |= gold != 0;
-            accepts_lumber |= lumber != 0;
+            let gold = parse_exact_bool(&alias, &ability_level_cell(tables, &alias, "DataA", 1)?, "DataA1")?;
+            let lumber = parse_exact_bool(&alias, &ability_level_cell(tables, &alias, "DataB", 1)?, "DataB1")?;
+            accepts_gold |= gold;
+            accepts_lumber |= lumber;
         }
         Ok(Self {
             source: source_of(tables),
