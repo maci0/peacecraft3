@@ -53,10 +53,30 @@ The existing strength path reaches `0x6be8c0` mode 1. At `0x6bea8e` it multiplie
 the retained ratio by the new maximum, then calls `0x9a1d70`. That helper adds the
 float at `0x10db0a8` (`00 00 00 3f`, one half) through `0x9a01c0`, then calls the
 floor helper `0x9a1520`. For positive values this supports nearest rounding with
-half upward, consistent with the runtime samples. It also rounds the new maximum
-before selecting the mode. The current strength recreation's unrounded ratio
-therefore needs attention when sharing pool adjustment with this effect.
+half upward, consistent with the runtime samples. It also rounds the input pool
+change before selecting the mode. The current strength recreation's unrounded
+ratio therefore needs attention when sharing pool adjustment with this effect.
 
-No death, revival, near-zero-life clamp, edited amount, native Windows or rendered
-parity is qualified here. Implementation must preflight every pool adjustment in
-the actual removal order before detaching an item or queuing its drop event.
+## Near-zero and death follow-up
+
+A second controlled run, in the same reviewed client and RoC edition, generated
+15 markers. Map SHA-256 is
+`6de5c5f3a80e4ae538f4425b8b257e2625a9eecc93b5faed1b6f1c66504122c7`;
+script SHA-256 is
+`396c560dae9d21f0c9cbc7cca17df06f6dee9a511d3446b724e502a5a475c393`.
+The local receipt is `.scratch/passive-max-life-edge-probe/result.json`.
+The edge sequence runs within one timer callback at the same reported game time:
+
+- Hero: life 0.5 / max 1550, remove one item → life 1 / max 1400.
+- Non-hero: life 0.5 / max 570, remove one item → life 1 / max 420.
+- Killing the hero retains its remaining item and max 1400, with life zero.
+- Explicitly removing that item while dead → life zero / max 1250.
+- Adding it to the dead hero returns false and leaves it unheld.
+- Immediate `ReviveHero` succeeds after explicit removal, restoring full life
+  1250 / max 1250 in this generation.
+
+This supports a living-unit minimum of one hit point after ratio adjustment and
+zero for the dead holder. It does not establish arbitrary edited amounts,
+revival with the bonus still held, native Windows or rendered parity.
+Implementation must preflight every pool adjustment in the actual removal order
+before detaching an item or queuing its drop event.
