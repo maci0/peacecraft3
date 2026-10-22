@@ -126,7 +126,11 @@ impl Fixture {
         let common_info = info("common");
         let bj_info = info("BJ");
         let stock = info("catalog");
-        let files=vec![("war3map.w3e",fixtures::terrain_bytes(2,1)),("war3map.wpm",fixtures::pathing_bytes(4,2)),("war3map.w3i",fixtures::info().canonical_bytes()),("war3mapUnits.doo",fixtures::units().canonical_bytes()),("war3map.j",b"globals\ninteger RequiresHost = FixtureHeld()\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n".to_vec()),("war3map.w3u",object(value))];
+        let mut empty_doodads = b"W3do".to_vec();
+        for word in [7u32, 9, 0, 0, 0] {
+            empty_doodads.extend(word.to_le_bytes());
+        }
+        let files=vec![("war3map.w3e",fixtures::terrain_bytes(2,1)),("war3map.wpm",fixtures::pathing_bytes(4,2)),("war3map.w3i",fixtures::info().canonical_bytes()),("war3mapUnits.doo",fixtures::units().canonical_bytes()),("war3map.doo",empty_doodads),("war3map.j",b"globals\ninteger RequiresHost = FixtureHeld()\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n".to_vec()),("war3map.w3u",object(value))];
         let raw = fixtures::build_synthetic_map(
             "one selected synthetic map",
             &files
