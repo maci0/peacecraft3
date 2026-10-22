@@ -210,9 +210,16 @@ fn open_with_fields(fields: &[([u8; 4], ObjectField)]) -> Vm {
     open_admitting(fields, rules())
 }
 fn open_move_speed() -> Vm {
+    open_move_speed_with(STOCK_MOVE_SPEED_MISC, "10")
+}
+fn open_move_speed_with(profile: &'static str, authored_speed: &str) -> Vm {
     open_admitting(
-        &profile_fields(FieldValue::Cell("10".into()), Some("foot"), Some(false)),
-        move_speed_rules(),
+        &profile_fields(
+            FieldValue::Cell(authored_speed.into()),
+            Some("foot"),
+            Some(false),
+        ),
+        move_speed_rules_with(profile),
     )
 }
 fn open_admitting(
@@ -796,6 +803,76 @@ fn non_stock_move_speed_limits_clamp_finite_negative_inputs_without_a_copied_flo
             Value::Real(expected)
         );
     }
+}
+
+#[test]
+fn zero_minimum_speed_retains_the_route_with_finite_spans_and_resumes() {
+    const ZERO_MIN: &str =
+        "[Misc]\nMinUnitSpeed=0\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+    let mut vm = open_move_speed_with(ZERO_MIN, "10");
+    let a = unit(&vm, "A");
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 1.);
+    let stopped = position(&mut vm, a);
+    let order = vm
+        .host()
+        .inner
+        .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+        .unwrap();
+    let destination = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .destination();
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(0.)])
+        .unwrap();
+    assert_eq!(move_speed(&mut vm, a), 0.);
+
+    let mut spans = Vec::new();
+    tick_spans(&mut vm, 2., &mut spans);
+    assert_eq!(position(&mut vm, a), stopped);
+    assert!(
+        spans
+            .iter()
+            .all(|s| s.start.is_finite() && s.end.is_finite() && s.from == s.to),
+        "{spans:?}"
+    );
+    let state = vm.host().inner.executed_unit(a).unwrap().activity.clone();
+    assert!(
+        state
+            .as_ref()
+            .is_some_and(|s| s.moving() && s.destination() == destination)
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("GetUnitCurrentOrder", &[Value::Handle(a)])
+            .unwrap(),
+        order
+    );
+
+    vm.host()
+        .inner
+        .native("SetUnitMoveSpeed", &[Value::Handle(a), Value::Real(10.)])
+        .unwrap();
+    assert_eq!(move_speed(&mut vm, a), 10.);
+    let appended = spans.len();
+    tick_spans(&mut vm, 3., &mut spans);
+    assert_ne!(position(&mut vm, a), stopped);
+    assert!(
+        spans[appended..]
+            .iter()
+            .all(|s| s.start.is_finite() && s.end.is_finite()),
+        "{:?}",
+        &spans[appended..]
+    );
+    assert!(spans[appended..].iter().any(|s| s.moving));
 }
 
 #[test]
