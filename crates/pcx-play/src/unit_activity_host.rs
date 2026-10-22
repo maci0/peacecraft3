@@ -1130,6 +1130,13 @@ impl ObjectHost {
                         .route_within(unit, start, target, radius, reach, &mut work)
                         .map_err(|e| self.inner.error(name, Failure::UnitActivity(e.to_string())))?
                 };
+                let target_distance =
+                    ((target[0] - start[0]).powi(2) + (target[1] - start[1]).powi(2)).sqrt();
+                if path.is_empty()
+                    || (path.iter().all(|point| *point == start) && target_distance > reach)
+                {
+                    return Ok(false);
+                }
                 Some(Box::new(Motion {
                     goal: target,
                     reach,
@@ -1175,6 +1182,17 @@ impl ObjectHost {
             active.insert(at, unit);
         }
         Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn activity_motion_path(&self, unit: HandleId) -> Option<Vec<[f32; 2]>> {
+        self.executed_unit(unit)
+            .ok()?
+            .activity
+            .as_ref()?
+            .motion
+            .as_ref()
+            .map(|motion| motion.path.clone())
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {

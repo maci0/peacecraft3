@@ -287,20 +287,23 @@ unit-runtime responsibilities.
 Deposits prepare the player's lumber bank and `PLAYER_STATE_LUMBER_GATHERED`
 rows before writing either value or firing player-state events. Both prepared
 rows are written before their events so a callback observes a coherent bank and
-counter. Stop, hold-position, non-harvest orders, unit death and removal cancel
-the worker record but keep its partial carry attached to the unit. Reissuing
-`autoharvestlumber` resumes with that carry; an explicit `returnresources`
-routes it to a qualified depot, deposits the preserved amount and ends idle,
-while an automatic capacity return reports `resumeharvesting` and resumes
-harvesting after the deposit. A worker with no remaining reachable tree stops
-searching.
+counter. Stop, hold-position and non-harvest orders cancel the worker record but
+keep its partial carry attached to the unit. Reissuing `autoharvestlumber`
+resumes with that carry; an explicit `returnresources` routes it to a qualified
+depot, deposits the preserved amount and ends idle, while an automatic capacity
+return reports `resumeharvesting` and resumes harvesting after the deposit. A
+worker with no remaining reachable tree stops searching. Unit death and removal
+also cancel the worker record and currently retain cargo. Cargo-retention
+evidence covers only Stop, Move and reissue, so retention on death or removal
+is unqualified.
 
 Tree deaths caused by an engine-tick swing reserve and push their registered
 death events into the delivery queue at the tick boundary; they do not run
 synchronously inside `SetLife` as the destructable native evidence indicates
 for direct mutation. Nested `TriggerExecute` behavior across that boundary and
 exact nested native ordering remain unqualified here. The work phase enters
-`attack`, the nearest admitted model sequence to the probed animation start,
-and refuses a unit whose admitted model lacks it. The candidate's `stand work
-lumber` sequence is retained as the unqualified target; audio and dedicated
-carry animation selection are not implemented by this runtime.
+`attack` as a recreation presentation choice; no native order-to-animation
+selection or sequence start was observed to establish that choice, and the
+runtime refuses a unit whose admitted model lacks `attack`. Work and carry
+variant selection, animation phase and harvest audio fidelity are unqualified;
+dedicated carry animation selection is not implemented by this runtime.

@@ -305,6 +305,11 @@ impl ObjectHost {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn harvest_cargo(&self, unit: HandleId) -> Option<f32> {
+        self.harvest.as_ref()?.cargo.get(&unit).copied()
+    }
+
     fn start_harvest(&mut self, unit: HandleId) -> Result<Value, Error> {
         let now = self
             .timer_game_time()
@@ -651,7 +656,9 @@ impl ObjectHost {
                 route = self.route_depot(worker, position);
             }
             self.commit_destructable_damage(plan);
-            self.enter_work_animation(worker.unit, now)?;
+            if worker.phase == Phase::Work {
+                self.enter_work_animation(worker.unit, now)?;
+            }
             route?;
             if reseek {
                 self.seek_tree(worker, position)?;
