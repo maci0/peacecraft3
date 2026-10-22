@@ -1074,6 +1074,78 @@ fn mission_scroll(
     }
 }
 
+/// Re-anchor keyboard focus into the campaign panel's modal tab group after a
+/// rebuild. The `TabNavigationPlugin` only cycles within a modal group when the
+/// current focus is already a member; a panel rebuild despawns the previously
+/// clicked row, leaving focus stale/`None`, so Tab cannot enter the mission
+/// list. Preserve a still-valid focus already inside this panel's group;
+/// otherwise focus the first enabled row, preferring a mission row when a
+/// campaign is selected.
+fn reanchor_menu_focus(world: &mut World, panel: Entity, selected: Option<usize>) {
+    use bevy::input_focus::InputFocus;
+    use bevy::input_focus::tab_navigation::TabGroup;
+
+    fn inside_tab_group(world: &World, entity: Entity) -> bool {
+        let mut cursor = Some(entity);
+        while let Some(current) = cursor {
+            if world.get::<TabGroup>(current).is_some() {
+                return true;
+            }
+            cursor = world.get::<ChildOf>(current).map(|child| child.parent());
+        }
+        false
+    }
+
+    fn focusable_descendants(world: &World, root: Entity, out: &mut Vec<(Entity, i32)>) {
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if entity != root
+                && let Some(index) =
+                    world.get::<bevy::input_focus::tab_navigation::TabIndex>(entity)
+                && index.0 >= 0
+                && !world.entity(entity).contains::<InteractionDisabled>()
+            {
+                out.push((entity, index.0));
+            }
+            if let Some(children) = world.get::<Children>(entity) {
+                for child in children.iter() {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+
+    // Preserve a still-valid focus already inside this panel's tab group.
+    let preserve = world
+        .get_resource::<InputFocus>()
+        .and_then(|focus| focus.get())
+        .is_some_and(|focused| {
+            world.get_entity(focused).is_ok() && inside_tab_group(world, focused)
+        });
+    if preserve {
+        return;
+    }
+    let mut candidates = Vec::new();
+    focusable_descendants(world, panel, &mut candidates);
+    let mut best: Option<(Entity, i32)> = None;
+    for &(entity, index) in &candidates {
+        let preferred = if selected.is_some() {
+            world.get::<MissionButton>(entity).is_some()
+        } else {
+            world.get::<CampaignButton>(entity).is_some()
+        };
+        if preferred && best.is_none_or(|(_, best_index)| index < best_index) {
+            best = Some((entity, index));
+        }
+    }
+    let pick = best.or_else(|| candidates.iter().min_by_key(|(_, index)| *index).copied());
+    if let Some((entity, _)) = pick
+        && let Some(mut focus) = world.get_resource_mut::<InputFocus>()
+    {
+        focus.set(entity, bevy::input_focus::FocusCause::Auto);
+    }
+}
+
 /// Build the real `CampaignMenu` screen's dynamic campaign and mission lists.
 fn render_campaign_panel(
     mut commands: Commands,
@@ -1158,6 +1230,10 @@ fn render_campaign_panel(
         chapters.error = Some(error);
         return;
     }
+    let selected = state.selected_campaign;
+    commands.queue(move |world: &mut World| {
+        reanchor_menu_focus(world, panel, selected);
+    });
     state.built_for = Some(signature);
 }
 
@@ -1625,6 +1701,109 @@ pub(crate) mod tests {
         }
         world.run_system(system).unwrap();
         assert_eq!(world.get::<ScrollPosition>(scroller).unwrap().0.y, 660.0);
+    }
+
+    fn tab_navigation_fixture() -> (World, Entity, Vec<Entity>) {
+        use bevy::input_focus::tab_navigation::TabGroup;
+        let mut world = World::new();
+        world.init_resource::<InputFocus>();
+        world.init_resource::<InputFocusVisible>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        let window = world
+            .spawn((Window::default(), bevy::window::PrimaryWindow))
+            .id();
+        world
+            .entity_mut(window)
+            .observe(bevy::input_focus::tab_navigation::handle_tab_navigation);
+        let group = world.spawn(TabGroup::modal()).id();
+        let mut missions = Vec::new();
+        world.entity_mut(group).with_children(|g| {
+            for index in 0..12 {
+                let mission = g
+                    .spawn((
+                        MissionButton {
+                            campaign: 0,
+                            mission: index,
+                        },
+                        bevy::input_focus::tab_navigation::TabIndex(index as i32),
+                        Hovered::default(),
+                    ))
+                    .id();
+                missions.push(mission);
+            }
+        });
+        (world, group, missions)
+    }
+
+    fn press_tab(world: &mut World, window: Entity) {
+        use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
+        let focused = world.resource::<InputFocus>().get().expect("focus set");
+        world.entity_mut(window).trigger(move |_| {
+            bevy::input_focus::FocusedInput::new(
+                focused,
+                KeyboardInput {
+                    key_code: KeyCode::Tab,
+                    logical_key: Key::Tab,
+                    state: bevy::input::ButtonState::Pressed,
+                    text: None,
+                    repeat: false,
+                    window,
+                },
+                window,
+            )
+        });
+    }
+
+    #[test]
+    fn tab_navigation_reaches_deep_mission_row_from_blank_focus() {
+        let (mut world, group, missions) = tab_navigation_fixture();
+        // Simulate a fresh panel build with no existing focus; prefer the
+        // selected campaign's mission rows.
+        reanchor_menu_focus(&mut world, group, Some(0));
+        let window = world
+            .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(world.resource::<InputFocus>().get(), Some(missions[0]));
+        for _ in 0..11 {
+            press_tab(&mut world, window);
+        }
+        assert_eq!(world.resource::<InputFocus>().get(), Some(missions[11]));
+    }
+
+    #[test]
+    fn tab_navigation_reanchors_after_rebuild_despawn_and_reaches_deep_row() {
+        let (mut world, group, missions) = tab_navigation_fixture();
+        let window = world
+            .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+            .single(&world)
+            .unwrap();
+        // Post-Human rebuild: the clicked row is despawned but still focused.
+        let old = world
+            .spawn((
+                MissionButton {
+                    campaign: 0,
+                    mission: 3,
+                },
+                bevy::input_focus::tab_navigation::TabIndex(3),
+                Hovered::default(),
+            ))
+            .id();
+        world.entity_mut(group).add_child(old);
+        world
+            .resource_mut::<InputFocus>()
+            .set(old, FocusCause::Navigated);
+        world.despawn(old);
+        reanchor_menu_focus(&mut world, group, Some(0));
+        let focused = world.resource::<InputFocus>().get().expect("re-anchored");
+        assert!(
+            missions.contains(&focused),
+            "focus must land on a live mission row"
+        );
+        for _ in 0..11 {
+            press_tab(&mut world, window);
+        }
+        assert_eq!(world.resource::<InputFocus>().get(), Some(missions[11]));
     }
 
     #[test]
