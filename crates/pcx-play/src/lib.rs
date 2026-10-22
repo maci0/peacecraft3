@@ -59,6 +59,7 @@ pub mod campaign;
 pub mod campaign_assets;
 pub mod campaign_cache;
 pub mod campaign_client;
+pub mod campaign_data_set;
 pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_placement;
