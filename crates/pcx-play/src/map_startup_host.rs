@@ -280,6 +280,7 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    pub ai_source: Option<crate::campaign_ai::SourceNames>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -329,7 +330,7 @@ pub struct MapStartupInputs {
     pub post_config: PostConfigObservations,
 }
 
-type NeutralStack = SelectedMapNeutralHost<
+pub(crate) type NeutralStack = SelectedMapNeutralHost<
     SelectedMapNeutralHost<
         SelectedMapNeutralHost<
             SelectedMapNeutralHost<SelectedMapNeutralHost<SelectedMapNeutralHost<ObjectHost>>>,
@@ -339,7 +340,8 @@ type NeutralStack = SelectedMapNeutralHost<
 
 pub struct MapStartupHost {
     sound_playback: Option<sound_playback::Rules>,
-    inner: NeutralStack,
+    inner: Option<NeutralStack>,
+    ai: crate::campaign_ai::Runtime<NeutralStack>,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
     placement_rules: Option<crate::unit_placement::Rules>,
@@ -359,6 +361,33 @@ type PlacementLoader = Box<
 >;
 
 impl MapStartupHost {
+    fn world(&self) -> &NeutralStack {
+        self.inner.as_ref().expect("map world is not lent to AI")
+    }
+
+    fn world_mut(&mut self) -> &mut NeutralStack {
+        self.inner.as_mut().expect("map world is not lent to AI")
+    }
+
+    pub(crate) fn with_ai_loader(
+        mut self,
+        loader: impl FnMut(&str) -> Result<Arc<crate::scripts::MapScripts>, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.ai.set_loader(loader);
+        self
+    }
+
+    pub(crate) fn next_ai_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
+        self.ai.next_wake(until)
+    }
+
+    pub(crate) fn resume_ai(&mut self, player: i32, ticket: u64) -> Result<(), String> {
+        self.ai.resume(&mut self.inner, player, ticket)
+    }
+
     pub fn sound_playback(&self) -> Option<&sound_playback::Rules> {
         self.sound_playback.as_ref()
     }
@@ -385,15 +414,15 @@ impl MapStartupHost {
         self
     }
     pub fn context(&self) -> &Arc<ParsedMapContext> {
-        self.inner.context()
+        self.world().context()
     }
 
     pub fn objects(&self) -> &ObjectHost {
-        self.inner.inner().inner().inner().inner().inner().inner()
+        self.world().inner().inner().inner().inner().inner().inner()
     }
 
     pub fn objects_mut(&mut self) -> &mut ObjectHost {
-        self.inner
+        self.world_mut()
             .inner_mut()
             .inner_mut()
             .inner_mut()
@@ -544,6 +573,7 @@ pub fn assemble(
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        ai_source: _,
         enumeration,
         rules,
         budgets,
@@ -897,7 +927,8 @@ pub fn assemble(
     let neutral_aggressive = inner.inner().selected_result();
     let mut host = MapStartupHost {
         sound_playback,
-        inner,
+        inner: Some(inner),
+        ai: crate::campaign_ai::Runtime::default(),
         research: current_research,
         day_night_loader: None,
         placement_tables: placement_rules.as_ref().map(|_| tables),
@@ -916,34 +947,66 @@ impl Host for MapStartupHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
-        self.inner.begin_script_call(name, args)
+        self.world_mut().begin_script_call(name, args)
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        self.inner.continue_script_call(value)
+        self.world_mut().continue_script_call(value)
     }
     fn abort_script_calls(&mut self) {
-        self.inner.abort_script_calls();
+        self.world_mut().abort_script_calls();
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
-        self.inner.real_ops()
+        self.world().real_ops()
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
-        self.inner.suspend(name, args)
+        self.world_mut().suspend(name, args)
     }
     fn park_thread(&mut self) -> Result<u64, String> {
-        self.inner.park_thread()
+        self.world_mut().park_thread()
     }
     fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
-        self.inner.resume_thread(ticket)
+        self.world_mut().resume_thread(ticket)
     }
     fn leave_thread(&mut self) -> Result<(), String> {
-        self.inner.leave_thread()
+        self.world_mut().leave_thread()
     }
     fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
-        self.inner.after_script_spawn()
+        self.world_mut().after_script_spawn()
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if name == "StartCampaignAI" {
+            let scripts = &self.context().scripts;
+            let declaration = scripts
+                .program()
+                .natives()
+                .get(name)
+                .ok_or("StartCampaignAI: selected common does not declare the native")?;
+            if scripts
+                .digests
+                .first()
+                .is_none_or(|common| declaration.source != common.label)
+                || declaration.params.len() != 2
+                || declaration.params[0].ty.kind.name() != "player"
+                || declaration.params[1].ty.kind.name() != "string"
+                || declaration.ret.kind.name() != "nothing"
+            {
+                return Err("StartCampaignAI: selected common declaration differs".into());
+            }
+            let [Value::Handle(player), Value::Str(path)] = args else {
+                return Err("StartCampaignAI: expected player and script path".into());
+            };
+            let slots = self
+                .objects()
+                .player_slots()
+                .ok_or("StartCampaignAI: players are not admitted")?;
+            let ordinal = (0..slots)
+                .filter_map(|slot| i32::try_from(slot).ok())
+                .find(|&slot| self.objects().player_identity(slot) == Some(*player))
+                .ok_or("StartCampaignAI: player is not a current identity")?;
+            self.ai.start(&mut self.inner, ordinal, path)?;
+            return Ok(Value::Null);
+        }
         if name == "CreateUnit"
             && let Some(rules) = &self.placement_rules
         {
@@ -989,20 +1052,20 @@ impl Host for MapStartupHost {
         if name == "GetPlayerTechResearched"
             && let Some(pending) = self.research.take()
         {
-            let context = Arc::clone(self.inner.context());
+            let context = Arc::clone(self.world().context());
             self.objects_mut()
                 .admit_current_research(&context, pending.entries, pending.budget)
                 .map_err(|error| error.to_string())?;
         }
-        self.inner.native(name, args)
+        self.world_mut().native(name, args)
     }
     fn table_string(&self, id: u32) -> Option<String> {
-        self.inner.table_string(id)
+        self.world().table_string(id)
     }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
-        self.inner.resolve_table_string(id)
+        self.world().resolve_table_string(id)
     }
     fn code_tag(&self, tag: &str) -> Option<String> {
-        self.inner.code_tag(tag)
+        self.world().code_tag(tag)
     }
 }
