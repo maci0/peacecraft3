@@ -3,7 +3,7 @@ use crate::{
     map_admission::ParsedMapContext,
     playercolor_host::{
         DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
-        ObjectHost, PlacedDestructable, PlacedSource,
+        DestructableStats, ObjectHost, PlacedDestructable, PlacedSource,
     },
     unit_placement::{Budget, Footprint, Grid, Placement, Rules, StationaryKey, StationaryStamp},
 };
@@ -12,10 +12,7 @@ use pcx_objects::editor::{
     FieldKind, FieldSource, Overlay, SlkId,
     defaults::{DefaultTables, Family, Unresolved},
 };
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 const CELLS: usize = 4 << 20;
 const FOOTPRINT_CELLS: usize = 1 << 16;
@@ -30,6 +27,13 @@ pub struct Catalog {
     doodads: Vec<pcx_map::Doodad>,
     destructables: Overlay,
     decorations: Overlay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PlacedRole {
+    Automatic(DestructableStats),
+    ScriptOnly,
+    Decoration,
 }
 
 impl Catalog {
@@ -91,15 +95,35 @@ impl Catalog {
         &self.doodads
     }
 
+    fn role(&self, instance: &pcx_map::Doodad) -> Result<PlacedRole, String> {
+        let objectid = i32::from_be_bytes(instance.type_id);
+        let Some(stats) = self.objects.stats_if_destructable(objectid)? else {
+            return Ok(PlacedRole::Decoration);
+        };
+        match instance.flags {
+            0 | 3 => Ok(PlacedRole::ScriptOnly),
+            2 | 6 => Ok(PlacedRole::Automatic(stats)),
+            flags => {
+                let name = std::str::from_utf8(&instance.type_id)
+                    .map_err(|_| "non-UTF8 placed destructable identity")?;
+                Err(format!(
+                    "{name} creation {}: unqualified placed destructable flags {flags:#04x}; measured 0x00, 0x02, 0x03, 0x06",
+                    instance.creation_number
+                ))
+            }
+        }
+    }
+
     /// Source life byte is the percentage of authored maximum HP, capped at
-    /// 100. Four initially dead records carry byte zero.
+    /// 100. Four initially dead records carry byte zero. Only the measured
+    /// automatic flags enter the arena; other measured flags leave creation to
+    /// the map script, and unmeasured flags refuse.
     pub fn placed(&self) -> Result<Vec<PlacedDestructable>, String> {
         let mut rows = Vec::new();
         rows.try_reserve_exact(self.doodads.len())
             .map_err(|_| "placed destructable allocation")?;
         for instance in &self.doodads {
-            let objectid = i32::from_be_bytes(instance.type_id);
-            let Some(stats) = self.objects.stats_if_destructable(objectid)? else {
+            let PlacedRole::Automatic(stats) = self.role(instance)? else {
                 continue;
             };
             if instance.position.iter().any(|v| !v.is_finite())
@@ -108,6 +132,7 @@ impl Catalog {
             {
                 return Err("nonfinite placed destructable pose".into());
             }
+            let objectid = i32::from_be_bytes(instance.type_id);
             let variation = i32::try_from(instance.variation)
                 .map_err(|_| "placed destructable variation range")?;
             let percent = f32::from(instance.life.min(100)) / 100.0;
@@ -133,17 +158,23 @@ impl Catalog {
                     max_life: Some(stats.max_life),
                     ..DestructableState::default()
                 },
-                source: PlacedSource {
-                    creation_number: instance.creation_number,
-                    type_id: instance.type_id,
-                    variation: instance.variation,
-                    position: instance.position,
-                    angle: instance.angle,
-                    scale: instance.scale,
-                    flags: instance.flags,
-                    life: instance.life,
-                },
+                source: placed_source(instance),
             });
+        }
+        Ok(rows)
+    }
+
+    /// Authored destructable rows whose measured flags leave creation to the
+    /// map script. They are retained as source records, not arena objects or
+    /// initial collision layers.
+    pub fn scripted_sources(&self) -> Result<Vec<PlacedSource>, String> {
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(self.doodads.len())
+            .map_err(|_| "scripted destructable allocation")?;
+        for instance in &self.doodads {
+            if matches!(self.role(instance)?, PlacedRole::ScriptOnly) {
+                rows.push(placed_source(instance));
+            }
         }
         Ok(rows)
     }
@@ -196,15 +227,8 @@ pub fn assemble(
         remaining_cells: FOOTPRINT_CELLS,
     };
     let mut work = STATIONARY_WORK;
-    let placed: BTreeSet<u32> = objects
-        .destructables_with_handles()
-        .filter_map(|(_, creation, _)| match creation.origin {
-            DestructableOrigin::Placed { creation_number } => Some(creation_number),
-            DestructableOrigin::Script => None,
-        })
-        .collect();
     for instance in catalog.doodads() {
-        if placed.contains(&instance.creation_number) {
+        if !matches!(catalog.role(instance)?, PlacedRole::Decoration) {
             continue;
         }
         let path = catalog.path(tables, instance.type_id, instance.life == 0)?;
@@ -269,6 +293,19 @@ pub fn assemble(
     .and_then(|p| p.with_stationary(base, layers))
     .map(|p| p.with_footprint_loader(move |path| textures.read(path).map(|f| f.as_ref().clone())))
     .map_err(|e| e.to_string())
+}
+
+fn placed_source(instance: &pcx_map::Doodad) -> PlacedSource {
+    PlacedSource {
+        creation_number: instance.creation_number,
+        type_id: instance.type_id,
+        variation: instance.variation,
+        position: instance.position,
+        angle: instance.angle,
+        scale: instance.scale,
+        flags: instance.flags,
+        life: instance.life,
+    }
 }
 
 fn domains(terrain: &pcx_map::Terrain, pathing: &pcx_map::Pathing) -> Result<Vec<u8>, String> {
@@ -682,6 +719,7 @@ mod tests {
             &["DestructableID", "HP", "targType"],
             &[&["LTlt", max_life, "tree,ground"]],
         );
+        let decorations = slk_table(&["doodID"], &[&["LOsm"]]);
         let metadata = slk_table(
             &["ID", "field", "slk", "type", "index", "category"],
             &[
@@ -704,6 +742,7 @@ mod tests {
             &[
                 (SlkId::DestructableData.path(), &data),
                 (SlkId::DestructableMetaData.path(), &metadata),
+                (SlkId::Doodads.path(), &decorations),
             ],
             &[],
             pcx_objects::editor::EditorReadLimits {
@@ -726,13 +765,17 @@ mod tests {
     }
 
     fn doodad(creation_number: u32, life: u8) -> pcx_map::Doodad {
+        doodad_with(creation_number, *b"LTlt", 2, life)
+    }
+
+    fn doodad_with(creation_number: u32, type_id: [u8; 4], flags: u8, life: u8) -> pcx_map::Doodad {
         pcx_map::Doodad {
-            type_id: *b"LTlt",
+            type_id,
             variation: 0,
             position: [100.0, 200.0, 0.0],
             angle: 0.0,
             scale: [1.0; 3],
-            flags: 0,
+            flags,
             life,
             creation_number,
         }
@@ -771,7 +814,7 @@ mod tests {
                 position: [100.0, 200.0, 0.0],
                 angle: 0.0,
                 scale: [1.0; 3],
-                flags: 0,
+                flags: 2,
                 life: 0,
             }
         );
@@ -793,7 +836,7 @@ mod tests {
             position: [f32::NAN, 0.0, 0.0],
             angle: 0.0,
             scale: [1.0; 3],
-            flags: 0,
+            flags: 2,
             life: 100,
             creation_number: 1,
         }];
@@ -807,6 +850,57 @@ mod tests {
             error.contains("nonfinite placed destructable pose"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn placed_flags_select_automatic_scripted_and_decorative_rows() {
+        let mut catalog = catalog_with_life("50");
+        catalog.doodads = vec![
+            doodad_with(1, *b"LTlt", 0, 100),
+            doodad_with(2, *b"LTlt", 2, 100),
+            doodad_with(3, *b"LTlt", 3, 100),
+            doodad_with(4, *b"LTlt", 6, 100),
+            doodad_with(5, *b"LOsm", 0, 100),
+        ];
+        let rows = catalog.placed().unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.source.creation_number)
+                .collect::<Vec<_>>(),
+            [2, 4]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.source.flags).collect::<Vec<_>>(),
+            [2, 6]
+        );
+        let scripted = catalog.scripted_sources().unwrap();
+        assert_eq!(
+            scripted
+                .iter()
+                .map(|source| (source.creation_number, source.flags))
+                .collect::<Vec<_>>(),
+            [(1, 0), (3, 3)]
+        );
+        assert!(matches!(
+            catalog.role(&catalog.doodads[4]).unwrap(),
+            PlacedRole::Decoration
+        ));
+    }
+
+    #[test]
+    fn placed_flags_refuse_unmeasured_values_with_source_context() {
+        let mut catalog = catalog_with_life("50");
+        for flags in [4, 7, 1] {
+            catalog.doodads = vec![doodad_with(37, *b"LTlt", flags, 100)];
+            let error = catalog.placed().unwrap_err();
+            assert!(
+                error.contains(&format!(
+                    "LTlt creation 37: unqualified placed destructable flags {flags:#04x}"
+                )),
+                "{error}"
+            );
+            assert!(catalog.scripted_sources().is_err());
+        }
     }
 
     #[test]

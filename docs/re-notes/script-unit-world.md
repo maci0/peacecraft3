@@ -1013,11 +1013,23 @@ stationary occupancy. Death and life mutation share one path, and a dead object
 swaps only its own live/dead footprint layer without erasing terrain bits or
 other overlapping stationary objects.
 
+A fresh native probe on the pinned Human02-derived map changes only the
+authored flag byte of four separated `LTlt` records and records destructable
+counts around one matching `CreateDestructable` per record. Flag `0` and flag
+`3` produce no automatic object; flags `2` and `6` do, and each script call
+adds a new handle rather than returning the pre-existing one. The pinned map
+contains only flags `0`, `2`, `3` and `6`; the wider corpus also contains `4`
+and `7`, which remain unqualified. The recreation now admits automatic
+placement only for `2` and `6`, leaves `0` and `3` to script creation, and
+refuses other destructable flags with the rawcode and creation number. These
+are observed admission counts, not a claim about the individual flag bits.
+
 The Human02 `.doo` stream contains `LTcr` records at `(-4608, -3264)` and
-`(-2112, -4800)`, while `CreateAllDestructables` allocates matching scripted
-destructables at those positions. The recreation currently admits both source
-identities and retains each `.doo` record's exact flags, creation number,
-variation, pose and raw life byte. No skip-by-flags admission rule is applied:
-how those raw flags control initial admission is awaiting a native
-flag/creation-count probe. Killing one identity therefore changes only that
-identity's stationary layer; duplicate identity policy remains open.
+`(-2112, -4800)` with flag `0`, while `CreateAllDestructables` allocates
+matching scripted destructables at those positions. The recreation retains
+each skipped `.doo` record as source, but creates neither an arena object nor
+an initial stationary layer for it. Each authored script call produces exactly
+one script-origin arena record and one `StationaryKey::Destructable` layer.
+Non-destructable decorative doodads keep their existing static-footprint
+handling regardless of their flags. Killing one script identity changes only
+that identity's stationary layer.
