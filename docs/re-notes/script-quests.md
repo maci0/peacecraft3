@@ -114,3 +114,55 @@ timers in the same arena. The view reflects those executed changes, preserves
 the surviving quest and refuses destroyed identities without disturbing the
 timers. This is a display-data boundary; grouping, screen layout, rendered
 objectives and campaign victory decisions remain open.
+
+## Null quest boolean setters (selected 1.29b image, 2026-10-22)
+
+Unchanged Human01 calls `QuestSetCompletedBJ(udg_QuestOrcs, true)` during its
+Warlord victory sequence. The map declares that quest as null and never assigns
+it; its created village quest is a different variable. Substituting that quest
+or editing the map would change the authored script, so neither is done.
+
+Static reads of the selected `Warcraft III.exe` (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+establish the primary registration and guard chain:
+
+- `QuestSetCompleted`: registration 0x49FB9D, handler 0x4A4940.
+- Required/discovered/failed/enabled handlers: 0x4A4A60, 0x4A49A0,
+  0x4A4A00 and 0x4A49D0, respectively.
+- Each calls quest resolver 0x4828A0. At 0x4828D2 it tests the incoming handle;
+  zero branches to 0x4828F3 and returns zero without a lookup.
+- Each setter tests that result and returns before any flag write when zero.
+  The completed setter's guard is at 0x4A494E; its return is 0x4A4962.
+- Item completion handler 0x4A48E0 uses item resolver 0x4829D0 and the same
+  zero-result guard. That resolver's null path must be read independently of
+  the quest resolver; it is not inferred from the common setter shape.
+
+The shared typed boolean-argument parser now admits null only with an actual
+boolean. The five quest flag setters and item completion return without changing
+state, allocating handles, or reserving observation events. Non-null identities
+retain live/family validation; wrong arity and non-boolean values still refuse.
+This does not generalize null semantics to all quest natives or qualify stale
+handle behavior. Primary registrations also have stub counterparts in the
+separate registrar; this static result does not establish runtime registrar
+selection or rendered/native victory parity.
+
+The item resolver was also read directly: its zero-handle test at 0x482A02
+branches to 0x482A23, which zeroes the return register. Local raw registration,
+setter and resolver reads are retained under `.scratch/campaign-route/quest-*`.
+
+Focused tests cover null calls with both boolean values and exhausted event
+capacity, unchanged quest/text/handle state, malformed calls and VM continuation
+past an unassigned quest. On unchanged Human01 the ordinary-order controller now
+passes the previous null completion refusal at requested tick 91832, then reaches
+`UnitRemoveBuffs` at requested tick 92152 (step 1406) in the authored victory
+cinematic and refuses there. The controller's final assertions follow the two
+source objective-item assignments, rather than requiring the distinct village
+quest to acquire an unexecuted completion flag. No chapter exit, rendered/native
+victory or next-map transition is established. Its source, log and hashes remain
+local in `.scratch/campaign-route/quest-null-receipt.json`.
+
+Private final checks: 1,150 pcx-play library tests pass (33 ignored), strict
+all-target Clippy and the WASM library check pass, and the native peacecraft3
+all-target check passes. The three selected-original Human01 opening, authored
+cinematic-skip and authored XP-cap gates pass separately. These results do not
+turn the still-refused long victory route into a passing acceptance gate.

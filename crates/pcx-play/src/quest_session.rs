@@ -428,6 +428,7 @@ impl QuestSession {
         flag: QuestFlag,
     ) -> Result<Value, QuestFailure> {
         let (id, value) = handle_and_bool(args)?;
+        let Some(id) = id else { return Ok(Value::Null) };
         self.require_live_quest(arena, id)?;
         self.reserve_event()?;
         *flag_slot(self.quest_mut(id)?, flag) = value;
@@ -512,6 +513,7 @@ impl QuestSession {
         args: &[Value],
     ) -> Result<Value, QuestFailure> {
         let (id, value) = handle_and_bool(args)?;
+        let Some(id) = id else { return Ok(Value::Null) };
         self.require_live_item(arena, id)?;
         self.reserve_event()?;
         self.item_mut(id)?.completed = value;
@@ -730,9 +732,10 @@ fn handle_and_string(args: &[Value]) -> Result<(HandleId, &str), QuestFailure> {
     }
 }
 
-fn handle_and_bool(args: &[Value]) -> Result<(HandleId, bool), QuestFailure> {
+fn handle_and_bool(args: &[Value]) -> Result<(Option<HandleId>, bool), QuestFailure> {
     match args {
-        [Value::Handle(id), Value::Bool(value)] => Ok((*id, *value)),
+        [Value::Handle(id), Value::Bool(value)] => Ok((Some(*id), *value)),
+        [Value::Null, Value::Bool(value)] => Ok((None, *value)),
         _ => Err(QuestFailure::Arguments),
     }
 }
