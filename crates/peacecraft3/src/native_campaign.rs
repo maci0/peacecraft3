@@ -1456,6 +1456,10 @@ pub(crate) mod tests {
                 .campaign_slow_chopping_policy()
                 .expect("campaign preparation admits the selected slow-chopping policy");
             assert_eq!(slow_chopping.image_sha256, recipe.image_sha256());
+            let group_timed_life = objects
+                .campaign_group_timed_life_policy()
+                .expect("campaign preparation admits the selected group-timed-life policy");
+            assert_eq!(group_timed_life.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
         assert!(units > 0, "unchanged chapter main must create units");

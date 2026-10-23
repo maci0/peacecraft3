@@ -50,11 +50,11 @@ not a claim of native rollback. No selected bits means no home mutation.
 Creation and assignment use the runtime's canonical player context; mutable
 `common.ai` globals do not establish ownership.
 
-This state does not issue orders, clone units, create script groups or substitute
-the anchor's current position for a captain position. Readiness, combat, group
-size, home queries and reset remain unsupported until their shared-world
-relationships are modeled. A host observation can verify target state without
-claiming those gameplay effects.
+Creation does not clone units, create script groups or substitute the anchor's
+current position for a moving captain. The later grouped timed-life consumer
+uses these declared targets for its supported members and enables count/empty
+queries. Readiness, combat, home queries and reset remain unsupported until
+their shared-world relationships are modeled.
 
 ## Validation
 
@@ -87,5 +87,7 @@ reference slot; it does not substitute a collection of all same-owner units.
 Synthetic tests change the reference and counter operands coherently, reject
 broken joins and string terminators, and reject every truncated window. All
 nine focused policy tests pass, including the explicit selected-image test.
-These checks do not enable either query in the runtime. Initial membership,
-attachment timing and timed-life effects still need runtime qualification.
+The later [grouped timed-life integration](campaign-ai-group-timed-life.md)
+enables these queries over canonical first-captain membership. It includes
+matched original-client count observations and a bounded lifecycle/movement
+consumer; general roster operations and exact native formation remain open.

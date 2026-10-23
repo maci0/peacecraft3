@@ -2,8 +2,9 @@
 
 The selected Legacy executable has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-Unchanged Human02 currently refuses `GroupTimedLife` at 7.218750 seconds.
-The policy reader is implemented; host dispatch and lifecycle behavior are not.
+Unchanged Human02 now passes `GroupTimedLife` and refuses `SetCampaignAI` at
+7.218750 seconds. The bounded host implementation below is exercised separately
+from that campaign frontier; this is not completed campaign execution.
 
 ## Selected-code evidence
 
@@ -94,11 +95,41 @@ The compact receipt has SHA-256
 all inputs, scripts, markers and stopped reference runs remain local under
 `.scratch/group-timed-life-home-probe/` and its recorded run directories.
 
-## Remaining implementation
+## Bounded host implementation
 
-Use canonical player and unit identities for membership and existing death,
-removal and timed-life machinery for lifecycle updates. Qualify attachment
-events and movement behavior before claiming the full consumer. The observation
-does not establish every timed-life effect, owner transition, repeated
-application, captain recreation or roster operation. A passive flag setter or
-an all-owner unit count would omit the demonstrated behavior.
+The existing active-player registry stores the explicit flag and canonical
+first-captain unit handles. `CaptainGroupSize` and `CaptainIsEmpty` observe that
+same membership; they do not count all units sharing an owner. AI declarations
+are checked against the owned common source before dispatch. The selected
+factory key admits public `UnitApplyTimedLife` through the existing unit expiry
+and death/event path, independently of Water Elemental spell admission.
+
+For supported direct-created, effect-free ordinary units, true mode routes to
+the current declared first home through the existing point router. Home changes
+preflight affected routes before publication. Captain route ownership is
+separate from counted membership: normal combat steering waits until arrival,
+while a later explicit order keeps the count and releases that route ownership.
+False mode preflights the admitted guard's post-stop decision and any required
+return route, stops the affected unit, then lets the next activity tick perform
+the normal guard refresh. Missing guards or units skipped by that combat step
+refuse before stop or expiry writes. This tick timing is a recreation choice,
+not a claim of identical native callback delivery.
+
+Death and removal clear membership and expiry. Owner transfer and AI-context
+retirement detach membership and stop only owned captain motion while keeping
+the accepted unit deadline. Failed retirement retains the VM and context,
+blocks its wakes, and retries cleanup on a later start attempt. Repeated timed
+life on the same unit and unqualified creation/effect states refuse before
+writes. Exact native formation, arrival and general roster operations remain
+unqualified.
+
+Combined validation passed 3,048 workspace unit tests before the final shared
+combat-eligibility guard, including 619 app tests. The final source passed all
+1,670 core tests, the published two-player session fixture, strict workspace
+native Clippy, affected native/WASM Clippy and formatting. Explicit selected
+image readers and selected Human01 startup/Continue passed. The unchanged
+Human02 opening-minute test still fails, now at `SetCampaignAI`; the test was
+not changed to accept that refusal. Logs remain local under
+`.scratch/group-timed-life-integration/`, including the initial missing-install
+test failure and its corrected explicit asset paths. No new original-client
+run or rendered comparison was made for this host integration.

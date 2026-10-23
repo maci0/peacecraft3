@@ -2,13 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [~] `GroupTimedLife` has a source-bound flag reader and a checked public
-  captain-count observation path. A matched original-client diagnostic reports
-  zero captain size with false, versus one during the applied timed-life effect
-  and zero after life reaches zero with true. Query progress, source identities
-  and both controls are checked. Host dispatch, canonical membership lifecycle
-  and controller effects remain unfinished; unchanged Human02 still refuses
-  the call. See [grouped timed life](docs/re-notes/campaign-ai-group-timed-life.md).
+- [~] `GroupTimedLife` now reaches canonical per-player state, first-captain
+  count/empty queries and source-factory `UnitApplyTimedLife` expiry. Supported
+  ordinary members use the existing home router; false mode preflights guard
+  refresh before stopping, and unsupported refresh states refuse before writes.
+  Death/removal clear membership; transfer/context retirement retain expiry.
+  Final checks pass 1,670 core tests, the published two-player fixture and strict
+  native/WASM Clippy. Selected startup/Continue also pass. Unchanged Human02 now
+  passes this call and refuses `SetCampaignAI` at 7.218750 seconds. Exact native
+  formation, refresh timing, repeated effects and full campaign execution remain
+  open. See [grouped timed life](docs/re-notes/campaign-ai-group-timed-life.md).
 
 - [~] `SetSlowChopping` now reaches canonical worker hits and deposits with
   separate source-derived damage and credit overrides; authored cargo, capacity
@@ -17,8 +20,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   1 lumber with true. Combined validation passes 1,661 core / 610 app tests,
   selected-image readers, published fixtures, startup/Continue and strict
   native/WASM Clippy. An accepted return walk survives an unknown flag and
-  refuses atomically at deposit. Unchanged Human02 passes the setter and stops
-  at `GroupTimedLife` at 7.218750 seconds. Modified workers, controller effects
+  refuses atomically at deposit. That checkpoint reached `GroupTimedLife` at
+  7.218750 seconds; the later integration above advances beyond it. Modified
+  workers, controller effects
   and complete campaign behavior remain open; see
   [campaign slow chopping](docs/re-notes/campaign-ai-slow-chopping.md).
 

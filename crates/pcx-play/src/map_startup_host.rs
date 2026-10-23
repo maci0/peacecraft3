@@ -293,6 +293,8 @@ pub struct MapStartupInputs {
     pub captain_policy: Option<crate::campaign_captain_policy::CaptainPolicy>,
     pub new_heroes_policy: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
     pub slow_chopping_policy: Option<crate::campaign_slow_chopping_policy::SlowChoppingPolicy>,
+    pub group_timed_life_policy:
+        Option<crate::campaign_group_timed_life_policy::GroupTimedLifePolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -595,6 +597,7 @@ pub fn assemble(
         captain_policy,
         new_heroes_policy,
         slow_chopping_policy,
+        group_timed_life_policy,
         enumeration,
         rules,
         budgets,
@@ -934,6 +937,9 @@ pub fn assemble(
     }
     if let Some(policy) = slow_chopping_policy {
         object.admit_campaign_slow_chopping(&context, policy)?;
+    }
+    if let Some(policy) = group_timed_life_policy {
+        object.admit_campaign_group_timed_life(&context, policy)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

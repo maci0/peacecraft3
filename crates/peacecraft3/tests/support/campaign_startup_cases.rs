@@ -642,6 +642,7 @@ pub(crate) fn host_inputs(
         captain_policy: None,
         new_heroes_policy: None,
         slow_chopping_policy: None,
+        group_timed_life_policy: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,
