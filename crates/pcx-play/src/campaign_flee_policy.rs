@@ -9,12 +9,8 @@ use crate::{
     unit_activity::Rules,
 };
 
-/// A life band `[minimum, maximum]` with an **inclusive** upper bound. The
-/// source `comiss` + `jae` to the shared true label selects a band when the
-/// value is `>= minimum` and `>= maximum` is treated as still in-bounds at the
-/// exact maximum (`jae` = jump if above-or-equal). Consumers must therefore
-/// classify `value <= maximum` as belonging to the band; an exclusive upper
-/// comparison would misclassify the boundary value.
+/// Both bounds are inclusive: the selected upper comparison jumps to true
+/// when the maximum is greater than or equal to the current life.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LifeBand {
     pub minimum: f32,
@@ -58,12 +54,12 @@ const WINDOWS: [(u32, usize, bool); 26] = [
     (0xabf9e2, 10, true),
     (0xba9581, 7, true),
     (0xba95b3, 27, true),
-    (0xba9693, 45, true),
-    (0xba96bf, 45, true),
-    (0xba96eb, 45, true),
-    (0xba9717, 45, true),
-    (0xba9743, 45, true),
-    (0xba976f, 42, true),
+    (0xba9693, 44, true),
+    (0xba96bf, 44, true),
+    (0xba96eb, 44, true),
+    (0xba9717, 44, true),
+    (0xba9743, 44, true),
+    (0xba976f, 41, true),
     (0xba9837, 13, true),
     (0x401350, 19, true),
     (0x4013f0, 19, true),
@@ -164,9 +160,10 @@ fn band(bytes: &[u8], va: u32) -> Result<(u32, f32), Error> {
             0xc1,
         ],
     )?;
-    // The upper comparison is `comiss xmm1, xmm0` followed by an inclusive
-    // `jae` (`0f 83 rel32`) to the shared true label. Validate the encoding and
-    // that every band's true branch joins the same label.
+    if bytes[8] as i8 != (call_at + 17) as i8 {
+        return Err(Error("band lower branch does not skip the complete band"));
+    }
+    // `comiss xmm0, xmm1` compares the maximum against current life.
     at(bytes, call_at + 20, &[0x0f, 0x83])?;
     let upper_target = va
         .wrapping_add(call_at as u32 + 26)
@@ -1045,7 +1042,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn band_upper_branch_mutants_refuse() {
+    fn band_branch_mutants_refuse() {
         for (index, mutate) in [
             (4usize, 38usize),
             (5, 38),
@@ -1054,6 +1051,16 @@ pub(crate) mod tests {
             (8, 38),
             (9, 35),
         ] {
+            let mut source = synthetic_windows();
+            source[index][8] ^= 1;
+            assert!(
+                FleePolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err(),
+                "band {index}: lower skip must reach the next band"
+            );
             // JAE opcode flip
             let mut source = synthetic_windows();
             source[index][mutate] ^= 1;
