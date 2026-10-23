@@ -52,8 +52,8 @@ edition, flag and bank witnesses, reciprocal event identities and raw hashes.
 Both owned clients are stopped; their sources, captures, raw markers and audit
 receipts remain local under `.scratch/flee-original-runs/r6/`. Earlier drafts
 with invalid version helpers or duplicate observer globals are preserved as failed
-loads and supply no gameplay evidence. Production `SetUnitsFlee` behavior remains
-unsupported. The unseeded pair alone does not establish flag causality; the
+loads and supply no gameplay evidence. These observations alone did not qualify
+production `SetUnitsFlee` behavior. The unseeded pair does not establish flag causality; the
 seeded repeats below address reproducibility in this setup.
 
 ## Seeded repeats
@@ -318,7 +318,40 @@ state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
 
 The unchanged selected Human01-to-Human02 opening-minute check now passes
-`SetUnitsFlee` and refuses at `StopGathering`, still at 7.218750 seconds in
-Human02's `StartCampaignAI` call. This is the next exact script frontier, not a
-completed opening minute or a flee-movement result. The retained failure is
-`.scratch/campaign-flee-integration/state-frontier.log`.
+`SetUnitsFlee` and `StopGathering` and refuses at `CreateCaptains`, still at
+7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
+script frontier, not a completed opening minute or a flee-movement result.
+The earlier failure remains in `state-frontier.log`; the gathering advancement
+is in `.scratch/campaign-flee-integration/gathering-frontier.log`.
+
+## Ordinary damage consumer
+
+The private consumer evaluates positive incoming melee hits and missile impacts
+as a bounded recreation trigger. Generic and spell damage do not start this
+path. It checks the admitted player flag, source `canFlee`, current movement
+speed and post-damage life. The ordinary cutoff is strict; native life-band
+bounds include both endpoints. Conditional score bands and earlier range or
+ability branches outside the qualified low-life leaf refuse with unit context.
+They do not silently become a supported no-retreat result.
+
+The supported incoming weapon is an initial single ordinary weapon without
+effect history or active listed research. Its admitted authored range supplies
+the initial indexed route operand; later range modifiers, alternate selection,
+hero attackers and effect history refuse. The destination uses the selected
+software arithmetic and internal square root. Unqualified zero-direction
+orientation also refuses. Native trigger identity and full scorer behavior
+remain open.
+
+Route preparation precedes damage mutation; only surviving hits commit motion.
+Melee refusals preserve the primary random state and pending swing. Failed
+missile processing retains unprocessed impacts, retaining the current impact
+only when damage was not applied. Existing activity routing owns travel and
+arrival. Explicit orders, removal, death and a replacing guard return release
+retreat ownership; a guard wait preserves it. Clearing the flag does not cancel
+an accepted route, matching the bounded original-client clear experiment.
+
+Real melee-launch and missile-launch regressions exercise incoming hits and
+single damage traces. Separate direct-damage and queued-missile tests cover
+life boundaries, route refusal and pending-impact recovery. Combined startup,
+application and native/WASM verification of this consumer is still pending;
+rendered path parity has not been checked.
