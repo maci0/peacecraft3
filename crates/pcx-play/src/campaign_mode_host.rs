@@ -57,6 +57,16 @@ impl ObjectHost {
         self.campaign_mode.as_ref()
     }
 
+    pub(crate) fn ai_debug_text(&self) -> Result<(), Error> {
+        // The selected primary handlers return without reading arguments or publishing messages.
+        self.campaign_mode.as_ref().map(|_| ()).ok_or_else(|| {
+            self.inner.error(
+                "DisplayText",
+                Failure::ConfigState("silent debug handlers are not admitted"),
+            )
+        })
+    }
+
     pub fn campaign_ai_mode(&self, owner: HandleId) -> Result<Option<bool>, Error> {
         if self.campaign_mode.is_none() {
             return Ok(None);

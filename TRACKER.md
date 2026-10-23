@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] All four AI `DisplayText` diagnostic calls now preserve the selected
+  client's immediate-return behavior. Registrations, signatures, names and
+  return bytes are checked before admission; local messages and their full
+  budget remain unchanged. Core 1,699, app-library 55, app-binary 638, published
+  two-program, original-image, startup/Continue and strict native/WASM checks
+  pass. Human02 now reaches `GetFoodMade` at 8.312500 seconds; its unchanged
+  opening-minute test remains red. See [AI diagnostics](docs/re-notes/campaign-ai-debug-text.md).
+
 - [~] `GetUnitBuildTime` now reads ordinary durations and map overrides from
   `UnitBalance.bldtm`, separately from hero-token cost discounts. The selected
   handler supplies the hero-byte range; empty hero context returns zero and

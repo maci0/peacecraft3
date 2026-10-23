@@ -233,6 +233,9 @@ endfunction
     );
     let ai_common =
         format!("{ai_common}native IgnoredUnits takes integer unitid returns integer\n");
+    let ai_common = format!(
+        "{ai_common}native DisplayText takes integer p, string text returns nothing\nnative DisplayTextI takes integer p, string text, integer v returns nothing\nnative DisplayTextII takes integer p, string text, integer a, integer b returns nothing\nnative DisplayTextIII takes integer p, string text, integer a, integer b, integer c returns nothing\n"
+    );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
         .into_iter()
         .map(|(name, flag)| {
@@ -241,7 +244,14 @@ endfunction
             let replacements = if flag { 17 } else { -29 };
             let later_replacements = -replacements;
             let body = format!(
-                r#"function VerifyUnitCounts takes nothing returns nothing
+                r#"function VerifySilentDebug takes nothing returns nothing
+call DisplayText(-7,"silent %s %n")
+call DisplayTextI(GetAiPlayer(),"silent %d",-3)
+call DisplayTextII(99,null,-3,17)
+call DisplayTextIII(GetAiPlayer(),"",1,2,3)
+endfunction
+function VerifyUnitCounts takes nothing returns nothing
+call VerifySilentDebug()
 if GetUnitCount('a001') != 1 or GetUnitCountDone('a001') != 1 or GetUnitCount(0) != 0 or GetUnitCountDone(0) != 0 then
 call CountAssertionFailed()
 endif

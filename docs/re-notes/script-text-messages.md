@@ -1,5 +1,9 @@
 # Executed local text messages
 
+The AI-common [diagnostic text family](campaign-ai-debug-text.md) has checked
+silent handlers in the selected release client. Those calls preserve the local
+message state described here.
+
 `ObjectHost` optionally admits `DisplayTimedTextToPlayer` and
 `ClearTextMessages` from the same declaration source as `CreateTimer` and
 `Player`. The production campaign startup attaches this state before script

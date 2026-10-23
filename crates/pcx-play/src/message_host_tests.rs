@@ -44,6 +44,34 @@ fn show(host: &mut ObjectHost, to: i32, text: &str, duration: f32) -> Result<Val
         ],
     )
 }
+
+#[test]
+fn campaign_debug_text_is_source_admitted_and_preserves_live_messages() {
+    let mut host = host("// silent AI debug", 1, 5);
+    assert!(host.ai_debug_text().is_err());
+    show(&mut host, 2, "local", 4.).unwrap();
+    let before: Vec<_> = host.messages().unwrap().visible(0.).cloned().collect();
+    let revision = host.messages().unwrap().revision();
+    let handles = host.inner().handles();
+    let context = host.player_context().unwrap().clone();
+    let mut policy = crate::campaign_mode_policy::CampaignModePolicy::fixture();
+    policy.campaign_mode = false;
+    host.admit_campaign_mode(&context, policy).unwrap();
+    for _ in 0..4 {
+        host.ai_debug_text().unwrap();
+    }
+    assert_eq!(host.messages().unwrap().revision(), revision);
+    assert_eq!(
+        host.messages()
+            .unwrap()
+            .visible(0.)
+            .cloned()
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(host.inner().handles(), handles);
+    assert!(show(&mut host, 2, "extra", 1.).is_err());
+}
 #[test]
 fn executed_messages_are_local_and_clear_releases_the_live_budget() {
     let mut vm = host("function run takes nothing returns nothing\ncall DisplayTimedTextToPlayer(Player(2),0,0,4,\"local\")\ncall DisplayTimedTextToPlayer(Player(1),0,0,4,\"other\")\nendfunction", 1, 5).into_vm();

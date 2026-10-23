@@ -3,9 +3,10 @@
 ## Selected-source audit (2026-10-23)
 
 The private campaign continuation passes Human02 initialization with nearby
-lumber harvesting admitted. The latest authored opening reaches 7.312500
-seconds, then refuses the red program's `DisplayTextI` after
-[build-time query admission](campaign-ai-build-time.md).
+lumber harvesting admitted. The latest authored opening reaches 8.312500
+seconds, then refuses the red program's `GetFoodMade`. The selected
+[AI diagnostic handlers](campaign-ai-debug-text.md) are now admitted with their
+source-proven silent behavior.
 This is a real selected-map execution result,
 distinct from the synthetic source fixtures below; it does not establish a
 working opening cinematic or campaign strategy.

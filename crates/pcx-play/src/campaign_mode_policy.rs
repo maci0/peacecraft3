@@ -1,4 +1,4 @@
-//! Selected campaign context configuration and per-unit mode propagation.
+//! Selected campaign configuration, mode propagation and silent debug calls.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -18,7 +18,7 @@ pub struct CampaignModePolicy {
 #[error("campaign mode policy: {0}")]
 pub struct Error(&'static str);
 
-const WINDOWS: [(u32, usize, bool); 12] = [
+const WINDOWS: [(u32, usize, bool); 28] = [
     (0xab6887, 20, true),
     (0xab6e80, 60, true),
     (0xe70fac, 4, false),
@@ -31,6 +31,29 @@ const WINDOWS: [(u32, usize, bool); 12] = [
     (0xab7450, 67, true),
     (0xe6f4a0, 5, false),
     (0xf161a0, 20, false),
+    (0xab605c, 20, true),
+    (0xab48b0, 1, true),
+    (0xe779d0, 6, false),
+    (0xeb4374, 12, false),
+    (0xab6070, 20, true),
+    (0xab48c0, 1, true),
+    (0xe77830, 7, false),
+    (0xf159dc, 13, false),
+    (0xab6084, 20, true),
+    (0xab48d0, 1, true),
+    (0xf159ec, 8, false),
+    (0xf159f4, 14, false),
+    (0xab609b, 20, true),
+    (0xab48e0, 1, true),
+    (0xf15a04, 9, false),
+    (0xf15a10, 15, false),
+];
+
+const DEBUG_TEXT: [(&[u8], &[u8]); 4] = [
+    (b"DisplayText\0", b"(IS)V\0"),
+    (b"DisplayTextI\0", b"(ISI)V\0"),
+    (b"DisplayTextII\0", b"(ISII)V\0"),
+    (b"DisplayTextIII\0", b"(ISIII)V\0"),
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -83,6 +106,9 @@ impl CampaignModePolicy {
     }
 
     fn decode(windows: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
+        if windows.len() != WINDOWS.len() {
+            return Err(Error("incomplete windows"));
+        }
         let [
             registration,
             handler,
@@ -96,7 +122,7 @@ impl CampaignModePolicy {
             replacement_handler,
             replacement_signature,
             replacement_name,
-        ] = windows
+        ] = &windows[..12]
         else {
             return Err(Error("incomplete windows"));
         };
@@ -245,6 +271,24 @@ impl CampaignModePolicy {
         {
             return Err(Error("replacement integer storage differs"));
         }
+        for (index, (name, signature)) in DEBUG_TEXT.iter().enumerate() {
+            let base = 12 + 4 * index;
+            let registration = windows[base];
+            for (offset, target) in [
+                (0, WINDOWS[base + 2].0),
+                (5, WINDOWS[base + 3].0),
+                (10, WINDOWS[base + 1].0),
+            ] {
+                at(registration, offset, &[0x68])?;
+                if word(registration, offset + 1)? != target {
+                    return Err(Error("debug text registration changed"));
+                }
+            }
+            call(registration, WINDOWS[base].0, 15, 0x8ccc80)?;
+            at(windows[base + 1], 0, &[0xc3])?;
+            at(windows[base + 2], 0, signature)?;
+            at(windows[base + 3], 0, name)?;
+        }
         Ok(Self {
             image_sha256,
             context_mask,
@@ -379,6 +423,21 @@ fn synthetic() -> Vec<Vec<u8>> {
     put(&mut w, 9, 56, &[0x8b, 0x4d, 0x08, 0x89, 0x88]);
     word(&mut w, 9, 61, 0x380);
     put(&mut w, 9, 65, &[0x5d, 0xc3]);
+    for (index, (name, signature)) in DEBUG_TEXT.iter().enumerate() {
+        let base = 12 + 4 * index;
+        for (offset, target) in [
+            (0, WINDOWS[base + 2].0),
+            (5, WINDOWS[base + 3].0),
+            (10, WINDOWS[base + 1].0),
+        ] {
+            put(&mut w, base, offset, &[0x68]);
+            word(&mut w, base, offset + 1, target);
+        }
+        call(&mut w, base, 15, 0x8ccc80);
+        put(&mut w, base + 1, 0, &[0xc3]);
+        put(&mut w, base + 2, 0, signature);
+        put(&mut w, base + 3, 0, name);
+    }
     w
 }
 
@@ -452,6 +511,26 @@ mod tests {
                 let mut w = synthetic();
                 w[i].truncate(length);
                 assert!(decode(&w).is_err(), "window {i} length {length}");
+            }
+        }
+    }
+
+    #[test]
+    fn debug_text_requires_the_bound_primary_return_and_exact_contract() {
+        for index in 0..4 {
+            let base = 12 + 4 * index;
+            for (window, offset) in [
+                (base, 1),
+                (base, 6),
+                (base, 11),
+                (base, 16),
+                (base + 1, 0),
+                (base + 2, WINDOWS[base + 2].1 - 1),
+                (base + 3, WINDOWS[base + 3].1 - 1),
+            ] {
+                let mut w = synthetic();
+                w[window][offset] ^= 1;
+                assert!(decode(&w).is_err(), "window {window} offset {offset}");
             }
         }
     }

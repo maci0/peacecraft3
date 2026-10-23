@@ -68,6 +68,9 @@ impl Host for AiResearchWorld {
 }
 
 impl AiWorld for AiResearchWorld {
+    fn ai_debug_text(&mut self) -> Result<(), String> {
+        self.object.ai_debug_text().map_err(|e| e.to_string())
+    }
     fn ai_clock(&self) -> Option<f64> {
         Some(*self.clock.lock().unwrap())
     }

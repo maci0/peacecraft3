@@ -114,6 +114,7 @@ type Loader = Box<dyn FnMut(&str) -> Result<Arc<MapScripts>, String> + Send + Sy
 pub(crate) trait AiWorld: Host {
     fn ai_clock(&self) -> Option<f64>;
     fn has_map_player_state_callbacks(&self) -> bool;
+    fn ai_debug_text(&mut self) -> Result<(), String>;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
     fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
@@ -149,6 +150,16 @@ pub(crate) trait AiWorld: Host {
 }
 
 impl AiWorld for NeutralStack {
+    fn ai_debug_text(&mut self) -> Result<(), String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .ai_debug_text()
+            .map_err(|e| e.to_string())
+    }
     fn ai_clock(&self) -> Option<f64> {
         self.inner()
             .inner()
@@ -689,6 +700,16 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("SetCampaignAI", &[][..]),
         ("SetReplacementCount", &["integer"][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
+        ("DisplayText", &["integer", "string"][..]),
+        ("DisplayTextI", &["integer", "string", "integer"][..]),
+        (
+            "DisplayTextII",
+            &["integer", "string", "integer", "integer"][..],
+        ),
+        (
+            "DisplayTextIII",
+            &["integer", "string", "integer", "integer", "integer"][..],
+        ),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
             continue;
@@ -861,6 +882,30 @@ impl<W: AiWorld> Host for AiHost<W> {
                 Ok(Value::Int(
                     self.world_mut()?.ai_upgrade_level(player, *upgrade)?,
                 ))
+            }
+            "DisplayText" | "DisplayTextI" | "DisplayTextII" | "DisplayTextIII" => {
+                let expected = match name {
+                    "DisplayText" => 2,
+                    "DisplayTextI" => 3,
+                    "DisplayTextII" => 4,
+                    _ => 5,
+                };
+                if args.len() != expected
+                    || !matches!(args[0], Value::Int(_))
+                    || !matches!(args[1], Value::Str(_) | Value::Null)
+                    || args[2..]
+                        .iter()
+                        .any(|value| !matches!(value, Value::Int(_)))
+                {
+                    return Err(format!(
+                        "{name}: expected integer player, string, and {} integer values",
+                        expected - 2
+                    ));
+                }
+                self.world_mut()?
+                    .ai_debug_text()
+                    .map_err(|e| format!("{name}: {e}"))?;
+                Ok(Value::Null)
             }
             "GetUnitGoldCost" | "GetUnitWoodCost" | "GetUnitBuildTime" => {
                 let [Value::Int(unit)] = args else {
@@ -1048,6 +1093,7 @@ mod tests {
         ignored_counts: BTreeMap<(i32, i32), i32>,
         player_unit_counts: BTreeMap<(HandleId, i32), i32>,
         callbacks: bool,
+        silent_debug: bool,
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
         units_flee: BTreeMap<i32, bool>,
@@ -1067,6 +1113,13 @@ mod tests {
     struct World(Arc<Mutex<State>>);
 
     impl AiWorld for World {
+        fn ai_debug_text(&mut self) -> Result<(), String> {
+            if self.0.lock().unwrap().silent_debug {
+                Ok(())
+            } else {
+                Err("silent debug handlers are not admitted".into())
+            }
+        }
         fn ai_clock(&self) -> Option<f64> {
             Some(self.0.lock().unwrap().clock)
         }
@@ -2074,6 +2127,107 @@ mod tests {
                 let shared = Arc::new(Mutex::new(State::default()));
                 let mut world = Some(World(Arc::clone(&shared)));
                 let error = runtime.start(&mut world, 1, "count.ai").unwrap_err();
+                assert!(error.contains(name), "{error}");
+                assert!(shared.lock().unwrap().gold.is_empty());
+                assert!(shared.lock().unwrap().active.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn debug_text_dispatch_requires_source_admission_and_has_no_observable_writes() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for (name, values) in [
+            ("DisplayText", 0),
+            ("DisplayTextI", 1),
+            ("DisplayTextII", 2),
+            ("DisplayTextIII", 3),
+        ] {
+            let mut args = vec![
+                Value::Int(i32::MIN),
+                Value::Str("%s %n %d unformatted\n".into()),
+            ];
+            args.extend((0..values).map(|_| Value::Int(i32::MAX)));
+            shared.lock().unwrap().silent_debug = false;
+            assert!(
+                host.native(name, &args)
+                    .unwrap_err()
+                    .contains("not admitted")
+            );
+            shared.lock().unwrap().silent_debug = true;
+            assert_eq!(host.native(name, &args).unwrap(), Value::Null);
+            args[1] = Value::Null;
+            assert_eq!(host.native(name, &args).unwrap(), Value::Null);
+            let mut bad = args.clone();
+            bad[0] = Value::Bool(false);
+            assert!(host.native(name, &bad).is_err());
+            bad = args.clone();
+            bad[1] = Value::Int(17);
+            assert!(host.native(name, &bad).is_err());
+            if values > 0 {
+                bad = args.clone();
+                bad[2] = Value::Real(1.);
+                assert!(host.native(name, &bad).is_err());
+            }
+            args.pop();
+            assert!(host.native(name, &args).is_err());
+            assert!(host.native(name, &[]).is_err());
+        }
+        let state = shared.lock().unwrap();
+        assert!(state.gold.is_empty());
+        assert!(state.active.is_empty());
+        assert_eq!(state.clock, 0.);
+    }
+
+    #[test]
+    fn debug_text_declarations_refuse_before_globals_or_world_activation() {
+        for (name, params) in [
+            ("DisplayText", "integer p, string text"),
+            ("DisplayTextI", "integer p, string text, integer v"),
+            (
+                "DisplayTextII",
+                "integer p, string text, integer a, integer b",
+            ),
+            (
+                "DisplayTextIII",
+                "integer p, string text, integer a, integer b, integer c",
+            ),
+        ] {
+            let declaration = format!("native {name} takes {params} returns nothing\n");
+            for (common, ai_common) in [
+                (
+                    COMMON.to_owned(),
+                    format!(
+                        "{AI_COMMON}{}",
+                        declaration.replace("returns nothing", "returns integer")
+                    ),
+                ),
+                (
+                    COMMON.to_owned(),
+                    format!("{AI_COMMON}constant {declaration}"),
+                ),
+                (
+                    COMMON.to_owned(),
+                    format!("{AI_COMMON}native {name} takes nothing returns nothing\n"),
+                ),
+                (format!("{COMMON}{declaration}"), AI_COMMON.to_owned()),
+                (
+                    format!("{COMMON}{declaration}"),
+                    format!("{AI_COMMON}{declaration}"),
+                ),
+            ] {
+                let script = program_with_sources(
+                    "synthetic:debug.ai",
+                    "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                    &common,
+                    &ai_common,
+                );
+                let mut runtime = Runtime::<World>::default();
+                runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+                let shared = Arc::new(Mutex::new(State::default()));
+                let mut world = Some(World(Arc::clone(&shared)));
+                let error = runtime.start(&mut world, 1, "debug.ai").unwrap_err();
                 assert!(error.contains(name), "{error}");
                 assert!(shared.lock().unwrap().gold.is_empty());
                 assert!(shared.lock().unwrap().active.is_empty());
