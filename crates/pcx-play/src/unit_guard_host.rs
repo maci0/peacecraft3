@@ -392,7 +392,14 @@ impl ObjectHost {
                 Failure::UnitActivity("unit guard is not admitted".into()),
             )
         })?;
-        let position = self.executed_unit(unit)?.position.ok_or_else(|| {
+        let record = self.executed_unit(unit)?;
+        if !self.combat_step_eligible(unit, record) {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitActivity("unit cannot receive a guard combat step".into()),
+            ));
+        }
+        let position = record.position.ok_or_else(|| {
             self.inner.error(
                 name,
                 Failure::UnitActivity("accepted guard position required".into()),
