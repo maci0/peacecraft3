@@ -23,6 +23,7 @@ pub struct FleePolicy {
     pub units_flee_default: bool,
     pub context_units_flee_mask: u32,
     pub context_heroes_flee_mask: u32,
+    pub context_groups_flee_mask: u32,
     pub minimum_move_speed: f32,
     pub life_bands: [LifeBand; 6],
     pub ordinary_life_cutoff: f32,
@@ -50,7 +51,7 @@ pub enum RouteError {
     Math(#[from] real::MathError),
 }
 
-const WINDOWS: [(u32, usize, bool); 31] = [
+const WINDOWS: [(u32, usize, bool); 34] = [
     (0xab7665, 16, true),
     (0xabf9e2, 10, true),
     (0xba9581, 7, true),
@@ -82,6 +83,9 @@ const WINDOWS: [(u32, usize, bool); 31] = [
     (0xba9573, 7, true),  // hero decision test (context + field, imm8 mask)
     (0xf160cc, 14, false), // name bytes "SetHeroesFlee\0"
     (0xe700b0, 5, false), // signature bytes "(B)V\0"
+    (0xab6969, 20, true), // SetGroupsFlee registration banner (sig/name/handler)
+    (0xab7090, 71, true), // SetGroupsFlee handler through final ret
+    (0xf16158, 14, false), // name bytes "SetGroupsFlee\0"
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -112,6 +116,95 @@ fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
     Ok(va
         .wrapping_add(offset as u32 + 5)
         .wrapping_add(word(bytes, offset + 1)?))
+}
+
+/// Decode a shared 71-byte flag-setter handler (control chain, resolver, set
+/// and clear operands, both returns) and return the single positive bit mask.
+fn decode_flag_setter(bytes: &[u8], va: u32, context_offset: u32) -> Result<u32, Error> {
+    at(bytes, 0, &[0x55, 0x8b, 0xec])?;
+    at(bytes, 3, &[0xa1])?;
+    if word(bytes, 4)? != 0x11b4a10 {
+        return Err(Error("flag setter AI context global changed"));
+    }
+    at(bytes, 8, &[0x85, 0xc0])?;
+    at(bytes, 10, &[0x75])?;
+    if 12 + i32::from(bytes[11] as i8) != 25 {
+        return Err(Error(
+            "flag setter null skip does not reach the resolver path",
+        ));
+    }
+    at(bytes, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0])?;
+    at(bytes, 19, &[0x5d])?;
+    if jmp(bytes, va, 20)? != 0x43eca0 {
+        return Err(Error("flag setter error sink changed"));
+    }
+    at(bytes, 25, &[0x8d, 0x48, 0x2c])?;
+    at(bytes, 28, &[0x8b, 0x41, 0x04])?;
+    at(bytes, 31, &[0x23, 0x01])?;
+    at(bytes, 33, &[0x83, 0xf8, 0xff])?;
+    at(bytes, 36, &[0x75])?;
+    if 38 + i32::from(bytes[37] as i8) != 42 {
+        return Err(Error(
+            "flag setter sentinel branch does not reach the resolver",
+        ));
+    }
+    at(bytes, 38, &[0x33, 0xc0])?;
+    at(bytes, 40, &[0xeb])?;
+    if 42 + i32::from(bytes[41] as i8) != 47 {
+        return Err(Error(
+            "flag setter sentinel default does not reach the boolean branch",
+        ));
+    }
+    if call(bytes, va, 42)? != 0x7fc7e0 {
+        return Err(Error("flag setter context resolver changed"));
+    }
+    at(bytes, 47, &[0x83, 0x7d, 0x08, 0x00])?;
+    at(bytes, 51, &[0x74])?;
+    if 53 + i32::from(bytes[52] as i8) != 62 {
+        return Err(Error(
+            "flag setter boolean branch does not skip to the clear path",
+        ));
+    }
+    at(bytes, 53, &[0x83, 0x88])?;
+    if word(bytes, 55)? != context_offset {
+        return Err(Error(
+            "flag setter set field differs from the units flee field",
+        ));
+    }
+    let or_imm = *bytes
+        .get(59)
+        .ok_or(Error("missing flag setter set mask operand"))?;
+    if or_imm & 0x80 != 0 {
+        return Err(Error("flag setter set mask is a negative imm8"));
+    }
+    if or_imm == 0 || or_imm.count_ones() != 1 {
+        return Err(Error("flag setter mask is not a single positive bit"));
+    }
+    let mask = u32::from(or_imm);
+    at(bytes, 60, &[0x5d])?;
+    at(bytes, 61, &[0xc3])?;
+    at(bytes, 62, &[0x83, 0xa0])?;
+    if word(bytes, 64)? != context_offset {
+        return Err(Error(
+            "flag setter clear field differs from the units flee field",
+        ));
+    }
+    let and_imm = *bytes
+        .get(68)
+        .ok_or(Error("missing flag setter clear mask operand"))?;
+    if and_imm & 0x80 == 0 {
+        return Err(Error(
+            "flag setter clear mask does not sign-extend its complement",
+        ));
+    }
+    if i32::from(and_imm as i8) as u32 != !mask {
+        return Err(Error(
+            "flag setter clear mask is not the complement of the set mask",
+        ));
+    }
+    at(bytes, 69, &[0x5d])?;
+    at(bytes, 70, &[0xc3])?;
+    Ok(mask)
 }
 
 fn budgeted_windows(budget: RuleInputBudget) -> Result<(), Error> {
@@ -299,6 +392,9 @@ impl FleePolicy {
             hero_decision,
             hero_name,
             hero_sig,
+            groups_reg,
+            groups_handler,
+            groups_name,
         ] = w
         else {
             return Err(Error("incomplete flee-policy windows"));
@@ -453,85 +549,9 @@ impl FleePolicy {
         at(hero_name, 0, b"SetHeroesFlee\0")?;
         at(hero_sig, 0, b"(B)V\0")?;
 
-        // Handler: same full control chain as the units setter, but the set/clear
-        // operands derive the hero mask. The field offset must equal the decoded
-        // units-flee context field (not a copied literal).
-        at(hero_handler, 0, &[0x55, 0x8b, 0xec])?;
-        at(hero_handler, 3, &[0xa1])?;
-        if word(hero_handler, 4)? != 0x11b4a10 {
-            return Err(Error("hero AI context global changed"));
-        }
-        at(hero_handler, 8, &[0x85, 0xc0])?;
-        at(hero_handler, 10, &[0x75])?;
-        if 12 + i32::from(hero_handler[11] as i8) != 25 {
-            return Err(Error(
-                "hero null context skip does not reach the resolver path",
-            ));
-        }
-        at(hero_handler, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0])?;
-        at(hero_handler, 19, &[0x5d])?;
-        if jmp(hero_handler, WINDOWS[27].0, 20)? != 0x43eca0 {
-            return Err(Error("hero error sink changed"));
-        }
-        at(hero_handler, 25, &[0x8d, 0x48, 0x2c])?;
-        at(hero_handler, 28, &[0x8b, 0x41, 0x04])?;
-        at(hero_handler, 31, &[0x23, 0x01])?;
-        at(hero_handler, 33, &[0x83, 0xf8, 0xff])?;
-        at(hero_handler, 36, &[0x75])?;
-        if 38 + i32::from(hero_handler[37] as i8) != 42 {
-            return Err(Error("hero sentinel branch does not reach the resolver"));
-        }
-        at(hero_handler, 38, &[0x33, 0xc0])?;
-        at(hero_handler, 40, &[0xeb])?;
-        if 42 + i32::from(hero_handler[41] as i8) != 47 {
-            return Err(Error(
-                "hero sentinel default does not reach the boolean branch",
-            ));
-        }
-        if call(hero_handler, WINDOWS[27].0, 42)? != 0x7fc7e0 {
-            return Err(Error("hero context resolver changed"));
-        }
-        at(hero_handler, 47, &[0x83, 0x7d, 0x08, 0x00])?;
-        at(hero_handler, 51, &[0x74])?;
-        if 53 + i32::from(hero_handler[52] as i8) != 62 {
-            return Err(Error("hero boolean branch does not skip to the clear path"));
-        }
-        at(hero_handler, 53, &[0x83, 0x88])?;
-        if word(hero_handler, 55)? != context_offset {
-            return Err(Error("hero set field differs from the units flee field"));
-        }
-        let hero_or_imm = *hero_handler
-            .get(59)
-            .ok_or(Error("missing hero set mask operand"))?;
-        if hero_or_imm & 0x80 != 0 {
-            return Err(Error("hero set mask is a negative imm8"));
-        }
-        if hero_or_imm == 0 || hero_or_imm.count_ones() != 1 {
-            return Err(Error("hero mask is not a single positive bit"));
-        }
-        let heroes_mask = u32::from(hero_or_imm);
-        if heroes_mask & context_mask != 0 {
-            return Err(Error("hero and ordinary flee masks overlap"));
-        }
-        at(hero_handler, 60, &[0x5d])?;
-        at(hero_handler, 61, &[0xc3])?;
-        at(hero_handler, 62, &[0x83, 0xa0])?;
-        if word(hero_handler, 64)? != context_offset {
-            return Err(Error("hero clear field differs from the units flee field"));
-        }
-        let hero_and_imm = *hero_handler
-            .get(68)
-            .ok_or(Error("missing hero clear mask operand"))?;
-        if hero_and_imm & 0x80 == 0 {
-            return Err(Error("hero clear mask does not sign-extend its complement"));
-        }
-        if i32::from(hero_and_imm as i8) as u32 != !heroes_mask {
-            return Err(Error(
-                "hero clear mask is not the complement of the set mask",
-            ));
-        }
-        at(hero_handler, 69, &[0x5d])?;
-        at(hero_handler, 70, &[0xc3])?;
+        // Handler: shared 71-byte setter decoder derives the hero mask, joined to
+        // the decoded units-flee field.
+        let heroes_mask = decode_flag_setter(hero_handler, WINDOWS[27].0, context_offset)?;
 
         // Hero decision test must test the same field and the same mask.
         at(hero_decision, 0, &[0xf6, 0x86])?;
@@ -547,6 +567,32 @@ impl FleePolicy {
             return Err(Error("hero decision mask differs from the setter"));
         }
 
+        // SetGroupsFlee registration binds signature/name/handler + name bytes.
+        at(groups_reg, 0, &[0x68])?;
+        if word(groups_reg, 1)? != WINDOWS[30].0 {
+            return Err(Error("SetGroupsFlee signature pointer changed"));
+        }
+        at(groups_reg, 5, &[0x68])?;
+        if word(groups_reg, 6)? != WINDOWS[33].0 {
+            return Err(Error("SetGroupsFlee name pointer changed"));
+        }
+        at(groups_reg, 10, &[0x68])?;
+        if word(groups_reg, 11)? != 0xab7090 {
+            return Err(Error("SetGroupsFlee handler changed"));
+        }
+        if call(groups_reg, WINDOWS[31].0, 15)? != 0x8ccc80 {
+            return Err(Error("SetGroupsFlee registrar changed"));
+        }
+        at(groups_name, 0, b"SetGroupsFlee\0")?;
+
+        let groups_mask = decode_flag_setter(groups_handler, WINDOWS[32].0, context_offset)?;
+        if heroes_mask & context_mask != 0
+            || groups_mask & context_mask != 0
+            || heroes_mask & groups_mask != 0
+        {
+            return Err(Error("flee masks are not pairwise disjoint"));
+        }
+
         let minimum_move_speed = band100_minimum;
         if minimum_move_speed <= 0.0 || life_bands[5].minimum != minimum_move_speed {
             return Err(Error("minimum speed is not the final native life band"));
@@ -557,6 +603,7 @@ impl FleePolicy {
             units_flee_default: constructor_default & context_mask != 0,
             context_units_flee_mask: context_mask,
             context_heroes_flee_mask: heroes_mask,
+            context_groups_flee_mask: groups_mask,
             minimum_move_speed,
             life_bands,
             ordinary_life_cutoff,
@@ -807,6 +854,39 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 
     put(&mut w, 29, 0, b"SetHeroesFlee\0");
     put(&mut w, 30, 0, b"(B)V\0");
+
+    // SetGroupsFlee (nonstock groups mask 0x04, distinct from units 0x40 and
+    // hero 0x20).
+    put(&mut w, 31, 0, &[0x68]);
+    dword(&mut w, 31, 1, 0xe700b0);
+    put(&mut w, 31, 5, &[0x68]);
+    dword(&mut w, 31, 6, 0xf16158);
+    put(&mut w, 31, 10, &[0x68]);
+    dword(&mut w, 31, 11, 0xab7090);
+    call(&mut w, 31, 15, 0x8ccc80);
+
+    put(&mut w, 32, 0, &[0x55, 0x8b, 0xec]);
+    put(&mut w, 32, 3, &[0xa1]);
+    dword(&mut w, 32, 4, 0x11b4a10);
+    put(&mut w, 32, 8, &[0x85, 0xc0, 0x75, 0x0d]);
+    put(&mut w, 32, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0]);
+    put(&mut w, 32, 19, &[0x5d]);
+    jmp(&mut w, 32, 20, 0x43eca0);
+    put(&mut w, 32, 25, &[0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04]);
+    put(&mut w, 32, 31, &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x04]);
+    put(&mut w, 32, 38, &[0x33, 0xc0, 0xeb, 0x05]);
+    call(&mut w, 32, 42, 0x7fc7e0);
+    put(&mut w, 32, 47, &[0x83, 0x7d, 0x08, 0x00, 0x74, 0x09]);
+    put(&mut w, 32, 53, &[0x83, 0x88]);
+    dword(&mut w, 32, 55, context_offset);
+    put(&mut w, 32, 59, &[0x04]);
+    put(&mut w, 32, 60, &[0x5d, 0xc3]);
+    put(&mut w, 32, 62, &[0x83, 0xa0]);
+    dword(&mut w, 32, 64, context_offset);
+    put(&mut w, 32, 68, &[0xfb]);
+    put(&mut w, 32, 69, &[0x5d, 0xc3]);
+
+    put(&mut w, 33, 0, b"SetGroupsFlee\0");
 
     w
 }
@@ -1090,9 +1170,18 @@ pub(crate) mod tests {
         assert!(policy.units_flee_default);
         assert_eq!(policy.context_units_flee_mask, 0x40);
         assert_eq!(policy.context_heroes_flee_mask, 0x20);
-        assert_ne!(
-            policy.context_heroes_flee_mask,
-            policy.context_units_flee_mask
+        assert_eq!(policy.context_groups_flee_mask, 0x04);
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_heroes_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_groups_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_heroes_flee_mask & policy.context_groups_flee_mask,
+            0
         );
         assert_eq!(policy.minimum_move_speed, 117.0);
         assert_eq!(policy.range_margin, policy.minimum_move_speed);
@@ -1394,15 +1483,15 @@ pub(crate) mod tests {
     fn hero_selector_chain_discriminates_and_mutants_refuse() {
         // Nonstock hero-mask discrimination: change set + clear + decision together.
         let mut source = synthetic_windows();
-        source[27][59] = 0x04;
-        source[27][68] = 0xfb;
-        source[28][6] = 0x04;
+        source[27][59] = 0x10;
+        source[27][68] = 0xef;
+        source[28][6] = 0x10;
         let policy = FleePolicy::decode(
             &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             [0; 32],
         )
         .expect("changed hero mask operand");
-        assert_eq!(policy.context_heroes_flee_mask, 0x04);
+        assert_eq!(policy.context_heroes_flee_mask, 0x10);
 
         let mut overlap = synthetic_windows();
         let units = overlap[0][6];
@@ -1495,6 +1584,118 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn groups_selector_chain_discriminates_and_mutants_refuse() {
+        // Nonstock triple discrimination: units 0x40, hero 0x10, groups 0x08.
+        let mut source = synthetic_windows();
+        source[27][59] = 0x10;
+        source[27][68] = 0xef;
+        source[28][6] = 0x10;
+        source[32][59] = 0x08;
+        source[32][68] = 0xf7;
+        let policy = FleePolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0; 32],
+        )
+        .expect("changed masks");
+        assert_eq!(policy.context_units_flee_mask, 0x40);
+        assert_eq!(policy.context_heroes_flee_mask, 0x10);
+        assert_eq!(policy.context_groups_flee_mask, 0x08);
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_heroes_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_groups_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_heroes_flee_mask & policy.context_groups_flee_mask,
+            0
+        );
+
+        let refuses = |source: Vec<Vec<u8>>| {
+            assert!(
+                FleePolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err()
+            );
+        };
+
+        // Coherent overlaps refuse.
+        let mut source = synthetic_windows();
+        source[32][59] = 0x20;
+        source[32][68] = 0xdf;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][59] = 0x40;
+        source[32][68] = 0xbf;
+        refuses(source);
+
+        // Set changed but clear not complemented.
+        let mut source = synthetic_windows();
+        source[32][59] = 0x08;
+        refuses(source);
+
+        // Registration / name NUL / handler binding.
+        let mut source = synthetic_windows();
+        source[31][0] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[33][13] = b'X';
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[31][11] ^= 0x10;
+        refuses(source);
+
+        // Field offsets and control chain.
+        let mut source = synthetic_windows();
+        source[32][55] ^= 0x10;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][64] ^= 0x10;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][11] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][37] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][52] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][60] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][70] ^= 1;
+        refuses(source);
+
+        // Signed / complement mutants.
+        let mut source = synthetic_windows();
+        source[32][59] = 0x80;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][59] = 0x06;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[32][68] = 0x04;
+        refuses(source);
+    }
+
+    #[test]
     #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
     fn reviewed_original_image_decodes() {
         let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
@@ -1512,9 +1713,18 @@ pub(crate) mod tests {
         assert!(!policy.units_flee_default);
         assert_eq!(policy.context_units_flee_mask, 0x10);
         assert_eq!(policy.context_heroes_flee_mask, 0x08);
-        assert_ne!(
-            policy.context_heroes_flee_mask,
-            policy.context_units_flee_mask
+        assert_eq!(policy.context_groups_flee_mask, 0x20);
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_heroes_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_units_flee_mask & policy.context_groups_flee_mask,
+            0
+        );
+        assert_eq!(
+            policy.context_heroes_flee_mask & policy.context_groups_flee_mask,
+            0
         );
         assert_eq!(policy.minimum_move_speed, 100.0);
         assert_eq!(policy.range_margin, policy.minimum_move_speed);
