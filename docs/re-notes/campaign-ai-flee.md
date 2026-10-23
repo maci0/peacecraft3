@@ -240,3 +240,28 @@ clearing map SHA-256:
 The eleven offline collector/build checks pass. All-member staged roundtrips,
 raw marker hashes, captures and the source/first-divergence summary remain
 local under `.scratch/flee-midroute-clear-runs/`. Both clients are stopped.
+
+## Paused-threat comparison
+
+A further matched true/false pair uses an unpaused `ogru` actor and a paused
+`hfoo` threat, retaining the seed, geometry and diagnostic initial-life fraction.
+The threat remains paused with constant position and order throughout both
+20-second observations. Each run preserves 200 samples and twelve outgoing
+attack events, with no incoming attack event and no source movement order.
+The complete sample and attack sequences match between the flags.
+
+The actor's sampled life rises from 102 to 106 in both runs. Consequently both
+collectors reject the experiment's original constant-life premise; this result
+must not be relabeled as a passed constant-life test. It neither identifies the
+native callback nor proves that the flag is inert. A matched control changing
+only the threat's unpause call is needed before attributing the difference from
+the earlier two-active-unit experiments to incoming damage.
+
+True map SHA-256:
+`7782c6d875217ccf21ee0984817bf2c38e844ea8aae3d3fe3cb7a9cbed3760e8`;
+false map SHA-256:
+`6ee2187fd939ccdf954195243dc85c767e6c55033e2749aa8e7c3d198b670d3b`.
+The corrected collector passes 52 offline tests, including literal JASS rawcode
+byte order, unexpected marker identities, and approach movement that must not
+be called retreat. Frozen source comparisons, staged-member roundtrips, raw
+marker hashes and results remain local under `.scratch/flee-paused-threat-runs/`.
