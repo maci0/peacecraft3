@@ -4,15 +4,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 - [~] Campaign flee policy operands now decode from 26 checked selected-image
   windows, preserving conditional life-band grouping and joining the route order
-  to admitted movement rules. Private integration passes 1,530 core tests,
-  strict native/WASM Clippy and the selected-image gate. The runtime consumer
+  to admitted movement rules. Policy startup and shared flag dispatch now pass
+  1,543 core / 610 app tests, strict native/WASM Clippy, and selected startup and
+  Continue gates. The runtime movement consumer
   remains unfinished: a pure ordinary destination calculation now reuses the
   selected software arithmetic and internal square root, with unresolved
   zero-direction geometry refused. Initial authored weapon-range inputs have a verified
   indexed initialization path, while later modifiers, alternate selection and
   trigger timing remain open. Original-client pairs establish route persistence
-  after clearing the flag in the tested setup. Human02 still stops at
-  `SetUnitsFlee`; see [campaign flee](docs/re-notes/campaign-ai-flee.md).
+  after clearing the flag in the tested setup. The unchanged Human02 opening-minute
+  gate now passes `SetUnitsFlee` and stops at `StopGathering` at 7.218750 seconds.
+  This does not qualify retreat execution; see
+  [campaign flee](docs/re-notes/campaign-ai-flee.md).
 
 - [~] Campaign targeting now has a selected-image policy reader, canonical
   per-player flags and a bounded automatic-acquisition consumer. The published
@@ -113,8 +116,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 - [~] Human02's easy-difficulty health-handicap behavior is measured on the
   selected RoC client, including existing/fresh units, a hero-specific pool
-  effect, ownership transfers and isolated bound requests. It remains
-  unimplemented; the separate XP-factor host is not its consumer. See
+  effect, ownership transfers and isolated bound requests. The private runtime
+  now applies the source-derived policy to existing and fresh unit pools,
+  including source rounding and pre-publication pool checks. Destructive
+  factors still refuse before mutation pending death/revive semantics. See
   [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
 
 ### 2026-10-23: Destructable death delivery
