@@ -71,7 +71,7 @@ impl ObjectHost {
         // shortcut: a later direct birth can fill an empty stopped association;
         // qualify native linked-list insertion order before changing this choice.
         let association = if association.is_none() && enabled == Some(false) {
-            self.select_gathering_unit(owner)?
+            self.select_gathering_unit(owner, NATIVE)?
                 .and_then(|unit| self.live_gathering_unit(unit, owner))
         } else {
             association
@@ -92,16 +92,15 @@ impl ObjectHost {
             self.inner
                 .error(NATIVE, Failure::ConfigState("player is not admitted"))
         })?;
-        let (_, associated) = self.campaign_ai.gathering(player).ok_or_else(|| {
+        self.campaign_ai.gathering(player).ok_or_else(|| {
             self.inner
                 .error(NATIVE, Failure::ConfigState("AI player is not active"))
         })?;
         // An accepted association retains its slot. Selection and all refusals
         // precede the policy write; no explicit unit order is changed.
-        let unit = match associated {
-            Some(unit) if self.live_gathering_unit(unit, owner).is_some() => Some(unit),
-            _ => self.select_gathering_unit(owner)?,
-        };
+        let unit = self
+            .current_gathering_anchor(owner, NATIVE)?
+            .map(|(unit, _)| unit);
         self.campaign_ai
             .stop_gathering(player, unit)
             .then_some(())
@@ -109,6 +108,29 @@ impl ObjectHost {
                 self.inner
                     .error(NATIVE, Failure::ConfigState("AI player is not active"))
             })
+    }
+
+    /// Resolve the current canonical association without changing AI flags.
+    /// Creation can use this before `StopGathering` is called.
+    pub(super) fn current_gathering_anchor(
+        &self,
+        owner: HandleId,
+        native: &'static str,
+    ) -> Result<Option<(HandleId, [f32; 2])>, Error> {
+        if self.campaign_gathering.is_none() {
+            return Err(self
+                .inner
+                .error(native, Failure::ConfigState("operands are not admitted")));
+        }
+        let player = self.player_settings(owner)?.number;
+        if let Some((_, Some(unit))) = self.campaign_ai.gathering(player)
+            && let Some(association) = self.live_gathering_unit(unit, owner)
+        {
+            return Ok(Some(association));
+        }
+        Ok(self
+            .select_gathering_unit(owner, native)?
+            .and_then(|unit| self.live_gathering_unit(unit, owner)))
     }
 
     fn live_gathering_unit(&self, unit: HandleId, owner: HandleId) -> Option<(HandleId, [f32; 2])> {
@@ -139,11 +161,15 @@ impl ObjectHost {
             .then_some((unit, position))
     }
 
-    fn select_gathering_unit(&self, owner: HandleId) -> Result<Option<HandleId>, Error> {
+    fn select_gathering_unit(
+        &self,
+        owner: HandleId,
+        native: &'static str,
+    ) -> Result<Option<HandleId>, Error> {
         let number = self.player_settings(owner)?.number;
         self.campaign_gathering.as_ref().ok_or_else(|| {
             self.inner
-                .error(NATIVE, Failure::ConfigState("operands are not admitted"))
+                .error(native, Failure::ConfigState("operands are not admitted"))
         })?;
         // The symbolic enum and cached unit-class bit occupy distinct native domains.
         self.source_constant_enumerand("UNIT_TYPE_PEON", "unittype")?;
@@ -177,22 +203,25 @@ impl ObjectHost {
                 || !record.shown
                 || record.paused_since.is_some()
                 || record.position.is_none()
+                || record
+                    .position
+                    .is_some_and(|position| position.iter().any(|value| !value.is_finite()))
                 || affected.contains(&unit)
             {
                 return Err(self.inner.error(
-                    NATIVE,
+                    native,
                     Failure::UnitActivity(
                         "candidate membership has unmodeled dynamic state".into(),
                     ),
                 ));
             }
             if super::unit_types::class(&record.definition, "UNIT_TYPE_PEON")
-                .map_err(|detail| self.inner.error(NATIVE, Failure::UnitActivity(detail)))?
+                .map_err(|detail| self.inner.error(native, Failure::UnitActivity(detail)))?
             {
                 return Ok(Some(unit));
             }
             let structure = super::unit_types::structure(&record.definition)
-                .map_err(|detail| self.inner.error(NATIVE, Failure::UnitActivity(detail)))?;
+                .map_err(|detail| self.inner.error(native, Failure::UnitActivity(detail)))?;
             if structure {
                 preferred = Some(unit);
             } else {

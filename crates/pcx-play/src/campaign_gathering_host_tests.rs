@@ -1,7 +1,7 @@
 use super::*;
 use crate::campaign_gathering_policy::GatheringPolicy;
 
-fn source_fields(structure: bool) -> Vec<([u8; 4], ObjectField)> {
+pub(super) fn source_fields(structure: bool) -> Vec<([u8; 4], ObjectField)> {
     let mut field = geometry_field(Ok(FieldValue::Cell(
         if structure { "1" } else { "0" }.into(),
     )));
