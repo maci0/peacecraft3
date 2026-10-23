@@ -1162,6 +1162,9 @@ impl ObjectHost {
             if !attacks {
                 continue;
             }
+            if self.captain_route_owned(unit) {
+                continue;
+            }
             let has_valid_target = self
                 .live(unit)
                 .and_then(|record| record.combat.as_ref()?.target)

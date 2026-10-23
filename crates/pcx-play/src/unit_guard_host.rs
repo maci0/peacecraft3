@@ -374,6 +374,60 @@ impl ObjectHost {
             guard.resumed(since, now);
         }
     }
+    pub(super) fn preflight_guard_refresh(
+        &mut self,
+        unit: HandleId,
+        now: f64,
+        name: &str,
+    ) -> Result<(), Error> {
+        let state = self.guards.as_ref().ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::UnitActivity("unit guards are not admitted".into()),
+            )
+        })?;
+        let mut guard = state.get(unit).copied().ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::UnitActivity("unit guard is not admitted".into()),
+            )
+        })?;
+        let position = self.executed_unit(unit)?.position.ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::UnitActivity("accepted guard position required".into()),
+            )
+        })?;
+        let tolerance = self.unit_collision_radius(unit, name)?;
+        let maximum = self
+            .creep_owner(guard.owner, name)?
+            .then_some(state.source.max_guard_distance);
+        let decision = guard
+            .plan(
+                position,
+                now,
+                false,
+                false,
+                tolerance,
+                ReturnRules {
+                    distance: state.source.guard_distance,
+                    maximum,
+                    timeout: f64::from(state.source.guard_return_time),
+                },
+            )
+            .map_err(|e| self.inner.error(name, Failure::UnitActivity(e.into())))?;
+        if decision == Decision::Return {
+            self.prepare_steer_unit_in_range(unit, Some(guard.home), 0., name)?
+                .ok_or_else(|| {
+                    self.inner.error(
+                        name,
+                        Failure::UnitActivity("guard cannot return home".into()),
+                    )
+                })?;
+            self.reserve_steer_commits(2, name)?;
+        }
+        Ok(())
+    }
     /// A skipped acquisition may be a wait that leaves the accepted retreat
     /// route in place, so callers only clear flee ownership when motion was
     /// actually replaced by the guard return.
