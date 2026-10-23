@@ -4326,6 +4326,13 @@ fn summoned_victim_refuses_before_damage_but_a_normal_victim_takes_damage() {
             .moving()
     );
 
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.combat_damage_unit(a, b, 1.0).unwrap();
+    assert_eq!(life(&mut vm, b), 19.0);
+    assert_eq!(damage_events(&mut vm), 1);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    set_life(&mut vm, b, 20.0);
+    vm.host().inner.set_ai_units_flee(5, true).unwrap();
     vm.host().inner.test_set_summoned(b, false);
     assert!(low_life_damage(&mut vm, a, b, 1.0));
     assert_eq!(life(&mut vm, b), 19.0);
@@ -4388,6 +4395,13 @@ fn active_admitted_ability_state_refuses_the_victim_but_the_off_state_takes_dama
             .moving()
     );
 
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.combat_damage_unit(a, b, 1.0).unwrap();
+    assert_eq!(life(&mut vm, b), 19.0);
+    assert_eq!(damage_events(&mut vm), 1);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    set_life(&mut vm, b, 20.0);
+    vm.host().inner.set_ai_units_flee(5, true).unwrap();
     assert_eq!(
         vm.host()
             .inner

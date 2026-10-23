@@ -321,8 +321,8 @@ The unchanged selected Human01-to-Human02 opening-minute check now passes
 `SetUnitsFlee` and `StopGathering` and refuses at `CreateCaptains`, still at
 7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
 script frontier, not a completed opening minute or a flee-movement result.
-The earlier failure remains in `state-frontier.log`; the gathering advancement
-is in `.scratch/campaign-flee-integration/gathering-frontier.log`.
+The earlier failure remains in `state-frontier.log`; the latest final-consumer
+result is in `.scratch/campaign-flee-integration/consumer-final-frontier.log`.
 
 ## Ordinary damage consumer
 
@@ -342,6 +342,11 @@ software arithmetic and internal square root. Unqualified zero-direction
 orientation also refuses. Native trigger identity and full scorer behavior
 remain open.
 
+Summoned victims and active admitted ability On/Off state also refuse when the
+flee flag is enabled. The ability cell is not an explicit unit-order field.
+With the flag disabled, these flee-specific refusals do not suppress damage;
+the regressions assert normal life reduction and a single damage trace.
+
 Route preparation precedes damage mutation; only surviving hits commit motion.
 Melee refusals preserve the primary random state and pending swing. Failed
 missile processing retains unprocessed impacts, retaining the current impact
@@ -352,6 +357,12 @@ an accepted route, matching the bounded original-client clear experiment.
 
 Real melee-launch and missile-launch regressions exercise incoming hits and
 single damage traces. Separate direct-damage and queued-missile tests cover
-life boundaries, route refusal and pending-impact recovery. Combined startup,
-application and native/WASM verification of this consumer is still pending;
-rendered path parity has not been checked.
+life boundaries, route refusal and pending-impact recovery. Combined validation
+passes 1,590 core tests, 610 app tests, strict native and WASM Clippy,
+formatting and selected Human01 startup and Human02 Continue startup. All 13
+flee-policy tests pass with the original-image tests enabled, including both
+branch directions and the selected numeric/math route join. No warning
+suppression is used in these root checks. Local receipts are under
+`.scratch/campaign-flee-integration/consumer-final-*`. The unchanged Human02
+opening-minute check still stops at `CreateCaptains`; rendered path parity and
+complete native flee behavior have not been checked.

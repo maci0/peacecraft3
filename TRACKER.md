@@ -5,13 +5,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 - [~] Campaign flee policy operands now decode from 26 checked selected-image
   windows, preserving conditional life-band grouping and joining the route order
   to admitted movement rules. Policy startup and shared flag dispatch now pass
-  1,543 core / 610 app tests, strict native/WASM Clippy, and selected startup and
-  Continue gates. The runtime movement consumer
-  remains unfinished: a pure ordinary destination calculation now reuses the
+  1,590 core / 610 app tests, strict native/WASM Clippy, and selected startup and
+  Continue gates. The bounded ordinary consumer now handles positive incoming
+  melee hits and missile impacts, preserving pending combat and random state
+  on pre-damage refusal. Its destination calculation reuses the
   selected software arithmetic and internal square root, with unresolved
   zero-direction geometry refused. Initial authored weapon-range inputs have a verified
   indexed initialization path, while later modifiers, alternate selection and
-  trigger timing remain open. Original-client pairs establish route persistence
+  exact native trigger identity remain open. Unsupported provenance and
+  score-dependent decisions refuse contextually. Original-client pairs establish route persistence
   after clearing the flag in the tested setup. The unchanged Human02 opening-minute
   gate now passes `SetUnitsFlee` and `StopGathering` and stops at
   `CreateCaptains` at 7.218750 seconds.
