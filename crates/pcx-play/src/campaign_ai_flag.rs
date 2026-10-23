@@ -33,11 +33,20 @@ fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
         .wrapping_add(word(bytes, offset + 1)?))
 }
 
-/// Decode a shared 71-byte flag-setter handler (control chain, resolver, set
+/// Decode a shared flag-setter handler (control chain, resolver, set
 /// and clear operands, both returns), returning the field offset and bit mask.
 pub(crate) fn decode(bytes: &[u8], va: u32) -> Result<(u32, u32), Error> {
-    let bytes = bytes
+    let prefix = bytes
         .get(..71)
+        .ok_or(Error("truncated flag setter window"))?;
+    let wide = match prefix[53] {
+        0x83 => false,
+        0x81 => true,
+        _ => return Err(Error("flag setter immediate opcode changed")),
+    };
+    let extra = if wide { 3 } else { 0 };
+    let bytes = bytes
+        .get(..71 + extra * 2)
         .ok_or(Error("truncated flag setter window"))?;
     at(bytes, 0, &[0x55, 0x8b, 0xec])?;
     at(bytes, 3, &[0xa1])?;
@@ -78,43 +87,40 @@ pub(crate) fn decode(bytes: &[u8], va: u32) -> Result<(u32, u32), Error> {
     }
     at(bytes, 47, &[0x83, 0x7d, 0x08, 0x00])?;
     at(bytes, 51, &[0x74])?;
-    if 53 + i32::from(bytes[52] as i8) != 62 {
+    if 53 + i32::from(bytes[52] as i8) != (62 + extra) as i32 {
         return Err(Error(
             "flag setter boolean branch does not skip to the clear path",
         ));
     }
-    at(bytes, 53, &[0x83, 0x88])?;
+    let opcode = if wide { 0x81 } else { 0x83 };
+    at(bytes, 53, &[opcode, 0x88])?;
     let context_offset = word(bytes, 55)?;
-    let or_imm = *bytes
-        .get(59)
-        .ok_or(Error("missing flag setter set mask operand"))?;
-    if or_imm & 0x80 != 0 {
-        return Err(Error("flag setter set mask is a negative imm8"));
+    let mask = if wide {
+        word(bytes, 59)?
+    } else {
+        if bytes[59] & 0x80 != 0 {
+            return Err(Error("flag setter set mask is a negative imm8"));
+        }
+        u32::from(bytes[59])
+    };
+    if mask.count_ones() != 1 {
+        return Err(Error("flag setter mask is not a single bit"));
     }
-    if or_imm == 0 || or_imm.count_ones() != 1 {
-        return Err(Error("flag setter mask is not a single positive bit"));
-    }
-    let mask = u32::from(or_imm);
-    at(bytes, 60, &[0x5d])?;
-    at(bytes, 61, &[0xc3])?;
-    at(bytes, 62, &[0x83, 0xa0])?;
-    if word(bytes, 64)? != context_offset {
+    at(bytes, 60 + extra, &[0x5d, 0xc3])?;
+    at(bytes, 62 + extra, &[opcode, 0xa0])?;
+    if word(bytes, 64 + extra)? != context_offset {
         return Err(Error("flag setter clear field differs from set"));
     }
-    let and_imm = *bytes
-        .get(68)
-        .ok_or(Error("missing flag setter clear mask operand"))?;
-    if and_imm & 0x80 == 0 {
-        return Err(Error(
-            "flag setter clear mask does not sign-extend its complement",
-        ));
-    }
-    if i32::from(and_imm as i8) as u32 != !mask {
+    let clear = if wide {
+        word(bytes, 68 + extra)?
+    } else {
+        i32::from(bytes[68] as i8) as u32
+    };
+    if clear != !mask {
         return Err(Error(
             "flag setter clear mask is not the complement of the set mask",
         ));
     }
-    at(bytes, 69, &[0x5d])?;
-    at(bytes, 70, &[0xc3])?;
+    at(bytes, 69 + extra * 2, &[0x5d, 0xc3])?;
     Ok((context_offset, mask))
 }

@@ -65,6 +65,7 @@ pub mod campaign_client;
 pub mod campaign_data_set;
 pub mod campaign_flee_policy;
 pub mod campaign_gathering_policy;
+pub mod campaign_group_timed_life_policy;
 pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_new_heroes_policy;
