@@ -16,6 +16,7 @@ const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
+    new_heroes: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
     captains_created: bool,
@@ -42,6 +43,7 @@ impl Registry {
             PlayerFlags {
                 target_heroes,
                 units_flee,
+                new_heroes: None,
                 gathering: None,
                 gathering_unit: None,
                 captains_created: false,
@@ -63,6 +65,10 @@ impl Registry {
 
     pub(super) fn units_flee(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.units_flee)
+    }
+
+    pub(super) fn new_heroes(&self, player: i32) -> Option<bool> {
+        self.players.get(&player).and_then(|flags| flags.new_heroes)
     }
 
     pub(super) fn gathering(&self, player: i32) -> Option<(Option<bool>, Option<HandleId>)> {
@@ -136,6 +142,14 @@ impl Registry {
             return false;
         };
         flags.units_flee = Some(enabled);
+        true
+    }
+
+    pub(super) fn set_new_heroes(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.new_heroes = Some(enabled);
         true
     }
 
@@ -221,6 +235,7 @@ impl ObjectHost {
             && units_flee.is_none()
             && self.campaign_gathering.is_none()
             && self.campaign_captains.is_none()
+            && self.campaign_new_heroes.is_none()
         {
             return Ok(false);
         }
@@ -259,7 +274,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn require_active_campaign_ai_player(
+    pub(super) fn require_active_campaign_ai_player(
         &self,
         player: i32,
         native: &'static str,
