@@ -1315,9 +1315,9 @@ mod targeting;
 
 #[path = "campaign_flee_host.rs"]
 mod campaign_flee;
-
 #[path = "campaign_flee_motion.rs"]
 mod campaign_flee_motion;
+
 #[path = "campaign_new_heroes_host.rs"]
 mod campaign_new_heroes;
 
