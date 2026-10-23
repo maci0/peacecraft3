@@ -66,15 +66,29 @@ input gate and report unsupported minimap camera/order projection; they do not
 fall through to ground selection/orders. Cinematic interface suppression and
 camera suspension still hide the entire control.
 
-The existing fog host retains executed modifiers but explicitly does not
-simulate visibility. Displaying the full map image through unexplored fog
-would therefore be an incorrect completion of the blank minimap. Fog-enabled
-rendering remains open: the terrain image is displayed only while both admitted
-fog switches are explicitly false. Unknown settings and enabled fog refuse that
-image projection. Standard Human01 has both switches true after cinematic skip,
-so its minimap image is still hidden at that checkpoint. World fog rendering,
-exploration history, sight blockers, markers, units, camera overlay, panning and
-minimap orders remain unfinished.
+The minimap now projects circular sight from canonical live unit positions and
+source `UnitBalance/sight` or `nsight`, using the existing game clock's day/night
+classification. Explicit shared-vision alliances and running radius modifiers
+feed the same snapshot. Before-unit and after-unit modifier phases retain their
+creation order. Hidden, dead and removed units do not provide sight. No second
+unit store or guessed sight radius is introduced.
+
+A bounded presentation raster retains explored cells for the current viewer.
+Movement leaves explored terrain fogged; current sight reveals it. Fog and mask
+switches are independent. The raster fits the admitted placement extent into the
+actual map image, preserving aspect ratio and north-up orientation. It begins
+updating while the cinematic camera hides the control and retires with the
+session; changing viewers resets its history. With both switches false, the
+authored image alpha is restored even when sight admission is unavailable.
+
+This is a house visibility implementation, not a copy of native grid internals.
+It still lacks terrain/tree sight occlusion and sight-changing upgrades/effects.
+Presentation-frame exploration sampling, exact camera-margin projection,
+modifier masking behavior and blend/filter parity need original-client
+comparison. World terrain/actor fog and public visibility queries do not yet
+consume this raster. Markers, unit icons, camera overlay, panning and minimap
+orders remain unfinished. The renderer keeps an explicit missing-occlusion
+diagnostic rather than claiming completed visibility fidelity.
 
 ### Fog alpha source join
 
@@ -93,8 +107,12 @@ from those fields, samples two visibility grids through a shared mask and
 writes the fourth byte of the minimap CPU image. It also considers frame alpha
 and averages changing horizontal samples. This establishes alpha input and
 update relationships, not rendered blend parity or a complete visibility model.
-The grid producers, fog-switch identity, world-to-minimap transform and retained
-exploration history still need qualification before enabling the fogged image.
+The current renderer reads the normal black-mask, fogged and visible fields from
+the receipt-matched profile. The alternate dark-mask mode is not implemented.
+An opaque backing uses the minimap updater's own packed clear pixel, decoded
+from the paired immediate writes at `658bae` and `658bb5`. This prevents masked
+pixels exposing the world through transparent console art. The UI backing is a
+recreation choice; the clear pixel is source-derived, not a fitted black color.
 
 Complete static dossiers remain ignored under
 `.scratch/campaign-minimap-source/`. The constructor evidence is
@@ -107,22 +125,31 @@ These are static observations on the image identified above, not a client run.
 
 ## Runtime evidence and limits
 
-All 626 app tests pass, including decoded synthetic pixels, source attempt order,
-fog gating, pointer consumption and recursive session/asset retirement. Strict
-native all-targets and WASM app Clippy, the default native build and formatting
-pass. Core code is unchanged from the 1,679-test reader gate above.
+The current suites pass 69 object tests, 1,682 core tests, 55 app-library tests
+and 628 app-binary tests. Synthetic fixtures vary day/night sight, alliances,
+modifier states/order, opacity and clear-pixel values. Movement, exploration,
+switch combinations, canonical removal, budgets and refusal without history
+mutation are covered. The selected-image minimap decoder passes separately.
+Strict native all-targets and WASM library/binary Clippy, the default desktop
+build and formatting pass.
 
-The production offscreen diagnostic retains its unchanged menu-to-Human01
-checkpoints, then separately executes `FogEnable(false)` and
-`FogMaskEnable(false)` through the host and captures the image projection. This
-mutation is labelled in `minimap-no-fog-diagnostic.json`; it is not evidence of
-unchanged campaign visibility. The retained Vulkan run is
-`.scratch/campaign-minimap-render/run-3/`: the decoded `war3mapMap.blp` is visible
-inside the source-derived console rectangle, with no minimap error after the
-explicit mutation. The image SHA-256 is
-`edbb3eb2b3ac59e4f1238dcfc6543f7d984f111e0de67bf13849a07bcdb87e5c`.
-The **strict unchanged rendering gate still exits 101** for the known sky
-illumination diagnostic and unsupported minimap fog. It was not weakened.
+The production offscreen Vulkan run in
+`.scratch/campaign-minimap-render/vision-2/` follows mounted menu and mission
+widgets into Human01, then skips the cinematic. At this unchanged checkpoint,
+130 units exist, both fog switches remain true and `war3mapMap.blp` is shown with
+black unexplored terrain and an owned-unit sight area. The gameplay capture's
+SHA-256 is `f03c15bfea71c05cc733fc86b3f0a505c2f00a1e2e35af6d185883df476aa2fe`;
+`scope.json` is `60f73a6cfc1a9899b8e322fe47f8c7bbb488ce8a1a6c973cb16ab443d82a3f2c`.
+The **strict unchanged rendering gate still exits 101** for known sky
+illumination and missing minimap sight occlusion. It was not weakened.
+
+After that checkpoint, the diagnostic separately executes `FogEnable(false)`
+and `FogMaskEnable(false)`. That labelled mutation shows the fully revealed image
+with no minimap error; its PNG SHA-256 is
+`a5532945661960fcfa7620c9385b5d8a3c761239f017d0462aa5115f865fc1b6`.
+It is not evidence of unchanged campaign visibility. Earlier captures remain
+preserved, including `vision-1`, which exposed the transparent-backing bug fixed
+before the final recapture.
 
 A separate native-window XTest replay of the input implementation, before the
 final texture-dimension preflight, enters Human01, selects the hero,
@@ -136,9 +163,9 @@ window/PID ownership, source/build/content fingerprints and calibrated
 That replay's default binary SHA-256 is
 `77ef21a661990647be29e17c8f04a888aa38fcefa05b5a48a984f4e521815fcc`.
 The tested executable is preserved locally as `peacecraft3-tested` in that
-receipt directory. The later dimension guard passes the app suite, native/WASM
-checks, default native build and the hardware offscreen run above; that guard
-did not change the input implementation. This replay used software Vulkan and
+receipt directory. That replay predates the current sight projection and does
+not validate its visibility behavior. Pointer isolation is unchanged. This
+replay used software Vulkan and
 disabled audio. Failed display-setup logs
 are preserved separately; the app and private display were stopped afterward.
 Neither run establishes original-client pixel parity, fog fidelity, audio or a

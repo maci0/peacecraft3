@@ -8,6 +8,8 @@ mod follow;
 pub(super) mod gathering;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
+#[path = "vision_host_tests.rs"]
+mod vision;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 pub(super) const ORDERS: &str = r#"
 native PauseUnit takes unit u, boolean paused returns nothing

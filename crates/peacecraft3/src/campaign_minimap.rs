@@ -15,6 +15,20 @@ const IMAGE_BYTES: usize = 4 << 20;
 const PIXEL_BYTES: usize = 16 << 20;
 const FOG_ERROR: &str = "minimap fog-of-war projection is not yet supported";
 const SETTINGS_ERROR: &str = "minimap requires admitted fog settings";
+const OCCLUSION_ERROR: &str =
+    "minimap circular sight is rendered; terrain/tree sight occlusion is not implemented";
+const PROFILE_BYTES: usize = 1 << 20;
+const VISION_SOURCES: usize = 4096;
+const VISION_WORK: usize = 16 << 20;
+
+struct FogImage {
+    raster: crate::campaign_visibility::Raster,
+    alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha,
+    original_alpha: Vec<u8>,
+    viewer: Option<pcx_script::HandleId>,
+    width: u32,
+    height: u32,
+}
 #[derive(Resource, Default)]
 pub(crate) struct CampaignMinimap {
     witness: Option<Weak<()>>,
@@ -22,6 +36,7 @@ pub(crate) struct CampaignMinimap {
     root: Option<Entity>,
     image_node: Option<Entity>,
     image: Option<Handle<Image>>,
+    fog: Option<FogImage>,
     pending_pointer: bool,
     load_error: Option<String>,
     pub member: Option<String>,
@@ -132,6 +147,80 @@ struct Inputs<'w> {
     camera: Res<'w, CampaignCamera>,
     launcher: Option<Res<'w, crate::launch_gui::Launcher>>,
     device: Option<Res<'w, bevy::render::renderer::RenderDevice>>,
+    sources: Option<Res<'w, peacecraft3::browser_configuration::SelectedMapSources>>,
+}
+
+fn update_fog(
+    state: &mut CampaignMinimap,
+    host: &pcx_play::playercolor_host::ObjectHost,
+    images: &mut Assets<Image>,
+) -> Result<(), String> {
+    let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
+    let fog = state
+        .fog
+        .as_mut()
+        .ok_or("minimap fog image is not loaded")?;
+    let mut image = images
+        .get_mut(state.image.as_ref().ok_or("minimap image missing")?)
+        .ok_or("minimap image asset missing")?;
+    let pixels = image
+        .data
+        .as_mut()
+        .ok_or("minimap CPU pixels unavailable")?;
+    if pixels.len() / 4 != fog.original_alpha.len() || !pixels.len().is_multiple_of(4) {
+        return Err("minimap pixel buffer changed dimensions".into());
+    }
+    if !settings.fog_enabled && !settings.fog_mask_enabled {
+        for (pixel, alpha) in pixels
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(&fog.original_alpha)
+        {
+            pixel[3] = *alpha;
+        }
+    }
+    let result: Result<(), String> = (|| {
+        let viewer = host
+            .local_player_settings()
+            .ok_or("minimap viewer is not admitted")?
+            .identity;
+        if fog.viewer != Some(viewer) {
+            fog.raster =
+                crate::campaign_visibility::Raster::new(fog.width, fog.height, PIXEL_BYTES / 4)?;
+            fog.viewer = Some(viewer);
+        }
+        let night = host
+            .vision_is_night()
+            .ok_or("minimap needs admitted day/night sight state")?;
+        let sources = host
+            .vision_sources(viewer, night, VISION_SOURCES)
+            .map_err(|e| e.to_string())?;
+        let bounds = host
+            .vision_world_bounds()
+            .ok_or("minimap needs the admitted world extent")?;
+        let alpha = fog.raster.update(
+            bounds,
+            &sources,
+            settings.fog_enabled,
+            settings.fog_mask_enabled,
+            fog.alpha,
+            VISION_WORK,
+        )?;
+        if !settings.fog_enabled && !settings.fog_mask_enabled {
+            return Ok(());
+        }
+        for (pixel, alpha) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
+            pixel[3] = *alpha;
+        }
+        Ok(())
+    })();
+    // Visibility admission must not gate the fully revealed authored image.
+    if !settings.fog_enabled && !settings.fog_mask_enabled {
+        Ok(())
+    } else {
+        result
+    }
 }
 fn project(
     mut commands: Commands,
@@ -162,7 +251,15 @@ fn project(
     let visibility = session
         .host()
         .map(|host| visibility(host.objects().startup_settings()));
-    let visible = input.camera.active() && matches!(visibility, Some(Ok(())));
+    let fog_result = if state.fog.is_some() {
+        session
+            .host()
+            .map(|h| update_fog(&mut state, h.objects(), &mut images))
+    } else {
+        None
+    };
+    let visible = input.camera.active()
+        && (matches!(visibility, Some(Ok(()))) || matches!(fog_result, Some(Ok(()))));
     for (part, mut node) in &mut parts {
         let allowed = match part {
             MinimapPart::Surface => input.camera.active(),
@@ -184,16 +281,20 @@ fn project(
                 .presentation()
                 .is_none_or(|p| p.interface_visible != Some(false))
         });
-    let mode_error = visibility.and_then(Result::err);
+    let mode_error = match fog_result {
+        Some(Err(error)) => Some(error),
+        Some(Ok(())) if matches!(visibility, Some(Err(_))) => Some(OCCLUSION_ERROR.into()),
+        _ => visibility.and_then(Result::err),
+    };
     if let Some(error) = &mode_error {
         state.last_error = Some(error.clone());
     } else if matches!(
         state.last_error.as_deref(),
-        Some(FOG_ERROR | SETTINGS_ERROR)
+        Some(FOG_ERROR | SETTINGS_ERROR | OCCLUSION_ERROR)
     ) {
         state.last_error = state.load_error.clone();
     }
-    if !input.camera.active() || state.attempted {
+    if state.attempted {
         return;
     }
     let Some(context) = session.context() else {
@@ -260,8 +361,21 @@ fn project(
             Pickable::IGNORE,
         ))
         .id();
+    let mut surface_node = node(rules.frame, rules.viewport);
+    if !input.camera.active() {
+        surface_node.display = Display::None;
+    }
     let surface = commands
-        .spawn((node(rules.frame, rules.viewport), MinimapPart::Surface))
+        .spawn((
+            surface_node,
+            BackgroundColor(Color::srgba_u8(
+                rules.clear_color[0],
+                rules.clear_color[1],
+                rules.clear_color[2],
+                rules.clear_color[3],
+            )),
+            MinimapPart::Surface,
+        ))
         .id();
     commands.entity(root).add_child(surface);
     state.root = Some(root);
@@ -286,6 +400,49 @@ fn project(
     })();
     match result {
         Ok((member, image)) => {
+            let fog = (|| -> Result<FogImage, String> {
+                let reader = input
+                    .sources
+                    .as_deref()
+                    .and_then(|sources| sources.for_receipts(&bindings.receipts))
+                    .ok_or("minimap fog has no matching source reader")?;
+                let profile = reader
+                    .resolve_bounded("UI\\MiscData.txt", PROFILE_BYTES as u64)
+                    .map_err(|e| e.to_string())?;
+                let alpha = pcx_objects::editor::minimap_fog::MinimapFogAlpha::read(
+                    &profile.bytes,
+                    PROFILE_BYTES,
+                )?;
+                let width = image.texture_descriptor.size.width;
+                let height = image.texture_descriptor.size.height;
+                let raster =
+                    crate::campaign_visibility::Raster::new(width, height, PIXEL_BYTES / 4)?;
+                let pixels = image
+                    .data
+                    .as_ref()
+                    .ok_or("minimap CPU pixels unavailable")?;
+                let mut original_alpha = Vec::new();
+                original_alpha
+                    .try_reserve_exact(pixels.len() / 4)
+                    .map_err(|_| "minimap alpha allocation")?;
+                original_alpha.extend(pixels.as_chunks::<4>().0.iter().map(|p| p[3]));
+                Ok(FogImage {
+                    raster,
+                    alpha,
+                    original_alpha,
+                    viewer: None,
+                    width,
+                    height,
+                })
+            })();
+            match fog {
+                Ok(fog) => state.fog = Some(fog),
+                Err(error) => {
+                    state.load_error = Some(error.clone());
+                    state.last_error = Some(error);
+                    return;
+                }
+            }
             let image = images.add(image);
             let child = commands
                 .spawn((

@@ -2,18 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [~] Campaign minimap source qualification now derives its logical rectangle,
-  viewport and TGA-before-BLP lookup order from the selected client image.
-  The reader distinguishes the in-game minimap from the selection preview and
-  refuses unsupported source relationships. All 1,679 core tests, the explicit
-  selected-image gate and strict native/WASM Clippy pass. The receipt-bound
-  terrain image now renders when fog and mask are explicitly disabled. Its
-  independent hit surface refuses unsupported minimap input without issuing
-  ground orders, verified through native-window pointer replay. All 626 app
-  tests, strict native/WASM checks and the default native build pass. Standard
-  Human01 still hides the image because fog is enabled; the strict rendering
-  gate still fails for fog and sky. Visibility, overlays and minimap actions
-  remain open; see [campaign minimap](docs/re-notes/campaign-minimap.md).
+- [~] Campaign minimap now renders canonical unit day/night sight and retained
+  exploration, with source-derived opacity, layout, image lookup and backing.
+  Human01's unchanged fog-enabled checkpoint shows an owned-unit sight area and
+  black unexplored terrain. Tests pass 69 object / 1,682 core / 55 app-library /
+  628 app-binary cases, the selected-image decoder and strict native/WASM Clippy.
+  The independent hit surface still refuses unsupported minimap input without
+  issuing ground orders. The strict visual gate still fails for missing
+  terrain/tree sight occlusion and sky illumination. World fog, sight-changing
+  effects, exact projection/blend parity, overlays and minimap actions remain
+  open; see [campaign minimap](docs/re-notes/campaign-minimap.md).
 
 - [~] A production-app offscreen Vulkan diagnostic now renders the selected RoC
   main menu, activates mounted campaign/mission controls and reaches Human01

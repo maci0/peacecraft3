@@ -824,6 +824,6 @@ pub use objects::{
     DialogBudget, DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent,
     FogModifier, GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing,
     PlacedDestructable, PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog,
-    SummonContext, Vitals, Weapon,
+    SummonContext, VisionCircle, VisionState, Vitals, Weapon,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};

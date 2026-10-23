@@ -175,6 +175,7 @@ pub mod hero_experience_awards;
 mod keys;
 pub mod messages;
 pub mod meta;
+pub mod minimap_fog;
 pub mod misc;
 pub mod object;
 pub mod path;

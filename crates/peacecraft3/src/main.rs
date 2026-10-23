@@ -22,6 +22,7 @@ mod campaign_score_model;
 mod campaign_score_view;
 mod campaign_script_dialogs;
 mod campaign_selection;
+mod campaign_visibility;
 use peacecraft3::fdf;
 mod glue_menu;
 pub mod hud;

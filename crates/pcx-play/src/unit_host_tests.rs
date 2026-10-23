@@ -3225,6 +3225,7 @@ fn position_host_admitting_placed(
         "ConvertPlayerState",
         "ConvertAllianceType",
         "ConvertUnitType",
+        "ConvertFogState",
         "ConvertFGameState",
         "ConvertPlayerScore",
         "ConvertLimitOp",

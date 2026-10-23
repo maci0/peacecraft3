@@ -17,6 +17,8 @@ pub struct Rules {
     pub frame: Rect,
     /// Map members in the texture loader's source-defined attempt order.
     pub image_members: Vec<String>,
+    /// RGBA from the minimap texture updater's packed clear pixel.
+    pub clear_color: [u8; 4],
 }
 
 impl Rules {
@@ -207,6 +209,12 @@ impl Rules {
             }
             image_members.push(member);
         }
+        let clear = operand(&mut read, 0x658bae, &[0xc7, 0x45, 0xe8], 4)?;
+        if operand(&mut read, 0x658bb5, &[0xc7, 0x45, 0xec], 4)? != clear {
+            return Err("minimap paired clear pixels differ".into());
+        }
+        let [blue, green, red, alpha]: [u8; 4] =
+            clear.try_into().map_err(|_| "minimap clear pixel")?;
         Ok(Self {
             origin,
             image_sha256,
@@ -218,6 +226,7 @@ impl Rules {
                 height: top - y,
             },
             image_members,
+            clear_color: [red, green, blue, alpha],
         })
     }
 }
@@ -298,6 +307,8 @@ mod tests {
         op(&mut d, 0x71bb40, &[0x81, 0xfe], 0x400a);
         put(&mut d, 0x71bb3d, &[0x83, 0xc6, 5]);
         put(&mut d, 0x4000, b".blp\0.tga\0");
+        op(&mut d, 0x658bae, &[0xc7, 0x45, 0xe8], 0x6d53412b);
+        op(&mut d, 0x658bb5, &[0xc7, 0x45, 0xec], 0x6d53412b);
         d
     }
     fn decode(d: &BTreeMap<u32, u8>) -> Result<Rules, String> {
@@ -321,6 +332,7 @@ mod tests {
         assert!((r.frame.width - 0.3).abs() < 0.000001);
         assert!((r.frame.height - 0.3).abs() < 0.000001);
         assert_eq!(r.image_members, ["fixtureMap.blp", "fixtureMap.tga"]);
+        assert_eq!(r.clear_color, [83, 65, 43, 109]);
         op(&mut d, 0x5e7ee6, &[0xc7, 4, 0x24], 0.8f32.to_bits());
         put(&mut d, 0x4000, b".tga\0.blp\0");
         let other = decode(&d).unwrap();
@@ -339,6 +351,8 @@ mod tests {
             (0x71bb3f, vec![0]),
             (0x71bb47, vec![0]),
             (0x71bb3c, vec![0]),
+            (0x658bae, vec![0x90]),
+            (0x658bb8, vec![0]),
             (0x4004, vec![b'x']),
             (0x4000, b".png\0".to_vec()),
             (0x4005, b".blp\0".to_vec()),

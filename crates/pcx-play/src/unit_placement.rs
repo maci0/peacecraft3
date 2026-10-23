@@ -388,6 +388,18 @@ impl Placement {
     pub fn source(&self) -> &Source {
         &self.source
     }
+    /// Canonical raster extent using the admitted source-derived cell scale.
+    pub fn world_bounds(&self) -> [[f32; 2]; 2] {
+        let [x, y] = self.grid.origin;
+        let cell = self.rules.cell_size();
+        [
+            [x, y],
+            [
+                x + self.grid.pathing.width as f32 * cell,
+                y + self.grid.pathing.height as f32 * cell,
+            ],
+        ]
+    }
     pub fn new(
         grid: Grid,
         rules: Rules,

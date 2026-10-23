@@ -1307,6 +1307,10 @@ mod unit_types;
 mod fog_modifiers;
 pub use fog_modifiers::FogModifier;
 
+#[path = "vision_host.rs"]
+mod vision;
+pub use vision::{VisionCircle, VisionState};
+
 #[path = "selection_host.rs"]
 mod selection;
 
