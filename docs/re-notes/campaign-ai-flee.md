@@ -155,6 +155,17 @@ chain and checks remain local in `flee-range-live-baseline-join.md` and
 `attack-initializer.json` under the retained flee evidence directory. A matched
 flag-clear experiment supplies the bounded observations below.
 
+The route position getter is also joined to the public `GetUnitX/Y` handlers.
+On successful extraction it writes the same third component for actor and
+target, so that component cancels in their difference; it does not supply
+terrain or flight height. The length helper uses the selected software
+multiply/add operations and internal square root in its reviewed order. The
+existing numeric implementation can be reused, while the public `SquareRoot`
+native wrapper's additional near-zero checks must not be inserted into this
+internal call. Independent checks pin seven position windows and five length
+and arithmetic windows. Failed position extraction and the zero-direction
+orientation branch remain outside this qualified nonzero route path.
+
 ## Clearing before retreat initiation
 
 Two further seeded runs both start with the flee flag true, sleep for one
