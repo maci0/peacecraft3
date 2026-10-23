@@ -4,7 +4,19 @@ use crate::campaign_gathering_policy::GatheringPolicy;
 use crate::campaign_group_timed_life_policy::GroupTimedLifePolicy;
 
 fn opened() -> (Vm, HandleId, HandleId, i32) {
+    opened_with_acquire(None)
+}
+
+fn opened_with_acquire(acquire: Option<&str>) -> (Vm, HandleId, HandleId, i32) {
     let mut fields = armed("80", "normal");
+    if let Some(acquire) = acquire {
+        fields
+            .iter_mut()
+            .find(|(id, _)| id == b"W005")
+            .unwrap()
+            .1
+            .value = Ok(FieldValue::Cell(acquire.into()));
+    }
     fields.extend(super::super::activity::profile_fields(
         FieldValue::Cell("100".into()),
         Some("foot"),
@@ -96,7 +108,7 @@ fn true_membership_tracks_shared_expiry_and_home_route_without_minting_handles()
 }
 
 #[test]
-fn false_flag_stops_existing_motion_without_attaching_and_bad_keys_are_atomic() {
+fn false_flag_without_guard_refuses_before_stopping_or_scheduling() {
     let (mut vm, unit, _, key) = opened();
     let host = &mut vm.host().inner;
     let owner = host.executed_unit(unit).unwrap().owner;
@@ -125,7 +137,8 @@ fn false_flag_stops_existing_motion_without_attaching_and_bad_keys_are_atomic() 
             .destination(),
         before
     );
-    apply(host, unit, key, 1.).unwrap();
+    let refusal = apply(host, unit, key, 1.).unwrap_err();
+    assert!(refusal.contains("unit guard"), "{refusal}");
     assert_eq!(
         host.executed_unit(unit)
             .unwrap()
@@ -133,10 +146,64 @@ fn false_flag_stops_existing_motion_without_attaching_and_bad_keys_are_atomic() 
             .as_ref()
             .unwrap()
             .destination(),
-        None
+        before
+    );
+    host.advance_unit_expirations(1.).unwrap();
+    assert!(
+        !host
+            .executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
     );
     assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(0));
     assert_eq!(host.campaign_captain_is_empty(owner).unwrap(), Some(true));
+}
+
+#[test]
+fn captain_route_keeps_combat_acquisition_out_until_arrival() {
+    let (mut vm, unit, other, key) = opened_with_acquire(Some("256"));
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(unit).unwrap().owner;
+    host.set_ai_group_timed_life(4, true).unwrap();
+    apply(host, unit, key, 5.).unwrap();
+    assert!(host.captain_route_owned(unit));
+    step(&mut vm, 0.25);
+    let host = &vm.host().inner;
+    assert_eq!(
+        host.executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        None
+    );
+    assert_eq!(
+        host.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some([112., 16.])
+    );
+    assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(1));
+    step(&mut vm, 2.);
+    let host = &vm.host().inner;
+    assert!(!host.captain_route_owned(unit));
+    assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(1));
+    assert_eq!(
+        host.executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target,
+        Some(other)
+    );
 }
 
 #[test]

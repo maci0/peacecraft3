@@ -228,6 +228,9 @@ impl ObjectHost {
             if enabled && linked.is_some() {
                 None
             } else {
+                if !enabled {
+                    self.preflight_guard_refresh(unit, now, APPLY)?;
+                }
                 let prepared = self
                     .prepare_steer_unit_in_range(unit, destination, 0., APPLY)?
                     .ok_or_else(|| {
