@@ -19,9 +19,11 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 2] = [
-    (0xab6166, 20, true), // SetNewHeroes registration banner (sig/name/handler)
-    (0xab72d0, 71, true), // SetNewHeroes handler through final ret
+const WINDOWS: [(u32, usize, bool); 4] = [
+    (0xab6166, 20, true),  // SetNewHeroes registration banner (sig/name/handler)
+    (0xab72d0, 71, true),  // SetNewHeroes handler through final ret
+    (0xe700b0, 5, false),  // signature bytes "(B)V\0"
+    (0xf15aa0, 12, false), // name bytes "SetNewHeroes"
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -90,19 +92,19 @@ impl NewHeroesPolicy {
     }
 
     fn decode(w: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
-        let [reg, h] = w else {
+        let [reg, h, sig, name] = w else {
             return Err(Error("incomplete new-heroes windows"));
         };
 
-        // Registration binds signature `(B)V`, name "SetNewHeroes", handler
-        // 0xab72d0 through the registrar.
+        // Registration binds the actual signature and name strings plus the
+        // handler 0xab72d0 through the registrar.
         at(reg, 0, &[0x68])?;
-        if word(reg, 1)? != 0xe700b0 {
-            return Err(Error("SetNewHeroes signature changed"));
+        if word(reg, 1)? != WINDOWS[2].0 {
+            return Err(Error("SetNewHeroes signature pointer changed"));
         }
         at(reg, 5, &[0x68])?;
-        if word(reg, 6)? != 0xf15aa0 {
-            return Err(Error("SetNewHeroes name changed"));
+        if word(reg, 6)? != WINDOWS[3].0 {
+            return Err(Error("SetNewHeroes name pointer changed"));
         }
         at(reg, 10, &[0x68])?;
         if word(reg, 11)? != 0xab72d0 {
@@ -111,6 +113,8 @@ impl NewHeroesPolicy {
         if call(reg, WINDOWS[0].0, 15)? != 0x8ccc80 {
             return Err(Error("SetNewHeroes registrar changed"));
         }
+        at(sig, 0, b"(B)V")?;
+        at(name, 0, b"SetNewHeroes")?;
 
         // Handler: read AI-context global; null context writes 0x57 and jumps to
         // the error sink; else resolve via the shared resolver; then set/clear
@@ -120,9 +124,28 @@ impl NewHeroesPolicy {
         if word(h, 4)? != 0x11b4a10 {
             return Err(Error("AI context global changed"));
         }
+        at(h, 8, &[0x85, 0xc0])?;
+        at(h, 10, &[0x75])?;
+        if 12 + i32::from(h[11] as i8) != 25 {
+            return Err(Error("null context skip does not reach the resolver path"));
+        }
         at(h, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0])?;
+        at(h, 19, &[0x5d])?;
         if jmp(h, WINDOWS[1].0, 20)? != 0x43eca0 {
             return Err(Error("error sink changed"));
+        }
+        at(h, 25, &[0x8d, 0x48, 0x2c])?;
+        at(h, 28, &[0x8b, 0x41, 0x04])?;
+        at(h, 31, &[0x23, 0x01])?;
+        at(h, 33, &[0x83, 0xf8, 0xff])?;
+        at(h, 36, &[0x75])?;
+        if 38 + i32::from(h[37] as i8) != 42 {
+            return Err(Error("sentinel branch does not reach the resolver"));
+        }
+        at(h, 38, &[0x33, 0xc0])?;
+        at(h, 40, &[0xeb])?;
+        if 42 + i32::from(h[41] as i8) != 47 {
+            return Err(Error("sentinel default does not reach the boolean branch"));
         }
         if call(h, WINDOWS[1].0, 42)? != 0x7fc7e0 {
             return Err(Error("context resolver changed"));
@@ -145,6 +168,8 @@ impl NewHeroesPolicy {
             return Err(Error("context mask is not a single positive bit"));
         }
         let context_mask = u32::from(or_imm);
+        at(h, 60, &[0x5d])?;
+        at(h, 61, &[0xc3])?;
 
         // Clear: `and r/m32, imm8` (83 /4) must target the same field and be
         // the sign-extended complement of the mask.
@@ -159,6 +184,8 @@ impl NewHeroesPolicy {
         if i32::from(and_imm as i8) as u32 != !context_mask {
             return Err(Error("clear mask is not the complement of the set mask"));
         }
+        at(h, 69, &[0x5d])?;
+        at(h, 70, &[0xc3])?;
 
         Ok(Self {
             image_sha256,
@@ -222,21 +249,31 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     dword(&mut w, 0, 11, 0xab72d0);
     call(&mut w, 0, 15, 0x8ccc80);
 
-    // Handler.
+    // Handler (full context-control chain and both returns).
     put(&mut w, 1, 0, &[0x55, 0x8b, 0xec]);
     put(&mut w, 1, 3, &[0xa1]);
     dword(&mut w, 1, 4, 0x11b4a10);
+    put(&mut w, 1, 8, &[0x85, 0xc0, 0x75, 0x0d]);
     put(&mut w, 1, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0]);
+    put(&mut w, 1, 19, &[0x5d]);
     jmp(&mut w, 1, 20, 0x43eca0);
+    put(&mut w, 1, 25, &[0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04]);
+    put(&mut w, 1, 31, &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x04]);
+    put(&mut w, 1, 38, &[0x33, 0xc0, 0xeb, 0x05]);
     call(&mut w, 1, 42, 0x7fc7e0);
-    put(&mut w, 1, 47, &[0x83, 0x7d, 0x08, 0x00]);
-    put(&mut w, 1, 51, &[0x74, 0x09]);
+    put(&mut w, 1, 47, &[0x83, 0x7d, 0x08, 0x00, 0x74, 0x09]);
     put(&mut w, 1, 53, &[0x83, 0x88]);
     dword(&mut w, 1, 55, NONSTOCK_FIELD);
     put(&mut w, 1, 59, &[NONSTOCK_MASK]);
+    put(&mut w, 1, 60, &[0x5d, 0xc3]);
     put(&mut w, 1, 62, &[0x83, 0xa0]);
     dword(&mut w, 1, 64, NONSTOCK_FIELD);
     put(&mut w, 1, 68, &[!NONSTOCK_MASK]);
+    put(&mut w, 1, 69, &[0x5d, 0xc3]);
+
+    // Signature and name data strings.
+    put(&mut w, 2, 0, b"(B)V");
+    put(&mut w, 3, 0, b"SetNewHeroes");
 
     w
 }
@@ -321,7 +358,14 @@ mod tests {
             |w| w[0][0] ^= 1,
             |w| w[1][0] ^= 1,
             |w| w[0][11] ^= 0x10,         // handler change
+            |w| w[2][0] ^= 1,             // signature string changed
+            |w| w[3][0] ^= 1,             // name string changed
             |w| w[1][4] ^= 0x10,          // AI context global change
+            |w| w[1][11] ^= 1,            // null-context skip changed
+            |w| w[1][26] ^= 0x10,         // reference LEA offset changed
+            |w| w[1][31] ^= 1,            // reference AND opcode changed
+            |w| w[1][35] ^= 1,            // sentinel compare immediate changed
+            |w| w[1][37] ^= 1,            // sentinel branch changed
             |w| w[1][52] ^= 1,            // boolean branch skip changed
             |w| w[1][55] ^= 0x10,         // set field offset changed (clear unchanged)
             |w| w[1][64] ^= 0x10,         // clear field offset changed (set unchanged)
@@ -329,6 +373,9 @@ mod tests {
             |w| w[1][68] = 0x00,          // clear sign bit clear
             |w| w[1][53] ^= 1,            // set opcode changed
             |w| w[1][62] ^= 1,            // clear opcode changed
+            |w| w[1][60] ^= 1,            // true-path pop changed
+            |w| w[1][69] ^= 1,            // false-path pop changed
+            |w| w[1][70] ^= 1,            // false-path ret changed
         ];
         for (index, mutate) in invalid.iter().enumerate() {
             let mut source = synthetic_windows();
