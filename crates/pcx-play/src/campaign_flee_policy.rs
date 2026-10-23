@@ -22,6 +22,7 @@ pub struct FleePolicy {
     pub image_sha256: Sha256Digest,
     pub units_flee_default: bool,
     pub context_units_flee_mask: u32,
+    pub context_heroes_flee_mask: u32,
     pub minimum_move_speed: f32,
     pub life_bands: [LifeBand; 6],
     pub ordinary_life_cutoff: f32,
@@ -49,7 +50,7 @@ pub enum RouteError {
     Math(#[from] real::MathError),
 }
 
-const WINDOWS: [(u32, usize, bool); 26] = [
+const WINDOWS: [(u32, usize, bool); 31] = [
     (0xab7665, 16, true),
     (0xabf9e2, 10, true),
     (0xba9581, 7, true),
@@ -76,6 +77,11 @@ const WINDOWS: [(u32, usize, bool); 26] = [
     (0xb67dac, 28, true),
     (0xb67f2c, 19, true),
     (0x10db124, 4, false),
+    (0xab68c6, 20, true), // SetHeroesFlee registration banner (sig/name/handler)
+    (0xab7170, 71, true), // SetHeroesFlee handler through final ret
+    (0xba9573, 7, true),  // hero decision test (context + field, imm8 mask)
+    (0xf160cc, 16, false), // name bytes "SetHeroesFlee\0"
+    (0xe700b0, 5, false), // signature bytes "(B)V\0"
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -96,6 +102,13 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, Error> {
 
 fn call(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
     at(bytes, offset, &[0xe8])?;
+    Ok(va
+        .wrapping_add(offset as u32 + 5)
+        .wrapping_add(word(bytes, offset + 1)?))
+}
+
+fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
+    at(bytes, offset, &[0xe9])?;
     Ok(va
         .wrapping_add(offset as u32 + 5)
         .wrapping_add(word(bytes, offset + 1)?))
@@ -281,6 +294,11 @@ impl FleePolicy {
             epsilon_reference,
             order,
             epsilon_data,
+            hero_reg,
+            hero_handler,
+            hero_decision,
+            hero_name,
+            hero_sig,
         ] = w
         else {
             return Err(Error("incomplete flee-policy windows"));
@@ -416,6 +434,116 @@ impl FleePolicy {
         {
             return Err(Error("life band order differs from the native decision"));
         }
+        // SetHeroesFlee registration binds signature/name/handler + their bytes.
+        at(hero_reg, 0, &[0x68])?;
+        if word(hero_reg, 1)? != WINDOWS[30].0 {
+            return Err(Error("SetHeroesFlee signature pointer changed"));
+        }
+        at(hero_reg, 5, &[0x68])?;
+        if word(hero_reg, 6)? != WINDOWS[29].0 {
+            return Err(Error("SetHeroesFlee name pointer changed"));
+        }
+        at(hero_reg, 10, &[0x68])?;
+        if word(hero_reg, 11)? != 0xab7170 {
+            return Err(Error("SetHeroesFlee handler changed"));
+        }
+        if call(hero_reg, WINDOWS[26].0, 15)? != 0x8ccc80 {
+            return Err(Error("SetHeroesFlee registrar changed"));
+        }
+        at(hero_name, 0, b"SetHeroesFlee")?;
+        at(hero_sig, 0, b"(B)V")?;
+
+        // Handler: same full control chain as the units setter, but the set/clear
+        // operands derive the hero mask. The field offset must equal the decoded
+        // units-flee context field (not a copied literal).
+        at(hero_handler, 0, &[0x55, 0x8b, 0xec])?;
+        at(hero_handler, 3, &[0xa1])?;
+        if word(hero_handler, 4)? != 0x11b4a10 {
+            return Err(Error("hero AI context global changed"));
+        }
+        at(hero_handler, 8, &[0x85, 0xc0])?;
+        at(hero_handler, 10, &[0x75])?;
+        if 12 + i32::from(hero_handler[11] as i8) != 25 {
+            return Err(Error(
+                "hero null context skip does not reach the resolver path",
+            ));
+        }
+        at(hero_handler, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0])?;
+        at(hero_handler, 19, &[0x5d])?;
+        if jmp(hero_handler, WINDOWS[27].0, 20)? != 0x43eca0 {
+            return Err(Error("hero error sink changed"));
+        }
+        at(hero_handler, 25, &[0x8d, 0x48, 0x2c])?;
+        at(hero_handler, 28, &[0x8b, 0x41, 0x04])?;
+        at(hero_handler, 31, &[0x23, 0x01])?;
+        at(hero_handler, 33, &[0x83, 0xf8, 0xff])?;
+        at(hero_handler, 36, &[0x75])?;
+        if 38 + i32::from(hero_handler[37] as i8) != 42 {
+            return Err(Error("hero sentinel branch does not reach the resolver"));
+        }
+        at(hero_handler, 38, &[0x33, 0xc0])?;
+        at(hero_handler, 40, &[0xeb])?;
+        if 42 + i32::from(hero_handler[41] as i8) != 47 {
+            return Err(Error(
+                "hero sentinel default does not reach the boolean branch",
+            ));
+        }
+        if call(hero_handler, WINDOWS[27].0, 42)? != 0x7fc7e0 {
+            return Err(Error("hero context resolver changed"));
+        }
+        at(hero_handler, 47, &[0x83, 0x7d, 0x08, 0x00])?;
+        at(hero_handler, 51, &[0x74])?;
+        if 53 + i32::from(hero_handler[52] as i8) != 62 {
+            return Err(Error("hero boolean branch does not skip to the clear path"));
+        }
+        at(hero_handler, 53, &[0x83, 0x88])?;
+        if word(hero_handler, 55)? != context_offset {
+            return Err(Error("hero set field differs from the units flee field"));
+        }
+        let hero_or_imm = *hero_handler
+            .get(59)
+            .ok_or(Error("missing hero set mask operand"))?;
+        if hero_or_imm & 0x80 != 0 {
+            return Err(Error("hero set mask is a negative imm8"));
+        }
+        if hero_or_imm == 0 || hero_or_imm.count_ones() != 1 {
+            return Err(Error("hero mask is not a single positive bit"));
+        }
+        let heroes_mask = u32::from(hero_or_imm);
+        at(hero_handler, 60, &[0x5d])?;
+        at(hero_handler, 61, &[0xc3])?;
+        at(hero_handler, 62, &[0x83, 0xa0])?;
+        if word(hero_handler, 64)? != context_offset {
+            return Err(Error("hero clear field differs from the units flee field"));
+        }
+        let hero_and_imm = *hero_handler
+            .get(68)
+            .ok_or(Error("missing hero clear mask operand"))?;
+        if hero_and_imm & 0x80 == 0 {
+            return Err(Error("hero clear mask does not sign-extend its complement"));
+        }
+        if i32::from(hero_and_imm as i8) as u32 != !heroes_mask {
+            return Err(Error(
+                "hero clear mask is not the complement of the set mask",
+            ));
+        }
+        at(hero_handler, 69, &[0x5d])?;
+        at(hero_handler, 70, &[0xc3])?;
+
+        // Hero decision test must test the same field and the same mask.
+        at(hero_decision, 0, &[0xf6, 0x86])?;
+        if word(hero_decision, 2)? != context_offset {
+            return Err(Error(
+                "hero decision field differs from the units flee field",
+            ));
+        }
+        let hero_decision_byte = *hero_decision
+            .get(6)
+            .ok_or(Error("missing hero decision mask operand"))?;
+        if u32::from(hero_decision_byte) != heroes_mask {
+            return Err(Error("hero decision mask differs from the setter"));
+        }
+
         let minimum_move_speed = band100_minimum;
         if minimum_move_speed <= 0.0 || life_bands[5].minimum != minimum_move_speed {
             return Err(Error("minimum speed is not the final native life band"));
@@ -425,6 +553,7 @@ impl FleePolicy {
             image_sha256,
             units_flee_default: constructor_default & context_mask != 0,
             context_units_flee_mask: context_mask,
+            context_heroes_flee_mask: heroes_mask,
             minimum_move_speed,
             life_bands,
             ordinary_life_cutoff,
@@ -477,6 +606,15 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     }
     fn call(w: &mut [Vec<u8>], i: usize, at: usize, target: u32) {
         put(w, i, at, &[0xe8]);
+        dword(
+            w,
+            i,
+            at + 1,
+            target.wrapping_sub(WINDOWS[i].0 + at as u32 + 5),
+        );
+    }
+    fn jmp(w: &mut [Vec<u8>], i: usize, at: usize, target: u32) {
+        put(w, i, at, &[0xe9]);
         dword(
             w,
             i,
@@ -629,6 +767,43 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     put(&mut w, 24, 12, &[0x74, 0x05, 0xbe]);
     dword(&mut w, 24, 15, 0x000d0043);
     dword(&mut w, 25, 0, 0.00000025_f32.to_bits());
+
+    // SetHeroesFlee (nonstock hero mask 0x20, distinct from units 0x40).
+    put(&mut w, 26, 0, &[0x68]);
+    dword(&mut w, 26, 1, 0xe700b0);
+    put(&mut w, 26, 5, &[0x68]);
+    dword(&mut w, 26, 6, 0xf160cc);
+    put(&mut w, 26, 10, &[0x68]);
+    dword(&mut w, 26, 11, 0xab7170);
+    call(&mut w, 26, 15, 0x8ccc80);
+
+    put(&mut w, 27, 0, &[0x55, 0x8b, 0xec]);
+    put(&mut w, 27, 3, &[0xa1]);
+    dword(&mut w, 27, 4, 0x11b4a10);
+    put(&mut w, 27, 8, &[0x85, 0xc0, 0x75, 0x0d]);
+    put(&mut w, 27, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0]);
+    put(&mut w, 27, 19, &[0x5d]);
+    jmp(&mut w, 27, 20, 0x43eca0);
+    put(&mut w, 27, 25, &[0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04]);
+    put(&mut w, 27, 31, &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x04]);
+    put(&mut w, 27, 38, &[0x33, 0xc0, 0xeb, 0x05]);
+    call(&mut w, 27, 42, 0x7fc7e0);
+    put(&mut w, 27, 47, &[0x83, 0x7d, 0x08, 0x00, 0x74, 0x09]);
+    put(&mut w, 27, 53, &[0x83, 0x88]);
+    dword(&mut w, 27, 55, context_offset);
+    put(&mut w, 27, 59, &[0x20]);
+    put(&mut w, 27, 60, &[0x5d, 0xc3]);
+    put(&mut w, 27, 62, &[0x83, 0xa0]);
+    dword(&mut w, 27, 64, context_offset);
+    put(&mut w, 27, 68, &[0xdf]);
+    put(&mut w, 27, 69, &[0x5d, 0xc3]);
+
+    put(&mut w, 28, 0, &[0xf6, 0x86]);
+    dword(&mut w, 28, 2, context_offset);
+    put(&mut w, 28, 6, &[0x20]);
+
+    put(&mut w, 29, 0, b"SetHeroesFlee\0");
+    put(&mut w, 30, 0, b"(B)V\0");
 
     w
 }
@@ -911,6 +1086,11 @@ pub(crate) mod tests {
         assert_eq!(policy.image_sha256, [0x42; 32]);
         assert!(policy.units_flee_default);
         assert_eq!(policy.context_units_flee_mask, 0x40);
+        assert_eq!(policy.context_heroes_flee_mask, 0x20);
+        assert_ne!(
+            policy.context_heroes_flee_mask,
+            policy.context_units_flee_mask
+        );
         assert_eq!(policy.minimum_move_speed, 117.0);
         assert_eq!(policy.range_margin, policy.minimum_move_speed);
         assert_eq!(policy.ordinary_life_cutoff, 173.0);
@@ -1208,6 +1388,88 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn hero_selector_chain_discriminates_and_mutants_refuse() {
+        // Nonstock hero-mask discrimination: change set + clear + decision together.
+        let mut source = synthetic_windows();
+        source[27][59] = 0x04;
+        source[27][68] = 0xfb;
+        source[28][6] = 0x04;
+        let policy = FleePolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0; 32],
+        )
+        .expect("changed hero mask operand");
+        assert_eq!(policy.context_heroes_flee_mask, 0x04);
+
+        let refuses = |source: Vec<Vec<u8>>| {
+            assert!(
+                FleePolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err()
+            );
+        };
+
+        // Set mask changed but clear not complemented.
+        let mut source = synthetic_windows();
+        source[27][59] = 0x04;
+        refuses(source);
+
+        // Decision mask differs from the setter.
+        let mut source = synthetic_windows();
+        source[28][6] = 0x04;
+        refuses(source);
+
+        // Hero field offset diverges from the units field.
+        let mut source = synthetic_windows();
+        source[27][55] ^= 0x10;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[27][64] ^= 0x10;
+        refuses(source);
+
+        // Registration / strings / handler binding.
+        let mut source = synthetic_windows();
+        source[26][0] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[29][0] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[30][0] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[26][11] ^= 0x10;
+        refuses(source);
+
+        // Control-chain branch mutants.
+        let mut source = synthetic_windows();
+        source[27][11] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[27][37] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[27][52] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[27][60] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[27][70] ^= 1;
+        refuses(source);
+    }
+
+    #[test]
     #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
     fn reviewed_original_image_decodes() {
         let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
@@ -1224,6 +1486,11 @@ pub(crate) mod tests {
         assert_eq!(policy.image_sha256, REVIEWED_IMAGE);
         assert!(!policy.units_flee_default);
         assert_eq!(policy.context_units_flee_mask, 0x10);
+        assert_eq!(policy.context_heroes_flee_mask, 0x08);
+        assert_ne!(
+            policy.context_heroes_flee_mask,
+            policy.context_units_flee_mask
+        );
         assert_eq!(policy.minimum_move_speed, 100.0);
         assert_eq!(policy.range_margin, policy.minimum_move_speed);
         assert_eq!(policy.ordinary_life_cutoff, 150.0);
