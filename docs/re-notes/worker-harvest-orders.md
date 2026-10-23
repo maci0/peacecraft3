@@ -319,9 +319,14 @@ distance.
 
 Work timing requires the authored tree weapon's `cool`, `dmgpt` and `Backsw`.
 A unit without an admitted tree-targeting weapon is refused before tree
-selection; `Ahar.Dur` is not a timing fallback. Each swing applies
+selection; `Ahar.Dur` is not a timing fallback. Normally each swing applies
 `Ahar.DataA` damage to the tree and adds the same amount to carried lumber,
-capped at `Ahar.DataB`. A dead tree with at least one whole lumber carried is
+capped at `Ahar.DataB`. An active, explicitly enabled campaign slow-chopping
+policy independently replaces tree damage and positive deposit credit with
+image-derived operands, while preserving authored cargo, capacity and swing
+timing; see [campaign slow chopping](campaign-ai-slow-chopping.md). Its flag is
+checked at hits and deposits, without gating an accepted return walk.
+A dead tree with at least one whole lumber carried is
 deposited even when below capacity. Sub-unit carry is not deposited; fractional
 damage/yield behavior remains unqualified. The edited-damage observation above
 qualifies a full final hit past the remaining capacity for its tested values;

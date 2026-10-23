@@ -59,7 +59,7 @@ impl ObjectHost {
 
     /// `None` when slow-chopping operands are not admitted, the owner has no
     /// active campaign AI context, or that player has not run the setter. An
-    /// invalid owner handle is an `Err`, not `None`.
+    /// invalid owner handle is an `Err` once the policy is admitted.
     // shortcut: controller effects and modified workers remain unqualified; extend after their behavior is mapped.
     pub fn campaign_slow_chopping_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
         if self.campaign_slow_chopping.is_none() {

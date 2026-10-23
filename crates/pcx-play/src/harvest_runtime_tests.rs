@@ -1375,6 +1375,57 @@ fn a_new_unknown_ai_context_stops_an_existing_order_before_its_hit() {
     assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
 }
 
+#[test]
+fn slow_chopping_does_not_gate_an_accepted_return_walk() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_range("9", "18", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(52.0, 32.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 46.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 100.0, 96.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(current_order(&mut vm, worker), 903);
+    assert!(
+        !vm.host()
+            .inner
+            .activity_motion_path(worker)
+            .unwrap()
+            .is_empty()
+    );
+    vm.host().inner.deactivate_campaign_ai_player(0);
+    assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
+
+    let before = position(&mut vm, worker);
+    tick(&mut vm, 3.5);
+    assert_ne!(position(&mut vm, worker), before);
+    assert_eq!(tree_life(&mut vm, tree), 75.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert!(advance(&mut vm, 100.0, 65536).is_err());
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered
+    );
+
+    vm.host().inner.set_ai_slow_chopping(0, false).unwrap();
+    tick(&mut vm, 100.0);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 18
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 18
+    );
+}
+
 fn tree_life(vm: &mut Vm, tree: HandleId) -> f32 {
     vm.host()
         .inner

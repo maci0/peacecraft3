@@ -703,7 +703,6 @@ impl ObjectHost {
         };
         let owner = self.executed_unit(worker.unit)?.owner;
         worker.owner = owner;
-        let slow_chopping = self.slow_chopping_for(worker.unit)?;
         let usable = self
             .executed_unit(depot)
             .is_ok_and(|record| record.shown && !record.combat.as_ref().is_some_and(|c| c.dead))
@@ -728,7 +727,8 @@ impl ObjectHost {
             return Ok(());
         }
         let amount = if worker.carrying >= 1.0 {
-            slow_chopping.map_or(worker.carrying.floor() as i32, |(_, deposit)| deposit)
+            self.slow_chopping_for(worker.unit)?
+                .map_or(worker.carrying.floor() as i32, |(_, deposit)| deposit)
         } else {
             0
         };
@@ -754,34 +754,29 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn slow_chopping_mode(&self, owner: HandleId) -> Result<Option<(f32, i32)>, Error> {
+    fn slow_chopping_for(&self, unit: HandleId) -> Result<Option<(f32, i32)>, Error> {
         let Some(policy) = self.campaign_slow_chopping_policy() else {
             return Ok(None);
         };
-        let player = self.player_settings(owner)?.number;
+        let record = self.executed_unit(unit)?;
+        let player = self.player_settings(record.owner)?.number;
         if !self.campaign_ai.is_active(player) {
             return Ok(None);
         }
         match self.campaign_ai.slow_chopping(player) {
-            None => Err(self.harvest_error("active campaign AI slow-chopping flag is unset")),
-            Some(false) => Ok(None),
-            Some(true) => Ok(Some((policy.tree_damage, policy.deposit_lumber))),
+            None => {
+                return Err(self.harvest_error("active campaign AI slow-chopping flag is unset"));
+            }
+            Some(false) => return Ok(None),
+            Some(true) => {}
         }
-    }
-
-    fn slow_chopping_for(&self, unit: HandleId) -> Result<Option<(f32, i32)>, Error> {
-        let record = self.executed_unit(unit)?;
-        let result = self.slow_chopping_mode(record.owner)?;
         // shortcut: only direct, effect-free workers have qualified slow-chop packets; admit modifiers when measured.
-        if result.is_some()
-            && (record.summoned
-                || record.admitted_order.is_some()
-                || self.unit_has_effect_history(unit))
+        if record.summoned || record.admitted_order.is_some() || self.unit_has_effect_history(unit)
         {
             return Err(self
                 .harvest_error("slow-chopping worker has unqualified ability or effect metadata"));
         }
-        Ok(result)
+        Ok(Some((policy.tree_damage, policy.deposit_lumber)))
     }
 
     #[cfg(test)]
