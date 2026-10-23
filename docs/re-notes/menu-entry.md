@@ -101,6 +101,19 @@ can reach the deep mission rows.
 
 ## Verification
 
+An explicit local-asset diagnostic,
+`campaign_entry_gpu_tests::mounted_menu_enters_the_rendered_campaign`, now uses
+the production app factory with offscreen Vulkan, mounted widget activations
+and synthetic Escape messages. Its first device-enabled run stopped during
+audio-device initialization; the visual-only configuration disables playback
+while retaining audio assets. That configuration rendered the selected RoC
+main menu, then timed out waiting for Single Player navigation after 600
+updates. It has **not** verified rendered campaign entry. The ignored test
+preserves this unfinished acceptance gate rather than treating the earlier
+headless session-publication test as visual proof. Original captures remain
+local and untracked. Physical input, audio playback and paired original-client
+frame parity are outside this diagnostic's scope.
+
 Dynamic rows do not carry `ScreenPosition`: the generic FDF layout pass resolves
 that component against the template origin, which would collapse every row onto
 one position. Container and label nodes ignore picking so the button receives
