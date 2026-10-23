@@ -73,6 +73,13 @@ impl ObjectHost {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_set_summoned(&mut self, unit: HandleId, summoned: bool) {
+        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit) {
+            record.summoned = summoned;
+        }
+    }
+
     pub(crate) fn campaign_flee_damage_decision(
         &self,
         source: HandleId,
@@ -203,8 +210,17 @@ impl ObjectHost {
         if victim.is_sleeping() || victim.paused_since.is_some() {
             return Ok(false);
         }
-        if victim.summoned || victim.admitted_order.is_some_and(|(_, active)| active) {
-            return Ok(false);
+        if victim.summoned {
+            return Err(self.campaign_flee_error(
+                unit,
+                "victim is a summoned unit; campaign flee admission is not qualified",
+            ));
+        }
+        if victim.admitted_order.is_some_and(|(_, active)| active) {
+            return Err(self.campaign_flee_error(
+                unit,
+                "victim has an admitted ability On/Off state; campaign flee admission is not qualified",
+            ));
         }
         let Some(activity) = victim.activity.as_ref() else {
             return Ok(false);
@@ -230,9 +246,17 @@ impl ObjectHost {
         if attacker.definition.rawcode[0].is_ascii_uppercase() {
             return Err(self.campaign_flee_error(source, "incoming attacker is a hero"));
         }
-        if attacker.summoned || attacker.admitted_order.is_some_and(|(_, active)| active) {
-            return Err(self
-                .campaign_flee_error(source, "incoming attacker has an unqualified active order"));
+        if attacker.summoned {
+            return Err(self.campaign_flee_error(
+                source,
+                "incoming attacker is a summoned unit; campaign flee admission is not qualified",
+            ));
+        }
+        if attacker.admitted_order.is_some_and(|(_, active)| active) {
+            return Err(self.campaign_flee_error(
+                source,
+                "incoming attacker has an admitted ability On/Off state; campaign flee admission is not qualified",
+            ));
         }
         if self.unit_has_effect_history(source) {
             return Err(self.campaign_flee_error(

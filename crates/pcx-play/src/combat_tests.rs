@@ -221,7 +221,9 @@ fn open_fixture(
     blight: Option<crate::terrain_blight::InitialBlight>,
     resource: Option<Arc<DefaultTables>>,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture_with(fields, heroes, combat, clock, blight, resource, None, None)
+    open_fixture_with(
+        fields, heroes, combat, clock, blight, resource, None, None, None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -234,6 +236,7 @@ fn open_fixture_with(
     resource: Option<Arc<DefaultTables>>,
     numeric: Option<crate::script_numeric::NumericPolicy>,
     flee: Option<(crate::campaign_flee_policy::FleePolicy, i32)>,
+    defend: Option<Arc<DefaultTables>>,
 ) -> (Vm, HandleId, HandleId) {
     let mut extra = format!(
         "{}\n{}{DECLARATIONS}{}{}{}",
@@ -268,9 +271,16 @@ fn open_fixture_with(
             |m| matches!(&m.source, FieldSource::Column { column, .. } if column == "upgradeList"),
         )
     });
-    if upgrade_list {
+    if upgrade_list || defend.is_some() {
         extra.push_str(
             "\nconstant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
+        );
+    }
+    if defend.is_some() {
+        extra.push_str(
+            "native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing\n\
+constant native GetPlayerTechResearched takes player whichPlayer, integer techid, boolean specificOnly returns boolean\n",
         );
     }
     let map = if heroes.is_some() {
@@ -308,11 +318,18 @@ fn open_fixture_with(
         .unwrap()
         .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
         .unwrap();
-    if upgrade_list {
+    if upgrade_list || defend.is_some() {
         h = h
             .with_player_tech_researched(crate::playercolor_host::TechLimitBudget {
                 max_records: 8,
             })
+            .unwrap();
+    }
+    if let Some(defend) = defend {
+        h = h
+            .with_defend_ability(&defend, "Qord")
+            .unwrap()
+            .with_player_abilities(16)
             .unwrap();
     }
     if let Some(numeric) = numeric {
@@ -4020,12 +4037,36 @@ fn open_flee(
         None,
         Some(numeric),
         Some((policy, player)),
+        None,
     )
 }
 
 fn flee_fixture(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
     let (policy, numeric) = crate::campaign_flee_policy::tests::route_fixture();
     open_flee(fields, policy, numeric, 5)
+}
+
+fn defend_flee_fixture() -> (Vm, HandleId, HandleId) {
+    let (policy, numeric) = crate::campaign_flee_policy::tests::route_fixture();
+    let mut fields = flee_fields("1", "8");
+    fields.push((*b"uabi", super::ability_field("abilList", "Qord")));
+    let tables = Arc::new(super::order_tables(
+        super::ORDER_HEADERS,
+        &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"],
+        "",
+        "1",
+    ));
+    open_fixture_with(
+        &fields,
+        None,
+        rules(),
+        false,
+        None,
+        None,
+        Some(numeric),
+        Some((policy, 5)),
+        Some(tables),
+    )
 }
 
 fn flee_fixture_with_margin(
@@ -4255,6 +4296,118 @@ fn high_life_is_a_contextual_refusal_that_aborts_before_damage() {
     assert_eq!(life(&mut vm, b), 200.0);
     assert_eq!(damage_events(&mut vm), 0);
     assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+}
+
+#[test]
+fn summoned_victim_refuses_before_damage_but_a_normal_victim_takes_damage() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    vm.host().inner.test_set_summoned(b, true);
+    set_life(&mut vm, b, 20.0);
+    let start = position(&mut vm, b);
+    vm.host().inner.enable_combat_trace(16);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("summoned victim");
+    assert!(error.to_string().contains("summoned"), "{error}");
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert_eq!(position(&mut vm, b), start);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    assert!(
+        !vm.host()
+            .inner
+            .executed_unit(b)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+
+    vm.host().inner.test_set_summoned(b, false);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    assert_eq!(life(&mut vm, b), 19.0);
+}
+
+#[test]
+fn active_admitted_ability_state_refuses_the_victim_but_the_off_state_takes_damage() {
+    let (mut vm, a, b) = defend_flee_fixture();
+    let player = vm.host().inner.native("Player", &[Value::Int(5)]).unwrap();
+    vm.host()
+        .inner
+        .native(
+            "SetPlayerTechResearched",
+            &[
+                player,
+                Value::Int(i32::from_be_bytes(*b"Qtec")),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(b), Value::Str("engage".into())],
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(b)
+            .unwrap()
+            .admitted_order
+            .is_some_and(|(_, active)| active)
+    );
+    set_life(&mut vm, b, 20.0);
+    let start = position(&mut vm, b);
+    vm.host().inner.enable_combat_trace(16);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("active admitted ability state");
+    assert!(error.to_string().contains("On/Off"), "{error}");
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert_eq!(position(&mut vm, b), start);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    assert!(
+        !vm.host()
+            .inner
+            .executed_unit(b)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(b), Value::Str("release".into())],
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(
+        !vm.host()
+            .inner
+            .executed_unit(b)
+            .unwrap()
+            .admitted_order
+            .is_some_and(|(_, active)| active)
+    );
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    assert_eq!(life(&mut vm, b), 19.0);
 }
 
 #[test]
