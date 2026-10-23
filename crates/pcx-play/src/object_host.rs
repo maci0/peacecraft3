@@ -98,6 +98,8 @@ pub struct ObjectHost {
     startup_version: Option<HandleId>,
     game_difficulty: Option<HandleId>,
     campaign_targeting: Option<targeting::State>,
+    campaign_ai: campaign_flee::Registry,
+    campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
@@ -266,6 +268,8 @@ impl ObjectHost {
             startup_version: None,
             game_difficulty: None,
             campaign_targeting: None,
+            campaign_ai: campaign_flee::Registry::default(),
+            campaign_flee: None,
             default_difficulty: None,
             campaign_menu_race: None,
             stock: None,
@@ -1280,6 +1284,9 @@ pub use indicators::{Indicator, MinimapPing};
 
 #[path = "campaign_targeting_host.rs"]
 mod targeting;
+
+#[path = "campaign_flee_host.rs"]
+mod campaign_flee;
 
 #[path = "combat_host.rs"]
 mod combat;

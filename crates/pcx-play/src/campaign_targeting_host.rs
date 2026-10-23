@@ -5,15 +5,18 @@ use super::{Error, Failure, ObjectHost};
 use crate::campaign_targeting_policy::TargetingPolicy;
 use crate::map_admission::ParsedMapContext;
 use pcx_script::HandleId;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const NATIVE: &str = "SetTargetHeroes";
 
 pub(super) struct State {
     policy: TargetingPolicy,
-    /// Active campaign AI players and their current target-heroes flag.
-    active: BTreeMap<i32, bool>,
+}
+
+impl State {
+    pub(super) fn target_heroes_default(&self) -> bool {
+        self.policy.target_heroes_default
+    }
 }
 
 impl ObjectHost {
@@ -38,10 +41,9 @@ impl ObjectHost {
                 .inner
                 .error(NATIVE, Failure::ConfigState("map context differs")));
         }
-        self.campaign_targeting = Some(State {
-            policy,
-            active: BTreeMap::new(),
-        });
+        self.campaign_ai
+            .admit_target_heroes_default(policy.target_heroes_default);
+        self.campaign_targeting = Some(State { policy });
         Ok(())
     }
 
@@ -53,57 +55,20 @@ impl ObjectHost {
     /// active campaign AI player. `Some(false)` is the source default for an
     /// active AI player that has not called `SetTargetHeroes(true)`.
     pub fn campaign_targeting_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
-        let Some(state) = &self.campaign_targeting else {
+        if self.campaign_targeting.is_none() {
             return Ok(None);
-        };
+        }
         let number = self.player_settings(owner)?.number;
-        Ok(state.active.get(&number).copied())
-    }
-
-    /// Registers an active campaign AI player. Returns whether this call created
-    /// the context; an already-active player keeps its current flag. Targeting
-    /// admission is independent, so sessions without operands keep old behavior.
-    pub(crate) fn activate_campaign_ai_player(&mut self, player: i32) -> Result<bool, Error> {
-        let Some(state) = &mut self.campaign_targeting else {
-            return Ok(false);
-        };
-        if state.active.contains_key(&player) {
-            return Ok(false);
-        }
-        state
-            .active
-            .insert(player, state.policy.target_heroes_default);
-        Ok(true)
-    }
-
-    pub(crate) fn deactivate_campaign_ai_player(&mut self, player: i32) {
-        if let Some(state) = &mut self.campaign_targeting {
-            state.active.remove(&player);
-        }
-    }
-
-    pub(crate) fn set_ai_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), Error> {
-        let Some(state) = &mut self.campaign_targeting else {
-            return Err(self
-                .inner
-                .error(NATIVE, Failure::ConfigState("operands are not admitted")));
-        };
-        let Some(current) = state.active.get_mut(&player) else {
-            return Err(self
-                .inner
-                .error(NATIVE, Failure::ConfigState("AI player is not active")));
-        };
-        *current = enabled;
-        Ok(())
+        Ok(self.campaign_ai.target_heroes(number))
     }
 
     /// The admitted target-heroes flag for `actor`, or `None` when no active
     /// campaign AI context applies and the caller keeps its prior nearest rule.
     pub(super) fn campaign_target_heroes(&self, actor: HandleId) -> Option<bool> {
-        let state = self.campaign_targeting.as_ref()?;
+        self.campaign_targeting.as_ref()?;
         let owner = self.executed_unit(actor).ok()?.owner;
         let player = self.player_settings(owner).ok()?.number;
-        state.active.get(&player).copied()
+        self.campaign_ai.target_heroes(player)
     }
 
     /// Automatic acquisition for an idle weapon scan. `Err` names a native
