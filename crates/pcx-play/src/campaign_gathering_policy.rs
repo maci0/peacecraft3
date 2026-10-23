@@ -185,12 +185,14 @@ impl GatheringPolicy {
         at(candidate, 27, &[0x3d])?;
         let excluded_state_value = word(candidate, 28)?;
         at(candidate, 32, &[0x74])?;
-        at(candidate, 34, &[0xb8])?;
+        at(candidate, 20, &[0x74, 0x0c])?;
+        at(candidate, 34, &[0xb8, 1, 0, 0, 0, 0x5d, 0xc2, 4, 0])?;
+        at(candidate, 43, &[0x33, 0xc0, 0x5d, 0xc2, 4, 0])?;
         // Both "reject" JE branches must converge on the shared false return
         // after the true-return block: `16 + je1.disp == 34 + je2.disp`.
         let je1 = *candidate.get(15).ok_or(Error("missing structure JE"))? as i8;
         let je2 = *candidate.get(33).ok_or(Error("missing excluded JE"))? as i8;
-        if je1 < 0 || je2 < 0 || 16 + je1 as usize != 34 + je2 as usize {
+        if je1 < 0 || je2 < 0 || 16 + je1 as usize != 43 || 34 + je2 as usize != 43 {
             return Err(Error("candidate reject branches do not converge"));
         }
         if excluded_state_mask == 0
@@ -426,6 +428,13 @@ mod tests {
             |w| w[4][27] ^= 1,   // excluded CMP opcode changed
             |w| w[4][15] = 0xff, // structure JE backward (negative disp)
             |w| w[4][33] += 1,   // reject branches stop converging
+            |w| {
+                w[4][15] -= 1;
+                w[4][33] -= 1;
+            }, // convergent branches must still reach the false return
+            |w| w[4][21] -= 1,   // argument-zero branch must reach the true return
+            |w| w[4][35] = 0,    // true return changed to false
+            |w| w[4][44] ^= 1,   // false return no longer clears eax
             |w| {
                 w[4][10] = 0x00;
                 w[4][11] = 0x30;
