@@ -66,6 +66,7 @@ pub mod campaign_flee_policy;
 pub mod campaign_gathering_policy;
 pub mod campaign_host;
 pub mod campaign_inputs;
+pub mod campaign_new_heroes_policy;
 pub mod campaign_placement;
 pub mod campaign_progress;
 pub mod campaign_targeting_policy;
