@@ -166,6 +166,16 @@ internal call. Independent checks pin seven position windows and five length
 and arithmetic windows. Failed position extraction and the zero-direction
 orientation branch remain outside this qualified nonzero route path.
 
+The controller's route-request callback consumes a record containing a unit
+pointer, flags and a scalar. Its scalar comparison rejects equality with the
+source zero value; the intervening `LAHF`/`TEST` parity calculation must be
+included when reading that branch. The callback's producer and event identity
+remain unqualified. Neither a periodic update rule nor a landed-damage trigger
+is established by this static evidence. The current low-life observations
+therefore do not justify initiating retreat on every combat tick. A paused
+threat comparison will separate acquisition and outgoing attacks from incoming
+damage without changing the actor's initial life.
+
 ## Clearing before retreat initiation
 
 Two further seeded runs both start with the flee flag true, sleep for one
