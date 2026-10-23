@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `GroupTimedLife` has a source-bound flag reader and a checked public
+  captain-count observation path. A matched original-client diagnostic reports
+  zero captain size with false, versus one during the applied timed-life effect
+  and zero after life reaches zero with true. Query progress, source identities
+  and both controls are checked. Host dispatch, canonical membership lifecycle
+  and controller effects remain unfinished; unchanged Human02 still refuses
+  the call. See [grouped timed life](docs/re-notes/campaign-ai-group-timed-life.md).
+
 - [~] `SetSlowChopping` now reaches canonical worker hits and deposits with
   separate source-derived damage and credit overrides; authored cargo, capacity
   and timing remain intact. A matched original-client pair observed two
