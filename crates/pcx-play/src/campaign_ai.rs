@@ -122,6 +122,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_deactivate_player(&mut self, player: i32);
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -219,6 +220,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .set_ai_units_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .stop_ai_gathering(player)
             .map_err(|e| e.to_string())
     }
 }
@@ -410,6 +422,16 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
+    if let Some(native) = scripts.program().natives().get("StopGathering")
+        && (native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || !native.params.is_empty()
+            || native.ret.array
+            || native.ret.kind.name() != "nothing")
+    {
+        return Err("StartCampaignAI: StopGathering AI common declaration differs".into());
+    }
     Ok(())
 }
 
@@ -572,6 +594,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_set_units_flee(player, *enabled)?;
                 Ok(Value::Null)
             }
+            "StopGathering" => {
+                if !args.is_empty() {
+                    return Err("StopGathering: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_stop_gathering(player)?;
+                Ok(Value::Null)
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -599,6 +629,7 @@ mod tests {
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
         units_flee: BTreeMap<i32, bool>,
+        gathering: BTreeMap<i32, bool>,
     }
 
     struct World(Arc<Mutex<State>>);
@@ -631,6 +662,7 @@ mod tests {
             self.0.lock().unwrap().active.remove(&player);
             self.0.lock().unwrap().target_heroes.remove(&player);
             self.0.lock().unwrap().units_flee.remove(&player);
+            self.0.lock().unwrap().gathering.remove(&player);
         }
         fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
@@ -646,6 +678,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.units_flee.insert(player, enabled);
+            Ok(())
+        }
+        fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.gathering.insert(player, false);
             Ok(())
         }
     }
@@ -726,6 +766,94 @@ mod tests {
 
     const AI_TARGET: &str = "native SetTargetHeroes takes boolean flag returns nothing\n";
     const AI_FLEE: &str = "native SetUnitsFlee takes boolean flag returns nothing\n";
+    const AI_GATHERING: &str = "native StopGathering takes nothing returns nothing\n";
+
+    #[test]
+    fn gathering_uses_active_player_and_keeps_sleeping_context() {
+        let script = program_with_ai_common(
+            "synthetic:gather.ai",
+            "function main takes nothing returns nothing\ncall StopGathering()\ncall Sleep(0.25)\ncall StopGathering()\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GATHERING}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "gather.ai").unwrap();
+        runtime.start(&mut world, 2, "gather.ai").unwrap();
+        assert_eq!(
+            shared.lock().unwrap().gathering,
+            [(1, false), (2, false)].into()
+        );
+        let remaining = runtime.remaining_loads;
+        runtime.start(&mut world, 1, "again.ai").unwrap();
+        assert_eq!(runtime.remaining_loads, remaining);
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(
+            shared.lock().unwrap().gathering,
+            [(1, false), (2, false)].into()
+        );
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn gathering_abi_refuses_before_world_writes() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\nendfunction\n";
+        for (common, ai_common) in [
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}native StopGathering takes nothing returns integer\n"),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}native StopGathering takes integer flag returns nothing\n"),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}constant {AI_GATHERING}"),
+            ),
+            (format!("{COMMON}{AI_GATHERING}"), AI_COMMON.to_string()),
+        ] {
+            let script = program_with_sources("synthetic:gather.ai", body, &common, &ai_common);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "gather.ai").unwrap_err();
+            assert!(error.contains("StopGathering"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(state.gathering.is_empty());
+            assert!(world.is_some());
+        }
+    }
+
+    #[test]
+    fn gathering_dispatch_rejects_arguments_and_failed_start_retires_state() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [vec![Value::Null], vec![Value::Bool(false)]] {
+            assert!(host.native("StopGathering", &args).is_err());
+            assert!(shared.lock().unwrap().gathering.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:gather.ai",
+            "function main takes nothing returns nothing\ncall StopGathering()\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GATHERING}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let mut world = Some(World(Arc::clone(&shared)));
+        assert!(runtime.start(&mut world, 1, "gather.ai").is_err());
+        let state = shared.lock().unwrap();
+        assert!(state.active.is_empty());
+        assert!(state.gathering.is_empty());
+        assert!(world.is_some());
+    }
 
     #[test]
     fn flee_flags_use_each_ai_player_and_wake_without_changing_targeting_flags() {

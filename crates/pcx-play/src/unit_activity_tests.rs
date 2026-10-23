@@ -2,6 +2,8 @@ use super::*;
 use pcx_script::HandleId;
 #[path = "unit_follow_tests.rs"]
 mod follow;
+#[path = "campaign_gathering_host_tests.rs"]
+mod gathering;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
@@ -9,6 +11,7 @@ pub(super) const ORDERS: &str = r#"
 native PauseUnit takes unit u, boolean paused returns nothing
 native IsUnitPaused takes unit u returns boolean
 native ShowUnit takes unit u, boolean shown returns nothing
+native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 constant native IsUnitHidden takes unit u returns boolean
 type location extends agent
 native Location takes real x, real y returns location
@@ -218,6 +221,7 @@ constant native ConvertUnitType takes integer n returns unittype
 constant native IsUnitType takes unit u, unittype kind returns boolean
 globals
 constant unittype UNIT_TYPE_STRUCTURE=ConvertUnitType(-91)
+constant unittype UNIT_TYPE_PEON=ConvertUnitType(16)
 endglobals
 native SetUnitPathing takes unit u, boolean enabled returns nothing
 type sound extends agent\n{SOUNDS}{PROPERTY_DECLARATIONS}",
