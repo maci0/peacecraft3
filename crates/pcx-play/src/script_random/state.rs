@@ -14,6 +14,11 @@ pub struct State {
     secondary: Vec<Primary>,
 }
 
+/// A narrow copy of the primary generator state. Restoring it undoes consumed
+/// primary draws without cloning the retained secondary block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrimaryCheckpoint(Primary);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateError {
     #[error("no qualified random state; an explicit seed is required")]
@@ -64,6 +69,12 @@ impl State {
     }
     pub fn secondary_words(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
         self.secondary.iter().map(|state| state.word)
+    }
+    pub(crate) fn primary_checkpoint(&self) -> PrimaryCheckpoint {
+        PrimaryCheckpoint(self.primary)
+    }
+    pub(crate) fn restore_primary(&mut self, checkpoint: PrimaryCheckpoint) {
+        self.primary = checkpoint.0;
     }
     fn check(&self, policy: &Policy) -> Result<(), StateError> {
         if self.policy_key == policy.key {

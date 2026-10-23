@@ -175,7 +175,10 @@ impl ObjectHost {
                     "resulting life is above the ordinary cutoff in a score-dependent band",
                 ));
             }
-            return Ok(None);
+            return Err(self.campaign_flee_error(
+                candidate.target,
+                "resulting life is outside the qualified low leaf; the earlier range/ability flee branch is not qualified",
+            ));
         }
         let numeric = self.numeric.as_ref().ok_or_else(|| {
             self.campaign_flee_error(candidate.target, "selected numeric policy is not admitted")

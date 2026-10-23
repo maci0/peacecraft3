@@ -924,6 +924,11 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_swing(&self, unit: HandleId) -> Option<(HandleId, f64)> {
+        self.executed_unit(unit).ok()?.combat.as_ref()?.swing
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_queue_missile(
         &mut self,
         source: HandleId,
@@ -1379,22 +1384,40 @@ impl ObjectHost {
                     // pending; the missile impact is the incoming hit instead.
                     let preflight = weapon.missile_speed.is_none()
                         && self.campaign_flee_source_preflight(unit, swung)?;
-                    let damage = self.roll_damage(unit, weapon, swung)?;
-                    let retreat = if preflight {
-                        let life = self
-                            .weapon_target(swung)
-                            .map(|victim| victim.vitals.map(|v| v.life).unwrap_or(0.0) - damage)
-                            .unwrap_or(0.0);
-                        if life > 0.0 {
-                            self.campaign_flee_retreat(unit, swung, life)?
+                    let checkpoint = self.script_random_primary_checkpoint();
+                    let prepared = (|| -> Result<_, Error> {
+                        let damage = self.roll_damage(unit, weapon, swung)?;
+                        let retreat = if preflight {
+                            let life = self
+                                .weapon_target(swung)
+                                .map(|victim| victim.vitals.map(|v| v.life).unwrap_or(0.0) - damage)
+                                .unwrap_or(0.0);
+                            if life > 0.0 {
+                                self.campaign_flee_retreat(unit, swung, life)?
+                            } else {
+                                None
+                            }
                         } else {
                             None
+                        };
+                        Ok((damage, retreat))
+                    })();
+                    let (damage, retreat) = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            self.restore_script_random_primary(checkpoint);
+                            return Err(error);
                         }
-                    } else {
-                        None
                     };
-                    if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                        record.combat.as_mut().expect("combat").swing = None;
+                    let cleared = (|| -> Result<(), Error> {
+                        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                            record.combat.as_mut().expect("combat").swing = None;
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = cleared {
+                        self.restore_script_random_primary(checkpoint);
+                        return Err(error);
                     }
                     match weapon.missile_speed {
                         Some(speed) => {
@@ -1411,7 +1434,14 @@ impl ObjectHost {
                         }
                         None => {
                             let mut applied = false;
-                            self.apply_damage_commit(unit, swung, damage, retreat, &mut applied)?;
+                            if let Err(error) =
+                                self.apply_damage_commit(unit, swung, damage, retreat, &mut applied)
+                            {
+                                if !applied {
+                                    self.restore_script_random_primary(checkpoint);
+                                }
+                                return Err(error);
+                            }
                         }
                     }
                 }

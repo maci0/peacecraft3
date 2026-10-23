@@ -1235,6 +1235,13 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_set_route_work(&mut self, work: usize) {
+        if let Some(state) = &mut self.unit_activity {
+            state.route_work = work;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn activity_motion_path(&self, unit: HandleId) -> Option<Vec<[f32; 2]>> {
         self.executed_unit(unit)
             .ok()?

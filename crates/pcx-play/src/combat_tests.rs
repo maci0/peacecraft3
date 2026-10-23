@@ -420,6 +420,54 @@ fn step_refused(vm: &mut Vm, until: f64) -> String {
     panic!("expected campaign targeting refusal");
 }
 
+fn random_snapshot(vm: &mut Vm) -> (u32, Vec<u32>) {
+    let state = vm.host().inner.script_random_state().unwrap();
+    (state.primary_word(), state.secondary_words().collect())
+}
+
+fn advance_until_swing(vm: &mut Vm, unit: HandleId) {
+    let h = &mut vm.host().inner;
+    for _ in 0..256 {
+        if h.test_swing(unit).is_some() {
+            return;
+        }
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        h.advance_unit_activity(next, &mut 65536).unwrap();
+    }
+    panic!("expected a pending swing");
+}
+
+fn advance_until_melee_refusal(vm: &mut Vm) -> (u32, Vec<u32>, String) {
+    let h = &mut vm.host().inner;
+    for _ in 0..256 {
+        let before = (
+            h.script_random_state().unwrap().primary_word(),
+            h.script_random_state().unwrap().secondary_words().collect(),
+        );
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(error) = h.advance_unit_activity(next, &mut 65536) {
+            return (before.0, before.1, error.to_string());
+        }
+    }
+    panic!("expected a melee refusal");
+}
+
+fn retry_melee_refusal(vm: &mut Vm) -> (u32, Vec<u32>, String) {
+    let h = &mut vm.host().inner;
+    let before = (
+        h.script_random_state().unwrap().primary_word(),
+        h.script_random_state().unwrap().secondary_words().collect(),
+    );
+    let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+    assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+    let error = h
+        .advance_unit_activity(next, &mut 65536)
+        .expect_err("repeat refusal");
+    (before.0, before.1, error.to_string())
+}
+
 #[test]
 fn killed_resource_unit_retains_amount_across_later_activity() {
     let mut fields = armed("1", "normal");
@@ -4157,9 +4205,24 @@ fn high_life_is_a_contextual_refusal_that_aborts_before_damage() {
 
     let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     set_life(&mut vm, b, 200.0);
-    assert_eq!(flee_decision(&mut vm, a, b, 200.0).unwrap(), None);
-    assert!(!low_life_damage(&mut vm, a, b, 1.0));
-    assert_eq!(life(&mut vm, b), 199.0);
+    let error = flee_decision(&mut vm, a, b, 200.0).expect_err("earlier branch");
+    assert!(
+        error.to_string().contains("earlier range/ability"),
+        "{error}"
+    );
+    vm.host().inner.enable_combat_trace(16);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("earlier branch refusal");
+    assert!(
+        error.to_string().contains("earlier range/ability"),
+        "{error}"
+    );
+    assert_eq!(life(&mut vm, b), 200.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
 }
 
 #[test]
@@ -4231,8 +4294,19 @@ fn a_refused_retreat_leaves_normal_acquisition_and_attack_running() {
 fn the_post_hit_life_decides_whether_the_cutoff_is_crossed() {
     let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     set_life(&mut vm, b, 180.0);
-    assert!(!low_life_damage(&mut vm, a, b, 1.0));
-    assert_eq!(life(&mut vm, b), 179.0);
+    vm.host().inner.enable_combat_trace(16);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("above the qualified low leaf");
+    assert!(
+        error.to_string().contains("earlier range/ability"),
+        "{error}"
+    );
+    assert_eq!(life(&mut vm, b), 180.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
 
     let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     set_life(&mut vm, b, 180.0);
@@ -4436,6 +4510,54 @@ fn a_refused_melee_source_aborts_before_swing_rng_trace_and_vitals() {
     assert_eq!(life(&mut vm, b), 20.0);
     assert_eq!(damage_events(&mut vm), 0);
     assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+}
+
+#[test]
+fn a_conditional_band_melee_refusal_restores_primary_and_pending_swing() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields_with("640", "normal", "1", "8"));
+    set_life(&mut vm, b, 390.0);
+    vm.host().inner.enable_combat_trace(16);
+    issue_attack(&mut vm, a, b);
+    advance_until_swing(&mut vm, a);
+    let (primary, secondary, error) = advance_until_melee_refusal(&mut vm);
+    assert!(error.to_string().contains("score-dependent"), "{error}");
+    assert_eq!(random_snapshot(&mut vm), (primary, secondary));
+    let swing = vm.host().inner.test_swing(a).expect("pending swing");
+    assert_eq!(life(&mut vm, b), 390.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+
+    let (primary, secondary, retry) = retry_melee_refusal(&mut vm);
+    assert_eq!(retry, error);
+    assert_eq!(random_snapshot(&mut vm), (primary, secondary));
+    assert_eq!(vm.host().inner.test_swing(a), Some(swing));
+    assert_eq!(life(&mut vm, b), 390.0);
+    assert_eq!(damage_events(&mut vm), 0);
+}
+
+#[test]
+fn a_route_work_melee_refusal_restores_primary_and_pending_swing() {
+    let (mut vm, a, b) =
+        flee_fixture_with_margin(&flee_fields_with("640", "normal", "1", "8"), 100.0);
+    set_life(&mut vm, b, 20.0);
+    vm.host().inner.enable_combat_trace(16);
+    issue_attack(&mut vm, a, b);
+    advance_until_swing(&mut vm, a);
+    vm.host().inner.test_set_route_work(1);
+    let (primary, secondary, error) = advance_until_melee_refusal(&mut vm);
+    assert!(error.to_string().contains("work exhausted"), "{error}");
+    assert_eq!(random_snapshot(&mut vm), (primary, secondary));
+    let swing = vm.host().inner.test_swing(a).expect("pending swing");
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+
+    let (primary, secondary, retry) = retry_melee_refusal(&mut vm);
+    assert_eq!(retry, error);
+    assert_eq!(random_snapshot(&mut vm), (primary, secondary));
+    assert_eq!(vm.host().inner.test_swing(a), Some(swing));
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
 }
 
 #[test]
