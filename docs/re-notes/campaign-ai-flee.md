@@ -316,3 +316,9 @@ policy binds the selected recipe image. Receipts remain local under
 `.scratch/campaign-flee-integration/`. These gates establish dispatch, shared
 state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
+
+The unchanged selected Human01-to-Human02 opening-minute check now passes
+`SetUnitsFlee` and refuses at `StopGathering`, still at 7.218750 seconds in
+Human02's `StartCampaignAI` call. This is the next exact script frontier, not a
+completed opening minute or a flee-movement result. The retained failure is
+`.scratch/campaign-flee-integration/state-frontier.log`.
