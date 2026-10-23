@@ -64,6 +64,8 @@ The unchanged Human02 opening-minute test now passes both calls and refuses
 `SetReplacementCount` at 7.312500 seconds. Its failure remains recorded; the test
 was not weakened to accept it. Logs are local under
 `.scratch/set-campaign-ai/gates/` and `.scratch/set-campaign-ai/final/`.
+The later [replacement-count integration](campaign-ai-replacements.md) passes
+that setter and records the next refusal at `GetUnitCount` at the same clock step.
 No new original-client run or rendered menu/campaign comparison was performed.
 The selected startup checks are headless execution evidence, not visual
 playability or complete campaign-controller acceptance.

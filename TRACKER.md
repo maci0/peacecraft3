@@ -2,6 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `SetReplacementCount` now validates the selected registration/setter and
+  owned AI-common integer ABI, then retains the exact signed quantity in the
+  canonical active-player context. Player isolation, sleep, repeat starts,
+  retirement and failed-start rollback pass; the published two-program fixture
+  observes both independent values. Core 1,687, app-library 55 and app-binary
+  638 tests, actual-image decoding, selected startup/Continue and strict
+  native/WASM Clippy pass. Unchanged Human02 passes the setter and now refuses
+  `GetUnitCount` at 7.312500 seconds; its opening-minute test remains red.
+  Guard-post replenishment/production remains unfinished; see
+  [replacement count](docs/re-notes/campaign-ai-replacements.md).
+
 - [~] Selected campaign units now have an animated MDX portrait, using authored
   cameras/tracks, source-derived placement/model lookup and the shared portrait
   light. It reuses the renderer and canonical selection. Models without embedded

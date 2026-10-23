@@ -28,10 +28,12 @@ impl ObjectHost {
         if !policy.context_mask.is_power_of_two()
             || !policy.unit_mask.is_power_of_two()
             || policy.unit_mask >= 0x80
+            || policy.replacement_count_field == 0
+            || !policy.replacement_count_field.is_multiple_of(4)
         {
             return Err(self.inner.error(
                 NATIVE,
-                Failure::ConfigState("mode masks are not single bits"),
+                Failure::ConfigState("mode masks or replacement field are invalid"),
             ));
         }
         for image in [
@@ -89,6 +91,30 @@ impl ObjectHost {
             .campaign_mode;
         self.require_active_campaign_ai_player(player, NATIVE)?;
         self.campaign_ai.set_campaign_mode(player, enabled);
+        Ok(())
+    }
+
+    /// The explicit script value for the active owner, unknown before its first setter.
+    // shortcut: FillGuardPosts still refuses; consume this threshold when canonical guard-post replenishment is admitted.
+    pub fn campaign_replacement_count(&self, owner: HandleId) -> Result<Option<i32>, Error> {
+        let player = self.player_settings(owner)?.number;
+        Ok(self.campaign_ai.replacement_count(player))
+    }
+
+    pub(crate) fn set_ai_replacement_count(
+        &mut self,
+        player: i32,
+        count: i32,
+    ) -> Result<(), Error> {
+        const SETTER: &str = "SetReplacementCount";
+        if self.campaign_mode.is_none() {
+            return Err(self.inner.error(
+                SETTER,
+                Failure::ConfigState("campaign context operands are not admitted"),
+            ));
+        }
+        self.require_active_campaign_ai_player(player, SETTER)?;
+        self.campaign_ai.set_replacement_count(player, count);
         Ok(())
     }
 }

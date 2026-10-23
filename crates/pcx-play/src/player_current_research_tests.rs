@@ -142,6 +142,12 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())
     }
 
+    fn ai_set_replacement_count(&mut self, player: i32, count: i32) -> Result<(), String> {
+        self.object
+            .set_ai_replacement_count(player, count)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String> {
         self.object
             .set_ai_slow_chopping(player, enabled)

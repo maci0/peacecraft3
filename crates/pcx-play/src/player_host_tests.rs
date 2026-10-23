@@ -15,6 +15,63 @@ mod local_player;
 #[path = "message_host_tests.rs"]
 mod messages;
 
+#[test]
+fn replacement_counts_keep_signed_values_and_canonical_context_lifecycle() {
+    let (mut host, ctx) = campaign_host();
+    let first = player(&mut host, 0);
+    let second = player(&mut host, 1);
+    assert_eq!(host.campaign_replacement_count(id(&first)).unwrap(), None);
+    assert!(host.set_ai_replacement_count(0, 17).is_err());
+    for field in [0, 1, 7] {
+        let mut policy = crate::campaign_mode_policy::CampaignModePolicy::fixture();
+        policy.replacement_count_field = field;
+        assert!(host.admit_campaign_mode(&ctx, policy).is_err());
+        assert_eq!(host.campaign_replacement_count(id(&first)).unwrap(), None);
+    }
+    host.admit_campaign_mode(
+        &ctx,
+        crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+    )
+    .unwrap();
+    assert!(host.set_ai_replacement_count(0, 17).is_err());
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert!(host.activate_campaign_ai_player(1).unwrap());
+    host.set_ai_replacement_count(1, -29).unwrap();
+    for count in [0, -1, i32::MIN, i32::MAX, 17] {
+        host.set_ai_replacement_count(0, count).unwrap();
+        assert_eq!(
+            host.campaign_replacement_count(id(&first)).unwrap(),
+            Some(count)
+        );
+        assert_eq!(
+            host.campaign_replacement_count(id(&second)).unwrap(),
+            Some(-29)
+        );
+        assert_eq!(host.campaign_ai_mode(id(&first)).unwrap(), None);
+    }
+    assert!(!host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        host.campaign_replacement_count(id(&first)).unwrap(),
+        Some(17)
+    );
+    assert!(host.set_ai_replacement_count(3, 33).is_err());
+    assert!(
+        host.campaign_replacement_count(HandleId::new(
+            std::num::NonZeroU64::new(u64::MAX).unwrap()
+        ))
+        .is_err()
+    );
+    host.deactivate_campaign_ai_player(0).unwrap();
+    assert_eq!(host.campaign_replacement_count(id(&first)).unwrap(), None);
+    assert!(host.set_ai_replacement_count(0, 21).is_err());
+    assert_eq!(
+        host.campaign_replacement_count(id(&second)).unwrap(),
+        Some(-29)
+    );
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(host.campaign_replacement_count(id(&first)).unwrap(), None);
+}
+
 const COMMON: &str = "type agent extends handle\ntype player extends agent\ntype timer extends agent\ntype placement extends handle\ntype playercolor extends handle\ntype racepreference extends handle\ntype mapcontrol extends handle\nconstant native GetBJMaxPlayerSlots takes nothing returns integer\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nconstant native ConvertPlacement takes integer i returns placement\nconstant native ConvertPlayerColor takes integer i returns playercolor\nconstant native ConvertRacePref takes integer i returns racepreference\nconstant native ConvertMapControl takes integer i returns mapcontrol\nnative SetMapName takes string name returns nothing\nnative SetMapDescription takes string description returns nothing\nnative SetPlayers takes integer n returns nothing\nnative SetTeams takes integer n returns nothing\nnative GetPlayers takes nothing returns integer\nnative GetTeams takes nothing returns integer\nnative SetGamePlacement takes placement p returns nothing\nconstant native GetGamePlacement takes nothing returns placement\nnative DefineStartLocation takes integer i, real x, real y returns nothing\nconstant native GetStartLocationX takes integer i returns real\nconstant native GetStartLocationY takes integer i returns real\nconstant native Player takes integer number returns player\nconstant native GetPlayerId takes player p returns integer\nnative SetPlayerTeam takes player p, integer team returns nothing\nnative GetPlayerTeam takes player p returns integer\nnative SetPlayerStartLocation takes player p, integer index returns nothing\nnative ForcePlayerStartLocation takes player p, integer index returns nothing\nnative GetPlayerStartLocation takes player p returns integer\nnative SetPlayerColor takes player p, playercolor c returns nothing\nnative GetPlayerColor takes player p returns playercolor\nnative SetPlayerRacePreference takes player p, racepreference r returns nothing\nnative SetPlayerRaceSelectable takes player p, boolean b returns nothing\nnative GetPlayerSelectable takes player p returns boolean\nnative SetPlayerController takes player p, mapcontrol c returns nothing\nnative GetPlayerController takes player p returns mapcontrol\nnative SetPlayerName takes player p, string name returns nothing\nnative GetPlayerName takes player p returns string\nnative SetPlayerOnScoreScreen takes player p, boolean b returns nothing\nglobals\nconstant placement P = ConvertPlacement(7)\nconstant playercolor C = ConvertPlayerColor(37)\nconstant racepreference R = ConvertRacePref(-5)\nconstant mapcontrol M = ConvertMapControl(91)\nendglobals\n";
 fn enums(ctx: &ParsedMapContext, handles: usize) -> EnumHost {
     EnumHost::checked_selected(

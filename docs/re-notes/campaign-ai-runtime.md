@@ -4,8 +4,8 @@
 
 The private campaign continuation passes Human02 initialization with nearby
 lumber harvesting admitted. The latest authored opening reaches 7.312500
-seconds, then refuses the red program's `SetReplacementCount` after
-[campaign mode and shared player-count admission](campaign-ai-mode.md).
+seconds, then refuses the red program's `GetUnitCount` after
+[replacement-count admission](campaign-ai-replacements.md).
 This is a real selected-map execution result,
 distinct from the synthetic source fixtures below; it does not establish a
 working opening cinematic or campaign strategy.

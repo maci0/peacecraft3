@@ -1,4 +1,4 @@
-//! Selected `SetCampaignAI` mode transition and per-unit propagation.
+//! Selected campaign context configuration and per-unit mode propagation.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -11,13 +11,14 @@ pub struct CampaignModePolicy {
     pub context_mask: u32,
     pub unit_mask: u32,
     pub campaign_mode: bool,
+    pub replacement_count_field: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("campaign mode policy: {0}")]
 pub struct Error(&'static str);
 
-const WINDOWS: [(u32, usize, bool); 8] = [
+const WINDOWS: [(u32, usize, bool); 12] = [
     (0xab6887, 20, true),
     (0xab6e80, 60, true),
     (0xe70fac, 4, false),
@@ -26,6 +27,10 @@ const WINDOWS: [(u32, usize, bool); 8] = [
     (0xac2660, 45, true),
     (0xabb3ce, 25, true),
     (0xac39d9, 12, true),
+    (0xab69bc, 20, true),
+    (0xab7450, 67, true),
+    (0xe6f4a0, 5, false),
+    (0xf161a0, 20, false),
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -87,6 +92,10 @@ impl CampaignModePolicy {
             units,
             admission,
             consumer,
+            replacement_registration,
+            replacement_handler,
+            replacement_signature,
+            replacement_name,
         ] = windows
         else {
             return Err(Error("incomplete windows"));
@@ -194,11 +203,54 @@ impl CampaignModePolicy {
         {
             return Err(Error("mode consumer differs"));
         }
+        for (offset, target) in [(0, WINDOWS[10].0), (5, WINDOWS[11].0), (10, WINDOWS[9].0)] {
+            at(replacement_registration, offset, &[0x68])?;
+            if word(replacement_registration, offset + 1)? != target {
+                return Err(Error("replacement registration changed"));
+            }
+        }
+        call(replacement_registration, WINDOWS[8].0, 15, 0x8ccc80)?;
+        at(replacement_signature, 0, b"(I)V\0")?;
+        at(replacement_name, 0, b"SetReplacementCount\0")?;
+        let h = replacement_handler;
+        at(h, 0, &[0x55, 0x8b, 0xec, 0xa1])?;
+        if word(h, 4)? != word(handler, 1)? {
+            return Err(Error("replacement AI context differs"));
+        }
+        at(h, 8, &[0x85, 0xc0, 0x75, 0x0d, 0xc7, 0x45, 0x08])?;
+        if word(h, 15)? != 0x57 {
+            return Err(Error("replacement context error differs"));
+        }
+        at(h, 19, &[0x5d, 0xe9])?;
+        if WINDOWS[9].0.wrapping_add(25).wrapping_add(word(h, 21)?) != 0x43eca0 {
+            return Err(Error("replacement error target differs"));
+        }
+        at(
+            h,
+            25,
+            &[
+                0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x0d, 0x8b,
+                0x4d, 0x08, 0x33, 0xc0, 0x89, 0x88,
+            ],
+        )?;
+        let replacement_count_field = word(h, 45)?;
+        at(h, 49, &[0x5d, 0xc3])?;
+        call(h, WINDOWS[9].0, 51, 0x7fc7e0)?;
+        at(h, 56, &[0x8b, 0x4d, 0x08, 0x89, 0x88])?;
+        at(h, 65, &[0x5d, 0xc3])?;
+        if word(h, 61)? != replacement_count_field
+            || replacement_count_field == 0
+            || !replacement_count_field.is_multiple_of(4)
+            || replacement_count_field == field
+        {
+            return Err(Error("replacement integer storage differs"));
+        }
         Ok(Self {
             image_sha256,
             context_mask,
             unit_mask,
             campaign_mode: handler[36] != 0,
+            replacement_count_field,
         })
     }
 
@@ -299,6 +351,34 @@ fn synthetic() -> Vec<Vec<u8>> {
     word(&mut w, 7, 2, 0x350);
     word(&mut w, 7, 6, 0x8000);
     put(&mut w, 7, 10, &[0x74, 0x51]);
+    for (offset, target) in [(0, WINDOWS[10].0), (5, WINDOWS[11].0), (10, WINDOWS[9].0)] {
+        put(&mut w, 8, offset, &[0x68]);
+        word(&mut w, 8, offset + 1, target);
+    }
+    call(&mut w, 8, 15, 0x8ccc80);
+    put(&mut w, 10, 0, b"(I)V\0");
+    put(&mut w, 11, 0, b"SetReplacementCount\0");
+    put(&mut w, 9, 0, &[0x55, 0x8b, 0xec, 0xa1]);
+    word(&mut w, 9, 4, 0x11b4a10);
+    put(&mut w, 9, 8, &[0x85, 0xc0, 0x75, 0x0d, 0xc7, 0x45, 0x08]);
+    word(&mut w, 9, 15, 0x57);
+    put(&mut w, 9, 19, &[0x5d, 0xe9]);
+    word(&mut w, 9, 21, 0x43eca0u32.wrapping_sub(WINDOWS[9].0 + 25));
+    put(
+        &mut w,
+        9,
+        25,
+        &[
+            0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x0d, 0x8b,
+            0x4d, 0x08, 0x33, 0xc0, 0x89, 0x88,
+        ],
+    );
+    word(&mut w, 9, 45, 0x380);
+    put(&mut w, 9, 49, &[0x5d, 0xc3]);
+    call(&mut w, 9, 51, 0x7fc7e0);
+    put(&mut w, 9, 56, &[0x8b, 0x4d, 0x08, 0x89, 0x88]);
+    word(&mut w, 9, 61, 0x380);
+    put(&mut w, 9, 65, &[0x5d, 0xc3]);
     w
 }
 
@@ -318,6 +398,11 @@ mod tests {
             (p.context_mask, p.unit_mask, p.campaign_mode),
             (0x8000, 0x20, true)
         );
+        assert_eq!(p.replacement_count_field, 0x380);
+        for offset in [45, 61] {
+            w[9][offset..offset + 4].copy_from_slice(&0x398u32.to_le_bytes());
+        }
+        assert_eq!(decode(&w).unwrap().replacement_count_field, 0x398);
         w[1][36] = 0;
         w[1][51] = 0;
         assert!(!decode(&w).unwrap().campaign_mode);
@@ -342,6 +427,21 @@ mod tests {
             (6, 18),
             (7, 6),
             (7, 11),
+            (8, 11),
+            (9, 4),
+            (9, 10),
+            (9, 21),
+            (9, 27),
+            (9, 37),
+            (9, 40),
+            (9, 47),
+            (9, 50),
+            (9, 52),
+            (9, 58),
+            (9, 61),
+            (9, 66),
+            (10, 4),
+            (11, 19),
         ] {
             let mut w = synthetic();
             w[i][offset] ^= 1;
@@ -392,6 +492,7 @@ mod tests {
             (0x4000, 0x40, true)
         );
         assert_eq!(p.image_sha256, REVIEWED_IMAGE);
+        assert_eq!(p.replacement_count_field, 0x1d4);
         assert!(
             CampaignModePolicy::read(
                 &image,

@@ -225,12 +225,16 @@ endfunction
     let ai_common = format!(
         "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\nnative SetSlowChopping takes boolean enabled returns nothing\nnative GroupTimedLife takes boolean enabled returns nothing\nnative CaptainGroupSize takes nothing returns integer\nnative CaptainIsEmpty takes nothing returns boolean\n"
     );
-    let ai_common = format!("{ai_common}native SetCampaignAI takes nothing returns nothing\n");
+    let ai_common = format!(
+        "{ai_common}native SetCampaignAI takes nothing returns nothing\nnative SetReplacementCount takes integer count returns nothing\n"
+    );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
         .into_iter()
         .map(|(name, flag)| {
             let home_x = if flag { 112.0 } else { 48.0 };
             let opposite = !flag;
+            let replacements = if flag { 17 } else { -29 };
+            let later_replacements = -replacements;
             let body = format!(
                 r#"function VerifyEmptyCaptains takes nothing returns nothing
 if CaptainGroupSize() != 0 or not CaptainIsEmpty() or GetPlayers() != 3 then
@@ -245,6 +249,7 @@ call SetGroupsFlee({flag})
 call SetSlowChopping({flag})
 call SetNewHeroes({flag})
 call GroupTimedLife({flag})
+call SetReplacementCount({replacements})
 if {flag} then
 call SetCampaignAI()
 endif
@@ -259,6 +264,7 @@ call SetGroupsFlee({opposite})
 call SetSlowChopping({opposite})
 call SetNewHeroes({opposite})
 call GroupTimedLife({opposite})
+call SetReplacementCount({later_replacements})
 if {opposite} then
 call SetCampaignAI()
 endif
@@ -413,6 +419,13 @@ endfunction
     };
     assert_eq!(campaign_mode(&mut session, a), None);
     assert_eq!(campaign_mode(&mut session, b), Some(true));
+    let replacement_count = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_replacement_count(owner).unwrap()
+    };
+    assert_eq!(replacement_count(&mut session, a), Some(-29));
+    assert_eq!(replacement_count(&mut session, b), Some(17));
     let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
         let objects = session.host().unwrap().objects();
         for (unit, base) in [(a, a_base), (b, b_base)] {
@@ -475,6 +488,8 @@ endfunction
     assert_eq!(group_timed_life_flag(&mut session, b), Some(false));
     assert_eq!(campaign_mode(&mut session, a), Some(true));
     assert_eq!(campaign_mode(&mut session, b), Some(true));
+    assert_eq!(replacement_count(&mut session, a), Some(29));
+    assert_eq!(replacement_count(&mut session, b), Some(-17));
     check_gathering(&mut session);
     check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {

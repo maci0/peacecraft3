@@ -22,6 +22,7 @@ struct PlayerFlags {
     groups_flee: Option<bool>,
     new_heroes: Option<bool>,
     campaign_mode: Option<bool>,
+    replacement_count: Option<i32>,
     slow_chopping: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
@@ -56,6 +57,7 @@ impl Registry {
                 groups_flee: None,
                 new_heroes: None,
                 campaign_mode: None,
+                replacement_count: None,
                 slow_chopping: None,
                 gathering: None,
                 gathering_unit: None,
@@ -114,6 +116,19 @@ impl Registry {
             .get_mut(&player)
             .expect("active player preflighted")
             .campaign_mode = Some(enabled);
+    }
+
+    pub(super) fn replacement_count(&self, player: i32) -> Option<i32> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.replacement_count)
+    }
+
+    pub(super) fn set_replacement_count(&mut self, player: i32, count: i32) {
+        self.players
+            .get_mut(&player)
+            .expect("active player preflighted")
+            .replacement_count = Some(count);
     }
 
     pub(super) fn slow_chopping(&self, player: i32) -> Option<bool> {

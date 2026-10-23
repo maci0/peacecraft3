@@ -126,6 +126,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String>;
+    fn ai_set_replacement_count(&mut self, player: i32, count: i32) -> Result<(), String>;
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
@@ -280,6 +281,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .set_ai_campaign_mode(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_replacement_count(&mut self, player: i32, count: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_replacement_count(player, count)
             .map_err(|e| e.to_string())
     }
 
@@ -604,6 +616,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     for (name, params) in [
         ("CreateCaptains", &[][..]),
         ("SetCampaignAI", &[][..]),
+        ("SetReplacementCount", &["integer"][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
@@ -873,6 +886,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_set_campaign_mode(player)?;
                 Ok(Value::Null)
             }
+            "SetReplacementCount" => {
+                let [Value::Int(count)] = args else {
+                    return Err("SetReplacementCount: expected one integer".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_replacement_count(player, *count)?;
+                Ok(Value::Null)
+            }
             "GroupTimedLife" => {
                 let [Value::Bool(enabled)] = args else {
                     return Err("GroupTimedLife: expected a boolean".into());
@@ -927,6 +948,7 @@ mod tests {
         groups_flee: BTreeMap<i32, bool>,
         new_heroes: BTreeMap<i32, bool>,
         campaign_modes: BTreeSet<i32>,
+        replacement_counts: BTreeMap<i32, i32>,
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         captain_creates: BTreeMap<i32, usize>,
@@ -972,6 +994,7 @@ mod tests {
             self.0.lock().unwrap().groups_flee.remove(&player);
             self.0.lock().unwrap().new_heroes.remove(&player);
             self.0.lock().unwrap().campaign_modes.remove(&player);
+            self.0.lock().unwrap().replacement_counts.remove(&player);
             self.0.lock().unwrap().slow_chopping.remove(&player);
             self.0.lock().unwrap().gathering.remove(&player);
             self.0.lock().unwrap().captain_creates.remove(&player);
@@ -1034,6 +1057,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.campaign_modes.insert(player);
+            Ok(())
+        }
+        fn ai_set_replacement_count(&mut self, player: i32, count: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.replacement_counts.insert(player, count);
             Ok(())
         }
         fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
@@ -1758,6 +1789,108 @@ mod tests {
         assert!(shared.lock().unwrap().campaign_modes.is_empty());
         assert_eq!(host.native("SetCampaignAI", &[]).unwrap(), Value::Null);
         assert_eq!(shared.lock().unwrap().campaign_modes, [1].into());
+    }
+
+    #[test]
+    fn replacement_counts_are_program_local_and_survive_sleep_and_repeat_start() {
+        let script = program_with_ai_common(
+            "synthetic:replacements.ai",
+            "function main takes nothing returns nothing\ncall SetReplacementCount(GetAiPlayer()*17)\ncall Sleep(0.25)\ncall SetReplacementCount(-GetAiPlayer()*29)\nendfunction\n",
+            &format!("{AI_COMMON}native SetReplacementCount takes integer count returns nothing\n"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime
+                .start(&mut world, player, "replacements.ai")
+                .unwrap();
+        }
+        assert_eq!(
+            shared.lock().unwrap().replacement_counts,
+            [(1, 17), (2, 34)].into()
+        );
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        runtime.start(&mut world, 1, "replacements.ai").unwrap();
+        assert_eq!(
+            shared.lock().unwrap().replacement_counts,
+            [(1, -29), (2, -58)].into()
+        );
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn replacement_abi_and_runtime_arguments_refuse_without_writes() {
+        for declaration in [
+            "native SetReplacementCount takes boolean count returns nothing\n",
+            "native SetReplacementCount takes integer count returns integer\n",
+            "constant native SetReplacementCount takes integer count returns nothing\n",
+            "native SetReplacementCount takes nothing returns nothing\n",
+        ] {
+            let script = program_with_ai_common(
+                "synthetic:replacements.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &format!("{AI_COMMON}{declaration}"),
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "replacements.ai").unwrap_err();
+            assert!(error.contains("SetReplacementCount"), "{error}");
+            assert!(shared.lock().unwrap().gold.is_empty());
+            assert!(shared.lock().unwrap().active.is_empty());
+        }
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        assert!(
+            host.native("SetReplacementCount", &[Value::Int(17)])
+                .is_err()
+        );
+        shared.lock().unwrap().active.insert(1, false);
+        for args in [
+            vec![],
+            vec![Value::Bool(true)],
+            vec![Value::Real(1.0)],
+            vec![Value::Int(1), Value::Int(2)],
+        ] {
+            assert!(host.native("SetReplacementCount", &args).is_err());
+            assert!(shared.lock().unwrap().replacement_counts.is_empty());
+        }
+        assert_eq!(
+            host.native("SetReplacementCount", &[Value::Int(i32::MIN)])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            shared.lock().unwrap().replacement_counts,
+            [(1, i32::MIN)].into()
+        );
+        let failing = program_with_ai_common(
+            "synthetic:replacement-failure.ai",
+            "function main takes nothing returns nothing\ncall SetReplacementCount(73)\ncall Unsupported()\nendfunction\n",
+            &format!(
+                "{AI_COMMON}native SetReplacementCount takes integer count returns nothing\nnative Unsupported takes nothing returns nothing\n"
+            ),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&failing)));
+        let mut world = Some(World(Arc::clone(&shared)));
+        assert!(
+            runtime
+                .start(&mut world, 2, "replacement-failure.ai")
+                .is_err()
+        );
+        assert_eq!(
+            shared.lock().unwrap().replacement_counts,
+            [(1, i32::MIN)].into()
+        );
+        assert!(!shared.lock().unwrap().active.contains_key(&2));
+        assert!(world.is_some());
     }
 
     #[test]
