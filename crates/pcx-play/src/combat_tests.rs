@@ -221,6 +221,20 @@ fn open_fixture(
     blight: Option<crate::terrain_blight::InitialBlight>,
     resource: Option<Arc<DefaultTables>>,
 ) -> (Vm, HandleId, HandleId) {
+    open_fixture_with(fields, heroes, combat, clock, blight, resource, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_fixture_with(
+    fields: &[([u8; 4], ObjectField)],
+    heroes: Option<crate::hero_skills::Rules>,
+    combat: CombatRules,
+    clock: bool,
+    blight: Option<crate::terrain_blight::InitialBlight>,
+    resource: Option<Arc<DefaultTables>>,
+    numeric: Option<crate::script_numeric::NumericPolicy>,
+    flee: Option<(crate::campaign_flee_policy::FleePolicy, i32)>,
+) -> (Vm, HandleId, HandleId) {
     let mut extra = format!(
         "{}\n{}{DECLARATIONS}{}{}{}",
         enumeration::TRIGGERS,
@@ -284,6 +298,9 @@ fn open_fixture(
         .unwrap()
         .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
         .unwrap();
+    if let Some(numeric) = numeric {
+        h = h.with_script_numeric(numeric);
+    }
     if experience {
         let (rules, numeric) = crate::player_handicap::tests::rules();
         h = h
@@ -347,10 +364,17 @@ fn open_fixture(
     .unwrap();
     h.admit_combat(combat, "alpha").unwrap();
     h.set_neutral_passive(15);
+    if let Some((policy, _)) = flee.as_ref() {
+        let context = Arc::clone(h.player_context().unwrap());
+        h.admit_campaign_flee(&context, policy.clone()).unwrap();
+    }
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
     vm.call("setup", &[]).unwrap();
+    if let Some((_, player)) = flee {
+        vm.host().inner.activate_campaign_ai_player(player).unwrap();
+    }
     let id = |vm: &Vm, name| match vm.global(name) {
         Value::Handle(id) => id,
         _ => panic!("{name}"),
@@ -3845,4 +3869,232 @@ fn campaign_targeting_refuses_neutral_aggressive_candidates_and_keeps_explicit_t
     );
     step(&mut vm, 1.0 / 64.0);
     assert_eq!(acquired(&mut vm, a), Some(b));
+}
+
+fn flee_fields(can_flee: &str, speed: &str) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("4", "normal");
+    fields.push(column(
+        b"H001",
+        SlkId::UnitBalance,
+        "HP",
+        FieldKind::Int,
+        "1000",
+    ));
+    fields.push(column(
+        b"C001",
+        SlkId::UnitData,
+        "canFlee",
+        FieldKind::Bool,
+        can_flee,
+    ));
+    fields.push(column(
+        b"S001",
+        SlkId::UnitBalance,
+        "spd",
+        FieldKind::Real,
+        speed,
+    ));
+    fields
+}
+
+fn open_flee(
+    fields: &[([u8; 4], ObjectField)],
+    policy: crate::campaign_flee_policy::FleePolicy,
+    numeric: crate::script_numeric::NumericPolicy,
+    player: i32,
+) -> (Vm, HandleId, HandleId) {
+    open_fixture_with(
+        fields,
+        None,
+        rules(),
+        false,
+        None,
+        None,
+        Some(numeric),
+        Some((policy, player)),
+    )
+}
+
+fn flee_fixture(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
+    let (policy, numeric) = crate::campaign_flee_policy::tests::route_fixture();
+    open_flee(fields, policy, numeric, 5)
+}
+
+fn set_life(vm: &mut Vm, unit: HandleId, life: f32) {
+    let state = vm.global("UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), state, Value::Real(life)],
+        )
+        .unwrap();
+}
+
+fn position(vm: &mut Vm, unit: HandleId) -> [f32; 2] {
+    vm.host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .position
+        .unwrap()
+}
+
+fn low_life_damage(vm: &mut Vm, source: HandleId, target: HandleId, damage: f32) -> bool {
+    vm.host()
+        .inner
+        .combat_damage_unit(source, target, damage)
+        .unwrap();
+    vm.host().inner.campaign_flee_motion_owns(target)
+}
+
+#[test]
+fn low_life_alone_does_not_start_a_retreat() {
+    let (mut vm, _, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    let before = position(&mut vm, b);
+    step(&mut vm, 1.0);
+    assert_eq!(position(&mut vm, b), before);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+}
+
+#[test]
+fn ordinary_incoming_hit_starts_a_route_away_from_the_attacker() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    let before = position(&mut vm, b);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    let destination = vm
+        .host()
+        .inner
+        .executed_unit(b)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .destination()
+        .expect("retreat destination");
+    assert!(destination[0] > before[0]);
+    assert_eq!(destination[1], before[1]);
+    step(&mut vm, 0.25);
+    assert!(position(&mut vm, b)[0] > before[0]);
+}
+
+#[test]
+fn disabled_flee_flag_keeps_the_low_life_unit_in_place() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    set_life(&mut vm, b, 20.0);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+}
+
+#[test]
+fn can_flee_and_minimum_speed_gate_the_retreat() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("0", "8"));
+    set_life(&mut vm, b, 20.0);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "1"));
+    set_life(&mut vm, b, 20.0);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+}
+
+#[test]
+fn life_bands_and_the_ordinary_cutoff_are_distinct() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 200.0);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 390.0);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 290.0);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+}
+
+#[test]
+fn nonpositive_damage_does_not_start_a_retreat() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    assert!(!low_life_damage(&mut vm, a, b, 0.0));
+    assert!(!low_life_damage(&mut vm, a, b, -1.0));
+}
+
+#[test]
+fn clearing_the_flag_midroute_keeps_the_route_and_blocks_later_starts() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    step(&mut vm, 0.1);
+    assert!(vm.host().inner.campaign_flee_motion_owns(b));
+    step(&mut vm, 2.0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+}
+
+#[test]
+fn explicit_order_and_death_forget_retreat_ownership() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    vm.host()
+        .inner
+        .native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(b),
+                Value::Str("gamma".into()),
+                Value::Real(52.0),
+                Value::Real(16.0),
+            ],
+        )
+        .unwrap();
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    assert!(low_life_damage(&mut vm, a, b, 1.0));
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(b)])
+        .unwrap();
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+}
+
+#[test]
+fn unsupported_damage_source_refuses_before_vitals_and_trace() {
+    let mut fields = flee_fields("1", "8");
+    fields.push(column(
+        b"W001",
+        SlkId::UnitWeapons,
+        "weapsOn",
+        FieldKind::Int,
+        "0",
+    ));
+    let (mut vm, a, b) = flee_fixture(&fields);
+    vm.host().inner.enable_combat_trace(16);
+    set_life(&mut vm, b, 20.0);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("spell-like source is unsupported");
+    assert!(
+        error.to_string().contains("no admitted combat weapon"),
+        "{error}"
+    );
+    assert_eq!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life, 20.0);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+}
+
+#[test]
+fn generic_damage_does_not_start_a_retreat() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 20.0);
+    vm.host().inner.damage_unit(a, b, 1.0).unwrap();
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+    assert_eq!(vm.host().inner.unit_vitals(b).unwrap().unwrap().life, 19.0);
 }

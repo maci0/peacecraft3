@@ -895,18 +895,47 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Lethal or partial life loss from a damage source (weapon or spell). Kills name `source` as killer.
+    /// Lethal or partial life loss from any damage source. Kills name `source`
+    /// as killer but a generic source does not start a combat retreat.
     pub(crate) fn damage_unit(
         &mut self,
         source: HandleId,
         target: HandleId,
         damage: f32,
     ) -> Result<(), Error> {
+        self.apply_damage(source, target, damage, false)
+    }
+
+    /// A landed melee hit or missile impact. This is the incoming combat damage
+    /// that the ordinary campaign flee leaf observes.
+    pub(crate) fn combat_damage_unit(
+        &mut self,
+        source: HandleId,
+        target: HandleId,
+        damage: f32,
+    ) -> Result<(), Error> {
+        self.apply_damage(source, target, damage, true)
+    }
+
+    fn apply_damage(
+        &mut self,
+        source: HandleId,
+        target: HandleId,
+        damage: f32,
+        combat_hit: bool,
+    ) -> Result<(), Error> {
         let Some(record) = self.weapon_target(target) else {
             return Ok(());
         };
         let life_before = record.vitals.map(|v| v.life);
         let life = life_before.unwrap_or(0.0) - damage;
+        if combat_hit
+            && damage > 0.0
+            && let Some(destination) =
+                self.campaign_flee_damage_decision(source, target, life_before)?
+        {
+            self.initiate_campaign_flee(target, destination)?;
+        }
         if damage > 0.0 {
             self.wake_natural_sleep(target);
         }
@@ -984,7 +1013,7 @@ impl ObjectHost {
             missiles.into_iter().partition(|m| m.impact_at <= now);
         self.combat.as_mut().expect("combat").missiles = pending;
         for missile in due {
-            self.damage_unit(missile.source, missile.target, missile.damage)?;
+            self.combat_damage_unit(missile.source, missile.target, missile.damage)?;
         }
         self.advance_holy_light(now)?;
         self.advance_summoning(now)?;
@@ -1011,7 +1040,18 @@ impl ObjectHost {
                 .and_then(|record| record.combat.as_ref()?.target)
                 .is_some_and(|target| self.weapon_target(target).is_some());
             if self.guard_combat_step(unit, now, has_valid_target)? {
+                self.forget_campaign_flee(unit);
                 continue;
+            }
+            if self.campaign_flee_motion_owns(unit) {
+                let moving = self
+                    .live(unit)
+                    .and_then(|record| record.activity.as_ref())
+                    .is_some_and(|activity| activity.moving());
+                if moving {
+                    continue;
+                }
+                self.forget_campaign_flee(unit);
             }
             let Some(record) = self.live(unit) else {
                 continue;
@@ -1225,7 +1265,7 @@ impl ObjectHost {
                                 damage,
                             });
                         }
-                        None => self.damage_unit(unit, swung, damage)?,
+                        None => self.combat_damage_unit(unit, swung, damage)?,
                     }
                 }
                 _ => {}
