@@ -187,6 +187,110 @@ fn heroes_flee_is_explicit_per_player_and_rejected_masks_do_not_backfill() {
 }
 
 #[test]
+fn groups_flee_uses_existing_players_and_refuses_overlapping_policy_before_backfill() {
+    let (mut h, ctx) = campaign_host();
+    let first = player(&mut h, 0);
+    let second = player(&mut h, 1);
+    h.admit_campaign_targeting(&ctx, TargetingPolicy::fixture())
+        .unwrap();
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert!(h.activate_campaign_ai_player(1).unwrap());
+    h.set_ai_target_heroes(0, true).unwrap();
+    let policy = FleePolicy::fixture();
+    for (units, heroes, groups) in [
+        (
+            0,
+            policy.context_heroes_flee_mask,
+            policy.context_groups_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            3,
+            policy.context_groups_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            0,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            3,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            policy.context_units_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            policy.context_heroes_flee_mask,
+        ),
+    ] {
+        let mut malformed = policy.clone();
+        malformed.context_units_flee_mask = units;
+        malformed.context_heroes_flee_mask = heroes;
+        malformed.context_groups_flee_mask = groups;
+        assert!(h.admit_campaign_flee(&ctx, malformed).is_err());
+        assert!(h.campaign_flee_policy().is_none());
+        assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
+        assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+        assert_eq!(
+            h.campaign_targeting_enabled(id(&first)).unwrap(),
+            Some(true)
+        );
+    }
+    assert!(h.set_ai_groups_flee(0, true).is_err());
+    assert!(h.set_ai_groups_flee(3, true).is_err());
+    assert!(h.player_identity(3).is_none());
+
+    h.admit_campaign_flee(&ctx, policy).unwrap();
+    let error = h.set_ai_groups_flee(3, true).unwrap_err().to_string();
+    assert!(error.contains("SetGroupsFlee"), "{error}");
+    assert!(h.player_identity(3).is_none());
+    assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(h.campaign_groups_flee_enabled(id(&second)).unwrap(), None);
+    h.set_ai_units_flee(0, true).unwrap();
+    h.set_ai_heroes_flee(0, false).unwrap();
+    h.set_ai_groups_flee(0, true).unwrap();
+    h.set_ai_groups_flee(1, false).unwrap();
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let handles = h.inner().handles();
+    assert!(h.campaign_groups_flee_enabled(id(&timer)).is_err());
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), Some(true));
+    assert_eq!(
+        h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
 fn activation_without_policies_still_refuses_an_invalid_player_without_state_growth() {
     let (mut h, _) = campaign_host();
     assert!(h.player_identity(3).is_none());
