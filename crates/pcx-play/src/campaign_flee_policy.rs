@@ -80,7 +80,7 @@ const WINDOWS: [(u32, usize, bool); 31] = [
     (0xab68c6, 20, true), // SetHeroesFlee registration banner (sig/name/handler)
     (0xab7170, 71, true), // SetHeroesFlee handler through final ret
     (0xba9573, 7, true),  // hero decision test (context + field, imm8 mask)
-    (0xf160cc, 16, false), // name bytes "SetHeroesFlee\0"
+    (0xf160cc, 14, false), // name bytes "SetHeroesFlee\0"
     (0xe700b0, 5, false), // signature bytes "(B)V\0"
 ];
 
@@ -450,8 +450,8 @@ impl FleePolicy {
         if call(hero_reg, WINDOWS[26].0, 15)? != 0x8ccc80 {
             return Err(Error("SetHeroesFlee registrar changed"));
         }
-        at(hero_name, 0, b"SetHeroesFlee")?;
-        at(hero_sig, 0, b"(B)V")?;
+        at(hero_name, 0, b"SetHeroesFlee\0")?;
+        at(hero_sig, 0, b"(B)V\0")?;
 
         // Handler: same full control chain as the units setter, but the set/clear
         // operands derive the hero mask. The field offset must equal the decoded
@@ -510,6 +510,9 @@ impl FleePolicy {
             return Err(Error("hero mask is not a single positive bit"));
         }
         let heroes_mask = u32::from(hero_or_imm);
+        if heroes_mask & context_mask != 0 {
+            return Err(Error("hero and ordinary flee masks overlap"));
+        }
         at(hero_handler, 60, &[0x5d])?;
         at(hero_handler, 61, &[0xc3])?;
         at(hero_handler, 62, &[0x83, 0xa0])?;
@@ -1401,6 +1404,20 @@ pub(crate) mod tests {
         .expect("changed hero mask operand");
         assert_eq!(policy.context_heroes_flee_mask, 0x04);
 
+        let mut overlap = synthetic_windows();
+        let units = overlap[0][6];
+        overlap[27][59] = units;
+        overlap[27][68] = !units;
+        overlap[28][6] = units;
+        assert!(
+            FleePolicy::decode(
+                &overlap.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0; 32],
+            )
+            .is_err(),
+            "coherently overlapping flags must refuse"
+        );
+
         let refuses = |source: Vec<Vec<u8>>| {
             assert!(
                 FleePolicy::decode(
@@ -1441,6 +1458,14 @@ pub(crate) mod tests {
 
         let mut source = synthetic_windows();
         source[30][0] ^= 1;
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[29][13] = b'X';
+        refuses(source);
+
+        let mut source = synthetic_windows();
+        source[30][4] = b'X';
         refuses(source);
 
         let mut source = synthetic_windows();

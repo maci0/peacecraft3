@@ -217,11 +217,11 @@ endfunction
         .shared_context()
         .unwrap();
     let ai_common = format!(
-        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\n"
+        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\n"
     );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
         let home_x = if flag { 112.0 } else { 48.0 };
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag);
+        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetHeroesFlee({flag})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetHeroesFlee({})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag, !flag);
         let program = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -317,6 +317,13 @@ endfunction
     };
     assert_eq!(new_heroes_flag(&mut session, a), Some(false));
     assert_eq!(new_heroes_flag(&mut session, b), Some(true));
+    let heroes_flee_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_heroes_flee_enabled(owner).unwrap()
+    };
+    assert_eq!(heroes_flee_flag(&mut session, a), Some(false));
+    assert_eq!(heroes_flee_flag(&mut session, b), Some(true));
     let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
         let objects = session.host().unwrap().objects();
         for (unit, base) in [(a, a_base), (b, b_base)] {
@@ -369,6 +376,8 @@ endfunction
     assert_eq!(flee_flag(&mut session, b), Some(true));
     assert_eq!(new_heroes_flag(&mut session, a), Some(true));
     assert_eq!(new_heroes_flag(&mut session, b), Some(false));
+    assert_eq!(heroes_flee_flag(&mut session, a), Some(true));
+    assert_eq!(heroes_flee_flag(&mut session, b), Some(false));
     check_gathering(&mut session);
     check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {

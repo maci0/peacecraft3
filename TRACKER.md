@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `SetHeroesFlee` now has source-derived mask admission, canonical per-player
+  state and an explicit combat boundary independent of ordinary flee. Inactive
+  human owners take normal damage; enabled or unknown hero retreat on an active
+  AI refuses before combat mutation until its distinct rule is qualified.
+  Combined checks pass 1,630 core / 610 app tests, 14 selected-image/synthetic
+  flee checks, strict native/WASM Clippy and selected startup/Continue. Unchanged
+  Human02 passes this call and stops at `SetGroupsFlee` at 7.218750 seconds.
+  Full hero retreat and campaign completion remain open; see
+  [campaign flee](docs/re-notes/campaign-ai-flee.md).
+
 - [~] `SetNewHeroes` now validates its owned source ABI and stores the explicit
   transition in the canonical per-player context. The selected-image reader
   binds the registration, handler control flow and complementary flag operands.
