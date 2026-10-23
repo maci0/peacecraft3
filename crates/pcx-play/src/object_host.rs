@@ -683,7 +683,6 @@ impl ObjectHost {
         &self,
         number: i32,
         techid: i32,
-        _settings: &PlayerSettings,
     ) -> Result<bool, Error> {
         match self.stored_tech_level(number, techid) {
             players::TechRead::Level(level) => Ok(level > 0),

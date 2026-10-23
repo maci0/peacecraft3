@@ -273,7 +273,7 @@ impl ObjectHost {
             };
             let techid = i32::from_be_bytes([*a, *b, *c, *d]);
             if self
-                .campaign_flee_upgrade_is_active(settings.number, techid, settings)
+                .campaign_flee_upgrade_is_active(settings.number, techid)
                 .map_err(|error| self.campaign_flee_error(source, &error.to_string()))?
             {
                 return Err(self.campaign_flee_error(

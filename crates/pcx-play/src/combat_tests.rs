@@ -4228,31 +4228,10 @@ fn high_life_is_a_contextual_refusal_that_aborts_before_damage() {
 #[test]
 fn unavailable_applied_upgrade_state_is_a_contextual_refusal() {
     let (mut vm, _, _) = flee_fixture(&flee_fields("1", "8"));
-    let settings = crate::playercolor_host::PlayerSettings {
-        identity: HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
-        number: 5,
-        team: None,
-        start_location: None,
-        start_is_forced: false,
-        color: None,
-        race_preference: None,
-        race_selectable: None,
-        controller: None,
-        slot_state: None,
-        name: None,
-        on_score_screen: None,
-        tech_max: Vec::new(),
-        tech_researched: Vec::new(),
-        research_levels: Vec::new(),
-        alliances: Vec::new(),
-        state_requests: Vec::new(),
-        experience_handicap: None,
-        health_handicap: None,
-    };
     let error = vm
         .host()
         .inner
-        .campaign_flee_upgrade_is_active(5, 0x5268_6d65, &settings)
+        .campaign_flee_upgrade_is_active(5, 0x5268_6d65)
         .expect_err("unavailable applied research");
     assert!(
         error

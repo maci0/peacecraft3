@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 const NATIVE: &str = "SetUnitsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
-const GATHERING_NATIVE: &str = "StopGathering";
 const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
