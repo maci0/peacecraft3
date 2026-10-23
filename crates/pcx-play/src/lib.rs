@@ -98,6 +98,7 @@ pub mod map_startup_host;
 pub mod menu_edition;
 pub mod menu_lighting;
 pub mod message_layout;
+pub mod minimap_layout;
 pub mod minimize;
 pub mod mp3_frame;
 pub mod neutral_player;

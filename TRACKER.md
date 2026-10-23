@@ -2,6 +2,13 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign minimap source qualification now derives its logical rectangle,
+  viewport and TGA-before-BLP lookup order from the selected client image.
+  The reader distinguishes the in-game minimap from the selection preview and
+  refuses unsupported source relationships. All 1,679 core tests, the explicit
+  selected-image gate and strict native/WASM Clippy pass. Rendering, visibility, overlays and
+  pointer actions remain open; see [campaign minimap](docs/re-notes/campaign-minimap.md).
+
 - [~] A production-app offscreen Vulkan diagnostic now renders the selected RoC
   main menu, activates mounted campaign/mission controls and reaches Human01
   gameplay after Escape (130 live units). It waits for authored panel Stand
