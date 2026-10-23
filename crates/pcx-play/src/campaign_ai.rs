@@ -852,7 +852,6 @@ mod tests {
             state.captain_homes.push((player, selector, home));
             Ok(())
         }
-
     }
 
     impl Host for World {

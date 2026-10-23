@@ -1581,9 +1581,7 @@ impl ObjectHost {
     /// Null units are ignored by setters and read as zero facing.
     fn facing_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
-        let (unit, rest) = args
-            .split_first()
-            .ok_or_else(|| fail("unit required"))?;
+        let (unit, rest) = args.split_first().ok_or_else(|| fail("unit required"))?;
         let reals = rest
             .iter()
             .map(|v| v.as_real().filter(|r| r.is_finite()))
