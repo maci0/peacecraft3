@@ -32,7 +32,7 @@ const WINDOWS: [(u32, usize, bool); 6] = [
     (0xabb4e9, 7, true),  // context reader (testb $1, ctx+0x2d0)
     (0xabf9e2, 10, true), // constructor zero-initialize
     (0xabfa1e, 16, true), // constructor conditional OR (kind gate)
-    (0x696b50, 48, true), // candidate structure/excluded-state predicate
+    (0x696b50, 49, true), // candidate structure/excluded-state predicate
     (0xac3f9d, 7, true),  // immediate-candidate mask (testb $0x10, unit+0x454)
 ];
 
@@ -107,6 +107,15 @@ impl GatheringPolicy {
         at(clear, 0, &[0x83, 0xa0])?;
         let ctx_offset = word(clear, 2)?;
         let clear_imm = *clear.get(6).ok_or(Error("missing clear operand"))?;
+        // `andl r/m32, imm8` sign-extends the imm8; the real clear is a
+        // negative widened mask (e.g. 0xfe -> 0xfffffffe). Reject a clear imm
+        // whose sign bit is clear so an 8-bit-wide "mask" cannot masquerade as
+        // a 32-bit clear.
+        if clear_imm & 0x80 == 0 {
+            return Err(Error(
+                "context clear imm8 does not sign-extend a wide clear",
+            ));
+        }
         let ctx_mask = u32::from(!clear_imm);
         if ctx_mask == 0 || ctx_mask.count_ones() != 1 {
             return Err(Error("context gathering mask is not a single cleared bit"));
@@ -142,6 +151,12 @@ impl GatheringPolicy {
         }
         let conditional_excluded_kind = u32::from(kind_byte);
         at(init_cond, 3, &[0x74])?;
+        // The conditional OR occupies bytes 5..15; the JE skip must land just
+        // past it (displacement 0x0a -> target 15).
+        let skip = *init_cond.get(4).ok_or(Error("missing excluded-kind JE"))? as i8;
+        if skip < 0 || 5 + skip as usize != 15 {
+            return Err(Error("gathering excluded-kind JE does not skip the OR"));
+        }
         at(init_cond, 5, &[0x81, 0x8e])?;
         if word(init_cond, 7)? != ctx_offset {
             return Err(Error("gathering conditional OR offset differs from clear"));
@@ -157,15 +172,27 @@ impl GatheringPolicy {
         if word(candidate, 5)? != 0x164 {
             return Err(Error("candidate flag offset changed"));
         }
-        let structure_mask = word(candidate, 11)?;
+        at(candidate, 9, &[0xa9])?;
+        let structure_mask = word(candidate, 10)?;
         if structure_mask == 0 || structure_mask.count_ones() != 1 {
             return Err(Error("candidate structure mask is not a single bit"));
         }
-        at(candidate, 15, &[0x74])?;
-        at(candidate, 23, &[0x25])?;
-        let excluded_state_mask = word(candidate, 24)?;
-        at(candidate, 28, &[0x3d])?;
-        let excluded_state_value = word(candidate, 29)?;
+        at(candidate, 14, &[0x74])?;
+        at(candidate, 16, &[0x83, 0x7d, 0x08, 0x00])?;
+        at(candidate, 20, &[0x74])?;
+        at(candidate, 22, &[0x25])?;
+        let excluded_state_mask = word(candidate, 23)?;
+        at(candidate, 27, &[0x3d])?;
+        let excluded_state_value = word(candidate, 28)?;
+        at(candidate, 32, &[0x74])?;
+        at(candidate, 34, &[0xb8])?;
+        // Both "reject" JE branches must converge on the shared false return
+        // after the true-return block: `16 + je1.disp == 34 + je2.disp`.
+        let je1 = *candidate.get(15).ok_or(Error("missing structure JE"))? as i8;
+        let je2 = *candidate.get(33).ok_or(Error("missing excluded JE"))? as i8;
+        if je1 < 0 || je2 < 0 || 16 + je1 as usize != 34 + je2 as usize {
+            return Err(Error("candidate reject branches do not converge"));
+        }
         if excluded_state_mask == 0
             || excluded_state_value == 0
             || (excluded_state_mask & excluded_state_value) != excluded_state_value
@@ -265,20 +292,19 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 
     put(&mut w, 4, 0, &[0x55, 0x8b, 0xec, 0x8b, 0x81]);
     dword(&mut w, 4, 5, 0x164);
-    dword(&mut w, 4, 11, STRUCT_MASK);
-    put(&mut w, 4, 15, &[0x74, 0x1b]);
-    put(&mut w, 4, 17, &[0x83, 0x7d, 0x08, 0x00]);
-    put(&mut w, 4, 21, &[0x74, 0x0c]);
-    put(&mut w, 4, 23, &[0x25]);
-    dword(&mut w, 4, 24, EXCL_MASK);
-    put(&mut w, 4, 28, &[0x3d]);
-    dword(&mut w, 4, 29, EXCL_VAL);
-    put(
-        &mut w,
-        4,
-        33,
-        &[0x74, 0x09, 0xb8, 0x01, 0, 0, 0, 0x5d, 0xc2, 0x04, 0x00],
-    );
+    put(&mut w, 4, 9, &[0xa9]);
+    dword(&mut w, 4, 10, STRUCT_MASK);
+    put(&mut w, 4, 14, &[0x74, 0x1b]);
+    put(&mut w, 4, 16, &[0x83, 0x7d, 0x08, 0x00]);
+    put(&mut w, 4, 20, &[0x74, 0x0c]);
+    put(&mut w, 4, 22, &[0x25]);
+    dword(&mut w, 4, 23, EXCL_MASK);
+    put(&mut w, 4, 27, &[0x3d]);
+    dword(&mut w, 4, 28, EXCL_VAL);
+    put(&mut w, 4, 32, &[0x74, 0x09]);
+    put(&mut w, 4, 34, &[0xb8, 0x01, 0, 0, 0]);
+    put(&mut w, 4, 39, &[0x5d, 0xc2, 0x04, 0x00]);
+    put(&mut w, 4, 43, &[0x33, 0xc0, 0x5d, 0xc2, 0x04, 0x00]);
 
     put(&mut w, 5, 0, &[0xf6, 0x86]);
     dword(&mut w, 5, 2, 0x454);
@@ -356,7 +382,7 @@ mod tests {
         assert!(!policy.gathering_default(0x11));
 
         source = synthetic_windows();
-        source[4][29] = (EXCL_VAL as u8) | 0x20;
+        source[4][28] = (EXCL_VAL as u8) | 0x20;
         let policy = GatheringPolicy::decode(
             &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             [0; 32],
@@ -388,18 +414,25 @@ mod tests {
             |w| w[3][7] ^= 0x10, // conditional OR offset mismatch
             |w| w[4][5] ^= 0x10, // candidate offset mismatch
             |w| w[5][2] ^= 0x10, // immediate offset mismatch
+            |w| w[0][6] = 0x40,  // clear imm sign bit clear (not a wide clear)
             |w| w[1][6] = 0x80,  // sign-extended reader mask
             |w| w[3][2] = 0x80,  // sign-extended excluded kind
             |w| w[5][6] = 0x80,  // sign-extended immediate mask
+            |w| w[3][4] = 0x09,  // excluded-kind JE does not skip the OR
             |w| w[3][11] = 0,    // conditional mask missing context bit
             |w| w[2][6] = 1,     // nonzero initial flags
+            |w| w[4][9] ^= 1,    // structure test opcode changed
+            |w| w[4][22] ^= 1,   // excluded AND opcode changed
+            |w| w[4][27] ^= 1,   // excluded CMP opcode changed
+            |w| w[4][15] = 0xff, // structure JE backward (negative disp)
+            |w| w[4][33] += 1,   // reject branches stop converging
             |w| {
-                w[4][11] = 0x00;
-                w[4][12] = 0x30;
+                w[4][10] = 0x00;
+                w[4][11] = 0x30;
+                w[4][12] = 0x00;
                 w[4][13] = 0x00;
-                w[4][14] = 0x00;
             }, // multi-bit structure mask
-            |w| w[4][24] = 0,    // empty excluded mask
+            |w| w[4][23] = 0,    // empty excluded mask
             |w| w[5][6] = 0,     // empty immediate mask
         ];
         for (index, mutate) in cases.iter().enumerate() {
@@ -414,5 +447,30 @@ mod tests {
                 "case {index} should refuse"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+    fn reviewed_original_image_decodes() {
+        let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
+            .expect("read reviewed client");
+        let budget = RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: WINDOWS.iter().map(|(_, len, _)| len).sum(),
+            sections: 96,
+        };
+        let policy =
+            GatheringPolicy::read(&image, budget).expect("selected gathering-policy operands");
+        assert_eq!(policy.image_sha256, REVIEWED_IMAGE);
+        assert_eq!(policy.context_gathering_mask, 0x1);
+        assert_eq!(policy.structure_mask, 0x10000);
+        assert_eq!(policy.excluded_state_mask, 0x0800_0080);
+        assert_eq!(policy.excluded_state_value, 0x80);
+        assert_eq!(policy.immediate_candidate_mask, 0x10);
+        assert_eq!(policy.initial_flags, 0);
+        assert_eq!(policy.conditional_initial_mask, 0x0008_0181);
+        assert_eq!(policy.conditional_excluded_kind, 0x18);
+        assert!(policy.gathering_default(0x17));
+        assert!(!policy.gathering_default(0x18));
     }
 }
