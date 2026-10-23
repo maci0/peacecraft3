@@ -229,6 +229,7 @@ impl ObjectHost {
                 .filter(|index| state.workers[*index].carrying >= 1.0)
         };
         if let Some(index) = existing {
+            self.slow_chopping_for(unit)?;
             let mut worker = self.harvest.as_ref().expect("admitted").workers[index].clone();
             worker.owner = owner;
             worker.manual_return = true;
@@ -250,6 +251,7 @@ impl ObjectHost {
             };
             carrying
         };
+        self.slow_chopping_for(unit)?;
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
@@ -345,6 +347,7 @@ impl ObjectHost {
         };
         let definition = record.definition.clone();
         let owner = record.owner;
+        self.slow_chopping_for(unit)?;
         self.require_work_animation(unit)?;
         let setup = self.harvest_setup(&definition, owner)?;
         let rules = setup.rules;
@@ -641,7 +644,10 @@ impl ObjectHost {
             *work = work
                 .checked_sub(1)
                 .ok_or_else(|| self.harvest_error("harvest work exhausted"))?;
-            let plan = self.prepare_destructable_damage(tree, worker.rules.damage)?;
+            let damage = self
+                .slow_chopping_for(worker.unit)?
+                .map_or(worker.rules.damage, |(damage, _)| damage);
+            let plan = self.prepare_destructable_damage(tree, damage)?;
             let capacity = worker.rules.lumber_capacity as f32;
             let Some(plan) = plan else {
                 worker.next_hit += f64::from(work_interval(&worker.rules));
@@ -720,7 +726,12 @@ impl ObjectHost {
             }
             return Ok(());
         }
-        let amount = worker.carrying.floor() as i32;
+        let amount = if worker.carrying >= 1.0 {
+            self.slow_chopping_for(worker.unit)?
+                .map_or(worker.carrying.floor() as i32, |(_, deposit)| deposit)
+        } else {
+            0
+        };
         if amount > 0 {
             let credit = self.prepare_lumber_credit_reserving(owner, amount, 0)?;
             self.stop_unit(worker.unit)?;
@@ -741,6 +752,39 @@ impl ObjectHost {
         worker.tree = None;
         self.seek_tree(worker, position)?;
         Ok(())
+    }
+
+    fn slow_chopping_for(&self, unit: HandleId) -> Result<Option<(f32, i32)>, Error> {
+        let Some(policy) = self.campaign_slow_chopping_policy() else {
+            return Ok(None);
+        };
+        let record = self.executed_unit(unit)?;
+        let player = self.player_settings(record.owner)?.number;
+        if !self.campaign_ai.is_active(player) {
+            return Ok(None);
+        }
+        match self.campaign_ai.slow_chopping(player) {
+            None => {
+                return Err(self.harvest_error("active campaign AI slow-chopping flag is unset"));
+            }
+            Some(false) => return Ok(None),
+            Some(true) => {}
+        }
+        // shortcut: only direct, effect-free workers have qualified slow-chop packets; admit modifiers when measured.
+        if record.summoned || record.admitted_order.is_some() || self.unit_has_effect_history(unit)
+        {
+            return Err(self
+                .harvest_error("slow-chopping worker has unqualified ability or effect metadata"));
+        }
+        Ok(Some((policy.tree_damage, policy.deposit_lumber)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_harvest_admitted_order(&mut self, unit: HandleId, active: bool) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("unit fixture") else {
+            panic!("unit fixture");
+        };
+        record.admitted_order = Some((*b"Aoff", active));
     }
 
     fn route_depot(&mut self, worker: &mut Worker, position: [f32; 2]) -> Result<(), Error> {

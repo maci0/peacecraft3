@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 const NATIVE: &str = "SetUnitsFlee";
 const HEROES_FLEE_NATIVE: &str = "SetHeroesFlee";
+const GROUPS_FLEE_NATIVE: &str = "SetGroupsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
 const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
@@ -18,7 +19,9 @@ struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
     heroes_flee: Option<bool>,
+    groups_flee: Option<bool>,
     new_heroes: Option<bool>,
+    slow_chopping: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
     captains_created: bool,
@@ -46,7 +49,9 @@ impl Registry {
                 target_heroes,
                 units_flee,
                 heroes_flee: None,
+                groups_flee: None,
                 new_heroes: None,
+                slow_chopping: None,
                 gathering: None,
                 gathering_unit: None,
                 captains_created: false,
@@ -80,8 +85,20 @@ impl Registry {
             .and_then(|flags| flags.heroes_flee)
     }
 
+    pub(super) fn groups_flee(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.groups_flee)
+    }
+
     pub(super) fn new_heroes(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.new_heroes)
+    }
+
+    pub(super) fn slow_chopping(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.slow_chopping)
     }
 
     pub(super) fn gathering(&self, player: i32) -> Option<(Option<bool>, Option<HandleId>)> {
@@ -166,11 +183,27 @@ impl Registry {
         true
     }
 
+    pub(super) fn set_groups_flee(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.groups_flee = Some(enabled);
+        true
+    }
+
     pub(super) fn set_new_heroes(&mut self, player: i32, enabled: bool) -> bool {
         let Some(flags) = self.players.get_mut(&player) else {
             return false;
         };
         flags.new_heroes = Some(enabled);
+        true
+    }
+
+    pub(super) fn set_slow_chopping(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.slow_chopping = Some(enabled);
         true
     }
 
@@ -207,11 +240,16 @@ impl ObjectHost {
         }
         let units_mask = policy.context_units_flee_mask;
         let heroes_mask = policy.context_heroes_flee_mask;
+        let groups_mask = policy.context_groups_flee_mask;
         if units_mask == 0
             || !units_mask.is_power_of_two()
             || heroes_mask == 0
             || !heroes_mask.is_power_of_two()
+            || groups_mask == 0
+            || !groups_mask.is_power_of_two()
             || units_mask == heroes_mask
+            || units_mask == groups_mask
+            || heroes_mask == groups_mask
         {
             return Err(self.inner.error(
                 NATIVE,
@@ -256,6 +294,16 @@ impl ObjectHost {
         Ok(self.campaign_ai.heroes_flee(number))
     }
 
+    /// `None` until this AI player explicitly calls `SetGroupsFlee`.
+    // shortcut: group controller membership is unmodeled; bind a canonical consumer before issuing retreats.
+    pub fn campaign_groups_flee_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
+        if self.campaign_flee.is_none() {
+            return Ok(None);
+        }
+        let number = self.player_settings(owner)?.number;
+        Ok(self.campaign_ai.groups_flee(number))
+    }
+
     /// Registers an active campaign AI player using the defaults of every
     /// admitted policy. Returns whether this call created the context; an
     /// already-active player keeps its current flags.
@@ -279,6 +327,7 @@ impl ObjectHost {
             && self.campaign_gathering.is_none()
             && self.campaign_captains.is_none()
             && self.campaign_new_heroes.is_none()
+            && self.campaign_slow_chopping.is_none()
         {
             return Ok(false);
         }
@@ -332,6 +381,24 @@ impl ObjectHost {
         }
         self.require_active_campaign_ai_player(player, HEROES_FLEE_NATIVE)?;
         self.campaign_ai.set_heroes_flee(player, enabled);
+        Ok(())
+    }
+
+    pub(crate) fn set_ai_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), Error> {
+        if self.campaign_flee.is_none() {
+            return Err(self.inner.error(
+                GROUPS_FLEE_NATIVE,
+                Failure::ConfigState("operands are not admitted"),
+            ));
+        }
+        if self.player_identity(player).is_none() {
+            return Err(self.inner.error(
+                GROUPS_FLEE_NATIVE,
+                Failure::ConfigState("player is not admitted"),
+            ));
+        }
+        self.require_active_campaign_ai_player(player, GROUPS_FLEE_NATIVE)?;
+        self.campaign_ai.set_groups_flee(player, enabled);
         Ok(())
     }
 

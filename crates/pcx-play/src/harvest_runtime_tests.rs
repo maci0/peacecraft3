@@ -1,4 +1,5 @@
 use super::*;
+use crate::campaign_slow_chopping_policy::SlowChoppingPolicy;
 use crate::playercolor_host::{DestructableCatalog, PlayerStateRequestBudget};
 use pcx_objects::editor::SlkId;
 use pcx_objects::editor::defaults::{DefaultTables, Identity};
@@ -498,6 +499,19 @@ fn open_harvest() -> (Vm, HandleId) {
     )
 }
 
+fn admit_slow_chopping(vm: &mut Vm, enabled: Option<bool>) {
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut policy = SlowChoppingPolicy::fixture();
+    policy.tree_damage = 2.5;
+    policy.deposit_lumber = 3;
+    host.admit_campaign_slow_chopping(&context, policy).unwrap();
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    if let Some(enabled) = enabled {
+        host.set_ai_slow_chopping(0, enabled).unwrap();
+    }
+}
+
 fn open_harvest_with(
     tables: Arc<DefaultTables>,
     catalog: DestructableCatalog,
@@ -571,7 +585,15 @@ fn open_harvest_with(
 }
 
 fn create_unit(vm: &mut Vm, rawcode: [u8; 4], x: f32, y: f32) -> HandleId {
-    let player = vm.host().inner.native("Player", &[Value::Int(0)]).unwrap();
+    create_unit_for(vm, 0, rawcode, x, y)
+}
+
+fn create_unit_for(vm: &mut Vm, owner: i32, rawcode: [u8; 4], x: f32, y: f32) -> HandleId {
+    let player = vm
+        .host()
+        .inner
+        .native("Player", &[Value::Int(owner)])
+        .unwrap();
     let Value::Handle(id) = vm
         .host()
         .inner
@@ -1085,6 +1107,323 @@ fn player_bank(vm: &mut Vm, state: &str) -> i32 {
         .player_resource_value(player, state)
         .unwrap()
         .unwrap()
+}
+
+#[test]
+fn slow_chopping_uses_image_damage_but_source_cargo_and_one_credit() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    vm.call("watch_deposit", &[]).unwrap();
+
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 77.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 75.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    tick(&mut vm, 4.5);
+    assert_eq!(tree_life(&mut vm, tree), 72.5);
+    tick(&mut vm, 5.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 3
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 3
+    );
+    while let Some(event) = vm.host().inner.take_fired_event() {
+        let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+        vm.run_thread(&delivery.actions).unwrap();
+        vm.host().inner.finish_fired_event();
+    }
+    assert_eq!(vm.global("Deposits"), Value::Int(2));
+    assert_eq!(vm.global("FirstBank"), Value::Int(bank + 3));
+    assert_eq!(vm.global("FirstGathered"), Value::Int(gathered + 3));
+    tick(&mut vm, 6.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 3
+    );
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+#[test]
+fn slow_chopping_rechecks_owner_flag_at_hit_and_deposit() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 77.5);
+    vm.host().inner.set_ai_slow_chopping(0, false).unwrap();
+    tick(&mut vm, 2.5);
+    assert_eq!(tree_life(&mut vm, tree), 68.5);
+    issue_id(&mut vm, worker, 744);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(18.0));
+    vm.host().inner.set_ai_slow_chopping(0, true).unwrap();
+    issue_id(&mut vm, worker, 901);
+    tick(&mut vm, 3.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 3
+    );
+}
+
+#[test]
+fn slow_chopping_deposit_is_independent_of_carried_lumber() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut policy = SlowChoppingPolicy::fixture();
+    policy.tree_damage = 2.5;
+    policy.deposit_lumber = 20;
+    host.admit_campaign_slow_chopping(&context, policy).unwrap();
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    host.set_ai_slow_chopping(0, true).unwrap();
+
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 77.5);
+    issue_id(&mut vm, worker, 744);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
+    assert_eq!(issue_id(&mut vm, worker, 901), Value::Bool(true));
+    tick(&mut vm, 1.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 20
+    );
+}
+
+#[test]
+fn inactive_or_explicitly_false_slow_chopping_keeps_source_harvest() {
+    for active in [false, true] {
+        let (mut vm, tree) = open_harvest();
+        let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+        let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+        if active {
+            admit_slow_chopping(&mut vm, Some(false));
+        } else {
+            let host = &mut vm.host().inner;
+            let context = Arc::clone(host.player_context().unwrap());
+            host.admit_campaign_slow_chopping(&context, SlowChoppingPolicy::fixture())
+                .unwrap();
+        }
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+        start_harvest(&mut vm, worker);
+        tick(&mut vm, 0.5);
+        tick(&mut vm, 2.5);
+        assert_eq!(tree_life(&mut vm, tree), 62.0);
+        issue_id(&mut vm, worker, 744);
+        assert_eq!(vm.host().inner.harvest_cargo(worker), Some(18.0));
+        issue_id(&mut vm, worker, 901);
+        tick(&mut vm, 3.5);
+        assert_eq!(
+            player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+            bank + 18
+        );
+    }
+}
+
+#[test]
+fn another_owners_worker_keeps_source_harvest_while_ai_owner_is_slow() {
+    let (mut vm, tree) = open_harvest();
+    vm.host().inner.native("Player", &[Value::Int(0)]).unwrap();
+    let worker = create_unit_for(&mut vm, 1, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit_for(&mut vm, 1, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 71.0);
+    issue_id(&mut vm, worker, 744);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
+}
+
+#[test]
+fn unknown_and_exceptional_slow_chopping_refuse_before_order_or_tree_writes() {
+    for exceptional in ["unknown", "summoned", "effect", "ability_off", "ability_on"] {
+        let (mut vm, tree) = open_harvest();
+        let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+        let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+        admit_slow_chopping(&mut vm, (exceptional != "unknown").then_some(true));
+        match exceptional {
+            "summoned" => vm.host().inner.test_set_summoned(worker, true),
+            "effect" => vm
+                .host()
+                .inner
+                .test_record_effect_history(worker, false, None),
+            "ability_off" => vm
+                .host()
+                .inner
+                .test_set_harvest_admitted_order(worker, false),
+            "ability_on" => vm
+                .host()
+                .inner
+                .test_set_harvest_admitted_order(worker, true),
+            _ => {}
+        }
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+        let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+        let handles = vm.host().inner.inner().handles();
+        let result = vm.host().inner.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(worker), Value::Int(900)],
+        );
+        assert!(result.is_err(), "{exceptional}");
+        assert_eq!(current_order(&mut vm, worker), 0, "{exceptional}");
+        assert_eq!(vm.host().inner.inner().handles(), handles);
+        assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+        assert_eq!(vm.host().inner.harvest_cargo(worker), None);
+        assert_eq!(tree_life(&mut vm, tree), 80.0);
+        assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+        assert_eq!(
+            player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+            gathered
+        );
+    }
+}
+
+#[test]
+fn empty_returnresources_ignores_an_unknown_slow_chopping_flag() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, None);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    let handles = vm.host().inner.inner().handles();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(worker), Value::Int(901)],
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(current_order(&mut vm, worker), 0);
+    assert_eq!(tree_life(&mut vm, tree), 80.0);
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), None);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered
+    );
+}
+
+#[test]
+fn loaded_returnresources_refuses_an_unknown_slow_chopping_flag_before_credit() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    issue_id(&mut vm, worker, 744);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
+    vm.host().inner.deactivate_campaign_ai_player(0);
+    assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
+
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    let order = current_order(&mut vm, worker);
+    let handles = vm.host().inner.inner().handles();
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(worker), Value::Int(901)],
+            )
+            .is_err()
+    );
+    assert_eq!(current_order(&mut vm, worker), order);
+    assert_eq!(tree_life(&mut vm, tree), 77.5);
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+    assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered
+    );
+}
+
+#[test]
+fn a_new_unknown_ai_context_stops_an_existing_order_before_its_hit() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    vm.host().inner.deactivate_campaign_ai_player(0);
+    assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
+    assert!(advance(&mut vm, 0.5, 64).is_err());
+    assert_eq!(tree_life(&mut vm, tree), 80.0);
+    assert_eq!(current_order(&mut vm, worker), 902);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+}
+
+#[test]
+fn slow_chopping_does_not_gate_an_accepted_return_walk() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_range("9", "18", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(52.0, 32.0),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 46.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 100.0, 96.0);
+    admit_slow_chopping(&mut vm, Some(true));
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    assert_eq!(current_order(&mut vm, worker), 903);
+    assert!(
+        !vm.host()
+            .inner
+            .activity_motion_path(worker)
+            .unwrap()
+            .is_empty()
+    );
+    vm.host().inner.deactivate_campaign_ai_player(0);
+    assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
+
+    let before = position(&mut vm, worker);
+    tick(&mut vm, 3.5);
+    assert_ne!(position(&mut vm, worker), before);
+    assert_eq!(tree_life(&mut vm, tree), 75.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert!(advance(&mut vm, 100.0, 65536).is_err());
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered
+    );
+
+    vm.host().inner.set_ai_slow_chopping(0, false).unwrap();
+    tick(&mut vm, 100.0);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 18
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 18
+    );
 }
 
 fn tree_life(vm: &mut Vm, tree: HandleId) -> f32 {

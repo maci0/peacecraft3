@@ -49,13 +49,6 @@ fn call(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
         .wrapping_add(word(bytes, offset + 1)?))
 }
 
-fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
-    at(bytes, offset, &[0xe9])?;
-    Ok(va
-        .wrapping_add(offset as u32 + 5)
-        .wrapping_add(word(bytes, offset + 1)?))
-}
-
 fn budgeted_windows(budget: RuleInputBudget) -> Result<(), Error> {
     let mut total = 0usize;
     for (_, len, _) in WINDOWS {
@@ -116,76 +109,8 @@ impl NewHeroesPolicy {
         at(sig, 0, b"(B)V\0")?;
         at(name, 0, b"SetNewHeroes\0")?;
 
-        // Handler: read AI-context global; null context writes 0x57 and jumps to
-        // the error sink; else resolve via the shared resolver; then set/clear
-        // the flag on the boolean argument.
-        at(h, 0, &[0x55, 0x8b, 0xec])?;
-        at(h, 3, &[0xa1])?;
-        if word(h, 4)? != 0x11b4a10 {
-            return Err(Error("AI context global changed"));
-        }
-        at(h, 8, &[0x85, 0xc0])?;
-        at(h, 10, &[0x75])?;
-        if 12 + i32::from(h[11] as i8) != 25 {
-            return Err(Error("null context skip does not reach the resolver path"));
-        }
-        at(h, 12, &[0xc7, 0x45, 0x08, 0x57, 0, 0, 0])?;
-        at(h, 19, &[0x5d])?;
-        if jmp(h, WINDOWS[1].0, 20)? != 0x43eca0 {
-            return Err(Error("error sink changed"));
-        }
-        at(h, 25, &[0x8d, 0x48, 0x2c])?;
-        at(h, 28, &[0x8b, 0x41, 0x04])?;
-        at(h, 31, &[0x23, 0x01])?;
-        at(h, 33, &[0x83, 0xf8, 0xff])?;
-        at(h, 36, &[0x75])?;
-        if 38 + i32::from(h[37] as i8) != 42 {
-            return Err(Error("sentinel branch does not reach the resolver"));
-        }
-        at(h, 38, &[0x33, 0xc0])?;
-        at(h, 40, &[0xeb])?;
-        if 42 + i32::from(h[41] as i8) != 47 {
-            return Err(Error("sentinel default does not reach the boolean branch"));
-        }
-        if call(h, WINDOWS[1].0, 42)? != 0x7fc7e0 {
-            return Err(Error("context resolver changed"));
-        }
-        at(h, 47, &[0x83, 0x7d, 0x08, 0x00])?;
-        at(h, 51, &[0x74])?;
-        if 53 + i32::from(h[52] as i8) != 62 {
-            return Err(Error("boolean branch does not skip to the clear path"));
-        }
-
-        // Set: `or r/m32, imm8` (83 /0). The imm8 must be a single positive
-        // bit; a sign-extended negative imm8 (bit 7 set) is rejected.
-        at(h, 53, &[0x83, 0x88])?;
-        let field_offset = word(h, 55)?;
-        let or_imm = *h.get(59).ok_or(Error("missing set mask operand"))?;
-        if or_imm & 0x80 != 0 {
-            return Err(Error("set mask is a negative imm8"));
-        }
-        if or_imm == 0 || or_imm.count_ones() != 1 {
-            return Err(Error("context mask is not a single positive bit"));
-        }
-        let context_mask = u32::from(or_imm);
-        at(h, 60, &[0x5d])?;
-        at(h, 61, &[0xc3])?;
-
-        // Clear: `and r/m32, imm8` (83 /4) must target the same field and be
-        // the sign-extended complement of the mask.
-        at(h, 62, &[0x83, 0xa0])?;
-        if word(h, 64)? != field_offset {
-            return Err(Error("clear field offset differs from set"));
-        }
-        let and_imm = *h.get(68).ok_or(Error("missing clear mask operand"))?;
-        if and_imm & 0x80 == 0 {
-            return Err(Error("clear mask does not sign-extend its complement"));
-        }
-        if i32::from(and_imm as i8) as u32 != !context_mask {
-            return Err(Error("clear mask is not the complement of the set mask"));
-        }
-        at(h, 69, &[0x5d])?;
-        at(h, 70, &[0xc3])?;
+        let (_, context_mask) =
+            crate::campaign_ai_flag::decode(h, WINDOWS[1].0).map_err(|error| Error(error.0))?;
 
         Ok(Self {
             image_sha256,

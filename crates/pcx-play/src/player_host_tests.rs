@@ -187,6 +187,110 @@ fn heroes_flee_is_explicit_per_player_and_rejected_masks_do_not_backfill() {
 }
 
 #[test]
+fn groups_flee_uses_existing_players_and_refuses_overlapping_policy_before_backfill() {
+    let (mut h, ctx) = campaign_host();
+    let first = player(&mut h, 0);
+    let second = player(&mut h, 1);
+    h.admit_campaign_targeting(&ctx, TargetingPolicy::fixture())
+        .unwrap();
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert!(h.activate_campaign_ai_player(1).unwrap());
+    h.set_ai_target_heroes(0, true).unwrap();
+    let policy = FleePolicy::fixture();
+    for (units, heroes, groups) in [
+        (
+            0,
+            policy.context_heroes_flee_mask,
+            policy.context_groups_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            3,
+            policy.context_groups_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            0,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            3,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            policy.context_units_flee_mask,
+        ),
+        (
+            policy.context_units_flee_mask,
+            policy.context_heroes_flee_mask,
+            policy.context_heroes_flee_mask,
+        ),
+    ] {
+        let mut malformed = policy.clone();
+        malformed.context_units_flee_mask = units;
+        malformed.context_heroes_flee_mask = heroes;
+        malformed.context_groups_flee_mask = groups;
+        assert!(h.admit_campaign_flee(&ctx, malformed).is_err());
+        assert!(h.campaign_flee_policy().is_none());
+        assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
+        assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+        assert_eq!(
+            h.campaign_targeting_enabled(id(&first)).unwrap(),
+            Some(true)
+        );
+    }
+    assert!(h.set_ai_groups_flee(0, true).is_err());
+    assert!(h.set_ai_groups_flee(3, true).is_err());
+    assert!(h.player_identity(3).is_none());
+
+    h.admit_campaign_flee(&ctx, policy).unwrap();
+    let error = h.set_ai_groups_flee(3, true).unwrap_err().to_string();
+    assert!(error.contains("SetGroupsFlee"), "{error}");
+    assert!(h.player_identity(3).is_none());
+    assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(h.campaign_groups_flee_enabled(id(&second)).unwrap(), None);
+    h.set_ai_units_flee(0, true).unwrap();
+    h.set_ai_heroes_flee(0, false).unwrap();
+    h.set_ai_groups_flee(0, true).unwrap();
+    h.set_ai_groups_flee(1, false).unwrap();
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let handles = h.inner().handles();
+    assert!(h.campaign_groups_flee_enabled(id(&timer)).is_err());
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), Some(true));
+    assert_eq!(
+        h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(
+        h.campaign_groups_flee_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
 fn activation_without_policies_still_refuses_an_invalid_player_without_state_growth() {
     let (mut h, _) = campaign_host();
     assert!(h.player_identity(3).is_none());
@@ -879,3 +983,90 @@ mod script_dialogs;
 
 #[path = "player_removal_tests.rs"]
 mod player_removal;
+
+#[test]
+fn slow_chopping_admission_and_setter_refusals_preserve_existing_state() {
+    use crate::campaign_slow_chopping_policy::SlowChoppingPolicy;
+    let (mut host, ctx) = campaign_host();
+    let owner = player(&mut host, 0);
+    assert!(host.set_ai_slow_chopping(0, true).is_err());
+    assert!(!host.activate_campaign_ai_player(0).unwrap());
+    let other = context(300, COMMON, "// map", "other-chopping-map");
+    assert!(
+        host.admit_campaign_slow_chopping(&other, SlowChoppingPolicy::fixture())
+            .is_err()
+    );
+    for mask in [0, 3, 0x80, 0x100] {
+        let mut policy = SlowChoppingPolicy::fixture();
+        policy.context_mask = mask;
+        assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+        assert!(host.campaign_slow_chopping_policy().is_none());
+    }
+    for damage in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+        let mut policy = SlowChoppingPolicy::fixture();
+        policy.tree_damage = damage;
+        assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+        assert!(host.campaign_slow_chopping_policy().is_none());
+    }
+    let mut policy = SlowChoppingPolicy::fixture();
+    policy.deposit_lumber = 0;
+    assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+    assert!(host.campaign_slow_chopping_policy().is_none());
+    host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+        .unwrap();
+    assert!(host.set_ai_slow_chopping(0, true).is_err());
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        None
+    );
+    host.set_ai_slow_chopping(0, true).unwrap();
+    assert!(!host.activate_campaign_ai_player(0).unwrap());
+    assert!(
+        host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+            .is_err()
+    );
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+    let timer = host.native("CreateTimer", &[]).unwrap();
+    assert!(host.campaign_slow_chopping_enabled(id(&timer)).is_err());
+    assert!(host.set_ai_slow_chopping(-1, false).is_err());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+}
+
+#[test]
+fn slow_chopping_players_and_lifecycles_are_independent() {
+    use crate::campaign_slow_chopping_policy::SlowChoppingPolicy;
+    let (mut host, ctx) = campaign_host();
+    let a = player(&mut host, 0);
+    let b = player(&mut host, 1);
+    host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+        .unwrap();
+    for number in [0, 1] {
+        assert!(host.activate_campaign_ai_player(number).unwrap());
+    }
+    host.set_ai_slow_chopping(0, true).unwrap();
+    host.set_ai_slow_chopping(1, false).unwrap();
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&a)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
+        Some(false)
+    );
+    host.deactivate_campaign_ai_player(0);
+    assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
+    assert!(host.set_ai_slow_chopping(0, false).is_err());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
+        Some(false)
+    );
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
+}

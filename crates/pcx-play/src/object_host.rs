@@ -101,6 +101,7 @@ pub struct ObjectHost {
     campaign_ai: campaign_flee::Registry,
     campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
     campaign_new_heroes: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
+    campaign_slow_chopping: Option<crate::campaign_slow_chopping_policy::SlowChoppingPolicy>,
     campaign_gathering: Option<crate::campaign_gathering_policy::GatheringPolicy>,
     campaign_captains: Option<crate::campaign_captain_policy::CaptainPolicy>,
     campaign_flee_motion: campaign_flee_motion::State,
@@ -275,6 +276,7 @@ impl ObjectHost {
             campaign_ai: campaign_flee::Registry::default(),
             campaign_flee: None,
             campaign_new_heroes: None,
+            campaign_slow_chopping: None,
             campaign_gathering: None,
             campaign_captains: None,
             campaign_flee_motion: campaign_flee_motion::State::default(),
@@ -1320,6 +1322,8 @@ mod campaign_flee_motion;
 
 #[path = "campaign_new_heroes_host.rs"]
 mod campaign_new_heroes;
+#[path = "campaign_slow_chopping_host.rs"]
+mod campaign_slow_chopping;
 
 #[path = "campaign_gathering_host.rs"]
 mod campaign_gathering;

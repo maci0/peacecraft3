@@ -123,9 +123,20 @@ impl AiWorld for AiResearchWorld {
             .set_ai_heroes_flee(player, enabled)
             .map_err(|e| e.to_string())
     }
+    fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_groups_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
     fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
         self.object
             .set_ai_new_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_slow_chopping(player, enabled)
             .map_err(|e| e.to_string())
     }
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {

@@ -318,11 +318,11 @@ state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
 
 The unchanged selected Human01-to-Human02 opening-minute check now passes
-`SetUnitsFlee`, `StopGathering`, `CreateCaptains`, `SetNewHeroes` and `SetHeroesFlee` and refuses at `SetGroupsFlee`, still at
+`SetUnitsFlee`, `StopGathering`, `CreateCaptains`, `SetNewHeroes`, `SetHeroesFlee` and `SetGroupsFlee` and refuses at `SetSlowChopping`, still at
 7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
 script frontier, not a completed opening minute or a flee-movement result.
 The earlier failure remains in `state-frontier.log`; the latest final-consumer
-result is in `.scratch/campaign-flee-integration/heroes-flee-frontier.log`.
+result is in `.scratch/campaign-flee-integration/groups-flee-frontier.log`.
 
 ## Ordinary damage consumer
 
@@ -364,7 +364,7 @@ flee-policy tests pass with the original-image tests enabled, including both
 branch directions and the selected numeric/math route join. No warning
 suppression is used in these root checks. Local receipts are under
 `.scratch/campaign-flee-integration/consumer-final-*`. The unchanged Human02
-opening-minute check now passes captain creation, `SetNewHeroes` and `SetHeroesFlee` and stops at `SetGroupsFlee`; rendered path parity and
+opening-minute check now passes captain creation and the named flag setters and stops at `SetSlowChopping`; rendered path parity and
 complete native flee behavior have not been checked.
 
 ## Hero decision boundary
@@ -402,3 +402,40 @@ impact tests remain separately identified. Local receipts are under
 `.scratch/campaign-flee-integration/heroes-flee-*`. No new original-client or
 rendered hero-retreat check was run. The unchanged Human02 execution now stops
 at `SetGroupsFlee`, so the opening minute and campaign remain incomplete.
+
+## Group flag boundary
+
+`SetGroupsFlee` binds to handler `0xab7090` in the selected primary registration.
+It changes a separate bit in the owning AI context. The bounded consumer review
+joins that bit to `baafd0`, `acdb40` and `ad1d00` controller paths. Those paths
+are not the ordinary `ba94a0` damage decision, which reads the units-flee bit.
+Applying the group flag to every ordinary hit would merge distinct source rules.
+
+The referenced controller objects and their actions are not yet mapped to
+canonical captain or public script-group membership. The current captain
+observation exposes optional targets, not a roster. Sharing an owner does not
+prove group membership. The private integration therefore stores the explicit
+per-player flag while keeping controller behavior unqualified; it does not
+claim working group retreat or an unused native flag.
+
+The owned AI-common declaration and exact boolean dispatch update the existing
+active-player row. The group value remains unknown until explicitly set; it can
+be set before captain creation. Malformed or overlapping masks refuse before
+policy storage or default backfill. Group updates preserve the independent
+unit and hero flags and captain targets. Failed startup and wake cleanup retire
+only the affected context.
+
+Combined checks pass 1,637 core tests, 610 app tests, all 16 flee-policy checks
+including the selected image and numeric/math join, strict native/WASM Clippy,
+formatting, selected startup and Continue. The published two-program fixture
+changes the group flag before captain creation and after sleep. A real melee
+regression keeps ordinary retreat independent of the group flag. Truncated
+setter windows refuse before indexing. The unchanged Human02 opening-minute
+gate now passes `SetGroupsFlee` and stops at `SetSlowChopping`; no full-minute,
+group-retreat or original-client behavior claim follows from these checks.
+
+Receipts remain under `.scratch/campaign-flee-integration/groups-flee-*` in the
+private checkout. Mapped windows and byte hashes remain local in the main
+checkout's `.scratch/campaign-basics-native/set-groups-flee-*` notes, including
+the corrected registration-banner receipt. Controller membership and actions
+remain an active fidelity task.
