@@ -332,7 +332,7 @@ pub(crate) fn paint(
             Name::new("Campaign text messages"),
         ))
         .id();
-    for text in parsed.into_iter().rev() {
+    for text in parsed {
         let text_font = TextFont {
             font: bevy::text::FontSource::Handle(font.clone()),
             font_size: bevy::text::FontSize::Vh(height_vh),
@@ -426,7 +426,7 @@ mod tests {
                     &mut commands,
                     &[TimedMessage {
                         sequence: 1,
-                        position: [0.2, 0.3],
+                        position: [0., 0.],
                         text: "a|c7f123456b|r|nc".into(),
                         started_at: 0.,
                         expires_at: 4.,

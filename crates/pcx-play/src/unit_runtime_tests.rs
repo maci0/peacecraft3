@@ -11,7 +11,9 @@ native RegionAddRect takes region g, rect r returns nothing
 native TriggerRegisterEnterRegion takes trigger t, region g, boolexpr f returns event
 native TriggerRegisterLeaveRegion takes trigger t, region g, boolexpr f returns event
 native RemoveUnit takes unit u returns nothing
+native SetUnitFacing takes unit u, real a returns nothing
 native SetUnitFacingTimed takes unit u, real a, real d returns nothing
+constant native GetUnitFacing takes unit u returns real
 native SetUnitPathing takes unit u, boolean b returns nothing
 native SetUnitPosition takes unit u, real x, real y returns nothing
 native SetUnitPositionLoc takes unit u, location l returns nothing
