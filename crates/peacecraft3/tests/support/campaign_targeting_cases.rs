@@ -47,6 +47,18 @@ impl ObjectCatalog for Fighters {
             (SlkId::UnitWeapons, "dmgplus1", FieldKind::Int, "4"),
             (SlkId::UnitWeapons, "dice1", FieldKind::Int, "1"),
             (SlkId::UnitWeapons, "sides1", FieldKind::Int, "1"),
+            (
+                SlkId::UnitBalance,
+                "fused",
+                FieldKind::Int,
+                if rawcode == *b"a001" { "3" } else { "2" },
+            ),
+            (
+                SlkId::UnitBalance,
+                "fmade",
+                FieldKind::Int,
+                if rawcode == *b"a001" { "17" } else { "31" },
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -104,6 +116,8 @@ constant native OrderId takes string s returns integer
 constant native OrderId2String takes integer i returns string
 native IssuePointOrder takes unit u, string s, real x, real y returns boolean
 native GetUnitCurrentOrder takes unit u returns integer
+constant native GetFoodMade takes integer unitid returns integer
+constant native GetFoodUsed takes integer unitid returns integer
 constant native GetUnitMoveSpeed takes unit u returns real
 constant native GetUnitX takes unit u returns real
 constant native GetUnitY takes unit u returns real
@@ -138,6 +152,8 @@ unit BOld=null
 unit BNew=null
 unit ABase=null
 unit BBase=null
+integer SourceFoodMade=GetFoodMade('a001')
+integer SourceFoodUsed=GetFoodUsed('a001')
 endglobals
 function config takes nothing returns nothing
 call SetPlayers(3)
@@ -252,6 +268,9 @@ call DisplayTextIII(GetAiPlayer(),"",1,2,3)
 endfunction
 function VerifyUnitCounts takes nothing returns nothing
 call VerifySilentDebug()
+if GetFoodMade('a001') != 17 or GetFoodUsed('a001') != 3 or GetFoodMade('t001') != 31 or GetFoodUsed(0) != 0 or GetFoodMade(0) != 0 then
+call CountAssertionFailed()
+endif
 if GetUnitCount('a001') != 1 or GetUnitCountDone('a001') != 1 or GetUnitCount(0) != 0 or GetUnitCountDone(0) != 0 then
 call CountAssertionFailed()
 endif
@@ -380,6 +399,8 @@ endfunction
             },
         )
         .unwrap();
+    assert_eq!(session.global("SourceFoodMade"), Some(Value::Int(17)));
+    assert_eq!(session.global("SourceFoodUsed"), Some(Value::Int(3)));
     let handle = |session: &mut MapScriptSession<MapStartupHost>, name| {
         let Some(Value::Handle(id)) = session.global(name) else {
             panic!("unit {name}")

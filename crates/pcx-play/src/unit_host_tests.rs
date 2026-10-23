@@ -15,6 +15,41 @@ use std::sync::{Arc, Mutex};
 const PLACEMENT_OWNER: i16 = 7;
 
 #[test]
+fn food_query_contracts_are_common_source_constant_integer_queries() {
+    for name in ["GetFoodMade", "GetFoodUsed"] {
+        for declaration in [
+            format!("native {name} takes integer id returns integer\n"),
+            format!("constant native {name} takes real id returns integer\n"),
+            format!("constant native {name} takes integer id returns real\n"),
+            format!("constant native {name} takes nothing returns integer\n"),
+        ] {
+            let common = script_common_with("widget", true, &declaration);
+            let ctx = context(300, &common, "// invalid food query", "unit-catalog");
+            let (catalog, hits, _) = counting();
+            let host = object(&ctx, 32)
+                .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+                .unwrap();
+            assert!(
+                host.with_unit_catalog(catalog, source(), limits(0))
+                    .is_err()
+            );
+            assert_eq!(hits.load(Ordering::SeqCst), 0);
+        }
+        let map = format!("constant native {name} takes integer id returns integer\n");
+        let ctx = context(300, &script_common("widget", true), &map, "unit-catalog");
+        let (catalog, hits, _) = counting();
+        let host = object(&ctx, 32)
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap();
+        assert!(
+            host.with_unit_catalog(catalog, source(), limits(0))
+                .is_err()
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
 fn campaign_counts_refuse_unknown_liveness_instead_of_guessing_alive() {
     let mut fixture = open(4, 32, MAP);
     fixture.vm.init_globals().unwrap();

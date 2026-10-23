@@ -314,6 +314,22 @@ impl ObjectHost {
         self.unit_buff_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         self.unit_cooldown_reset_declaration(&declaration_source)?;
+        for name in ["GetFoodMade", "GetFoodUsed"] {
+            if self.inner.program.natives().get(name).is_some()
+                || self.inner.program.natives().ambiguous(name).is_some()
+            {
+                Self::contract(&self.inner, name, &["integer"], "integer", true, None)?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .is_none_or(|n| n.source != declaration_source)
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
         if self.sound_properties {
             self.sound_attachment_declaration(&declaration_source)?;
         }
@@ -858,12 +874,68 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    fn food_for_type(&self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [Value::Int(rawcode)] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        let requested = rawcode.to_be_bytes();
+        let definition = match self
+            .unit_catalog()
+            .map_err(|e| self.inner.error(name, e.failure))?
+            .resolve(requested)
+        {
+            Ok(value) => value,
+            Err(ResolutionProblem::MissingRawcode(_) | ResolutionProblem::InvalidRawcode) => {
+                return Ok(Value::Int(0));
+            }
+            Err(problem) => {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitCatalog {
+                        requested,
+                        problem: Box::new(problem),
+                    },
+                ));
+            }
+        };
+        if definition.rawcode != requested {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitState("food catalog resolved another rawcode"),
+            ));
+        }
+        if definition.kind != ObjectKind::Unit {
+            return Ok(Value::Int(0));
+        }
+        let column = if name == "GetFoodMade" {
+            "fmade"
+        } else {
+            "fused"
+        };
+        self.unit_food_amount(&definition, column)
+            .map(Value::Int)
+            .map_err(|e| {
+                self.inner.error(
+                    name,
+                    Failure::UnitActivity(format!(
+                        "unit {} {column}: {e}",
+                        pcx_objects::fourcc_text(requested)
+                    )),
+                )
+            })
+    }
+
     pub(super) fn unit_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
+        if matches!(name, "GetFoodMade" | "GetFoodUsed")
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.food_for_type(name, args));
+        }
         if name == "UnitResetCooldown" && self.inner.program.natives().get(name).is_some() {
             return Some(self.unit_reset_cooldown(args));
         }

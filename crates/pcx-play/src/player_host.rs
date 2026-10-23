@@ -817,6 +817,19 @@ impl ObjectHost {
         });
         Ok(self)
     }
+    pub(super) fn unit_food_amount(
+        &self,
+        definition: &pcx_sim::world::Definition,
+        column: &str,
+    ) -> Result<i32, String> {
+        let marker = self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .map(|r| r.rules.food_marker_default);
+        crate::player_unit_cost::amount_with_marker(definition, column, marker)
+    }
+
     fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
         self.executed_units()
             .filter(|(_, u)| {
@@ -825,21 +838,10 @@ impl ObjectHost {
                     && u.vitals.is_none_or(|v| v.life > 0.0)
             })
             .try_fold(0i32, |total, (_, u)| {
-                let marker = self
-                    .players
-                    .as_ref()
-                    .and_then(|p| p.resources.as_ref())
-                    .map(|r| r.rules.food_marker_default);
-                let value =
-                    super::unit_activity::balance_real_with_marker(&u.definition, column, marker)
-                        .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
-                if value.fract() != 0.0 || value >= i32::MAX as f32 {
-                    return Err(self.inner.error(
-                        GET_PLAYER_STATE,
-                        Failure::PlayerState("invalid integral unit food"),
-                    ));
-                }
-                total.checked_add(value as i32).ok_or_else(|| {
+                let value = self
+                    .unit_food_amount(&u.definition, column)
+                    .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
+                total.checked_add(value).ok_or_else(|| {
                     self.inner
                         .error(GET_PLAYER_STATE, Failure::PlayerState("unit food overflow"))
                 })

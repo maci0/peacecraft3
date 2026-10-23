@@ -148,6 +148,14 @@ impl Policy {
 }
 
 pub(crate) fn amount(definition: &Definition, column: &str) -> Result<i32, String> {
+    amount_with_marker(definition, column, None)
+}
+
+pub(crate) fn amount_with_marker(
+    definition: &Definition,
+    column: &str,
+    marker: Option<i32>,
+) -> Result<i32, String> {
     if definition.kind != ObjectKind::Unit {
         return Err("cost rawcode is not a unit".into());
     }
@@ -176,10 +184,12 @@ pub(crate) fn amount(definition: &Definition, column: &str) -> Result<i32, Strin
         .as_ref()
         .map_err(|e| format!("unit cost: {e:?}"))?
     {
-        FieldValue::Cell(cell) => cell
-            .trim()
-            .parse::<i32>()
-            .map_err(|_| "unit cost cell is not an integer")?,
+        FieldValue::Cell(cell) => match cell.trim() {
+            "-" | "_" => marker.ok_or("unit balance marker default is not admitted")?,
+            value => value
+                .parse::<i32>()
+                .map_err(|_| "unit balance cell is not an integer")?,
+        },
         FieldValue::Override(pcx_objects::Value::Int(bits)) => *bits as i32,
         _ => return Err("unit cost value kind unsupported".into()),
     };
@@ -244,6 +254,22 @@ mod tests {
         );
         assert!(amount(&invalid, "goldcost").is_err());
         assert!(amount(&invalid, "lumbercost").is_err());
+    }
+
+    #[test]
+    fn integer_markers_require_an_explicit_default_and_do_not_hide_malformed_cells() {
+        let source = definition(FieldValue::Cell(" - ".into()), FieldValue::Cell("_".into()));
+        for column in ["goldcost", "lumbercost"] {
+            assert!(amount(&source, column).is_err());
+            assert_eq!(amount_with_marker(&source, column, Some(37)), Ok(37));
+            assert_eq!(amount_with_marker(&source, column, Some(19)), Ok(19));
+        }
+        let malformed = definition(
+            FieldValue::Cell("mistyped".into()),
+            FieldValue::Cell("2.5".into()),
+        );
+        assert!(amount_with_marker(&malformed, "goldcost", Some(37)).is_err());
+        assert!(amount_with_marker(&malformed, "lumbercost", Some(37)).is_err());
     }
 
     #[test]

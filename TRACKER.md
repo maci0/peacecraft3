@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `GetFoodMade` and `GetFoodUsed` now query source-derived unit food through
+  the shared map/AI catalog. Live totals reuse the strict integer path, preserving
+  exact values and admitted marker conversion. Core 1,703, app-library 55,
+  app-binary 638, published two-program, selected-image, startup/Continue,
+  strict native/WASM and desktop-build checks pass. Human02 passes these calls
+  and now refuses `ClearHarvestAI` at 8.312500 seconds; its unchanged opening-minute
+  test remains red. See [food queries](docs/re-notes/script-unit-food-queries.md).
+
 - [~] All four AI `DisplayText` diagnostic calls now preserve the selected
   client's immediate-return behavior. Registrations, signatures, names and
   return bytes are checked before admission; local messages and their full

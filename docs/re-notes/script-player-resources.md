@@ -163,8 +163,10 @@ that limitation.
 
 Resource admission now checks both source keys, matching descriptor offsets,
 their shared accessor and integer/string dispatch before retaining that marker
-result. Only the resource food projection opts into it through the shared balance
-reader. Existing strict callers retain marker refusal. Numeric text is trimmed;
+result. Live food totals and the
+[unit-type food queries](script-unit-food-queries.md) use the same strict integer
+reader, preserving exact values without a float intermediate. Other strict
+integer callers retain marker refusal. Numeric text is trimmed;
 recognized `-`/`_` markers use the admitted result, while arbitrary malformed,
 nonfinite, negative, missing or ambiguous food data still refuses. Limiting the
 string conversion to recognized markers is an explicit strict recreation policy;

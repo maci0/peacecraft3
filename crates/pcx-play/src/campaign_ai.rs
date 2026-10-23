@@ -626,6 +626,34 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
+    let common = &scripts
+        .digests
+        .first()
+        .ok_or("StartCampaignAI: common source is missing")?
+        .label;
+    for name in ["GetFoodMade", "GetFoodUsed"] {
+        let Some(native) = scripts.program().natives().get(name) else {
+            if scripts.program().natives().ambiguous(name).is_some() {
+                return Err(format!(
+                    "StartCampaignAI: {name} common declaration is ambiguous"
+                ));
+            }
+            continue;
+        };
+        if native.source != *common
+            || !native.also_declared_in.is_empty()
+            || !native.is_constant
+            || native.params.len() != 1
+            || native.params[0].ty.array
+            || native.params[0].ty.kind.name() != "integer"
+            || native.ret.array
+            || native.ret.kind.name() != "integer"
+        {
+            return Err(format!(
+                "StartCampaignAI: {name} common declaration differs"
+            ));
+        }
+    }
     for name in [
         "SetTargetHeroes",
         "SetUnitsFlee",
@@ -857,6 +885,12 @@ impl<W: AiWorld> Host for AiHost<W> {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         match name {
             "GetAiPlayer" if args.is_empty() => Ok(Value::Int(self.player)),
+            "GetFoodMade" | "GetFoodUsed" => {
+                if !matches!(args, [Value::Int(_)]) {
+                    return Err(format!("{name}: expected one integer unit ID"));
+                }
+                self.world_mut()?.native(name, args)
+            }
             "Player"
             | "GetPlayers"
             | "GetPlayerState"
@@ -2236,6 +2270,50 @@ mod tests {
     }
 
     #[test]
+    fn food_queries_require_common_source_constant_integer_contracts() {
+        for name in ["GetFoodMade", "GetFoodUsed"] {
+            let good = format!("constant native {name} takes integer id returns integer\n");
+            for (common, ai_common) in [
+                (
+                    format!(
+                        "{COMMON}{}",
+                        good.replace("returns integer", "returns real")
+                    ),
+                    AI_COMMON.to_owned(),
+                ),
+                (
+                    format!("{COMMON}{}", good.replace("constant native", "native")),
+                    AI_COMMON.to_owned(),
+                ),
+                (
+                    format!(
+                        "{COMMON}{}",
+                        good.replace("takes integer id", "takes nothing")
+                    ),
+                    AI_COMMON.to_owned(),
+                ),
+                (COMMON.to_owned(), format!("{AI_COMMON}{good}")),
+                (format!("{COMMON}{good}"), format!("{AI_COMMON}{good}")),
+            ] {
+                let script = program_with_sources(
+                    "synthetic:food.ai",
+                    "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                    &common,
+                    &ai_common,
+                );
+                let mut runtime = Runtime::<World>::default();
+                runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+                let shared = Arc::new(Mutex::new(State::default()));
+                let mut world = Some(World(Arc::clone(&shared)));
+                let error = runtime.start(&mut world, 1, "food.ai").unwrap_err();
+                assert!(error.contains(name), "{error}");
+                assert!(shared.lock().unwrap().gold.is_empty());
+                assert!(shared.lock().unwrap().active.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn replacement_abi_and_runtime_arguments_refuse_without_writes() {
         for declaration in [
             "native SetReplacementCount takes boolean count returns nothing\n",
@@ -2659,6 +2737,8 @@ mod tests {
             "GetUnitGoldCost",
             "GetUnitWoodCost",
             "GetUnitBuildTime",
+            "GetFoodMade",
+            "GetFoodUsed",
         ] {
             for args in [
                 vec![],

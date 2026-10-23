@@ -579,6 +579,118 @@ impl pcx_sim::world::ObjectCatalog for ResolvedFoodCatalog {
 }
 
 #[test]
+fn food_type_queries_and_live_totals_keep_exact_integers_and_source_markers() {
+    use pcx_sim::world::{FieldValue, ObjectCatalog};
+    let mut ordinary = FoodCatalog.resolve(*b"hfoo").unwrap();
+    ordinary.fields.get_mut(b"f001").unwrap().value = Ok(FieldValue::Cell("16777217".into()));
+    ordinary.fields.get_mut(b"f002").unwrap().value =
+        Ok(FieldValue::Override(pcx_objects::Value::Int(91)));
+    let mut marker = FoodCatalog.resolve(*b"mark").unwrap();
+    marker.fields.get_mut(b"f001").unwrap().value = Ok(FieldValue::Cell(" - ".into()));
+    marker.fields.get_mut(b"f002").unwrap().value = Ok(FieldValue::Cell("_".into()));
+    let mut malformed = FoodCatalog.resolve(*b"bad!").unwrap();
+    malformed.fields.get_mut(b"f001").unwrap().value = Ok(FieldValue::Cell("mistyped".into()));
+    let mut item = FoodCatalog.resolve(*b"item").unwrap();
+    item.kind = pcx_objects::editor::ObjectKind::Item;
+    let common = format!(
+        "{}constant native GetFoodMade takes integer id returns integer\nconstant native GetFoodUsed takes integer id returns integer\n",
+        resource_common()
+    );
+    let (_, host) = fixture(&common, "// food type queries", true);
+    let mut rules = crate::player_resources::fixture::rules();
+    rules.food_marker_default = 37;
+    let initial = rules.initial;
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 4 })
+        .unwrap()
+        .with_player_resources(rules)
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(ResolvedFoodCatalog(
+                [ordinary, marker, malformed, item]
+                    .into_iter()
+                    .map(|d| (d.rawcode, d))
+                    .collect(),
+            )),
+            pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "synthetic".into(),
+                map: "food queries".into(),
+            },
+            crate::playercolor_host::UnitBudget {
+                max_records: 1,
+                max_retained_fields: 4,
+                max_modifications: 0,
+            },
+        )
+        .unwrap();
+    let handles = host.inner().handles();
+    let query =
+        |host: &mut ObjectHost, name, id| host.native(name, &[Value::Int(i32::from_be_bytes(id))]);
+    assert_eq!(
+        query(&mut host, "GetFoodUsed", *b"hfoo").unwrap(),
+        Value::Int(16_777_217)
+    );
+    assert_eq!(
+        query(&mut host, "GetFoodMade", *b"hfoo").unwrap(),
+        Value::Int(91)
+    );
+    for name in ["GetFoodMade", "GetFoodUsed"] {
+        for raw in [*b"none", [0; 4], *b"item"] {
+            assert_eq!(query(&mut host, name, raw).unwrap(), Value::Int(0));
+        }
+        assert_eq!(query(&mut host, name, *b"mark").unwrap(), Value::Int(37));
+        for args in [
+            vec![],
+            vec![Value::Null],
+            vec![Value::Real(1.)],
+            vec![Value::Int(1), Value::Int(2)],
+        ] {
+            assert!(host.native(name, &args).is_err());
+        }
+    }
+    assert!(
+        query(&mut host, "GetFoodUsed", *b"bad!")
+            .unwrap_err()
+            .contains("GetFoodUsed")
+    );
+    assert_eq!(host.inner().handles(), handles);
+    assert_eq!(host.executed_units().count(), 0);
+    let owner = host.native("Player", &[Value::Int(0)]).unwrap();
+    let unit = host
+        .native(
+            "CreateUnit",
+            &[
+                owner.clone(),
+                Value::Int(i32::from_be_bytes(*b"hfoo")),
+                Value::Real(0.),
+                Value::Real(0.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&owner), "PLAYER_STATE_RESOURCE_FOOD_USED")
+            .unwrap(),
+        Some(initial + 16_777_217)
+    );
+    assert_eq!(
+        query(&mut host, "GetFoodMade", *b"hfoo").unwrap(),
+        Value::Int(91)
+    );
+    host.native("RemoveUnit", &[unit]).unwrap();
+    assert_eq!(
+        host.player_resource_value(id(&owner), "PLAYER_STATE_RESOURCE_FOOD_USED")
+            .unwrap(),
+        Some(initial)
+    );
+    assert_eq!(
+        query(&mut host, "GetFoodUsed", *b"hfoo").unwrap(),
+        Value::Int(16_777_217)
+    );
+}
+
+#[test]
 fn campaign_build_time_reads_catalog_without_tokens_and_refuses_owned_hero_timing() {
     use pcx_objects::editor::{FieldSource, SlkId};
     use pcx_sim::world::{FieldValue, ObjectCatalog};
