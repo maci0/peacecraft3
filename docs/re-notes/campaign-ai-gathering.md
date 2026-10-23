@@ -39,6 +39,18 @@ for issuing a worker stop order, cancelling every worker, or changing an
 explicit map harvest order. A later unit-admission branch also reads the cleared
 context flag, so a context-free successful no-op would lose state.
 
+## Policy reader checks
+
+The reader binds six checked image windows and charges their complete lengths
+against the input budget. It preserves the constructor condition and joins the
+context clear to its later reader. Candidate branches must reach the actual
+boolean returns. Six focused tests, including a real selected-image decode,
+pass alongside strict native/WASM Clippy and formatting. The initial draft
+used incorrect operand offsets in both decoder and synthetic fixture; its
+synthetic results did not qualify the real-image path. Those offsets and the
+missing real-image gate are corrected. Local receipts are under
+`.scratch/campaign-flee-integration/gathering-reader-*`.
+
 ## Recreation boundary
 
 The implementation under integration uses the existing canonical player and
