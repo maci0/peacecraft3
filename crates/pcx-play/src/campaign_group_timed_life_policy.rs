@@ -10,6 +10,8 @@ use crate::{
 pub struct GroupTimedLifePolicy {
     pub image_sha256: Sha256Digest,
     pub context_mask: u32,
+    /// Stock timed-life factory identity; this is not an editor-buff catalog row.
+    pub timed_life_factory: [u8; 4],
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -17,12 +19,18 @@ pub struct GroupTimedLifePolicy {
 pub struct Error(&'static str);
 
 // Reviewed image locations identify relationships; returned values are operands.
-const WINDOWS: [(u32, usize, bool); 5] = [
+const WINDOWS: [(u32, usize, bool); 11] = [
     (0xab6516, 20, true),
     (0xab5760, 77, true),
     (0xe700b0, 5, false),
     (0xf15dd0, 15, false),
     (0xac472a, 12, true),
+    (0x6f4c40, 6, true),  // fallback factory-key getter
+    (0x6d4c4f, 30, true), // fallback acquisition and virtual initializer
+    (0x6f2560, 6, true),  // class-key getter
+    (0x6f0dce, 6, true),  // constructor's vtable assignment
+    (0xea63c8, 4, false), // class-key vtable entry
+    (0xea66d0, 4, false), // timed-life initializer vtable entry
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -76,7 +84,20 @@ impl GroupTimedLifePolicy {
     }
 
     fn decode(windows: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
-        let [registration, handler, signature, name, consumer] = windows else {
+        let [
+            registration,
+            handler,
+            signature,
+            name,
+            consumer,
+            factory_key,
+            fallback,
+            class_key,
+            constructor,
+            key_entry,
+            initialize_entry,
+        ] = windows
+        else {
             return Err(Error("incomplete selected windows"));
         };
         for (window, (_, length, _)) in windows.iter().zip(WINDOWS) {
@@ -116,9 +137,43 @@ impl GroupTimedLifePolicy {
         {
             return Err(Error("association false branch changed"));
         }
+        for getter in [*factory_key, *class_key] {
+            at(getter, 0, &[0xb8])?;
+            at(getter, 5, &[0xc3])?;
+        }
+        let timed_life_factory = word(factory_key, 1)?.to_be_bytes();
+        if !timed_life_factory.iter().all(u8::is_ascii_graphic)
+            || word(class_key, 1)?.to_be_bytes() != timed_life_factory
+        {
+            return Err(Error("timed-life factory and class identities differ"));
+        }
+        for (offset, target) in [(0, WINDOWS[5].0), (5, 0x6d3610)] {
+            at(fallback, offset, &[0xe8])?;
+            if WINDOWS[6]
+                .0
+                .wrapping_add(offset as u32 + 5)
+                .wrapping_add(word(fallback, offset + 1)?)
+                != target
+            {
+                return Err(Error("timed-life fallback dispatch changed"));
+            }
+        }
+        at(fallback, 24, &[0xff, 0x90])?;
+        at(constructor, 0, &[0xc7, 0x06])?;
+        let vtable = word(constructor, 2)?;
+        if vtable.checked_add(0x1c) != Some(WINDOWS[9].0)
+            || vtable.checked_add(word(fallback, 26)?) != Some(WINDOWS[10].0)
+            || word(key_entry, 0)? != WINDOWS[7].0
+            || word(initialize_entry, 0)? != 0x6f2570
+        {
+            return Err(Error(
+                "timed-life class and initializer relationship changed",
+            ));
+        }
         Ok(Self {
             image_sha256,
             context_mask,
+            timed_life_factory,
         })
     }
 
@@ -198,6 +253,19 @@ fn synthetic_windows(mask: u32, field: u32) -> Vec<Vec<u8>> {
     word(&mut w, 4, 2, field);
     word(&mut w, 4, 6, mask);
     put(&mut w, 4, 10, &[0x74, 0x3c]);
+    for index in [5, 7] {
+        put(&mut w, index, 0, &[0xb8]);
+        word(&mut w, index, 1, u32::from_be_bytes(*b"zTLx"));
+        put(&mut w, index, 5, &[0xc3]);
+    }
+    branch(&mut w, 6, 0, 0xe8, WINDOWS[5].0);
+    branch(&mut w, 6, 5, 0xe8, 0x6d3610);
+    put(&mut w, 6, 24, &[0xff, 0x90]);
+    word(&mut w, 6, 26, WINDOWS[10].0 - (WINDOWS[9].0 - 0x1c));
+    put(&mut w, 8, 0, &[0xc7, 0x06]);
+    word(&mut w, 8, 2, WINDOWS[9].0 - 0x1c);
+    word(&mut w, 9, 0, WINDOWS[7].0);
+    word(&mut w, 10, 0, 0x6f2570);
     w
 }
 
@@ -211,15 +279,16 @@ mod tests {
 
     #[test]
     fn budget_and_source_identity_refuse_before_pe_parsing() {
+        let total = WINDOWS.iter().map(|(_, length, _)| length).sum();
         let budget = RuleInputBudget {
             image_bytes: 1024,
-            profile_bytes: 129,
+            profile_bytes: total,
             sections: 8,
         };
         assert!(window_budget(budget).is_ok());
         assert!(
             window_budget(RuleInputBudget {
-                profile_bytes: 128,
+                profile_bytes: total - 1,
                 ..budget
             })
             .is_err()
@@ -230,6 +299,7 @@ mod tests {
     #[test]
     fn wide_operands_drive_the_policy_and_allow_the_high_bit() {
         assert_eq!(GroupTimedLifePolicy::fixture().context_mask, 0x4000);
+        assert_eq!(GroupTimedLifePolicy::fixture().timed_life_factory, *b"zTLx");
         for mask in [0x800, 0x8000_0000] {
             let policy = decode(&synthetic_windows(mask, 0x440)).unwrap();
             assert_eq!(policy.context_mask, mask);
@@ -266,6 +336,17 @@ mod tests {
             (4, 2),
             (4, 6),
             (4, 11),
+            (5, 0),
+            (5, 1),
+            (5, 5),
+            (6, 1),
+            (6, 6),
+            (6, 24),
+            (6, 26),
+            (7, 1),
+            (8, 2),
+            (9, 0),
+            (10, 0),
         ] {
             let mut w = valid.clone();
             w[index][offset] ^= 1;
@@ -280,6 +361,19 @@ mod tests {
     }
 
     #[test]
+    fn factory_identity_is_operand_driven_and_must_match_its_class() {
+        let mut w = synthetic_windows(0x4000, 0x330);
+        for index in [5, 7] {
+            w[index][1..5].copy_from_slice(&u32::from_be_bytes(*b"xyZ9").to_le_bytes());
+        }
+        assert_eq!(decode(&w).unwrap().timed_life_factory, *b"xyZ9");
+        w[7][1..5].copy_from_slice(&0u32.to_le_bytes());
+        assert!(decode(&w).is_err());
+        w[5][1..5].copy_from_slice(&0u32.to_le_bytes());
+        assert!(decode(&w).is_err());
+    }
+
+    #[test]
     #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
     fn reviewed_original_image_decodes() {
         let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
@@ -288,12 +382,13 @@ mod tests {
             &image,
             RuleInputBudget {
                 image_bytes: 32 << 20,
-                profile_bytes: 129,
+                profile_bytes: WINDOWS.iter().map(|(_, length, _)| length).sum(),
                 sections: 96,
             },
         )
         .unwrap();
         assert_eq!(policy.image_sha256, REVIEWED_IMAGE);
         assert_eq!(policy.context_mask, 0x100);
+        assert_eq!(policy.timed_life_factory, *b"BTLF");
     }
 }

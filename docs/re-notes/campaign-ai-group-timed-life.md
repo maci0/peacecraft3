@@ -20,6 +20,11 @@ selected-image getter. The checked class constructor/vtable binds that stock
 key to the initializer containing the association bridge. The selected
 `AbilityBuffData.slk` members contain no matching alias or code row. This is a
 native factory identity, not an invented editor-buff record.
+`GroupTimedLifePolicy.timed_life_factory` now derives this identity from the
+getter and validates its agreement with the class getter, constructor vtable,
+fallback call and virtual initializer. Nonstock synthetic identities,
+relationship mutants and every truncated window are checked alongside an
+explicit actual-image decode. No constructor default is inferred for the flag.
 
 ## Original-client observation
 
