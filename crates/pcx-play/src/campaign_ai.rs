@@ -123,6 +123,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
@@ -240,6 +241,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .set_ai_heroes_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_groups_flee(player, enabled)
             .map_err(|e| e.to_string())
     }
 
@@ -460,6 +472,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         "SetTargetHeroes",
         "SetUnitsFlee",
         "SetHeroesFlee",
+        "SetGroupsFlee",
         "SetNewHeroes",
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
@@ -689,6 +702,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_set_heroes_flee(player, *enabled)?;
                 Ok(Value::Null)
             }
+            "SetGroupsFlee" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("SetGroupsFlee: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_groups_flee(player, *enabled)?;
+                Ok(Value::Null)
+            }
             "SetNewHeroes" => {
                 let [Value::Bool(enabled)] = args else {
                     return Err("SetNewHeroes: expected a boolean".into());
@@ -750,6 +771,7 @@ mod tests {
         target_heroes: BTreeMap<i32, bool>,
         units_flee: BTreeMap<i32, bool>,
         heroes_flee: BTreeMap<i32, bool>,
+        groups_flee: BTreeMap<i32, bool>,
         new_heroes: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         captain_creates: BTreeMap<i32, usize>,
@@ -787,6 +809,7 @@ mod tests {
             self.0.lock().unwrap().target_heroes.remove(&player);
             self.0.lock().unwrap().units_flee.remove(&player);
             self.0.lock().unwrap().heroes_flee.remove(&player);
+            self.0.lock().unwrap().groups_flee.remove(&player);
             self.0.lock().unwrap().new_heroes.remove(&player);
             self.0.lock().unwrap().gathering.remove(&player);
             self.0.lock().unwrap().captain_creates.remove(&player);
@@ -813,6 +836,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.heroes_flee.insert(player, enabled);
+            Ok(())
+        }
+        fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.groups_flee.insert(player, enabled);
             Ok(())
         }
         fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
@@ -933,6 +964,7 @@ mod tests {
     const AI_TARGET: &str = "native SetTargetHeroes takes boolean flag returns nothing\n";
     const AI_FLEE: &str = "native SetUnitsFlee takes boolean flag returns nothing\n";
     const AI_HERO_FLEE: &str = "native SetHeroesFlee takes boolean flag returns nothing\n";
+    const AI_GROUP_FLEE: &str = "native SetGroupsFlee takes boolean flag returns nothing\n";
     const AI_NEW_HEROES: &str = "native SetNewHeroes takes boolean flag returns nothing\n";
     const AI_GATHERING: &str = "native StopGathering takes nothing returns nothing\n";
     const AI_CAPTAINS: &str = "native CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\n";
@@ -1025,6 +1057,130 @@ mod tests {
         let mut world = Some(World(Arc::clone(&shared)));
         assert!(runtime.start(&mut world, 1, "hero-flee.ai").is_err());
         assert!(shared.lock().unwrap().heroes_flee.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn group_flee_state_is_per_player_before_and_after_captain_creation() {
+        let script = program_with_ai_common(
+            "synthetic:group-flee.ai",
+            "function main takes nothing returns nothing\ncall SetGroupsFlee(GetAiPlayer() == 2)\ncall CreateCaptains()\ncall SetCaptainHome(1, 10.0, 20.0)\ncall Sleep(0.25)\ncall SetGroupsFlee(GetAiPlayer() != 2)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GROUP_FLEE}{AI_CAPTAINS}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "group-flee.ai").unwrap();
+        }
+        {
+            let state = shared.lock().unwrap();
+            assert_eq!(state.groups_flee, [(1, false), (2, true)].into());
+            assert_eq!(state.captain_creates, [(1, 1), (2, 1)].into());
+            assert_eq!(
+                state.captain_homes,
+                vec![(1, 1, [10.0, 20.0]), (2, 1, [10.0, 20.0])]
+            );
+            assert!(state.units_flee.is_empty());
+            assert!(state.heroes_flee.is_empty());
+        }
+        let remaining_loads = runtime.remaining_loads;
+        runtime.start(&mut world, 1, "ignored.ai").unwrap();
+        assert_eq!(runtime.remaining_loads, remaining_loads);
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        let state = shared.lock().unwrap();
+        assert_eq!(state.groups_flee, [(1, true), (2, false)].into());
+        assert_eq!(state.captain_creates, [(1, 1), (2, 1)].into());
+        assert_eq!(
+            state.captain_homes,
+            vec![(1, 1, [10.0, 20.0]), (2, 1, [10.0, 20.0])]
+        );
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn group_flee_abi_and_bad_calls_refuse_before_world_mutation() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\ncall SetGroupsFlee(true)\nendfunction\n";
+        for (common, ai_common) in [
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_GROUP_FLEE.replace("boolean flag", "integer flag")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_GROUP_FLEE.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!("{AI_COMMON}constant {AI_GROUP_FLEE}"),
+            ),
+            (format!("{COMMON}{AI_GROUP_FLEE}"), AI_COMMON.into()),
+        ] {
+            let script = program_with_sources("synthetic:group-flee.ai", body, &common, &ai_common);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "group-flee.ai").unwrap_err();
+            assert!(error.contains("SetGroupsFlee"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.groups_flee.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(world.is_some());
+        }
+
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(true), Value::Bool(false)],
+        ] {
+            assert!(host.native("SetGroupsFlee", &args).is_err());
+            assert!(shared.lock().unwrap().groups_flee.is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_ai_start_retires_only_its_group_flee_state() {
+        let peer = program_with_ai_common(
+            "synthetic:peer.ai",
+            "function main takes nothing returns nothing\ncall SetGroupsFlee(false)\ncall Sleep(1.0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GROUP_FLEE}"),
+        );
+        let failing = program_with_ai_common(
+            "synthetic:fail.ai",
+            "function main takes nothing returns nothing\ncall SetGroupsFlee(true)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GROUP_FLEE}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |name| {
+            Ok(if name == "peer.ai" {
+                Arc::clone(&peer)
+            } else {
+                Arc::clone(&failing)
+            })
+        });
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 2, "peer.ai").unwrap();
+        assert!(runtime.start(&mut world, 1, "fail.ai").is_err());
+        let state = shared.lock().unwrap();
+        assert_eq!(state.groups_flee, [(2, false)].into());
+        assert!(state.active.contains_key(&2));
+        assert!(!state.active.contains_key(&1));
         assert!(world.is_some());
     }
 

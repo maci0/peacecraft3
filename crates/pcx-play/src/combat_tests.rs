@@ -4265,6 +4265,33 @@ fn ordinary_incoming_hit_starts_a_route_away_from_the_attacker() {
 }
 
 #[test]
+fn group_flee_flag_does_not_replace_the_ordinary_hit_flag() {
+    for group_enabled in [false, true] {
+        let (mut vm, source, target) =
+            flee_fixture_with_margin(&flee_fields_with("40", "normal", "1", "8"), 1.0);
+        vm.host()
+            .inner
+            .set_ai_groups_flee(5, group_enabled)
+            .unwrap();
+        set_life(&mut vm, target, 20.0);
+        issue_attack(&mut vm, source, target);
+        step(&mut vm, 0.3);
+        assert!(life(&mut vm, target) < 20.0);
+        assert!(vm.host().inner.campaign_flee_motion_owns(target));
+    }
+
+    let (mut vm, source, target) =
+        flee_fixture_with_margin(&flee_fields_with("40", "normal", "1", "8"), 1.0);
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.set_ai_groups_flee(5, true).unwrap();
+    set_life(&mut vm, target, 20.0);
+    issue_attack(&mut vm, source, target);
+    step(&mut vm, 0.3);
+    assert!(life(&mut vm, target) < 20.0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(target));
+}
+
+#[test]
 fn melee_hit_starts_the_route_and_traces_damage_once() {
     let (mut vm, a, b) = flee_fixture_with_margin(&flee_fields_with("40", "normal", "1", "8"), 1.0);
     set_life(&mut vm, b, 20.0);
