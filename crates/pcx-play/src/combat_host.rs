@@ -1142,6 +1142,7 @@ impl ObjectHost {
             }
         }
         self.advance_holy_light(now)?;
+        self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
         let units: Vec<_> = self
