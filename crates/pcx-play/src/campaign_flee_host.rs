@@ -60,6 +60,10 @@ impl Registry {
         self.players.remove(&player);
     }
 
+    pub(super) fn is_active(&self, player: i32) -> bool {
+        self.players.contains_key(&player)
+    }
+
     pub(super) fn target_heroes(&self, player: i32) -> Option<bool> {
         self.players
             .get(&player)

@@ -4076,6 +4076,58 @@ fn hero_flee_fixture(fields: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, Handle
     )
 }
 
+fn inactive_hero_flee_fixture(
+    missile: bool,
+    mismatched_classifier: bool,
+) -> (Vm, HandleId, HandleId) {
+    let (hero, combat) = hero_rules();
+    let mut fields = hero_fields("STR");
+    if missile {
+        fields
+            .iter_mut()
+            .find(|(id, _)| id == b"W003")
+            .unwrap()
+            .1
+            .value = Ok(FieldValue::Cell("missile".into()));
+        add_missile_speed(&mut fields);
+    }
+    let (mut vm, hero, attacker) = open_fixture_with(
+        &fields,
+        Some(hero),
+        combat,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(hero)
+            .unwrap()
+            .definition
+            .rawcode,
+        *b"H001"
+    );
+    let context = Arc::clone(vm.host().inner.player_context().unwrap());
+    if mismatched_classifier {
+        let mut targeting = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+        targeting.image_sha256 = [0x99; 32];
+        vm.host()
+            .inner
+            .admit_campaign_targeting(&context, targeting)
+            .unwrap();
+    }
+    vm.host()
+        .inner
+        .admit_campaign_flee(&context, crate::campaign_flee_policy::FleePolicy::fixture())
+        .unwrap();
+    (vm, attacker, hero)
+}
+
 fn defend_flee_fixture() -> (Vm, HandleId, HandleId) {
     let (policy, numeric) = crate::campaign_flee_policy::tests::route_fixture();
     let mut fields = flee_fields("1", "8");
@@ -4651,8 +4703,16 @@ fn hero_and_ordinary_flee_flags_select_independent_damage_paths() {
     let error = flee_decision(&mut vm, attacker, victim, 19.0).unwrap_err();
     assert!(error.to_string().contains("hero retreat"), "{error}");
     vm.host().inner.deactivate_campaign_ai_player(5);
-    let error = flee_decision(&mut vm, attacker, victim, 19.0).unwrap_err();
-    assert!(error.to_string().contains("hero flee flag"), "{error}");
+    assert_eq!(
+        flee_decision(&mut vm, attacker, victim, 19.0).unwrap(),
+        None
+    );
+    let before = life(&mut vm, victim);
+    vm.host()
+        .inner
+        .combat_damage_unit(attacker, victim, 1.0)
+        .unwrap();
+    assert!(life(&mut vm, victim) < before);
 
     let (mut ordinary, source, target) = flee_fixture(&flee_fields("1", "8"));
     ordinary.host().inner.set_ai_units_flee(5, false).unwrap();
@@ -4661,6 +4721,57 @@ fn hero_and_ordinary_flee_flags_select_independent_damage_paths() {
         flee_decision(&mut ordinary, source, target, 19.0).unwrap(),
         None
     );
+}
+
+#[test]
+fn inactive_hero_takes_melee_and_missile_hits_without_a_matching_classifier() {
+    for (missile, mismatch) in [(false, false), (true, true)] {
+        let (mut vm, attacker, hero) = inactive_hero_flee_fixture(missile, mismatch);
+        let owner = vm.host().inner.executed_unit(hero).unwrap().owner;
+        assert_eq!(
+            vm.host().inner.campaign_heroes_flee_enabled(owner).unwrap(),
+            None
+        );
+        set_life(&mut vm, hero, 100.0);
+        vm.host().inner.enable_combat_trace(16);
+        issue_attack(&mut vm, attacker, hero);
+        step(&mut vm, if missile { 0.8 } else { 0.3 });
+        assert!(life(&mut vm, hero) < 100.0);
+        assert_eq!(damage_events(&mut vm), 1);
+    }
+}
+
+#[test]
+fn active_both_false_flee_flags_bypass_an_unadmitted_classifier() {
+    let (policy, numeric) = crate::campaign_flee_policy::tests::route_fixture();
+    let (mut vm, attacker, victim) = open_fixture_with(
+        &flee_fields("1", "8"),
+        None,
+        rules(),
+        false,
+        None,
+        None,
+        Some(numeric),
+        None,
+        None,
+        None,
+    );
+    let context = Arc::clone(vm.host().inner.player_context().unwrap());
+    vm.host()
+        .inner
+        .admit_campaign_flee(&context, policy)
+        .unwrap();
+    vm.host().inner.activate_campaign_ai_player(5).unwrap();
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.set_ai_heroes_flee(5, false).unwrap();
+    set_life(&mut vm, victim, 20.0);
+    vm.host().inner.enable_combat_trace(16);
+    vm.host()
+        .inner
+        .combat_damage_unit(attacker, victim, 1.0)
+        .unwrap();
+    assert!(life(&mut vm, victim) < 20.0);
+    assert_eq!(damage_events(&mut vm), 1);
 }
 
 #[test]
@@ -4760,7 +4871,7 @@ fn hero_flee_melee_refusal_preserves_swing_rng_life_and_trace() {
 }
 
 #[test]
-fn hero_flee_missile_refusal_retains_due_impacts_and_damage_state() {
+fn queued_hero_flee_missile_refusal_retains_due_impacts_and_damage_state() {
     let (mut vm, attacker, victim) = hero_flee_fixture(&flee_fields("1", "8"));
     vm.host().inner.set_ai_heroes_flee(5, true).unwrap();
     vm.host().inner.set_ai_units_flee(5, false).unwrap();
@@ -4781,6 +4892,42 @@ fn hero_flee_missile_refusal_retains_due_impacts_and_damage_state() {
         assert_eq!(life(&mut vm, victim), 20.0);
         assert_eq!(damage_events(&mut vm), 0);
     }
+}
+
+#[test]
+fn launched_hero_flee_missiles_refuse_at_impact_without_consuming_siblings() {
+    let mut fields = flee_fields_with("640", "missile", "1", "8");
+    add_missile_speed(&mut fields);
+    let (mut vm, attacker, victim) = hero_flee_fixture(&fields);
+    vm.call("spawn", &[]).unwrap();
+    let Value::Handle(sibling) = vm.global("C") else {
+        panic!("sibling attacker")
+    };
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.set_ai_heroes_flee(5, true).unwrap();
+    set_life(&mut vm, victim, 20.0);
+    vm.host().inner.enable_combat_trace(16);
+    issue_attack(&mut vm, attacker, victim);
+    issue_attack(&mut vm, sibling, victim);
+    step(&mut vm, 0.6);
+    assert_eq!(vm.host().inner.test_missile_count(), 2);
+    let before = random_snapshot(&mut vm);
+    let error = step_refused(&mut vm, 1.0);
+    assert!(error.contains("hero retreat"), "{error}");
+    assert_eq!(vm.host().inner.test_missile_count(), 2);
+    assert_eq!(random_snapshot(&mut vm), before);
+    assert_eq!(life(&mut vm, victim), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+
+    let (mut vm, attacker, victim) = hero_flee_fixture(&fields);
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
+    vm.host().inner.set_ai_heroes_flee(5, false).unwrap();
+    set_life(&mut vm, victim, 20.0);
+    vm.host().inner.enable_combat_trace(16);
+    issue_attack(&mut vm, attacker, victim);
+    step(&mut vm, 0.8);
+    assert!(life(&mut vm, victim) < 20.0);
+    assert_eq!(damage_events(&mut vm), 1);
 }
 
 #[test]
