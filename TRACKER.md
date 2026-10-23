@@ -6,8 +6,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   windows, preserving conditional life-band grouping and joining the route order
   to admitted movement rules. Private integration passes 1,526 core tests,
   strict native/WASM Clippy and the selected-image gate. The runtime consumer
-  remains unfinished: ordinary indexed route-score initialization is unresolved,
-  and the offline flag-clear experiment has not run. Human02 still stops at
+  remains unfinished: initial authored weapon-range inputs now have a verified
+  indexed initialization path, while later modifiers, alternate selection and
+  trigger timing remain open. Original-client pairs establish route persistence
+  after clearing the flag in the tested setup. Human02 still stops at
   `SetUnitsFlee`; see [campaign flee](docs/re-notes/campaign-ai-flee.md).
 
 - [~] Campaign targeting now has a selected-image policy reader, canonical

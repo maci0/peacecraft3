@@ -139,11 +139,21 @@ also passes. Private integration passes 1,526 core tests (45 ignored), strict
 native/WASM Clippy, and formatting. These checks establish source decoding,
 not a working flee consumer or rendered parity.
 
-The remaining route-score relationship is explicit: the client caches authored
-`rangeN1/2`, and a later `ratr` upgrade updates indexed node values, but the
-ordinary cache-to-node initialization and alternate node value are not yet
-qualified. The host's first-weapon range cannot silently replace that value.
-A matched flag-clear experiment supplies the bounded observations below.
+The initial indexed route input is now source-qualified. The selected
+`rangeN1/2` descriptors feed cached unit-type fields `+0x100/+0x104`, a transient
+initialization record, and the attack component's indexed values
+`+0x25c/+0x264`. An indexed virtual setter hid this write from the earlier
+direct-offset scans. The previously proposed cache offset `+0x108` belongs to a
+different field and is withdrawn.
+
+Ten mapped image-window hashes and the slot/stride arithmetic pass an independent
+local check. This qualifies the initial authored weapon ranges on that path.
+Later modifiers, selection of the alternate node value, and the decision's
+update timing remain separate questions; the consumer must not substitute a
+first-weapon range outside the qualified selection envelope. The aligned source
+chain and checks remain local in `flee-range-live-baseline-join.md` and
+`attack-initializer.json` under the retained flee evidence directory. A matched
+flag-clear experiment supplies the bounded observations below.
 
 ## Clearing before retreat initiation
 
