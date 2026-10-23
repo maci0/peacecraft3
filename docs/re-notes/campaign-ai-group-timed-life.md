@@ -1,0 +1,136 @@
+# GroupTimedLife and captain membership
+
+The selected Legacy executable has SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+At this integration checkpoint, unchanged Human02 passed `GroupTimedLife` and
+refused `SetCampaignAI` at 7.218750 seconds. The later
+[campaign-mode integration](campaign-ai-mode.md) advances beyond that call.
+The bounded implementation below is not completed campaign execution.
+
+## Selected-code evidence
+
+The native boolean setter changes an owned AI-context flag. Its consumer can
+detach one unit association or attach that unit to the first captain reference.
+The attachment and detachment paths update a signed counter. Public
+`CaptainGroupSize` reads that same first-reference counter, while
+`CaptainIsEmpty` compares it with zero. `CaptainPolicy` validates the query
+registration/name/signature, first-reference and result-counter relationships;
+this does not by itself define a roster of all units sharing an owner.
+
+The public `UnitApplyTimedLife` factory has a fallback key derived from a
+selected-image getter. The checked class constructor/vtable binds that stock
+key to the initializer containing the association bridge. The selected
+`AbilityBuffData.slk` members contain no matching alias or code row. This is a
+native factory identity, not an invented editor-buff record.
+`GroupTimedLifePolicy.timed_life_factory` now derives this identity from the
+getter and validates its agreement with the class getter, constructor vtable,
+fallback call and virtual initializer. Nonstock synthetic identities,
+relationship mutants and every truncated window are checked alongside an
+explicit actual-image decode. No constructor default is inferred for the flag.
+
+## Original-client observation
+
+A matched diagnostic pair created one player-9 town hall before starting AI,
+then one ordinary player-9 footman after an acknowledged AI startup. The AI
+called `InitAI`, `CreateCaptains`, and `GroupTimedLife(false/true)`. It queried
+public captain size repeatedly, recording both count and a progressing sequence
+in a bounded diagnostic bank encoding. The map applied public timed life with
+the image-derived factory key and a diagnostic duration of six seconds. A
+different-owner unordered control and the anchor remained unchanged.
+
+Both arms passed the collector's complete bounded-observation checks. The
+false arm reported count zero throughout. In the true arm, count was zero
+through application at game time 6.063, one at samples 11–70 (6.188–12.063),
+and zero from sample 71 (12.188) through the tail. Both actors retained life
+420 through sample 70 and reached zero at sample 71. Their handles still
+resolved afterward; this is evidence of life reaching zero, not unit removal.
+Query sequences reached 120 in both arms, so unchanged readings were not a
+stopped query loop.
+
+The before-application actor observations match in both arms. Immediately
+afterward, the false arm reports no order and the true arm reports a movement
+order. Later positions also differ. The experiment did not set an explicit
+random seed; these observations do not establish a complete movement rule or justify
+fitting a route, stop distance or timing constant to the samples. The native
+association path's additional effects remain a separate implementation boundary.
+
+The false/true packed-map hashes are respectively
+`85de2fa0fbb42dbdc69d1a5b1d6131886f49555cdb7e86d03bc572789a8b4a70`
+and `545ac4df91650f9c10a3ed1ffadc25621cbad96188bd7e6ff60dbdedb51a5949`.
+Their scripts differ only in diagnostic identities and the boolean flag.
+Original member bytes, generated maps, raw markers and source hashes remain
+local under `.scratch/group-timed-life-probe-r2/`. The compact runtime receipt
+has SHA-256 `9ad8194d33b46e08f9f0d23552cbe8130daa019bd685401fcfe74a24c6599728`.
+It supersedes the preserved first receipt, which incorrectly described the
+order difference as preceding application.
+Both original-client containers were stopped and preserved after collection.
+
+## Declared-home comparison
+
+A second matched pair uses an explicit diagnostic random seed in both arms
+and calls public `SetCaptainHome` with the image-decoded first selector before
+the AI acknowledgment. The base target is the authored town-hall position
+`(-3776,-4032)`; the other target is a declared diagnostic translation to
+`(-2752,-4032)`. Both points are inside the source map. The static pathing row
+has no walk-block flags, but the base point is occupied by the live town hall.
+
+Both runs qualify, with the same count transitions and life reaching zero as
+the earlier true arm. The base actor settles at `(-3753.063,-4244.123)`, while
+the east-target actor settles at `(-2778.204,-4022.425)`. This supports using
+the declared captain target in the movement consumer. Positions already differ
+at sample 3, before timed-life application; the comparison does not isolate
+the effect's movement from other home-dependent AI activity.
+
+The approximate endpoint distances of 213 and 28 are observations, not arrival
+rules. The existing canonical point router already handles occupied goals by
+finding a nearest reachable cell, using source pathing scale, collision and live
+occupancy. Reusing it avoids a separate captain router or a distance fitted to
+these endpoints. Exact native arrival, formation and later target updates
+remain fidelity questions.
+
+The base/east map hashes are
+`40bdaac7348dcc9eb915baeb9cb113102deb4d0e3779857d268e95412c9e05b0`
+and `16bc12a9718cab69eb895a37c8f86b4e26831512c6d1c2e3bfbd344c8f80ae61`.
+The compact receipt has SHA-256
+`06f6af39f768a1d3315d163b3f3159ccc66b22975127e7bac4f42b6128d33360`;
+all inputs, scripts, markers and stopped reference runs remain local under
+`.scratch/group-timed-life-home-probe/` and its recorded run directories.
+
+## Bounded host implementation
+
+The existing active-player registry stores the explicit flag and canonical
+first-captain unit handles. `CaptainGroupSize` and `CaptainIsEmpty` observe that
+same membership; they do not count all units sharing an owner. AI declarations
+are checked against the owned common source before dispatch. The selected
+factory key admits public `UnitApplyTimedLife` through the existing unit expiry
+and death/event path, independently of Water Elemental spell admission.
+
+For supported direct-created, effect-free ordinary units, true mode routes to
+the current declared first home through the existing point router. Home changes
+preflight affected routes before publication. Captain route ownership is
+separate from counted membership: normal combat steering waits until arrival,
+while a later explicit order keeps the count and releases that route ownership.
+False mode preflights the admitted guard's post-stop decision and any required
+return route, stops the affected unit, then lets the next activity tick perform
+the normal guard refresh. Missing guards or units skipped by that combat step
+refuse before stop or expiry writes. This tick timing is a recreation choice,
+not a claim of identical native callback delivery.
+
+Death and removal clear membership and expiry. Owner transfer and AI-context
+retirement detach membership and stop only owned captain motion while keeping
+the accepted unit deadline. Failed retirement retains the VM and context,
+blocks its wakes, and retries cleanup on a later start attempt. Repeated timed
+life on the same unit and unqualified creation/effect states refuse before
+writes. Exact native formation, arrival and general roster operations remain
+unqualified.
+
+Combined validation passed 3,048 workspace unit tests before the final shared
+combat-eligibility guard, including 619 app tests. The final source passed all
+1,670 core tests, the published two-player session fixture, strict workspace
+native Clippy, affected native/WASM Clippy and formatting. Explicit selected
+image readers and selected Human01 startup/Continue passed. The unchanged
+Human02 opening-minute test still fails, now at `SetCampaignAI`; the test was
+not changed to accept that refusal. Logs remain local under
+`.scratch/group-timed-life-integration/`, including the initial missing-install
+test failure and its corrected explicit asset paths. No new original-client
+run or rendered comparison was made for this host integration.

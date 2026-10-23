@@ -17,6 +17,7 @@ pub struct ObjectHost {
     combat_trace: Option<combat::CombatTrace>,
     holy_light: Option<holy_light::Rules>,
     summoning: Option<unit_summon::State>,
+    unit_expirations: std::collections::BTreeMap<HandleId, f64>,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
@@ -101,9 +102,12 @@ pub struct ObjectHost {
     campaign_ai: campaign_flee::Registry,
     campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
     campaign_new_heroes: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
+    campaign_mode: Option<crate::campaign_mode_policy::CampaignModePolicy>,
     campaign_slow_chopping: Option<crate::campaign_slow_chopping_policy::SlowChoppingPolicy>,
     campaign_gathering: Option<crate::campaign_gathering_policy::GatheringPolicy>,
     campaign_captains: Option<crate::campaign_captain_policy::CaptainPolicy>,
+    campaign_group_timed_life:
+        Option<crate::campaign_group_timed_life_policy::GroupTimedLifePolicy>,
     campaign_flee_motion: campaign_flee_motion::State,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
@@ -246,6 +250,7 @@ impl ObjectHost {
             combat_trace: None,
             holy_light: None,
             summoning: None,
+            unit_expirations: std::collections::BTreeMap::new(),
             indicators: None,
             cinematic_scene: None,
             dialogs: None,
@@ -276,9 +281,11 @@ impl ObjectHost {
             campaign_ai: campaign_flee::Registry::default(),
             campaign_flee: None,
             campaign_new_heroes: None,
+            campaign_mode: None,
             campaign_slow_chopping: None,
             campaign_gathering: None,
             campaign_captains: None,
+            campaign_group_timed_life: None,
             campaign_flee_motion: campaign_flee_motion::State::default(),
             default_difficulty: None,
             campaign_menu_race: None,
@@ -803,6 +810,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.summoning_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.unit_timed_life_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if name == "CreateUnitAtLoc" && self.locations && self.units.is_some() {
             return self
                 .create_unit_at_location(args)
@@ -1320,6 +1330,8 @@ mod campaign_flee;
 #[path = "campaign_flee_motion.rs"]
 mod campaign_flee_motion;
 
+#[path = "campaign_mode_host.rs"]
+mod campaign_mode;
 #[path = "campaign_new_heroes_host.rs"]
 mod campaign_new_heroes;
 #[path = "campaign_slow_chopping_host.rs"]
@@ -1332,6 +1344,9 @@ pub use campaign_gathering::GatheringObservation;
 #[path = "campaign_captain_host.rs"]
 mod campaign_captains;
 pub use campaign_captains::CaptainObservation;
+
+#[path = "campaign_group_timed_life_host.rs"]
+mod campaign_group_timed_life;
 
 #[path = "combat_host.rs"]
 mod combat;

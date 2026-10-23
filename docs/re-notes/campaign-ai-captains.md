@@ -50,11 +50,11 @@ not a claim of native rollback. No selected bits means no home mutation.
 Creation and assignment use the runtime's canonical player context; mutable
 `common.ai` globals do not establish ownership.
 
-This state does not issue orders, clone units, create script groups or substitute
-the anchor's current position for a captain position. Readiness, combat, group
-size, home queries and reset remain unsupported until their shared-world
-relationships are modeled. A host observation can verify target state without
-claiming those gameplay effects.
+Creation does not clone units, create script groups or substitute the anchor's
+current position for a moving captain. The later grouped timed-life consumer
+uses these declared targets for its supported members and enables count/empty
+queries. Readiness, combat, home queries and reset remain unsupported until
+their shared-world relationships are modeled.
 
 ## Validation
 
@@ -74,3 +74,20 @@ execution checks; no new original-client or rendered captain test was run.
 Mapped windows, exact byte hashes, source callers and the known/unknown trail
 remain local under `.scratch/campaign-basics-native/create-captains*.md`.
 No original assets are tracked.
+
+## Public membership observation
+
+Further selected-image validation binds the primary `CaptainGroupSize` and
+`CaptainIsEmpty` registrations to their NUL-terminated names and signatures.
+Their result paths resolve the first captain reference, then respectively read
+or compare with zero the same counter updated by the unit-association path.
+The reader checks those operand relationships against the decoded first
+reference slot; it does not substitute a collection of all same-owner units.
+
+Synthetic tests change the reference and counter operands coherently, reject
+broken joins and string terminators, and reject every truncated window. All
+nine focused policy tests pass, including the explicit selected-image test.
+The later [grouped timed-life integration](campaign-ai-group-timed-life.md)
+enables these queries over canonical first-captain membership. It includes
+matched original-client count observations and a bounded lifecycle/movement
+consumer; general roster operations and exact native formation remain open.

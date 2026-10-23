@@ -104,8 +104,10 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())
     }
 
-    fn ai_deactivate_player(&mut self, player: i32) {
-        self.object.deactivate_campaign_ai_player(player);
+    fn ai_deactivate_player(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .deactivate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
     }
 
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
@@ -134,6 +136,12 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())
     }
 
+    fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .set_ai_campaign_mode(player)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String> {
         self.object
             .set_ai_slow_chopping(player, enabled)
@@ -159,6 +167,31 @@ impl AiWorld for AiResearchWorld {
         self.object
             .set_ai_captain_home(player, selector, home)
             .map_err(|e| e.to_string())
+    }
+    fn ai_set_group_timed_life(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_group_timed_life(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_group_size(&mut self, player: i32) -> Result<i32, String> {
+        let owner = self
+            .object
+            .player_identity(player)
+            .ok_or("player not admitted")?;
+        self.object
+            .campaign_captain_group_size(owner)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "captain policy absent".into())
+    }
+    fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String> {
+        let owner = self
+            .object
+            .player_identity(player)
+            .ok_or("player not admitted")?;
+        self.object
+            .campaign_captain_is_empty(owner)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "captain policy absent".into())
     }
 }
 

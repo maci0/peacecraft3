@@ -10,7 +10,7 @@
 //! RNG; armor uses the factor in the usual reduction curve. Attack-move reuses
 //! that acquisition policy during travel and resumes its accepted endpoint after
 //! losing a target; native interrupt/resume and event nesting remain unqualified.
-use super::{Entry, Error, EventSubject, Failure, ObjectHost};
+use super::{Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost};
 use crate::inventory_powerup::AttributeBonus;
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
@@ -238,6 +238,16 @@ pub(crate) struct HeroBonuses {
 }
 
 impl ObjectHost {
+    pub(super) fn combat_step_eligible(&self, unit: HandleId, record: &ExecutedUnit) -> bool {
+        self.summon_current_order(unit).is_none()
+            && record.combat.as_ref().is_some_and(|combat| {
+                record.paused_since.is_none()
+                    && !record.is_sleeping()
+                    && !combat.dead
+                    && (combat.weapon.is_some() || combat.attack_destination.is_some())
+            })
+    }
+
     pub(crate) fn derive_hero_combat(
         definition: &Definition,
         progress: Option<(i32, i32)>,
@@ -1142,23 +1152,18 @@ impl ObjectHost {
             }
         }
         self.advance_holy_light(now)?;
+        self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
         let units: Vec<_> = self
             .executed_units()
-            .map(|(id, u)| {
-                let attacks = self.summon_current_order(id).is_none()
-                    && u.combat.as_ref().is_some_and(|c| {
-                        u.paused_since.is_none()
-                            && !u.is_sleeping()
-                            && !c.dead
-                            && (c.weapon.is_some() || c.attack_destination.is_some())
-                    });
-                (id, attacks)
-            })
+            .map(|(id, unit)| (id, self.combat_step_eligible(id, unit)))
             .collect();
         for &(unit, attacks) in &units {
             if !attacks {
+                continue;
+            }
+            if self.captain_route_owned(unit) {
                 continue;
             }
             let has_valid_target = self

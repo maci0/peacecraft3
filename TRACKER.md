@@ -2,6 +2,33 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] A production-app offscreen Vulkan diagnostic now renders the selected RoC
+  main menu and activates its mounted controls. It currently times out waiting
+  for Single Player navigation; rendered campaign entry remains unverified.
+  Audio playback is excluded from this visual diagnostic. See
+  [menu entry](docs/re-notes/menu-entry.md).
+
+- [~] `SetCampaignAI` now admits its source-derived mode transition into the
+  canonical player registry, with lazy mode observation for supported existing
+  and later units. `GetPlayers` forwards the map's configured count through the
+  same world. Checks pass 1,677 core tests, the published two-player session,
+  selected menu activation/Continue and strict native/WASM Clippy. Unchanged
+  Human02 now refuses `SetReplacementCount` at 7.312500 seconds. Native manager
+  exclusions, controller actions and a fresh rendered menu-to-campaign replay
+  remain open; see [campaign mode](docs/re-notes/campaign-ai-mode.md).
+
+- [~] `GroupTimedLife` now reaches canonical per-player state, first-captain
+  count/empty queries and source-factory `UnitApplyTimedLife` expiry. Supported
+  ordinary members use the existing home router; false mode preflights guard
+  refresh before stopping, and unsupported refresh states refuse before writes.
+  Death/removal clear membership; transfer/context retirement retain expiry.
+  Final checks pass 1,670 core tests, the published two-player fixture and strict
+  native/WASM Clippy. Selected startup/Continue also pass. Unchanged Human02 now
+  passed this call and refused `SetCampaignAI` at 7.218750 seconds at that
+  checkpoint; the later mode integration above advances beyond it. Exact native
+  formation, refresh timing, repeated effects and full campaign execution remain
+  open. See [grouped timed life](docs/re-notes/campaign-ai-group-timed-life.md).
+
 - [~] `SetSlowChopping` now reaches canonical worker hits and deposits with
   separate source-derived damage and credit overrides; authored cargo, capacity
   and timing remain intact. A matched original-client pair observed two
@@ -9,8 +36,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   1 lumber with true. Combined validation passes 1,661 core / 610 app tests,
   selected-image readers, published fixtures, startup/Continue and strict
   native/WASM Clippy. An accepted return walk survives an unknown flag and
-  refuses atomically at deposit. Unchanged Human02 passes the setter and stops
-  at `GroupTimedLife` at 7.218750 seconds. Modified workers, controller effects
+  refuses atomically at deposit. That checkpoint reached `GroupTimedLife` at
+  7.218750 seconds; the later integration above advances beyond it. Modified
+  workers, controller effects
   and complete campaign behavior remain open; see
   [campaign slow chopping](docs/re-notes/campaign-ai-slow-chopping.md).
 

@@ -3,7 +3,7 @@ use crate::map_startup_host::NeutralStack;
 use crate::scripts::MapScripts;
 use pcx_assets::AssetPath;
 use pcx_script::{Host, OwnedVm, ScriptCall, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const MAX_PLAYERS: usize = 32;
@@ -119,12 +119,13 @@ pub(crate) trait AiWorld: Host {
     /// Registers the player as active before its AI main runs. Returns whether
     /// this call created the context so a failed start can roll it back.
     fn ai_activate_player(&mut self, player: i32) -> Result<bool, String>;
-    fn ai_deactivate_player(&mut self, player: i32);
+    fn ai_deactivate_player(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
@@ -134,6 +135,9 @@ pub(crate) trait AiWorld: Host {
         selector: i32,
         home: [f32; 2],
     ) -> Result<(), String>;
+    fn ai_set_group_timed_life(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_captain_group_size(&mut self, player: i32) -> Result<i32, String>;
+    fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -202,14 +206,15 @@ impl AiWorld for NeutralStack {
             .map_err(|e| e.to_string())
     }
 
-    fn ai_deactivate_player(&mut self, player: i32) {
+    fn ai_deactivate_player(&mut self, player: i32) -> Result<(), String> {
         self.inner_mut()
             .inner_mut()
             .inner_mut()
             .inner_mut()
             .inner_mut()
             .inner_mut()
-            .deactivate_campaign_ai_player(player);
+            .deactivate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
     }
 
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
@@ -267,6 +272,17 @@ impl AiWorld for NeutralStack {
             .map_err(|e| e.to_string())
     }
 
+    fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_campaign_mode(player)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String> {
         self.inner_mut()
             .inner_mut()
@@ -314,11 +330,45 @@ impl AiWorld for NeutralStack {
             .set_ai_captain_home(player, selector, home)
             .map_err(|e| e.to_string())
     }
+
+    fn ai_set_group_timed_life(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_group_timed_life(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_captain_group_size(&mut self, player: i32) -> Result<i32, String> {
+        let objects = self.inner().inner().inner().inner().inner().inner();
+        let owner = objects
+            .player_identity(player)
+            .ok_or("CaptainGroupSize: player is not admitted")?;
+        objects
+            .campaign_captain_group_size(owner)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "CaptainGroupSize: captain policy is not admitted".into())
+    }
+
+    fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String> {
+        let objects = self.inner().inner().inner().inner().inner().inner();
+        let owner = objects
+            .player_identity(player)
+            .ok_or("CaptainIsEmpty: player is not admitted")?;
+        objects
+            .campaign_captain_is_empty(owner)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "CaptainIsEmpty: captain policy is not admitted".into())
+    }
 }
 
 pub(crate) struct Runtime<W: AiWorld> {
     loader: Option<Loader>,
     active: BTreeMap<i32, OwnedVm<AiHost<W>>>,
+    pending_retirement: BTreeSet<i32>,
     remaining_loads: usize,
 }
 
@@ -327,6 +377,7 @@ impl<W: AiWorld> Default for Runtime<W> {
         Self {
             loader: None,
             active: BTreeMap::new(),
+            pending_retirement: BTreeSet::new(),
             remaining_loads: 64,
         }
     }
@@ -350,6 +401,18 @@ impl<W: AiWorld> Runtime<W> {
             return Err("StartCampaignAI: script path exceeds 16 KiB".into());
         }
         let path = AssetPath::new(path).map_err(|e| format!("StartCampaignAI: {e}"))?;
+        if self.pending_retirement.contains(&player) {
+            world
+                .as_mut()
+                .ok_or("StartCampaignAI: world is already lent")?
+                .ai_deactivate_player(player)
+                .map_err(|e| format!("StartCampaignAI player {player}: retirement: {e}"))?;
+            self.pending_retirement.remove(&player);
+            self.active.remove(&player);
+            return Err(format!(
+                "StartCampaignAI player {player}: failed context retired; retry start"
+            ));
+        }
         if self.active.contains_key(&player) {
             return Ok(());
         }
@@ -392,10 +455,19 @@ impl<W: AiWorld> Runtime<W> {
             vm.run_thread(&[main])
         });
         let mut borrowed = vm.host().world.take().expect("AI world is lent");
-        if result.is_err() && activated {
-            borrowed.ai_deactivate_player(player);
-        }
+        let retirement = if result.is_err() && activated {
+            borrowed.ai_deactivate_player(player)
+        } else {
+            Ok(())
+        };
         *world = Some(borrowed);
+        if let Err(error) = retirement {
+            self.active.insert(player, vm);
+            self.pending_retirement.insert(player);
+            return Err(format!(
+                "StartCampaignAI player {player}: retirement: {error}"
+            ));
+        }
         result.map_err(|e| format!("StartCampaignAI player {player}: {e}"))?;
         self.active.insert(player, vm);
         Ok(())
@@ -404,6 +476,7 @@ impl<W: AiWorld> Runtime<W> {
     pub(crate) fn next_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
         self.active
             .iter_mut()
+            .filter(|(player, _)| !self.pending_retirement.contains(player))
             .filter_map(|(&player, vm)| {
                 vm.host()
                     .sleepers
@@ -421,6 +494,9 @@ impl<W: AiWorld> Runtime<W> {
         player: i32,
         ticket: u64,
     ) -> Result<(), String> {
+        if self.pending_retirement.contains(&player) {
+            return Err("campaign AI context is pending retirement".into());
+        }
         if !self.active.contains_key(&player) {
             return Err("campaign AI player is not running".into());
         }
@@ -431,8 +507,12 @@ impl<W: AiWorld> Runtime<W> {
         *world = vm.host().world.take();
         if result.is_ok() {
             self.active.insert(player, vm);
-        } else if let Some(world) = world.as_mut() {
-            world.ai_deactivate_player(player);
+        } else if let Some(world) = world.as_mut()
+            && let Err(error) = world.ai_deactivate_player(player)
+        {
+            self.active.insert(player, vm);
+            self.pending_retirement.insert(player);
+            return Err(format!("campaign AI player {player}: retirement: {error}"));
         }
         result.map_err(|e| format!("campaign AI player {player}: {e}"))
     }
@@ -486,6 +566,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         "SetGroupsFlee",
         "SetNewHeroes",
         "SetSlowChopping",
+        "GroupTimedLife",
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
             continue;
@@ -522,6 +603,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     }
     for (name, params) in [
         ("CreateCaptains", &[][..]),
+        ("SetCampaignAI", &[][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
@@ -538,6 +620,25 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
                 .any(|(param, expected)| param.ty.array || param.ty.kind.name() != *expected)
             || native.ret.array
             || native.ret.kind.name() != "nothing"
+        {
+            return Err(format!(
+                "StartCampaignAI: {name} AI common declaration differs"
+            ));
+        }
+    }
+    for (name, result) in [
+        ("CaptainGroupSize", "integer"),
+        ("CaptainIsEmpty", "boolean"),
+    ] {
+        let Some(native) = scripts.program().natives().get(name) else {
+            continue;
+        };
+        if native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || !native.params.is_empty()
+            || native.ret.array
+            || native.ret.kind.name() != result
         {
             return Err(format!(
                 "StartCampaignAI: {name} AI common declaration differs"
@@ -652,6 +753,7 @@ impl<W: AiWorld> Host for AiHost<W> {
         match name {
             "GetAiPlayer" if args.is_empty() => Ok(Value::Int(self.player)),
             "Player"
+            | "GetPlayers"
             | "GetPlayerState"
             | "GetGameDifficulty"
             | "GetPlayerNeutralPassive"
@@ -763,6 +865,37 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .ai_set_captain_home(player, *selector, [*x, *y])?;
                 Ok(Value::Null)
             }
+            "SetCampaignAI" => {
+                if !args.is_empty() {
+                    return Err("SetCampaignAI: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_set_campaign_mode(player)?;
+                Ok(Value::Null)
+            }
+            "GroupTimedLife" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("GroupTimedLife: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?
+                    .ai_set_group_timed_life(player, *enabled)?;
+                Ok(Value::Null)
+            }
+            "CaptainGroupSize" => {
+                if !args.is_empty() {
+                    return Err("CaptainGroupSize: expected no arguments".into());
+                }
+                let player = self.player;
+                Ok(Value::Int(self.world_mut()?.ai_captain_group_size(player)?))
+            }
+            "CaptainIsEmpty" => {
+                if !args.is_empty() {
+                    return Err("CaptainIsEmpty: expected no arguments".into());
+                }
+                let player = self.player;
+                Ok(Value::Bool(self.world_mut()?.ai_captain_is_empty(player)?))
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -793,10 +926,13 @@ mod tests {
         heroes_flee: BTreeMap<i32, bool>,
         groups_flee: BTreeMap<i32, bool>,
         new_heroes: BTreeMap<i32, bool>,
+        campaign_modes: BTreeSet<i32>,
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
+        group_timed_life: BTreeMap<i32, bool>,
+        retirement_blocked: bool,
     }
 
     struct World(Arc<Mutex<State>>);
@@ -825,16 +961,22 @@ mod tests {
                 .insert(player, false)
                 .is_none())
         }
-        fn ai_deactivate_player(&mut self, player: i32) {
+        fn ai_deactivate_player(&mut self, player: i32) -> Result<(), String> {
+            if self.0.lock().unwrap().retirement_blocked {
+                return Err("route retirement refused".into());
+            }
             self.0.lock().unwrap().active.remove(&player);
             self.0.lock().unwrap().target_heroes.remove(&player);
             self.0.lock().unwrap().units_flee.remove(&player);
             self.0.lock().unwrap().heroes_flee.remove(&player);
             self.0.lock().unwrap().groups_flee.remove(&player);
             self.0.lock().unwrap().new_heroes.remove(&player);
+            self.0.lock().unwrap().campaign_modes.remove(&player);
             self.0.lock().unwrap().slow_chopping.remove(&player);
             self.0.lock().unwrap().gathering.remove(&player);
             self.0.lock().unwrap().captain_creates.remove(&player);
+            self.0.lock().unwrap().group_timed_life.remove(&player);
+            Ok(())
         }
         fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
@@ -885,6 +1027,15 @@ mod tests {
             state.slow_chopping.insert(player, enabled);
             Ok(())
         }
+
+        fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.campaign_modes.insert(player);
+            Ok(())
+        }
         fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
             if !state.active.contains_key(&player) {
@@ -914,6 +1065,21 @@ mod tests {
             }
             state.captain_homes.push((player, selector, home));
             Ok(())
+        }
+
+        fn ai_set_group_timed_life(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.group_timed_life.insert(player, enabled);
+            Ok(())
+        }
+        fn ai_captain_group_size(&mut self, _player: i32) -> Result<i32, String> {
+            Ok(0)
+        }
+        fn ai_captain_is_empty(&mut self, _player: i32) -> Result<bool, String> {
+            Ok(true)
         }
     }
 
@@ -1216,6 +1382,35 @@ mod tests {
     }
 
     #[test]
+    fn refused_retirement_keeps_the_vm_and_world_until_a_retry_succeeds() {
+        let failing = program_with_ai_common(
+            "synthetic:retire.ai",
+            "function main takes nothing returns nothing\ncall SetGroupsFlee(true)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_GROUP_FLEE}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&failing)));
+        let shared = Arc::new(Mutex::new(State {
+            retirement_blocked: true,
+            ..State::default()
+        }));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "retire.ai").unwrap_err();
+        assert!(error.contains("retirement"), "{error}");
+        assert!(runtime.active.contains_key(&1));
+        assert!(runtime.pending_retirement.contains(&1));
+        assert!(world.is_some());
+        assert_eq!(shared.lock().unwrap().groups_flee.get(&1), Some(&true));
+        shared.lock().unwrap().retirement_blocked = false;
+        let error = runtime.start(&mut world, 1, "retire.ai").unwrap_err();
+        assert!(error.contains("failed context retired"), "{error}");
+        assert!(!runtime.active.contains_key(&1));
+        assert!(runtime.pending_retirement.is_empty());
+        assert!(!shared.lock().unwrap().active.contains_key(&1));
+        assert!(world.is_some());
+    }
+
+    #[test]
     fn captain_natives_keep_ai_players_and_sleeping_calls_separate() {
         let script = program_with_ai_common(
             "synthetic:captain.ai",
@@ -1509,6 +1704,60 @@ mod tests {
         assert_eq!(state.target_heroes, [(1, true), (2, false)].into());
         assert!(state.units_flee.is_empty());
         assert!(world.is_some());
+    }
+
+    #[test]
+    fn campaign_mode_is_owned_by_each_program_and_survives_sleep() {
+        let script = program_with_ai_common(
+            "synthetic:mode.ai",
+            "function main takes nothing returns nothing\nif GetAiPlayer() == 1 then\ncall SetCampaignAI()\nendif\ncall Sleep(0.25)\ncall SetCampaignAI()\nendfunction\n",
+            &format!("{AI_COMMON}native SetCampaignAI takes nothing returns nothing\n"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "mode.ai").unwrap();
+        }
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1].into());
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1, 2].into());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn campaign_mode_abi_refuses_before_main_and_arguments_do_not_write() {
+        for declaration in [
+            "native SetCampaignAI takes integer mode returns nothing\n",
+            "native SetCampaignAI takes nothing returns boolean\n",
+            "constant native SetCampaignAI takes nothing returns nothing\n",
+        ] {
+            let script = program_with_ai_common(
+                "synthetic:mode.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &format!("{AI_COMMON}{declaration}"),
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "mode.ai").unwrap_err();
+            assert!(error.contains("SetCampaignAI"), "{error}");
+            assert!(shared.lock().unwrap().gold.is_empty());
+            assert!(shared.lock().unwrap().active.is_empty());
+        }
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        assert!(host.native("SetCampaignAI", &[]).is_err());
+        shared.lock().unwrap().active.insert(1, false);
+        assert!(host.native("SetCampaignAI", &[Value::Bool(true)]).is_err());
+        assert!(shared.lock().unwrap().campaign_modes.is_empty());
+        assert_eq!(host.native("SetCampaignAI", &[]).unwrap(), Value::Null);
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1].into());
     }
 
     #[test]

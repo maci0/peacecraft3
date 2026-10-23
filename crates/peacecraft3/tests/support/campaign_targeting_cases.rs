@@ -182,8 +182,12 @@ endfunction
     inputs.captain_policy = Some(captain_policy);
     inputs.new_heroes_policy =
         Some(pcx_play::campaign_new_heroes_policy::NewHeroesPolicy::fixture());
+    inputs.campaign_mode_policy =
+        Some(pcx_play::campaign_mode_policy::CampaignModePolicy::fixture());
     inputs.slow_chopping_policy =
         Some(pcx_play::campaign_slow_chopping_policy::SlowChoppingPolicy::fixture());
+    inputs.group_timed_life_policy =
+        Some(pcx_play::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture());
     inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
     inputs.enumeration.names.extend(
         [
@@ -219,20 +223,75 @@ endfunction
         .shared_context()
         .unwrap();
     let ai_common = format!(
-        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\nnative SetSlowChopping takes boolean enabled returns nothing\n"
+        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\nnative SetSlowChopping takes boolean enabled returns nothing\nnative GroupTimedLife takes boolean enabled returns nothing\nnative CaptainGroupSize takes nothing returns integer\nnative CaptainIsEmpty takes nothing returns boolean\n"
     );
-    let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
-        let home_x = if flag { 112.0 } else { 48.0 };
-        let opposite = !flag;
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetHeroesFlee({flag})\ncall SetGroupsFlee({flag})\ncall SetSlowChopping({flag})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetHeroesFlee({})\ncall SetGroupsFlee({})\ncall SetSlowChopping({opposite})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag, !flag, !flag);
-        let program = pcx_play::scripts::MapScripts::compile(
-            AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
-            ScriptAsset { label: "fixture:common.j", bytes: &map.common },
-            ScriptAsset { label: "fixture:common.ai", bytes: ai_common.as_bytes() },
-            ScriptAsset { label: name, bytes: body.as_bytes() }, None,
-        ).unwrap();
-        (name, Arc::new(program))
-    }).collect();
+    let ai_common = format!("{ai_common}native SetCampaignAI takes nothing returns nothing\n");
+    let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
+        .into_iter()
+        .map(|(name, flag)| {
+            let home_x = if flag { 112.0 } else { 48.0 };
+            let opposite = !flag;
+            let body = format!(
+                r#"function VerifyEmptyCaptains takes nothing returns nothing
+if CaptainGroupSize() != 0 or not CaptainIsEmpty() or GetPlayers() != 3 then
+call SetCaptainHome({captain_selector},0.0,0.0)
+endif
+endfunction
+function main takes nothing returns nothing
+call SetTargetHeroes({flag})
+call SetUnitsFlee({opposite})
+call SetHeroesFlee({flag})
+call SetGroupsFlee({flag})
+call SetSlowChopping({flag})
+call SetNewHeroes({flag})
+call GroupTimedLife({flag})
+if {flag} then
+call SetCampaignAI()
+endif
+call CreateCaptains()
+call VerifyEmptyCaptains()
+call StopGathering()
+call Sleep(0.25)
+call SetTargetHeroes({opposite})
+call SetUnitsFlee({flag})
+call SetHeroesFlee({opposite})
+call SetGroupsFlee({opposite})
+call SetSlowChopping({opposite})
+call SetNewHeroes({opposite})
+call GroupTimedLife({opposite})
+if {opposite} then
+call SetCampaignAI()
+endif
+call StopGathering()
+call SetCaptainHome({captain_selector},{home_x:.1},24.0)
+call VerifyEmptyCaptains()
+endfunction
+"#
+            );
+            let program = pcx_play::scripts::MapScripts::compile(
+                AssetIdentity {
+                    edition: "synthetic".into(),
+                    version: "targeting".into(),
+                    source: name.into(),
+                },
+                ScriptAsset {
+                    label: "fixture:common.j",
+                    bytes: &map.common,
+                },
+                ScriptAsset {
+                    label: "fixture:common.ai",
+                    bytes: ai_common.as_bytes(),
+                },
+                ScriptAsset {
+                    label: name,
+                    bytes: body.as_bytes(),
+                },
+                None,
+            )
+            .unwrap();
+            (name, Arc::new(program))
+        })
+        .collect();
     let entries =
         ["config", "main"].map(|name| context.scripts.program().function_id(name).unwrap());
     let post_config = inputs.post_config.clone();
@@ -341,6 +400,19 @@ endfunction
     };
     assert_eq!(slow_chopping_flag(&mut session, a), Some(false));
     assert_eq!(slow_chopping_flag(&mut session, b), Some(true));
+    let group_timed_life_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_group_timed_life_enabled(owner).unwrap()
+    };
+    assert_eq!(group_timed_life_flag(&mut session, a), Some(false));
+    assert_eq!(group_timed_life_flag(&mut session, b), Some(true));
+    let campaign_mode = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        objects.campaign_unit_mode(unit).unwrap()
+    };
+    assert_eq!(campaign_mode(&mut session, a), None);
+    assert_eq!(campaign_mode(&mut session, b), Some(true));
     let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
         let objects = session.host().unwrap().objects();
         for (unit, base) in [(a, a_base), (b, b_base)] {
@@ -399,6 +471,10 @@ endfunction
     assert_eq!(groups_flee_flag(&mut session, b), Some(false));
     assert_eq!(slow_chopping_flag(&mut session, a), Some(true));
     assert_eq!(slow_chopping_flag(&mut session, b), Some(false));
+    assert_eq!(group_timed_life_flag(&mut session, a), Some(true));
+    assert_eq!(group_timed_life_flag(&mut session, b), Some(false));
+    assert_eq!(campaign_mode(&mut session, a), Some(true));
+    assert_eq!(campaign_mode(&mut session, b), Some(true));
     check_gathering(&mut session);
     check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {

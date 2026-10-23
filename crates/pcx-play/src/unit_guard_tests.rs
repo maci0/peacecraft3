@@ -31,6 +31,7 @@ fn guarded_with_flee(
 native RemoveGuardPosition takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
 native SetUnitOwner takes unit u, player p, boolean color returns nothing
+native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
 globals
 constant mapcontrol MAP_CONTROL_COMPUTER=ConvertMapControl(91)
 constant mapcontrol MAP_CONTROL_USER=ConvertMapControl(-17)
@@ -141,6 +142,97 @@ fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
             .unwrap(),
         Value::Bool(true)
     );
+}
+
+#[test]
+fn false_timed_life_stops_then_guard_refresh_returns_home() {
+    let (mut vm, a, _) = guarded();
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    let policy = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
+    let key = i32::from_be_bytes(policy.timed_life_factory);
+    h.admit_campaign_group_timed_life(&context, policy).unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    h.set_ai_group_timed_life(4, false).unwrap();
+    let home = h.guard_state().unwrap().get(a).unwrap().home;
+    assert!(h.steer_unit(a, Some([64., 16.]), "test").unwrap());
+    step(&mut vm, 2.);
+    let h = &mut vm.host().inner;
+    assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) > 8.);
+    assert!(!h.guard_state().unwrap().get(a).unwrap().returning);
+    h.native(
+        "UnitApplyTimedLife",
+        &[Value::Handle(a), Value::Int(key), Value::Real(10.)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        None
+    );
+    step(&mut vm, 2.0 + 1.0 / 64.0);
+    let h = &vm.host().inner;
+    assert!(h.guard_state().unwrap().get(a).unwrap().returning);
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some(home)
+    );
+}
+
+#[test]
+fn false_timed_life_refuses_when_combat_will_skip_the_guard() {
+    for paused in [false, true] {
+        let (mut vm, a, _) = guarded();
+        let h = &mut vm.host().inner;
+        let context = Arc::clone(h.player_context().unwrap());
+        let policy = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
+        let key = i32::from_be_bytes(policy.timed_life_factory);
+        h.admit_campaign_group_timed_life(&context, policy).unwrap();
+        h.activate_campaign_ai_player(4).unwrap();
+        h.set_ai_group_timed_life(4, false).unwrap();
+        if paused {
+            h.native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+                .unwrap();
+        } else {
+            h.test_disarm_unit(a);
+        }
+        let guard = *h.guard_state().unwrap().get(a).unwrap();
+        let destination = h
+            .executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination();
+        let refusal = h
+            .native(
+                "UnitApplyTimedLife",
+                &[Value::Handle(a), Value::Int(key), Value::Real(1.)],
+            )
+            .unwrap_err();
+        assert!(refusal.to_string().contains("guard combat step"));
+        assert_eq!(*h.guard_state().unwrap().get(a).unwrap(), guard);
+        assert_eq!(
+            h.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .destination(),
+            destination
+        );
+        h.advance_unit_expirations(1.).unwrap();
+        assert!(!h.executed_unit(a).unwrap().combat.as_ref().unwrap().dead);
+    }
 }
 
 #[test]

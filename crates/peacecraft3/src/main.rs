@@ -144,3 +144,6 @@ mod view_format_guard_tests {
     use bevy::render::render_resource::TextureFormat;
     include!("../../../vendor/bevy_render/src/view/texture_view_formats.rs");
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+mod campaign_entry_gpu_tests;

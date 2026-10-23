@@ -2,10 +2,11 @@
 
 ## Selected-source audit (2026-10-23)
 
-The private campaign continuation now passes Human02 initialization with nearby
-lumber harvesting admitted. Advancing its authored opening reaches 7.218750
-seconds, then refuses the red program's `SetTargetHeroes` through the map's
-`StartCampaignAI` call at line 1692. This is a real selected-map execution result,
+The private campaign continuation passes Human02 initialization with nearby
+lumber harvesting admitted. The latest authored opening reaches 7.312500
+seconds, then refuses the red program's `SetReplacementCount` after
+[campaign mode and shared player-count admission](campaign-ai-mode.md).
+This is a real selected-map execution result,
 distinct from the synthetic source fixtures below; it does not establish a
 working opening cinematic or campaign strategy.
 

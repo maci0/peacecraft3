@@ -1,6 +1,8 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "campaign_group_timed_life_host_tests.rs"]
+mod campaign_timed_life;
 #[path = "hero_experience_kill_tests.rs"]
 mod experience_kills;
 #[path = "standard_command_host_tests.rs"]
@@ -38,6 +40,7 @@ constant native GetUnitState takes unit u, unitstate s returns real
 native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
 native KillUnit takes unit u returns nothing
+native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
 native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
 native SetUnitInvulnerable takes unit u, boolean flag returns nothing
 native GetRandomInt takes integer a, integer b returns integer
@@ -262,6 +265,13 @@ fn open_fixture_with(
     }
     if blight.is_some() {
         extra.push_str("\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n");
+    }
+    if fields.iter().any(|(_, f)| {
+        f.metadata
+            .as_ref()
+            .is_some_and(|m| m.declared == "unitClass")
+    }) {
+        extra.push_str("type unittype extends handle\nconstant native ConvertUnitType takes integer n returns unittype\nglobals\nconstant unittype UNIT_TYPE_PEON=ConvertUnitType(16)\nendglobals\n");
     }
     if resource.is_some() {
         extra.push('\n');
@@ -4729,7 +4739,7 @@ fn hero_and_ordinary_flee_flags_select_independent_damage_paths() {
     vm.host().inner.set_ai_units_flee(5, false).unwrap();
     let error = flee_decision(&mut vm, attacker, victim, 19.0).unwrap_err();
     assert!(error.to_string().contains("hero retreat"), "{error}");
-    vm.host().inner.deactivate_campaign_ai_player(5);
+    vm.host().inner.deactivate_campaign_ai_player(5).unwrap();
     assert_eq!(
         flee_decision(&mut vm, attacker, victim, 19.0).unwrap(),
         None

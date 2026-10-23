@@ -182,7 +182,7 @@ fn heroes_flee_is_explicit_per_player_and_rejected_masks_do_not_backfill() {
         h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
 }
 
@@ -282,7 +282,7 @@ fn groups_flee_uses_existing_players_and_refuses_overlapping_policy_before_backf
         h.campaign_groups_flee_enabled(id(&first)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
     assert_eq!(
         h.campaign_groups_flee_enabled(id(&second)).unwrap(),
@@ -368,7 +368,7 @@ fn campaign_flags_follow_independent_admission_and_repeat_activation() {
         Some(targeting.target_heroes_default)
     );
 
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
     assert_eq!(h.campaign_targeting_enabled(id(&first)).unwrap(), None);
     assert!(h.activate_campaign_ai_player(0).unwrap());
@@ -436,6 +436,41 @@ fn campaign_new_heroes_admission_requires_matching_context_and_refuses_duplicate
 }
 
 #[test]
+fn campaign_mode_admission_is_atomic_and_players_retire_independently() {
+    use crate::campaign_mode_policy::CampaignModePolicy;
+    let (mut host, ctx) = campaign_host();
+    let a = player(&mut host, 0);
+    let b = player(&mut host, 1);
+    assert!(host.set_ai_campaign_mode(0).is_err());
+    let other = context(300, COMMON, "// no globals", "synthetic:other-mode");
+    assert!(
+        host.admit_campaign_mode(&other, CampaignModePolicy::fixture())
+            .is_err()
+    );
+    for mask in [0, 3] {
+        let mut policy = CampaignModePolicy::fixture();
+        policy.context_mask = mask;
+        assert!(host.admit_campaign_mode(&ctx, policy).is_err());
+        assert!(host.campaign_mode_policy().is_none());
+    }
+    let mut policy = CampaignModePolicy::fixture();
+    policy.campaign_mode = false;
+    host.admit_campaign_mode(&ctx, policy.clone()).unwrap();
+    assert!(host.set_ai_campaign_mode(0).is_err());
+    host.activate_campaign_ai_player(0).unwrap();
+    host.activate_campaign_ai_player(1).unwrap();
+    assert_eq!(host.campaign_ai_mode(id(&a)).unwrap(), None);
+    host.set_ai_campaign_mode(0).unwrap();
+    assert_eq!(host.campaign_ai_mode(id(&a)).unwrap(), Some(false));
+    assert_eq!(host.campaign_ai_mode(id(&b)).unwrap(), None);
+    assert!(host.admit_campaign_mode(&ctx, policy).is_err());
+    host.set_ai_campaign_mode(1).unwrap();
+    host.deactivate_campaign_ai_player(0).unwrap();
+    assert_eq!(host.campaign_ai_mode(id(&a)).unwrap(), None);
+    assert_eq!(host.campaign_ai_mode(id(&b)).unwrap(), Some(false));
+}
+
+#[test]
 fn campaign_new_heroes_admission_refuses_invalid_context_masks_without_writing() {
     let (mut h, ctx) = campaign_host();
     for mask in [0, 0x3, 0x60] {
@@ -473,7 +508,7 @@ fn campaign_new_heroes_unadmitted_and_inactive_players_do_not_grow_the_registry(
         h.campaign_new_heroes_enabled(id(&owner)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
 }
 
@@ -497,7 +532,7 @@ fn campaign_new_heroes_flags_are_isolated_and_inactive_refusal_keeps_peer_state(
         Some(false)
     );
 
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_new_heroes_enabled(id(&first)).unwrap(), None);
     assert_eq!(
         h.campaign_new_heroes_enabled(id(&second)).unwrap(),
@@ -1060,7 +1095,7 @@ fn slow_chopping_players_and_lifecycles_are_independent() {
         host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
         Some(false)
     );
-    host.deactivate_campaign_ai_player(0);
+    host.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
     assert!(host.set_ai_slow_chopping(0, false).is_err());
     assert_eq!(

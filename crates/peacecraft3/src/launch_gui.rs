@@ -288,13 +288,20 @@ pub(crate) fn window_plugin(canvas: Option<&str>) -> WindowPlugin {
 /// platform default — a browser has no filesystem to read — has to register it
 /// first. The explicitly configured map request handlers are installed afterwards.
 pub fn app(window: WindowPlugin, configure: impl FnOnce(&mut App)) -> App {
+    app_with_plugins(DefaultPlugins.set(window), configure)
+}
+
+pub(crate) fn app_with_plugins(
+    plugins: bevy::app::PluginGroupBuilder,
+    configure: impl FnOnce(&mut App),
+) -> App {
     let mut app = App::new();
     (configure)(&mut app);
     peacecraft3::map_requests::install(&mut app);
     peacecraft3::campaign_startup::install(&mut app);
     crate::campaign_prepare::install(&mut app);
     crate::map_source_controls::install(&mut app);
-    app.add_plugins(DefaultPlugins.set(window))
+    app.add_plugins(plugins)
         .init_resource::<bevy::picking::ordered::OrderedPointerInput>()
         .add_plugins(crate::menu_particle_order::MenuParticleOrderPlugin)
         .add_plugins(crate::menu_composition::MenuCompositionPlugin)

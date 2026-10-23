@@ -11,7 +11,6 @@ pub(super) struct State {
     order: i32,
     pub(super) ready: BTreeMap<HandleId, f64>,
     pending: BTreeMap<HandleId, f64>,
-    expires: BTreeMap<HandleId, f64>,
     animations: BTreeMap<HandleId, (usize, f64, f64)>,
 }
 
@@ -25,6 +24,26 @@ struct Spell {
 }
 
 impl ObjectHost {
+    pub(super) fn unit_timed_life_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if name != "UnitApplyTimedLife"
+            || self.campaign_group_timed_life.is_none()
+            || self.inner.program.natives().get(name).is_none()
+        {
+            return None;
+        }
+        Some((|| {
+            let [Value::Handle(unit), Value::Int(key), Value::Real(duration)] = args else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.apply_qualified_timed_life(*unit, key.to_be_bytes(), *duration)?;
+            Ok(Value::Null)
+        })())
+    }
+
     fn summon_error(&self, detail: impl Into<String>) -> Error {
         self.inner
             .error(NATIVE, Failure::UnitActivity(detail.into()))
@@ -66,7 +85,6 @@ impl ObjectHost {
             order,
             ready: BTreeMap::new(),
             pending: BTreeMap::new(),
-            expires: BTreeMap::new(),
             animations: BTreeMap::new(),
         });
         Ok(())
@@ -339,23 +357,23 @@ impl ObjectHost {
             .map(|s| s.order)
     }
 
-    pub(super) fn advance_summoning(&mut self, now: f64) -> Result<(), Error> {
-        let Some(state) = &self.summoning else {
-            return Ok(());
-        };
-        let expired: Vec<_> = state
-            .expires
+    pub(crate) fn advance_unit_expirations(&mut self, now: f64) -> Result<(), Error> {
+        let expired: Vec<_> = self
+            .unit_expirations
             .iter()
             .filter(|(_, due)| **due <= now)
             .map(|(unit, _)| *unit)
             .collect();
         for unit in expired {
-            self.summoning
-                .as_mut()
-                .expect("admitted")
-                .expires
-                .remove(&unit);
+            self.unit_expirations.remove(&unit);
             self.kill_unit(unit, None)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn advance_summoning(&mut self, now: f64) -> Result<(), Error> {
+        if self.summoning.is_none() {
+            return Ok(());
         }
         self.finish_summon_animations(now)?;
         let due: Vec<_> = self
@@ -439,9 +457,9 @@ impl ObjectHost {
                 let state = self.summoning.as_mut().expect("admitted");
                 state.pending.remove(&caster);
                 state.ready.insert(caster, now + spell.cooldown);
-                for &unit in &spawned {
-                    state.expires.insert(unit, now + spell.duration);
-                }
+            }
+            for &unit in &spawned {
+                self.unit_expirations.insert(unit, now + spell.duration);
             }
             self.queue_spell_effect(caster, None)?;
             for unit in spawned {
