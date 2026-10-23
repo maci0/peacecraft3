@@ -1,4 +1,4 @@
-//! Captain selector operands from the reviewed client image. This is a source
+//! Captain selector and query operands from the reviewed client image. This is a source
 //! reader: it decodes instruction operands; the captain group/unit/home
 //! semantic boundary is unimplemented here.
 use crate::{
@@ -20,7 +20,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 7] = [
+const WINDOWS: [(u32, usize, bool); 17] = [
     (0xab645c, 20, true),  // SetCaptainHome registration banner (sig/name/handler)
     (0xab6f10, 80, true),  // SetCaptainHome handler entry
     (0xac26d0, 124, true), // selector (masks + slots + resolver/home write)
@@ -28,6 +28,16 @@ const WINDOWS: [(u32, usize, bool); 7] = [
     (0xab4771, 17, true),  // CreateCaptains handler -> main-work join (abd160)
     (0xabd2ad, 15, true),  // create first-pair home writes
     (0xabd352, 15, true),  // create second-pair home writes
+    (0xab6591, 20, true),  // CaptainGroupSize registration
+    (0xab657d, 20, true),  // CaptainIsEmpty registration
+    (0xab3e1a, 31, true),  // size result paths
+    (0xab3f0a, 26, true),  // empty result path
+    (0xabe270, 27, true),  // first captain reference resolver
+    (0xac9b30, 6, true),   // association counter update
+    (0xf15e34, 17, false), // CaptainGroupSize name
+    (0xf15e24, 15, false), // CaptainIsEmpty name
+    (0xe6f674, 4, false),  // integer query signature
+    (0xe700c8, 4, false),  // boolean query signature
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -104,10 +114,25 @@ impl CaptainPolicy {
             create_jmp,
             create1,
             create2,
+            size_reg,
+            empty_reg,
+            size_result,
+            empty_result,
+            first_reference,
+            counter_update,
+            size_name,
+            empty_name,
+            size_signature,
+            empty_signature,
         ] = w
         else {
             return Err(Error("incomplete captain-policy windows"));
         };
+        for (window, (_, length, _)) in w.iter().zip(WINDOWS) {
+            if window.len() < length {
+                return Err(Error("truncated captain-policy window"));
+            }
+        }
 
         // SetCaptainHome registration binds handler 0xab6f10 via the registrar.
         at(home_reg, 0, &[0x68])?;
@@ -239,6 +264,69 @@ impl CaptainPolicy {
             return Err(Error("create second slot second word differs"));
         }
 
+        for (registration, index, signature, name, handler) in [
+            (*size_reg, 7, WINDOWS[15].0, WINDOWS[13].0, 0xab3da0),
+            (*empty_reg, 8, WINDOWS[16].0, WINDOWS[14].0, 0xab3e90),
+        ] {
+            for (offset, target) in [(0, signature), (5, name), (10, handler)] {
+                at(registration, offset, &[0x68])?;
+                if word(registration, offset + 1)? != target {
+                    return Err(Error("captain query registration changed"));
+                }
+            }
+            if call(registration, WINDOWS[index].0, 15)? != 0x8ccc80 {
+                return Err(Error("captain query registrar changed"));
+            }
+        }
+        at(size_name, 0, b"CaptainGroupSize\0")?;
+        at(empty_name, 0, b"CaptainIsEmpty\0")?;
+        at(size_signature, 0, b"()I\0")?;
+        at(empty_signature, 0, b"()B\0")?;
+
+        // Query results share the first reference and the association counter;
+        // this relationship alone does not qualify runtime membership.
+        at(first_reference, 0, &[0x8b, 0x81])?;
+        at(first_reference, 6, &[0x81, 0xc1])?;
+        if word(first_reference, 2)? != first_end - 4 || word(first_reference, 8)? != first_slot {
+            return Err(Error("query reference differs from first captain slot"));
+        }
+        at(
+            first_reference,
+            12,
+            &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x03, 0x33, 0xc0, 0xc3],
+        )?;
+        if jmp(first_reference, WINDOWS[11].0, 22)? != 0x7fc7e0 {
+            return Err(Error("captain query reference resolver changed"));
+        }
+        for offset in [0, 19] {
+            if call(size_result, WINDOWS[9].0, offset)? != WINDOWS[11].0 {
+                return Err(Error("size query first-reference dispatch changed"));
+            }
+        }
+        if call(size_result, WINDOWS[9].0, 12)? != 0x7fc7e0
+            || call(empty_result, WINDOWS[10].0, 0)? != 0x7fc7e0
+            || call(empty_result, WINDOWS[10].0, 7)? != WINDOWS[11].0
+        {
+            return Err(Error("captain query result dispatch changed"));
+        }
+        at(size_result, 5, &[0x8b, 0x80])?;
+        at(size_result, 11, &[0xc3])?;
+        at(size_result, 17, &[0x8b, 0xc8])?;
+        at(size_result, 24, &[0x8b, 0x80])?;
+        at(size_result, 30, &[0xc3])?;
+        at(empty_result, 5, &[0x8b, 0xc8])?;
+        at(empty_result, 12, &[0x33, 0xc9, 0x39, 0x88])?;
+        at(empty_result, 20, &[0x0f, 0x94, 0xc1, 0x8b, 0xc1, 0xc3])?;
+        at(counter_update, 0, &[0x01, 0xb3])?;
+        let counter = word(size_result, 7)?;
+        if counter == 0
+            || word(size_result, 26)? != counter
+            || word(empty_result, 16)? != counter
+            || word(counter_update, 2)? != counter
+        {
+            return Err(Error("captain query and association counters differ"));
+        }
+
         Ok(Self {
             image_sha256,
             first_selector_mask,
@@ -351,6 +439,53 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     // Create home-write pairs (selector slots on both ends).
     move_pair(&mut w, 5, FIRST_SLOT);
     move_pair(&mut w, 6, SECOND_SLOT);
+
+    for (index, signature, name, handler) in [
+        (7, WINDOWS[15].0, WINDOWS[13].0, 0xab3da0),
+        (8, WINDOWS[16].0, WINDOWS[14].0, 0xab3e90),
+    ] {
+        for (offset, target) in [(0, signature), (5, name), (10, handler)] {
+            put(&mut w, index, offset, &[0x68]);
+            dword(&mut w, index, offset + 1, target);
+        }
+        call(&mut w, index, 15, 0x8ccc80);
+    }
+    call(&mut w, 9, 0, WINDOWS[11].0);
+    call(&mut w, 9, 12, 0x7fc7e0);
+    put(&mut w, 9, 17, &[0x8b, 0xc8]);
+    call(&mut w, 9, 19, WINDOWS[11].0);
+    for (load, ret) in [(5, 11), (24, 30)] {
+        put(&mut w, 9, load, &[0x8b, 0x80]);
+        dword(&mut w, 9, load + 2, 0x440);
+        put(&mut w, 9, ret, &[0xc3]);
+    }
+    call(&mut w, 10, 0, 0x7fc7e0);
+    put(&mut w, 10, 5, &[0x8b, 0xc8]);
+    call(&mut w, 10, 7, WINDOWS[11].0);
+    put(&mut w, 10, 12, &[0x33, 0xc9, 0x39, 0x88]);
+    dword(&mut w, 10, 16, 0x440);
+    put(&mut w, 10, 20, &[0x0f, 0x94, 0xc1, 0x8b, 0xc1, 0xc3]);
+    put(&mut w, 11, 0, &[0x8b, 0x81]);
+    dword(&mut w, 11, 2, FIRST_SLOT + 4);
+    put(&mut w, 11, 6, &[0x81, 0xc1]);
+    dword(&mut w, 11, 8, FIRST_SLOT);
+    put(
+        &mut w,
+        11,
+        12,
+        &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x03, 0x33, 0xc0, 0xc3],
+    );
+    jmp(&mut w, 11, 22, 0x7fc7e0);
+    put(&mut w, 12, 0, &[0x01, 0xb3]);
+    dword(&mut w, 12, 2, 0x440);
+    for (index, bytes) in [
+        (13, b"CaptainGroupSize\0".as_slice()),
+        (14, b"CaptainIsEmpty\0".as_slice()),
+        (15, b"()I\0".as_slice()),
+        (16, b"()B\0".as_slice()),
+    ] {
+        put(&mut w, index, 0, bytes);
+    }
 
     w
 }
@@ -492,6 +627,68 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn query_counter_and_first_reference_follow_source_operands() {
+        let mut source = synthetic_windows();
+        let slot = 0x510u32;
+        for (index, offset, value) in [
+            (2, 17, slot),
+            (5, 2, slot),
+            (5, 11, slot + 4),
+            (11, 2, slot + 4),
+            (11, 8, slot),
+            (9, 7, 0x620),
+            (9, 26, 0x620),
+            (10, 16, 0x620),
+            (12, 2, 0x620),
+        ] {
+            source[index][offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let decode = |source: &[Vec<u8>]| {
+            CaptainPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0x42; 32],
+            )
+        };
+        assert!(decode(&source).is_ok());
+        for (index, offset) in [
+            (7, 11),
+            (8, 16),
+            (9, 1),
+            (9, 7),
+            (9, 26),
+            (10, 16),
+            (10, 21),
+            (11, 2),
+            (11, 8),
+            (11, 18),
+            (12, 2),
+            (13, 16),
+            (14, 14),
+            (15, 3),
+            (16, 3),
+        ] {
+            let mut changed = source.clone();
+            changed[index][offset] ^= 1;
+            assert!(decode(&changed).is_err(), "window {index} offset {offset}");
+        }
+    }
+
+    #[test]
+    fn every_truncated_window_refuses_without_indexing_past_its_end() {
+        let source = synthetic_windows();
+        for (index, window) in source.iter().enumerate() {
+            for length in 0..window.len() {
+                let mut windows = source.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                windows[index] = &window[..length];
+                assert!(
+                    CaptainPolicy::decode(&windows, [0x42; 32]).is_err(),
+                    "window {index} length {length}"
+                );
+            }
         }
     }
 

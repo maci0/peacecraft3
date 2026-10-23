@@ -74,3 +74,18 @@ execution checks; no new original-client or rendered captain test was run.
 Mapped windows, exact byte hashes, source callers and the known/unknown trail
 remain local under `.scratch/campaign-basics-native/create-captains*.md`.
 No original assets are tracked.
+
+## Public membership observation
+
+Further selected-image validation binds the primary `CaptainGroupSize` and
+`CaptainIsEmpty` registrations to their NUL-terminated names and signatures.
+Their result paths resolve the first captain reference, then respectively read
+or compare with zero the same counter updated by the unit-association path.
+The reader checks those operand relationships against the decoded first
+reference slot; it does not substitute a collection of all same-owner units.
+
+Synthetic tests change the reference and counter operands coherently, reject
+broken joins and string terminators, and reject every truncated window. All
+nine focused policy tests pass, including the explicit selected-image test.
+These checks do not enable either query in the runtime. Initial membership,
+attachment timing and timed-life effects still need runtime qualification.
