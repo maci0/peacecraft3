@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign captain creation and home assignment now use source-derived
+  selector masks and the canonical per-player registry. The published two-program
+  fixture proves independent initial targets before gathering setup and updates
+  after sleep. Combined checks pass 1,604 core / 610 app tests, seven actual-image
+  and synthetic reader checks, strict native/WASM Clippy and selected startup/
+  Continue gates. The unchanged Human02 opening-minute gate now passes
+  `CreateCaptains` and refuses `SetNewHeroes` at 7.218750 seconds. Captain group
+  identity, movement, roster/readiness/home queries, reset and native callback
+  lifecycle remain unqualified; see [captain targets](docs/re-notes/campaign-ai-captains.md).
+
 - [~] Campaign flee policy operands now decode from 26 checked selected-image
   windows, preserving conditional life-band grouping and joining the route order
   to admitted movement rules. Policy startup and shared flag dispatch now pass
@@ -16,7 +26,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   score-dependent decisions refuse contextually. Original-client pairs establish route persistence
   after clearing the flag in the tested setup. The unchanged Human02 opening-minute
   gate now passes `SetUnitsFlee` and `StopGathering` and stops at
-  `CreateCaptains` at 7.218750 seconds.
+  `SetNewHeroes` at 7.218750 seconds after captain creation.
   This does not qualify retreat execution; see
   [campaign flee](docs/re-notes/campaign-ai-flee.md).
 
@@ -27,7 +37,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   associations before and after sleep, and selected startup proves policy
   provenance. Combined checks pass 1,555 core / 610 app tests and strict
   native/WASM Clippy. The unchanged Human02 opening-minute gate passes this call
-  and refuses `CreateCaptains`; native listener delivery, dynamic classification
+  and captain creation and refuses `SetNewHeroes`; native listener delivery, dynamic classification
   and complete campaign behavior remain open. See
   [campaign gathering](docs/re-notes/campaign-ai-gathering.md).
 

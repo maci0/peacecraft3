@@ -153,6 +153,9 @@ impl CaptainPolicy {
         if first_slot == 0 {
             return Err(Error("first selector slot is empty"));
         }
+        let first_end = first_slot
+            .checked_add(8)
+            .ok_or(Error("first selector reference pair overflows"))?;
         // Conditional skip: first test -> second test (offset 56).
         at(sel, 13, &[0x74])?;
         if 15 + i32::from(sel[14] as i8) != 56 {
@@ -179,6 +182,12 @@ impl CaptainPolicy {
         let second_slot = word(sel, 64)?;
         if second_slot == 0 || second_slot == first_slot {
             return Err(Error("second selector slot differs from first"));
+        }
+        let second_end = second_slot
+            .checked_add(8)
+            .ok_or(Error("second selector reference pair overflows"))?;
+        if first_slot < second_end && second_slot < first_end {
+            return Err(Error("selector reference pairs overlap"));
         }
         // Conditional skip: second test -> end (offset 116).
         at(sel, 60, &[0x74])?;
@@ -218,7 +227,7 @@ impl CaptainPolicy {
             return Err(Error("create first slot differs from selector"));
         }
         at(create1, 9, &[0x89, 0x87])?;
-        if word(create1, 11)? != first_slot + 4 {
+        if word(create1, 11)? != first_end - 4 {
             return Err(Error("create first slot second word differs"));
         }
         at(create2, 0, &[0x89, 0x87])?;
@@ -226,7 +235,7 @@ impl CaptainPolicy {
             return Err(Error("create second slot differs from selector"));
         }
         at(create2, 9, &[0x89, 0x87])?;
-        if word(create2, 11)? != second_slot + 4 {
+        if word(create2, 11)? != second_end - 4 {
             return Err(Error("create second slot second word differs"));
         }
 
@@ -457,6 +466,31 @@ mod tests {
                 )
                 .is_err(),
                 "case {index} should refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn overflowing_or_overlapping_reference_pairs_refuse() {
+        for (first, second) in [
+            (u32::MAX, SECOND_SLOT),
+            (FIRST_SLOT, u32::MAX),
+            (FIRST_SLOT, FIRST_SLOT + 4),
+            (FIRST_SLOT, FIRST_SLOT + 7),
+        ] {
+            let mut source = synthetic_windows();
+            source[2][17..21].copy_from_slice(&first.to_le_bytes());
+            source[2][64..68].copy_from_slice(&second.to_le_bytes());
+            for (index, slot) in [(5, first), (6, second)] {
+                source[index][2..6].copy_from_slice(&slot.to_le_bytes());
+                source[index][11..15].copy_from_slice(&slot.wrapping_add(4).to_le_bytes());
+            }
+            assert!(
+                CaptainPolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err()
             );
         }
     }

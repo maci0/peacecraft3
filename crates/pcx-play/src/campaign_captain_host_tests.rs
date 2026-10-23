@@ -29,6 +29,28 @@ fn admit(vm: &mut Vm) -> (HandleId, CaptainPolicy) {
 }
 
 #[test]
+fn malformed_selector_admission_preserves_the_unadmitted_host() {
+    for (first, second) in [(0, 2), (1, 0), (3, 2), (1, 1)] {
+        let mut vm = opened();
+        let host = &mut vm.host().inner;
+        let context = Arc::clone(host.player_context().unwrap());
+        let mut policy = CaptainPolicy::fixture();
+        policy.first_selector_mask = first;
+        policy.second_selector_mask = second;
+        let handles = host.inner().handles();
+        assert!(host.admit_campaign_captains(&context, policy).is_err());
+        assert!(host.campaign_captain_policy().is_none());
+        assert_eq!(host.inner().handles(), handles);
+    }
+    let mut vm = opened();
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut policy = CaptainPolicy::fixture();
+    policy.first_selector_mask = 0x80;
+    host.admit_campaign_captains(&context, policy).unwrap();
+}
+
+#[test]
 fn creation_before_stop_uses_canonical_anchor_and_setter_changes_selected_homes() {
     let mut vm = opened();
     let owner = admit(&mut vm).0;

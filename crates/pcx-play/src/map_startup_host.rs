@@ -289,6 +289,8 @@ pub struct MapStartupInputs {
     pub flee_policy: Option<crate::campaign_flee_policy::FleePolicy>,
     /// Checked client operands used by campaign gathering associations.
     pub gathering_policy: Option<crate::campaign_gathering_policy::GatheringPolicy>,
+    /// Checked client selector operands used by campaign captain targets.
+    pub captain_policy: Option<crate::campaign_captain_policy::CaptainPolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -588,6 +590,7 @@ pub fn assemble(
         targeting_policy,
         flee_policy,
         gathering_policy,
+        captain_policy,
         enumeration,
         rules,
         budgets,
@@ -918,6 +921,9 @@ pub fn assemble(
     }
     if let Some(policy) = gathering_policy {
         object.admit_campaign_gathering(&context, policy)?;
+    }
+    if let Some(policy) = captain_policy {
+        object.admit_campaign_captains(&context, policy)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

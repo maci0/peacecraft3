@@ -177,6 +177,9 @@ endfunction
     let flee_policy = pcx_play::campaign_flee_policy::FleePolicy::fixture();
     inputs.flee_policy = Some(flee_policy);
     inputs.gathering_policy = Some(pcx_play::campaign_gathering_policy::GatheringPolicy::fixture());
+    let captain_policy = pcx_play::campaign_captain_policy::CaptainPolicy::fixture();
+    let captain_selector = i32::from(captain_policy.first_selector_mask);
+    inputs.captain_policy = Some(captain_policy);
     inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
     inputs.enumeration.names.extend(
         [
@@ -212,10 +215,11 @@ endfunction
         .shared_context()
         .unwrap();
     let ai_common = format!(
-        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\n"
+        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\n"
     );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall StopGathering()\nendfunction\n", !flag, !flag);
+        let home_x = if flag { 112.0 } else { 48.0 };
+        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag);
         let program = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -315,6 +319,22 @@ endfunction
         }
     };
     check_gathering(&mut session);
+    let check_captains = |session: &mut MapScriptSession<MapStartupHost>, updated: bool| {
+        let objects = session.host().unwrap().objects();
+        for (unit, base) in [(a, a_base), (b, b_base)] {
+            let owner = objects.executed_unit(unit).unwrap().owner;
+            let state = objects.campaign_captain_state(owner).unwrap().unwrap();
+            assert!(state.created);
+            let position = objects.executed_unit(base).unwrap().position.unwrap();
+            let first_home = if updated {
+                [position[0] + 8.0, position[1] + 8.0]
+            } else {
+                position
+            };
+            assert_eq!(state.homes, [Some(first_home), Some(position)]);
+        }
+    };
+    check_captains(&mut session, false);
     session.advance_timers(0.125, 1000).unwrap();
     let acquired: Vec<_> = session
         .host()
@@ -339,6 +359,7 @@ endfunction
     assert_eq!(flee_flag(&mut session, a), Some(false));
     assert_eq!(flee_flag(&mut session, b), Some(true));
     check_gathering(&mut session);
+    check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {
         assert_eq!(
             session

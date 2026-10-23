@@ -33,6 +33,15 @@ impl ObjectHost {
                 .inner
                 .error(CREATE, Failure::ConfigState("map context differs")));
         }
+        if policy.first_selector_mask.count_ones() != 1
+            || policy.second_selector_mask.count_ones() != 1
+            || policy.first_selector_mask == policy.second_selector_mask
+        {
+            return Err(self.inner.error(
+                CREATE,
+                Failure::ConfigState("captain selectors must be distinct single bits"),
+            ));
+        }
         if self
             .campaign_gathering
             .as_ref()

@@ -5,7 +5,7 @@ The selected Legacy 1.29.2.9231 executable has SHA-256
 Its owned `common.ai` declares `StopGathering` with no arguments and no result.
 `InitAI` calls it before campaign build and captain setup. The unchanged
 Human01-to-Human02 opening-minute gate now passes this call and refuses
-`CreateCaptains` at 7.218750 seconds; this is not completed campaign execution.
+`SetNewHeroes` after captain creation at 7.218750 seconds; this is not completed campaign execution.
 
 ## Selected-code effects
 
@@ -74,7 +74,7 @@ The combined host, startup wiring and policy reader pass 1,555 core tests,
 610 app tests, strict native/WASM Clippy, formatting, selected Human01 startup
 and Human02 Continue startup. A published two-program fixture checks independent
 owner associations before and after sleep. The actual unchanged opening-minute
-gate passes gathering and stops at `CreateCaptains`. These are shared-world
+gate passes gathering and captain creation and stops at `SetNewHeroes`. These are shared-world
 and script-execution checks, not rendered or native callback parity. Receipts
 remain local under `.scratch/campaign-flee-integration/gathering-*`.
 Native callback delivery, later classification changes, AI production and

@@ -318,11 +318,11 @@ state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
 
 The unchanged selected Human01-to-Human02 opening-minute check now passes
-`SetUnitsFlee` and `StopGathering` and refuses at `CreateCaptains`, still at
+`SetUnitsFlee`, `StopGathering` and `CreateCaptains` and refuses at `SetNewHeroes`, still at
 7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
 script frontier, not a completed opening minute or a flee-movement result.
 The earlier failure remains in `state-frontier.log`; the latest final-consumer
-result is in `.scratch/campaign-flee-integration/consumer-final-frontier.log`.
+result is in `.scratch/campaign-flee-integration/captain-frontier.log`.
 
 ## Ordinary damage consumer
 
@@ -364,5 +364,5 @@ flee-policy tests pass with the original-image tests enabled, including both
 branch directions and the selected numeric/math route join. No warning
 suppression is used in these root checks. Local receipts are under
 `.scratch/campaign-flee-integration/consumer-final-*`. The unchanged Human02
-opening-minute check still stops at `CreateCaptains`; rendered path parity and
+opening-minute check now passes captain creation and stops at `SetNewHeroes`; rendered path parity and
 complete native flee behavior have not been checked.
