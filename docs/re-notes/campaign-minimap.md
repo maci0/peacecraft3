@@ -76,6 +76,35 @@ so its minimap image is still hidden at that checkpoint. World fog rendering,
 exploration history, sight blockers, markers, units, camera overlay, panning and
 minimap orders remain unfinished.
 
+### Fog alpha source join
+
+A further selected-image static trace joins the fog alpha inputs without
+assigning a guessed darkening palette. `CMinimap`'s constructor reads
+`FogOfWar/FogColorBlackMaskAlpha`, `FogColorDarkMaskAlpha`,
+`FogColorFogMaskAlpha` and `FogColorVisibleAlpha` through `4304c0`. The stores at
+`620419`, `620430`, `620447` and `620455` populate `+9cc`, `+9d0`, `+9d4` and
+`+9d8`, respectively. Both retained base and expansion `UI\\MiscData.txt`
+members contain these fields and have the same member SHA-256,
+`d097d3cbb4a03719a97591900b45ab42fdb847385819c3d5e7dd7b47d7d9b516`.
+Their numeric contents remain local; a renderer must read the admitted profile.
+
+The texture updater `658ac0` calls `657340` at `658cd9`. The latter selects
+from those fields, samples two visibility grids through a shared mask and
+writes the fourth byte of the minimap CPU image. It also considers frame alpha
+and averages changing horizontal samples. This establishes alpha input and
+update relationships, not rendered blend parity or a complete visibility model.
+The grid producers, fog-switch identity, world-to-minimap transform and retained
+exploration history still need qualification before enabling the fogged image.
+
+Complete static dossiers remain ignored under
+`.scratch/campaign-minimap-source/`. The constructor evidence is
+`ev_3eca7ff35417fcc6a5c906f4aeec2c14652928d930fe870afe09a72358be4b33`,
+the updater evidence is
+`ev_a2f06a059f46e1064a9e51f3006b8f522ec8aaefb5c91f55c338828a197e470b`,
+and the fog function evidence is
+`ev_ea4d3d461bd6787d1f8e77c056880b87c9d74df4230a5703ef45ed2a109c8331`.
+These are static observations on the image identified above, not a client run.
+
 ## Runtime evidence and limits
 
 All 626 app tests pass, including decoded synthetic pixels, source attempt order,
