@@ -977,6 +977,10 @@ pub(crate) mod tests {
                 .campaign_flee_policy()
                 .expect("campaign preparation admits the selected flee policy");
             assert_eq!(flee.image_sha256, recipe.image_sha256());
+            let gathering = objects
+                .campaign_gathering_policy()
+                .expect("campaign preparation admits the selected gathering policy");
+            assert_eq!(gathering.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
         assert!(units > 0, "unchanged chapter main must create units");

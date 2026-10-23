@@ -4,8 +4,8 @@ The selected Legacy 1.29.2.9231 executable has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Its owned `common.ai` declares `StopGathering` with no arguments and no result.
 `InitAI` calls it before campaign build and captain setup. The unchanged
-Human01-to-Human02 opening-minute gate currently reaches this call and refuses
-it at 7.218750 seconds; this is not completed campaign execution.
+Human01-to-Human02 opening-minute gate now passes this call and refuses
+`CreateCaptains` at 7.218750 seconds; this is not completed campaign execution.
 
 ## Selected-code effects
 
@@ -53,7 +53,7 @@ missing real-image gate are corrected. Local receipts are under
 
 ## Recreation boundary
 
-The implementation under integration uses the existing canonical player and
+The privately integrated implementation uses the existing canonical player and
 unit arena, one association per program owner, and current unit positions
 resolved on demand. It does not need a second unit store or the native cached
 listener representation. Initial units can be classified from the same source
@@ -70,7 +70,13 @@ establishes its cleared value. An association getter must resolve ownership,
 life and position against current shared units instead of publishing a stale
 foreign or removed unit.
 
-The host, startup wiring and policy reader are not yet validated together.
+The combined host, startup wiring and policy reader pass 1,555 core tests,
+610 app tests, strict native/WASM Clippy, formatting, selected Human01 startup
+and Human02 Continue startup. A published two-program fixture checks independent
+owner associations before and after sleep. The actual unchanged opening-minute
+gate passes gathering and stops at `CreateCaptains`. These are shared-world
+and script-execution checks, not rendered or native callback parity. Receipts
+remain local under `.scratch/campaign-flee-integration/gathering-*`.
 Native callback delivery, later classification changes, AI production and
 strategy, rendered behavior and chapter completion remain open. The retained
 local evidence is under `.scratch/campaign-basics-native/`, including the

@@ -13,9 +13,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   indexed initialization path, while later modifiers, alternate selection and
   trigger timing remain open. Original-client pairs establish route persistence
   after clearing the flag in the tested setup. The unchanged Human02 opening-minute
-  gate now passes `SetUnitsFlee` and stops at `StopGathering` at 7.218750 seconds.
+  gate now passes `SetUnitsFlee` and `StopGathering` and stops at
+  `CreateCaptains` at 7.218750 seconds.
   This does not qualify retreat execution; see
   [campaign flee](docs/re-notes/campaign-ai-flee.md).
+
+- [~] Campaign gathering now has source-bound policy admission and stateful
+  `StopGathering` over canonical owner units. Initialized peons take immediate
+  priority, then structures and fallback units; enumeration order is an explicit
+  recreation choice. The published two-program fixture proves independent
+  associations before and after sleep, and selected startup proves policy
+  provenance. Combined checks pass 1,555 core / 610 app tests and strict
+  native/WASM Clippy. The unchanged Human02 opening-minute gate passes this call
+  and refuses `CreateCaptains`; native listener delivery, dynamic classification
+  and complete campaign behavior remain open. See
+  [campaign gathering](docs/re-notes/campaign-ai-gathering.md).
 
 - [~] Campaign targeting now has a selected-image policy reader, canonical
   per-player flags and a bounded automatic-acquisition consumer. The published
