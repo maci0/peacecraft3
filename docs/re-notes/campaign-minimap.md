@@ -39,21 +39,78 @@ the selected-image decode passes separately, and strict native all-targets /
 WASM library Clippy and formatting pass. The native decoder test uses
 `PCX_PLAYER_RESOURCE_IMAGE`; original image bytes remain local.
 
-## Still unimplemented
+## Terrain image projection
 
-This reader does not mount a minimap or establish rendered parity. A runtime
-consumer must use the exact admitted map bytes and published receipt identity,
-bound extraction/decode allocations, and retire its resources with the session.
-It must also qualify image orientation/crop, world bounds, texture sampling,
-fog, unit/marker/camera projection and pointer actions. Parser tests do not
-establish any of those behaviors.
+`campaign_minimap.rs` now mounts the admitted map's terrain image. It checks the
+published context and receipt identities, checks the retained map bytes against
+the context's SHA-256, and extracts the source-selected member through the
+bounded checked MPQ path. Present malformed art refuses rather than silently
+trying another member. Decode bytes and the render device's actual texture
+dimensions are preflighted before decoding/upload. Resources
+retire with the script-session witness and are retained during camera suspension.
+The already-installed SHA-256 dependency is now also used by the production app.
 
-The exported rectangle is the outer frame. The image method also constructs an
-inset rectangle around `636e5f..636eba`; its relationship to the image quad and
-world projection has not yet been admitted. A renderer must not assume the
-outer anchors alone describe the image's visible texel bounds.
+The additional static quad trace distinguishes the outer image from the inset
+overlay clamp: `6378d0..637970` constructs four vertices from the outer frame's
+width/height, and the draw method submits those vertices from `+1e8` at
+`640277`. The inset `+830` rectangle from `636e5f..636eba` is separately used by
+the overlay clamp at `62f887..62f8c6`. The mapped-window receipt is
+`.scratch/campaign-minimap-source/quad-windows.json`, SHA-256
+`29baa0a5fcb739c048dce31c2596e90bc4397f743e0bafa3d98b42910f1e3aaf`.
+The recreation uses relative UI placement for that outer quad. House clamp /
+linear sampling remains an implementation choice awaiting a paired native render.
+
+The hit surface is independent of the terrain image. It remains present when
+fog hides the image or image decoding refuses. Presses consume the existing HUD
+input gate and report unsupported minimap camera/order projection; they do not
+fall through to ground selection/orders. Cinematic interface suppression and
+camera suspension still hide the entire control.
 
 The existing fog host retains executed modifiers but explicitly does not
 simulate visibility. Displaying the full map image through unexplored fog
 would therefore be an incorrect completion of the blank minimap. Fog-enabled
-rendering remains open rather than being replaced with an unmasked image.
+rendering remains open: the terrain image is displayed only while both admitted
+fog switches are explicitly false. Unknown settings and enabled fog refuse that
+image projection. Standard Human01 has both switches true after cinematic skip,
+so its minimap image is still hidden at that checkpoint. World fog rendering,
+exploration history, sight blockers, markers, units, camera overlay, panning and
+minimap orders remain unfinished.
+
+## Runtime evidence and limits
+
+All 626 app tests pass, including decoded synthetic pixels, source attempt order,
+fog gating, pointer consumption and recursive session/asset retirement. Strict
+native all-targets and WASM app Clippy, the default native build and formatting
+pass. Core code is unchanged from the 1,679-test reader gate above.
+
+The production offscreen diagnostic retains its unchanged menu-to-Human01
+checkpoints, then separately executes `FogEnable(false)` and
+`FogMaskEnable(false)` through the host and captures the image projection. This
+mutation is labelled in `minimap-no-fog-diagnostic.json`; it is not evidence of
+unchanged campaign visibility. The retained Vulkan run is
+`.scratch/campaign-minimap-render/run-3/`: the decoded `war3mapMap.blp` is visible
+inside the source-derived console rectangle, with no minimap error after the
+explicit mutation. The image SHA-256 is
+`edbb3eb2b3ac59e4f1238dcfc6543f7d984f111e0de67bf13849a07bcdb87e5c`.
+The **strict unchanged rendering gate still exits 101** for the known sky
+illumination diagnostic and unsupported minimap fog. It was not weakened.
+
+A separate native-window XTest replay of the input implementation, before the
+final texture-dimension preflight, enters Human01, selects the hero,
+right-clicks the fog-hidden minimap and then right-clicks ordinary ground. The
+minimap refusal is logged; the hero remains at the selected position after that
+press and visibly moves after the ground order. Balanced inputs, nine captures,
+window/PID ownership, source/build/content fingerprints and calibrated
+1280x1024/96-DPI display identity are retained in
+`.scratch/campaign-minimap-native/receipt-launcher.json`, SHA-256
+`431925cbaff039c250f316035edfc45cb0e5af09b70930761850ad214976542f`.
+That replay's default binary SHA-256 is
+`77ef21a661990647be29e17c8f04a888aa38fcefa05b5a48a984f4e521815fcc`.
+The tested executable is preserved locally as `peacecraft3-tested` in that
+receipt directory. The later dimension guard passes the app suite, native/WASM
+checks, default native build and the hardware offscreen run above; that guard
+did not change the input implementation. This replay used software Vulkan and
+disabled audio. Failed display-setup logs
+are preserved separately; the app and private display were stopped afterward.
+Neither run establishes original-client pixel parity, fog fidelity, audio or a
+completed campaign.

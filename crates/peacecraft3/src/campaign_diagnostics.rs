@@ -109,6 +109,7 @@ struct Stages<'w> {
     hud_prepare: Option<Res<'w, crate::hud_render::HudPrepare>>,
     inventory: Option<Res<'w, crate::campaign_inventory::CampaignInventory>>,
     command_card: Option<Res<'w, crate::campaign_command_card::CommandCard>>,
+    minimap: Option<Res<'w, crate::campaign_minimap::CampaignMinimap>>,
 }
 
 fn report(stages: Stages, mut reported: ResMut<Reported>) {
@@ -127,8 +128,13 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         hud_prepare,
         inventory,
         command_card,
+        minimap,
     } = stages;
     let current = [
+        (
+            "campaign minimap",
+            minimap.and_then(|state| state.last_error.clone()),
+        ),
         (
             "campaign transition",
             transition.and_then(|state| state.last_error.as_ref().map(ToString::to_string)),

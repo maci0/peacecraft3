@@ -404,6 +404,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
     crate::campaign_inventory::install(&mut app);
+    crate::campaign_minimap::install(&mut app);
     crate::campaign_command_card::install(&mut app);
     crate::campaign_selection::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]

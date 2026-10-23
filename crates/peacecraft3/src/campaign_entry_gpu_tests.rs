@@ -351,6 +351,13 @@ fn mounted_menu_enters_the_rendered_campaign() {
                 .last_error
                 .clone(),
         ),
+        (
+            "minimap",
+            app.world()
+                .resource::<crate::campaign_minimap::CampaignMinimap>()
+                .last_error
+                .clone(),
+        ),
     ];
     let requests = app
         .world()
@@ -379,6 +386,9 @@ fn mounted_menu_enters_the_rendered_campaign() {
         .count();
     use sha2::{Digest, Sha256};
     let mut frames = Vec::new();
+    let minimap = app
+        .world()
+        .resource::<crate::campaign_minimap::CampaignMinimap>();
     for name in [
         "main-menu.png",
         "chapter-selection.png",
@@ -392,9 +402,36 @@ fn mounted_menu_enters_the_rendered_campaign() {
     std::fs::write(output.join("scope.json"), serde_json::to_vec_pretty(&serde_json::json!({
         "install": install, "map": map, "expansion": expansion,
         "image_sha256": image_sha256, "executed_units": units, "frames": frames,
+        "minimap": {"member": minimap.member, "shown": minimap.shown},
         "subsystem_errors": errors,
         "scope": "Production app offscreen Vulkan; mounted widget activation and synthetic keyboard messages; no physical input, audio playback or original paired-frame parity claim"
     })).unwrap()).unwrap();
+    // Retain the unchanged campaign above; the following mutation is a separate rendering diagnostic.
+    let before = {
+        use pcx_script::{Host, Value};
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let host = session.host().unwrap();
+        let settings = host.objects().startup_settings().unwrap();
+        host.native("FogEnable", &[Value::Bool(false)]).unwrap();
+        host.native("FogMaskEnable", &[Value::Bool(false)]).unwrap();
+        [settings.fog_enabled, settings.fog_mask_enabled]
+    };
+    until(&mut app, "explicit no-fog minimap diagnostic", |world| {
+        let minimap = world.resource::<crate::campaign_minimap::CampaignMinimap>();
+        minimap.shown && minimap.member.is_some()
+    });
+    capture(&mut app, &output.join("minimap-no-fog-diagnostic.png"));
+    let minimap = app
+        .world()
+        .resource::<crate::campaign_minimap::CampaignMinimap>();
+    std::fs::write(output.join("minimap-no-fog-diagnostic.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "natural_fog_and_mask": before, "diagnostic_fog_and_mask": [false, false],
+        "member": minimap.member, "shown": minimap.shown, "error": minimap.last_error,
+        "scope": "Explicit post-checkpoint host-native mutation; image rendering only, no unchanged campaign visibility or native pixel parity claim"
+    })).unwrap()).unwrap();
+    assert!(minimap.last_error.is_none());
     assert!(
         errors.iter().all(|(_, error)| error.is_none()),
         "campaign rendering: {errors:?}"

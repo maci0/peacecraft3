@@ -16,6 +16,7 @@ mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;
 mod campaign_messages;
+mod campaign_minimap;
 mod campaign_prepare;
 mod campaign_score_model;
 mod campaign_score_view;
