@@ -189,6 +189,53 @@ fn false_timed_life_stops_then_guard_refresh_returns_home() {
 }
 
 #[test]
+fn false_timed_life_refuses_when_combat_will_skip_the_guard() {
+    for paused in [false, true] {
+        let (mut vm, a, _) = guarded();
+        let h = &mut vm.host().inner;
+        let context = Arc::clone(h.player_context().unwrap());
+        let policy = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
+        let key = i32::from_be_bytes(policy.timed_life_factory);
+        h.admit_campaign_group_timed_life(&context, policy).unwrap();
+        h.activate_campaign_ai_player(4).unwrap();
+        h.set_ai_group_timed_life(4, false).unwrap();
+        if paused {
+            h.native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+                .unwrap();
+        } else {
+            h.test_disarm_unit(a);
+        }
+        let guard = *h.guard_state().unwrap().get(a).unwrap();
+        let destination = h
+            .executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination();
+        let refusal = h
+            .native(
+                "UnitApplyTimedLife",
+                &[Value::Handle(a), Value::Int(key), Value::Real(1.)],
+            )
+            .unwrap_err();
+        assert!(refusal.to_string().contains("guard combat step"));
+        assert_eq!(*h.guard_state().unwrap().get(a).unwrap(), guard);
+        assert_eq!(
+            h.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .destination(),
+            destination
+        );
+        h.advance_unit_expirations(1.).unwrap();
+        assert!(!h.executed_unit(a).unwrap().combat.as_ref().unwrap().dead);
+    }
+}
+
+#[test]
 fn creep_maximum_tether_does_not_wait_for_the_chase_timeout_or_tether_other_computers() {
     for creep in [false, true] {
         let (mut vm, a, b) = guarded_with_limits(3., 7., 100.);
