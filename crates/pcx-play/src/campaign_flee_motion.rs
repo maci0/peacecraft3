@@ -128,8 +128,17 @@ impl ObjectHost {
             return Ok(None);
         };
         let owner = victim.owner;
+        if !self
+            .campaign_ai
+            .is_active(self.player_settings(owner)?.number)
+        {
+            return Ok(None);
+        }
         let units_flee = self.campaign_flee_enabled(owner)?;
         let heroes_flee = self.campaign_heroes_flee_enabled(owner)?;
+        if units_flee == Some(false) && heroes_flee == Some(false) {
+            return Ok(None);
+        }
         let hero = self.campaign_flee_is_hero(target, victim, policy)?;
         if hero {
             return match heroes_flee {
