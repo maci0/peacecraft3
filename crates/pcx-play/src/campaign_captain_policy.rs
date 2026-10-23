@@ -1,6 +1,6 @@
 //! Captain selector operands from the reviewed client image. This is a source
-//! reader: it decodes instruction operands and does not implement captain
-//! group/unit/home semantics (native `+agl` class join is owned elsewhere).
+//! reader: it decodes instruction operands; the captain group/unit/home
+//! semantic boundary is unimplemented here.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -20,11 +20,14 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 4] = [
+const WINDOWS: [(u32, usize, bool); 7] = [
     (0xab645c, 20, true),  // SetCaptainHome registration banner (sig/name/handler)
     (0xab6f10, 80, true),  // SetCaptainHome handler entry
     (0xac26d0, 124, true), // selector (masks + slots + resolver/home write)
     (0xab644d, 15, true),  // CreateCaptains primary registration
+    (0xab4771, 17, true),  // CreateCaptains handler -> main-work join (abd160)
+    (0xabd2ad, 15, true),  // create first-pair home writes
+    (0xabd352, 15, true),  // create second-pair home writes
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -45,6 +48,13 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, Error> {
 
 fn call(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
     at(bytes, offset, &[0xe8])?;
+    Ok(va
+        .wrapping_add(offset as u32 + 5)
+        .wrapping_add(word(bytes, offset + 1)?))
+}
+
+fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
+    at(bytes, offset, &[0xe9])?;
     Ok(va
         .wrapping_add(offset as u32 + 5)
         .wrapping_add(word(bytes, offset + 1)?))
@@ -86,7 +96,16 @@ impl CaptainPolicy {
     }
 
     fn decode(w: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
-        let [home_reg, home_handler, sel, capt_reg] = w else {
+        let [
+            home_reg,
+            home_handler,
+            sel,
+            capt_reg,
+            create_jmp,
+            create1,
+            create2,
+        ] = w
+        else {
             return Err(Error("incomplete captain-policy windows"));
         };
 
@@ -123,18 +142,21 @@ impl CaptainPolicy {
 
         // Selector derives the two single-bit masks and their context slots, and
         // binds the resolver + home writer for both.
+        // F6 TEST r/m8, imm8 does not sign-extend, so bit 0x80 is a valid mask.
         at(sel, 4, &[0xf6, 0x45, 0x08])?;
         let first_selector_mask = *sel.get(7).ok_or(Error("missing first selector mask"))?;
-        if first_selector_mask & 0x80 != 0 {
-            return Err(Error("first selector mask is a negative imm8"));
-        }
         if first_selector_mask == 0 || first_selector_mask.count_ones() != 1 {
-            return Err(Error("first selector mask is not a single bit"));
+            return Err(Error("first selector mask is not a single nonzero bit"));
         }
         at(sel, 15, &[0x8d, 0x88])?;
         let first_slot = word(sel, 17)?;
         if first_slot == 0 {
             return Err(Error("first selector slot is empty"));
+        }
+        // Conditional skip: first test -> second test (offset 56).
+        at(sel, 13, &[0x74])?;
+        if 15 + i32::from(sel[14] as i8) != 56 {
+            return Err(Error("first selector JE does not skip to the second test"));
         }
         if call(sel, WINDOWS[2].0, 31)? != 0x7fc7e0 {
             return Err(Error("first selector resolver changed"));
@@ -145,19 +167,23 @@ impl CaptainPolicy {
 
         at(sel, 56, &[0xf6, 0x45, 0x08])?;
         let second_selector_mask = *sel.get(59).ok_or(Error("missing second selector mask"))?;
-        if second_selector_mask & 0x80 != 0 {
-            return Err(Error("second selector mask is a negative imm8"));
-        }
         if second_selector_mask == 0
             || second_selector_mask.count_ones() != 1
             || second_selector_mask == first_selector_mask
         {
-            return Err(Error("second selector mask is not a distinct single bit"));
+            return Err(Error(
+                "second selector mask is not a distinct single nonzero bit",
+            ));
         }
         at(sel, 62, &[0x8d, 0x88])?;
         let second_slot = word(sel, 64)?;
         if second_slot == 0 || second_slot == first_slot {
             return Err(Error("second selector slot differs from first"));
+        }
+        // Conditional skip: second test -> end (offset 116).
+        at(sel, 60, &[0x74])?;
+        if 62 + i32::from(sel[61] as i8) != 116 {
+            return Err(Error("second selector JE does not skip to the end"));
         }
         if call(sel, WINDOWS[2].0, 78)? != 0x7fc7e0 {
             return Err(Error("second selector resolver changed"));
@@ -166,7 +192,8 @@ impl CaptainPolicy {
             return Err(Error("second selector home writer changed"));
         }
 
-        // CreateCaptains primary registration binds handler 0xab4750.
+        // CreateCaptains primary registration binds handler 0xab4750, and the
+        // handler joins the main work (abd160).
         at(capt_reg, 0, &[0x68])?;
         if word(capt_reg, 1)? != 0xf15d24 {
             return Err(Error("CreateCaptains name changed"));
@@ -177,6 +204,30 @@ impl CaptainPolicy {
         }
         if call(capt_reg, WINDOWS[3].0, 10)? != 0x8ccc80 {
             return Err(Error("CreateCaptains registrar changed"));
+        }
+        // handler -> main-work join: 0xab4750 tail-jumps to 0xabd160.
+        at(create_jmp, 2, &[0x8b, 0xc8])?;
+        if jmp(create_jmp, WINDOWS[4].0, 4)? != 0xabd160 {
+            return Err(Error("CreateCaptains handler does not join the main work"));
+        }
+
+        // The main work writes the two encoded reference pairs; the selector's
+        // slots must match those create-write offsets (second word = slot + 4).
+        at(create1, 0, &[0x89, 0x87])?;
+        if word(create1, 2)? != first_slot {
+            return Err(Error("create first slot differs from selector"));
+        }
+        at(create1, 9, &[0x89, 0x87])?;
+        if word(create1, 11)? != first_slot + 4 {
+            return Err(Error("create first slot second word differs"));
+        }
+        at(create2, 0, &[0x89, 0x87])?;
+        if word(create2, 2)? != second_slot {
+            return Err(Error("create second slot differs from selector"));
+        }
+        at(create2, 9, &[0x89, 0x87])?;
+        if word(create2, 11)? != second_slot + 4 {
+            return Err(Error("create second slot second word differs"));
         }
 
         Ok(Self {
@@ -226,6 +277,22 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
             target.wrapping_sub(WINDOWS[i].0 + at as u32 + 5),
         );
     }
+    fn jmp(w: &mut [Vec<u8>], i: usize, at: usize, target: u32) {
+        put(w, i, at, &[0xe9]);
+        dword(
+            w,
+            i,
+            at + 1,
+            target.wrapping_sub(WINDOWS[i].0 + at as u32 + 5),
+        );
+    }
+    fn move_pair(w: &mut [Vec<u8>], i: usize, slot: u32) {
+        put(w, i, 0, &[0x89, 0x87]);
+        dword(w, i, 2, slot);
+        put(w, i, 6, &[0x8b, 0x41, 0x18]);
+        put(w, i, 9, &[0x89, 0x87]);
+        dword(w, i, 11, slot + 4);
+    }
     let mut w = WINDOWS
         .iter()
         .map(|(_, len, _)| vec![0; *len])
@@ -249,11 +316,13 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 
     // Selector.
     put(&mut w, 2, 4, &[0xf6, 0x45, 0x08, FIRST_MASK]);
+    put(&mut w, 2, 13, &[0x74, 0x29]); // first test -> second test (56)
     put(&mut w, 2, 15, &[0x8d, 0x88]);
     dword(&mut w, 2, 17, FIRST_SLOT);
     call(&mut w, 2, 31, 0x7fc7e0);
     call(&mut w, 2, 48, 0xad0630);
     put(&mut w, 2, 56, &[0xf6, 0x45, 0x08, SECOND_MASK]);
+    put(&mut w, 2, 60, &[0x74, 0x36]); // second test -> end (116)
     put(&mut w, 2, 62, &[0x8d, 0x88]);
     dword(&mut w, 2, 64, SECOND_SLOT);
     call(&mut w, 2, 78, 0x7fc7e0);
@@ -265,6 +334,14 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     put(&mut w, 3, 5, &[0x68]);
     dword(&mut w, 3, 6, 0xab4750);
     call(&mut w, 3, 10, 0x8ccc80);
+
+    // CreateCaptains handler -> main-work join.
+    put(&mut w, 4, 0, &[0x33, 0xc0, 0x8b, 0xc8]);
+    jmp(&mut w, 4, 4, 0xabd160);
+
+    // Create home-write pairs (selector slots on both ends).
+    move_pair(&mut w, 5, FIRST_SLOT);
+    move_pair(&mut w, 6, SECOND_SLOT);
 
     w
 }
@@ -312,7 +389,17 @@ mod tests {
 
     #[test]
     fn synthetic_nonstock_masks_discriminate() {
+        // F6 TEST imm8 masks are unsigned u8; 0x80 is a valid single bit.
         let mut source = synthetic_windows();
+        source[2][7] = 0x80;
+        let policy = CaptainPolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0; 32],
+        )
+        .expect("accepted 0x80 first mask");
+        assert_eq!(policy.first_selector_mask, 0x80);
+
+        source = synthetic_windows();
         source[2][7] = 0x40;
         let policy = CaptainPolicy::decode(
             &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
@@ -323,14 +410,12 @@ mod tests {
 
         source = synthetic_windows();
         source[2][59] = 0x80;
-        assert!(
-            CaptainPolicy::decode(
-                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-                [0; 32],
-            )
-            .is_err(),
-            "negative second selector mask should refuse"
-        );
+        let policy = CaptainPolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0; 32],
+        )
+        .expect("accepted distinct 0x80 second mask");
+        assert_eq!(policy.second_selector_mask, 0x80);
 
         source = synthetic_windows();
         source[2][59] = FIRST_MASK;
@@ -354,10 +439,13 @@ mod tests {
             |w| w[0][11] ^= 0x10, // SetCaptainHome handler change
             |w| w[3][6] ^= 0x10,  // CreateCaptains handler change
             |w| w[1][4] ^= 0x10,  // AI context global change
+            |w| w[2][14] ^= 1,    // first JE skip target changed
+            |w| w[2][61] ^= 1,    // second JE skip target changed
             |w| w[2][64] = FIRST_SLOT.to_le_bytes()[0], // second == first
-            |w| w[2][7] = 0x80,   // negative first selector mask
             |w| w[2][7] = 0x00,   // non-single-bit first mask
             |w| w[2][59] = 0x00,  // non-single-bit second mask
+            |w| w[5][2] ^= 0x10,  // create first slot no longer matches selector
+            |w| w[6][11] ^= 0x10, // create second slot second word differs
         ];
         for (index, mutate) in invalid.iter().enumerate() {
             let mut source = synthetic_windows();
