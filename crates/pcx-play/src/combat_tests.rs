@@ -4141,29 +4141,74 @@ fn can_flee_and_minimum_speed_gate_the_retreat() {
 }
 
 #[test]
-fn high_life_is_a_contextual_refusal_not_a_silent_none() {
-    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
-    set_life(&mut vm, b, 200.0);
-    let error = flee_decision(&mut vm, a, b, 200.0).expect_err("above the cutoff");
-    assert!(error.to_string().contains("score-dependent"), "{error}");
-    assert!(!low_life_damage(&mut vm, a, b, 1.0));
-    assert_eq!(life(&mut vm, b), 199.0);
-
+fn high_life_is_a_contextual_refusal_that_aborts_before_damage() {
     let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     set_life(&mut vm, b, 390.0);
     let error = flee_decision(&mut vm, a, b, 390.0).expect_err("conditional band");
     assert!(error.to_string().contains("score-dependent"), "{error}");
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("fatal contextual refusal");
+    assert!(error.to_string().contains("score-dependent"), "{error}");
+    assert_eq!(life(&mut vm, b), 390.0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
+
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    set_life(&mut vm, b, 200.0);
+    assert_eq!(flee_decision(&mut vm, a, b, 200.0).unwrap(), None);
+    assert!(!low_life_damage(&mut vm, a, b, 1.0));
+    assert_eq!(life(&mut vm, b), 199.0);
+}
+
+#[test]
+fn unavailable_applied_upgrade_state_is_a_contextual_refusal() {
+    let (mut vm, _, _) = flee_fixture(&flee_fields("1", "8"));
+    let settings = crate::playercolor_host::PlayerSettings {
+        identity: HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
+        number: 5,
+        team: None,
+        start_location: None,
+        start_is_forced: false,
+        color: None,
+        race_preference: None,
+        race_selectable: None,
+        controller: None,
+        slot_state: None,
+        name: None,
+        on_score_screen: None,
+        tech_max: Vec::new(),
+        tech_researched: Vec::new(),
+        research_levels: Vec::new(),
+        alliances: Vec::new(),
+        state_requests: Vec::new(),
+        experience_handicap: None,
+        health_handicap: None,
+    };
+    let error = vm
+        .host()
+        .inner
+        .campaign_flee_upgrade_is_active(5, 0x5268_6d65, &settings)
+        .expect_err("unavailable applied research");
+    assert!(
+        error
+            .to_string()
+            .contains("applied research state unavailable"),
+        "{error}"
+    );
 }
 
 #[test]
 fn a_refused_retreat_leaves_normal_acquisition_and_attack_running() {
     let (mut vm, a, b) = flee_fixture_with_margin(&flee_fields_with("40", "normal", "1", "8"), 1.0);
-    set_life(&mut vm, b, 300.0);
+    vm.host().inner.set_ai_units_flee(5, false).unwrap();
     let start = position(&mut vm, b);
+    let start_life = life(&mut vm, b);
     issue_attack(&mut vm, a, b);
     step(&mut vm, 0.3);
     let once = life(&mut vm, b);
-    assert!(once < 300.0);
+    assert!(once < start_life);
     assert!(!vm.host().inner.campaign_flee_motion_owns(b));
     assert_eq!(
         vm.host()
@@ -4279,30 +4324,39 @@ fn explicit_order_and_death_forget_retreat_ownership() {
 }
 
 #[test]
-fn a_fatal_route_error_preserves_unprocessed_due_missiles() {
+fn a_pre_damage_route_error_preserves_current_and_sibling_due_missiles() {
     let (mut vm, a, b) = flee_fixture(&flee_fields_with("5000", "normal", "1", "8"));
     set_life(&mut vm, b, 20.0);
     vm.host().inner.test_queue_missile(a, b, 5.0, 0.0);
     vm.host().inner.test_queue_missile(a, b, 5.0, 0.0);
     let h = &mut vm.host().inner;
     assert!(h.test_advance_combat().is_err());
-    assert_eq!(h.test_missile_count(), 1);
-    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 15.0);
+    assert_eq!(h.test_missile_count(), 2);
+    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 20.0);
     assert!(h.test_advance_combat().is_err());
-    assert_eq!(h.test_missile_count(), 0);
-    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 10.0);
+    assert_eq!(h.test_missile_count(), 2);
+    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 20.0);
 }
 
 #[test]
-fn a_refused_source_keeps_damage_and_trace_without_a_route() {
+fn a_refused_source_aborts_before_damage_and_trace() {
     let mut fields = flee_fields("1", "8");
     set_weapon_mask(&mut fields, "0");
     let (mut vm, a, b) = flee_fixture(&fields);
     vm.host().inner.enable_combat_trace(16);
     set_life(&mut vm, b, 20.0);
-    assert!(!low_life_damage(&mut vm, a, b, 1.0));
-    assert_eq!(life(&mut vm, b), 19.0);
-    assert_eq!(damage_events(&mut vm), 1);
+    let error = vm
+        .host()
+        .inner
+        .combat_damage_unit(a, b, 1.0)
+        .expect_err("refused source");
+    assert!(
+        error.to_string().contains("not one initial weapon"),
+        "{error}"
+    );
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
 }
 
 #[test]
@@ -4343,35 +4397,64 @@ fn effect_history_refuses_both_the_source_and_the_victim() {
 }
 
 #[test]
-fn a_refused_melee_source_still_lands_damage_and_trace_once() {
+fn a_refused_melee_source_aborts_before_swing_rng_trace_and_vitals() {
     let (mut vm, a, b) = flee_fixture(&flee_fields_with("640", "normal", "1", "8"));
     vm.host().inner.test_record_effect_history(a, false, None);
     set_life(&mut vm, b, 20.0);
     vm.host().inner.enable_combat_trace(16);
     issue_attack(&mut vm, a, b);
-    step(&mut vm, 0.3);
-    assert!(life(&mut vm, b) < 20.0);
+    let (before_primary, before_secondary, error) = loop {
+        let h = &mut vm.host().inner;
+        if h.timer_game_time().unwrap() >= 1.0 {
+            panic!("expected a refused melee source");
+        }
+        let before_primary = h.script_random_state().unwrap().primary_word();
+        let before_secondary: Vec<u32> =
+            h.script_random_state().unwrap().secondary_words().collect();
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(error) = h.advance_unit_activity(next, &mut 65536) {
+            break (before_primary, before_secondary, error);
+        }
+    };
+    assert!(error.to_string().contains("effect history"), "{error}");
+    let after_primary = vm
+        .host()
+        .inner
+        .script_random_state()
+        .unwrap()
+        .primary_word();
+    let after_secondary: Vec<u32> = vm
+        .host()
+        .inner
+        .script_random_state()
+        .unwrap()
+        .secondary_words()
+        .collect();
+    assert_eq!(after_primary, before_primary);
+    assert_eq!(after_secondary, before_secondary);
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
     assert!(!vm.host().inner.campaign_flee_motion_owns(b));
-    assert_eq!(damage_events(&mut vm), 1);
 }
 
 #[test]
-fn a_refused_source_does_not_drop_sibling_due_missiles() {
-    let mut fields = flee_fields_with("640", "missile", "1", "8");
-    add_missile_speed(&mut fields);
-    let (mut vm, a, b) = flee_fixture(&fields);
+fn a_refused_missile_source_preserves_current_and_sibling_due_missiles() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     vm.host().inner.test_record_effect_history(a, false, None);
     set_life(&mut vm, b, 20.0);
     vm.host().inner.enable_combat_trace(16);
-    issue_attack(&mut vm, a, b);
-    step(&mut vm, 0.8);
-    let first = life(&mut vm, b);
-    assert!(first < 20.0);
-    // The second cooldown ends at 1.5 s and its impact at 2.25 s.
-    step(&mut vm, 2.4);
-    assert!(life(&mut vm, b) < first);
-    assert!(!vm.host().inner.campaign_flee_motion_owns(b));
-    assert!(damage_events(&mut vm) >= 2);
+    vm.host().inner.test_queue_missile(a, b, 5.0, 0.0);
+    vm.host().inner.test_queue_missile(a, b, 5.0, 0.0);
+    {
+        let h = &mut vm.host().inner;
+        let error = h.test_advance_combat().expect_err("refused missile source");
+        assert!(error.to_string().contains("effect history"), "{error}");
+        assert_eq!(h.test_missile_count(), 2);
+        assert!(!h.campaign_flee_motion_owns(b));
+    }
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
 }
 
 #[test]

@@ -65,6 +65,15 @@ struct Motion {
     started: f64,
 }
 
+/// A route and animation selected without mutating the unit or the active list.
+/// Committing the prepared value is the fallible capacity step, kept after
+/// damage so a refused or fatal hit leaves no partial motion.
+pub(super) struct PreparedSteer {
+    motion: Option<Box<Motion>>,
+    animation: Option<crate::unit_model::Animation>,
+    no_op: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Patrol {
     start: [f32; 2],
@@ -1092,13 +1101,13 @@ impl ObjectHost {
         self.steer_unit_in_range(unit, destination, 0.0, name)
     }
 
-    pub(super) fn steer_unit_in_range(
-        &mut self,
+    pub(super) fn prepare_steer_unit_in_range(
+        &self,
         unit: HandleId,
         destination: Option<[f32; 2]>,
         reach: f32,
         name: &str,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
         let route_work = self
             .unit_activity
@@ -1117,7 +1126,7 @@ impl ObjectHost {
         let motion = match destination {
             Some(target) => {
                 if !activity.can_start_motion() {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 let start = record
                     .position
@@ -1138,7 +1147,7 @@ impl ObjectHost {
                 if path.is_empty()
                     || (path.iter().all(|point| *point == start) && target_distance > reach)
                 {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 Some(Box::new(Motion {
                     goal: target,
@@ -1151,7 +1160,13 @@ impl ObjectHost {
                     started: now,
                 }))
             }
-            None if !was_moving => return Ok(true),
+            None if !was_moving => {
+                return Ok(Some(PreparedSteer {
+                    motion: None,
+                    animation: None,
+                    no_op: true,
+                }));
+            }
             None => None,
         };
         let mut animation = record.animation.clone();
@@ -1168,22 +1183,54 @@ impl ObjectHost {
                 )
                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
         }
-        let state = self.unit_activity.as_mut().expect("activity");
-        state
+        Ok(Some(PreparedSteer {
+            motion,
+            animation,
+            no_op: false,
+        }))
+    }
+
+    pub(super) fn commit_steer_unit(
+        &mut self,
+        unit: HandleId,
+        prepared: PreparedSteer,
+        name: &str,
+    ) -> Result<(), Error> {
+        if prepared.no_op {
+            return Ok(());
+        }
+        self.unit_activity
+            .as_mut()
+            .expect("activity")
             .active
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-        let moving = motion.is_some();
+        let moving = prepared.motion.is_some();
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             let activity = record.activity.as_mut().expect("activity");
             activity.held = false;
-            activity.motion = motion;
-            record.animation = animation;
+            activity.motion = prepared.motion;
+            record.animation = prepared.animation;
         }
         let active = &mut self.unit_activity.as_mut().expect("activity").active;
         if let (true, Err(at)) = (moving, active.binary_search(&unit)) {
             active.insert(at, unit);
         }
+        Ok(())
+    }
+
+    pub(super) fn steer_unit_in_range(
+        &mut self,
+        unit: HandleId,
+        destination: Option<[f32; 2]>,
+        reach: f32,
+        name: &str,
+    ) -> Result<bool, Error> {
+        let Some(prepared) = self.prepare_steer_unit_in_range(unit, destination, reach, name)?
+        else {
+            return Ok(false);
+        };
+        self.commit_steer_unit(unit, prepared, name)?;
         Ok(true)
     }
 

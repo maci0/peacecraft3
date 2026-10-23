@@ -62,6 +62,13 @@ struct Missile {
     damage: f32,
 }
 
+/// A damage error plus whether the victim's life was already committed, so a
+/// due missile list can distinguish a pre-damage refusal from a post-hit failure.
+struct DamageFailure {
+    error: Box<Error>,
+    applied: bool,
+}
+
 impl Combat {
     pub(super) fn resume_after_pause(&mut self, elapsed: f64) {
         self.ready_at += elapsed;
@@ -938,6 +945,7 @@ impl ObjectHost {
 
     /// A landed melee hit or missile impact. This is the incoming combat damage
     /// that the ordinary campaign flee leaf observes.
+    #[cfg(test)]
     pub(crate) fn combat_damage_unit(
         &mut self,
         source: HandleId,
@@ -954,30 +962,39 @@ impl ObjectHost {
         damage: f32,
         combat_hit: bool,
     ) -> Result<(), Error> {
-        let Some(record) = self.weapon_target(target) else {
-            return Ok(());
-        };
-        let life = record.vitals.map(|v| v.life).unwrap_or(0.0) - damage;
-        let retreat = if combat_hit && damage > 0.0 && life > 0.0 {
-            self.campaign_flee_retreat(source, target, life)
-        } else {
-            None
-        };
-        self.apply_damage_with_retreat(source, target, damage, retreat)
+        self.apply_damage_outcome(source, target, damage, combat_hit)
+            .map_err(|failure| *failure.error)
     }
 
-    /// A contextual source refusal leaves combat damage and its trace intact;
-    /// it only declines to start a retreat.
+    fn apply_damage_outcome(
+        &mut self,
+        source: HandleId,
+        target: HandleId,
+        damage: f32,
+        combat_hit: bool,
+    ) -> Result<(), DamageFailure> {
+        let mut applied = false;
+        self.apply_damage_with_retreat(source, target, damage, combat_hit, &mut applied)
+            .map_err(|error| DamageFailure {
+                error: Box::new(error),
+                applied,
+            })
+    }
+
+    /// Prepare a retreat before any damage mutation. A refusal propagates with
+    /// its source context; only a qualified non-eligible hit declines silently.
     fn campaign_flee_retreat(
         &self,
         source: HandleId,
         target: HandleId,
         resulting_life: f32,
-    ) -> Option<[f32; 2]> {
-        match self.campaign_flee_damage_decision(source, target, Some(resulting_life)) {
-            Ok(Some(destination)) => Some(destination),
-            Ok(None) | Err(_) => None,
-        }
+    ) -> Result<Option<super::unit_activity::PreparedSteer>, Error> {
+        let Some(destination) =
+            self.campaign_flee_damage_decision(source, target, Some(resulting_life))?
+        else {
+            return Ok(None);
+        };
+        self.prepare_campaign_flee(target, destination)
     }
 
     fn apply_damage_with_retreat(
@@ -985,7 +1002,32 @@ impl ObjectHost {
         source: HandleId,
         target: HandleId,
         damage: f32,
-        retreat: Option<[f32; 2]>,
+        combat_hit: bool,
+        applied: &mut bool,
+    ) -> Result<(), Error> {
+        let Some(record) = self.weapon_target(target) else {
+            return Ok(());
+        };
+        let retreat = if combat_hit && damage > 0.0 {
+            let life = record.vitals.map(|v| v.life).unwrap_or(0.0) - damage;
+            if life > 0.0 {
+                self.campaign_flee_retreat(source, target, life)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.apply_damage_commit(source, target, damage, retreat, applied)
+    }
+
+    fn apply_damage_commit(
+        &mut self,
+        source: HandleId,
+        target: HandleId,
+        damage: f32,
+        retreat: Option<super::unit_activity::PreparedSteer>,
+        applied: &mut bool,
     ) -> Result<(), Error> {
         let Some(record) = self.weapon_target(target) else {
             return Ok(());
@@ -1009,12 +1051,15 @@ impl ObjectHost {
         {
             vitals.life = life;
         }
+        if damage > 0.0 {
+            *applied = true;
+        }
         if life <= 0.0 {
             self.kill_unit(target, Some(source))?;
             return Ok(());
         }
-        if let Some(destination) = retreat {
-            self.initiate_campaign_flee(target, destination)?;
+        if let Some(prepared) = retreat {
+            self.commit_campaign_flee(target, prepared)?;
         }
         Ok(())
     }
@@ -1075,15 +1120,20 @@ impl ObjectHost {
         self.combat.as_mut().expect("combat").missiles = pending;
         let mut due = due.into_iter();
         while let Some(missile) = due.next() {
-            if let Err(error) =
-                self.combat_damage_unit(missile.source, missile.target, missile.damage)
+            if let Err(failure) =
+                self.apply_damage_outcome(missile.source, missile.target, missile.damage, true)
             {
                 let combat = self.combat.as_mut().expect("combat");
-                let mut restore = Vec::with_capacity(due.len() + combat.missiles.len());
+                let mut restore = Vec::with_capacity(
+                    due.len() + combat.missiles.len() + usize::from(!failure.applied),
+                );
+                if !failure.applied {
+                    restore.push(missile);
+                }
                 restore.extend(due);
                 restore.append(&mut combat.missiles);
                 combat.missiles = restore;
-                return Err(error);
+                return Err(*failure.error);
             }
         }
         self.advance_holy_light(now)?;
@@ -1110,18 +1160,10 @@ impl ObjectHost {
                 .live(unit)
                 .and_then(|record| record.combat.as_ref()?.target)
                 .is_some_and(|target| self.weapon_target(target).is_some());
-            if self.guard_combat_step(unit, now, has_valid_target)? {
-                if self.campaign_flee_motion_owns(unit) {
+            let guard = self.guard_combat_step(unit, now, has_valid_target)?;
+            if guard.skip_acquisition {
+                if guard.motion_replaced && self.campaign_flee_motion_owns(unit) {
                     self.forget_campaign_flee(unit);
-                    if let Some(home) = self
-                        .guards
-                        .as_ref()
-                        .and_then(|state| state.get(unit))
-                        .filter(|guard| guard.returning)
-                        .map(|guard| guard.home)
-                    {
-                        self.steer_unit(unit, Some(home), name)?;
-                    }
                 }
                 continue;
             }
@@ -1333,15 +1375,23 @@ impl ObjectHost {
                         }
                         continue;
                     }
+                    // A refused melee source consumes no RNG and leaves the swing
+                    // pending; the missile impact is the incoming hit instead.
+                    let preflight = weapon.missile_speed.is_none()
+                        && self.campaign_flee_source_preflight(unit, swung)?;
                     let damage = self.roll_damage(unit, weapon, swung)?;
-                    let retreat = match weapon.missile_speed {
-                        // The incoming hit is the missile impact, not the launch.
-                        Some(_) => None,
-                        None => self
+                    let retreat = if preflight {
+                        let life = self
                             .weapon_target(swung)
                             .map(|victim| victim.vitals.map(|v| v.life).unwrap_or(0.0) - damage)
-                            .filter(|life| *life > 0.0)
-                            .and_then(|life| self.campaign_flee_retreat(unit, swung, life)),
+                            .unwrap_or(0.0);
+                        if life > 0.0 {
+                            self.campaign_flee_retreat(unit, swung, life)?
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     };
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.combat.as_mut().expect("combat").swing = None;
@@ -1360,7 +1410,8 @@ impl ObjectHost {
                             });
                         }
                         None => {
-                            self.apply_damage_with_retreat(unit, swung, damage, retreat)?;
+                            let mut applied = false;
+                            self.apply_damage_commit(unit, swung, damage, retreat, &mut applied)?;
                         }
                     }
                 }

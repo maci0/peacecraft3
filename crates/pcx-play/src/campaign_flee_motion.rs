@@ -7,7 +7,7 @@
 //! `SetUnitsFlee` and whose resulting life is in a source life band. It owns
 //! only the decision and the bounded set of units whose accepted route is a
 //! retreat; movement, route work and arrival stay in the activity host.
-use super::{Error, Failure, ObjectHost};
+use super::{Entry, Error, Failure, ObjectHost};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::HandleId;
 use pcx_sim::world::{Definition, FieldValue};
@@ -18,6 +18,14 @@ const NATIVE: &str = "SetUnitsFlee";
 #[derive(Default)]
 pub(super) struct State {
     active: BTreeSet<HandleId>,
+}
+
+/// Life-independent source/victim envelope for one incoming hit.
+struct CampaignFleeCandidate {
+    target: HandleId,
+    victim_position: [f32; 2],
+    attacker_position: [f32; 2],
+    weapon_range: f32,
 }
 
 impl ObjectHost {
@@ -32,16 +40,24 @@ impl ObjectHost {
     /// Clear retreat ownership as soon as the accepted route is no longer
     /// moving, including for units that combat no longer considers attackers.
     pub(super) fn prune_campaign_flee_motion(&mut self) {
-        let units: Vec<_> = self.campaign_flee_motion.active.iter().copied().collect();
-        for unit in units {
-            let moving = self
-                .live(unit)
-                .and_then(|record| record.activity.as_ref())
-                .is_some_and(|activity| activity.moving());
-            if !moving {
-                self.campaign_flee_motion.active.remove(&unit);
-            }
-        }
+        let Self {
+            campaign_flee_motion,
+            inner,
+            ..
+        } = self;
+        campaign_flee_motion
+            .active
+            .retain(|unit| match inner.entry(*unit) {
+                Ok(Entry::Unit { record })
+                    if record.shown && record.combat.as_ref().is_some_and(|c| !c.dead) =>
+                {
+                    record
+                        .activity
+                        .as_ref()
+                        .is_some_and(|activity| activity.moving())
+                }
+                _ => false,
+            });
     }
 
     /// Evaluate the ordinary flee leaf for one positive incoming hit. Returns
@@ -63,6 +79,31 @@ impl ObjectHost {
         target: HandleId,
         resulting_life: Option<f32>,
     ) -> Result<Option<[f32; 2]>, Error> {
+        let Some(candidate) = self.campaign_flee_candidate(source, target)? else {
+            return Ok(None);
+        };
+        let Some(destination) = self.campaign_flee_life_destination(&candidate, resulting_life)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(destination))
+    }
+
+    /// The source and victim envelope that does not depend on the damage roll.
+    /// A melee hit runs this before drawing so a refused source consumes no RNG.
+    pub(super) fn campaign_flee_source_preflight(
+        &self,
+        source: HandleId,
+        target: HandleId,
+    ) -> Result<bool, Error> {
+        Ok(self.campaign_flee_candidate(source, target)?.is_some())
+    }
+
+    fn campaign_flee_candidate(
+        &self,
+        source: HandleId,
+        target: HandleId,
+    ) -> Result<Option<CampaignFleeCandidate>, Error> {
         let Some(policy) = self.campaign_flee.as_ref() else {
             return Ok(None);
         };
@@ -81,13 +122,7 @@ impl ObjectHost {
                 self.campaign_flee_error(target, "victim has an unqualified active effect history")
             );
         }
-        if !self.campaign_flee_victim_ready(target, victim)? {
-            return Ok(None);
-        }
-        let Some(life) = resulting_life else {
-            return Ok(None);
-        };
-        if life <= 0.0 {
+        if !self.campaign_flee_victim_ready(target, victim, policy)? {
             return Ok(None);
         }
 
@@ -109,25 +144,58 @@ impl ObjectHost {
                 self.campaign_flee_error(source, "incoming attacker has no admitted combat weapon")
             );
         };
+        Ok(Some(CampaignFleeCandidate {
+            target,
+            victim_position,
+            attacker_position,
+            weapon_range: weapon.range,
+        }))
+    }
+
+    fn campaign_flee_life_destination(
+        &self,
+        candidate: &CampaignFleeCandidate,
+        resulting_life: Option<f32>,
+    ) -> Result<Option<[f32; 2]>, Error> {
+        let Some(life) = resulting_life else {
+            return Ok(None);
+        };
+        if life <= 0.0 {
+            return Ok(None);
+        }
+        let policy = self.campaign_flee.as_ref().expect("checked campaign flee");
         if !campaign_flee_low_life(policy, life) {
-            return Err(self.campaign_flee_error(
-                target,
-                "resulting life is above the ordinary cutoff in a score-dependent band",
-            ));
+            if policy
+                .conditional_life_bands()
+                .iter()
+                .any(|band| life >= band.minimum && life < band.maximum)
+            {
+                return Err(self.campaign_flee_error(
+                    candidate.target,
+                    "resulting life is above the ordinary cutoff in a score-dependent band",
+                ));
+            }
+            return Ok(None);
         }
         let numeric = self.numeric.as_ref().ok_or_else(|| {
-            self.campaign_flee_error(target, "selected numeric policy is not admitted")
+            self.campaign_flee_error(candidate.target, "selected numeric policy is not admitted")
         })?;
         policy
-            .ordinary_destination(numeric, victim_position, attacker_position, weapon.range)
+            .ordinary_destination(
+                numeric,
+                candidate.victim_position,
+                candidate.attacker_position,
+                candidate.weapon_range,
+            )
             .map(Some)
-            .map_err(|error| self.campaign_flee_error(target, &error.to_string()))
+            .map_err(|error| self.campaign_flee_error(candidate.target, &error.to_string()))
     }
 
     fn campaign_flee_victim_ready(
         &self,
         unit: HandleId,
         victim: &super::ExecutedUnit,
+        policy: &crate::campaign_flee_policy::FleePolicy,
     ) -> Result<bool, Error> {
         if victim.is_sleeping() || victim.paused_since.is_some() {
             return Ok(false);
@@ -144,7 +212,6 @@ impl ObjectHost {
         let Some(speed) = activity.speed() else {
             return Ok(false);
         };
-        let policy = self.campaign_flee.as_ref().expect("checked campaign flee");
         if speed < policy.minimum_move_speed {
             return Ok(false);
         }
@@ -202,7 +269,10 @@ impl ObjectHost {
                 ));
             };
             let techid = i32::from_be_bytes([*a, *b, *c, *d]);
-            if self.campaign_flee_upgrade_is_active(settings.number, techid, settings) {
+            if self
+                .campaign_flee_upgrade_is_active(settings.number, techid, settings)
+                .map_err(|error| self.campaign_flee_error(source, &error.to_string()))?
+            {
                 return Err(self.campaign_flee_error(
                     source,
                     &format!("incoming attacker has active weapon-slot upgrade {code}"),
@@ -219,25 +289,45 @@ impl ObjectHost {
         )
     }
 
+    /// Prepare the accepted retreat without mutating the unit. Damage is the
+    /// fallible decision boundary; the returned route commits only for a survivor.
+    pub(super) fn prepare_campaign_flee(
+        &self,
+        unit: HandleId,
+        destination: [f32; 2],
+    ) -> Result<Option<super::unit_activity::PreparedSteer>, Error> {
+        let capacity = self.executed_units().count();
+        if self.campaign_flee_motion.active.contains(&unit) {
+            return Ok(None);
+        }
+        if self.campaign_flee_motion.active.len() >= capacity {
+            return Err(self.campaign_flee_error(unit, "retreat ownership capacity exhausted"));
+        }
+        self.prepare_steer_unit_in_range(unit, Some(destination), 0.0, NATIVE)
+    }
+
+    pub(super) fn commit_campaign_flee(
+        &mut self,
+        unit: HandleId,
+        prepared: super::unit_activity::PreparedSteer,
+    ) -> Result<(), Error> {
+        self.commit_steer_unit(unit, prepared, NATIVE)?;
+        self.campaign_flee_motion.active.insert(unit);
+        Ok(())
+    }
+
     /// Start the accepted retreat. A route that cannot be accepted leaves no
     /// ownership behind; the accepted route itself is the movement owner.
+    #[cfg(test)]
     pub(crate) fn initiate_campaign_flee(
         &mut self,
         unit: HandleId,
         destination: [f32; 2],
     ) -> Result<(), Error> {
-        let capacity = self.executed_units().count();
-        if self.campaign_flee_motion.active.contains(&unit) {
+        let Some(prepared) = self.prepare_campaign_flee(unit, destination)? else {
             return Ok(());
-        }
-        if self.campaign_flee_motion.active.len() >= capacity {
-            return Err(self.campaign_flee_error(unit, "retreat ownership capacity exhausted"));
-        }
-        if !self.steer_unit_in_range(unit, Some(destination), 0.0, NATIVE)? {
-            return Ok(());
-        }
-        self.campaign_flee_motion.active.insert(unit);
-        Ok(())
+        };
+        self.commit_campaign_flee(unit, prepared)
     }
 }
 
