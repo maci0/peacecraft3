@@ -182,6 +182,8 @@ endfunction
     inputs.captain_policy = Some(captain_policy);
     inputs.new_heroes_policy =
         Some(pcx_play::campaign_new_heroes_policy::NewHeroesPolicy::fixture());
+    inputs.campaign_mode_policy =
+        Some(pcx_play::campaign_mode_policy::CampaignModePolicy::fixture());
     inputs.slow_chopping_policy =
         Some(pcx_play::campaign_slow_chopping_policy::SlowChoppingPolicy::fixture());
     inputs.group_timed_life_policy =
@@ -223,6 +225,7 @@ endfunction
     let ai_common = format!(
         "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\nnative SetSlowChopping takes boolean enabled returns nothing\nnative GroupTimedLife takes boolean enabled returns nothing\nnative CaptainGroupSize takes nothing returns integer\nnative CaptainIsEmpty takes nothing returns boolean\n"
     );
+    let ai_common = format!("{ai_common}native SetCampaignAI takes nothing returns nothing\n");
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
         .into_iter()
         .map(|(name, flag)| {
@@ -230,7 +233,7 @@ endfunction
             let opposite = !flag;
             let body = format!(
                 r#"function VerifyEmptyCaptains takes nothing returns nothing
-if CaptainGroupSize() != 0 or not CaptainIsEmpty() then
+if CaptainGroupSize() != 0 or not CaptainIsEmpty() or GetPlayers() != 3 then
 call SetCaptainHome({captain_selector},0.0,0.0)
 endif
 endfunction
@@ -242,6 +245,9 @@ call SetGroupsFlee({flag})
 call SetSlowChopping({flag})
 call SetNewHeroes({flag})
 call GroupTimedLife({flag})
+if {flag} then
+call SetCampaignAI()
+endif
 call CreateCaptains()
 call VerifyEmptyCaptains()
 call StopGathering()
@@ -253,6 +259,9 @@ call SetGroupsFlee({opposite})
 call SetSlowChopping({opposite})
 call SetNewHeroes({opposite})
 call GroupTimedLife({opposite})
+if {opposite} then
+call SetCampaignAI()
+endif
 call StopGathering()
 call SetCaptainHome({captain_selector},{home_x:.1},24.0)
 call VerifyEmptyCaptains()
@@ -398,6 +407,12 @@ endfunction
     };
     assert_eq!(group_timed_life_flag(&mut session, a), Some(false));
     assert_eq!(group_timed_life_flag(&mut session, b), Some(true));
+    let campaign_mode = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        objects.campaign_unit_mode(unit).unwrap()
+    };
+    assert_eq!(campaign_mode(&mut session, a), None);
+    assert_eq!(campaign_mode(&mut session, b), Some(true));
     let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
         let objects = session.host().unwrap().objects();
         for (unit, base) in [(a, a_base), (b, b_base)] {
@@ -458,6 +473,8 @@ endfunction
     assert_eq!(slow_chopping_flag(&mut session, b), Some(false));
     assert_eq!(group_timed_life_flag(&mut session, a), Some(true));
     assert_eq!(group_timed_life_flag(&mut session, b), Some(false));
+    assert_eq!(campaign_mode(&mut session, a), Some(true));
+    assert_eq!(campaign_mode(&mut session, b), Some(true));
     check_gathering(&mut session);
     check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {

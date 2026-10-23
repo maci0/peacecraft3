@@ -1,0 +1,94 @@
+//! Campaign mode shares the canonical AI player context and unit ownership.
+use super::{Error, Failure, ObjectHost};
+use crate::{campaign_mode_policy::CampaignModePolicy, map_admission::ParsedMapContext};
+use pcx_script::HandleId;
+use std::sync::Arc;
+
+const NATIVE: &str = "SetCampaignAI";
+
+impl ObjectHost {
+    pub fn admit_campaign_mode(
+        &mut self,
+        context: &Arc<ParsedMapContext>,
+        policy: CampaignModePolicy,
+    ) -> Result<(), Error> {
+        if self.campaign_mode.is_some() {
+            return Err(self
+                .inner
+                .error(NATIVE, Failure::ConfigState("already admitted")));
+        }
+        if !self
+            .player_context()
+            .is_some_and(|current| Arc::ptr_eq(current, context))
+        {
+            return Err(self
+                .inner
+                .error(NATIVE, Failure::ConfigState("map context differs")));
+        }
+        if !policy.context_mask.is_power_of_two()
+            || !policy.unit_mask.is_power_of_two()
+            || policy.unit_mask >= 0x80
+        {
+            return Err(self.inner.error(
+                NATIVE,
+                Failure::ConfigState("mode masks are not single bits"),
+            ));
+        }
+        for image in [
+            self.campaign_flee.as_ref().map(|p| p.image_sha256),
+            self.campaign_captains.as_ref().map(|p| p.image_sha256),
+            self.campaign_group_timed_life
+                .as_ref()
+                .map(|p| p.image_sha256),
+        ] {
+            if image.is_some_and(|image| image != policy.image_sha256) {
+                return Err(self
+                    .inner
+                    .error(NATIVE, Failure::ConfigState("source image differs")));
+            }
+        }
+        self.campaign_mode = Some(policy);
+        Ok(())
+    }
+
+    pub fn campaign_mode_policy(&self) -> Option<&CampaignModePolicy> {
+        self.campaign_mode.as_ref()
+    }
+
+    pub fn campaign_ai_mode(&self, owner: HandleId) -> Result<Option<bool>, Error> {
+        if self.campaign_mode.is_none() {
+            return Ok(None);
+        }
+        let player = self.player_settings(owner)?.number;
+        Ok(self.campaign_ai.campaign_mode(player))
+    }
+
+    pub fn campaign_unit_mode(&self, unit: HandleId) -> Result<Option<bool>, Error> {
+        let record = self.executed_unit(unit)?;
+        let mode = self.campaign_ai_mode(record.owner)?;
+        if mode.is_some()
+            && (record.cached || record.summoned || self.unit_has_effect_history(unit))
+        {
+            return Err(self.inner.error(
+                NATIVE,
+                Failure::UnitActivity("unit attachment state is unqualified".into()),
+            ));
+        }
+        // shortcut: canonical direct-created ownership supplies mode attachment; qualify native manager exclusions before widening it.
+        Ok(mode)
+    }
+
+    pub(crate) fn set_ai_campaign_mode(&mut self, player: i32) -> Result<(), Error> {
+        let enabled = self
+            .campaign_mode
+            .as_ref()
+            .ok_or_else(|| {
+                self.inner
+                    .error(NATIVE, Failure::ConfigState("operands are not admitted"))
+            })?
+            .campaign_mode;
+        self.require_active_campaign_ai_player(player, NATIVE)?;
+        self.campaign_ai.set_campaign_mode(player, enabled);
+        Ok(())
+    }
+}

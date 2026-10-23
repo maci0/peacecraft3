@@ -2,9 +2,10 @@
 
 The selected Legacy executable has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-Unchanged Human02 now passes `GroupTimedLife` and refuses `SetCampaignAI` at
-7.218750 seconds. The bounded host implementation below is exercised separately
-from that campaign frontier; this is not completed campaign execution.
+At this integration checkpoint, unchanged Human02 passed `GroupTimedLife` and
+refused `SetCampaignAI` at 7.218750 seconds. The later
+[campaign-mode integration](campaign-ai-mode.md) advances beyond that call.
+The bounded implementation below is not completed campaign execution.
 
 ## Selected-code evidence
 

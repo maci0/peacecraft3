@@ -21,6 +21,7 @@ struct PlayerFlags {
     heroes_flee: Option<bool>,
     groups_flee: Option<bool>,
     new_heroes: Option<bool>,
+    campaign_mode: Option<bool>,
     slow_chopping: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
@@ -54,6 +55,7 @@ impl Registry {
                 heroes_flee: None,
                 groups_flee: None,
                 new_heroes: None,
+                campaign_mode: None,
                 slow_chopping: None,
                 gathering: None,
                 gathering_unit: None,
@@ -99,6 +101,19 @@ impl Registry {
 
     pub(super) fn new_heroes(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.new_heroes)
+    }
+
+    pub(super) fn campaign_mode(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.campaign_mode)
+    }
+
+    pub(super) fn set_campaign_mode(&mut self, player: i32, enabled: bool) {
+        self.players
+            .get_mut(&player)
+            .expect("active player preflighted")
+            .campaign_mode = Some(enabled);
     }
 
     pub(super) fn slow_chopping(&self, player: i32) -> Option<bool> {
@@ -430,6 +445,7 @@ impl ObjectHost {
             && self.campaign_gathering.is_none()
             && self.campaign_captains.is_none()
             && self.campaign_new_heroes.is_none()
+            && self.campaign_mode.is_none()
             && self.campaign_slow_chopping.is_none()
             && self.campaign_group_timed_life.is_none()
         {

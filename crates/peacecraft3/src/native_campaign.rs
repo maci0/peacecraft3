@@ -1460,6 +1460,10 @@ pub(crate) mod tests {
                 .campaign_group_timed_life_policy()
                 .expect("campaign preparation admits the selected group-timed-life policy");
             assert_eq!(group_timed_life.image_sha256, recipe.image_sha256());
+            let mode = objects
+                .campaign_mode_policy()
+                .expect("campaign preparation admits the selected mode policy");
+            assert_eq!(mode.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
         assert!(units > 0, "unchanged chapter main must create units");

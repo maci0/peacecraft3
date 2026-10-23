@@ -641,6 +641,7 @@ pub(crate) fn host_inputs(
         gathering_policy: None,
         captain_policy: None,
         new_heroes_policy: None,
+        campaign_mode_policy: None,
         slow_chopping_policy: None,
         group_timed_life_policy: None,
         inventory: None,

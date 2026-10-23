@@ -7,6 +7,11 @@ world. Gold and wood costs also read the admitted catalog and canonical player's
 hero-token state. The remaining query envelopes and production systems are
 unfinished; the tables below record bounded source and runtime evidence.
 
+The later [campaign-mode integration](campaign-ai-mode.md) forwards `GetPlayers`
+through the existing map-configuration host. It reads the map's `SetPlayers`
+value, with no copied slot count or separate AI state. The published two-player
+fixture checks that configured count before and after an AI sleep.
+
 ## Selected native paths
 
 The reviewed executable is 1.29.2.9231, SHA-256

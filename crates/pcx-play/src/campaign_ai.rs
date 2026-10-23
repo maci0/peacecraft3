@@ -125,6 +125,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_groups_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
@@ -268,6 +269,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .set_ai_new_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_campaign_mode(player)
             .map_err(|e| e.to_string())
     }
 
@@ -591,6 +603,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     }
     for (name, params) in [
         ("CreateCaptains", &[][..]),
+        ("SetCampaignAI", &[][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
@@ -740,6 +753,7 @@ impl<W: AiWorld> Host for AiHost<W> {
         match name {
             "GetAiPlayer" if args.is_empty() => Ok(Value::Int(self.player)),
             "Player"
+            | "GetPlayers"
             | "GetPlayerState"
             | "GetGameDifficulty"
             | "GetPlayerNeutralPassive"
@@ -851,6 +865,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .ai_set_captain_home(player, *selector, [*x, *y])?;
                 Ok(Value::Null)
             }
+            "SetCampaignAI" => {
+                if !args.is_empty() {
+                    return Err("SetCampaignAI: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_set_campaign_mode(player)?;
+                Ok(Value::Null)
+            }
             "GroupTimedLife" => {
                 let [Value::Bool(enabled)] = args else {
                     return Err("GroupTimedLife: expected a boolean".into());
@@ -904,6 +926,7 @@ mod tests {
         heroes_flee: BTreeMap<i32, bool>,
         groups_flee: BTreeMap<i32, bool>,
         new_heroes: BTreeMap<i32, bool>,
+        campaign_modes: BTreeSet<i32>,
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         captain_creates: BTreeMap<i32, usize>,
@@ -948,6 +971,7 @@ mod tests {
             self.0.lock().unwrap().heroes_flee.remove(&player);
             self.0.lock().unwrap().groups_flee.remove(&player);
             self.0.lock().unwrap().new_heroes.remove(&player);
+            self.0.lock().unwrap().campaign_modes.remove(&player);
             self.0.lock().unwrap().slow_chopping.remove(&player);
             self.0.lock().unwrap().gathering.remove(&player);
             self.0.lock().unwrap().captain_creates.remove(&player);
@@ -1001,6 +1025,15 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.slow_chopping.insert(player, enabled);
+            Ok(())
+        }
+
+        fn ai_set_campaign_mode(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.campaign_modes.insert(player);
             Ok(())
         }
         fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
@@ -1671,6 +1704,60 @@ mod tests {
         assert_eq!(state.target_heroes, [(1, true), (2, false)].into());
         assert!(state.units_flee.is_empty());
         assert!(world.is_some());
+    }
+
+    #[test]
+    fn campaign_mode_is_owned_by_each_program_and_survives_sleep() {
+        let script = program_with_ai_common(
+            "synthetic:mode.ai",
+            "function main takes nothing returns nothing\nif GetAiPlayer() == 1 then\ncall SetCampaignAI()\nendif\ncall Sleep(0.25)\ncall SetCampaignAI()\nendfunction\n",
+            &format!("{AI_COMMON}native SetCampaignAI takes nothing returns nothing\n"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "mode.ai").unwrap();
+        }
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1].into());
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1, 2].into());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn campaign_mode_abi_refuses_before_main_and_arguments_do_not_write() {
+        for declaration in [
+            "native SetCampaignAI takes integer mode returns nothing\n",
+            "native SetCampaignAI takes nothing returns boolean\n",
+            "constant native SetCampaignAI takes nothing returns nothing\n",
+        ] {
+            let script = program_with_ai_common(
+                "synthetic:mode.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &format!("{AI_COMMON}{declaration}"),
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "mode.ai").unwrap_err();
+            assert!(error.contains("SetCampaignAI"), "{error}");
+            assert!(shared.lock().unwrap().gold.is_empty());
+            assert!(shared.lock().unwrap().active.is_empty());
+        }
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        assert!(host.native("SetCampaignAI", &[]).is_err());
+        shared.lock().unwrap().active.insert(1, false);
+        assert!(host.native("SetCampaignAI", &[Value::Bool(true)]).is_err());
+        assert!(shared.lock().unwrap().campaign_modes.is_empty());
+        assert_eq!(host.native("SetCampaignAI", &[]).unwrap(), Value::Null);
+        assert_eq!(shared.lock().unwrap().campaign_modes, [1].into());
     }
 
     #[test]

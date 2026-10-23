@@ -316,3 +316,33 @@ fn inactive_unit_expiry_and_removed_member_do_not_leave_captain_counts() {
             .dead
     );
 }
+
+#[test]
+fn campaign_mode_reaches_existing_and_later_units_without_a_second_unit_store() {
+    use crate::campaign_mode_policy::CampaignModePolicy;
+    let (mut vm, unit, other, _) = opened();
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_mode(&context, CampaignModePolicy::fixture())
+        .unwrap();
+    assert_eq!(host.campaign_unit_mode(unit).unwrap(), None);
+    host.set_ai_campaign_mode(4).unwrap();
+    assert_eq!(host.campaign_unit_mode(unit).unwrap(), Some(true));
+    assert_eq!(host.campaign_unit_mode(other).unwrap(), None);
+    let later = create_for(&mut vm, unit, *b"u001", 80., 16.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.campaign_unit_mode(later).unwrap(), Some(true));
+    let owner = host.executed_unit(other).unwrap().owner;
+    host.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(later),
+            Value::Handle(owner),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(host.campaign_unit_mode(later).unwrap(), None);
+    host.deactivate_campaign_ai_player(4).unwrap();
+    assert_eq!(host.campaign_unit_mode(unit).unwrap(), None);
+}
