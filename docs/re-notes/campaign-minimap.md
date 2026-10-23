@@ -62,9 +62,8 @@ linear sampling remains an implementation choice awaiting a paired native render
 
 The hit surface is independent of the terrain image. It remains present when
 fog hides the image or image decoding refuses. Presses consume the existing HUD
-input gate and report unsupported minimap camera/order projection; they do not
-fall through to ground selection/orders. Cinematic interface suppression and
-camera suspension still hide the entire control.
+input gate and do not fall through to ground selection/orders. Cinematic
+interface suppression and camera suspension still hide the entire control.
 
 The minimap now projects circular sight from canonical live unit positions and
 source `UnitBalance/sight` or `nsight`, using the existing game clock's day/night
@@ -86,9 +85,28 @@ It still lacks terrain/tree sight occlusion and sight-changing upgrades/effects.
 Presentation-frame exploration sampling, exact camera-margin projection,
 modifier masking behavior and blend/filter parity need original-client
 comparison. World terrain/actor fog and public visibility queries do not yet
-consume this raster. Markers, unit icons, camera overlay, panning and minimap
-orders remain unfinished. The renderer keeps an explicit missing-occlusion
+consume this raster. Markers, unit icons, camera overlay and minimap orders
+remain unfinished. The renderer keeps an explicit missing-occlusion
 diagnostic rather than claiming completed visibility fidelity.
+
+### Camera navigation
+
+Left clicks and held-left-button dragging now move the existing canonical
+camera target. Pointer positions use Bevy's computed node-relative coordinates;
+the inverse of the sight raster's mapping converts them into world positions.
+Padding and dragging past the surface clamp to the map extent. Both minimap
+and arrow-key input then apply the same executed camera bounds and cancel the
+same running pan. No separate camera or copied map dimensions are introduced.
+
+Releasing the button stops tracking. Control/interface locks, quest/script
+dialogs, an inactive view, a retired session or a departed local player prevent
+camera changes. Session retirement clears pending presses and drags. Right
+clicks and clicks with an armed command still refuse targeting instead of
+moving the camera or issuing an unintended ground order.
+
+This uses the current house map-image projection; exact native camera-margin
+mapping and padding behavior still need comparison. It does not implement the
+camera-footprint overlay or minimap orders.
 
 ### Fog alpha source join
 
@@ -126,12 +144,35 @@ These are static observations on the image identified above, not a client run.
 ## Runtime evidence and limits
 
 The current suites pass 69 object tests, 1,682 core tests, 55 app-library tests
-and 628 app-binary tests. Synthetic fixtures vary day/night sight, alliances,
+and 630 app-binary tests. Synthetic fixtures vary day/night sight, alliances,
 modifier states/order, opacity and clear-pixel values. Movement, exploration,
 switch combinations, canonical removal, budgets and refusal without history
 mutation are covered. The selected-image minimap decoder passes separately.
 Strict native all-targets and WASM library/binary Clippy, the default desktop
 build and formatting pass.
+
+The explicit selected-Human01 camera test also passes. It changes the camera
+through the minimap consumer, checks the shared raster inverse and executed
+bounds, holds and releases a drag, then verifies control/UI locks, a quest modal,
+camera suspension and a stale session cannot move it. A separate unit test
+cancels a held drag with no cursor position; projection tests cover nonsquare
+maps, padding, out-of-surface coordinates and non-finite refusal. This is
+application behavior evidence, not an original-client camera comparison.
+
+A normal desktop-window XTest replay now enters Human01 from the launcher and
+menu, selects the hero, clicks the minimap, drags it, releases, and moves the
+pointer away. Captures show distinct terrain regions after click and drag;
+camera-target diagnostics cease after release. The balanced-input receipt is
+`.scratch/minimap-camera-native/receipt-launcher.json`, SHA-256
+`bf55c0bd0036f4d9fa1f96664c5e763e0844ec8325330818d516ef698412d9c9`.
+It pins the source/build/content, owned process/window and 1280x1024/96-DPI
+display. The default executable SHA-256 is
+`267008c26136dfc7b3d35d2db374a96035828109d8d85b1820b0b882791b38d0`;
+the tested binary is preserved locally in that directory. Software Vulkan was
+used, audio was disabled and no fixed seed or original-client parity is claimed.
+The private application/display were stopped afterward. Failed launcher and
+pre-input replay-validation attempts remain separate; no game input was sent in
+those attempts.
 
 The production offscreen Vulkan run in
 `.scratch/campaign-minimap-render/vision-2/` follows mounted menu and mission

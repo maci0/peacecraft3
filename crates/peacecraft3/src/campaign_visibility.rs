@@ -2,6 +2,38 @@
 use pcx_objects::editor::minimap_fog::MinimapFogAlpha;
 use pcx_play::playercolor_host::{VisionCircle, VisionState};
 
+struct Mapping {
+    left: f64,
+    bottom: f64,
+    right: f64,
+    top: f64,
+    scale: f64,
+    pad: [f64; 2],
+}
+impl Mapping {
+    fn new(width: usize, height: usize, bounds: [[f32; 2]; 2]) -> Result<Self, String> {
+        let [[left, bottom], [right, top]] = bounds.map(|p| p.map(f64::from));
+        if ![left, bottom, right, top].iter().all(|n| n.is_finite())
+            || right <= left
+            || top <= bottom
+        {
+            return Err("minimap visibility bounds are invalid".into());
+        }
+        let scale = (width as f64 / (right - left)).min(height as f64 / (top - bottom));
+        Ok(Self {
+            left,
+            bottom,
+            right,
+            top,
+            scale,
+            pad: [
+                (width as f64 - (right - left) * scale) * 0.5,
+                (height as f64 - (top - bottom) * scale) * 0.5,
+            ],
+        })
+    }
+}
+
 pub(crate) struct Raster {
     width: usize,
     height: usize,
@@ -11,6 +43,25 @@ pub(crate) struct Raster {
 }
 
 impl Raster {
+    /// Inverse of the sight projection; dragging into padding clamps to the map edge.
+    pub(crate) fn world_at(
+        &self,
+        bounds: [[f32; 2]; 2],
+        fraction: [f32; 2],
+    ) -> Result<[f32; 2], String> {
+        if !fraction.iter().all(|v| v.is_finite()) {
+            return Err("minimap pointer is not finite".into());
+        }
+        // shortcut: share the terrain-image fit; qualify native camera margins/padding with a paired replay.
+        let m = Mapping::new(self.width, self.height, bounds)?;
+        Ok([
+            (m.left + (f64::from(fraction[0]) * self.width as f64 - m.pad[0]) / m.scale)
+                .clamp(m.left, m.right) as f32,
+            (m.top - (f64::from(fraction[1]) * self.height as f64 - m.pad[1]) / m.scale)
+                .clamp(m.bottom, m.top) as f32,
+        ])
+    }
+
     pub(crate) fn new(width: u32, height: u32, max_pixels: usize) -> Result<Self, String> {
         let width = width as usize;
         let height = height as usize;
@@ -43,18 +94,14 @@ impl Raster {
         opacity: MinimapFogAlpha,
         work_limit: usize,
     ) -> Result<&[u8], String> {
-        let [[left, bottom], [right, top]] = bounds.map(|p| p.map(f64::from));
-        if ![left, bottom, right, top].iter().all(|n| n.is_finite())
-            || right <= left
-            || top <= bottom
-        {
-            return Err("minimap visibility bounds are invalid".into());
-        }
-        let scale = (self.width as f64 / (right - left)).min(self.height as f64 / (top - bottom));
-        let pad = [
-            (self.width as f64 - (right - left) * scale) * 0.5,
-            (self.height as f64 - (top - bottom) * scale) * 0.5,
-        ];
+        let Mapping {
+            left,
+            bottom,
+            right,
+            top,
+            scale,
+            pad,
+        } = Mapping::new(self.width, self.height, bounds)?;
         let mut ranges = Vec::new();
         ranges
             .try_reserve_exact(sources.len())
@@ -143,6 +190,30 @@ mod tests {
             radius: 0.6,
             state: VisionState::Visible,
             after_units: false,
+        }
+    }
+    #[test]
+    fn pointer_inverse_matches_pixels_and_clamps_padding_and_drag() {
+        let bounds = [[-100., -40.], [300., 160.]];
+        for (width, height) in [(10, 10), (20, 10), (10, 20)] {
+            let mut raster = Raster::new(width, height, 200).unwrap();
+            assert_eq!(raster.world_at(bounds, [0.5, 0.5]).unwrap(), [100., 60.]);
+            assert_eq!(raster.world_at(bounds, [-1., -1.]).unwrap(), [-100., 160.]);
+            assert_eq!(raster.world_at(bounds, [2., 2.]).unwrap(), [300., -40.]);
+            let fraction = [0.5 + 0.5 / width as f32, 0.5 + 0.5 / height as f32];
+            let center = raster.world_at(bounds, fraction).unwrap();
+            let visible = VisionCircle {
+                center,
+                radius: 1.,
+                state: VisionState::Visible,
+                after_units: false,
+            };
+            let alpha = raster
+                .update(bounds, &[visible], true, true, OPACITY, 1000)
+                .unwrap();
+            assert_eq!(alpha[(height / 2 * width + width / 2) as usize], 241);
+            assert!(raster.world_at(bounds, [f32::NAN, 0.]).is_err());
+            assert!(raster.world_at([[0.; 2]; 2], [0.5; 2]).is_err());
         }
     }
     #[test]

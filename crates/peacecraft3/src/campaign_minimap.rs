@@ -1,5 +1,5 @@
 //! Receipt-bound minimap terrain. Visibility and overlays are separate consumers.
-use bevy::{picking::events::PointerPress, prelude::*};
+use bevy::{picking::events::PointerPress, prelude::*, ui::RelativeCursorPosition};
 use pcx_play::{map_startup_host::MapStartupHost, minimap_layout::Rules};
 use peacecraft3::{
     campaign_camera::{CampaignCamera, CampaignCameraSet},
@@ -38,6 +38,8 @@ pub(crate) struct CampaignMinimap {
     image: Option<Handle<Image>>,
     fog: Option<FogImage>,
     pending_pointer: bool,
+    pan: Option<Vec2>,
+    drag: Option<Entity>,
     load_error: Option<String>,
     pub member: Option<String>,
     pub shown: bool,
@@ -63,28 +65,132 @@ pub(crate) fn install(app: &mut App) {
             Update,
             consume_pointer
                 .after(crate::campaign_hud::CampaignHudSet)
+                .after(crate::campaign_script_dialogs::CampaignScriptDialogSet)
                 .before(crate::campaign_input::CampaignInputSet),
         );
 }
 fn capture_press(
     event: On<PointerPress>,
-    parts: Query<&MinimapPart>,
+    parts: Query<(&MinimapPart, Option<&RelativeCursorPosition>)>,
     mut state: ResMut<CampaignMinimap>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
-    if matches!(parts.get(event.entity), Ok(MinimapPart::Surface))
-        && crate::button_actions::input_allowed(presentation)
-    {
-        state.pending_pointer = true;
+    let Ok((MinimapPart::Surface, cursor)) = parts.get(event.entity) else {
+        return;
+    };
+    if !crate::button_actions::input_allowed(presentation) {
+        return;
     }
+    state.pending_pointer = true;
+    let primary = event.button == bevy::picking::pointer::PointerButton::Primary;
+    state.pan = primary
+        .then(|| cursor.and_then(|p| p.normalized))
+        .flatten()
+        .map(|p| p + Vec2::splat(0.5));
+    state.drag = primary.then_some(event.entity);
 }
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct PointerControls<'w> {
+    camera: Option<Res<'w, CampaignCamera>>,
+    mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
+    presentation: Option<Res<'w, peacecraft3::campaign_presentation::CampaignPresentation>>,
+    dialogs: Option<Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>>,
+    input: Option<Res<'w, crate::campaign_input::CampaignInput>>,
+}
+
 fn consume_pointer(
     mut state: ResMut<CampaignMinimap>,
     mut hud: ResMut<crate::campaign_hud::CampaignHud>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    controls: PointerControls,
+    cursors: Query<&RelativeCursorPosition, With<MinimapPart>>,
 ) {
-    if std::mem::take(&mut state.pending_pointer) {
+    let pressed = std::mem::take(&mut state.pending_pointer);
+    let mut pan = state.pan.take();
+    if let Some(entity) = state.drag {
+        if controls
+            .mouse
+            .as_ref()
+            .is_some_and(|m| m.pressed(MouseButton::Left))
+        {
+            pan = cursors
+                .get(entity)
+                .ok()
+                .and_then(|p| p.normalized)
+                .map(|p| p + Vec2::splat(0.5));
+            hud.pointer_consumed = true;
+        } else {
+            state.drag = None;
+        }
+    }
+    if pressed {
         hud.pointer_consumed = true;
-        state.last_error = Some("minimap camera and order projection is not yet supported".into());
+        if pan.is_none() {
+            state.last_error =
+                Some("minimap order projection or pointer position is unsupported".into());
+        }
+    }
+    let Some(pan) = pan else {
+        state.drag = None;
+        return;
+    };
+    if controls.input.is_some_and(|i| i.command.is_some()) {
+        state.drag = None;
+        state.last_error = Some("minimap command targeting is not yet supported".into());
+        return;
+    }
+    if !controls.camera.is_some_and(|c| c.active())
+        || !crate::button_actions::input_allowed(controls.presentation)
+        || hud.quest_log_open
+        || controls.dialogs.is_some_and(|d| d.input_blocked())
+    {
+        state.drag = None;
+        return;
+    }
+    let result = (|| -> Result<(), String> {
+        if !state
+            .witness
+            .as_ref()
+            .zip(session.session_witness())
+            .is_some_and(|(a, b)| Weak::ptr_eq(a, &b))
+        {
+            return Err("minimap camera request belongs to a retired session".into());
+        }
+        let host = session.host().ok_or("minimap camera has no live session")?;
+        let objects = host.objects_mut();
+        if objects.presentation().is_some_and(|p| {
+            p.control_enabled == Some(false)
+                || p.ui_enabled == Some(false)
+                || p.interface_visible == Some(false)
+        }) {
+            state.drag = None;
+            return Ok(());
+        }
+        if objects.local_player_settings().is_some_and(|local| {
+            objects
+                .player_removal_state()
+                .and_then(|s| s.get(local.identity))
+                .is_some_and(|p| p.left)
+        }) {
+            return Err("minimap camera owner has left".into());
+        }
+        let bounds = objects
+            .vision_world_bounds()
+            .ok_or("minimap camera world extent is absent")?;
+        let target = state
+            .fog
+            .as_ref()
+            .ok_or("minimap camera image is absent")?
+            .raster
+            .world_at(bounds, pan.to_array())?;
+        peacecraft3::campaign_camera::scroll_to(objects, target)?;
+        debug!(?target, "campaign minimap camera target");
+        Ok(())
+    })();
+    if let Err(error) = result {
+        state.drag = None;
+        state.last_error = Some(error);
     }
 }
 fn visibility(settings: Option<pcx_play::playercolor_host::StartupSettings>) -> Result<(), String> {
@@ -375,6 +481,7 @@ fn project(
                 rules.clear_color[3],
             )),
             MinimapPart::Surface,
+            RelativeCursorPosition::default(),
         ))
         .id();
     commands.entity(root).add_child(surface);
@@ -541,7 +648,7 @@ mod tests {
         );
     }
     #[test]
-    fn minimap_does_not_reveal_the_image_for_unknown_or_enabled_fog() {
+    fn unconditional_image_requires_explicitly_disabled_fog_and_mask() {
         use pcx_play::playercolor_host::StartupSettings;
         let speed = pcx_script::HandleId::new(std::num::NonZeroU64::new(1).unwrap());
         assert!(visibility(None).is_err());
@@ -568,6 +675,7 @@ mod tests {
     fn minimap_press_is_consumed_and_refused_instead_of_becoming_a_world_order() {
         let mut world = World::new();
         world.init_resource::<CampaignMinimap>();
+        world.init_resource::<MapScriptSession<MapStartupHost>>();
         world.init_resource::<crate::campaign_hud::CampaignHud>();
         world.add_observer(capture_press);
         let image = world.spawn(MinimapPart::Surface).id();
@@ -614,6 +722,28 @@ mod tests {
         );
     }
     #[test]
+    fn losing_pointer_position_cancels_a_held_drag() {
+        let mut world = World::new();
+        world.init_resource::<CampaignMinimap>();
+        world.init_resource::<crate::campaign_hud::CampaignHud>();
+        world.init_resource::<MapScriptSession<MapStartupHost>>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        let surface = world
+            .spawn((MinimapPart::Surface, RelativeCursorPosition::default()))
+            .id();
+        world.resource_mut::<CampaignMinimap>().drag = Some(surface);
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        world.run_system_once(consume_pointer).unwrap();
+        assert!(world.resource::<CampaignMinimap>().drag.is_none());
+        assert!(
+            world
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .pointer_consumed
+        );
+    }
+    #[test]
     fn retiring_the_session_removes_the_tree_and_owned_image() {
         let mut app = App::new();
         peacecraft3::campaign_camera::install(&mut app, 0, 0);
@@ -635,6 +765,9 @@ mod tests {
             image: Some(image.clone()),
             member: Some("old map".into()),
             attempted: true,
+            pending_pointer: true,
+            pan: Some(Vec2::splat(0.25)),
+            drag: Some(surface),
             ..default()
         });
         world.run_system_once(project).unwrap();
@@ -646,6 +779,7 @@ mod tests {
         let state = world.resource::<CampaignMinimap>();
         assert!(state.root.is_none() && state.image_node.is_none() && state.member.is_none());
         assert!(!state.attempted && !state.shown);
+        assert!(!state.pending_pointer && state.pan.is_none() && state.drag.is_none());
     }
     #[test]
     fn minimap_node_preserves_the_logical_viewport_relationships() {
@@ -668,6 +802,217 @@ mod tests {
             } - 15.)
                 .abs()
                 < 0.00001
+        );
+    }
+
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
+    #[test]
+    #[ignore = "requires selected PCX_NATIVE_CHAPTER_* inputs"]
+    fn selected_chapter_minimap_pans_drags_clamps_and_rechecks_control_and_session() {
+        use bevy::picking::{
+            backend::HitData,
+            events::Pointer,
+            pointer::{Location, PointerButton, PointerId},
+        };
+        use pcx_script::{Host, Value};
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<CampaignMinimap>()
+            .init_resource::<crate::campaign_hud::CampaignHud>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_observer(capture_press);
+        let (witness, bounds, camera_bounds) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let witness = session.session_witness().unwrap();
+            let objects = session.host().unwrap().objects_mut();
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("EnableUserUI", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("ShowInterface", &[Value::Bool(true), Value::Real(0.)])
+                .unwrap();
+            (
+                witness,
+                objects.vision_world_bounds().unwrap(),
+                objects.camera_state().unwrap().bounds.unwrap(),
+            )
+        };
+        let fog = FogImage {
+            raster: crate::campaign_visibility::Raster::new(80, 40, 3200).unwrap(),
+            alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
+                masked: 7,
+                fogged: 91,
+                visible: 223,
+            },
+            original_alpha: Vec::new(),
+            viewer: None,
+            width: 80,
+            height: 40,
+        };
+        app.insert_resource(CampaignMinimap {
+            witness: Some(witness.clone()),
+            fog: Some(fog),
+            ..default()
+        });
+        let surface = app
+            .world_mut()
+            .spawn((
+                MinimapPart::Surface,
+                RelativeCursorPosition {
+                    cursor_over: true,
+                    normalized: Some(Vec2::new(-0.25, 0.25)),
+                },
+            ))
+            .id();
+        let press = |world: &mut World| {
+            world.trigger(PointerPress {
+                entity: surface,
+                pointer: Pointer::new(
+                    PointerId::Mouse,
+                    Location {
+                        target: bevy::camera::NormalizedRenderTarget::None {
+                            width: 1,
+                            height: 1,
+                        },
+                        position: Vec2::ZERO,
+                    },
+                ),
+                button: PointerButton::Primary,
+                hit: HitData::new(camera, 0., None, None),
+                count: 1,
+            });
+            world.flush();
+        };
+        let target = |world: &mut World| {
+            world
+                .resource_mut::<MapScriptSession<MapStartupHost>>()
+                .host()
+                .unwrap()
+                .objects()
+                .camera_target()
+                .unwrap()
+        };
+        let expected = |world: &World, fraction: [f32; 2]| {
+            let mut point = world
+                .resource::<CampaignMinimap>()
+                .fog
+                .as_ref()
+                .unwrap()
+                .raster
+                .world_at(bounds, fraction)
+                .unwrap();
+            for axis in 0..2 {
+                let corners = camera_bounds.as_chunks::<2>().0;
+                point[axis] = point[axis].clamp(
+                    corners
+                        .iter()
+                        .map(|c| c[axis])
+                        .fold(f32::INFINITY, f32::min),
+                    corners
+                        .iter()
+                        .map(|c| c[axis])
+                        .fold(f32::NEG_INFINITY, f32::max),
+                );
+            }
+            point
+        };
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), expected(app.world(), [0.25, 0.75]));
+        assert!(
+            app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .pointer_consumed
+        );
+        // Hold after a new press, then drag beyond the surface: camera bounds still win.
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        app.world_mut()
+            .get_mut::<RelativeCursorPosition>(surface)
+            .unwrap()
+            .normalized = Some(Vec2::new(1., -1.));
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        let edge = target(app.world_mut());
+        assert_eq!(edge, expected(app.world(), [1.5, -0.5]));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.world_mut()
+            .get_mut::<RelativeCursorPosition>(surface)
+            .unwrap()
+            .normalized = Some(Vec2::ZERO);
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        assert!(app.world().resource::<CampaignMinimap>().drag.is_none());
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("EnableUserControl", &[Value::Bool(false)])
+            .unwrap();
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("EnableUserControl", &[Value::Bool(true)])
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<crate::campaign_hud::CampaignHud>()
+            .quest_log_open = true;
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        app.world_mut()
+            .resource_mut::<crate::campaign_hud::CampaignHud>()
+            .quest_log_open = false;
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("EnableUserUI", &[Value::Bool(false)])
+            .unwrap();
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("EnableUserUI", &[Value::Bool(true)])
+            .unwrap();
+        app.world_mut().resource_mut::<CampaignCamera>().suspend();
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        app.insert_resource(CampaignCamera::active_for_test(camera));
+        let stale = Arc::new(());
+        app.world_mut().resource_mut::<CampaignMinimap>().witness = Some(Arc::downgrade(&stale));
+        press(app.world_mut());
+        app.world_mut().run_system_once(consume_pointer).unwrap();
+        assert_eq!(target(app.world_mut()), edge);
+        assert!(
+            app.world()
+                .resource::<CampaignMinimap>()
+                .last_error
+                .as_ref()
+                .unwrap()
+                .contains("retired")
         );
     }
 }

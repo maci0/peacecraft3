@@ -6,9 +6,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   exploration, with source-derived opacity, layout, image lookup and backing.
   Human01's unchanged fog-enabled checkpoint shows an owned-unit sight area and
   black unexplored terrain. Tests pass 69 object / 1,682 core / 55 app-library /
-  628 app-binary cases, the selected-image decoder and strict native/WASM Clippy.
-  The independent hit surface still refuses unsupported minimap input without
-  issuing ground orders. The strict visual gate still fails for missing
+  630 app-binary cases, the selected-image decoder and strict native/WASM Clippy.
+  Left-click/drag navigation now uses the existing camera target and bounds;
+  release, lost pointer, control locks and session retirement stop tracking.
+  The selected Human01 camera gate and a desktop-window pointer replay pass.
+  Right-click and armed-command targeting still refuse without issuing ground
+  orders. The strict visual gate still fails for missing
   terrain/tree sight occlusion and sky illumination. World fog, sight-changing
   effects, exact projection/blend parity, overlays and minimap actions remain
   open; see [campaign minimap](docs/re-notes/campaign-minimap.md).

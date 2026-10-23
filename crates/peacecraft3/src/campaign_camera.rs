@@ -150,10 +150,23 @@ fn scroll_camera(
     };
     let (sin, cos) = angle.to_radians().sin_cos();
     let dt = time.delta_secs();
-    let mut target = [
+    let target = [
         x + (cos * forward * forward_rate + sin * strafe * strafe_rate) * dt,
         y + (sin * forward * forward_rate - cos * strafe * strafe_rate) * dt,
     ];
+    if let Err(error) = scroll_to(objects, target) {
+        view.last_error = Some(error);
+    }
+}
+
+/// Player camera input shares the executed bounds and cancels the same live pan.
+pub fn scroll_to(
+    objects: &mut pcx_play::playercolor_host::ObjectHost,
+    mut target: [f32; 2],
+) -> Result<(), String> {
+    if !target.iter().all(|v| v.is_finite()) {
+        return Err("camera input target must be finite".into());
+    }
     if let Some(bounds) = objects.camera_state().and_then(|c| c.bounds) {
         let corners = bounds.as_chunks::<2>().0;
         for axis in 0..2 {
@@ -168,9 +181,7 @@ fn scroll_camera(
             target[axis] = target[axis].clamp(low, high);
         }
     }
-    if let Err(error) = objects.scroll_camera(target) {
-        view.last_error = Some(error.to_string());
-    }
+    objects.scroll_camera(target).map_err(|e| e.to_string())
 }
 
 fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
