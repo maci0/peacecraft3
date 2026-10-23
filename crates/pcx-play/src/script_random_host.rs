@@ -1,7 +1,7 @@
 use super::{Error, Failure, ObjectHost};
 use crate::script_random::{
     profile::Policy,
-    state::{self, State},
+    state::{self, PrimaryCheckpoint, State},
 };
 use pcx_script::Value;
 use std::sync::Arc;
@@ -70,6 +70,25 @@ impl ObjectHost {
 
     pub fn script_random_state(&self) -> Option<&State> {
         self.random.as_ref()?.state.as_ref()
+    }
+
+    /// Save only the primary word and lanes, so a refused combat hit can restore
+    /// the draw that its damage roll consumed without copying secondary history.
+    pub(super) fn script_random_primary_checkpoint(&self) -> Option<PrimaryCheckpoint> {
+        Some(self.script_random_state()?.primary_checkpoint())
+    }
+
+    pub(super) fn restore_script_random_primary(&mut self, checkpoint: Option<PrimaryCheckpoint>) {
+        let Some(checkpoint) = checkpoint else {
+            return;
+        };
+        if let Some(state) = self
+            .random
+            .as_mut()
+            .and_then(|random| random.state.as_mut())
+        {
+            state.restore_primary(checkpoint);
+        }
     }
 
     pub(super) fn random_native(

@@ -100,7 +100,10 @@ pub struct ObjectHost {
     campaign_targeting: Option<targeting::State>,
     campaign_ai: campaign_flee::Registry,
     campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
+    campaign_new_heroes: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
     campaign_gathering: Option<crate::campaign_gathering_policy::GatheringPolicy>,
+    campaign_captains: Option<crate::campaign_captain_policy::CaptainPolicy>,
+    campaign_flee_motion: campaign_flee_motion::State,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
@@ -271,7 +274,10 @@ impl ObjectHost {
             campaign_targeting: None,
             campaign_ai: campaign_flee::Registry::default(),
             campaign_flee: None,
+            campaign_new_heroes: None,
             campaign_gathering: None,
+            campaign_captains: None,
+            campaign_flee_motion: campaign_flee_motion::State::default(),
             default_difficulty: None,
             campaign_menu_race: None,
             stock: None,
@@ -672,6 +678,26 @@ impl ObjectHost {
             return Err(self.inner.error(global, Failure::OutsideDomain(value)));
         }
         Ok(value)
+    }
+
+    /// Whether a stored upgrade is active for a player row. The applied model
+    /// is authoritative; unavailable state is a contextual refusal, never a
+    /// guessed false.
+    pub(crate) fn campaign_flee_upgrade_is_active(
+        &self,
+        number: i32,
+        techid: i32,
+    ) -> Result<bool, Error> {
+        match self.stored_tech_level(number, techid) {
+            players::TechRead::Level(level) => Ok(level > 0),
+            players::TechRead::Absent => Ok(false),
+            players::TechRead::Unavailable => Err(self.inner.error(
+                "SetUnitsFlee",
+                Failure::UnitActivity(format!(
+                    "player {number} tech {techid} applied research state unavailable"
+                )),
+            )),
+        }
     }
 
     /// Selected software math; absent policy leaves these natives unsupported.
@@ -1290,9 +1316,18 @@ mod targeting;
 #[path = "campaign_flee_host.rs"]
 mod campaign_flee;
 
+#[path = "campaign_flee_motion.rs"]
+mod campaign_flee_motion;
+#[path = "campaign_new_heroes_host.rs"]
+mod campaign_new_heroes;
+
 #[path = "campaign_gathering_host.rs"]
 mod campaign_gathering;
 pub use campaign_gathering::GatheringObservation;
+
+#[path = "campaign_captain_host.rs"]
+mod campaign_captains;
+pub use campaign_captains::CaptainObservation;
 
 #[path = "combat_host.rs"]
 mod combat;

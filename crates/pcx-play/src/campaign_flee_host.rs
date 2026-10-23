@@ -9,15 +9,20 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const NATIVE: &str = "SetUnitsFlee";
+const HEROES_FLEE_NATIVE: &str = "SetHeroesFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
-const GATHERING_NATIVE: &str = "StopGathering";
+const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
+    heroes_flee: Option<bool>,
+    new_heroes: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
+    captains_created: bool,
+    captain_homes: [Option<[f32; 2]>; 2],
 }
 
 #[derive(Default)]
@@ -40,8 +45,12 @@ impl Registry {
             PlayerFlags {
                 target_heroes,
                 units_flee,
+                heroes_flee: None,
+                new_heroes: None,
                 gathering: None,
                 gathering_unit: None,
+                captains_created: false,
+                captain_homes: [None; 2],
             },
         );
         true
@@ -49,6 +58,10 @@ impl Registry {
 
     pub(super) fn deactivate(&mut self, player: i32) {
         self.players.remove(&player);
+    }
+
+    pub(super) fn is_active(&self, player: i32) -> bool {
+        self.players.contains_key(&player)
     }
 
     pub(super) fn target_heroes(&self, player: i32) -> Option<bool> {
@@ -59,6 +72,16 @@ impl Registry {
 
     pub(super) fn units_flee(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.units_flee)
+    }
+
+    pub(super) fn heroes_flee(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.heroes_flee)
+    }
+
+    pub(super) fn new_heroes(&self, player: i32) -> Option<bool> {
+        self.players.get(&player).and_then(|flags| flags.new_heroes)
     }
 
     pub(super) fn gathering(&self, player: i32) -> Option<(Option<bool>, Option<HandleId>)> {
@@ -76,6 +99,49 @@ impl Registry {
         true
     }
 
+    pub(super) fn captains(&self, player: i32) -> Option<(bool, [Option<[f32; 2]>; 2])> {
+        self.players
+            .get(&player)
+            .map(|flags| (flags.captains_created, flags.captain_homes))
+    }
+
+    pub(super) fn create_captains(&mut self, player: i32, home: Option<[f32; 2]>) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        if flags.captains_created {
+            return false;
+        }
+        flags.captains_created = true;
+        flags.captain_homes = [home; 2];
+        true
+    }
+
+    pub(super) fn set_captain_home(
+        &mut self,
+        player: i32,
+        first: bool,
+        second: bool,
+        home: [f32; 2],
+    ) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        if (first || second) && !flags.captains_created
+            || (first && flags.captain_homes[0].is_none())
+            || (second && flags.captain_homes[1].is_none())
+        {
+            return false;
+        }
+        if first {
+            flags.captain_homes[0] = Some(home);
+        }
+        if second {
+            flags.captain_homes[1] = Some(home);
+        }
+        true
+    }
+
     pub(super) fn set_target_heroes(&mut self, player: i32, enabled: bool) -> bool {
         let Some(flags) = self.players.get_mut(&player) else {
             return false;
@@ -89,6 +155,22 @@ impl Registry {
             return false;
         };
         flags.units_flee = Some(enabled);
+        true
+    }
+
+    pub(super) fn set_heroes_flee(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.heroes_flee = Some(enabled);
+        true
+    }
+
+    pub(super) fn set_new_heroes(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.new_heroes = Some(enabled);
         true
     }
 
@@ -123,6 +205,19 @@ impl ObjectHost {
                 .inner
                 .error(NATIVE, Failure::ConfigState("already admitted")));
         }
+        let units_mask = policy.context_units_flee_mask;
+        let heroes_mask = policy.context_heroes_flee_mask;
+        if units_mask == 0
+            || !units_mask.is_power_of_two()
+            || heroes_mask == 0
+            || !heroes_mask.is_power_of_two()
+            || units_mask == heroes_mask
+        {
+            return Err(self.inner.error(
+                NATIVE,
+                Failure::ConfigState("flee context masks are not distinct single bits"),
+            ));
+        }
         if !self
             .player_context()
             .is_some_and(|current| Arc::ptr_eq(current, context))
@@ -141,14 +236,24 @@ impl ObjectHost {
         self.campaign_flee.as_ref()
     }
 
-    /// `None` when flee operands are not admitted, the owner is not admitted, or
-    /// the owner is not an active campaign AI player.
+    /// `None` when flee operands are not admitted, the owner has no active
+    /// campaign AI context, or that player is not active. An invalid owner
+    /// handle is an `Err`, not `None`.
     pub fn campaign_flee_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
         if self.campaign_flee.is_none() {
             return Ok(None);
         }
         let number = self.player_settings(owner)?.number;
         Ok(self.campaign_ai.units_flee(number))
+    }
+
+    /// `None` until this AI player explicitly calls `SetHeroesFlee`.
+    pub fn campaign_heroes_flee_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
+        if self.campaign_flee.is_none() {
+            return Ok(None);
+        }
+        let number = self.player_settings(owner)?.number;
+        Ok(self.campaign_ai.heroes_flee(number))
     }
 
     /// Registers an active campaign AI player using the defaults of every
@@ -163,20 +268,19 @@ impl ObjectHost {
             .campaign_flee
             .as_ref()
             .map(|policy| policy.units_flee_default);
-        if target_heroes.is_none() && units_flee.is_none() && self.campaign_gathering.is_none() {
-            return Ok(false);
-        }
         if self.player_identity(player).is_none() {
-            let native = if target_heroes.is_some() {
-                TARGETING_NATIVE
-            } else if units_flee.is_some() {
-                NATIVE
-            } else {
-                GATHERING_NATIVE
-            };
-            return Err(self
-                .inner
-                .error(native, Failure::ConfigState("player is not admitted")));
+            return Err(self.inner.error(
+                START_CAMPAIGN_AI,
+                Failure::ConfigState("player is not admitted"),
+            ));
+        }
+        if target_heroes.is_none()
+            && units_flee.is_none()
+            && self.campaign_gathering.is_none()
+            && self.campaign_captains.is_none()
+            && self.campaign_new_heroes.is_none()
+        {
+            return Ok(false);
         }
         Ok(self.campaign_ai.activate(player, target_heroes, units_flee))
     }
@@ -213,7 +317,25 @@ impl ObjectHost {
         Ok(())
     }
 
-    fn require_active_campaign_ai_player(
+    pub(crate) fn set_ai_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), Error> {
+        if self.campaign_flee.is_none() {
+            return Err(self.inner.error(
+                HEROES_FLEE_NATIVE,
+                Failure::ConfigState("operands are not admitted"),
+            ));
+        }
+        if self.player_identity(player).is_none() {
+            return Err(self.inner.error(
+                HEROES_FLEE_NATIVE,
+                Failure::ConfigState("player is not admitted"),
+            ));
+        }
+        self.require_active_campaign_ai_player(player, HEROES_FLEE_NATIVE)?;
+        self.campaign_ai.set_heroes_flee(player, enabled);
+        Ok(())
+    }
+
+    pub(super) fn require_active_campaign_ai_player(
         &self,
         player: i32,
         native: &'static str,
@@ -301,5 +423,23 @@ mod tests {
         assert!(registry.set_units_flee(7, false));
         assert_eq!(registry.target_heroes(7), Some(false));
         assert_eq!(registry.units_flee(7), Some(false));
+    }
+
+    #[test]
+    fn captain_homes_are_per_player_and_selected_slots_preflight_together() {
+        let mut registry = Registry::default();
+        assert!(registry.activate(0, None, None));
+        assert!(registry.activate(1, None, None));
+        assert!(registry.create_captains(0, Some([8., 16.])));
+        assert!(registry.create_captains(1, None));
+        assert!(!registry.set_captain_home(1, true, true, [32., 40.]));
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
+        assert!(registry.set_captain_home(0, true, true, [24., 32.]));
+        assert_eq!(registry.captains(0), Some((true, [Some([24., 32.]); 2])));
+        assert!(registry.set_captain_home(1, false, false, [24., 32.]));
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
+        registry.deactivate(0);
+        assert_eq!(registry.captains(0), None);
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
     }
 }

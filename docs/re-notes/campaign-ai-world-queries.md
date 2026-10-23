@@ -3,8 +3,9 @@
 This note records source and original-runtime evidence for the next campaign
 gameplay consumers. The private runtime now implements
 [the upgrade-level query](campaign-ai-upgrade-level.md) through the shared map
-world. The other listed queries and the targeting and production systems that
-use them remain unfinished.
+world. Gold and wood costs also read the admitted catalog and canonical player's
+hero-token state. The remaining query envelopes and production systems are
+unfinished; the tables below record bounded source and runtime evidence.
 
 ## Selected native paths
 
@@ -39,8 +40,10 @@ remain incomplete evidence for the gameplay policy. The
 observed no difference in its limited nearer-hero setup; it does not qualify a
 targeting implementation.
 
-`CreateCaptains` handler `0xab4750` reaches `0xabd160`, which performs actual
-group and home setup. `SetHeroLevels` handler `0xab70e0` retains a code callback
+`CreateCaptains` handler `0xab4750` reaches `0xabd160`, which creates two typed
+object references and supplies scalar pairs. Their gameplay group identity is
+unqualified; see the later [captain target evidence](campaign-ai-captains.md).
+`SetHeroLevels` handler `0xab70e0` retains a code callback
 at context offset `0x40`; invoking that callback requires its owning program,
 rather than forwarding its function ID into the map VM. The other registration
 table's `0xcbda30` stub remains unqualified and is not edition evidence.

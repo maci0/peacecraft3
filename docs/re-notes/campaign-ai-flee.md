@@ -52,8 +52,8 @@ edition, flag and bank witnesses, reciprocal event identities and raw hashes.
 Both owned clients are stopped; their sources, captures, raw markers and audit
 receipts remain local under `.scratch/flee-original-runs/r6/`. Earlier drafts
 with invalid version helpers or duplicate observer globals are preserved as failed
-loads and supply no gameplay evidence. Production `SetUnitsFlee` behavior remains
-unsupported. The unseeded pair alone does not establish flag causality; the
+loads and supply no gameplay evidence. These observations alone did not qualify
+production `SetUnitsFlee` behavior. The unseeded pair does not establish flag causality; the
 seeded repeats below address reproducibility in this setup.
 
 ## Seeded repeats
@@ -318,7 +318,87 @@ state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
 
 The unchanged selected Human01-to-Human02 opening-minute check now passes
-`SetUnitsFlee` and refuses at `StopGathering`, still at 7.218750 seconds in
-Human02's `StartCampaignAI` call. This is the next exact script frontier, not a
-completed opening minute or a flee-movement result. The retained failure is
-`.scratch/campaign-flee-integration/state-frontier.log`.
+`SetUnitsFlee`, `StopGathering`, `CreateCaptains`, `SetNewHeroes` and `SetHeroesFlee` and refuses at `SetGroupsFlee`, still at
+7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
+script frontier, not a completed opening minute or a flee-movement result.
+The earlier failure remains in `state-frontier.log`; the latest final-consumer
+result is in `.scratch/campaign-flee-integration/heroes-flee-frontier.log`.
+
+## Ordinary damage consumer
+
+The private consumer evaluates positive incoming melee hits and missile impacts
+as a bounded recreation trigger. Generic and spell damage do not start this
+path. It checks the admitted player flag, source `canFlee`, current movement
+speed and post-damage life. The ordinary cutoff is strict; native life-band
+bounds include both endpoints. Conditional score bands and earlier range or
+ability branches outside the qualified low-life leaf refuse with unit context.
+They do not silently become a supported no-retreat result.
+
+The supported incoming weapon is an initial single ordinary weapon without
+effect history or active listed research. Its admitted authored range supplies
+the initial indexed route operand; later range modifiers, alternate selection,
+hero attackers and effect history refuse. The destination uses the selected
+software arithmetic and internal square root. Unqualified zero-direction
+orientation also refuses. Native trigger identity and full scorer behavior
+remain open.
+
+Summoned victims and active admitted ability On/Off state also refuse when the
+flee flag is enabled. The ability cell is not an explicit unit-order field.
+With the flag disabled, these flee-specific refusals do not suppress damage;
+the regressions assert normal life reduction and a single damage trace.
+
+Route preparation precedes damage mutation; only surviving hits commit motion.
+Melee refusals preserve the primary random state and pending swing. Failed
+missile processing retains unprocessed impacts, retaining the current impact
+only when damage was not applied. Existing activity routing owns travel and
+arrival. Explicit orders, removal, death and a replacing guard return release
+retreat ownership; a guard wait preserves it. Clearing the flag does not cancel
+an accepted route, matching the bounded original-client clear experiment.
+
+Real melee-launch and missile-launch regressions exercise incoming hits and
+single damage traces. Separate direct-damage and queued-missile tests cover
+life boundaries, route refusal and pending-impact recovery. Combined validation
+passes 1,590 core tests, 610 app tests, strict native and WASM Clippy,
+formatting and selected Human01 startup and Human02 Continue startup. All 13
+flee-policy tests pass with the original-image tests enabled, including both
+branch directions and the selected numeric/math route join. No warning
+suppression is used in these root checks. Local receipts are under
+`.scratch/campaign-flee-integration/consumer-final-*`. The unchanged Human02
+opening-minute check now passes captain creation, `SetNewHeroes` and `SetHeroesFlee` and stops at `SetGroupsFlee`; rendered path parity and
+complete native flee behavior have not been checked.
+
+## Hero decision boundary
+
+The selected `ba94a0` decision classifies its first unit with `499030`, then
+tests separate hero and ordinary flags in the owning AI context. A clear selected
+bit returns false for this decision path. The hero tail has distinct score,
+absolute-life and life-ratio branches; the ordinary low-life leaf does not
+qualify hero retreat.
+
+The existing targeting policy already decodes the exact `499030` range and
+creation-exclusion operands. They can be reused with matching source identity
+within the current direct-created, effect-free unit envelope. Native copy-created
+exclusion behavior has no current host producer. Unknown classification or an
+enabled but unsupported hero decision must not silently become no retreat.
+The private host stores the separate hero flag in the canonical player registry,
+initially unknown until its setter runs. An inactive owner bypasses campaign
+flee entirely. Active owners with both flags explicitly clear also bypass
+classification. Otherwise, a classified hero uses the hero flag: false declines
+this decision path; true or unknown refuses before melee RNG or missile damage
+commit. Ordinary victims keep the independent units-flee path. This does not
+implement the distinct hero retreat algorithm or prohibit other movement paths.
+
+Combined validation passes 1,630 core tests, 610 app tests, all 14 flee-policy
+checks including both selected-image gates, strict native/WASM Clippy, formatting
+and selected startup/Continue. The reader checks terminated registration strings,
+the full setter control chain, common field offsets, complementary operands and
+distinct masks. A coherent overlapping-mask mutant refuses.
+
+The published two-program fixture checks isolated hero flags before and after
+sleep alongside the other policy state. Real melee and launched-missile tests
+verify normal damage for inactive human heroes, active false-policy damage, and
+unchanged life, trace, RNG and pending combat on enabled-hero refusal. Queued
+impact tests remain separately identified. Local receipts are under
+`.scratch/campaign-flee-integration/heroes-flee-*`. No new original-client or
+rendered hero-retreat check was run. The unchanged Human02 execution now stops
+at `SetGroupsFlee`, so the opening minute and campaign remain incomplete.

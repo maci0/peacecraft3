@@ -118,9 +118,35 @@ impl AiWorld for AiResearchWorld {
             .set_ai_units_flee(player, enabled)
             .map_err(|e| e.to_string())
     }
+    fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_heroes_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_new_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
         self.object
             .stop_ai_gathering(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .create_ai_captains(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_captain_home(
+        &mut self,
+        player: i32,
+        selector: i32,
+        home: [f32; 2],
+    ) -> Result<(), String> {
+        self.object
+            .set_ai_captain_home(player, selector, home)
             .map_err(|e| e.to_string())
     }
 }

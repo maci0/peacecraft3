@@ -122,7 +122,16 @@ pub(crate) trait AiWorld: Host {
     fn ai_deactivate_player(&mut self, player: i32);
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
+    fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
+    fn ai_set_captain_home(
+        &mut self,
+        player: i32,
+        selector: i32,
+        home: [f32; 2],
+    ) -> Result<(), String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -223,6 +232,28 @@ impl AiWorld for NeutralStack {
             .map_err(|e| e.to_string())
     }
 
+    fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_heroes_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_new_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
         self.inner_mut()
             .inner_mut()
@@ -231,6 +262,32 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .stop_ai_gathering(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .create_ai_captains(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_captain_home(
+        &mut self,
+        player: i32,
+        selector: i32,
+        home: [f32; 2],
+    ) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_captain_home(player, selector, home)
             .map_err(|e| e.to_string())
     }
 }
@@ -398,7 +455,12 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
-    for name in ["SetTargetHeroes", "SetUnitsFlee"] {
+    for name in [
+        "SetTargetHeroes",
+        "SetUnitsFlee",
+        "SetHeroesFlee",
+        "SetNewHeroes",
+    ] {
         let Some(native) = scripts.program().natives().get(name) else {
             continue;
         };
@@ -431,6 +493,30 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             || native.ret.kind.name() != "nothing")
     {
         return Err("StartCampaignAI: StopGathering AI common declaration differs".into());
+    }
+    for (name, params) in [
+        ("CreateCaptains", &[][..]),
+        ("SetCaptainHome", &["integer", "real", "real"][..]),
+    ] {
+        let Some(native) = scripts.program().natives().get(name) else {
+            continue;
+        };
+        if native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || native.params.len() != params.len()
+            || native
+                .params
+                .iter()
+                .zip(params)
+                .any(|(param, expected)| param.ty.array || param.ty.kind.name() != *expected)
+            || native.ret.array
+            || native.ret.kind.name() != "nothing"
+        {
+            return Err(format!(
+                "StartCampaignAI: {name} AI common declaration differs"
+            ));
+        }
     }
     Ok(())
 }
@@ -594,12 +680,45 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_set_units_flee(player, *enabled)?;
                 Ok(Value::Null)
             }
+            "SetHeroesFlee" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("SetHeroesFlee: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_heroes_flee(player, *enabled)?;
+                Ok(Value::Null)
+            }
+            "SetNewHeroes" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("SetNewHeroes: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_new_heroes(player, *enabled)?;
+                Ok(Value::Null)
+            }
             "StopGathering" => {
                 if !args.is_empty() {
                     return Err("StopGathering: expected no arguments".into());
                 }
                 let player = self.player;
                 self.world_mut()?.ai_stop_gathering(player)?;
+                Ok(Value::Null)
+            }
+            "CreateCaptains" => {
+                if !args.is_empty() {
+                    return Err("CreateCaptains: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_create_captains(player)?;
+                Ok(Value::Null)
+            }
+            "SetCaptainHome" => {
+                let [Value::Int(selector), Value::Real(x), Value::Real(y)] = args else {
+                    return Err("SetCaptainHome: expected integer, real, real".into());
+                };
+                let player = self.player;
+                self.world_mut()?
+                    .ai_set_captain_home(player, *selector, [*x, *y])?;
                 Ok(Value::Null)
             }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
@@ -629,7 +748,11 @@ mod tests {
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
         units_flee: BTreeMap<i32, bool>,
+        heroes_flee: BTreeMap<i32, bool>,
+        new_heroes: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
+        captain_creates: BTreeMap<i32, usize>,
+        captain_homes: Vec<(i32, i32, [f32; 2])>,
     }
 
     struct World(Arc<Mutex<State>>);
@@ -662,7 +785,10 @@ mod tests {
             self.0.lock().unwrap().active.remove(&player);
             self.0.lock().unwrap().target_heroes.remove(&player);
             self.0.lock().unwrap().units_flee.remove(&player);
+            self.0.lock().unwrap().heroes_flee.remove(&player);
+            self.0.lock().unwrap().new_heroes.remove(&player);
             self.0.lock().unwrap().gathering.remove(&player);
+            self.0.lock().unwrap().captain_creates.remove(&player);
         }
         fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
@@ -680,6 +806,22 @@ mod tests {
             state.units_flee.insert(player, enabled);
             Ok(())
         }
+        fn ai_set_heroes_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.heroes_flee.insert(player, enabled);
+            Ok(())
+        }
+        fn ai_set_new_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.new_heroes.insert(player, enabled);
+            Ok(())
+        }
         fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
             if !state.active.contains_key(&player) {
@@ -688,6 +830,29 @@ mod tests {
             state.gathering.insert(player, false);
             Ok(())
         }
+        fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            *state.captain_creates.entry(player).or_default() += 1;
+            Ok(())
+        }
+
+        fn ai_set_captain_home(
+            &mut self,
+            player: i32,
+            selector: i32,
+            home: [f32; 2],
+        ) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.captain_homes.push((player, selector, home));
+            Ok(())
+        }
+
     }
 
     impl Host for World {
@@ -766,7 +931,179 @@ mod tests {
 
     const AI_TARGET: &str = "native SetTargetHeroes takes boolean flag returns nothing\n";
     const AI_FLEE: &str = "native SetUnitsFlee takes boolean flag returns nothing\n";
+    const AI_HERO_FLEE: &str = "native SetHeroesFlee takes boolean flag returns nothing\n";
+    const AI_NEW_HEROES: &str = "native SetNewHeroes takes boolean flag returns nothing\n";
     const AI_GATHERING: &str = "native StopGathering takes nothing returns nothing\n";
+    const AI_CAPTAINS: &str = "native CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\n";
+
+    #[test]
+    fn hero_flee_flags_follow_each_ai_context_across_sleep() {
+        let script = program_with_ai_common(
+            "synthetic:hero-flee.ai",
+            "function main takes nothing returns nothing\ncall SetHeroesFlee(GetAiPlayer() == 2)\ncall Sleep(0.25)\ncall SetHeroesFlee(GetAiPlayer() != 2)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_HERO_FLEE}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "hero-flee.ai").unwrap();
+        }
+        assert_eq!(
+            shared.lock().unwrap().heroes_flee,
+            [(1, false), (2, true)].into()
+        );
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(
+            shared.lock().unwrap().heroes_flee,
+            [(1, true), (2, false)].into()
+        );
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn malformed_hero_flee_abi_refuses_before_any_world_write() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\ncall SetHeroesFlee(true)\nendfunction\n";
+        for (common, ai_common) in [
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_HERO_FLEE.replace("boolean flag", "integer flag")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_HERO_FLEE.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (COMMON.into(), format!("{AI_COMMON}constant {AI_HERO_FLEE}")),
+            (format!("{COMMON}{AI_HERO_FLEE}"), AI_COMMON.into()),
+        ] {
+            let script = program_with_sources("synthetic:hero-flee.ai", body, &common, &ai_common);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "hero-flee.ai").unwrap_err();
+            assert!(error.contains("SetHeroesFlee"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.heroes_flee.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(world.is_some());
+        }
+    }
+
+    #[test]
+    fn hero_flee_native_refuses_bad_arguments_and_failed_main_retires_flag() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(true), Value::Bool(false)],
+        ] {
+            assert!(host.native("SetHeroesFlee", &args).is_err());
+            assert!(shared.lock().unwrap().heroes_flee.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:hero-flee.ai",
+            "function main takes nothing returns nothing\ncall SetHeroesFlee(true)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_HERO_FLEE}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let mut world = Some(World(Arc::clone(&shared)));
+        assert!(runtime.start(&mut world, 1, "hero-flee.ai").is_err());
+        assert!(shared.lock().unwrap().heroes_flee.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn captain_natives_keep_ai_players_and_sleeping_calls_separate() {
+        let script = program_with_ai_common(
+            "synthetic:captain.ai",
+            "function main takes nothing returns nothing\ncall CreateCaptains()\ncall SetCaptainHome(3, 24.0, 32.0)\ncall Sleep(0.25)\ncall SetCaptainHome(1, 48.0, 64.0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_CAPTAINS}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "captain.ai").unwrap();
+        runtime.start(&mut world, 2, "captain.ai").unwrap();
+        {
+            let state = shared.lock().unwrap();
+            assert_eq!(state.captain_creates.get(&1), Some(&1));
+            assert_eq!(state.captain_creates.get(&2), Some(&1));
+            assert_eq!(
+                state.captain_homes,
+                vec![(1, 3, [24., 32.]), (2, 3, [24., 32.])]
+            );
+        }
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(
+            shared.lock().unwrap().captain_homes,
+            vec![
+                (1, 3, [24., 32.]),
+                (2, 3, [24., 32.]),
+                (1, 1, [48., 64.]),
+                (2, 1, [48., 64.]),
+            ]
+        );
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn captain_abi_refuses_before_globals_touch_the_world() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\nendfunction\n";
+        for bad in [
+            "native CreateCaptains takes nothing returns integer\n",
+            "native CreateCaptains takes integer n returns nothing\n",
+            "native SetCaptainHome takes integer which, real x, real y returns integer\n",
+            "native SetCaptainHome takes integer which, integer x, real y returns nothing\n",
+        ] {
+            let script =
+                program_with_ai_common("synthetic:captain.ai", body, &format!("{AI_COMMON}{bad}"));
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "captain.ai").unwrap_err();
+            assert!(error.contains("Captain"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(state.captain_creates.is_empty());
+            assert!(state.captain_homes.is_empty());
+            assert!(world.is_some());
+        }
+        let script = program_with_sources(
+            "synthetic:captain.ai",
+            body,
+            &format!("{COMMON}native CreateCaptains takes nothing returns nothing\n"),
+            AI_COMMON,
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        let error = runtime.start(&mut world, 1, "captain.ai").unwrap_err();
+        assert!(error.contains("CreateCaptains"), "{error}");
+        assert!(shared.lock().unwrap().gold.is_empty());
+        assert!(world.is_some());
+    }
 
     #[test]
     fn gathering_uses_active_player_and_keeps_sleeping_context() {
@@ -951,6 +1288,107 @@ mod tests {
         assert!(state.active.is_empty());
         assert!(state.target_heroes.is_empty());
         assert!(state.units_flee.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn new_heroes_flags_use_each_ai_player_and_wake_without_changing_other_flags() {
+        let ai_common = format!("{AI_COMMON}{AI_TARGET}{AI_NEW_HEROES}");
+        let script = program_with_ai_common(
+            "synthetic:new-heroes.ai",
+            "function main takes nothing returns nothing\ncall SetNewHeroes(GetAiPlayer() == 2)\ncall SetTargetHeroes(GetAiPlayer() == 1)\ncall Sleep(0.25)\ncall SetNewHeroes(GetAiPlayer() != 2)\nendfunction\n",
+            &ai_common,
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "new-heroes.ai").unwrap();
+        }
+        {
+            let state = shared.lock().unwrap();
+            assert_eq!(state.new_heroes, [(1, false), (2, true)].into());
+            assert_eq!(state.target_heroes, [(1, true), (2, false)].into());
+            assert!(state.units_flee.is_empty());
+        }
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        let state = shared.lock().unwrap();
+        assert_eq!(state.new_heroes, [(1, true), (2, false)].into());
+        assert_eq!(state.target_heroes, [(1, true), (2, false)].into());
+        assert!(state.units_flee.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn malformed_new_heroes_declarations_refuse_before_activation_or_main_writes() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\ncall SetNewHeroes(true)\nendfunction\n";
+        for (common, ai_common) in [
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_NEW_HEROES.replace("boolean flag", "integer flag")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_NEW_HEROES.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!("{AI_COMMON}constant {AI_NEW_HEROES}"),
+            ),
+            (format!("{COMMON}{AI_NEW_HEROES}"), AI_COMMON.into()),
+        ] {
+            let script = program_with_sources("synthetic:new-heroes.ai", body, &common, &ai_common);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "new-heroes.ai").unwrap_err();
+            assert!(error.contains("SetNewHeroes"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.new_heroes.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(world.is_some());
+        }
+    }
+
+    #[test]
+    fn new_heroes_dispatch_refuses_bad_arguments_and_failed_main_retires_the_flag() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(true), Value::Bool(false)],
+        ] {
+            let error = host.native("SetNewHeroes", &args).unwrap_err();
+            assert!(error.contains("SetNewHeroes"), "{error}");
+            assert!(shared.lock().unwrap().new_heroes.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:new-heroes.ai",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall SetNewHeroes(true)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_TARGET}{AI_NEW_HEROES}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let mut world = Some(World(Arc::clone(&shared)));
+        assert!(runtime.start(&mut world, 1, "new-heroes.ai").is_err());
+        let state = shared.lock().unwrap();
+        assert!(state.active.is_empty());
+        assert!(state.target_heroes.is_empty());
+        assert!(state.new_heroes.is_empty());
         assert!(world.is_some());
     }
 

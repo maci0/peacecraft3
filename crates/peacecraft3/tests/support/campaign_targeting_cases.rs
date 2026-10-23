@@ -6,7 +6,7 @@ use pcx_sim::world::{Definition, FieldValue, ObjectCatalog, ObjectField, Resolut
 struct Fighters;
 impl ObjectCatalog for Fighters {
     fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
-        if !matches!(&rawcode, b"a001" | b"t001") {
+        if !matches!(&rawcode, b"a001" | b"t001" | b"b001") {
             return Err(ResolutionProblem::MissingRawcode(
                 String::from_utf8_lossy(&rawcode).into_owned(),
             ));
@@ -16,6 +16,12 @@ impl ObjectCatalog for Fighters {
         definition.base_rawcode = String::from_utf8(rawcode.to_vec()).unwrap();
         for (index, (slk, column, kind, value)) in [
             (SlkId::UnitBalance, "HP", FieldKind::Int, "20"),
+            (
+                SlkId::UnitBalance,
+                "isbldg",
+                FieldKind::Bool,
+                if rawcode == *b"b001" { "1" } else { "0" },
+            ),
             (SlkId::UnitBalance, "manaN", FieldKind::Int, "0"),
             (SlkId::UnitBalance, "mana0", FieldKind::Int, "0"),
             (SlkId::UnitBalance, "def", FieldKind::Int, "0"),
@@ -24,6 +30,7 @@ impl ObjectCatalog for Fighters {
             (SlkId::UnitBalance, "regenMana", FieldKind::Real, "0"),
             (SlkId::UnitBalance, "regenType", FieldKind::Token, "none"),
             (SlkId::UnitBalance, "level", FieldKind::Int, "1"),
+            (SlkId::UnitBalance, "type", FieldKind::Token, "_"),
             (SlkId::UnitAbilities, "abilList", FieldKind::Token, "_"),
             (
                 SlkId::UnitWeapons,
@@ -54,9 +61,11 @@ impl ObjectCatalog for Fighters {
                         field: column.into(),
                         slk: slk.name().into(),
                         index: -1,
-                        declared: match kind {
-                            FieldKind::Int => "int",
-                            FieldKind::Real => "real",
+                        declared: match (column, kind) {
+                            ("type", _) => "unitClass",
+                            (_, FieldKind::Int) => "int",
+                            (_, FieldKind::Real) => "real",
+                            (_, FieldKind::Bool) => "bool",
                             _ => "string",
                         }
                         .into(),
@@ -79,9 +88,11 @@ impl ObjectCatalog for Fighters {
 const EXTRA: &str = r#"
 type playerunitevent extends eventid
 type gamedifficulty extends handle
+type unittype extends handle
 constant native ConvertPlayerUnitEvent takes integer n returns playerunitevent
 constant native ConvertMapControl takes integer n returns mapcontrol
 constant native ConvertGameDifficulty takes integer n returns gamedifficulty
+constant native ConvertUnitType takes integer n returns unittype
 constant native GetGameDifficulty takes nothing returns gamedifficulty
 native SetGameDifficulty takes gamedifficulty d returns nothing
 native StartCampaignAI takes player p, string path returns nothing
@@ -109,6 +120,7 @@ constant playerunitevent EVENT_PLAYER_UNIT_DEATH=ConvertPlayerUnitEvent(20)
 constant playerunitevent EVENT_PLAYER_UNIT_ATTACKED=ConvertPlayerUnitEvent(117)
 constant mapcontrol MAP_CONTROL_COMPUTER=ConvertMapControl(1)
 constant gamedifficulty MAP_DIFFICULTY_NORMAL=ConvertGameDifficulty(1)
+constant unittype UNIT_TYPE_PEON=ConvertUnitType(16)
 endglobals
 "#;
 
@@ -124,6 +136,8 @@ unit AOld=null
 unit ANew=null
 unit BOld=null
 unit BNew=null
+unit ABase=null
+unit BBase=null
 endglobals
 function config takes nothing returns nothing
 call SetPlayers(3)
@@ -140,6 +154,8 @@ set ANew=CreateUnit(Player(2),'t001',16.0,24.0,0.0)
 set B=CreateUnit(Player(1),'a001',80.0,16.0,0.0)
 set BOld=CreateUnit(Player(2),'t001',88.0,16.0,0.0)
 set BNew=CreateUnit(Player(2),'t001',80.0,24.0,0.0)
+set ABase=CreateUnit(Player(0),'b001',40.0,16.0,0.0)
+set BBase=CreateUnit(Player(1),'b001',104.0,16.0,0.0)
 call StartCampaignAI(Player(0),"false.ai")
 call StartCampaignAI(Player(1),"true.ai")
 endfunction
@@ -160,17 +176,24 @@ endfunction
     inputs.targeting_policy = Some(pcx_play::campaign_targeting_policy::TargetingPolicy::fixture());
     let flee_policy = pcx_play::campaign_flee_policy::FleePolicy::fixture();
     inputs.flee_policy = Some(flee_policy);
+    inputs.gathering_policy = Some(pcx_play::campaign_gathering_policy::GatheringPolicy::fixture());
+    let captain_policy = pcx_play::campaign_captain_policy::CaptainPolicy::fixture();
+    let captain_selector = i32::from(captain_policy.first_selector_mask);
+    inputs.captain_policy = Some(captain_policy);
+    inputs.new_heroes_policy =
+        Some(pcx_play::campaign_new_heroes_policy::NewHeroesPolicy::fixture());
     inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
     inputs.enumeration.names.extend(
         [
             "ConvertGameDifficulty",
             "ConvertPlayerUnitEvent",
             "ConvertMapControl",
+            "ConvertUnitType",
         ]
         .map(str::to_owned),
     );
     inputs.enumeration.limits.max_handles = 256;
-    inputs.budgets.units.max_records = 6;
+    inputs.budgets.units.max_records = 8;
     inputs.budgets.units.max_retained_fields = 256;
     let mut app = App::new();
     peacecraft3::map_requests::install(&mut app);
@@ -193,10 +216,12 @@ endfunction
         .admission
         .shared_context()
         .unwrap();
-    let ai_common =
-        format!("{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\n");
+    let ai_common = format!(
+        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\n"
+    );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\nendfunction\n", !flag, !flag);
+        let home_x = if flag { 112.0 } else { 48.0 };
+        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetHeroesFlee({flag})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetHeroesFlee({})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag, !flag);
         let program = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -269,6 +294,8 @@ endfunction
     let b = handle(&mut session, "B");
     let a_new = handle(&mut session, "ANew");
     let b_new = handle(&mut session, "BNew");
+    let a_base = handle(&mut session, "ABase");
+    let b_base = handle(&mut session, "BBase");
     let flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
         let objects = session.host().unwrap().objects();
         let owner = objects.executed_unit(unit).unwrap().owner;
@@ -283,6 +310,47 @@ endfunction
     };
     assert_eq!(flee_flag(&mut session, a), Some(true));
     assert_eq!(flee_flag(&mut session, b), Some(false));
+    let new_heroes_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_new_heroes_enabled(owner).unwrap()
+    };
+    assert_eq!(new_heroes_flag(&mut session, a), Some(false));
+    assert_eq!(new_heroes_flag(&mut session, b), Some(true));
+    let heroes_flee_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_heroes_flee_enabled(owner).unwrap()
+    };
+    assert_eq!(heroes_flee_flag(&mut session, a), Some(false));
+    assert_eq!(heroes_flee_flag(&mut session, b), Some(true));
+    let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
+        let objects = session.host().unwrap().objects();
+        for (unit, base) in [(a, a_base), (b, b_base)] {
+            let owner = objects.executed_unit(unit).unwrap().owner;
+            let state = objects.campaign_gathering_state(owner).unwrap().unwrap();
+            assert_eq!(state.enabled, Some(false));
+            let position = objects.executed_unit(base).unwrap().position.unwrap();
+            assert_eq!(state.association, Some((base, position)));
+        }
+    };
+    check_gathering(&mut session);
+    let check_captains = |session: &mut MapScriptSession<MapStartupHost>, updated: bool| {
+        let objects = session.host().unwrap().objects();
+        for (unit, base) in [(a, a_base), (b, b_base)] {
+            let owner = objects.executed_unit(unit).unwrap().owner;
+            let state = objects.campaign_captain_state(owner).unwrap().unwrap();
+            assert!(state.created);
+            let position = objects.executed_unit(base).unwrap().position.unwrap();
+            let first_home = if updated {
+                [position[0] + 8.0, position[1] + 8.0]
+            } else {
+                position
+            };
+            assert_eq!(state.homes, [Some(first_home), Some(position)]);
+        }
+    };
+    check_captains(&mut session, false);
     session.advance_timers(0.125, 1000).unwrap();
     let acquired: Vec<_> = session
         .host()
@@ -306,6 +374,12 @@ endfunction
     assert_eq!(flag(&mut session, b), Some(false));
     assert_eq!(flee_flag(&mut session, a), Some(false));
     assert_eq!(flee_flag(&mut session, b), Some(true));
+    assert_eq!(new_heroes_flag(&mut session, a), Some(true));
+    assert_eq!(new_heroes_flag(&mut session, b), Some(false));
+    assert_eq!(heroes_flee_flag(&mut session, a), Some(true));
+    assert_eq!(heroes_flee_flag(&mut session, b), Some(false));
+    check_gathering(&mut session);
+    check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {
         assert_eq!(
             session

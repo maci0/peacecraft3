@@ -1440,6 +1440,18 @@ pub(crate) mod tests {
                 .campaign_flee_policy()
                 .expect("campaign preparation admits the selected flee policy");
             assert_eq!(flee.image_sha256, recipe.image_sha256());
+            let gathering = objects
+                .campaign_gathering_policy()
+                .expect("campaign preparation admits the selected gathering policy");
+            assert_eq!(gathering.image_sha256, recipe.image_sha256());
+            let captains = objects
+                .campaign_captain_policy()
+                .expect("campaign preparation admits the selected captain policy");
+            assert_eq!(captains.image_sha256, recipe.image_sha256());
+            let new_heroes = objects
+                .campaign_new_heroes_policy()
+                .expect("campaign preparation admits the selected new-heroes policy");
+            assert_eq!(new_heroes.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
         assert!(units > 0, "unchanged chapter main must create units");
