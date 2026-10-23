@@ -170,7 +170,7 @@ impl ScriptMath {
         root >> 1
     }
 
-    fn square_root(&self, x: u32) -> Result<u32, MathError> {
+    pub(crate) fn square_root(&self, x: u32) -> Result<u32, MathError> {
         if x.wrapping_add(x) & !((x as i32 >> 31) as u32) == 0 {
             return Ok(0);
         }

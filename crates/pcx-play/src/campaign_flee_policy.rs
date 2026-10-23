@@ -4,6 +4,8 @@ use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
     order_registry::Registry,
+    script_numeric::NumericPolicy,
+    script_random::real,
     unit_activity::Rules,
 };
 
@@ -30,6 +32,20 @@ pub struct FleePolicy {
 #[derive(Debug, thiserror::Error)]
 #[error("campaign flee policy: {0}")]
 pub struct Error(&'static str);
+
+#[derive(Debug, thiserror::Error)]
+pub enum RouteError {
+    #[error("campaign flee route: numeric source image differs from flee policy")]
+    Identity,
+    #[error("campaign flee route: selected numeric math is absent")]
+    MissingMath,
+    #[error("campaign flee route: {0}")]
+    Input(&'static str),
+    #[error("campaign flee route: zero-direction orientation is not qualified")]
+    ZeroDirection,
+    #[error("campaign flee route: selected real arithmetic: {0}")]
+    Math(#[from] real::MathError),
+}
 
 const WINDOWS: [(u32, usize, bool); 26] = [
     (0xab7665, 16, true),
@@ -156,6 +172,51 @@ fn checked_band(minimum: f32, maximum: f32) -> Result<LifeBand, Error> {
 }
 
 impl FleePolicy {
+    /// Compute only the ordinary nonzero flee destination; no order is issued.
+    pub fn ordinary_destination(
+        &self,
+        numeric: &NumericPolicy,
+        actor: [f32; 2],
+        threat: [f32; 2],
+        target_range: f32,
+    ) -> Result<[f32; 2], RouteError> {
+        if self.image_sha256 != *numeric.image_sha256() {
+            return Err(RouteError::Identity);
+        }
+        let math = numeric.math().ok_or(RouteError::MissingMath)?;
+        if !self.range_margin.is_finite() || self.range_margin < 0.0 {
+            return Err(RouteError::Input("invalid source route margin"));
+        }
+        if !self.near_zero_distance.is_finite() || self.near_zero_distance <= 0.0 {
+            return Err(RouteError::Input("invalid source route epsilon"));
+        }
+        if !target_range.is_finite() || target_range < 0.0 {
+            return Err(RouteError::Input("invalid initial target range"));
+        }
+        let actor = [real::from_f32(actor[0])?, real::from_f32(actor[1])?];
+        let threat = [real::from_f32(threat[0])?, real::from_f32(threat[1])?];
+        let range = real::from_f32(target_range)?;
+        let margin = real::from_f32(self.range_margin)?;
+        let dz = real::sub(0, 0)?;
+        let dy = real::sub(actor[1], threat[1])?;
+        let dx = real::sub(actor[0], threat[0])?;
+        let square_z = real::mul(dz, dz)?;
+        let square_y = real::mul(dy, dy)?;
+        let square_x = real::mul(dx, dx)?;
+        let sum = real::add(square_x, square_y)?;
+        let sum = real::add(sum, square_z)?;
+        let length = math.square_root(sum)?;
+        if f32::from_bits(real::abs(length)) < self.near_zero_distance {
+            return Err(RouteError::ZeroDirection);
+        }
+        let distance = real::add(range, margin)?;
+        let factor = numeric.division(distance, length)?;
+        Ok([
+            f32::from_bits(real::add(actor[0], real::mul(dx, factor)?)?),
+            f32::from_bits(real::add(actor[1], real::mul(dy, factor)?)?),
+        ])
+    }
+
     pub fn read(image: &[u8], budget: RuleInputBudget) -> Result<Self, Error> {
         if image.len() > budget.image_bytes {
             return Err(Error("image budget exceeded"));
@@ -549,6 +610,246 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{camera_margins::SourceWindow, script_math, script_numeric};
+
+    fn route_fixture() -> (FleePolicy, NumericPolicy) {
+        let (mut image, mut numeric_binding, budget) = script_numeric::tests::fixture();
+        let base = 0x301000u32;
+        fn put(image: &mut [u8], base: u32, at: usize, bytes: &[u8]) -> SourceWindow {
+            image[0x200 + at..0x200 + at + bytes.len()].copy_from_slice(bytes);
+            SourceWindow {
+                va: base + at as u32,
+                len: bytes.len() as u32,
+                digest: sha256(bytes),
+            }
+        }
+        fn call(bytes: &mut [u8], base: u32, at: usize, target: u32) {
+            bytes[at] = 0xe8;
+            bytes[at + 1..at + 5]
+                .copy_from_slice(&target.wrapping_sub(base + at as u32 + 5).to_le_bytes());
+        }
+        fn initializer(
+            image: &mut [u8],
+            base: u32,
+            at: usize,
+            value: u32,
+            convert: u32,
+        ) -> SourceWindow {
+            let mut bytes = vec![0x68];
+            bytes.extend(value.to_le_bytes());
+            bytes.push(0x68);
+            bytes.extend((base + at as u32 + 0x100).to_le_bytes());
+            bytes.extend([0; 5]);
+            call(&mut bytes, base + at as u32, 10, convert);
+            bytes.extend([0x83, 0xc4, 8, 0xc3]);
+            put(image, base, at, &bytes)
+        }
+        let zero = initializer(
+            &mut image,
+            base,
+            0xc60,
+            0,
+            numeric_binding.math_i32_to_real.va,
+        );
+        let one = initializer(
+            &mut image,
+            base,
+            0xc80,
+            1,
+            numeric_binding.math_i32_to_real.va,
+        );
+        let mut root_native = vec![0x90; 94];
+        for at in [12, 54, 85] {
+            root_native[at..at + 4].copy_from_slice(&(base + 0xd60).to_le_bytes());
+        }
+        root_native[27..31].copy_from_slice(&numeric_binding.equality_constant.va.to_le_bytes());
+        call(&mut root_native, base + 0x800, 68, base + 0x900);
+        let square_root_native = put(&mut image, base, 0x800, &root_native);
+        let mut atan2_native = vec![0x90; 126];
+        for at in [5, 49, 93] {
+            atan2_native[at..at + 4].copy_from_slice(&(base + 0xd60).to_le_bytes());
+        }
+        for at in [25, 69] {
+            atan2_native[at..at + 4]
+                .copy_from_slice(&numeric_binding.equality_constant.va.to_le_bytes());
+        }
+        call(&mut atan2_native, base + 0x880, 111, base + 0xa00);
+        let arctangent2_native = put(&mut image, base, 0x880, &atan2_native);
+        let mut root = vec![0x90; 164];
+        call(&mut root, base + 0x900, 72, base + 0x9b0);
+        root[0x4d] = 0x2d;
+        root[0x4e..0x52].copy_from_slice(&46340u32.to_le_bytes());
+        root[0x54..0x56].copy_from_slice(&[0x69, 0xc0]);
+        root[0x56..0x5a].copy_from_slice(&46340u32.to_le_bytes());
+        root[0x6f..0x71].copy_from_slice(&[0x81, 0xe1]);
+        root[0x71..0x75].copy_from_slice(&0x0035_0000u32.to_le_bytes());
+        let square_root = put(&mut image, base, 0x900, &root);
+        let mut integer_root = vec![0x90; 61];
+        integer_root[0x0d..0x10].copy_from_slice(&[0x8d, 0x7e, 16]);
+        let integer_root = put(&mut image, base, 0x9b0, &integer_root);
+        let mut atan2 = vec![0x90; 161];
+        call(&mut atan2, base + 0xa00, 76, base + 0xab0);
+        atan2[89..93].copy_from_slice(&(base + 0xd20).to_le_bytes());
+        atan2[116..120].copy_from_slice(&(base + 0xd24).to_le_bytes());
+        let arctangent2 = put(&mut image, base, 0xa00, &atan2);
+        let mut atan = vec![0x90; 423];
+        for at in [32, 115, 233] {
+            atan[at..at + 4].copy_from_slice(&(base + 0xd80).to_le_bytes());
+        }
+        for (at, datum) in [
+            (72, 0xd00),
+            (100, 0xd04),
+            (131, 0xd08),
+            (218, 0xd0c),
+            (253, 0xd10),
+            (268, 0xd14),
+            (348, 0xd18),
+            (378, 0xd20),
+        ] {
+            atan[at..at + 4].copy_from_slice(&(base + datum).to_le_bytes());
+        }
+        let arctangent = put(&mut image, base, 0xab0, &atan);
+        for (at, value) in [
+            (0xd00, 0.5f32),
+            (0xd04, 1.0),
+            (0xd08, 0.25),
+            (0xd0c, 0.125),
+            (0xd10, 0.75),
+            (0xd14, 1.5),
+            (0xd18, 0.5),
+            (0xd20, 1.5),
+            (0xd24, 3.0),
+        ] {
+            image[0x200 + at..0x204 + at].copy_from_slice(&value.to_le_bytes());
+        }
+        numeric_binding.image_sha256 = sha256(&image);
+        let math_binding = script_math::Binding {
+            image_sha256: numeric_binding.image_sha256,
+            square_root_native,
+            arctangent2_native,
+            square_root,
+            integer_root,
+            arctangent2,
+            arctangent,
+            zero_initializer: zero,
+            one_initializer: one,
+        };
+        let numeric = NumericPolicy::read(&image, numeric_binding, budget, 64)
+            .unwrap()
+            .with_math(&image, &math_binding, budget)
+            .unwrap();
+        let mut windows = synthetic_windows();
+        windows[11][1] = 2;
+        let policy = FleePolicy::decode(
+            &windows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            *numeric.image_sha256(),
+        )
+        .unwrap();
+        (policy, numeric)
+    }
+
+    #[test]
+    fn ordinary_route_moves_away_and_translates_with_the_actor() {
+        let (policy, numeric) = route_fixture();
+        assert_eq!(
+            policy
+                .ordinary_destination(&numeric, [5.0, 9.0], [3.0, 9.0], 0.0)
+                .unwrap(),
+            [7.0, 9.0]
+        );
+        assert_eq!(
+            policy
+                .ordinary_destination(&numeric, [105.0, 29.0], [103.0, 29.0], 0.0)
+                .unwrap(),
+            [107.0, 29.0]
+        );
+    }
+
+    #[test]
+    fn ordinary_route_uses_both_axes_and_source_margin() {
+        let (mut policy, numeric) = route_fixture();
+        let base = policy
+            .ordinary_destination(&numeric, [8.0, 9.0], [5.0, 5.0], 3.0)
+            .unwrap();
+        assert!(base[0] > 8.0 && base[1] > 9.0);
+        let farther = policy
+            .ordinary_destination(&numeric, [8.0, 9.0], [5.0, 5.0], 4.0)
+            .unwrap();
+        assert!(farther[0] > base[0] && farther[1] > base[1]);
+        policy.range_margin = 3.0;
+        assert_eq!(
+            policy
+                .ordinary_destination(&numeric, [8.0, 9.0], [5.0, 5.0], 3.0)
+                .unwrap(),
+            farther
+        );
+    }
+
+    #[test]
+    fn route_refuses_unqualified_inputs_before_arithmetic() {
+        let (mut policy, numeric) = route_fixture();
+        assert!(matches!(
+            policy.ordinary_destination(&numeric, [0.0; 2], [0.0; 2], 0.0),
+            Err(RouteError::ZeroDirection)
+        ));
+        policy.near_zero_distance = 2.0;
+        assert!(matches!(
+            policy.ordinary_destination(&numeric, [1.0, 0.0], [0.0; 2], 1.0),
+            Err(RouteError::ZeroDirection)
+        ));
+        policy.near_zero_distance = 0.00000025;
+        for value in [f32::NAN, f32::INFINITY, f32::from_bits(1)] {
+            assert!(
+                policy
+                    .ordinary_destination(&numeric, [value, 0.0], [0.0; 2], 1.0)
+                    .is_err()
+            );
+        }
+        assert!(
+            policy
+                .ordinary_destination(&numeric, [1.0, 0.0], [0.0; 2], -1.0)
+                .is_err()
+        );
+        policy.range_margin = f32::NAN;
+        assert!(matches!(
+            policy.ordinary_destination(&numeric, [1.0, 0.0], [0.0; 2], 1.0),
+            Err(RouteError::Input(_))
+        ));
+        policy.range_margin = 2.0;
+        policy.near_zero_distance = 0.0;
+        assert!(matches!(
+            policy.ordinary_destination(&numeric, [1.0, 0.0], [0.0; 2], 1.0),
+            Err(RouteError::Input(_))
+        ));
+        policy.near_zero_distance = 0.00000025;
+        policy.image_sha256[0] ^= 1;
+        assert!(matches!(
+            policy.ordinary_destination(&numeric, [1.0, 0.0], [0.0; 2], 1.0),
+            Err(RouteError::Identity)
+        ));
+        let (image, binding, budget) = script_numeric::tests::fixture();
+        let numeric_without_math = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        policy.image_sha256 = *numeric_without_math.image_sha256();
+        assert!(matches!(
+            policy.ordinary_destination(&numeric_without_math, [1.0, 0.0], [0.0; 2], 1.0),
+            Err(RouteError::MissingMath)
+        ));
+    }
+
+    #[test]
+    fn route_calls_internal_root_not_the_native_near_zero_wrapper() {
+        let (policy, numeric) = route_fixture();
+        let math = numeric.math().unwrap();
+        assert_eq!(
+            math.square_root_native(&numeric, 0.125 * 0.125).unwrap(),
+            0.0
+        );
+        assert!(
+            policy
+                .ordinary_destination(&numeric, [0.125, 0.0], [0.0; 2], 0.0)
+                .is_ok()
+        );
+    }
 
     #[test]
     fn window_budget_is_exact() {
@@ -865,5 +1166,73 @@ mod tests {
         policy
             .validate_route_move_order(&registry, &activities)
             .expect("flee route order joins the movement identity");
+    }
+
+    #[test]
+    #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+    fn reviewed_route_joins_selected_numeric_and_math() {
+        let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
+            .expect("read reviewed client");
+        let budget = RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        };
+        let policy = FleePolicy::read(&image, budget).expect("selected flee policy");
+        let pe = Pe::parse(&image, budget).expect("selected image sections");
+        let window = |va, len, code| {
+            let bytes = &pe.read_from(va, code).unwrap()[..len as usize];
+            SourceWindow {
+                va,
+                len,
+                digest: sha256(bytes),
+            }
+        };
+        let numeric = NumericPolicy::read(
+            &image,
+            script_numeric::Binding {
+                origin: crate::scripts::AssetIdentity {
+                    edition: "reviewed".into(),
+                    version: "selected".into(),
+                    source: "PCX_WAR3_EXE".into(),
+                },
+                image_sha256: sha256(&image),
+                literal: window(0x8df660, 238, true),
+                division: window(0x9a02d0, 57, true),
+                reciprocal: window(0x9a1d00, 103, true),
+                reciprocal_table: window(0xed6cf0, 4100, false),
+                equality: window(0x8d8d10, 53, true),
+                equality_constant: window(0x10db054, 4, false),
+                inequality: window(0x8d7e32, 162, true),
+                math_sub: window(0x9a00b0, 264, true),
+                math_add: window(0x9a01c0, 262, true),
+                math_mul: window(0x99ffe0, 195, true),
+                math_lzcnt: window(0x9a0330, 29, true),
+                math_i32_to_real: window(0x9a1620, 92, true),
+            },
+            budget,
+            4096,
+        )
+        .expect("selected numeric policy")
+        .with_math(
+            &image,
+            &script_math::Binding {
+                image_sha256: sha256(&image),
+                square_root_native: window(0x4ac1a0, 94, true),
+                arctangent2_native: window(0x489fd0, 126, true),
+                square_root: window(0x9a20a0, 164, true),
+                integer_root: window(0x9a2150, 61, true),
+                arctangent2: window(0x9a0cf0, 161, true),
+                arctangent: window(0x9a0da0, 423, true),
+                zero_initializer: window(0x401300, 16, true),
+                one_initializer: window(0x401460, 16, true),
+            },
+            budget,
+        )
+        .expect("selected math policy");
+        let destination = policy
+            .ordinary_destination(&numeric, [8.0, 9.0], [5.0, 5.0], 30.0)
+            .expect("selected nonzero flee route");
+        assert!(destination[0] > 8.0 && destination[1] > 9.0);
     }
 }
