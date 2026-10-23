@@ -5,7 +5,7 @@ mod captains;
 #[path = "unit_follow_tests.rs"]
 mod follow;
 #[path = "campaign_gathering_host_tests.rs"]
-mod gathering;
+pub(super) mod gathering;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
@@ -680,7 +680,7 @@ fn profile_with_structure(value: FieldValue, movement: Option<&str>, building: b
         move_speed_rules(),
     )
 }
-fn profile_fields(
+pub(super) fn profile_fields(
     value: FieldValue,
     movement: Option<&str>,
     building: Option<bool>,

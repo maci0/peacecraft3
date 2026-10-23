@@ -393,6 +393,9 @@ impl ObjectHost {
         let Some(mut guard) = state.get(unit).copied() else {
             return Ok(GuardCombatStep::default());
         };
+        if self.captain_route_owned(unit) {
+            return Ok(GuardCombatStep::default());
+        }
         let record = self.executed_unit(unit)?;
         if !record.shown || record.combat.as_ref().is_none_or(|c| c.dead) {
             return Ok(GuardCombatStep::default());

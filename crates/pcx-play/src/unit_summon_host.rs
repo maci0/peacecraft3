@@ -24,6 +24,26 @@ struct Spell {
 }
 
 impl ObjectHost {
+    pub(super) fn unit_timed_life_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if name != "UnitApplyTimedLife"
+            || self.campaign_group_timed_life.is_none()
+            || self.inner.program.natives().get(name).is_none()
+        {
+            return None;
+        }
+        Some((|| {
+            let [Value::Handle(unit), Value::Int(key), Value::Real(duration)] = args else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.apply_qualified_timed_life(*unit, key.to_be_bytes(), *duration)?;
+            Ok(Value::Null)
+        })())
+    }
+
     fn summon_error(&self, detail: impl Into<String>) -> Error {
         self.inner
             .error(NATIVE, Failure::UnitActivity(detail.into()))
@@ -337,7 +357,7 @@ impl ObjectHost {
             .map(|s| s.order)
     }
 
-    pub(super) fn advance_unit_expirations(&mut self, now: f64) -> Result<(), Error> {
+    pub(crate) fn advance_unit_expirations(&mut self, now: f64) -> Result<(), Error> {
         let expired: Vec<_> = self
             .unit_expirations
             .iter()

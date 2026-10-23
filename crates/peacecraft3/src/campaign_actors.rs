@@ -1246,6 +1246,7 @@ mod tests {
             animation: None,
             look_at: None,
             summoned: false,
+            cached: false,
             activity: None,
             shown: true,
             paused_since: None,

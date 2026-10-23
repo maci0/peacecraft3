@@ -1093,7 +1093,7 @@ impl ObjectHost {
 
     /// Route toward `destination`, or stop when `None`, keeping walk/stand animation
     /// and the sorted active list. Returns false for units that cannot move.
-    pub(super) fn steer_unit(
+    pub(crate) fn steer_unit(
         &mut self,
         unit: HandleId,
         destination: Option<[f32; 2]>,
@@ -1206,6 +1206,7 @@ impl ObjectHost {
             .active
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        self.campaign_ai.clear_captain_route(unit);
         let moving = prepared.motion.is_some();
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             let activity = record.activity.as_mut().expect("activity");
@@ -1218,6 +1219,18 @@ impl ObjectHost {
             active.insert(at, unit);
         }
         Ok(())
+    }
+
+    pub(super) fn reserve_steer_commits(&mut self, count: usize, name: &str) -> Result<(), Error> {
+        self.unit_activity
+            .as_mut()
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::UnitActivity("activity not admitted".into()))
+            })?
+            .active
+            .try_reserve(count)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))
     }
 
     pub(super) fn steer_unit_in_range(
@@ -1254,6 +1267,8 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.forget_captain_member(unit);
+        self.unit_expirations.remove(&unit);
         self.forget_campaign_flee(unit);
         self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
