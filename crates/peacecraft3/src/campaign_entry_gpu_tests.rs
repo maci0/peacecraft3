@@ -67,7 +67,15 @@ fn until(app: &mut App, label: &str, ready: impl Fn(&mut World) -> bool) {
             return;
         }
     }
-    panic!("{label} did not complete in 600 updates");
+    let navigation = app.world().resource::<crate::menu_screens::Navigation>();
+    panic!(
+        "{label} did not complete in 600 updates: screen={:?}, requested={:?}, transition={}, built={:?}, notice={:?}",
+        navigation.screen,
+        navigation.requested,
+        navigation.transition_active,
+        navigation.built,
+        navigation.notice
+    );
 }
 
 fn escape(app: &mut App, state: ButtonState) {
@@ -89,6 +97,13 @@ fn escape(app: &mut App, state: ButtonState) {
 fn activate(app: &mut App, entity: Entity) {
     assert!(app.world().entity(entity).contains::<Button>());
     assert!(!app.world().entity(entity).contains::<InteractionDisabled>());
+    println!(
+        "activate {:?}",
+        app.world()
+            .entity(entity)
+            .get::<crate::glue_menu::GlueButton>()
+            .map(|b| &b.frame)
+    );
     app.world_mut().trigger(Activate { entity });
 }
 
@@ -98,6 +113,10 @@ fn screen(app: &mut App, expected: crate::menu_screens::Screen) {
         navigation.screen == expected
             && navigation.requested.is_none()
             && !navigation.transition_active
+            && navigation.built == Some(expected)
+            && world
+                .get_resource::<crate::menu_sprites::MenuPanels>()
+                .is_some_and(|panels| panels.navigation_settled())
     });
 }
 
@@ -172,6 +191,9 @@ fn mounted_menu_enters_the_rendered_campaign() {
         .disable::<bevy::gilrs::GilrsPlugin>();
     let mut app = crate::launch_gui::app_with_plugins(plugins, |_| {});
     app.init_asset::<AudioSource>();
+    app.world_mut()
+        .resource_mut::<peacecraft3::campaign_startup::CampaignSeed>()
+        .requested = Some(1);
     app.insert_resource(crate::launch_gui::Launcher::test_source(
         install.clone(),
         expansion,
@@ -236,6 +258,11 @@ fn mounted_menu_enters_the_rendered_campaign() {
         chapters.campaigns[campaign].default_open,
         "campaign must be source-unlocked"
     );
+    until(&mut app, "mounted campaign buttons", |w| {
+        w.query::<&crate::native_campaign::CampaignButton>()
+            .iter(w)
+            .any(|b| b.0 == campaign)
+    });
     let button = app
         .world_mut()
         .query::<(Entity, &crate::native_campaign::CampaignButton)>()
@@ -256,6 +283,11 @@ fn mounted_menu_enters_the_rendered_campaign() {
             .is_none()
     );
     capture(&mut app, &output.join("chapter-selection.png"));
+    until(&mut app, "mounted mission buttons", |w| {
+        w.query::<&crate::native_campaign::MissionButton>()
+            .iter(w)
+            .any(|b| b.campaign == campaign && b.mission == mission)
+    });
     let button = app
         .world_mut()
         .query::<(Entity, &crate::native_campaign::MissionButton)>()
@@ -283,21 +315,88 @@ fn mounted_menu_enters_the_rendered_campaign() {
                 })
             })
     });
-    assert!(
-        app.world()
-            .resource::<crate::campaign_actors::UnitActors>()
-            .last_error
-            .is_none()
-    );
-    assert!(
-        app.world()
-            .resource::<peacecraft3::map_ground::GroundPublication>()
-            .last_error
-            .is_none()
-    );
     capture(&mut app, &output.join("campaign-control.png"));
+    // Retain every stage before refusing a known renderer gap.
+    let errors = [
+        (
+            "actors",
+            app.world()
+                .resource::<crate::campaign_actors::UnitActors>()
+                .last_error
+                .clone(),
+        ),
+        (
+            "ground",
+            app.world()
+                .resource::<peacecraft3::map_ground::GroundPublication>()
+                .last_error
+                .as_ref()
+                .map(ToString::to_string),
+        ),
+        (
+            "camera",
+            app.world().resource::<CampaignCamera>().last_error.clone(),
+        ),
+        (
+            "HUD",
+            app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .last_error
+                .clone(),
+        ),
+        (
+            "input",
+            app.world()
+                .resource::<crate::campaign_input::CampaignInput>()
+                .last_error
+                .clone(),
+        ),
+    ];
+    let requests = app
+        .world()
+        .resource::<peacecraft3::map_requests::MapRequests>();
+    let context = requests.admission.shared_context().expect("admitted map");
+    assert!(std::sync::Arc::ptr_eq(
+        &context,
+        app.world()
+            .resource::<MapScriptSession<MapStartupHost>>()
+            .context()
+            .unwrap()
+    ));
+    let recipe = app
+        .world()
+        .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+        .campaign_for_receipts(&requests.bindings.as_ref().unwrap().receipts)
+        .unwrap();
+    let image_sha256 = recipe.image_sha256();
+    let units = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects()
+        .executed_units()
+        .count();
+    use sha2::{Digest, Sha256};
+    let mut frames = Vec::new();
+    for name in [
+        "main-menu.png",
+        "chapter-selection.png",
+        "campaign-entry.png",
+        "campaign-control.png",
+    ] {
+        let bytes = std::fs::read(output.join(name)).unwrap();
+        frames
+            .push(serde_json::json!({"path":name, "sha256_bytes":Sha256::digest(bytes).to_vec()}));
+    }
     std::fs::write(output.join("scope.json"), serde_json::to_vec_pretty(&serde_json::json!({
         "install": install, "map": map, "expansion": expansion,
+        "image_sha256": image_sha256, "executed_units": units, "frames": frames,
+        "subsystem_errors": errors,
         "scope": "Production app offscreen Vulkan; mounted widget activation and synthetic keyboard messages; no physical input, audio playback or original paired-frame parity claim"
     })).unwrap()).unwrap();
+    assert!(
+        errors.iter().all(|(_, error)| error.is_none()),
+        "campaign rendering: {errors:?}"
+    );
 }

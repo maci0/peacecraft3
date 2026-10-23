@@ -147,6 +147,7 @@ pub(crate) fn install(app: &mut App) {
             )
                 .chain()
                 .run_if(crate::button_actions::input_allowed)
+                .run_if(crate::launch_gui::campaign_is_hidden)
                 .before(MapRequestSet::Deliver)
                 .before(crate::button_actions::clear),
         );
@@ -833,6 +834,7 @@ fn spawn_campaign_button(
             world
                 .entity_mut(target)
                 .remove::<crate::menu_screens::ScreenPosition>();
+            crate::glue_menu::delegate_button_to_row(world, target, panel);
         } else {
             world.entity_mut(target).insert((
                 component,
@@ -873,7 +875,7 @@ fn spawn_campaign_button(
                     label.line,
                     crate::glue_menu::GlueLabel {
                         frame: LABEL_FRAME.to_string(),
-                        button: target,
+                        button: if options.fill { panel } else { target },
                     },
                     crate::launch_gui::MenuTextFilled,
                     Pickable::IGNORE,
@@ -1677,9 +1679,11 @@ pub(crate) mod tests {
         .unwrap();
         world.flush();
         let target = world
-            .query_filtered::<Entity, With<crate::glue_menu::GlueButton>>()
-            .single(&world)
-            .unwrap();
+            .query::<(Entity, &Name)>()
+            .iter(&world)
+            .find(|(_, name)| name.as_str() == "CampaignButtonTemplate")
+            .unwrap()
+            .0;
         assert_eq!(
             world.get::<Node>(target).unwrap().position_type,
             PositionType::Relative
@@ -1688,6 +1692,17 @@ pub(crate) mod tests {
             world
                 .get::<crate::menu_screens::ScreenPosition>(target)
                 .is_none()
+        );
+        assert!(world.get::<Button>(target).is_none());
+        assert!(!world.get::<Pickable>(target).unwrap().is_hoverable);
+        assert!(world.get::<crate::glue_menu::GlueButton>(row).is_some());
+        assert_eq!(
+            world
+                .query::<&crate::glue_menu::GlueLabel>()
+                .single(&world)
+                .unwrap()
+                .button,
+            row
         );
         assert!(
             world

@@ -101,6 +101,45 @@ can reach the deep mission rows.
 
 ## Verification
 
+### Native pointer launch and gameplay isolation
+
+The native window run exposed two input bugs that direct `Activate` events
+could not reveal. Mission rows contained a second, pickable template button;
+clicks hit that decorative button and reached the generic unavailable-action
+handler. The row now owns the `GlueButton` state as well as its mission action.
+Its nested art ignores picking, while the shared state layers and label offsets
+follow the row's hover, pressed, disabled and keyboard-focus state.
+
+After launch, the inactive menu camera still left its UI available to picking.
+A gameplay click selected an invisible chapter and attempted another map load.
+The menu root now uses `Display::None` during active gameplay and restores its
+existing grid layout on return. Native chapter consumers share the existing
+campaign-visibility guard used by the ordinary menu actions.
+
+The final rebuilt native app was exercised on a dedicated Xvfb display with
+matching framebuffer and RandR output, 1280×1024 at 96 DPI and auto-repeat off.
+The repository's checked native adapter verified window ownership, process
+start identity, executable, source/build receipt and local content fingerprints
+before injecting balanced OS mouse/key events and retaining unscaled captures.
+The observed route is launcher edition choice → Main Menu → Single Player →
+Campaign → Human campaign → Human01 → Escape → gameplay. A subsequent unit
+selection and right-click moved the hero; the campaign stayed in Human01 rather
+than loading an invisible mission. The run uses no controlled script seed and
+does not establish deterministic or original-client parity. Audio was directed
+to a local null sink for this visual run, so playback is unverified.
+
+Final local evidence is under `.scratch/menu-entry-native-verified/`; the earlier
+failed pointer and layout runs remain separate. The final executable SHA-256
+is `bfc8833cdd4ee7703b9d6390196bfe52604f60e38a529774380f048c3cf188d2`.
+All 621 app tests, strict native and WASM Clippy, and the native build pass.
+The visibility regression also checks that an unchanged gameplay frame leaves
+the menu layout node unchanged, avoiding needless layout invalidation.
+The source-image sky diagnostic, missing minimap/portrait/unit-information
+content, campaign background sprites, difficulty and full mission completion
+remain open; this is an entry and ordinary-input result, not finished gameplay.
+
+### Offscreen acceptance diagnostic
+
 An explicit local-asset diagnostic,
 `campaign_entry_gpu_tests::mounted_menu_enters_the_rendered_campaign`, now uses
 the production app factory with offscreen Vulkan, mounted widget activations
@@ -108,11 +147,19 @@ and synthetic Escape messages. Its first device-enabled run stopped during
 audio-device initialization; the visual-only configuration disables playback
 while retaining audio assets. That configuration rendered the selected RoC
 main menu, then timed out waiting for Single Player navigation after 600
-updates. It has **not** verified rendered campaign entry. The ignored test
-preserves this unfinished acceptance gate rather than treating the earlier
-headless session-publication test as visual proof. Original captures remain
-local and untracked. Physical input, audio playback and paired original-client
-frame parity are outside this diagnostic's scope.
+updates. The timeout was an early diagnostic click during the source-defined
+entrance: the panel reported `panel entrance has not completed`. The test now
+waits for the actual Stand phase and mounted dynamic campaign/mission buttons.
+The revised selected RoC Human01 run reaches gameplay control after Escape,
+with 130 live executed units and the admitted map context shared by the session.
+It retains main-menu, chapter-selection, cinematic-entry and gameplay-control
+captures plus source-image identity and capture digests in a local receipt.
+Camera, terrain, HUD and input errors are absent at that checkpoint. The strict
+test still **fails**, after saving all stages, on the existing actor diagnostic
+`sky lit layer drawn without a qualified illumination source`; it is not a
+rendering-fidelity pass. See [campaign sky](campaign-sky.md). Original captures
+remain local and untracked. Physical input, audio playback and paired
+original-client frame parity are outside this diagnostic's scope.
 
 Dynamic rows do not carry `ScreenPosition`: the generic FDF layout pass resolves
 that component against the template origin, which would collapse every row onto

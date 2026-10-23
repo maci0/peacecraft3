@@ -3,10 +3,22 @@
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
 - [~] A production-app offscreen Vulkan diagnostic now renders the selected RoC
-  main menu and activates its mounted controls. It currently times out waiting
-  for Single Player navigation; rendered campaign entry remains unverified.
-  Audio playback is excluded from this visual diagnostic. See
+  main menu, activates mounted campaign/mission controls and reaches Human01
+  gameplay after Escape (130 live units). It waits for authored panel Stand
+  phases and mounted widgets. Camera, terrain, HUD and input have no recorded
+  error at the checkpoint; the strict gate still fails on the known sky
+  illumination diagnostic. Audio playback and physical input are excluded. See
   [menu entry](docs/re-notes/menu-entry.md).
+
+- [x] Native OS pointer entry now reaches Human01 gameplay and accepts hero
+  movement. Fixed nested mission art intercepting clicks, and invisible chapter
+  controls receiving gameplay input after their camera became inactive. The
+  menu root is removed from layout during play and restored as its existing
+  grid on return; chapter actions share the campaign-visibility guard. The
+  calibrated native run retains balanced input and source/build/content
+  receipts locally. All 621 app tests and strict native/WASM Clippy pass.
+  This closes the entry/input bug, not sky/audio/HUD fidelity or mission
+  completion; see [menu entry](docs/re-notes/menu-entry.md).
 
 - [~] `SetCampaignAI` now admits its source-derived mode transition into the
   canonical player registry, with lazy mode observation for supported existing

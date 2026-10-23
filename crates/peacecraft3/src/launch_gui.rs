@@ -1789,6 +1789,7 @@ type MenuUiCameraFilter = (
 struct MenuUiCameraState<'w, 's> {
     commands: Commands<'w, 's>,
     campaign: Option<Res<'w, peacecraft3::campaign_camera::CampaignCamera>>,
+    menu_nodes: Query<'w, 's, &'static mut Node, With<MenuLayer>>,
     cameras:
         Query<'w, 's, (Entity, &'static mut Camera, Has<MenuColourCamera>), MenuUiCameraFilter>,
 }
@@ -1805,9 +1806,21 @@ fn show_menu_or_launcher(
     let MenuUiCameraState {
         mut commands,
         campaign,
+        mut menu_nodes,
         cameras: mut ui_cameras,
     } = ui;
     let playing = campaign.as_ref().is_some_and(|camera| camera.active());
+    // An inactive UI camera alone does not remove its nodes from picking.
+    for mut node in &mut menu_nodes {
+        let display = if playing {
+            Display::None
+        } else {
+            Display::Grid
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
     // The original CFrame renderer has a centered 4:3 branch. Its main-menu
     // live flags are unmeasured; keep the authored extent without stretching.
     let viewport = if !menu.is_empty() {
@@ -1915,7 +1928,9 @@ fn menu_is_visible(
     !menu.is_empty() && !camera.as_ref().is_some_and(|camera| camera.active())
 }
 
-fn campaign_is_hidden(camera: Option<Res<peacecraft3::campaign_camera::CampaignCamera>>) -> bool {
+pub(crate) fn campaign_is_hidden(
+    camera: Option<Res<peacecraft3::campaign_camera::CampaignCamera>>,
+) -> bool {
     !camera.as_ref().is_some_and(|camera| camera.active())
 }
 
@@ -3985,6 +4000,36 @@ mod tests {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn campaign_view_removes_menu_layout_and_restores_it_on_return() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<crate::intro::Intro>();
+        spawn_main_menu(&mut world.commands());
+        world.flush();
+        let menu = world
+            .query_filtered::<Entity, With<MenuLayer>>()
+            .single(&world)
+            .unwrap();
+        assert_eq!(world.get::<Node>(menu).unwrap().display, Display::Grid);
+        world.insert_resource(
+            peacecraft3::campaign_camera::CampaignCamera::active_for_test(Entity::PLACEHOLDER),
+        );
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert_eq!(world.get::<Node>(menu).unwrap().display, Display::None);
+        world.clear_trackers();
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert!(!world.entity(menu).get_ref::<Node>().unwrap().is_changed());
+        assert!(!world.run_system_once(campaign_is_hidden).unwrap());
+        world
+            .resource_mut::<peacecraft3::campaign_camera::CampaignCamera>()
+            .suspend();
+        world.run_system_once(show_menu_or_launcher).unwrap();
+        assert_eq!(world.get::<Node>(menu).unwrap().display, Display::Grid);
+        assert!(world.run_system_once(campaign_is_hidden).unwrap());
+    }
 
     #[test]
     #[ignore = "requires PEACECRAFT3_INSTALL with original menu FDFs"]

@@ -548,6 +548,30 @@ pub struct GlueLabel {
     pub button: Entity,
 }
 
+/// A scroll row owns input while its nested template keeps the authored art.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(crate) fn delegate_button_to_row(world: &mut World, art: Entity, row: Entity) {
+    let button = world
+        .entity_mut(art)
+        .take::<GlueButton>()
+        .expect("spawned glue button");
+    world
+        .entity_mut(art)
+        .remove::<UiButton>()
+        .insert(Pickable::IGNORE);
+    world.entity_mut(row).insert(button);
+    for mut layer in world.query::<&mut StateLayer>().iter_mut(world) {
+        if layer.button == art {
+            layer.button = row;
+        }
+    }
+    for mut label in world.query::<&mut GlueLabel>().iter_mut(world) {
+        if label.button == art {
+            label.button = row;
+        }
+    }
+}
+
 /// A text shadow whose `FontShadowOffset` is in frame units.
 #[derive(Component, Debug)]
 pub struct FrameShadow(pub Vec2);
@@ -1565,6 +1589,70 @@ fn place_shadows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delegated_row_owns_pressed_disabled_and_label_states() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let row = world.spawn((UiButton, Hovered::default(), Pressed)).id();
+        let art = world
+            .spawn((
+                UiButton,
+                Hovered::default(),
+                GlueButton {
+                    frame: "SyntheticRow".into(),
+                    shortcut: None,
+                    pushed_text_offset: Some(Vec2::new(2.0, 3.0)),
+                },
+            ))
+            .id();
+        let layer = |state| {
+            (
+                StateLayer {
+                    button: art,
+                    state,
+                    has: [true; 3],
+                },
+                Visibility::Hidden,
+            )
+        };
+        let pushed = world.spawn(layer(State::Pushed)).id();
+        let disabled = world.spawn(layer(State::Disabled)).id();
+        let container = world.spawn(Node::default()).id();
+        let label = world
+            .spawn(GlueLabel {
+                frame: "SyntheticLabel".into(),
+                button: art,
+            })
+            .id();
+        world.entity_mut(container).add_child(label);
+        delegate_button_to_row(&mut world, art, row);
+        world.run_system_once(show_states).unwrap();
+        assert_eq!(
+            *world.get::<Visibility>(pushed).unwrap(),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            world.get::<Node>(container).unwrap().left,
+            Val::Percent(2.0)
+        );
+        world.entity_mut(row).insert(InteractionDisabled);
+        world.run_system_once(show_states).unwrap();
+        assert_eq!(
+            *world.get::<Visibility>(pushed).unwrap(),
+            Visibility::Hidden
+        );
+        assert_eq!(
+            *world.get::<Visibility>(disabled).unwrap(),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            world.get::<Node>(container).unwrap().left,
+            Val::Percent(0.0)
+        );
+        assert!(world.get::<UiButton>(art).is_none());
+        assert!(!world.get::<Pickable>(art).unwrap().is_hoverable);
+    }
 
     #[test]
     fn edition_art_changes_all_states_and_preserves_source_chrome() {

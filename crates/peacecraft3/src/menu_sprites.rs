@@ -1051,6 +1051,18 @@ pub enum Transition {
 }
 
 impl MenuPanels {
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    pub(crate) fn navigation_settled(&self) -> bool {
+        self.clock.target.is_none()
+            && matches!(
+                self.clock.phase,
+                Phase::MainStand
+                    | Phase::SingleStand
+                    | Phase::OptionsStand
+                    | Phase::OptionsStandAlternate
+            )
+    }
+
     pub fn request(
         &mut self,
         from: crate::menu_screens::Screen,
