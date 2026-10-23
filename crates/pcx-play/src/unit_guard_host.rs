@@ -32,6 +32,11 @@ enum Decision {
     Return,
     Wait,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct GuardCombatStep {
+    pub skip_acquisition: bool,
+    pub motion_replaced: bool,
+}
 pub struct GuardState {
     native: Rules,
     source: CombatRules,
@@ -347,6 +352,14 @@ impl ObjectHost {
             g.ordered();
         }
     }
+    #[cfg(test)]
+    pub(crate) fn test_set_guard_returning(&mut self, unit: HandleId, returning: bool) {
+        if let Some(state) = &mut self.guards
+            && let Some((_, guard)) = state.records.iter_mut().find(|(id, _)| *id == unit)
+        {
+            guard.returning = returning;
+        }
+    }
     pub(super) fn guard_attacked(&mut self, unit: HandleId, now: f64) {
         if let Some(state) = &mut self.guards
             && let Some((_, g)) = state.records.iter_mut().find(|(id, _)| *id == unit)
@@ -361,7 +374,9 @@ impl ObjectHost {
             guard.resumed(since, now);
         }
     }
-    /// True means an AI return owns movement this tick, so skip acquisition.
+    /// A skipped acquisition may be a wait that leaves the accepted retreat
+    /// route in place, so callers only clear flee ownership when motion was
+    /// actually replaced by the guard return.
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "combat.guard")
@@ -371,16 +386,16 @@ impl ObjectHost {
         unit: HandleId,
         now: f64,
         chasing: bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<GuardCombatStep, Error> {
         let Some(state) = &self.guards else {
-            return Ok(false);
+            return Ok(GuardCombatStep::default());
         };
         let Some(mut guard) = state.get(unit).copied() else {
-            return Ok(false);
+            return Ok(GuardCombatStep::default());
         };
         let record = self.executed_unit(unit)?;
         if !record.shown || record.combat.as_ref().is_none_or(|c| c.dead) {
-            return Ok(false);
+            return Ok(GuardCombatStep::default());
         }
         let position = record.position.ok_or_else(|| {
             self.inner.error(
@@ -410,10 +425,12 @@ impl ObjectHost {
                 },
             )
             .map_err(|e| self.inner.error(REMOVE, Failure::UnitActivity(e.into())))?;
+        let mut motion_replaced = false;
         if decision == Decision::Return {
             if !self.steer_unit(unit, Some(guard.home), REMOVE)? {
-                return Ok(false);
+                return Ok(GuardCombatStep::default());
             }
+            motion_replaced = true;
             self.clear_combat_target(unit);
         }
         if let Some(state) = &mut self.guards
@@ -421,7 +438,10 @@ impl ObjectHost {
         {
             *g = guard;
         }
-        Ok(decision != Decision::Continue)
+        Ok(GuardCombatStep {
+            skip_acquisition: decision != Decision::Continue,
+            motion_replaced,
+        })
     }
     pub(super) fn guard_native(
         &mut self,

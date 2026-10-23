@@ -392,3 +392,44 @@ fn guard_return_cancels_an_active_campaign_flee_route() {
     assert!(!h.campaign_flee_motion_owns(a));
     assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) <= 8.);
 }
+
+#[test]
+fn guard_wait_keeps_an_active_campaign_flee_route() {
+    let flee = crate::campaign_flee_policy::tests::route_fixture();
+    let (mut vm, a, b) = guarded_with_flee(3., 7., 0.2, Some(flee));
+    let state = vm.global("UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(a), state, Value::Real(20.0)],
+        )
+        .unwrap();
+    vm.host().inner.combat_damage_unit(b, a, 1.0).unwrap();
+    assert!(vm.host().inner.campaign_flee_motion_owns(a));
+    let home = vm.host().inner.guard_state().unwrap().get(a).unwrap().home;
+    let away = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .destination()
+        .unwrap();
+    vm.host().inner.test_set_guard_returning(a, true);
+    vm.host().inner.test_advance_combat().unwrap();
+    let h = &vm.host().inner;
+    assert!(h.campaign_flee_motion_owns(a));
+    assert_ne!(Some(away), Some(home));
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some(away)
+    );
+}

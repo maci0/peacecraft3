@@ -676,30 +676,24 @@ impl ObjectHost {
         Ok(value)
     }
 
-    /// Whether a stored upgrade is active for a player row. Record-only
-    /// setters are used only when the applied research model is unavailable.
-    pub(super) fn campaign_flee_upgrade_is_active(
+    /// Whether a stored upgrade is active for a player row. The applied model
+    /// is authoritative; unavailable state is a contextual refusal, never a
+    /// guessed false.
+    pub(crate) fn campaign_flee_upgrade_is_active(
         &self,
         number: i32,
         techid: i32,
-        settings: &PlayerSettings,
-    ) -> bool {
+        _settings: &PlayerSettings,
+    ) -> Result<bool, Error> {
         match self.stored_tech_level(number, techid) {
-            players::TechRead::Level(level) => level > 0,
-            players::TechRead::Absent => false,
-            players::TechRead::Unavailable => {
-                if settings.research_levels.is_empty() {
-                    settings
-                        .tech_researched
-                        .iter()
-                        .any(|(id, level)| *id == techid && *level > 0)
-                } else {
-                    settings
-                        .research_levels
-                        .iter()
-                        .any(|(id, level)| *id == techid && *level > 0)
-                }
-            }
+            players::TechRead::Level(level) => Ok(level > 0),
+            players::TechRead::Absent => Ok(false),
+            players::TechRead::Unavailable => Err(self.inner.error(
+                "SetUnitsFlee",
+                Failure::UnitActivity(format!(
+                    "player {number} tech {techid} applied research state unavailable"
+                )),
+            )),
         }
     }
 
