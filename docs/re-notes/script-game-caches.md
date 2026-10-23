@@ -238,6 +238,15 @@ results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
 the main checkout. These Wine observations do not qualify native Windows
 or a general restore-pool policy beyond the sampled life case.
 
+The original-client same-map RoC probe at
+`.scratch/same-map-store-restore-probe/result.json` records a plain hero at
+312.5/1250 life and 123.75/495 mana restoring to 1250/1250 and 495/495.
+With held maximum-life and intelligence items, 350/1400 and 146.25/585
+restore to 1400/1400 and 585/585; removing each item returns the corresponding
+maximum to its source-derived base. The paired cross-map probe at
+`.scratch/cross-map-cache-probe/selector1-transition/result.json` records a
+source item bonus of 150 in A and a typed receiving-map bonus of 200 in B;
+the restored B hero is full at 1450/1450 and returns to 1250/1250 on removal.
 Those observations qualify life and mana for the tested hero/item cases, not
 non-hero restoration, multi-item rounding order, the native cache layout or
 every cached state. The same full-pool projection for non-heroes and slot-order
