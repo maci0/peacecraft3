@@ -9,6 +9,12 @@ use crate::{
     unit_activity::Rules,
 };
 
+/// A life band `[minimum, maximum]` with an **inclusive** upper bound. The
+/// source `comiss` + `jae` to the shared true label selects a band when the
+/// value is `>= minimum` and `>= maximum` is treated as still in-bounds at the
+/// exact maximum (`jae` = jump if above-or-equal). Consumers must therefore
+/// classify `value <= maximum` as belonging to the band; an exclusive upper
+/// comparison would misclassify the boundary value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LifeBand {
     pub minimum: f32,
@@ -52,12 +58,12 @@ const WINDOWS: [(u32, usize, bool); 26] = [
     (0xabf9e2, 10, true),
     (0xba9581, 7, true),
     (0xba95b3, 27, true),
-    (0xba9693, 39, true),
-    (0xba96bf, 39, true),
-    (0xba96eb, 39, true),
-    (0xba9717, 39, true),
-    (0xba9743, 39, true),
-    (0xba976f, 36, true),
+    (0xba9693, 45, true),
+    (0xba96bf, 45, true),
+    (0xba96eb, 45, true),
+    (0xba9717, 45, true),
+    (0xba9743, 45, true),
+    (0xba976f, 42, true),
     (0xba9837, 13, true),
     (0x401350, 19, true),
     (0x4013f0, 19, true),
@@ -158,6 +164,18 @@ fn band(bytes: &[u8], va: u32) -> Result<(u32, f32), Error> {
             0xc1,
         ],
     )?;
+    // The upper comparison is `comiss xmm1, xmm0` followed by an inclusive
+    // `jae` (`0f 83 rel32`) to the shared true label. Validate the encoding and
+    // that every band's true branch joins the same label.
+    at(bytes, call_at + 20, &[0x0f, 0x83])?;
+    let upper_target = va
+        .wrapping_add(call_at as u32 + 26)
+        .wrapping_add(word(bytes, call_at + 22)?);
+    if upper_target != 0xba9844 {
+        return Err(Error(
+            "band upper true branch does not join the shared label",
+        ));
+    }
     if upper < 0 {
         return Err(Error("band upper bound is negative"));
     }
@@ -469,6 +487,15 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
             target.wrapping_sub(WINDOWS[i].0 + at as u32 + 5),
         );
     }
+    fn jae(w: &mut [Vec<u8>], i: usize, at: usize, target: u32) {
+        put(w, i, at, &[0x0f, 0x83]);
+        dword(
+            w,
+            i,
+            at + 2,
+            target.wrapping_sub(WINDOWS[i].0 + at as u32 + 6),
+        );
+    }
     fn initializer(w: &mut [Vec<u8>], i: usize, value: u32, global: u32, imm8: bool) {
         if imm8 {
             put(w, i, 0, &[0x6a, value as u8]);
@@ -506,6 +533,7 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
                     0x2f, 0xc1,
                 ],
             );
+            jae(w, i, 35, 0xba9844);
         } else {
             put(w, i, 7, &[0x72, 0x23, 0x8d, 0x45, 0xe0, 0x68]);
             dword(w, i, 13, maximum);
@@ -520,6 +548,7 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
                     0x2f, 0xc1,
                 ],
             );
+            jae(w, i, 38, 0xba9844);
         }
     }
 
@@ -978,6 +1007,76 @@ pub(crate) mod tests {
             .expect("changed constructor default")
             .units_flee_default
         );
+    }
+
+    #[test]
+    fn band_lower_branch_skips_to_next_boundary_and_true_joins_shared_label() {
+        let source = synthetic_windows();
+        let fall_through = 0xba9798;
+        for i in 4..=9 {
+            let w = &source[i];
+            assert_eq!(w[7], 0x72, "band {i}: expected lower jb opcode");
+            let next = if i < 9 {
+                WINDOWS[i + 1].0
+            } else {
+                fall_through
+            };
+            let expected_rel = (i64::from(next) - i64::from(WINDOWS[i].0) - 9) as i8;
+            assert_eq!(
+                w[8] as i8, expected_rel,
+                "band {i}: lower branch must skip to the next boundary"
+            );
+            let jae_at = if i == 9 { 35 } else { 38 };
+            assert_eq!(&w[jae_at..jae_at + 2], &[0x0f, 0x83]);
+            let disp = u32::from_le_bytes(
+                w[jae_at + 2..jae_at + 6]
+                    .try_into()
+                    .expect("jae displacement"),
+            );
+            let target = WINDOWS[i]
+                .0
+                .wrapping_add(jae_at as u32 + 6)
+                .wrapping_add(disp);
+            assert_eq!(
+                target, 0xba9844,
+                "band {i}: true branch must join the shared label"
+            );
+        }
+    }
+
+    #[test]
+    fn band_upper_branch_mutants_refuse() {
+        for (index, mutate) in [
+            (4usize, 38usize),
+            (5, 38),
+            (6, 38),
+            (7, 38),
+            (8, 38),
+            (9, 35),
+        ] {
+            // JAE opcode flip
+            let mut source = synthetic_windows();
+            source[index][mutate] ^= 1;
+            assert!(
+                FleePolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err(),
+                "band {index}: JAE opcode flip should refuse"
+            );
+            // JAE displacement break (target no longer shared)
+            let mut source = synthetic_windows();
+            source[index][mutate + 2] ^= 0x01;
+            assert!(
+                FleePolicy::decode(
+                    &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32],
+                )
+                .is_err(),
+                "band {index}: JAE displacement break should refuse"
+            );
+        }
     }
 
     #[test]
