@@ -133,6 +133,60 @@ fn campaign_flee_unadmitted_and_inactive_players_do_not_grow_the_registry() {
 }
 
 #[test]
+fn heroes_flee_is_explicit_per_player_and_rejected_masks_do_not_backfill() {
+    let (mut h, ctx) = campaign_host();
+    let first = player(&mut h, 0);
+    let second = player(&mut h, 1);
+    h.admit_campaign_targeting(&ctx, TargetingPolicy::fixture())
+        .unwrap();
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert!(h.activate_campaign_ai_player(1).unwrap());
+    assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
+    assert!(h.set_ai_heroes_flee(0, true).is_err());
+
+    let policy = FleePolicy::fixture();
+    for (units, heroes) in [
+        (0, policy.context_heroes_flee_mask),
+        (3, policy.context_heroes_flee_mask),
+        (policy.context_units_flee_mask, 0),
+        (policy.context_units_flee_mask, 3),
+        (
+            policy.context_units_flee_mask,
+            policy.context_units_flee_mask,
+        ),
+    ] {
+        let mut malformed = policy.clone();
+        malformed.context_units_flee_mask = units;
+        malformed.context_heroes_flee_mask = heroes;
+        assert!(h.admit_campaign_flee(&ctx, malformed).is_err());
+        assert!(h.campaign_flee_policy().is_none());
+        assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
+        assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
+    }
+
+    h.admit_campaign_flee(&ctx, policy).unwrap();
+    assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(h.campaign_heroes_flee_enabled(id(&second)).unwrap(), None);
+    h.set_ai_heroes_flee(0, true).unwrap();
+    h.set_ai_heroes_flee(1, false).unwrap();
+    assert_eq!(
+        h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        h.campaign_heroes_flee_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
+}
+
+#[test]
 fn activation_without_policies_still_refuses_an_invalid_player_without_state_growth() {
     let (mut h, _) = campaign_host();
     assert!(h.player_identity(3).is_none());
