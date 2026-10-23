@@ -820,10 +820,10 @@ pub use objects::{
     UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
 };
 pub use objects::{
-    CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
-    DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
-    GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing, PlacedDestructable,
-    PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog, SummonContext, Vitals,
-    Weapon,
+    CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState,
+    DialogBudget, DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent,
+    FogModifier, GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing,
+    PlacedDestructable, PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog,
+    SummonContext, Vitals, Weapon,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};

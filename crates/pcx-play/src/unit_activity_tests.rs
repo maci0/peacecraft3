@@ -1,5 +1,7 @@
 use super::*;
 use pcx_script::HandleId;
+#[path = "campaign_captain_host_tests.rs"]
+mod captains;
 #[path = "unit_follow_tests.rs"]
 mod follow;
 #[path = "campaign_gathering_host_tests.rs"]

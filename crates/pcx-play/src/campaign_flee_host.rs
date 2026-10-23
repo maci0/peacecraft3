@@ -12,12 +12,14 @@ const NATIVE: &str = "SetUnitsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
 const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
+    captains_created: bool,
+    captain_homes: [Option<[f32; 2]>; 2],
 }
 
 #[derive(Default)]
@@ -42,6 +44,8 @@ impl Registry {
                 units_flee,
                 gathering: None,
                 gathering_unit: None,
+                captains_created: false,
+                captain_homes: [None; 2],
             },
         );
         true
@@ -73,6 +77,49 @@ impl Registry {
         };
         flags.gathering = Some(false);
         flags.gathering_unit = unit;
+        true
+    }
+
+    pub(super) fn captains(&self, player: i32) -> Option<(bool, [Option<[f32; 2]>; 2])> {
+        self.players
+            .get(&player)
+            .map(|flags| (flags.captains_created, flags.captain_homes))
+    }
+
+    pub(super) fn create_captains(&mut self, player: i32, home: Option<[f32; 2]>) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        if flags.captains_created {
+            return false;
+        }
+        flags.captains_created = true;
+        flags.captain_homes = [home; 2];
+        true
+    }
+
+    pub(super) fn set_captain_home(
+        &mut self,
+        player: i32,
+        first: bool,
+        second: bool,
+        home: [f32; 2],
+    ) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        if (first || second) && !flags.captains_created
+            || (first && flags.captain_homes[0].is_none())
+            || (second && flags.captain_homes[1].is_none())
+        {
+            return false;
+        }
+        if first {
+            flags.captain_homes[0] = Some(home);
+        }
+        if second {
+            flags.captain_homes[1] = Some(home);
+        }
         true
     }
 
@@ -170,7 +217,11 @@ impl ObjectHost {
                 Failure::ConfigState("player is not admitted"),
             ));
         }
-        if target_heroes.is_none() && units_flee.is_none() && self.campaign_gathering.is_none() {
+        if target_heroes.is_none()
+            && units_flee.is_none()
+            && self.campaign_gathering.is_none()
+            && self.campaign_captains.is_none()
+        {
             return Ok(false);
         }
         Ok(self.campaign_ai.activate(player, target_heroes, units_flee))
@@ -296,5 +347,23 @@ mod tests {
         assert!(registry.set_units_flee(7, false));
         assert_eq!(registry.target_heroes(7), Some(false));
         assert_eq!(registry.units_flee(7), Some(false));
+    }
+
+    #[test]
+    fn captain_homes_are_per_player_and_selected_slots_preflight_together() {
+        let mut registry = Registry::default();
+        assert!(registry.activate(0, None, None));
+        assert!(registry.activate(1, None, None));
+        assert!(registry.create_captains(0, Some([8., 16.])));
+        assert!(registry.create_captains(1, None));
+        assert!(!registry.set_captain_home(1, true, true, [32., 40.]));
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
+        assert!(registry.set_captain_home(0, true, true, [24., 32.]));
+        assert_eq!(registry.captains(0), Some((true, [Some([24., 32.]); 2])));
+        assert!(registry.set_captain_home(1, false, false, [24., 32.]));
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
+        registry.deactivate(0);
+        assert_eq!(registry.captains(0), None);
+        assert_eq!(registry.captains(1), Some((true, [None; 2])));
     }
 }

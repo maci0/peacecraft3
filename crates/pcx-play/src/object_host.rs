@@ -101,6 +101,7 @@ pub struct ObjectHost {
     campaign_ai: campaign_flee::Registry,
     campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
     campaign_gathering: Option<crate::campaign_gathering_policy::GatheringPolicy>,
+    campaign_captains: Option<crate::campaign_captain_policy::CaptainPolicy>,
     campaign_flee_motion: campaign_flee_motion::State,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
@@ -273,6 +274,7 @@ impl ObjectHost {
             campaign_ai: campaign_flee::Registry::default(),
             campaign_flee: None,
             campaign_gathering: None,
+            campaign_captains: None,
             campaign_flee_motion: campaign_flee_motion::State::default(),
             default_difficulty: None,
             campaign_menu_race: None,
@@ -1317,6 +1319,10 @@ mod campaign_flee_motion;
 #[path = "campaign_gathering_host.rs"]
 mod campaign_gathering;
 pub use campaign_gathering::GatheringObservation;
+
+#[path = "campaign_captain_host.rs"]
+mod campaign_captains;
+pub use campaign_captains::CaptainObservation;
 
 #[path = "combat_host.rs"]
 mod combat;
