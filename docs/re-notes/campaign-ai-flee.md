@@ -265,3 +265,36 @@ The corrected collector passes 52 offline tests, including literal JASS rawcode
 byte order, unexpected marker identities, and approach movement that must not
 be called retreat. Frozen source comparisons, staged-member roundtrips, raw
 marker hashes and results remain local under `.scratch/flee-paused-threat-runs/`.
+
+## Matched unpaused-threat control
+
+The next true/false pair adds only the threat's unpause call after the actor's
+unpause, plus diagnostic identities. Both preserve the initial paused identity
+marker and the original object edits. Current map/AI parse and resolve checks
+pass, all nineteen members round-trip with the independent archive tool, and
+53 offline collector/source-diff tests pass.
+
+Both runs first sample a life reduction from 102 to 91 at 1.5 seconds. At that
+same sample the true arm reports the registered movement order; the false arm
+reports zero and never reports that movement order during the run. The true
+arm's first observed leg ends at 2.313 seconds, with separation from the threat
+increasing from about 115.35 to 220.61 map units. Both directions of attack are
+observed. The true arm records 148 samples through death at 14.813 seconds; the
+false arm records 137 through death at 13.75 seconds. Both satisfy this
+unpaused control's premise, which permits changing life and positions.
+
+Together with the paused pair, this supports evaluating an ordinary retreat
+after positive incoming damage as a recreation choice for the tested setup.
+It does not prove the native callback's identity or its only possible trigger:
+unpausing also permits threat movement and attacks, sample clocks bracket
+state changes, and attack markers have no timestamps. Route endpoints remain
+sampled world state, not a rendered path comparison. No incoming-damage hook
+is implemented by the pure destination component.
+
+True map SHA-256:
+`1916b9700b85b9bb8bae7783fb135c4e142ddbd3f0d4d0255fcfbb9a950a385a`;
+false map SHA-256:
+`ea6b22e58738808a36e5a26e1169d1557b3c1d2446ce0142b98955f0ccf8baaa`.
+All staged-member identities, source comparisons, loader captures, raw markers
+and summaries remain local under `.scratch/flee-unpaused-threat-runs/`. Both
+clients are stopped.
