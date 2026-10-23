@@ -21,17 +21,28 @@ pub(super) fn structure(definition: &Definition) -> Result<bool, String> {
     }
 }
 
-/// Classification tokens of `UnitBalance` `type` named by these unit types.
-const CLASSES: [(&str, &str); 8] = [
-    ("UNIT_TYPE_GIANT", "giant"),
-    ("UNIT_TYPE_UNDEAD", "undead"),
-    ("UNIT_TYPE_MECHANICAL", "mechanical"),
-    ("UNIT_TYPE_PEON", "peon"),
-    ("UNIT_TYPE_SAPPER", "sapper"),
-    ("UNIT_TYPE_TOWNHALL", "townhall"),
-    ("UNIT_TYPE_ANCIENT", "ancient"),
-    ("UNIT_TYPE_TAUREN", "tauren"),
+/// Script type names whose suffix is the `UnitBalance/type` source token.
+const CLASSES: [&str; 8] = [
+    "UNIT_TYPE_GIANT",
+    "UNIT_TYPE_UNDEAD",
+    "UNIT_TYPE_MECHANICAL",
+    "UNIT_TYPE_PEON",
+    "UNIT_TYPE_SAPPER",
+    "UNIT_TYPE_TOWNHALL",
+    "UNIT_TYPE_ANCIENT",
+    "UNIT_TYPE_TAUREN",
 ];
+
+pub(super) fn class(definition: &Definition, global: &str) -> Result<bool, String> {
+    let token = global
+        .strip_prefix("UNIT_TYPE_")
+        .ok_or("unit class requires a source type name")?;
+    let list = super::unit_positions::text(definition, SlkId::UnitBalance, "type")
+        .map_err(|e| format!("UnitBalance/type: {e}"))?;
+    Ok(list
+        .split(',')
+        .any(|part| part.trim().eq_ignore_ascii_case(token)))
+}
 
 impl ObjectHost {
     pub(super) fn unit_type_native(
@@ -94,11 +105,9 @@ impl ObjectHost {
                 weapon.is_some_and(|w| w.missile_speed.is_none())
             } else if is("UNIT_TYPE_RANGED_ATTACKER") {
                 weapon.is_some_and(|w| w.missile_speed.is_some())
-            } else if let Some(&(_, token)) = CLASSES.iter().find(|(global, _)| is(global)) {
-                text(SlkId::UnitBalance, "type").is_ok_and(|list| {
-                    list.split(',')
-                        .any(|t| t.trim().eq_ignore_ascii_case(token))
-                })
+            } else if let Some(&global) = CLASSES.iter().find(|global| is(global)) {
+                class(definition, global)
+                    .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e)))?
             } else {
                 false
             };
