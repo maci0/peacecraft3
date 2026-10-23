@@ -68,6 +68,7 @@ native amount branches, but the production support boundary above is unchanged
 until its rules are derived from image operands. Exact threshold equality,
 rendered birth animation and collision behavior remain unqualified.
 
+
 Script death natives deliver matching callbacks synchronously before returning:
 the host takes the reserved batch, installs the event context, and continues
 through the shared synchronous frame machinery used by player-state events. A
