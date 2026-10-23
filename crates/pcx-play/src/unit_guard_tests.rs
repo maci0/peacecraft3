@@ -107,6 +107,9 @@ endglobals
     let flee = policy.is_some();
     if let Some(policy) = policy {
         let context = Arc::clone(h.player_context().unwrap());
+        let mut targeting = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+        targeting.image_sha256 = policy.image_sha256;
+        h.admit_campaign_targeting(&context, targeting).unwrap();
         h.admit_campaign_flee(&context, policy).unwrap();
     }
     let context = Arc::clone(h.player_context().unwrap());

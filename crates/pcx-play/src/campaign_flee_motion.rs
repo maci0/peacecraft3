@@ -4,10 +4,12 @@
 //! weapon, no active weapon-slot upgrades and no effect history; other sources
 //! are refused with their unit context instead of being approximated. The
 //! victim must be a shown, mobile, nonhero ordinary unit whose owner enabled
-//! `SetUnitsFlee` and whose resulting life is in a source life band. It owns
+//! `SetUnitsFlee` and whose resulting life is in a source life band. The
+//! independent hero flag is checked before this ordinary route. It owns
 //! only the decision and the bounded set of units whose accepted route is a
 //! retreat; movement, route work and arrival stay in the activity host.
 use super::{Entry, Error, Failure, ObjectHost};
+use crate::campaign_targeting_policy::TargetingPolicy;
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::HandleId;
 use pcx_sim::world::{Definition, FieldValue};
@@ -80,6 +82,14 @@ impl ObjectHost {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_set_flee_rawcode(&mut self, unit: HandleId, rawcode: [u8; 4]) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("unit fixture") else {
+            panic!("unit fixture");
+        };
+        record.definition.rawcode = rawcode;
+    }
+
     pub(crate) fn campaign_flee_damage_decision(
         &self,
         source: HandleId,
@@ -118,10 +128,22 @@ impl ObjectHost {
             return Ok(None);
         };
         let owner = victim.owner;
-        if self.campaign_flee_enabled(owner)? != Some(true) {
-            return Ok(None);
+        let units_flee = self.campaign_flee_enabled(owner)?;
+        let heroes_flee = self.campaign_heroes_flee_enabled(owner)?;
+        let hero = self.campaign_flee_is_hero(target, victim, policy)?;
+        if hero {
+            return match heroes_flee {
+                Some(false) => Ok(None),
+                Some(true) => Err(self.campaign_flee_error(
+                    target,
+                    "hero retreat decision and route are not qualified",
+                )),
+                None => {
+                    Err(self.campaign_flee_error(target, "hero flee flag has no qualified value"))
+                }
+            };
         }
-        if victim.definition.rawcode[0].is_ascii_uppercase() {
+        if units_flee != Some(true) {
             return Ok(None);
         }
         if self.unit_has_effect_history(target) {
@@ -145,7 +167,7 @@ impl ObjectHost {
         let Some(attacker_position) = attacker.position else {
             return Err(self.campaign_flee_error(source, "accepted attacker position is missing"));
         };
-        self.campaign_flee_source_is_ordinary(source, attacker)?;
+        self.campaign_flee_source_is_ordinary(source, attacker, policy)?;
         let Some(weapon) = attacker.combat.as_ref().and_then(|combat| combat.weapon) else {
             return Err(
                 self.campaign_flee_error(source, "incoming attacker has no admitted combat weapon")
@@ -242,8 +264,9 @@ impl ObjectHost {
         &self,
         source: HandleId,
         attacker: &super::ExecutedUnit,
+        policy: &crate::campaign_flee_policy::FleePolicy,
     ) -> Result<(), Error> {
-        if attacker.definition.rawcode[0].is_ascii_uppercase() {
+        if self.campaign_flee_is_hero(source, attacker, policy)? {
             return Err(self.campaign_flee_error(source, "incoming attacker is a hero"));
         }
         if attacker.summoned {
@@ -274,6 +297,29 @@ impl ObjectHost {
         }
         self.campaign_flee_source_has_no_active_upgrades(source, attacker)?;
         Ok(())
+    }
+
+    fn campaign_flee_is_hero(
+        &self,
+        unit: HandleId,
+        record: &super::ExecutedUnit,
+        flee: &crate::campaign_flee_policy::FleePolicy,
+    ) -> Result<bool, Error> {
+        let targeting: &TargetingPolicy = self.campaign_targeting_policy().ok_or_else(|| {
+            self.campaign_flee_error(unit, "selected hero classifier is not admitted")
+        })?;
+        if targeting.image_sha256 != flee.image_sha256 {
+            return Err(self.campaign_flee_error(unit, "hero classifier source image differs"));
+        }
+        if targeting.hero_first > targeting.hero_last
+            || !targeting.hero_exclusion_mask.is_power_of_two()
+            || targeting.creation_exclusion_flag == 0
+        {
+            return Err(self.campaign_flee_error(unit, "hero classifier operands are invalid"));
+        }
+        // shortcut: current creation and cache paths do not produce the native copy-exclusion bit; revisit when one does.
+        Ok(targeting.hero_first <= record.definition.rawcode[0]
+            && record.definition.rawcode[0] <= targeting.hero_last)
     }
 
     fn campaign_flee_source_has_no_active_upgrades(
