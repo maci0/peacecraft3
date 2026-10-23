@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `SetGroupsFlee` now admits its source-derived mask and exact owned-source
+  boolean ABI into canonical per-player state. The published session verifies
+  independent updates before captain creation and after sleep; real melee
+  checks keep ordinary retreat independent. Combined validation passes 1,637
+  core / 610 app tests, 16 flee-policy checks including selected-image gates,
+  strict native/WASM Clippy and selected startup/Continue. Unchanged Human02
+  passes the setter and stops at `SetSlowChopping` at 7.218750 seconds.
+  Group-controller membership and retreat actions remain unfinished; see
+  [campaign flee](docs/re-notes/campaign-ai-flee.md).
+
 - [~] `SetHeroesFlee` now has source-derived mask admission, canonical per-player
   state and an explicit combat boundary independent of ordinary flee. Inactive
   human owners take normal damage; enabled or unknown hero retreat on an active

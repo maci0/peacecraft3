@@ -1551,15 +1551,15 @@ mod tests {
 
     #[test]
     fn failed_wake_retires_only_its_discarded_vm_and_shared_flags() {
-        let common = format!("{AI_COMMON}{AI_TARGET}{AI_FLEE}");
+        let common = format!("{AI_COMMON}{AI_TARGET}{AI_FLEE}{AI_GROUP_FLEE}");
         let failed = program_with_ai_common(
             "synthetic:failed.ai",
-            "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall SetUnitsFlee(true)\ncall Sleep(0.25)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall SetUnitsFlee(true)\ncall SetGroupsFlee(true)\ncall Sleep(0.25)\ncall GetUnitGoldCost(0)\nendfunction\n",
             &common,
         );
         let peer = program_with_ai_common(
             "synthetic:peer.ai",
-            "function main takes nothing returns nothing\ncall SetTargetHeroes(false)\ncall SetUnitsFlee(false)\ncall Sleep(1.0)\nendfunction\n",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(false)\ncall SetUnitsFlee(false)\ncall SetGroupsFlee(false)\ncall Sleep(1.0)\nendfunction\n",
             &common,
         );
         let mut runtime = Runtime::<World>::default();
@@ -1583,10 +1583,12 @@ mod tests {
         assert_eq!(runtime.remaining_loads, loads);
         assert!(world.is_some());
         assert!(world.as_mut().unwrap().ai_set_units_flee(1, true).is_err());
+        assert!(world.as_mut().unwrap().ai_set_groups_flee(1, true).is_err());
         let state = shared.lock().unwrap();
         assert_eq!(state.active.keys().copied().collect::<Vec<_>>(), [2]);
         assert_eq!(state.target_heroes, [(2, false)].into());
         assert_eq!(state.units_flee, [(2, false)].into());
+        assert_eq!(state.groups_flee, [(2, false)].into());
         drop(state);
         assert_eq!(runtime.next_wake(1.0).unwrap().1, 2);
     }

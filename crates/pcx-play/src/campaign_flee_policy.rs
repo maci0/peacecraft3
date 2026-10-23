@@ -121,6 +121,9 @@ fn jmp(bytes: &[u8], va: u32, offset: usize) -> Result<u32, Error> {
 /// Decode a shared 71-byte flag-setter handler (control chain, resolver, set
 /// and clear operands, both returns) and return the single positive bit mask.
 fn decode_flag_setter(bytes: &[u8], va: u32, context_offset: u32) -> Result<u32, Error> {
+    let bytes = bytes
+        .get(..71)
+        .ok_or(Error("truncated flag setter window"))?;
     at(bytes, 0, &[0x55, 0x8b, 0xec])?;
     at(bytes, 3, &[0xa1])?;
     if word(bytes, 4)? != 0x11b4a10 {
@@ -1693,6 +1696,20 @@ pub(crate) mod tests {
         let mut source = synthetic_windows();
         source[32][68] = 0x04;
         refuses(source);
+    }
+
+    #[test]
+    fn flag_setter_short_windows_refuse_before_indexing() {
+        let source = synthetic_windows();
+        let field = word(&source[0], 2).unwrap();
+        for index in [27, 32] {
+            for length in 0..source[index].len() {
+                assert!(
+                    decode_flag_setter(&source[index][..length], WINDOWS[index].0, field).is_err(),
+                    "window {index}, length {length}"
+                );
+            }
+        }
     }
 
     #[test]
