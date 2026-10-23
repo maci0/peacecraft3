@@ -4189,6 +4189,38 @@ fn can_flee_and_minimum_speed_gate_the_retreat() {
 }
 
 #[test]
+fn life_band_maxima_are_inclusive_while_the_ordinary_cutoff_stays_strict() {
+    let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
+    assert!(
+        flee_decision(&mut vm, a, b, 293.0).unwrap().is_some(),
+        "unconditional maximum"
+    );
+    let error = flee_decision(&mut vm, a, b, 293.5).expect_err("above band");
+    assert!(
+        error.to_string().contains("earlier range/ability"),
+        "{error}"
+    );
+    for life in [393.0, 493.0, 593.0, 693.0] {
+        let error = flee_decision(&mut vm, a, b, life).expect_err("conditional maximum");
+        assert!(
+            error.to_string().contains("score-dependent"),
+            "{life}: {error}"
+        );
+        let error = flee_decision(&mut vm, a, b, life + 0.5).expect_err("above band");
+        assert!(
+            error.to_string().contains("earlier range/ability"),
+            "{life}: {error}"
+        );
+    }
+    assert!(flee_decision(&mut vm, a, b, 172.5).unwrap().is_some());
+    let error = flee_decision(&mut vm, a, b, 173.0).expect_err("strict cutoff");
+    assert!(
+        error.to_string().contains("earlier range/ability"),
+        "{error}"
+    );
+}
+
+#[test]
 fn high_life_is_a_contextual_refusal_that_aborts_before_damage() {
     let (mut vm, a, b) = flee_fixture(&flee_fields("1", "8"));
     set_life(&mut vm, b, 390.0);

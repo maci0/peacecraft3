@@ -168,7 +168,7 @@ impl ObjectHost {
             if policy
                 .conditional_life_bands()
                 .iter()
-                .any(|band| life >= band.minimum && life < band.maximum)
+                .any(|band| life >= band.minimum && life <= band.maximum)
             {
                 return Err(self.campaign_flee_error(
                     candidate.target,
@@ -339,7 +339,7 @@ fn campaign_flee_low_life(policy: &crate::campaign_flee_policy::FleePolicy, life
         || policy
             .unconditional_life_bands()
             .iter()
-            .any(|band| life >= band.minimum && life < band.maximum)
+            .any(|band| life >= band.minimum && life <= band.maximum)
 }
 
 fn campaign_flee_can_flee(definition: &Definition) -> Result<bool, String> {
