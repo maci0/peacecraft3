@@ -979,22 +979,25 @@ impl ObjectHost {
         let state = self.source_constant_enumerand(source_global, "playerstate")?;
         self.resource_value(at, state)
     }
-    /// Read the AI player's admitted cost without creating a unit or a player identity.
-    pub(crate) fn ai_unit_cost(
+    /// Read catalog quantities without creating a unit or player identity.
+    pub(crate) fn ai_unit_amount(
         &self,
         player: HandleId,
         rawcode: i32,
         column: &str,
     ) -> Result<i32, Error> {
-        let name = if column == "goldcost" {
-            "GetUnitGoldCost"
-        } else {
-            "GetUnitWoodCost"
+        let name = match column {
+            "goldcost" => "GetUnitGoldCost",
+            "lumbercost" => "GetUnitWoodCost",
+            "bldtm" => "GetUnitBuildTime",
+            _ => {
+                return Err(self.inner.error(
+                    "campaign unit query",
+                    Failure::PlayerState("unknown unit quantity column"),
+                ));
+            }
         };
         let fail = |why| self.inner.error(name, Failure::PlayerState(why));
-        if !matches!(column, "goldcost" | "lumbercost") {
-            return Err(fail("unknown unit cost column"));
-        }
         let at = self.player_index(&Value::Handle(player), name)?;
         let resources = self
             .players
@@ -1006,21 +1009,30 @@ impl ObjectHost {
             .unit_cost
             .as_ref()
             .map_err(|_| fail("selected unit cost policy unsupported"))?;
-        let tokens = self
-            .resource_value(
-                at,
-                resources
-                    .hero_tokens
-                    .ok_or_else(|| fail("hero token source state missing"))?,
-            )?
-            .ok_or_else(|| fail("hero tokens not admitted"))?;
-        if policy.zero_cost(rawcode, tokens) {
-            return Ok(0);
+        if column != "bldtm" {
+            let tokens = self
+                .resource_value(
+                    at,
+                    resources
+                        .hero_tokens
+                        .ok_or_else(|| fail("hero token source state missing"))?,
+                )?
+                .ok_or_else(|| fail("hero tokens not admitted"))?;
+            if policy.zero_cost(rawcode, tokens) {
+                return Ok(0);
+            }
         }
         let requested = rawcode.to_be_bytes();
-        let definition = match self.unit_catalog()?.resolve(requested) {
+        let definition = match self
+            .unit_catalog()
+            .map_err(|e| self.inner.error(name, e.failure))?
+            .resolve(requested)
+        {
             Ok(value) => value,
-            Err(pcx_sim::world::ResolutionProblem::MissingRawcode(_)) => return Ok(0),
+            Err(
+                pcx_sim::world::ResolutionProblem::MissingRawcode(_)
+                | pcx_sim::world::ResolutionProblem::InvalidRawcode,
+            ) => return Ok(0),
             Err(problem) => {
                 return Err(self.inner.error(
                     name,
@@ -1032,10 +1044,22 @@ impl ObjectHost {
             }
         };
         if definition.rawcode != requested {
-            return Err(fail("cost catalog resolved another rawcode"));
+            return Err(fail("unit quantity catalog resolved another rawcode"));
+        }
+        if column == "bldtm" && policy.is_hero(rawcode) {
+            // shortcut: owned hero timing needs revival state; add its source-derived formula when revival is supported.
+            if self
+                .executed_units()
+                .any(|(_, unit)| unit.owner == player && unit.definition.rawcode == requested)
+            {
+                return Err(fail(
+                    "owned hero revival build-time context is not admitted",
+                ));
+            }
+            return Ok(0);
         }
         crate::player_unit_cost::amount(&definition, column)
-            .map_err(|_| fail("unit cost definition unsupported"))
+            .map_err(|_| fail("unit quantity definition unsupported"))
     }
     /// Effective value of one admitted player state, used by state-change events.
     pub fn player_state_value(

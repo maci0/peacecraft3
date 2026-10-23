@@ -94,7 +94,7 @@ impl AiWorld for AiResearchWorld {
         }
     }
 
-    fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
+    fn ai_unit_amount(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
         Err("unit costs are outside this research fixture".into())
     }
 

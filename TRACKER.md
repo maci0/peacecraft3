@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `GetUnitBuildTime` now reads ordinary durations and map overrides from
+  `UnitBalance.bldtm`, separately from hero-token cost discounts. The selected
+  handler supplies the hero-byte range; empty hero context returns zero and
+  owned-hero revival timing still refuses. Unknown IDs return zero without
+  swallowing malformed definitions. Core 1,695, app-library 55, app-binary 638,
+  published two-program fixtures, selected image/startup/Continue and strict
+  native/WASM Clippy pass. Unchanged Human02 now refuses `DisplayTextI` at
+  7.312500 seconds; see [build time](docs/re-notes/campaign-ai-build-time.md).
+
 - [~] `IgnoredUnits` now queries live canonical units outside the current guard
   and captain memberships. Real guard release, repeat release, owner transfer,
   death/removal and captain attachment are covered without a second count store.

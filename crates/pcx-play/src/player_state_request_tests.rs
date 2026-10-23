@@ -577,6 +577,93 @@ impl pcx_sim::world::ObjectCatalog for ResolvedFoodCatalog {
         })
     }
 }
+
+#[test]
+fn campaign_build_time_reads_catalog_without_tokens_and_refuses_owned_hero_timing() {
+    use pcx_objects::editor::{FieldSource, SlkId};
+    use pcx_sim::world::{FieldValue, ObjectCatalog};
+    let mut ordinary = FoodCatalog.resolve(*b"a001").unwrap();
+    let mut field = ordinary.fields[b"f001"].clone();
+    let meta = field.metadata.as_mut().unwrap();
+    meta.fourcc = *b"ubld";
+    meta.field = "bldtm".into();
+    meta.source = FieldSource::Column {
+        slk: SlkId::UnitBalance,
+        column: "bldtm".into(),
+    };
+    field.value = Ok(FieldValue::Override(pcx_objects::Value::Int(29)));
+    ordinary.fields.insert(*b"ubld", field);
+    let mut hero = ordinary.clone();
+    hero.rawcode = *b"H001";
+    hero.base_rawcode = "H001".into();
+    let (ctx, host) = fixture(&resource_common(), "// campaign build time", true);
+    let mut rules = crate::player_resources::fixture::rules();
+    rules.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(3, b'B', b'Y', 10));
+    let mut host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 4 })
+        .unwrap()
+        .with_player_resources(rules)
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(ResolvedFoodCatalog(
+                [(ordinary.rawcode, ordinary), (hero.rawcode, hero)].into(),
+            )),
+            pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "synthetic".into(),
+                map: ctx.map_digest.label.clone(),
+            },
+            crate::playercolor_host::UnitBudget {
+                max_records: 2,
+                max_retained_fields: 8,
+                max_modifications: 0,
+            },
+        )
+        .unwrap();
+    let first = host.native("Player", &[Value::Int(0)]).unwrap();
+    let second = host.native("Player", &[Value::Int(1)]).unwrap();
+    let handles = host.inner().handles();
+    assert_eq!(
+        host.ai_unit_amount(id(&first), i32::from_be_bytes(*b"a001"), "bldtm")
+            .unwrap(),
+        29
+    );
+    assert_eq!(
+        host.ai_unit_amount(id(&first), i32::from_be_bytes(*b"H001"), "bldtm")
+            .unwrap(),
+        0
+    );
+    assert_eq!(host.ai_unit_amount(id(&first), 0, "bldtm").unwrap(), 0);
+    assert_eq!(host.inner().handles(), handles);
+    let unit = host
+        .native(
+            "CreateUnit",
+            &[
+                first.clone(),
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(0.),
+                Value::Real(0.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+    let error = host
+        .ai_unit_amount(id(&first), i32::from_be_bytes(*b"H001"), "bldtm")
+        .unwrap_err();
+    assert!(error.to_string().contains("GetUnitBuildTime"));
+    assert!(error.to_string().contains("revival"));
+    assert_eq!(
+        host.ai_unit_amount(id(&second), i32::from_be_bytes(*b"H001"), "bldtm")
+            .unwrap(),
+        0
+    );
+    host.native("RemoveUnit", &[unit]).unwrap();
+    assert_eq!(
+        host.ai_unit_amount(id(&first), i32::from_be_bytes(*b"H001"), "bldtm")
+            .unwrap(),
+        0
+    );
+}
 fn marker_food_queries(
     catalog: ResolvedFoodCatalog,
     rules: crate::player_resources::Rules,

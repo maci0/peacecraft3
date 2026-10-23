@@ -115,7 +115,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_clock(&self) -> Option<f64>;
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
-    fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
+    fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
     fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String>;
     fn ai_player_unit_type_count(
@@ -193,13 +193,13 @@ impl AiWorld for NeutralStack {
         }
     }
 
-    fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String> {
+    fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String> {
         let objects = self.inner().inner().inner().inner().inner().inner();
         let identity = objects
             .player_identity(player)
             .ok_or("campaign AI cost player identity is not admitted")?;
         objects
-            .ai_unit_cost(identity, unit, column)
+            .ai_unit_amount(identity, unit, column)
             .map_err(|e| e.to_string())
     }
 
@@ -650,6 +650,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     for (name, params) in [
         ("GetUnitCount", &["integer"][..]),
         ("GetUnitCountDone", &["integer"][..]),
+        ("GetUnitBuildTime", &["integer"][..]),
         ("IgnoredUnits", &["integer"][..]),
         ("GetPlayerUnitTypeCount", &["player", "integer"][..]),
     ] {
@@ -861,18 +862,18 @@ impl<W: AiWorld> Host for AiHost<W> {
                     self.world_mut()?.ai_upgrade_level(player, *upgrade)?,
                 ))
             }
-            "GetUnitGoldCost" | "GetUnitWoodCost" => {
+            "GetUnitGoldCost" | "GetUnitWoodCost" | "GetUnitBuildTime" => {
                 let [Value::Int(unit)] = args else {
                     return Err(format!("{name}: expected an integer unit ID"));
                 };
-                let column = if name == "GetUnitGoldCost" {
-                    "goldcost"
-                } else {
-                    "lumbercost"
+                let column = match name {
+                    "GetUnitGoldCost" => "goldcost",
+                    "GetUnitWoodCost" => "lumbercost",
+                    _ => "bldtm",
                 };
                 let player = self.player;
                 Ok(Value::Int(
-                    self.world_mut()?.ai_unit_cost(player, *unit, column)?,
+                    self.world_mut()?.ai_unit_amount(player, *unit, column)?,
                 ))
             }
             "GetUnitCount" | "GetUnitCountDone" => {
@@ -1077,7 +1078,12 @@ mod tests {
         fn ai_upgrade_level(&mut self, _player: i32, _upgrade: i32) -> Result<i32, String> {
             Err("test world has no admitted upgrade research".into())
         }
-        fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
+        fn ai_unit_amount(
+            &mut self,
+            _player: i32,
+            _unit: i32,
+            _column: &str,
+        ) -> Result<i32, String> {
             Err("mock costs are not admitted".into())
         }
         fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String> {
@@ -2031,6 +2037,7 @@ mod tests {
         for (name, params) in [
             ("GetUnitCount", "integer unitid"),
             ("GetUnitCountDone", "integer unitid"),
+            ("GetUnitBuildTime", "integer unitid"),
             ("IgnoredUnits", "integer unitid"),
             ("GetPlayerUnitTypeCount", "player owner, integer unitid"),
         ] {
@@ -2493,7 +2500,12 @@ mod tests {
     fn ai_queries_reject_wrong_arity_and_type_without_touching_world() {
         let shared = Arc::new(Mutex::new(State::default()));
         let mut host = AiHost::new(1, World(Arc::clone(&shared)));
-        for name in ["GetUpgradeLevel", "GetUnitGoldCost", "GetUnitWoodCost"] {
+        for name in [
+            "GetUpgradeLevel",
+            "GetUnitGoldCost",
+            "GetUnitWoodCost",
+            "GetUnitBuildTime",
+        ] {
             for args in [
                 vec![],
                 vec![Value::Real(5.0)],

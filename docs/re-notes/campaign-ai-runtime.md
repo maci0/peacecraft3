@@ -4,8 +4,8 @@
 
 The private campaign continuation passes Human02 initialization with nearby
 lumber harvesting admitted. The latest authored opening reaches 7.312500
-seconds, then refuses the red program's `GetUnitBuildTime` after
-[ignored-unit query admission](campaign-ai-ignored-units.md).
+seconds, then refuses the red program's `DisplayTextI` after
+[build-time query admission](campaign-ai-build-time.md).
 This is a real selected-map execution result,
 distinct from the synthetic source fixtures below; it does not establish a
 working opening cinematic or campaign strategy.

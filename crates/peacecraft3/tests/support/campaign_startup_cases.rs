@@ -1087,7 +1087,7 @@ fn campaign_ai_upgrade_queries_share_published_research_across_map_timer_and_sle
 
 #[cfg(feature = "test-fixtures")]
 #[test]
-fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
+fn campaign_ai_unit_cost_and_build_time_read_catalog_overrides_and_live_player_tokens() {
     use crate::binding::Reply;
     use pcx_play::map_startup_host::MapStartupError;
     use pcx_script::Host;
@@ -1110,12 +1110,13 @@ fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
     );
     map.common = common.into_bytes();
     let mut metadata = String::from_utf8(std::mem::take(&mut map.metadata)).unwrap();
-    metadata = metadata.replace("B;Y2;X6", "B;Y4;X6");
+    metadata = metadata.replace("B;Y2;X6", "B;Y5;X6");
     metadata = metadata.replacen(
         "\r\nE\r\n",
         "\r\nC;X1;Y3;K\"ugol\"\r\nC;X2;Y3;K\"goldcost\"\r\nC;X3;Y3;K\"UnitBalance\"\r\nC;X4;Y3;K\"int\"\r\nC;X5;Y3;K\"-1\"\r\nC;X6;Y3;K\"synthetic category\"\r\nC;X1;Y4;K\"ulum\"\r\nC;X2;Y4;K\"lumbercost\"\r\nC;X3;Y4;K\"UnitBalance\"\r\nC;X4;Y4;K\"int\"\r\nC;X5;Y4;K\"-1\"\r\nC;X6;Y4;K\"synthetic category\"\r\nE\r\n",
         1,
     );
+    metadata = metadata.replacen("\r\nE\r\n", "\r\nC;X1;Y5;K\"ubld\"\r\nC;X2;Y5;K\"bldtm\"\r\nC;X3;Y5;K\"UnitBalance\"\r\nC;X4;Y5;K\"int\"\r\nC;X5;Y5;K\"-1\"\r\nC;X6;Y5;K\"synthetic category\"\r\nE\r\n",1);
     map.metadata = metadata.into_bytes();
     let mut w3u = Vec::new();
     for word in [1u32, 1] {
@@ -1130,14 +1131,21 @@ fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
         w3u.extend(value.to_le_bytes());
         w3u.extend(b"TAIL");
     }
+    w3u.extend(1u32.to_le_bytes());
+    w3u.extend(b"UNIT");
+    w3u.extend(b"unit");
+    w3u.extend(1u32.to_le_bytes());
+    w3u.extend(b"ubld");
     w3u.extend(0u32.to_le_bytes());
+    w3u.extend(31u32.to_le_bytes());
+    w3u.extend(b"unit");
     map.files
         .iter_mut()
         .find(|(name, _)| *name == "war3map.w3u")
         .unwrap()
         .1 = w3u;
     map.rebuild();
-    let balance = b"ID;PWXL;N;E\r\nB;Y2;X3\r\nC;X1;Y1;K\"unitBalanceID\"\r\nC;X2;Y1;K\"goldcost\"\r\nC;X3;Y1;K\"lumbercost\"\r\nC;X1;Y2;K\"UNIT\"\r\nC;X2;Y2;K\"125\"\r\nC;X3;Y2;K\"13\"\r\nE\r\n";
+    let balance = b"ID;PWXL;N;E\r\nB;Y2;X4\r\nC;X1;Y1;K\"unitBalanceID\"\r\nC;X2;Y1;K\"goldcost\"\r\nC;X3;Y1;K\"lumbercost\"\r\nC;X4;Y1;K\"bldtm\"\r\nC;X1;Y2;K\"UNIT\"\r\nC;X2;Y2;K\"125\"\r\nC;X3;Y2;K\"13\"\r\nC;X4;Y2;K\"47\"\r\nE\r\n";
     let reader = map.resolver_with_assets(std::collections::BTreeMap::from([(
         SlkId::UnitBalance.path().to_owned(),
         Reply::Bytes(balance.to_vec()),
@@ -1174,9 +1182,10 @@ fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
         .admission
         .shared_context()
         .unwrap();
-    let ai_common = AI_COMMON;
+    let ai_common =
+        format!("{AI_COMMON}native GetUnitBuildTime takes integer unitid returns integer\n");
     let programs: std::collections::BTreeMap<_, _> = ["red.ai", "purple.ai"].into_iter().map(|name| {
-        let body = "function cost takes nothing returns integer\nreturn GetUnitGoldCost('UNIT') + GetUnitWoodCost('UNIT') + GetUnitGoldCost('ZZZZ')\nendfunction\nfunction main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\nendfunction\n";
+        let body = "function cost takes nothing returns integer\nreturn GetUnitGoldCost('UNIT') + GetUnitWoodCost('UNIT') + GetUnitGoldCost('ZZZZ') + GetUnitBuildTime('unit') + GetUnitBuildTime('UNIT') + GetUnitBuildTime(0)\nendfunction\nfunction main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\nendfunction\n";
         let scripts = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "ai-cost-map-host".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -1210,13 +1219,13 @@ fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
         host.native("GetPlayerState", &[player, gold.clone()])
             .unwrap()
     };
-    assert_eq!(bank(&mut session, 0), Value::Int(150));
-    assert_eq!(bank(&mut session, 1), Value::Int(150));
+    assert_eq!(bank(&mut session, 0), Value::Int(181));
+    assert_eq!(bank(&mut session, 1), Value::Int(181));
     session.advance_timers(0.125, 8).unwrap();
-    assert_eq!(bank(&mut session, 0), Value::Int(150));
+    assert_eq!(bank(&mut session, 0), Value::Int(181));
     session.advance_timers(0.25, 8).unwrap();
-    assert_eq!(bank(&mut session, 0), Value::Int(0));
-    assert_eq!(bank(&mut session, 1), Value::Int(150));
+    assert_eq!(bank(&mut session, 0), Value::Int(31));
+    assert_eq!(bank(&mut session, 1), Value::Int(181));
 }
 
 #[test]

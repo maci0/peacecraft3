@@ -6,6 +6,9 @@ gameplay consumers. The private runtime now implements
 world. Gold and wood costs also read the admitted catalog and canonical player's
 hero-token state. The remaining query envelopes and production systems are
 unfinished; the tables below record bounded source and runtime evidence.
+The later [build-time implementation](campaign-ai-build-time.md) reads ordinary
+durations and map overrides from that same catalog, separately from token
+discounts. Owned-hero revival timing remains unsupported.
 
 The later [campaign-mode integration](campaign-ai-mode.md) forwards `GetPlayers`
 through the existing map-configuration host. It reads the map's `SetPlayers`

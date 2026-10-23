@@ -1,4 +1,4 @@
-//! Source-checked campaign cost queries over the admitted unit catalog.
+//! Source-checked campaign cost and build-time queries over the unit catalog.
 use crate::neutral_player::{RuleInputBudget, sha256};
 use crate::neutral_rule_input::Pe;
 use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, SlkId};
@@ -58,6 +58,9 @@ impl Policy {
         if Self::branch(parts.next().unwrap())? != (first, last, slot, threshold) {
             return Err("gold and wood cost policy differ".into());
         }
+        if Self::build_time_range(window(0xab5260, 128)?)? != (first, last) {
+            return Err("build-time and cost hero ranges differ".into());
+        }
         let hero_state = i32::from(slot >> get[0x27]) - i32::from(get[0x24]);
         if slot != ((hero_state + i32::from(get[0x24])) << get[0x27]) as u8
             || hero_state < 0
@@ -97,9 +100,35 @@ impl Policy {
         Ok((first, last, body[0x7d], i32::from(body[0x85] as i8)))
     }
 
-    pub(crate) fn zero_cost(&self, rawcode: i32, tokens: i32) -> bool {
+    fn build_time_range(body: &[u8]) -> Result<(u8, u8), String> {
+        let body = body.get(..128).ok_or("build-time handler is short")?;
+        if body[..14]
+            != [
+                0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 8, 0x8b, 0xc6, 0xc1, 0xe8, 24, 0x83, 0xf8,
+            ]
+            || body[15] != 0x72
+            || body[17..19] != [0x83, 0xf8]
+            || body[20] != 0x77
+            || 17i32 + i32::from(body[16] as i8) != 0x74
+            || 22i32 + i32::from(body[21] as i8) != 0x74
+            || body[14] > body[19]
+            || body[19] >= 0x80
+            || call(body, 0xab5260, 0x75) != Some(0x67c3d0)
+            || call(body, 0xab5260, 0x6c) != Some(0xabe900)
+            || body[0x74] != 0x56
+            || body[0x7a..] != [0x83, 0xc4, 4, 0x5e, 0x5d, 0xc3]
+        {
+            return Err("build-time handler branch differs".into());
+        }
+        Ok((body[14], body[19]))
+    }
+
+    pub(crate) fn is_hero(&self, rawcode: i32) -> bool {
         (self.upper_first..=self.upper_last).contains(&rawcode.to_be_bytes()[0])
-            && tokens >= self.zero_from
+    }
+
+    pub(crate) fn zero_cost(&self, rawcode: i32, tokens: i32) -> bool {
+        self.is_hero(rawcode) && tokens >= self.zero_from
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -215,6 +244,72 @@ mod tests {
         );
         assert!(amount(&invalid, "goldcost").is_err());
         assert!(amount(&invalid, "lumbercost").is_err());
+    }
+
+    #[test]
+    fn build_time_cells_and_overrides_share_strict_integer_metadata() {
+        let mut source = definition(FieldValue::Cell("47".into()), FieldValue::Cell("13".into()));
+        let mut field = source.fields.remove(b"ugol").unwrap();
+        let meta = field.metadata.as_mut().unwrap();
+        meta.fourcc = *b"ubld";
+        meta.field = "bldtm".into();
+        meta.source = FieldSource::Column {
+            slk: SlkId::UnitBalance,
+            column: "bldtm".into(),
+        };
+        source.fields.insert(*b"ubld", field);
+        assert_eq!(amount(&source, "bldtm"), Ok(47));
+        source.fields.get_mut(b"ubld").unwrap().value =
+            Ok(FieldValue::Override(pcx_objects::Value::Int(29)));
+        assert_eq!(amount(&source, "bldtm"), Ok(29));
+        for value in [
+            FieldValue::Cell("-1".into()),
+            FieldValue::Cell("2.5".into()),
+            FieldValue::Cell("NaN".into()),
+        ] {
+            source.fields.get_mut(b"ubld").unwrap().value = Ok(value);
+            assert!(amount(&source, "bldtm").is_err());
+        }
+        source
+            .fields
+            .get_mut(b"ubld")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .field = "goldcost".into();
+        assert!(amount(&source, "bldtm").is_err());
+    }
+
+    #[test]
+    fn build_time_handler_range_is_operand_driven_and_branches_are_checked() {
+        let mut body = [0u8; 128];
+        body[..22].copy_from_slice(&[
+            0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 8, 0x8b, 0xc6, 0xc1, 0xe8, 24, 0x83, 0xf8, b'B',
+            0x72, 0x63, 0x83, 0xf8, b'Y', 0x77, 0x5e,
+        ]);
+        for (at, target) in [(0x75, 0x67c3d0u32), (0x6c, 0xabe900u32)] {
+            body[at] = 0xe8;
+            body[at + 1..at + 5]
+                .copy_from_slice(&target.wrapping_sub(0xab5260 + at as u32 + 5).to_le_bytes());
+        }
+        body[0x74] = 0x56;
+        body[0x7a..].copy_from_slice(&[0x83, 0xc4, 4, 0x5e, 0x5d, 0xc3]);
+        let range = Policy::build_time_range(&body).unwrap();
+        assert_eq!(range, (b'B', b'Y'));
+        let policy = Policy::fixture(3, range.0, range.1, 1);
+        assert!(!policy.is_hero(i32::from_be_bytes(*b"A001")));
+        assert!(policy.is_hero(i32::from_be_bytes(*b"B001")));
+        assert!(policy.is_hero(i32::from_be_bytes(*b"Y001")));
+        assert!(!policy.is_hero(i32::from_be_bytes(*b"Z001")));
+        for at in [0, 15, 16, 20, 21, 0x6c, 0x6d, 0x75, 0x76, 0x7f] {
+            let mut bad = body;
+            bad[at] ^= 1;
+            assert!(Policy::build_time_range(&bad).is_err());
+        }
+        for len in 0..128 {
+            assert!(Policy::build_time_range(&body[..len]).is_err());
+        }
     }
 
     #[test]
