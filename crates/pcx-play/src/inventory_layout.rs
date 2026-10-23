@@ -70,6 +70,10 @@ pub struct Rules {
     row_shift: u32,
 }
 impl Rules {
+    /// Shared selected-unit information frame in the logical ConsoleUI surface.
+    pub fn info_panel(&self) -> Rect {
+        self.info
+    }
     pub fn reviewed_legacy(image: &[u8], origin: AssetIdentity) -> Result<Self, String> {
         let fail = |s: &str| format!("inventory layout {}: {s}", origin.source);
         let digest = sha256(image);

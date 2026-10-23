@@ -184,3 +184,4 @@ pub mod player_alliance_rules;
 pub mod script_localization;
 pub mod shop_table;
 pub mod unit_guard_rules;
+pub mod unit_panel_layout;

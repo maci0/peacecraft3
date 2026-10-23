@@ -133,6 +133,10 @@ impl MapScripts {
     pub fn source(&self, label: &str) -> Option<&str> {
         self.sources.get(label).map(String::as_str)
     }
+    /// Resolve presentation strings through the same retained map table as JASS.
+    pub fn table_string(&self, id: u32) -> Result<Option<String>, String> {
+        resolve_table_string(self.wts.as_ref(), self.wts_label.as_deref(), id)
+    }
     /// Share this exact compiled program with a session-owned Host.
     pub fn shared_program(&self) -> Arc<Program> {
         Arc::clone(&self.program)

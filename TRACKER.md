@@ -2,6 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] A single selected unit now shows its source-derived name and live health/
+  mana readouts in the campaign console. The selected detail FDF supplies title
+  style/anchor; checked client operands supply portrait text geometry, formatting,
+  rounding and colours. Map-localized names use the retained WTS. Human01 tests
+  verify selection changes, life updates, deselection and session cleanup; a
+  calibrated desktop menu-to-Human01 replay shows the centered title/readouts.
+  All 1,684 core, 55 app-library and 634 app-binary tests pass, with strict
+  native/WASM checks. Portrait rendering, additional statistics, group selection
+  and randomized hero-name state remain open; see
+  [selected-unit readouts](docs/re-notes/held-inventory-presentation.md#selected-unit-title-and-portrait-readouts).
+
 - [~] Campaign minimap now renders canonical unit day/night sight and retained
   exploration, with source-derived opacity, layout, image lookup and backing.
   Human01's unchanged fog-enabled checkpoint shows an owned-unit sight area and

@@ -61,6 +61,7 @@ pub(crate) struct CampaignHud {
 pub(crate) fn install(app: &mut App) {
     upper_buttons::install(app);
     resource_bar::install(app);
+    crate::campaign_unit_panel::install(app);
     app.init_resource::<CampaignHud>()
         .add_systems(Update, produce_policy);
 }

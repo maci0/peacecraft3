@@ -182,3 +182,58 @@ Not yet established: pickup and hover on a rendered frame, rendered slot icon an
 - Pickup remains unreachable: control is false until the defeat pause, and hero life falls
   to 0 before then. Whether the early death is faithful is for the combat/alliance
   investigation (wave10). The original source is unchanged.
+
+## Selected-unit title and portrait readouts
+
+`campaign_unit_panel.rs` projects the canonical selection and `ExecutedUnit`
+vitals onto the same receipt-bound console parent as the inventory. It keeps no
+second unit store. `unit_panel_layout.rs` admits the reviewed client image above
+and reads the title/detail identifiers and portrait text records. The existing
+inventory rules supply the shared information-frame rectangle and logical viewport.
+
+Native evidence retained locally in `.scratch/campaign-unit-panel/` binds
+`SimpleInfoPanelUnitDetail` and `SimpleNameValue` to the selected
+`UI\FrameDef\UI\SimpleInfoPanel.fdf`. This differs from the older base-archive
+`InfoPanelUnitDetail.fdf`. The selected FDF supplies the title anchor, inherited
+font, height, colour and shadow. The portrait updater at `0x659bd0` supplies the
+health/mana rectangles, font and profile keys, formatting, shadows, justification
+and colours. Health rounds upward; mana truncates. Health colour is refreshed
+when the displayed life pair changes. These are native-code/byte findings, not
+an original-client pixel comparison.
+
+Ordinary names come from effective profile `Name` metadata, rather than the
+animation-set name in UnitUI. Supported heroes use a single authored
+`Propernames` entry. Map overrides resolve through the same retained WTS used by
+scripts. Missing data and unresolved creation-time random-name choices report
+an error. Multi-selection is left to a future group panel. Dead, hidden or
+deselected units clear the display; session retirement removes its nodes/fonts.
+
+The renderer uses the existing HUD's frame plus intrinsically sized text-child
+pattern. This preserves horizontal frame alignment with no wrapping; Bevy's
+no-wrap text justification alone does not center text inside its frame.
+
+Final checks pass 1,684 core tests (54 ignored), 55 app-library tests (4 ignored)
+and 634 app-binary tests (59 ignored), plus the explicit selected-image reader and
+Human01 panel gates. The latter checks the mounted console, a life change,
+selection replacement, deselection and retirement. Strict native all-target and
+WASM library/binary Clippy, the default desktop build and formatting pass.
+Receipts are in `.scratch/campaign-unit-panel/gates-final/` (core/reader) and
+`gates-centered/` (final app/compile checks).
+
+A desktop-window replay enters Human01 through the menu, skips its cinematic
+and selects the hero. The final capture shows the centered title and green/blue
+readouts. The calibrated 1280x1024/96-DPI run uses software Vulkan, disabled audio
+and no fixed seed. Its balanced-input receipt is
+`.scratch/unit-panel-native-centered/receipt-launcher.json`, SHA-256
+`c7e95ddf0903149b8cba8dd28318caa3a31f595dd09ad03c512137ea77400ab6`.
+The preserved default executable has SHA-256
+`b4592da8b9de5c6bfce3de616de454995bfc836bf581e3d81e8840ed82604795`;
+`captures/unit-readouts.png` has SHA-256
+`a23cecb8e3995d05b326a3f17d85b13ba352506aa6525c19ca67a1e9302fc37f`.
+The application and private display were stopped. The earlier left-aligned run
+remains preserved in `.scratch/unit-panel-native/` and is superseded.
+
+Portrait models, remaining unit/hero statistics, group-selection icons, readout
+hover tooltips and randomized proper-name state remain unfinished. Original-client
+pixel parity and other viewport/DPI combinations were not verified here. The
+existing sky illumination and sight-occlusion gaps remain open.
