@@ -166,6 +166,15 @@ internal call. Independent checks pin seven position windows and five length
 and arithmetic windows. Failed position extraction and the zero-direction
 orientation branch remain outside this qualified nonzero route path.
 
+The private implementation now exposes that nonzero ordinary destination
+calculation without issuing an order. It requires the flee and numeric policies
+to bind the same image and requires the admitted software math implementation.
+Synthetic checks cover translation, both axes, source margin changes, invalid
+inputs and the distinction from the public square-root wrapper. Private
+integration passes 1,530 core tests, the explicit selected-image route test,
+strict native/WASM Clippy and formatting. This component does not qualify a
+combat trigger, path execution or complete flee behavior.
+
 The controller's route-request callback consumes a record containing a unit
 pointer, flags and a scalar. Its scalar comparison rejects equality with the
 source zero value; the intervening `LAHF`/`TEST` parity calculation must be

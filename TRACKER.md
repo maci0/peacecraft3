@@ -4,9 +4,11 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 - [~] Campaign flee policy operands now decode from 26 checked selected-image
   windows, preserving conditional life-band grouping and joining the route order
-  to admitted movement rules. Private integration passes 1,526 core tests,
+  to admitted movement rules. Private integration passes 1,530 core tests,
   strict native/WASM Clippy and the selected-image gate. The runtime consumer
-  remains unfinished: initial authored weapon-range inputs now have a verified
+  remains unfinished: a pure ordinary destination calculation now reuses the
+  selected software arithmetic and internal square root, with unresolved
+  zero-direction geometry refused. Initial authored weapon-range inputs have a verified
   indexed initialization path, while later modifiers, alternate selection and
   trigger timing remain open. Original-client pairs establish route persistence
   after clearing the flag in the tested setup. Human02 still stops at
