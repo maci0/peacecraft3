@@ -38,6 +38,27 @@ constant playerunitevent EVENT_PLAYER_UNIT_DROP_ITEM=ConvertPlayerUnitEvent(99)
 endglobals
 "#;
 fn tables(slots: &str) -> Arc<DefaultTables> {
+    tables_with_capacity(slots, "1")
+}
+fn tables_with_capacity(slots: &str, data_ordinal: &str) -> Arc<DefaultTables> {
+    let ordinal = data_ordinal.parse::<usize>().unwrap();
+    let second_data = if data_ordinal == "2" { "1" } else { "2" };
+    let mut row = [
+        "L000".to_owned(),
+        "Xinv".to_owned(),
+        "1".to_owned(),
+        "0".to_owned(),
+        "0".to_owned(),
+        "0".to_owned(),
+        "0".to_owned(),
+        "1".to_owned(),
+        "1".to_owned(),
+        "1".to_owned(),
+        "0".to_owned(),
+    ];
+    row[5 + ordinal - 1] = slots.to_owned();
+    let row: Vec<&str> = row.iter().map(String::as_str).collect();
+    let other = ["AIh1", "AIhe", "1", "0", "0", "0", "0", "0", "0", "0", "20"];
     let data = sylk(
         &[
             "alias",
@@ -52,12 +73,7 @@ fn tables(slots: &str) -> Arc<DefaultTables> {
             "DataE1",
             "Cool1",
         ],
-        &[
-            &[
-                "L000", "Xinv", "1", "0", "0", slots, "0", "1", "1", "1", "0",
-            ],
-            &["AIh1", "AIhe", "1", "0", "0", "0", "0", "0", "0", "0", "20"],
-        ],
+        &[row.as_slice(), &other],
     );
     let meta = sylk(
         &[
@@ -112,7 +128,7 @@ fn tables(slots: &str) -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "data",
-                "1",
+                data_ordinal,
                 "L000",
                 "9",
             ],
@@ -123,7 +139,7 @@ fn tables(slots: &str) -> Arc<DefaultTables> {
                 "-1",
                 "bool",
                 "data",
-                "2",
+                second_data,
                 "L000",
                 "1",
             ],
@@ -507,19 +523,19 @@ fn inventory_source_capacity_overlays_and_permission_flags_drive_policy() {
         b"[Misc]\nPickupItemRange=3\nDropItemRange=4\nGiveItemRange=5".as_slice(),
     )];
     let mut overlay = Overlay::default();
-    let modification = |field, value| pcx_objects::Mod {
+    let modification = |field, pointer, value| pcx_objects::Mod {
         field,
         value_type: pcx_objects::ValueType::Int,
-        selectors: Some([1, 0]),
+        selectors: Some([1, pointer]),
         value: pcx_objects::Value::Int(value),
         end_word: 0,
     };
     overlay.mods.insert(
         "L000".into(),
         vec![
-            modification(*b"inv1", 4),
-            modification(*b"inv4", 0),
-            modification(*b"inv2", 1),
+            modification(*b"inv1", 1, 4),
+            modification(*b"inv4", 4, 0),
+            modification(*b"inv2", 2, 1),
         ],
     );
     let rules = Rules::read(tables("2"), overlay, Arc::clone(&registry), &profiles, 1024).unwrap();
@@ -542,6 +558,107 @@ fn inventory_source_capacity_overlays_and_permission_flags_drive_policy() {
             1024
         )
         .is_err()
+    );
+}
+
+#[test]
+fn inventory_capacity_reads_and_validates_the_metadata_data_pointer() {
+    let (registry, _) = order_inputs();
+    let profiles = [(
+        "synthetic",
+        b"[Misc]\nPickupItemRange=3\nDropItemRange=4\nGiveItemRange=5".as_slice(),
+    )];
+    let rules = |overlay| {
+        Rules::read(
+            tables_with_capacity("4", "2"),
+            overlay,
+            Arc::clone(&registry),
+            &profiles,
+            1024,
+        )
+        .unwrap()
+    };
+    let policy = rules(Overlay::default())
+        .policy([(*b"L000", 1)].into_iter(), 9)
+        .unwrap();
+    assert_eq!(policy.slots, 4, "DataB is the metadata Data column");
+
+    let capacity = |pointer, value_type, value| pcx_objects::Mod {
+        field: *b"inv1",
+        value_type,
+        selectors: Some([1, pointer]),
+        value,
+        end_word: 0,
+    };
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![capacity(
+            2,
+            pcx_objects::ValueType::Int,
+            pcx_objects::Value::Int(6),
+        )],
+    );
+    assert_eq!(
+        rules(overlay)
+            .policy([(*b"L000", 1)].into_iter(), 9)
+            .unwrap()
+            .slots,
+        6
+    );
+
+    for pointer in [0, 1] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "L000".into(),
+            vec![capacity(
+                pointer,
+                pcx_objects::ValueType::Int,
+                pcx_objects::Value::Int(6),
+            )],
+        );
+        let error = rules(overlay)
+            .policy([(*b"L000", 1)].into_iter(), 9)
+            .unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "data pointer {pointer} does not match metadata data column 2"
+            )),
+            "{error}"
+        );
+    }
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![capacity(
+            2,
+            pcx_objects::ValueType::Str,
+            pcx_objects::Value::Str(b"6".to_vec()),
+        )],
+    );
+    assert_eq!(
+        rules(overlay)
+            .policy([(*b"L000", 1)].into_iter(), 9)
+            .unwrap_err(),
+        "noninteger inventory override"
+    );
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![
+            capacity(2, pcx_objects::ValueType::Int, pcx_objects::Value::Int(3)),
+            capacity(2, pcx_objects::ValueType::Int, pcx_objects::Value::Int(6)),
+        ],
+    );
+    assert_eq!(
+        rules(overlay)
+            .policy([(*b"L000", 1)].into_iter(), 9)
+            .unwrap()
+            .slots,
+        6,
+        "the latest matching capacity override wins"
     );
 }
 
@@ -1072,6 +1189,8 @@ constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
 constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
 constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
 endglobals
 "#;
 

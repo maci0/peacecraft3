@@ -134,6 +134,7 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         game_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
+    let activity = activity.with_move_speed_profiles(&game_profiles, 8 << 20)?;
     let hero = inputs
         .hero_skills
         .as_mut()
@@ -231,6 +232,7 @@ pub fn prepare_new_game(
             initial_alliances: Some(initial_alliances),
             orders: Some(orders),
             activity: Some(activity),
+            upgrades: upgrades.clone(),
             group_orders: Some(group_orders),
             research: Some(research),
             placement_rules: Some(placement_rules),
@@ -406,6 +408,18 @@ pub fn prepare(
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        ai_source: Some(crate::campaign_ai::SourceNames::selected(image)?),
+        targeting_policy: Some(
+            crate::campaign_targeting_policy::TargetingPolicy::read(
+                image,
+                crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 64 << 10,
+                    sections: 96,
+                },
+            )
+            .map_err(|e| e.to_string())?,
+        ),
         item_classes: Some(item_classes),
         item_sales: Some(item_sales),
         item_use: None,
@@ -479,7 +493,9 @@ pub fn prepare(
             max_secondary: 256,
         }),
         numeric: Some(source.numeric),
+        destructable_restore: Some(source.destructable_restore),
         experience_handicap: Some(source.experience),
+        health_handicap: Some(source.health),
         hero_skills: Some(HeroSkillsInput {
             rules: source.hero,
             abilities,
@@ -732,6 +748,7 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
         }),
         timer_events: 65536,
         game_state_events: 65536,
+        player_state_events: 65536,
         stock: Some(StockBudget {
             max_records: 65536,
             shop,

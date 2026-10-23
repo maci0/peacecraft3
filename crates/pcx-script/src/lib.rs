@@ -11,7 +11,7 @@
 //! | layer | module | stops at |
 //! |---|---|---|
 //! | syntax | [`lexer`], [`parser`], [`ast`], [`mod@print`], [`canon`] | an exact tree, every node spanned |
-//! | resolution | [`mod@resolve`] | one flat environment, three checks |
+//! | resolution | [`mod@resolve`] | one flat environment, declaration and arity checks |
 //! | values | [`value`] | `null`, boolean, integer, real, string, `code` |
 //! | execution | [`eval`] | statements and expressions, no natives but two |
 //! | text seams | [`text`], [`eval::Host`] | the caller supplies `war3map.wts` |
@@ -44,11 +44,10 @@
 //! nothing declares is a genuine finding rather than an artifact of resolving
 //! the script in isolation.
 //!
-//! The checks are only the ones the engine's own compiler performs: an unknown
-//! type, a wrong argument count where the declaration gives the arity, and
-//! `library` `requires` / `uses` ordering. JASS has no static type system, so
-//! none is invented here: mixed `real` / `integer` operands and string
-//! comparisons resolve, and the value model decides what they mean.
+//! Resolution checks unknown types, argument counts, `library` ordering and
+//! repeated map globals. Assignment and return types are not checked. A resolving
+//! script is therefore not necessarily accepted by the original client; mixed
+//! numeric operands and string comparisons are left to the runtime value model.
 //!
 //! # Round-trip
 //!

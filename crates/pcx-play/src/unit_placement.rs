@@ -4,6 +4,7 @@ use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
 use crate::scripts::AssetIdentity;
+use pcx_assets::AssetPath;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
 use pcx_sim::world::Source;
@@ -20,6 +21,7 @@ pub struct Binding {
     pub one_initializer: SourceWindow,
     pub two_initializer: SourceWindow,
     pub ground_mask: SourceWindow,
+    pub fly_mask: SourceWindow,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +41,7 @@ pub struct Rules {
     one: f32,
     two: f32,
     mask: u8,
+    fly: u8,
 }
 
 impl Rules {
@@ -62,6 +65,7 @@ impl Rules {
             binding.one_initializer,
             binding.two_initializer,
             binding.ground_mask,
+            binding.fly_mask,
         ];
         if image.len() > budget.image_bytes
             || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 12
@@ -153,15 +157,20 @@ impl Rules {
         {
             return Err(fail("unordered radius geometry"));
         }
-        let mask = code(&binding.ground_mask)?;
-        if mask.len() != 5 || mask[0] != 0xb9 {
-            return Err(fail("ground mask instruction"));
-        }
-        let mask = u8::try_from(u32::from_le_bytes(mask[1..].try_into().unwrap()))
-            .map_err(|_| fail("ground mask range"))?;
-        if mask == 0 {
-            return Err(fail("empty ground mask"));
-        }
+        let mask = |window: &SourceWindow, label: &str| -> Result<u8, Error> {
+            let bytes = code(window)?;
+            if bytes.len() != 5 || bytes[0] != 0xb9 {
+                return Err(fail(format!("{label} instruction")));
+            }
+            let value = u8::try_from(u32::from_le_bytes(bytes[1..].try_into().unwrap()))
+                .map_err(|_| fail(format!("{label} range")))?;
+            if value == 0 {
+                return Err(fail(format!("empty {label}")));
+            }
+            Ok(value)
+        };
+        let ground = mask(&binding.ground_mask, "ground mask")?;
+        let fly = mask(&binding.fly_mask, "fly mask")?;
         Ok(Self {
             binding,
             exponent,
@@ -169,7 +178,8 @@ impl Rules {
             thresholds,
             one,
             two,
-            mask,
+            mask: ground,
+            fly,
         })
     }
 
@@ -179,6 +189,10 @@ impl Rules {
 
     pub fn ground_mask(&self) -> u8 {
         self.mask
+    }
+
+    pub fn fly_mask(&self) -> u8 {
+        self.fly
     }
 
     pub fn binding(&self) -> &Binding {
@@ -233,8 +247,8 @@ impl Rules {
 }
 
 /// An explicitly selected, derived static collision raster, including stationary
-/// footprints. It is a cache, not another object/handle arena. Its owner must
-/// rebuild it when stationary obstacles change; mutation is not admitted here.
+/// footprints. It is a cache, not another object/handle arena. Authored placement
+/// builds it once; script-created destructables add bounded layers at creation.
 pub struct Grid {
     pub source: Source,
     pub origin: [f32; 2],
@@ -255,8 +269,52 @@ pub struct Footprint {
 pub struct Budget {
     pub cells: usize,
     pub footprint_cells: usize,
+    /// Total live+dead layer cells retained for stationary destructables.
+    pub stationary_cells: usize,
+    /// Footprint cells decoded while preparing stationary layers.
+    pub stationary_work: usize,
     /// Deterministic cell/occupancy queries per creation, independent of wall time.
     pub queries: usize,
+}
+
+/// Identity of one stationary destructable whose collision can change.
+///
+/// Placed objects are keyed by their authored creation number; script objects by
+/// their arena handle. Both share the same overlay path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StationaryKey {
+    Placed(u32),
+    Destructable(HandleId),
+}
+
+/// One destructable's live and dead footprint cells over a shared base raster.
+#[derive(Clone, Debug)]
+pub struct StationaryStamp {
+    pub key: StationaryKey,
+    pub live: Vec<usize>,
+    pub dead: Vec<usize>,
+    pub mask: u8,
+    pub active: bool,
+}
+
+#[derive(Debug)]
+struct StationaryLayer {
+    live: Vec<usize>,
+    dead: Vec<usize>,
+    mask: u8,
+    active: bool,
+}
+
+/// Preflighted live/dead layer for one script-created destructable. Publishing it
+/// is infallible once the shared arena has issued the matching handle.
+#[derive(Debug)]
+pub(crate) struct PreparedStationary {
+    live: Vec<usize>,
+    dead: Vec<usize>,
+    cells: Vec<usize>,
+    mask: u8,
+    active: bool,
+    work: usize,
 }
 
 pub struct Placement {
@@ -264,14 +322,49 @@ pub struct Placement {
     grid: Grid,
     rules: Rules,
     footprints: BTreeMap<String, Footprint>,
-    footprint_loader: Option<FootprintLoader>,
+    footprint_loader: Option<FootprintLoaderBox>,
+    script_paths: Option<ScriptPathsLoader>,
     occupied: Vec<u32>,
     footprint_occupied: Vec<u32>,
     stamps: Vec<(HandleId, Prepared)>,
+    stationary: BTreeMap<StationaryKey, StationaryLayer>,
+    stationary_cells: BTreeMap<usize, Vec<(StationaryKey, bool)>>,
+    stationary_cells_used: usize,
+    stationary_work: usize,
+    base_pathing: Option<Pathing>,
     budget: Budget,
 }
 
-type FootprintLoader = Box<dyn FnMut(&str) -> Result<Footprint, String> + Send + Sync>;
+/// Source reader for lazily decoded footprints. Paths are canonical
+/// [`AssetPath`] identities. Script loads stay staged until
+/// [`Placement::prepare_script_destructable`] accepts the layer; refusing the
+/// layer calls [`FootprintLoader::rollback`] for every successful load.
+/// Ordinary unit footprints commit as soon as their source load succeeds.
+pub trait FootprintLoader: Send + Sync {
+    fn load(&mut self, path: &str) -> Result<Footprint, String>;
+    fn commit(&mut self, _paths: &[String]) {}
+    fn rollback(&mut self, _paths: &[String]) {}
+}
+
+struct ClosureLoader<F>(F);
+
+impl<F> FootprintLoader for ClosureLoader<F>
+where
+    F: FnMut(&str) -> Result<Footprint, String> + Send + Sync,
+{
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        (self.0)(path)
+    }
+}
+
+type FootprintLoaderBox = Box<dyn FootprintLoader>;
+type ScriptPathsLoader = Box<dyn Fn(i32, bool) -> Result<String, String> + Send + Sync>;
+
+#[derive(Clone, Copy)]
+struct Candidate {
+    creation: bool,
+    air: bool,
+}
 
 #[derive(Debug)]
 pub(crate) struct Prepared {
@@ -279,6 +372,7 @@ pub(crate) struct Prepared {
     cells: Vec<usize>,
     footprint: Vec<usize>,
     active: bool,
+    air: bool,
 }
 
 #[cfg(test)]
@@ -286,6 +380,11 @@ pub(crate) struct Prepared {
 pub(crate) mod tests;
 
 impl Placement {
+    #[cfg(test)]
+    pub(crate) fn test_cell(&self, cell: usize) -> u8 {
+        self.grid.pathing.cells[cell]
+    }
+
     pub fn source(&self) -> &Source {
         &self.source
     }
@@ -325,6 +424,14 @@ impl Placement {
         {
             return Err(fail("missing map/footprint provenance or finite origin"));
         }
+        let mut canonical = BTreeMap::new();
+        for (path, footprint) in footprints {
+            let key = Self::footprint_key(&path)?;
+            if canonical.insert(key.clone(), footprint).is_some() {
+                return Err(fail(format!("duplicate footprint path alias {key}")));
+            }
+        }
+        let footprints = canonical;
         let mut occupied = Vec::new();
         occupied
             .try_reserve_exact(count)
@@ -341,31 +448,421 @@ impl Placement {
             rules,
             footprints,
             footprint_loader: None,
+            script_paths: None,
             occupied,
             footprint_occupied,
             stamps: Vec::new(),
+            stationary: BTreeMap::new(),
+            stationary_cells: BTreeMap::new(),
+            stationary_cells_used: 0,
+            stationary_work: budget.stationary_work,
+            base_pathing: None,
             budget,
         })
     }
 
+    /// Compose stationary destructables over an already decoration-stamped base.
+    ///
+    /// Each layer owns only its footprint cells. Recomposing a cell starts from
+    /// the base and ORs every active layer touching that cell, so killing one
+    /// tree cannot erase an overlapping tree or a terrain bit.
+    pub fn with_stationary(
+        mut self,
+        base: Pathing,
+        stamps: Vec<StationaryStamp>,
+    ) -> Result<Self, Error> {
+        let count = self.grid.pathing.cells.len();
+        if base.width != self.grid.pathing.width
+            || base.height != self.grid.pathing.height
+            || base.cells.len() != count
+        {
+            return Err(fail("stationary base dimensions"));
+        }
+        if stamps.len() > self.budget.footprint_cells {
+            return Err(fail("stationary layer budget"));
+        }
+        let cells = stamps.iter().try_fold(0usize, |total, stamp| {
+            total
+                .checked_add(stamp.live.len())?
+                .checked_add(stamp.dead.len())
+        });
+        if cells.is_none_or(|cells| cells > self.budget.stationary_cells) {
+            return Err(fail("stationary cell budget"));
+        }
+        self.base_pathing = Some(base);
+        for mut stamp in stamps {
+            if stamp.mask == 0 || stamp.live.iter().chain(&stamp.dead).any(|&i| i >= count) {
+                return Err(fail("stationary layer mask or cell range"));
+            }
+            stamp.live.sort_unstable();
+            stamp.live.dedup();
+            stamp.dead.sort_unstable();
+            stamp.dead.dedup();
+            if self.stationary.contains_key(&stamp.key) {
+                return Err(fail("duplicate stationary key"));
+            }
+            for &i in &stamp.live {
+                self.stationary_cells
+                    .entry(i)
+                    .or_default()
+                    .push((stamp.key, true));
+            }
+            for &i in &stamp.dead {
+                self.stationary_cells
+                    .entry(i)
+                    .or_default()
+                    .push((stamp.key, false));
+            }
+            self.stationary.insert(
+                stamp.key,
+                StationaryLayer {
+                    live: stamp.live,
+                    dead: stamp.dead,
+                    mask: stamp.mask,
+                    active: stamp.active,
+                },
+            );
+        }
+        self.stationary_cells_used = self
+            .stationary
+            .values()
+            .try_fold(0usize, |total, layer| {
+                total
+                    .checked_add(layer.live.len())?
+                    .checked_add(layer.dead.len())
+            })
+            .ok_or_else(|| fail("stationary cell count overflow"))?;
+        let cells: Vec<usize> = self.stationary_cells.keys().copied().collect();
+        self.recompose(&cells);
+        Ok(self)
+    }
+
+    /// Toggle one placed tree. `false` means the state did not change.
+    pub fn set_placed_active(&mut self, creation: u32, active: bool) -> bool {
+        self.set_stationary_active(StationaryKey::Placed(creation), active)
+    }
+
+    /// Toggle one script-created destructable.
+    pub fn set_destructable_active(&mut self, id: HandleId, active: bool) -> bool {
+        self.set_stationary_active(StationaryKey::Destructable(id), active)
+    }
+
+    /// Toggle one retained stationary layer without allocating.
+    pub fn set_stationary_active(&mut self, key: StationaryKey, active: bool) -> bool {
+        let Some(layer) = self.stationary.get_mut(&key) else {
+            return false;
+        };
+        if layer.active == active {
+            return false;
+        }
+        layer.active = active;
+        self.recompose_key(key);
+        true
+    }
+
+    /// Recompose one layer over its retained cells without allocating.
+    fn recompose_key(&mut self, key: StationaryKey) {
+        let (Some(base), Some(layer)) = (&self.base_pathing, self.stationary.get(&key)) else {
+            return;
+        };
+        let stationary = &self.stationary;
+        let stationary_cells = &self.stationary_cells;
+        let pathing = &mut self.grid.pathing.cells;
+        for &i in layer.live.iter().chain(&layer.dead) {
+            let mut value = base.cells[i];
+            if let Some(keys) = stationary_cells.get(&i) {
+                for &(key, live) in keys {
+                    let layer = &stationary[&key];
+                    if layer.active == live {
+                        value |= layer.mask;
+                    }
+                }
+            }
+            pathing[i] = value;
+        }
+    }
+
+    fn recompose(&mut self, cells: &[usize]) {
+        let Some(base) = &self.base_pathing else {
+            return;
+        };
+        for &i in cells {
+            let mut value = base.cells[i];
+            if let Some(keys) = self.stationary_cells.get(&i) {
+                for &(key, live) in keys {
+                    let layer = &self.stationary[&key];
+                    if layer.active == live {
+                        value |= layer.mask;
+                    }
+                }
+            }
+            self.grid.pathing.cells[i] = value;
+        }
+    }
+
     /// Load executed footprint paths through the caller's retained source reader.
     pub fn with_footprint_loader(
-        mut self,
+        self,
         loader: impl FnMut(&str) -> Result<Footprint, String> + Send + Sync + 'static,
     ) -> Self {
+        self.with_staged_footprint_loader(ClosureLoader(loader))
+    }
+
+    /// Load executed footprint paths through a source reader whose successful
+    /// loads are staged until script stationary preflight accepts the layer.
+    pub fn with_staged_footprint_loader(mut self, loader: impl FootprintLoader + 'static) -> Self {
         self.footprint_loader = Some(Box::new(loader));
         self
     }
 
+    /// Resolve a script rawcode to its authored live and dead pathing textures
+    /// through the same selected object catalog used for placed objects.
+    pub fn with_script_paths(
+        mut self,
+        loader: impl Fn(i32, bool) -> Result<String, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.script_paths = Some(Box::new(loader));
+        self
+    }
+
+    /// Preflight one script-created stationary layer against the existing base
+    /// raster and budgets. No handle, collision cell or layer is changed until
+    /// [`Self::publish_script_destructable`].
+    pub(crate) fn prepare_script_destructable(
+        &mut self,
+        objectid: i32,
+        point: [f32; 2],
+        face: f32,
+        requested_dead: bool,
+    ) -> Result<PreparedStationary, Error> {
+        let mut loaded = Vec::new();
+        let result = self.prepare_script_destructable_inner(
+            objectid,
+            point,
+            face,
+            requested_dead,
+            &mut loaded,
+        );
+        match result {
+            Ok(prepared) => {
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.commit(&loaded);
+                }
+                Ok(prepared)
+            }
+            Err(error) => {
+                for path in &loaded {
+                    self.footprints.remove(path);
+                }
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.rollback(&loaded);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn prepare_script_destructable_inner(
+        &mut self,
+        objectid: i32,
+        point: [f32; 2],
+        face: f32,
+        requested_dead: bool,
+        loaded: &mut Vec<String>,
+    ) -> Result<PreparedStationary, Error> {
+        if point.iter().any(|v| !v.is_finite()) || !face.is_finite() {
+            return Err(fail("nonfinite script stationary pose"));
+        }
+        if self.base_pathing.is_none() {
+            return Err(fail("stationary base pathing is missing"));
+        }
+        if self.stationary.len() >= self.budget.footprint_cells {
+            return Err(fail("stationary layer budget"));
+        }
+        let (live_path, dead_path) = {
+            let resolver = self
+                .script_paths
+                .as_ref()
+                .ok_or_else(|| fail("script stationary path resolver is missing"))?;
+            (
+                resolver(objectid, false).map_err(fail)?,
+                resolver(objectid, true).map_err(fail)?,
+            )
+        };
+        self.ensure_footprint_tracked(&live_path, loaded)?;
+        self.ensure_footprint_tracked(&dead_path, loaded)?;
+        let mut work = 0usize;
+        for path in [&live_path, &dead_path] {
+            if !matches!(path.as_str(), "" | "_" | "none") {
+                let key = Self::footprint_key(path)?;
+                let count = self
+                    .footprints
+                    .get(&key)
+                    .ok_or_else(|| fail(format!("missing selected footprint {path}")))?
+                    .cells
+                    .len();
+                work = work
+                    .checked_add(count)
+                    .ok_or_else(|| fail("stationary work count overflow"))?;
+            }
+        }
+        if work > self.stationary_work {
+            return Err(fail("stationary footprint work budget"));
+        }
+        let mut live = self.script_footprint_cells(&live_path, point, face)?;
+        let mut dead = self.script_footprint_cells(&dead_path, point, face)?;
+        live.sort_unstable();
+        live.dedup();
+        dead.sort_unstable();
+        dead.dedup();
+        let total = self
+            .stationary_cells_used
+            .checked_add(live.len())
+            .and_then(|total| total.checked_add(dead.len()))
+            .ok_or_else(|| fail("stationary cell count overflow"))?;
+        if total > self.budget.stationary_cells {
+            return Err(fail("stationary cell budget"));
+        }
+        let mask = self.rules.ground_mask();
+        if mask == 0 {
+            return Err(fail("stationary layer mask"));
+        }
+        let mut cells = Vec::new();
+        cells
+            .try_reserve_exact(live.len() + dead.len())
+            .map_err(|_| fail("stationary cell allocation"))?;
+        cells.extend_from_slice(&live);
+        cells.extend_from_slice(&dead);
+        cells.sort_unstable();
+        cells.dedup();
+        Ok(PreparedStationary {
+            live,
+            dead,
+            cells,
+            mask,
+            active: !requested_dead,
+            work,
+        })
+    }
+
+    /// Publish a preflighted layer under its issued script handle. Every failure
+    /// path belongs to [`Self::prepare_script_destructable`]; this step cannot
+    /// refuse after the arena identity exists.
+    pub(crate) fn publish_script_destructable(
+        &mut self,
+        id: HandleId,
+        prepared: PreparedStationary,
+    ) {
+        let key = StationaryKey::Destructable(id);
+        debug_assert!(!self.stationary.contains_key(&key));
+        for &i in &prepared.live {
+            self.stationary_cells
+                .entry(i)
+                .or_default()
+                .push((key, true));
+        }
+        for &i in &prepared.dead {
+            self.stationary_cells
+                .entry(i)
+                .or_default()
+                .push((key, false));
+        }
+        self.stationary_cells_used += prepared.live.len() + prepared.dead.len();
+        self.stationary_work -= prepared.work;
+        let cells = prepared.cells;
+        self.stationary.insert(
+            key,
+            StationaryLayer {
+                live: prepared.live,
+                dead: prepared.dead,
+                mask: prepared.mask,
+                active: prepared.active,
+            },
+        );
+        self.recompose(&cells);
+    }
+
+    fn script_footprint_cells(
+        &self,
+        path: &str,
+        point: [f32; 2],
+        face: f32,
+    ) -> Result<Vec<usize>, Error> {
+        if matches!(path, "" | "_" | "none") {
+            return Ok(Vec::new());
+        }
+        let key = Self::footprint_key(path)?;
+        let footprint = self
+            .footprints
+            .get(&key)
+            .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
+        let cell: [f64; 2] = std::array::from_fn(|axis| {
+            ((f64::from(point[axis]) - f64::from(self.grid.origin[axis]))
+                / f64::from(self.rules.cell_size()))
+            .round_ties_even()
+        });
+        if cell.iter().any(|v| v.abs() > f64::from(i32::MAX)) {
+            return Err(fail("stationary cell range"));
+        }
+        let quarter = (f64::from(face) / 90.0).round_ties_even().rem_euclid(4.0) as u8;
+        let mut cells = Vec::new();
+        cells
+            .try_reserve_exact(footprint.cells.len())
+            .map_err(|_| fail("stationary cell allocation"))?;
+        for &[x, y] in &footprint.cells {
+            let (x, y) = match quarter {
+                0 => (i64::from(x), i64::from(y)),
+                1 => (-i64::from(y) - 1, i64::from(x)),
+                2 => (-i64::from(x) - 1, -i64::from(y) - 1),
+                _ => (i64::from(y), -i64::from(x) - 1),
+            };
+            let (x, y) = (cell[0] as i64 + x, cell[1] as i64 + y);
+            if let Some(i) = self.index(x, y) {
+                cells.push(i);
+            }
+        }
+        Ok(cells)
+    }
+
     fn ensure_footprint(&mut self, path: &str) -> Result<(), Error> {
-        if matches!(path, "" | "_" | "none") || self.footprints.contains_key(path) {
+        let mut loaded = Vec::new();
+        match self.ensure_footprint_tracked(path, &mut loaded) {
+            Ok(()) => {
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.commit(&loaded);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                for path in &loaded {
+                    self.footprints.remove(path);
+                }
+                if let Some(loader) = self.footprint_loader.as_mut() {
+                    loader.rollback(&loaded);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn ensure_footprint_tracked(
+        &mut self,
+        path: &str,
+        loaded: &mut Vec<String>,
+    ) -> Result<(), Error> {
+        if matches!(path, "" | "_" | "none") {
+            return Ok(());
+        }
+        let key = Self::footprint_key(path)?;
+        if self.footprints.contains_key(&key) {
             return Ok(());
         }
         let loader = self
             .footprint_loader
             .as_mut()
             .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
-        let input = loader(path).map_err(fail)?;
+        let input = loader.load(&key).map_err(fail)?;
+        loaded.push(key.clone());
         let count = self
             .footprints
             .values()
@@ -382,8 +879,14 @@ impl Placement {
         {
             return Err(fail("footprint budget or provenance"));
         }
-        self.footprints.insert(path.into(), input);
+        self.footprints.insert(key, input);
         Ok(())
+    }
+
+    fn footprint_key(path: &str) -> Result<String, Error> {
+        AssetPath::new(path)
+            .map(|path| path.as_str().to_owned())
+            .map_err(|error| fail(format!("{path}: {error}")))
     }
 
     fn cell(&self, point: [f32; 2]) -> Result<[i32; 2], Error> {
@@ -441,6 +944,7 @@ impl Placement {
         Ok(cells)
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare(
         &mut self,
         request: [f32; 2],
@@ -448,17 +952,49 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
+        self.prepare_class(request, radius, path, face, false)
+    }
+
+    pub(crate) fn prepare_class(
+        &mut self,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+        air: bool,
+    ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         self.stamps
             .try_reserve(1)
             .map_err(|_| fail("unit occupancy allocation"))?;
-        self.candidate(request, radius, path, face, None, true)?
-            .ok_or_else(|| fail("creation placement refused"))
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("creation placement refused"))
     }
 
+    #[cfg(test)]
     fn blocked(&self, i: usize, exclude: Option<&Prepared>) -> bool {
-        self.grid.pathing.cells[i] & self.rules.mask != 0
-            || (exclude.is_none_or(|p| p.active)
+        self.blocked_class(i, exclude, false)
+    }
+
+    fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, air: bool) -> bool {
+        let mask = if air {
+            self.rules.fly_mask()
+        } else {
+            self.rules.ground_mask()
+        };
+        self.grid.pathing.cells[i] & mask != 0
+            || (!air
+                && exclude.is_none_or(|p| p.active)
                 && (self.occupied[i]
                     > u32::from(exclude.is_some_and(|p| p.cells.binary_search(&i).is_ok()))
                     || self.footprint_occupied[i]
@@ -474,8 +1010,9 @@ impl Placement {
         path: &str,
         face: f32,
         exclude: Option<&Prepared>,
-        creation: bool,
+        options: Candidate,
     ) -> Result<Option<Prepared>, Error> {
+        let Candidate { creation, air } = options;
         if request.iter().any(|v| !v.is_finite()) {
             return Err(fail("nonfinite unit position"));
         }
@@ -518,10 +1055,11 @@ impl Placement {
                     return Ok(false);
                 }
                 let cells = self.rectangle(cell, extents)?;
-                Ok(cells.iter().all(|&i| !self.blocked(i, exclude))
-                    && self
-                        .index(i64::from(cell[0]), i64::from(cell[1]))
-                        .is_some_and(|i| self.grid.domains[i] == wanted))
+                Ok(cells.iter().all(|&i| !self.blocked_class(i, exclude, air))
+                    && (air
+                        || self
+                            .index(i64::from(cell[0]), i64::from(cell[1]))
+                            .is_some_and(|i| self.grid.domains[i] == wanted)))
             };
             if !good(start)? {
                 if !creation {
@@ -586,9 +1124,10 @@ impl Placement {
         }
         let mut footprint = Vec::new();
         if !matches!(path, "" | "_" | "none") {
+            let key = Self::footprint_key(path)?;
             let input = self
                 .footprints
-                .get(path)
+                .get(&key)
                 .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
             footprint
                 .try_reserve_exact(input.cells.len())
@@ -628,6 +1167,7 @@ impl Placement {
             cells,
             footprint,
             active: exclude.is_none_or(|p| p.active),
+            air,
         }))
     }
 
@@ -639,17 +1179,20 @@ impl Placement {
             .map(|(_, p)| p)
             .ok_or_else(|| fail("unit occupancy is missing"))?;
         if stamp.active {
-            for &i in &stamp.cells {
-                self.occupied[i] -= 1;
-            }
-            for &i in &stamp.footprint {
-                self.footprint_occupied[i] -= 1;
+            if !stamp.air {
+                for &i in &stamp.cells {
+                    self.occupied[i] -= 1;
+                }
+                for &i in &stamp.footprint {
+                    self.footprint_occupied[i] -= 1;
+                }
             }
             stamp.active = false;
         }
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_show(
         &mut self,
         unit: HandleId,
@@ -658,24 +1201,57 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
-        if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
-            return Err(fail("hidden unit occupancy required"));
-        }
-        self.ensure_footprint(path)?;
-        if let Some(prepared) = self.candidate(request, radius, path, face, None, false)? {
-            return Ok(prepared);
-        }
-        self.candidate(request, radius, path, face, None, true)?
-            .ok_or_else(|| fail("no admitted reveal placement"))
+        self.prepare_show_class(unit, request, radius, path, face, false)
     }
 
-    pub(crate) fn prepare_relocation(
+    pub(crate) fn prepare_show_class(
         &mut self,
         unit: HandleId,
         request: [f32; 2],
         radius: Option<f32>,
         path: &str,
         face: f32,
+        air: bool,
+    ) -> Result<Prepared, Error> {
+        if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
+            return Err(fail("hidden unit occupancy required"));
+        }
+        self.ensure_footprint(path)?;
+        if let Some(prepared) = self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: false,
+                air,
+            },
+        )? {
+            return Ok(prepared);
+        }
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            None,
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("no admitted reveal placement"))
+    }
+
+    pub(crate) fn prepare_relocation_class(
+        &mut self,
+        unit: HandleId,
+        request: [f32; 2],
+        radius: Option<f32>,
+        path: &str,
+        face: f32,
+        air: bool,
     ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         let stamp = self
@@ -684,8 +1260,18 @@ impl Placement {
             .find(|(id, _)| *id == unit)
             .map(|(_, stamp)| stamp)
             .ok_or_else(|| fail("unit occupancy is missing"))?;
-        self.candidate(request, radius, path, face, Some(stamp), true)?
-            .ok_or_else(|| fail("no admitted relocation placement"))
+        self.candidate(
+            request,
+            radius,
+            path,
+            face,
+            Some(stamp),
+            Candidate {
+                creation: true,
+                air,
+            },
+        )?
+        .ok_or_else(|| fail("no admitted relocation placement"))
     }
 
     pub(crate) fn prepare_motion(
@@ -703,7 +1289,17 @@ impl Placement {
         if !stamp.footprint.is_empty() {
             return Err(fail("moving pathing textures are not admitted"));
         }
-        self.candidate(point, Some(radius), "_", 0.0, Some(stamp), false)
+        self.candidate(
+            point,
+            Some(radius),
+            "_",
+            0.0,
+            Some(stamp),
+            Candidate {
+                creation: false,
+                air: stamp.air,
+            },
+        )
     }
 
     pub(crate) fn segment_clear(
@@ -1158,6 +1754,7 @@ impl Placement {
         let old = self.stamps.iter().position(|(id, _)| *id == unit);
         if let Some(at) = old
             && self.stamps[at].1.active
+            && !self.stamps[at].1.air
         {
             for &i in &self.stamps[at].1.cells {
                 self.occupied[i] -= 1;
@@ -1166,7 +1763,7 @@ impl Placement {
                 self.footprint_occupied[i] -= 1;
             }
         }
-        if prepared.active {
+        if prepared.active && !prepared.air {
             for &i in &prepared.cells {
                 self.occupied[i] += 1;
             }

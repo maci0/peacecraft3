@@ -76,10 +76,11 @@ pub(super) struct Rules {
     attack_order: i32,
     /// From the selected neutral rule, set once the host is assembled.
     neutral_passive: Option<i32>,
-    neutral_aggressive: Option<i32>,
+    pub(super) neutral_aggressive: Option<i32>,
     passive: i32,
     player_death: i32,
     unit_death: i32,
+    death_event: Option<HandleId>,
     unit_attacked: i32,
     player_attacked: i32,
     missiles: Vec<Missile>,
@@ -223,6 +224,8 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct HeroBonuses {
     pub damage: f32,
+    /// Flat attack damage from held passive items, applied once per attack.
+    pub held_damage: f32,
     pub armor: f32,
     pub speed: f32,
 }
@@ -237,6 +240,7 @@ impl ObjectHost {
         if !definition.rawcode[0].is_ascii_uppercase() {
             return Ok(HeroBonuses {
                 damage: 0.0,
+                held_damage: bonus.damage as f32,
                 armor: 0.0,
                 speed: 1.0,
             });
@@ -257,6 +261,7 @@ impl ObjectHost {
         }
         Ok(HeroBonuses {
             damage,
+            held_damage: bonus.damage as f32,
             armor,
             speed,
         })
@@ -388,6 +393,14 @@ impl ObjectHost {
                 Self::contract(&self.inner, name, args, result, false, Some("unit"))?;
             }
         }
+        let death_event_source = self
+            .inner
+            .program
+            .natives()
+            .get("TriggerRegisterDeathEvent")
+            .or_else(|| self.inner.program.natives().get("ConvertWidgetEvent"))
+            .map_or_else(String::new, |n| n.source.clone());
+        let death_event = self.optional_widget_death_event(&death_event_source)?;
         self.combat = Some(Rules {
             rules,
             attack_order,
@@ -397,6 +410,7 @@ impl ObjectHost {
             player_death: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_DEATH", "playerunitevent")?,
             unit_death: self.source_constant_enumerand("EVENT_UNIT_DEATH", "unitevent")?,
+            death_event,
             unit_attacked: self.source_constant_enumerand("EVENT_UNIT_ATTACKED", "unitevent")?,
             player_attacked: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_ATTACKED", "playerunitevent")?,
@@ -498,14 +512,14 @@ impl ObjectHost {
             rules.neutral_aggressive = Some(number);
         }
     }
-    pub(super) fn creep_owner(&self, owner: HandleId) -> Result<bool, Error> {
+    pub(super) fn creep_owner(&self, owner: HandleId, native: &str) -> Result<bool, Error> {
         let aggressive = self
             .combat
             .as_ref()
             .and_then(|r| r.neutral_aggressive)
             .ok_or_else(|| {
                 self.inner.error(
-                    "hero kill XP",
+                    native,
                     Failure::UnitState("neutral aggressive owner is not admitted"),
                 )
             })?;
@@ -609,6 +623,22 @@ impl ObjectHost {
 
     fn hostile(&self, attacker: &super::ExecutedUnit, target: &super::ExecutedUnit) -> bool {
         self.hostile_owners(attacker.owner, target.owner)
+    }
+
+    fn acquisition_candidate(
+        &self,
+        unit: HandleId,
+        owner: HandleId,
+        position: [f32; 2],
+        acquire: f32,
+        id: HandleId,
+    ) -> Option<(HandleId, f32)> {
+        if id == unit {
+            return None;
+        }
+        let other = self.weapon_target(id)?;
+        let gap = distance(other.position?, position);
+        (gap <= acquire && self.hostile_owners(owner, other.owner)).then_some((id, gap))
     }
 
     pub(super) fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
@@ -830,7 +860,8 @@ impl ObjectHost {
             self.assign_hero_experience(hero, xp, false)?;
         }
         let rules = self.combat.as_ref().expect("combat");
-        let (player_death, unit_death) = (rules.player_death, rules.unit_death);
+        let (player_death, unit_death, death_event) =
+            (rules.player_death, rules.unit_death, rules.death_event);
         let subject = EventSubject {
             unit: Some(unit),
             source: killer,
@@ -853,7 +884,7 @@ impl ObjectHost {
                     fired.push((*trigger, None, Some(*unitevent), None));
                 }
                 Entry::RegisteredDeathEvent(r) if r.widget == unit => {
-                    fired.push((r.trigger, None, None, None));
+                    fired.push((r.trigger, None, death_event, None));
                 }
                 _ => {}
             }
@@ -917,7 +948,8 @@ impl ObjectHost {
         // Hero armor derives from agility; held armor points are a separate item bonus.
         let armor =
             armor + self.hero_combat_bonuses(target)?.armor + self.held_armor_bonus(target)? as f32;
-        let primary_damage = self.hero_combat_bonuses(source)?.damage;
+        let bonuses = self.hero_combat_bonuses(source)?;
+        let primary_damage = bonuses.damage + bonuses.held_damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {
             roll += self.draw_random_integer(1, weapon.sides.max(1), name)?;
@@ -1003,6 +1035,7 @@ impl ObjectHost {
             let held = record.activity.as_ref().is_some_and(|a| a.held());
             let destination = combat.attack_destination;
             let previous_target = combat.target;
+            let owner = record.owner;
             let resume = previous_target.is_some()
                 || record
                     .activity
@@ -1017,19 +1050,35 @@ impl ObjectHost {
                 if held {
                     target = self.hold_position_target(unit, weapon.range, name, &units)?;
                 } else if weapon.acquire > 0.0 {
-                    target = units
-                        .iter()
-                        .filter_map(|&(id, _)| {
-                            if id == unit {
-                                return None;
-                            }
-                            let other = self.weapon_target(id)?;
-                            let gap = distance(other.position?, position);
-                            (gap <= weapon.acquire && self.hostile(record, other))
-                                .then_some((id, gap))
-                        })
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                        .map(|(id, _)| id);
+                    if let Some(target_heroes) = self.campaign_target_heroes(unit) {
+                        let candidates = units.iter().filter_map(|&(id, _)| {
+                            self.acquisition_candidate(unit, owner, position, weapon.acquire, id)
+                        });
+                        target = self
+                            .campaign_acquisition(target_heroes, candidates)
+                            .map_err(|reason| {
+                                self.inner.error(
+                                    name,
+                                    Failure::UnitActivity(format!(
+                                        "campaign targeting for unit {unit:?}: {reason}"
+                                    )),
+                                )
+                            })?;
+                    } else {
+                        target = units
+                            .iter()
+                            .filter_map(|&(id, _)| {
+                                self.acquisition_candidate(
+                                    unit,
+                                    owner,
+                                    position,
+                                    weapon.acquire,
+                                    id,
+                                )
+                            })
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(id, _)| id);
+                    }
                 }
             }
             if target != combat.target {

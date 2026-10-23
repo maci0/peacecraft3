@@ -46,7 +46,7 @@ call TriggerAddCondition(T,Condition(function condition))
 call TriggerAddAction(T,function action)
 endfunction
 "#;
-struct Geometry;
+pub(super) struct Geometry;
 impl ObjectCatalog for Geometry {
     fn resolve(&self, rawcode: [u8; 4]) -> Result<Definition, ResolutionProblem> {
         if rawcode != *b"UNIT" {
@@ -111,7 +111,7 @@ impl ObjectCatalog for Geometry {
         })
     }
 }
-fn placement(source: Source) -> pcx_play::unit_placement::Placement {
+pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
     use pcx_play::unit_placement::*;
     let mut image = vec![0; 0x800];
     for (at, value) in [
@@ -167,6 +167,7 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
     let one_initializer = put(0x280, &init(1));
     let two_initializer = put(0x2a0, &init(2));
     let ground_mask = put(0x2c0, &[0xb9, 8, 0, 0, 0]);
+    let fly_mask = put(0x2e0, &[0xb9, 4, 0, 0, 0]);
     for (at, value) in [(0x700, -8192.25f32), (0x704, 0.5), (0x708, 1.5)] {
         image[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -182,6 +183,7 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
             one_initializer,
             two_initializer,
             ground_mask,
+            fly_mask,
         },
         RuleInputBudget {
             image_bytes: 4096,
@@ -207,6 +209,8 @@ fn placement(source: Source) -> pcx_play::unit_placement::Placement {
         Budget {
             cells: 1024,
             footprint_cells: 64,
+            stationary_cells: 0,
+            stationary_work: 1 << 20,
             queries: 100,
         },
     )
@@ -505,7 +509,7 @@ fn registry_fixture(
     )
 }
 
-fn activity_rules() -> (
+pub(super) fn activity_rules() -> (
     Arc<pcx_play::order_registry::Registry>,
     pcx_play::unit_activity::Rules,
 ) {

@@ -1,13 +1,16 @@
 //! Application pacing for the published campaign VM. Simulation time is tick based.
 use crate::{
+    browser_configuration::SelectedMapSources,
     campaign_camera::CampaignCamera,
     campaign_startup::CampaignStartupSet,
+    map_binding::BindingInputs,
+    map_requests::{MapRequestSet, MapRequests},
     map_script_session::{MapScriptSession, TimerSessionError},
 };
 use bevy::prelude::*;
 use pcx_play::{
     map_admission::ParsedMapContext, map_startup_host::MapStartupHost,
-    playercolor_host::PlayerScoreSnapshot,
+    playercolor_host::PlayerScoreSnapshot, scripts::AssetIdentity,
 };
 use pcx_script::Value;
 use std::{
@@ -24,6 +27,8 @@ pub enum CampaignRuntimeError {
     TickOverflow,
     #[error("campaign pacing duration exhausted")]
     ClockOverflow,
+    #[error("one script delivery requested conflicting campaign destinations")]
+    ConflictingDestinations,
     #[error(transparent)]
     Timer(#[from] TimerSessionError),
 }
@@ -185,6 +190,8 @@ pub fn install(app: &mut App, runtime: CampaignRuntime) {
     // Time<Real> is sampled before startup. Bind on the following frame so loading is excluded.
     app.insert_resource(runtime)
         .init_resource::<CampaignExitResult>()
+        .init_resource::<CampaignTransition>()
+        .add_message::<CampaignTransitionRequest>()
         .add_systems(
             Update,
             (
@@ -192,6 +199,11 @@ pub fn install(app: &mut App, runtime: CampaignRuntime) {
                 take_game_exit
                     .in_set(CampaignExitSet)
                     .after(advance_campaign),
+                apply_transition
+                    .in_set(CampaignTransitionSet)
+                    .after(CampaignExitSet)
+                    .before(MapRequestSet::Deliver),
+                finish_transition.after(CampaignStartupSet),
             ),
         );
 }
@@ -245,9 +257,11 @@ const GAME_RESULT_GLOBALS: [(LocalGameResult, &str); 4] = [
 
 /// State of one campaign exit, captured before its VM is dropped.
 pub struct CampaignExitSnapshot {
-    /// Any executed `EndGame(true)` in the exit. Choosing any-true over other
+    /// Any executed exit requesting scores. Choosing any-true over other
     /// combinations is host policy; the native's multi-call behavior is not verified.
     pub score_screen: bool,
+    /// Verbatim destination of the executed `ChangeLevel` request, if any.
+    pub next_level: Option<String>,
     /// Simulation clock; `None` when the timer is not admitted.
     pub game_time: Option<f64>,
     /// `None` when the local player has no admitted removal record.
@@ -270,7 +284,7 @@ impl CampaignExitResult {
     }
 }
 
-/// Ends the campaign session for executed `EndGame` requests. Ordered after
+/// Ends the campaign session for executed `EndGame` or `ChangeLevel` requests. Ordered after
 /// `advance_campaign`, the only place queued callbacks are delivered, so a request
 /// recorded by a delivered callback is taken in the same frame. Requests come from
 /// the active host only, so a cleared or replaced session cannot deliver them.
@@ -278,6 +292,7 @@ fn take_game_exit(
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut exit: ResMut<CampaignExitResult>,
     view: Option<ResMut<CampaignCamera>>,
+    mut runtime: ResMut<CampaignRuntime>,
 ) {
     let Some(context) = session.context().cloned() else {
         return;
@@ -288,6 +303,14 @@ fn take_game_exit(
     };
     let requests = host.objects_mut().take_game_exit_requests();
     if requests.is_empty() {
+        return;
+    }
+    let next_level = requests[0].next_level.clone();
+    if requests
+        .iter()
+        .any(|request| request.next_level != next_level)
+    {
+        runtime.last_error = Some(CampaignRuntimeError::ConflictingDestinations);
         return;
     }
     let objects = host.objects();
@@ -304,6 +327,7 @@ fn take_game_exit(
     let local_number = objects.local_player_number();
     exit.0 = Some(CampaignExitSnapshot {
         score_screen: requests.iter().any(|request| request.score_screen),
+        next_level,
         game_time: objects.timer_game_time(),
         local_result,
         local_scores: local_number.and_then(|number| objects.player_score_snapshot(number)),
@@ -313,4 +337,287 @@ fn take_game_exit(
     if let Some(mut view) = view {
         view.suspend();
     }
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CampaignTransitionSet;
+
+/// An authored continuation. It names the exiting
+/// session's context so a late press cannot replace a different admitted map.
+#[derive(Message, Clone)]
+pub struct CampaignTransitionRequest {
+    pub next_level: String,
+    pub context: Arc<ParsedMapContext>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CampaignTransitionError {
+    #[error("continued score screen is not the admitted session")]
+    StaleSession,
+    #[error("continued score screen has no selected map bindings")]
+    MissingBindings,
+    #[error("selected map sources no longer hold the binding's reader")]
+    MissingReader,
+    #[error("binding revision counter exhausted")]
+    RevisionOverflow,
+    #[error("resolving next level {member}: {source}")]
+    Resolve {
+        member: String,
+        #[source]
+        source: pcx_assets::Error,
+    },
+    #[error("binding next level {member}: {reason}")]
+    Binding { member: String, reason: String },
+}
+
+/// Diagnostics for the authored score-screen continuation. A refused request
+/// leaves the previous binding, admission and selected reader unchanged.
+#[derive(Resource, Default)]
+pub struct CampaignTransition {
+    pub last_next_level: Option<String>,
+    pub last_error: Option<CampaignTransitionError>,
+    pending: Option<(CampaignTransitionRequest, Arc<ParsedMapContext>)>,
+}
+
+/// Rebind an authored next map through the retained source generation.
+///
+/// The request is accepted only while its exit context is still the admitted
+/// map. The next member is read once within the retained map/input ceilings,
+/// and its winning source fixes the archive identity; edition and version are
+/// retained from the admitted binding. Success publishes one new binding and
+/// admission atomically. Failure leaves both unchanged.
+pub fn transition_to_next_level(
+    requests: &mut MapRequests,
+    sources: &mut SelectedMapSources,
+    request: &CampaignTransitionRequest,
+) -> Result<(), CampaignTransitionError> {
+    let admitted = requests
+        .admission
+        .shared_context()
+        .ok_or(CampaignTransitionError::StaleSession)?;
+    if !Arc::ptr_eq(&admitted, &request.context) {
+        return Err(CampaignTransitionError::StaleSession);
+    }
+    let bindings = requests
+        .bindings
+        .as_ref()
+        .ok_or(CampaignTransitionError::MissingBindings)?;
+    let previous_resolver = sources
+        .for_receipts(&bindings.receipts)
+        .ok_or(CampaignTransitionError::MissingReader)?;
+    let recipe = sources.campaign_for_receipts(&bindings.receipts);
+    let (resolver, catalog_identity, catalog_sources) = if let Some(recipe) = &recipe {
+        let prepare = || -> Result<_, String> {
+            let base = recipe.base_resolver().map_err(|error| error.to_string())?;
+            let map = base
+                .resolve_bounded(
+                    &request.next_level,
+                    bindings.limits.max_map_file_bytes as u64,
+                )
+                .map_err(|error| error.to_string())?;
+            let limits = bindings.limits;
+            let reader = recipe
+                .open_map(
+                    &map.bytes,
+                    &request.next_level,
+                    pcx_mpq::checked::ReadBudget {
+                        max_archive_bytes: limits.max_map_file_bytes,
+                        max_archive_table_bytes: limits.admission.scripts.max_archive_table_bytes,
+                        max_raw_packed_bytes: limits.admission.scripts.max_raw_packed_bytes,
+                        max_decoded_bytes: limits.admission.info_bytes,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            let selected = reader
+                .resolver
+                .resolve_bounded(&request.next_level, limits.max_map_file_bytes as u64)
+                .map_err(|error| error.to_string())?;
+            if selected.bytes != map.bytes {
+                return Err(
+                    "selected campaign namespace changes the map used to select its data".into(),
+                );
+            }
+            let mut catalog_sources = Vec::new();
+            for path in reader.resolver.paths() {
+                let source = reader
+                    .resolver
+                    .source_for(path.as_str())
+                    .map_err(|error| error.to_string())?;
+                if !catalog_sources.contains(source) {
+                    catalog_sources.push(source.clone());
+                }
+            }
+            let identity = AssetIdentity {
+                edition: bindings.catalog_identity.edition.clone(),
+                version: recipe.rules().origin.version.clone(),
+                source: format!("{}::{}", recipe.dir().display(), reader.selection.prefix),
+            };
+            Ok((Arc::new(reader.resolver), identity, catalog_sources))
+        };
+        prepare().map_err(|reason| CampaignTransitionError::Binding {
+            member: request.next_level.clone(),
+            reason,
+        })?
+    } else {
+        (
+            previous_resolver,
+            bindings.catalog_identity.clone(),
+            bindings.catalog_sources.clone(),
+        )
+    };
+    let (map_path, map_source) = {
+        let source = resolver.source_for(&request.next_level).map_err(|source| {
+            CampaignTransitionError::Resolve {
+                member: request.next_level.clone(),
+                source,
+            }
+        })?;
+        (request.next_level.clone(), source.clone())
+    };
+    let map_identity = AssetIdentity {
+        edition: bindings.map_identity.edition.clone(),
+        version: bindings.map_identity.version.clone(),
+        source: map_source.origin.clone(),
+    };
+    let revision = bindings
+        .revision
+        .checked_add(1)
+        .ok_or(CampaignTransitionError::RevisionOverflow)?;
+    let common_path = bindings.receipts.common.path.as_str().to_owned();
+    let common_label = bindings.common.label.clone();
+    let common_identity = bindings.common.identity.clone();
+    let common_source = resolver
+        .source_for(&common_path)
+        .map_err(|source| CampaignTransitionError::Resolve {
+            member: common_path.clone(),
+            source,
+        })?
+        .clone();
+    let blizzard_path = bindings.receipts.blizzard.path.as_str().to_owned();
+    let blizzard_label = bindings.blizzard.label.clone();
+    let blizzard_identity = bindings.blizzard.identity.clone();
+    let blizzard_source = resolver
+        .source_for(&blizzard_path)
+        .map_err(|source| CampaignTransitionError::Resolve {
+            member: blizzard_path.clone(),
+            source,
+        })?
+        .clone();
+    let catalog_label = bindings.catalog_label.clone();
+    let required_catalog_tables = bindings.required_catalog_tables.clone();
+    let required_fields = bindings.required_fields.clone();
+    let limits = bindings.limits;
+    let label = request.next_level.clone();
+    let input = BindingInputs {
+        map: crate::map_binding::IdentifiedMember {
+            path: &map_path,
+            label: &label,
+            identity: &map_identity,
+            source: &map_source,
+        },
+        common: crate::map_binding::IdentifiedMember {
+            path: &common_path,
+            label: &common_label,
+            identity: &common_identity,
+            source: &common_source,
+        },
+        blizzard: crate::map_binding::IdentifiedMember {
+            path: &blizzard_path,
+            label: &blizzard_label,
+            identity: &blizzard_identity,
+            source: &blizzard_source,
+        },
+        catalog_identity: &catalog_identity,
+        catalog_label: &catalog_label,
+        catalog_sources: &catalog_sources,
+        required_catalog_tables: &required_catalog_tables,
+        required_fields: &required_fields,
+        revision,
+    };
+    let outcome = requests.replace_selected_with_campaign(sources, resolver, recipe, input, limits);
+    match &outcome.result {
+        Ok(()) => Ok(()),
+        Err(error) => Err(CampaignTransitionError::Binding {
+            member: request.next_level.clone(),
+            reason: error.to_string(),
+        }),
+    }
+}
+
+fn apply_transition(
+    mut continuation: MessageReader<CampaignTransitionRequest>,
+    mut state: ResMut<CampaignTransition>,
+    mut requests: ResMut<MapRequests>,
+    mut sources: ResMut<SelectedMapSources>,
+    startup: Option<Res<crate::campaign_startup::CampaignStartup>>,
+) {
+    for request in continuation.read() {
+        let mut candidate = request.clone();
+        if let Some((original, admitted)) = &state.pending
+            && Arc::ptr_eq(&original.context, &request.context)
+            && original.next_level == request.next_level
+            && requests
+                .admission
+                .shared_context()
+                .is_some_and(|current| Arc::ptr_eq(&current, admitted))
+        {
+            // A failed startup keeps its score screen; another press retries that binding.
+            if startup
+                .as_ref()
+                .is_none_or(|startup| startup.last_error.is_none())
+            {
+                continue;
+            }
+            candidate.context = Arc::clone(admitted);
+        }
+        state.last_next_level = Some(request.next_level.clone());
+        match transition_to_next_level(&mut requests, &mut sources, &candidate) {
+            Ok(()) => {
+                state.last_error = None;
+                state.pending = Some((
+                    request.clone(),
+                    requests
+                        .admission
+                        .shared_context()
+                        .expect("successful admission"),
+                ));
+            }
+            Err(error) => {
+                warn!("campaign transition refused: {error}");
+                state.last_error = Some(error);
+            }
+        }
+    }
+}
+
+fn finish_transition(
+    session: Res<MapScriptSession<MapStartupHost>>,
+    requests: Res<MapRequests>,
+    mut state: ResMut<CampaignTransition>,
+    mut score: Option<ResMut<crate::campaign_score::ScoreScreenState>>,
+) {
+    let Some((original, admitted)) = &state.pending else {
+        return;
+    };
+    let Some(current) = session.context() else {
+        return;
+    };
+    // A different successful map launch also retires the old retry screen.
+    if !Arc::ptr_eq(current, admitted)
+        && !requests
+            .admission
+            .shared_context()
+            .is_some_and(|context| Arc::ptr_eq(&context, current))
+    {
+        return;
+    }
+    if let Some(score) = score.as_mut()
+        && score
+            .0
+            .as_ref()
+            .is_some_and(|screen| Arc::ptr_eq(screen.context(), &original.context))
+    {
+        score.0 = None;
+    }
+    state.pending = None;
 }

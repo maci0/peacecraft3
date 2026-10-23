@@ -201,13 +201,12 @@ impl ObjectHost {
         for (trigger, filter, event) in triggers {
             events.push((trigger, self.resolve_event_filter(filter)?, event));
         }
-        self.reserve_event_delivery(events.len())?;
-        let debit = self.prepare_gold_debit(owner, price)?;
+        let debit = self.prepare_gold_debit_reserving(owner, price, events.len())?;
 
         // The only fallible write: creation checks every budget before it allocates.
         let item_handle = self.create_item_record(item, shop_x, shop_y, Some((buyer, slot)))?;
 
-        // Infallible from here: every row, cell and queue slot was located or reserved above.
+        // Every row, cell and queue slot was located or reserved above.
         self.apply_gold_debit(debit);
         self.apply_stock_sale(cell);
         let subject = EventSubject {

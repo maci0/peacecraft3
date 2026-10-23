@@ -235,6 +235,22 @@ impl Resolver {
         self.paths.iter()
     }
 
+    /// The first inventoried source for a path, without reading its contents.
+    /// Resolution must still validate the source's read and declared length.
+    pub fn source_for(&self, value: &str) -> Result<&SourceInfo, Error> {
+        let path = AssetPath::new(value)?;
+        if let Some(overrides) = &self.overrides
+            && overrides.contains(&path)
+        {
+            return Ok(&overrides.info);
+        }
+        self.archives
+            .iter()
+            .find(|archive| archive.members.contains_key(&path))
+            .map(|archive| &archive.info)
+            .ok_or(Error::MissingAsset { path })
+    }
+
     pub fn layer_info(&self, id: &str) -> Result<&SourceInfo, Error> {
         if let Some(overrides) = &self.overrides
             && overrides.info.id == id

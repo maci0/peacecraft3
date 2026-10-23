@@ -3,7 +3,9 @@
 use super::*;
 use crate::inventory::{InventoryBudget, Rules as InventoryRules};
 use crate::inventory_powerup::Rules as TomeRules;
-use crate::playercolor_host::{HeroBudget, ItemBudget, UnitStateBudget};
+use crate::playercolor_host::{
+    ExecutedItem, ExecutedUnit, HeroBudget, ItemBudget, UnitStateBudget,
+};
 use crate::scripts::AssetIdentity;
 use pcx_objects::editor::defaults::Identity;
 use pcx_objects::editor::{EditorReadLimits, Overlay};
@@ -11,6 +13,9 @@ use pcx_sim::world::ResolutionProblem;
 
 /// Source-shaped rows: the tome grants 7 STR through `DataC1`, one slot count through `L000`.
 const POWERUP_DECLARATIONS: &str = r#"
+constant native SetPlayerHandicap takes player p, real factor returns nothing
+constant native GetPlayerHandicap takes player p returns real
+native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 native UnitResetCooldown takes unit u returns nothing
 type gamecache extends agent
 native InitGameCache takes string filename returns gamecache
@@ -36,6 +41,7 @@ native SetItemDropID takes item whichItem, integer unitId returns nothing
 native GetHeroStr takes unit whichHero, boolean includeBonuses returns integer
 native GetHeroAgi takes unit whichHero, boolean includeBonuses returns integer
 native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer
+native PauseUnit takes unit u, boolean paused returns nothing
 native RemoveUnit takes unit u returns nothing
 constant native GetManipulatedItem takes nothing returns item
 constant native GetManipulatingUnit takes nothing returns unit
@@ -81,7 +87,10 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["tmix", "AIsm,L000", "1", "1", "1", "1"],
             &["tsrd", "", "0", "1", "1", "1"],
             &["pstr", "AIs4,AIa4", "0", "0", "0", "-"],
+            &["pbig", "AIsh", "0", "0", "0", "-"],
+            &["pmin", "AImn", "0", "0", "0", "-"],
             &["pint", "AIi4", "0", "0", "0", "-"],
+            &["pivi", "AIi9", "0", "0", "0", "-"],
             &["pbad", "AIsm", "0", "0", "0", "-"],
             &["uact", "AIsm", "0", "1", "1", "1"],
             &["parm", "AId1", "0", "0", "0", "-"],
@@ -90,6 +99,19 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["phcd", "AIh1", "0", "1", "1", "2"],
             &["phsm", "AIh2", "0", "1", "1", "1"],
             &["phtg", "AIh3", "0", "1", "1", "1"],
+            &["pdm1", "AItf", "0", "0", "0", "-"],
+            &["pdm2", "AIat", "0", "0", "0", "-"],
+            &["pdmx", "AItz", "0", "0", "0", "-"],
+            &["pdmv", "AItf,AIwz", "0", "0", "0", "-"],
+            &["pdmm", "AIwz", "0", "0", "0", "-"],
+            &["pdmo", "AIt1", "0", "0", "0", "-"],
+            &["preg", "Arel", "0", "0", "0", "-"],
+            &["pman", "AIrm", "0", "0", "0", "-"],
+            &["pmax", "AImx", "0", "0", "0", "-"],
+            &["plif", "AIl1", "0", "0", "0", "-"],
+            &["plsm", "AIl2", "0", "0", "0", "-"],
+            &["plmx", "AIl3", "0", "0", "0", "-"],
+            &["plon", "AIl4", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
@@ -101,8 +123,37 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
             &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
             &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
+            &[
+                "AIsh", "AIab", "1", "0", "0", "1000", "0", "0", "-", "-", "_",
+            ],
+            &[
+                "AImn",
+                "AIab",
+                "1",
+                "0",
+                "0",
+                "-2147483648",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
             &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
             &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIi9",
+                "AIab",
+                "1",
+                "0",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
             &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
             &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
             &[
@@ -124,6 +175,46 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "20",
                 "ground,air",
             ],
+            &["AItf", "AIat", "1", "15", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
+            &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+            &["Arel", "Arel", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIrm", "AIrm", "1", "0.5", "0", "0", "0", "0", "-", "-", "_",
+            ],
+            &[
+                "AImx", "AIrm", "1", "3.4e38", "0", "0", "0", "0", "-", "-", "_",
+            ],
+            &[
+                "AIwz",
+                "AIat",
+                "1",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
+            &["AIl1", "AIml", "1", "37", "0", "0", "0", "0", "-", "-", "_"],
+            &["AIl2", "AIml", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+            &[
+                "AIl3",
+                "AIml",
+                "1",
+                "2147483647",
+                "0",
+                "0",
+                "0",
+                "0",
+                "-",
+                "-",
+                "_",
+            ],
+            &["AIl4", "AIml", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
         ],
     );
     let metadata = sylk(
@@ -186,7 +277,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "1",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &[
@@ -196,7 +287,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "2",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &[
@@ -206,10 +297,31 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "-1",
                 "int",
                 "3",
-                "AIsm,AIxm,AIs4,AIa4,AIi4",
+                "AIsm,AIxm,AIs4,AIa4,AIi4,AIi9,AIsh,AImn",
                 "",
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1", ""],
+            &["Ihpr", "Data", "AbilityData", "-1", "int", "1", "Arel", ""],
+            &[
+                "Imrp",
+                "Data",
+                "AbilityData",
+                "-1",
+                "real",
+                "1",
+                "AIrm,AImx",
+                "",
+            ],
+            &[
+                "Iatt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                "AIat,AItf,AIwz,AIt1",
+                "",
+            ],
             &[
                 "Ihpg",
                 "Data",
@@ -218,6 +330,16 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "int",
                 "1",
                 "AIh1,AIh2,AIh3",
+                "",
+            ],
+            &[
+                "Ilif",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                "AIl1,AIl2,AIl3,AIl4,AIl5",
                 "",
             ],
         ],
@@ -293,7 +415,11 @@ impl ObjectCatalog for PowerupItems {
         };
         // Charge, perishable, cooldown and ability fields for the two healing rows: `phea` has no
         // cooldown group; `phcd` has two charges and cooldown group `AIhe`.
-        let mut rows = vec![(*b"ipow", "powerup", powerup), (*b"iuse", "uses", "-")];
+        let mut rows = vec![
+            (*b"ipow", "powerup", powerup),
+            (*b"iuse", "uses", "-"),
+            (*b"idro", "drop", "0"),
+        ];
         match &rawcode {
             b"phea" => rows.extend([
                 (*b"iuse", "uses", "1"),
@@ -323,6 +449,7 @@ impl ObjectCatalog for PowerupItems {
                 (*b"icid", "cooldownID", "AIhe"),
                 (*b"iabi", "abilList", "AIh1"),
             ]),
+            b"pman" => rows.push((*b"iabi", "abilList", "AIrm")),
             _ => {}
         }
         let fields = rows
@@ -355,12 +482,96 @@ struct Fixture {
 }
 
 fn open() -> Fixture {
+    open_with_strength_regen(0.)
+}
+
+fn open_with_strength_regen(strength_regen: f32) -> Fixture {
+    open_with_regens(strength_regen, None, 0.0)
+}
+
+fn open_with_regens(
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
+    open_with_regens_overlay(
+        Overlay::default(),
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+    )
+}
+
+fn open_with_regens_overlay(
+    overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
+    open_with_regens_overlays(
+        overlay.clone(),
+        overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+    )
+}
+
+fn open_with_regens_overlays(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+) -> Fixture {
+    open_with_regens_overlays_hp(
+        inventory_overlay,
+        hero_overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+        "500",
+    )
+}
+
+fn open_with_regens_overlays_hp(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+    hp: &str,
+) -> Fixture {
     let (hero_rules, combat) = hero_rules();
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
         .into_iter()
         .filter(|(id, _)| *id != *b"A008")
         .collect();
+    let mut found = false;
+    for (id, field) in &mut fields {
+        if *id == *b"H001" {
+            field.value = Ok(FieldValue::Cell(hp.into()));
+            found = true;
+        }
+    }
+    assert!(found, "hero fixture HP");
+    if fields.iter().all(|(id, _)| *id != *b"S001") {
+        fields.push(column(
+            b"S001",
+            SlkId::UnitBalance,
+            "spd",
+            FieldKind::Real,
+            "32",
+        ));
+    }
+    if let Some(rate) = mana_regen {
+        let field = fields
+            .iter_mut()
+            .find(|(id, _)| *id == *b"H007")
+            .expect("hero fixture regenMana field");
+        field.1.value = Ok(FieldValue::Cell(rate.into()));
+    }
     fields.push((*b"uabi", ability_field("abilList", "L000")));
     let declarations = format!(
         "{}\n{}{DECLARATIONS}{POWERUP_DECLARATIONS}",
@@ -377,7 +588,7 @@ fn open() -> Fixture {
     let (registry, activity) = super::inventory::order_inputs();
     let inventory = InventoryRules::read(
         Arc::clone(&tables),
-        Overlay::default(),
+        inventory_overlay.clone(),
         Arc::clone(&registry),
         &[(
             "synthetic MiscGame",
@@ -388,15 +599,24 @@ fn open() -> Fixture {
     .unwrap();
     let tome = TomeRules::decode(
         Arc::clone(&tables),
-        Overlay::default(),
+        inventory_overlay.clone(),
         origin.clone(),
         [0; 32],
-        &registration("AIsm", "AIxm"),
-        &registration("AIab", "APbo"),
-        &registration("AIde", "APbo"),
+        [
+            &registration("AIsm", "AIxm"),
+            &registration("AIab", "APbo"),
+            &registration("AIde", "APbo"),
+            &registration("AIat", "APbo"),
+        ],
     )
     .unwrap()
     .with_heal(&healing_registration(), &healing_base())
+    .unwrap()
+    .with_life_regen(&registration("Arel", "AREB"))
+    .unwrap()
+    .with_mana_regen(&registration("AIrm", "Arem"))
+    .unwrap()
+    .with_max_life(&registration("AIml", "APbo"))
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -410,7 +630,7 @@ fn open() -> Fixture {
         .with_hero_skills(
             tables,
             origin,
-            Overlay::default(),
+            hero_overlay,
             hero_rules,
             HeroBudget {
                 abilities_per_unit: 8,
@@ -443,43 +663,67 @@ fn open() -> Fixture {
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: LIFE_PER_STRENGTH,
         mana_per_intelligence: 15.0,
-        life_regen_per_strength: 0.0,
-        mana_regen_per_intelligence: 0.0,
+        life_regen_per_strength: strength_regen,
+        mana_regen_per_intelligence: mana_per_intelligence,
     })
     .unwrap();
     let mut h = h
         .with_inventory_powerup(tome)
         .unwrap()
         .with_item_use(
-            crate::item_use_rules::Rules::new(powerup_tables(), Overlay::default()),
+            crate::item_use_rules::Rules::new(powerup_tables(), inventory_overlay.clone()),
             8,
         )
         .unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_combat(combat, "alpha").unwrap();
     h.set_neutral_passive(15);
-    let player = h.native("Player", &[Value::Int(4)]).unwrap();
-    let mut create = |raw: &[u8; 4], x: f32| {
-        let Value::Handle(id) = h
-            .native(
-                "CreateUnit",
-                &[
-                    player.clone(),
-                    Value::Int(i32::from_be_bytes(*raw)),
-                    Value::Real(x),
-                    Value::Real(0.0),
-                    Value::Real(0.0),
-                ],
-            )
-            .unwrap()
-        else {
-            panic!("unit handle")
-        };
-        id
-    };
-    let hero = create(b"H001", 0.0);
-    let ordinary = create(b"u001", 0.0);
+    let hero = create_unit(&mut h, b"H001", 0.0);
+    let ordinary = create_unit(&mut h, b"u001", 0.0);
     Fixture { h, hero, ordinary }
+}
+
+pub(crate) fn health_fixture() -> (ObjectHost, HandleId) {
+    health_fixture_with_bias(0.5)
+}
+
+fn health_fixture_with_bias(bias: f32) -> (ObjectHost, HandleId) {
+    health_fixture_with_bias_and_hp(bias, "500")
+}
+
+fn health_fixture_with_bias_and_hp(bias: f32, hp: &str) -> (ObjectHost, HandleId) {
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays_hp(Overlay::default(), Overlay::default(), 0., None, 0., hp);
+    let (rules, numeric) = crate::player_handicap::tests::health_rules_with_bias(bias);
+    h = h
+        .with_script_numeric(numeric)
+        .with_player_health_handicap(rules)
+        .unwrap();
+    (h, hero)
+}
+
+pub(crate) fn health_fixture_hp1() -> (ObjectHost, HandleId) {
+    health_fixture_with_bias_and_hp(0.5, "1")
+}
+
+fn create_unit(h: &mut ObjectHost, raw: &[u8; 4], x: f32) -> HandleId {
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let Value::Handle(id) = h
+        .native(
+            "CreateUnit",
+            &[
+                player,
+                Value::Int(i32::from_be_bytes(*raw)),
+                Value::Real(x),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit handle")
+    };
+    id
 }
 
 fn item(h: &mut ObjectHost, raw: &[u8; 4], x: f32) -> HandleId {
@@ -503,14 +747,14 @@ fn add(h: &mut ObjectHost, unit: HandleId, item: HandleId) -> Result<Value, Stri
     h.native("UnitAddItem", &[Value::Handle(unit), Value::Handle(item)])
 }
 
-/// Registers a player pickup trigger for the unit's owner and returns the trigger handle.
-fn register_pickup(h: &mut ObjectHost, unit: HandleId) -> HandleId {
+/// Registers a player item event for the unit's owner and returns the trigger handle.
+fn register_item_event(h: &mut ObjectHost, unit: HandleId, enumerand: i32) -> HandleId {
     let Value::Handle(trigger) = h.native("CreateTrigger", &[]).unwrap() else {
         panic!("trigger handle")
     };
     let owner = Value::Handle(h.executed_unit(unit).unwrap().owner);
     let event = h
-        .native("ConvertPlayerUnitEvent", &[Value::Int(-71)])
+        .native("ConvertPlayerUnitEvent", &[Value::Int(enumerand)])
         .unwrap();
     h.native(
         "TriggerRegisterPlayerUnitEvent",
@@ -520,6 +764,31 @@ fn register_pickup(h: &mut ObjectHost, unit: HandleId) -> HandleId {
     trigger
 }
 
+/// Registers a player pickup trigger for the unit's owner and returns the trigger handle.
+fn register_pickup(h: &mut ObjectHost, unit: HandleId) -> HandleId {
+    register_item_event(h, unit, -71)
+}
+
+/// Registers a player drop trigger for the unit's owner and returns the trigger handle.
+fn register_drop(h: &mut ObjectHost, unit: HandleId) -> HandleId {
+    register_item_event(h, unit, 99)
+}
+
+fn issue_pending_pickup(h: &mut ObjectHost, unit: HandleId, ground: HandleId) -> i32 {
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(unit),
+                Value::Str("smart".into()),
+                Value::Handle(ground)
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    h.inventory_order(unit).expect("pending pickup order")
+}
+
 fn life_state(h: &mut ObjectHost) -> Value {
     h.native("ConvertUnitState", &[Value::Int(LIFE_STATE)])
         .unwrap()
@@ -527,6 +796,10 @@ fn life_state(h: &mut ObjectHost) -> Value {
 
 fn damage(h: &ObjectHost, unit: HandleId) -> f32 {
     h.hero_combat_bonuses(unit).unwrap().damage
+}
+
+fn held_damage(h: &ObjectHost, unit: HandleId) -> i32 {
+    h.hero_combat_bonuses(unit).unwrap().held_damage as i32
 }
 
 #[test]
@@ -644,6 +917,70 @@ fn retained_strength_survives_a_later_level_up() {
 }
 
 #[test]
+fn health_handicap_scales_powerup_and_level_strength_life_deltas() {
+    let (mut h, hero) = health_fixture();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(0.6)])
+        .unwrap();
+    let scaled = h.unit_vitals(hero).unwrap().unwrap();
+    // Base 500 plus STR 10 * 25, each component rounded after scaling.
+    assert_eq!(scaled.max_life, 450.0);
+    let tome = item(&mut h, b"tstr", 0.0);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    let granted = h.unit_vitals(hero).unwrap().unwrap();
+    assert_eq!(granted.max_life, scaled.max_life + 105.0);
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(4), Value::Bool(false)],
+    )
+    .unwrap();
+    // Level 4 raises base STR 10 to 12; the 2 * 25 gain is scaled too.
+    assert_eq!(
+        h.unit_vitals(hero).unwrap().unwrap().max_life,
+        granted.max_life + 30.0
+    );
+}
+
+#[test]
+fn health_rounding_bias_governs_scaled_strength_item_deltas() {
+    for (bias, expected) in [(0.5, 88.0), (0.25, 87.0)] {
+        let (mut h, hero) = health_fixture_with_bias(bias);
+        let player = h.native("Player", &[Value::Int(4)]).unwrap();
+        h.native("SetPlayerHandicap", &[player, Value::Real(0.5)])
+            .unwrap();
+        let before = h.unit_vitals(hero).unwrap().unwrap().max_life;
+        let tome = item(&mut h, b"tstr", 0.0);
+        assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+        assert_eq!(
+            h.unit_vitals(hero).unwrap().unwrap().max_life,
+            before + expected,
+            "bias {bias}"
+        );
+    }
+}
+
+#[test]
+fn equipped_strength_delta_ratio_uses_admitted_rounding() {
+    let (mut h, hero) = health_fixture_with_bias(0.25);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(0.5)])
+        .unwrap();
+    let life = life_state(&mut h);
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(hero), life, Value::Real(29.0)],
+    )
+    .unwrap();
+    let tome = item(&mut h, b"tstr", 0.0);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    let granted = h.unit_vitals(hero).unwrap().unwrap();
+    // 29/375 * 462 is 35.728; the source bias 0.25 keeps 35 while half-up
+    // would produce 36.
+    assert_eq!(granted.max_life, 462.0);
+    assert_eq!(granted.life, 35.0);
+}
+
+#[test]
 fn grant_keeps_the_life_percentage_not_the_absolute_missing_amount() {
     let Fixture { mut h, hero, .. } = open();
     let life = life_state(&mut h);
@@ -660,7 +997,7 @@ fn grant_keeps_the_life_percentage_not_the_absolute_missing_amount() {
             h.unit_vitals(hero).unwrap().unwrap().life,
             h.unit_vitals(hero).unwrap().unwrap().max_life
         ),
-        (max / 2.0, max)
+        (463.0, max)
     );
 }
 
@@ -675,6 +1012,36 @@ fn mixed_ability_list_refuses_without_partial_state() {
     assert_eq!(h.unit_vitals(hero).unwrap().unwrap(), before);
     assert_eq!(damage(&h, hero), damage_before);
     assert!(!h.executed_item(mixed).unwrap().claimed);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn powerup_overflows_with_held_strength_before_any_grant() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIsm".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Istr",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 3]),
+            value: pcx_objects::Value::Int((i32::MAX - 10) as u32),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let held = item(&mut h, b"pbig", 0.0);
+    assert_eq!(add(&mut h, hero, held), Ok(Value::Bool(true)));
+    let tome = item(&mut h, b"tstr", 0.0);
+    let before = snapshot_records(&h, &[hero]);
+    let err = add(&mut h, hero, tome).unwrap_err();
+    assert!(
+        err.contains("powerup strength overflows combined hero bonus"),
+        "{err}"
+    );
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(held));
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert!(!h.executed_item(tome).unwrap().claimed);
     assert!(h.take_fired_event().is_none());
 }
 
@@ -782,7 +1149,7 @@ fn equipping_passive_strength_reprices_life_by_ratio_and_derives_damage_and_armo
     let passive = item(&mut h, b"pstr", 0.0);
     assert_eq!(add(&mut h, hero, passive), Ok(Value::Bool(true)));
     let max = HERO_LIFE + PASSIVE_STRENGTH * LIFE_PER_STRENGTH;
-    assert_eq!(strength_and_agility(&mut h, hero), (max / 2.0, max));
+    assert_eq!(strength_and_agility(&mut h, hero), (438.0, max));
     assert_eq!(
         damage(&h, hero),
         (HERO_STR + PASSIVE_STRENGTH) * PRIMARY_DAMAGE
@@ -898,21 +1265,11 @@ fn unsupported_passive_families_refuse_atomically_with_a_diagnostic() {
     let mismatched = item(&mut h, b"pbad", 0.0);
     let err = add(&mut h, hero, mismatched).unwrap_err();
     assert!(err.contains("unsupported passive ability"), "{err}");
-    let intelligence = item(&mut h, b"pint", 0.0);
-    let err = add(&mut h, hero, intelligence).unwrap_err();
-    assert!(err.contains("intelligence passive bonus"), "{err}");
     assert_eq!(strength_and_agility(&mut h, hero), before);
     assert_eq!(
         h.native(
             "UnitHasItem",
             &[Value::Handle(hero), Value::Handle(mismatched)]
-        ),
-        Ok(Value::Bool(false))
-    );
-    assert_eq!(
-        h.native(
-            "UnitHasItem",
-            &[Value::Handle(hero), Value::Handle(intelligence)]
         ),
         Ok(Value::Bool(false))
     );
@@ -971,6 +1328,204 @@ fn armor_transfer_moves_the_points_to_the_receiver() {
 }
 
 #[test]
+fn held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let mana = (mana_of(&h, hero), max_mana_of(&h, hero));
+    let first = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
+    assert_eq!(life_of(&h, hero), 394.0);
+    let second = item(&mut h, b"plsm", 0.0);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 44.0);
+    assert_eq!(life_of(&h, hero), 398.0);
+    assert_eq!(
+        (mana_of(&h, hero), max_mana_of(&h, hero)),
+        mana,
+        "life-only items leave both mana pools"
+    );
+}
+
+#[test]
+fn held_max_life_applies_to_a_non_hero_and_transfers_the_pool() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let hero_max = max_life_of(&h, hero);
+    let ordinary_max = max_life_of(&h, ordinary);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), hero_max + 37.0);
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max);
+    assert_eq!(add(&mut h, ordinary, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), hero_max);
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max + 37.0);
+}
+
+#[test]
+fn dropping_held_max_life_restores_the_pool_and_rounds_the_ratio() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE);
+    assert_eq!(life_of(&h, hero), HERO_LIFE / 2.0);
+}
+
+#[test]
+fn cleanup_drops_held_max_life_and_restores_the_pool() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, HERO_LIFE / 2.0);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE);
+    assert_eq!(life_of(&h, hero), HERO_LIFE / 2.0);
+    assert_eq!(h.held_slot(hero, 0), None);
+}
+
+#[test]
+fn held_max_life_total_overflow_refuses_transfer_without_writes() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let donor = item(&mut h, b"plmx", 0.);
+    let receiver = item(&mut h, b"plon", 0.);
+    assert_eq!(add(&mut h, hero, donor), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, ordinary, receiver), Ok(Value::Bool(true)));
+    let before = snapshot_records(&h, &[hero, ordinary]);
+    let _pickup = register_pickup(&mut h, ordinary);
+    let _drop = register_drop(&mut h, hero);
+    assert!(
+        add(&mut h, ordinary, donor)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_records_unchanged(&h, &[hero, ordinary], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(donor));
+    assert_eq!(h.held_slot(ordinary, 0), Some(receiver));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn held_max_life_on_a_typed_override_uses_the_override_amount() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIl1".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Ilif",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 1]),
+            value: pcx_objects::Value::Int(41),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 41.0);
+}
+
+#[test]
+fn held_max_life_keeps_a_living_holder_at_one_life() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.1);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
+    assert_eq!(life_of(&h, hero), 1.0);
+}
+
+#[test]
+fn tiny_living_hero_keeps_one_life_after_a_strength_powerup() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.1);
+    let tome = item(&mut h, b"tstr", 0.);
+    assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(true)));
+    assert_eq!(life_of(&h, hero), 1.0);
+    assert_eq!(
+        max_life_of(&h, hero),
+        HERO_LIFE + TOME_STRENGTH * LIFE_PER_STRENGTH
+    );
+}
+
+#[test]
+fn non_hero_near_zero_drop_keeps_one_life_and_restores_maximum() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open();
+    let ordinary_max = max_life_of(&h, ordinary);
+    set_life(&mut h, ordinary, 0.1);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, ordinary, item), Ok(Value::Bool(true)));
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max + 37.0);
+    assert_eq!(life_of(&h, ordinary), 1.0);
+    set_life(&mut h, ordinary, 0.1);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, ordinary), ordinary_max);
+    assert_eq!(life_of(&h, ordinary), 1.0);
+}
+
+#[test]
+fn dead_retained_max_life_drop_keeps_zero_life_and_restores_maximum() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![pcx_objects::Mod {
+            field: *b"inv2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 2]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays(overlay, Overlay::default(), 0., None, 0.);
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    let held_max = max_life_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    assert_eq!(h.held_slot(hero, 0), Some(item));
+    assert_eq!(max_life_of(&h, hero), held_max);
+    assert_eq!(life_of(&h, hero), 0.0);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(item)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, hero), held_max - 37.0);
+    assert_eq!(life_of(&h, hero), 0.0);
+}
+
+#[test]
+fn dead_unit_cannot_pick_up_max_life() {
+    let Fixture { mut h, hero, .. } = open();
+    let before = max_life_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    let item = item(&mut h, b"plif", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(false)));
+    assert_eq!(max_life_of(&h, hero), before);
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(item)]),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
 fn death_drops_held_armor_and_removes_its_points() {
     let Fixture { mut h, hero, .. } = open();
     let armor = item(&mut h, b"parm", 0.0);
@@ -997,6 +1552,161 @@ fn armor_row_outside_the_admission_refuses_atomically() {
             &[Value::Handle(hero), Value::Handle(refused)]
         ),
         Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn held_flat_damage_stacks_transfers_and_removes() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let primary = damage(&h, hero);
+    assert_eq!(held_damage(&h, hero), 0);
+    let first = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 15);
+    // Damage is not a strength or agility change.
+    assert_eq!(damage(&h, hero), primary);
+    let second = item(&mut h, b"pdm2", 0.0);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 35);
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 20);
+    assert_eq!(held_damage(&h, ordinary), 15);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(first)],
+    )
+    .unwrap();
+    assert_eq!(held_damage(&h, ordinary), 0);
+    assert_eq!(held_damage(&h, hero), 20);
+}
+
+#[test]
+fn death_drops_held_flat_damage() {
+    let Fixture { mut h, hero, .. } = open();
+    let item = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 15);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(held_damage(&h, hero), 0);
+}
+
+#[test]
+fn damage_row_outside_admission_and_overflow_refuse_atomically() {
+    let Fixture { mut h, hero, .. } = open();
+    let refused = item(&mut h, b"pdmx", 0.0);
+    let err = add(&mut h, hero, refused).unwrap_err();
+    assert!(
+        err.contains("damage metadata does not admit ability AItz"),
+        "{err}"
+    );
+    assert_eq!(held_damage(&h, hero), 0);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(refused)]
+        ),
+        Ok(Value::Bool(false))
+    );
+    let overflow = item(&mut h, b"pdmv", 0.0);
+    let err = add(&mut h, hero, overflow).unwrap_err();
+    assert!(err.contains("passive damage overflows"), "{err}");
+    assert_eq!(held_damage(&h, hero), 0);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(overflow)]
+        ),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn combined_held_damage_overflow_refuses_pickup_and_preserves_transfer_holder() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let maximum = item(&mut h, b"pdmm", 0.0);
+    let one = item(&mut h, b"pdmo", 0.0);
+    assert_eq!(add(&mut h, hero, maximum), Ok(Value::Bool(true)));
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().damage, i32::MAX);
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    let vitals = h.executed_unit(hero).unwrap().vitals;
+    assert!(
+        add(&mut h, hero, one)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.executed_unit(hero).unwrap().vitals, vitals);
+    assert_eq!(add(&mut h, ordinary, one), Ok(Value::Bool(true)));
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    assert!(
+        add(&mut h, hero, one)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().damage, i32::MAX);
+    assert_eq!(h.unit_hero_bonus(ordinary).unwrap().damage, 1);
+    assert_eq!(h.executed_unit(hero).unwrap().vitals, vitals);
+}
+
+/// Held flat damage enters the real damage formula for heroes and non-heroes, and its transfer
+/// moves the contribution to the receiver.
+#[test]
+fn held_flat_damage_changes_real_damage() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let weapon = crate::playercolor_host::Weapon {
+        range: 1.0,
+        acquire: 1.0,
+        cooldown: 1.0,
+        damage_point: 0.0,
+        base: 10,
+        dice: 0,
+        sides: 1,
+        attack: 0,
+        missile_speed: None,
+    };
+    let factor = h.roll_damage(ordinary, weapon, ordinary).unwrap() / 10.0;
+    let hero_bare = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let first = item(&mut h, b"pdm1", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    let hero_with = h.roll_damage(hero, weapon, ordinary).unwrap();
+    assert!(
+        (hero_with - hero_bare - 15.0 * factor).abs() < 1e-4,
+        "hero: {hero_with} vs {hero_bare} at factor {factor}"
+    );
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    let ordinary_with = h.roll_damage(ordinary, weapon, ordinary).unwrap();
+    assert!(
+        (ordinary_with - 25.0 * factor).abs() < 1e-4,
+        "non-hero: {ordinary_with} at factor {factor}"
     );
 }
 
@@ -1062,8 +1772,849 @@ fn set_life(h: &mut ObjectHost, unit: HandleId, life: f32) {
     .unwrap();
 }
 
+fn set_fixture_max_life(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
+    h.set_test_maximum(unit, Some(maximum), None);
+}
+
 fn life_of(h: &ObjectHost, unit: HandleId) -> f32 {
     h.unit_vitals(unit).unwrap().unwrap().life
+}
+
+fn max_life_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().max_life
+}
+
+fn prepare_passive_regen(h: &mut ObjectHost, units: &[HandleId]) {
+    for &unit in units {
+        set_life(h, unit, 100.);
+        assert_eq!(
+            h.unit_vitals(unit).unwrap().unwrap().regen.life_per_second,
+            0.
+        );
+    }
+}
+
+fn advance_passive_regen(h: &mut ObjectHost, now: f64) {
+    h.next_timer_expiry(now, &mut 1000).unwrap();
+    h.advance_unit_activity(now, &mut 65536).unwrap();
+}
+
+const MANA_STATE: i32 = 2;
+
+fn set_state(h: &mut ObjectHost, unit: HandleId, state: i32, value: f32) {
+    let state = h.native("ConvertUnitState", &[Value::Int(state)]).unwrap();
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(unit), state, Value::Real(value)],
+    )
+    .unwrap();
+}
+
+fn set_mana(h: &mut ObjectHost, unit: HandleId, mana: f32) {
+    set_state(h, unit, MANA_STATE, mana);
+}
+
+fn set_fixture_max_mana(h: &mut ObjectHost, unit: HandleId, maximum: f32) {
+    h.set_test_maximum(unit, None, Some(maximum));
+}
+
+fn mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().mana
+}
+
+fn max_mana_of(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.unit_vitals(unit).unwrap().unwrap().max_mana
+}
+
+type RecordSnapshot = (Vec<(HandleId, ExecutedUnit)>, Vec<(HandleId, ExecutedItem)>);
+
+fn snapshot_records(h: &ObjectHost, units: &[HandleId]) -> RecordSnapshot {
+    (
+        units
+            .iter()
+            .map(|&unit| (unit, h.executed_unit(unit).unwrap().clone()))
+            .collect(),
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect(),
+    )
+}
+
+fn assert_records_unchanged(h: &ObjectHost, units: &[HandleId], before: &RecordSnapshot) {
+    assert_eq!(&snapshot_records(h, units), before);
+}
+
+fn assert_close(actual: f32, expected: f32, context: &str) {
+    assert!(
+        (actual - expected).abs() < 1e-4,
+        "{context}: {actual} != {expected}"
+    );
+}
+
+#[test]
+fn held_intelligence_adds_mana_pool_and_is_removed_with_ratio_rounding() {
+    let Fixture { mut h, hero, .. } = open();
+    let base_max = max_mana_of(&h, hero);
+    assert_close(base_max, 7.0 * 15.0, "base intelligence pool");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, false), Ok(7));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(10));
+    assert_close(max_mana_of(&h, hero), base_max + 3.0 * 15.0, "held maximum");
+    assert_close(
+        mana_of(&h, hero),
+        base_max * 0.5 + 3.0 * 15.0 * 0.5,
+        "held current",
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    assert_close(max_mana_of(&h, hero), base_max, "dropped maximum");
+    assert_close(mana_of(&h, hero), 53.0, "dropped ratio rounds half upward");
+}
+
+#[test]
+fn pure_intelligence_equip_and_drop_leave_tiny_positive_life_untouched() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.5);
+    let life = (life_of(&h, hero), max_life_of(&h, hero));
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "equip leaves both life pools"
+    );
+    assert_close(mana_of(&h, hero), 75.0, "equip reprices current mana");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "drop leaves both life pools"
+    );
+    assert_close(mana_of(&h, hero), 53.0, "drop reprices current mana");
+}
+
+#[test]
+fn pure_intelligence_cleanup_keeps_tiny_life_and_matches_sequential_mana() {
+    let Fixture { mut h, hero, .. } = open();
+    set_life(&mut h, hero, 0.5);
+    let life = (life_of(&h, hero), max_life_of(&h, hero));
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let first = item(&mut h, b"pint", 0.0);
+    let second = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "equip leaves both life pools"
+    );
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "cleanup leaves both life pools"
+    );
+    assert_close(max_mana_of(&h, hero), base_max, "cleanup restores maximum");
+    assert_close(mana_of(&h, hero), 53.0, "cleanup sequential ratio");
+}
+
+#[test]
+fn held_intelligence_stacks_and_cleanup_restores_the_mana_pool() {
+    let Fixture { mut h, hero, .. } = open();
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let first = item(&mut h, b"pint", 0.0);
+    let second = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_close(max_mana_of(&h, hero), base_max + 45.0, "one held bonus");
+    assert_close(mana_of(&h, hero), 75.0, "one held ratio");
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(13));
+    assert_close(max_mana_of(&h, hero), base_max + 90.0, "two held bonuses");
+    assert_close(mana_of(&h, hero), 98.0, "two held ratio rounds half upward");
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(max_mana_of(&h, hero), base_max, "cleanup maximum");
+    assert_close(mana_of(&h, hero), 53.0, "cleanup sequential ratio");
+}
+
+#[test]
+fn held_intelligence_transfers_between_heroes_and_reprices_both_pools() {
+    let Fixture { mut h, hero, .. } = open();
+    let receiver = create_unit(&mut h, b"H001", 64.0);
+    let base_max = max_mana_of(&h, hero);
+    assert_close(max_mana_of(&h, receiver), base_max, "equal base pools");
+    set_mana(&mut h, hero, base_max / 2.0);
+    set_mana(&mut h, receiver, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, receiver, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(receiver, 0), Some(intelligence));
+    assert_close(max_mana_of(&h, hero), base_max, "donor maximum");
+    assert_close(mana_of(&h, hero), 53.0, "donor ratio rounds half upward");
+    assert_close(
+        max_mana_of(&h, receiver),
+        base_max + 45.0,
+        "receiver maximum",
+    );
+    assert_close(mana_of(&h, receiver), 75.0, "receiver ratio");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", hero, true), Ok(7));
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", receiver, true), Ok(10));
+}
+
+#[test]
+fn held_intelligence_overflow_refuses_without_pool_or_item_changes() {
+    let Fixture { mut h, hero, .. } = open();
+    let huge = item(&mut h, b"pivi", 0.0);
+    assert_eq!(add(&mut h, hero, huge), Ok(Value::Bool(true)));
+    let max = max_mana_of(&h, hero);
+    let mana = mana_of(&h, hero);
+    let item = item(&mut h, b"pint", 0.0);
+    let err = add(&mut h, hero, item).unwrap_err();
+    assert!(err.contains("held passive bonus overflows"), "{err}");
+    assert_eq!(h.held_slot(hero, 0), Some(huge));
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(max_mana_of(&h, hero), max, "overflow maximum");
+    assert_close(mana_of(&h, hero), mana, "overflow current");
+    assert_eq!(
+        h.native("UnitHasItem", &[Value::Handle(hero), Value::Handle(item)]),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn dead_retained_intelligence_drop_rounds_mana_and_keeps_it_nonzero() {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "L000".into(),
+        vec![pcx_objects::Mod {
+            field: *b"inv2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 2]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } =
+        open_with_regens_overlays(overlay, Overlay::default(), 0., None, 0.);
+    let base_max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, base_max / 2.0);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    let held_max = max_mana_of(&h, hero);
+    h.kill_unit(hero, None).unwrap();
+    assert_eq!(h.held_slot(hero, 0), Some(intelligence));
+    assert_eq!(life_of(&h, hero), 0.0);
+    assert_close(max_mana_of(&h, hero), held_max, "dead retained maximum");
+    assert_close(mana_of(&h, hero), held_max / 2.0, "death keeps mana");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_close(max_mana_of(&h, hero), base_max, "dead dropped maximum");
+    assert_close(mana_of(&h, hero), 53.0, "dead ratio rounds half upward");
+    assert_eq!(life_of(&h, hero), 0.0);
+}
+
+#[test]
+fn pure_intelligence_on_a_non_hero_is_accepted_without_a_modeled_effect() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open();
+    let before_max = max_mana_of(&h, ordinary);
+    let before_mana = mana_of(&h, ordinary);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, ordinary, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(ordinary, 0), Some(intelligence));
+    assert_close(max_mana_of(&h, ordinary), before_max, "non-hero maximum");
+    assert_close(mana_of(&h, ordinary), before_mana, "non-hero current");
+    assert_eq!(hero_attribute(&mut h, "GetHeroInt", ordinary, true), Ok(0));
+}
+
+#[test]
+fn held_intelligence_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture { mut h, hero, .. } = open();
+    let intelligence = item(&mut h, b"pint", 0.0);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, intelligence)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(
+        h.native(
+            "UnitHasItem",
+            &[Value::Handle(hero), Value::Handle(intelligence)]
+        ),
+        Ok(Value::Bool(false))
+    );
+}
+
+#[test]
+fn held_mana_fraction_scales_base_and_intelligence_rate() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.05);
+    let base = 2.0 + 7.0 * 0.05;
+    set_mana(&mut h, hero, 0.);
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), base, "base plus intelligence");
+    let first = item(&mut h, b"pman", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_close(mana_of(&h, hero), base * 2.5, "one half fraction");
+    let second = item(&mut h, b"pman", 0.);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 3.);
+    assert_close(mana_of(&h, hero), base * 4.5, "two half fractions");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(first)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_close(mana_of(&h, hero), base * 6.0, "drop removes one fraction");
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().mana_regen_fraction, 0.5);
+}
+
+#[test]
+fn held_intelligence_scales_regeneration_before_the_mana_fraction() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.05);
+    set_mana(&mut h, hero, 0.);
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), 2.5, "base plus held intelligence");
+    let fraction = item(&mut h, b"pman", 0.0);
+    assert_eq!(add(&mut h, hero, fraction), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_close(
+        mana_of(&h, hero),
+        6.25,
+        "held fraction scales held intelligence",
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 3.);
+    assert_close(
+        mana_of(&h, hero),
+        7.525,
+        "drop reprices current before regen",
+    );
+}
+
+#[test]
+fn held_mana_fraction_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.0);
+    set_mana(&mut h, hero, 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, mana)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.executed_items()
+            .find(|(id, _)| *id == mana)
+            .unwrap()
+            .1
+            .held_by
+            .is_none()
+    );
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    add(&mut h, hero, mana).unwrap();
+    advance_passive_regen(&mut h, 2.);
+    assert_close(mana_of(&h, hero), 5.0, "one and a half times base");
+    h.next_timer_expiry(3., &mut 1000).unwrap();
+    assert!(
+        h.native(
+            "UnitRemoveItem",
+            &[Value::Handle(hero), Value::Handle(mana)]
+        )
+        .is_err()
+    );
+    h.advance_unit_activity(3., &mut 65536).unwrap();
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(mana)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_close(mana_of(&h, hero), 10.0, "drop restores the base rate");
+}
+
+#[test]
+fn held_mana_fraction_cleanup_refuses_stale_projection_and_clears_the_rate() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.0);
+    set_mana(&mut h, hero, 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    add(&mut h, hero, mana).unwrap();
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, hero), 3.0, "held fraction");
+    h.next_timer_expiry(2., &mut 1000).unwrap();
+    assert!(
+        h.forget_inventory_unit(hero, false)
+            .unwrap_err()
+            .to_string()
+            .contains("projected through")
+    );
+    h.advance_unit_activity(2., &mut 65536).unwrap();
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.unit_hero_bonus(hero).unwrap().mana_regen_fraction, 0.0);
+    advance_passive_regen(&mut h, 3.);
+    assert_close(mana_of(&h, hero), 8.0, "cleanup clears the held fraction");
+}
+
+#[test]
+fn held_mana_fraction_transfer_overflow_refuses_without_changing_either_holder() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open_with_regens(0., Some("2"), 0.);
+    let donor = item(&mut h, b"pmax", 0.);
+    let receiver = item(&mut h, b"pmax", 0.);
+    assert_eq!(add(&mut h, hero, donor), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, ordinary, receiver), Ok(Value::Bool(true)));
+    for held in [donor, receiver] {
+        let fraction = h.held_attributes(held).unwrap().mana_regen_fraction;
+        assert!(fraction.is_finite() && fraction > 3.0e38, "{fraction}");
+    }
+    let before = snapshot_records(&h, &[hero, ordinary]);
+    let _pickup = register_pickup(&mut h, ordinary);
+    let _drop = register_drop(&mut h, hero);
+    assert!(
+        add(&mut h, ordinary, donor)
+            .unwrap_err()
+            .contains("held passive bonus overflows")
+    );
+    assert_records_unchanged(&h, &[hero, ordinary], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(donor));
+    assert_eq!(h.held_slot(ordinary, 0), Some(receiver));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn held_mana_fraction_transfer_refuses_stale_donor_projection_before_changes() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    add(&mut h, hero, mana).unwrap();
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    let receiver = create_unit(&mut h, b"u001", 1.0);
+    assert_eq!(h.unit_vitals(hero).unwrap().unwrap().regen.through, 0.);
+    assert_eq!(h.unit_vitals(receiver).unwrap().unwrap().regen.through, 1.);
+    let before = snapshot_records(&h, &[hero, receiver]);
+    let _pickup = register_pickup(&mut h, receiver);
+    let _drop = register_drop(&mut h, hero);
+    assert!(
+        add(&mut h, receiver, mana)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert_records_unchanged(&h, &[hero, receiver], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(mana));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn mixed_item_cleanup_refuses_stale_mana_fraction_before_any_drop() {
+    let Fixture { mut h, hero, .. } = open_with_regens(0., Some("2"), 0.);
+    let plain = item(&mut h, b"tsrd", 0.);
+    let mana = item(&mut h, b"pman", 0.);
+    add(&mut h, hero, plain).unwrap();
+    add(&mut h, hero, mana).unwrap();
+    let before = snapshot_records(&h, &[hero]);
+    let _drop = register_drop(&mut h, hero);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        h.forget_inventory_unit(hero, false)
+            .unwrap_err()
+            .to_string()
+            .contains("projected through")
+    );
+    assert_records_unchanged(&h, &[hero], &before);
+    assert!(h.take_fired_event().is_none());
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn non_hero_base_mana_regeneration_receives_and_loses_the_held_fraction() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open_with_regens(0., Some("2"), 0.);
+    set_fixture_max_mana(&mut h, ordinary, 100.);
+    set_mana(&mut h, ordinary, 0.);
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, ordinary), 2.0, "source base rate");
+    let mana = item(&mut h, b"pman", 0.);
+    assert_eq!(add(&mut h, ordinary, mana), Ok(Value::Bool(true)));
+    assert_eq!(
+        h.unit_hero_bonus(ordinary).unwrap().mana_regen_fraction,
+        0.5
+    );
+    advance_passive_regen(&mut h, 2.);
+    assert_close(mana_of(&h, ordinary), 5.0, "fraction on a non-hero");
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(ordinary), Value::Handle(mana)],
+    )
+    .unwrap();
+    assert_eq!(h.unit_hero_bonus(ordinary).unwrap().mana_regen_fraction, 0.);
+    advance_passive_regen(&mut h, 3.);
+    assert_close(mana_of(&h, ordinary), 7.0, "drop removes the fraction");
+}
+
+#[test]
+fn held_mana_fraction_partitions_clamps_and_pauses_with_the_unit() {
+    let Fixture {
+        h: mut whole,
+        hero: whole_hero,
+        ..
+    } = open_with_regens(0., Some("2"), 0.);
+    let Fixture {
+        h: mut split,
+        hero: split_hero,
+        ..
+    } = open_with_regens(0., Some("2"), 0.);
+    for (h, hero) in [(&mut whole, whole_hero), (&mut split, split_hero)] {
+        set_mana(h, hero, 0.);
+        let mana = item(h, b"pman", 0.);
+        add(h, hero, mana).unwrap();
+    }
+    advance_passive_regen(&mut whole, 2.);
+    for time in [0.5, 1., 2.] {
+        advance_passive_regen(&mut split, time);
+    }
+    assert_close(mana_of(&whole, whole_hero), 6.0, "whole clock");
+    assert_close(mana_of(&split, split_hero), 6.0, "split clock");
+    let maximum = whole.unit_vitals(whole_hero).unwrap().unwrap().max_mana;
+    set_mana(&mut whole, whole_hero, maximum - 1.);
+    advance_passive_regen(&mut whole, 3.);
+    assert_close(mana_of(&whole, whole_hero), maximum, "clamped");
+    set_mana(&mut whole, whole_hero, 0.);
+    whole
+        .native("PauseUnit", &[Value::Handle(whole_hero), Value::Bool(true)])
+        .unwrap();
+    advance_passive_regen(&mut whole, 4.);
+    assert_close(mana_of(&whole, whole_hero), 0., "paused");
+    whole
+        .native(
+            "PauseUnit",
+            &[Value::Handle(whole_hero), Value::Bool(false)],
+        )
+        .unwrap();
+    advance_passive_regen(&mut whole, 5.);
+    assert_close(mana_of(&whole, whole_hero), 3.0, "resumed with fraction");
+}
+
+#[test]
+fn held_life_regeneration_stacks_transfers_drops_and_cleans_up() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    let first = item(&mut h, b"preg", 0.);
+    let second = item(&mut h, b"preg", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 1.);
+    assert_eq!(life_of(&h, hero), 107.);
+    assert_eq!(life_of(&h, ordinary), 100.);
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 2.);
+    assert_eq!(life_of(&h, hero), 121.);
+    assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
+    advance_passive_regen(&mut h, 3.);
+    assert_eq!(life_of(&h, hero), 128.);
+    assert_eq!(life_of(&h, ordinary), 107.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(second)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 4.);
+    assert_eq!(life_of(&h, hero), 128.);
+    assert_eq!(life_of(&h, ordinary), 114.);
+    h.forget_inventory_unit(ordinary, false).unwrap();
+    advance_passive_regen(&mut h, 5.);
+    assert_eq!(life_of(&h, ordinary), 114.);
+    assert_eq!(h.unit_hero_bonus(ordinary).unwrap().life_regen, 0);
+}
+
+#[test]
+fn held_life_regeneration_is_partition_independent_and_clamped() {
+    let Fixture {
+        h: mut whole,
+        hero: whole_hero,
+        ..
+    } = open();
+    let Fixture {
+        h: mut split,
+        hero: split_hero,
+        ..
+    } = open();
+    for (h, hero) in [(&mut whole, whole_hero), (&mut split, split_hero)] {
+        prepare_passive_regen(h, &[hero]);
+        let regen = item(h, b"preg", 0.);
+        add(h, hero, regen).unwrap();
+    }
+    advance_passive_regen(&mut whole, 4.);
+    for time in [0.5, 1., 2., 4.] {
+        advance_passive_regen(&mut split, time);
+    }
+    assert_eq!(life_of(&whole, whole_hero), life_of(&split, split_hero));
+    assert_eq!(life_of(&whole, whole_hero), 128.);
+    let maximum = whole.unit_vitals(whole_hero).unwrap().unwrap().max_life;
+    set_life(&mut whole, whole_hero, maximum - 2.);
+    advance_passive_regen(&mut whole, 5.);
+    assert_eq!(life_of(&whole, whole_hero), maximum);
+}
+
+#[test]
+fn regeneration_item_changes_refuse_stale_projection_without_moving_items() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    let regen = item(&mut h, b"preg", 0.);
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        add(&mut h, hero, regen)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.executed_items()
+            .find(|(id, _)| *id == regen)
+            .unwrap()
+            .1
+            .held_by
+            .is_none()
+    );
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    add(&mut h, hero, regen).unwrap();
+    assert_eq!(life_of(&h, hero), 100.);
+    h.next_timer_expiry(2., &mut 1000).unwrap();
+    let before = h
+        .executed_items()
+        .find(|(id, _)| *id == regen)
+        .unwrap()
+        .1
+        .clone();
+    assert!(
+        add(&mut h, ordinary, regen)
+            .unwrap_err()
+            .contains("projected through")
+    );
+    assert!(
+        h.native(
+            "UnitRemoveItem",
+            &[Value::Handle(hero), Value::Handle(regen)]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.executed_items().find(|(id, _)| *id == regen).unwrap().1,
+        &before
+    );
+    h.advance_unit_activity(2., &mut 65536).unwrap();
+    assert_eq!(life_of(&h, hero), 107.);
+}
+
+#[test]
+fn strength_and_item_life_regeneration_do_not_use_base_eligibility() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open_with_strength_regen(0.3);
+    prepare_passive_regen(&mut h, &[hero, ordinary]);
+    advance_passive_regen(&mut h, 1.);
+    assert_eq!(life_of(&h, hero), 103.);
+    assert_eq!(life_of(&h, ordinary), 100.);
+    let regen = item(&mut h, b"preg", 0.);
+    add(&mut h, hero, regen).unwrap();
+    advance_passive_regen(&mut h, 2.);
+    assert_eq!(life_of(&h, hero), 113.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(regen)],
+    )
+    .unwrap();
+    advance_passive_regen(&mut h, 3.);
+    assert_eq!(life_of(&h, hero), 116.);
+}
+
+#[test]
+fn mixed_item_cleanup_refuses_stale_regeneration_before_any_drop() {
+    let Fixture { mut h, hero, .. } = open();
+    let plain = item(&mut h, b"pdm1", 0.);
+    let regen = item(&mut h, b"preg", 0.);
+    add(&mut h, hero, plain).unwrap();
+    add(&mut h, hero, regen).unwrap();
+    let before: Vec<_> = h
+        .executed_items()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    let unit = h.executed_unit(hero).unwrap().clone();
+    h.next_timer_expiry(1., &mut 1000).unwrap();
+    assert!(
+        h.forget_inventory_unit(hero, false)
+            .unwrap_err()
+            .to_string()
+            .contains("projected through")
+    );
+    assert_eq!(
+        h.executed_items()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(h.executed_unit(hero).unwrap(), &unit);
+    h.advance_unit_activity(1., &mut 65536).unwrap();
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+}
+
+#[test]
+fn cleanup_refuses_an_oversized_strength_item_before_dropping_the_earlier_plain_item() {
+    let Fixture { mut h, hero, .. } = open();
+    let plain = item(&mut h, b"tsrd", 0.);
+    let huge = item(&mut h, b"pbig", 0.);
+    assert_eq!(add(&mut h, hero, plain), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, huge), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(plain));
+    assert_eq!(h.held_slot(hero, 1), Some(huge));
+    set_fixture_max_life(&mut h, hero, 100.);
+    set_life(&mut h, hero, 100.);
+    let ground = item(&mut h, b"tstr", 64.);
+    let _drop = register_drop(&mut h, hero);
+    let pending = issue_pending_pickup(&mut h, hero, ground);
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("new maximum life is not positive"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(plain));
+    assert_eq!(h.held_slot(hero, 1), Some(huge));
+    assert_eq!(h.inventory_order(hero), Some(pending));
+    assert!(h.take_fired_event().is_none());
+    set_fixture_max_life(&mut h, hero, 30_000.);
+    set_life(&mut h, hero, 100.);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(h.inventory_order(hero), None);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn cleanup_refuses_a_minimum_strength_removal_before_any_write() {
+    let Fixture { mut h, hero, .. } = open();
+    let debuff = item(&mut h, b"pmin", 0.);
+    set_fixture_max_life(&mut h, hero, 1.0e12);
+    set_life(&mut h, hero, 5.0e11);
+    assert_eq!(add(&mut h, hero, debuff), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(debuff));
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("strength removal delta overflows"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(debuff));
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn cleanup_preflights_sequential_strength_pools_before_dropping_either_item() {
+    let Fixture { mut h, hero, .. } = open();
+    let first = item(&mut h, b"pstr", 0.);
+    let second = item(&mut h, b"pstr", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    set_fixture_max_life(&mut h, hero, 200.);
+    set_life(&mut h, hero, 100.);
+    assert!(
+        crate::inventory_powerup_host::reprice_life(100.0, 200.0, LIFE_PER_STRENGTH, -5).is_ok()
+    );
+    let (life, max_life) =
+        crate::inventory_powerup_host::reprice_life(100.0, 200.0, LIFE_PER_STRENGTH, -5).unwrap();
+    assert!(
+        crate::inventory_powerup_host::reprice_life(life, max_life, LIFE_PER_STRENGTH, -5).is_err()
+    );
+    let ground = item(&mut h, b"tstr", 64.);
+    let _drop = register_drop(&mut h, hero);
+    let pending = issue_pending_pickup(&mut h, hero, ground);
+    let before = snapshot_records(&h, &[hero]);
+    let err = h
+        .forget_inventory_unit(hero, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("new maximum life is not positive"), "{err}");
+    assert_records_unchanged(&h, &[hero], &before);
+    assert_eq!(h.held_slot(hero, 0), Some(first));
+    assert_eq!(h.held_slot(hero, 1), Some(second));
+    assert_eq!(h.inventory_order(hero), Some(pending));
+    assert!(h.take_fired_event().is_none());
+    set_fixture_max_life(&mut h, hero, 1_000.);
+    set_life(&mut h, hero, 100.);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_eq!(h.unit_vitals(hero).unwrap().unwrap().max_life, HERO_LIFE);
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn cleanup_drops_sequential_fractional_max_life_without_spurious_refusal() {
+    let Fixture { mut h, hero, .. } = open();
+    let first = item(&mut h, b"plif", 0.);
+    let second = item(&mut h, b"plon", 0.);
+    assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, second), Ok(Value::Bool(true)));
+    set_fixture_max_life(&mut h, hero, 100.6);
+    set_life(&mut h, hero, 100.6);
+    let _drop = register_drop(&mut h, hero);
+    h.forget_inventory_unit(hero, false).unwrap();
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert_eq!(h.held_slot(hero, 1), None);
+    assert_close(life_of(&h, hero), 62.6, "clamped sequential life");
+    assert_close(max_life_of(&h, hero), 62.6, "clamped sequential maximum");
+    assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
 }
 
 #[test]
@@ -1141,9 +2692,9 @@ fn cached_unit_survives_storage_and_restores_progress_sparse_slots_charges_and_o
     assert_eq!(
         [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana],
         [
-            previous.life,
             previous.max_life,
-            previous.mana,
+            previous.max_life,
+            previous.max_mana,
             previous.max_mana
         ]
     );
@@ -1181,6 +2732,99 @@ fn cached_unit_survives_storage_and_restores_progress_sparse_slots_charges_and_o
 }
 
 #[test]
+fn cached_restore_uses_current_item_data_and_fills_both_pools_before_attaching_items() {
+    use crate::game_cache::tests::{Memory, budget};
+    let store = Arc::new(Memory::default());
+    let Fixture { mut h, hero, .. } = open();
+    h.admit_game_caches(store.clone(), budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    let life = item(&mut h, b"plif", 0.);
+    let intelligence = item(&mut h, b"pint", 0.);
+    assert_eq!(add(&mut h, hero, life), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    let before = h.unit_vitals(hero).unwrap().unwrap();
+    set_life(&mut h, hero, before.max_life / 4.);
+    set_mana(&mut h, hero, before.max_mana / 4.);
+    let key = [
+        cache.clone(),
+        Value::Str("next".into()),
+        Value::Str("hero".into()),
+    ];
+    assert_eq!(
+        h.native(
+            "StoreUnit",
+            &[
+                key[0].clone(),
+                key[1].clone(),
+                key[2].clone(),
+                Value::Handle(hero)
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(h.native("SaveGameCache", &[cache]), Ok(Value::Bool(true)));
+    drop(h);
+
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AIl1".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Ilif",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 1]),
+            value: pcx_objects::Value::Int(41),
+            end_word: 0,
+        }],
+    );
+    let Fixture { mut h, hero, .. } = open_with_regens_overlay(overlay, 0., None, 0.);
+    let base = h.unit_vitals(hero).unwrap().unwrap();
+    let _pickup = register_pickup(&mut h, hero);
+    h.admit_game_caches(store, budget()).unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let key = [cache, Value::Str("next".into()), Value::Str("hero".into())];
+    let mut restore = key.to_vec();
+    restore.extend([owner, Value::Real(64.), Value::Real(16.), Value::Real(90.)]);
+    let handles = h.inner().handles();
+    let Value::Handle(restored) = h.native("RestoreUnit", &restore).unwrap() else {
+        panic!("restored hero");
+    };
+    assert_eq!(h.inner().handles(), handles + 3);
+    let vitals = h.unit_vitals(restored).unwrap().unwrap();
+    assert_eq!(
+        (vitals.life, vitals.max_life),
+        (base.max_life + 41., base.max_life + 41.)
+    );
+    assert_eq!(
+        (vitals.mana, vitals.max_mana),
+        (base.max_mana + 45., base.max_mana + 45.)
+    );
+    let life = h.held_slot(restored, 0).unwrap();
+    let intelligence = h.held_slot(restored, 1).unwrap();
+    assert!(
+        h.take_fired_event().is_none(),
+        "cached items attach without pickup events"
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(restored), Value::Handle(life)],
+    )
+    .unwrap();
+    assert_eq!(max_life_of(&h, restored), base.max_life);
+    assert_eq!(max_mana_of(&h, restored), base.max_mana + 45.);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(restored), Value::Handle(intelligence)],
+    )
+    .unwrap();
+    assert_eq!(max_mana_of(&h, restored), base.max_mana);
+}
+
+#[test]
 fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
     use crate::game_cache::{
         CachedUnit, Kind, Profile, Stored,
@@ -1207,7 +2851,7 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
     h.native("SaveGameCache", &[cache]).unwrap();
     let original = store.bytes.lock().unwrap().clone().unwrap();
     drop(h);
-    for case in 0..6 {
+    for case in 0..7 {
         let mut profile = Profile::decode(&original, budget()).unwrap();
         let Some(Stored::Unit(bytes)) = profile.get("campaign", "next", "hero", Kind::Unit) else {
             panic!("stored unit");
@@ -1218,6 +2862,12 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
             1 => saved.install = "foreign install".into(),
             3 => saved.client_sha256[0] ^= 1,
             5 => saved.items[0].rawcode = *b"tstr",
+            6 => {
+                saved.items[0].rawcode = *b"pmax";
+                let mut second = saved.items[0].clone();
+                second.slot = 1;
+                saved.items.push(second);
+            }
             _ => {}
         }
         profile
@@ -1269,6 +2919,7 @@ fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
             2 => "cached item record policy",
             4 => "cached item charges",
             5 => "cached powerup cannot",
+            6 => "combined cached mana regeneration overflows",
             _ => "different client image",
         };
         assert!(error.contains(reason), "case {case}: {error}");
@@ -1632,8 +3283,11 @@ fn hero_attribute_queries_split_base_permanent_and_held_totals() {
     assert_eq!(query(&mut h, "GetHeroStr", true), Ok(22));
     assert_eq!(query(&mut h, "GetHeroAgi", false), Ok(5));
     assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(7));
-    // Intelligence passive bonuses refuse on pickup, so INT has no held total to add.
-    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(7));
+    // Intelligence passive bonuses join only with `includeBonuses`.
+    let intelligence = item(&mut h, b"pint", 0.0);
+    assert_eq!(add(&mut h, hero, intelligence), Ok(Value::Bool(true)));
+    assert_eq!(query(&mut h, "GetHeroInt", false), Ok(7));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(10));
     // Growth floors each attribute after the fractional per-level gain: STR 10+2.5, AGI 5+1.5.
     h.native(
         "SetHeroLevel",
@@ -1653,7 +3307,8 @@ fn hero_attribute_queries_split_base_permanent_and_held_totals() {
     assert_eq!(query(&mut h, "GetHeroStr", false), Ok(22));
     assert_eq!(query(&mut h, "GetHeroStr", true), Ok(27));
     assert_eq!(query(&mut h, "GetHeroAgi", true), Ok(10));
-    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(8));
+    assert_eq!(query(&mut h, "GetHeroInt", false), Ok(8));
+    assert_eq!(query(&mut h, "GetHeroInt", true), Ok(11));
 }
 
 #[test]

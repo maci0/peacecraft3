@@ -12,10 +12,9 @@ previous recreation choice, not newly established native rounding parity.
 Coefficients remain the selected stock/map MiscGame values read by HeroVitals.
 Each update computes the difference between the old and new attribute
 contributions, then adds that difference to the current maximum and current
-resource. This preserves an independently set maximum and the absolute amount
-missing from the pool. It does not preserve a percentage. Repeated assignments
-and lower requested levels keep the existing setter's non-decreasing semantics
-and cannot accumulate bonuses. Units without admitted vitals keep their existing
+resource. This preserves the absolute amount missing from the pool. It does not
+preserve a percentage. Repeated assignments and lower requested levels keep the
+existing setter's non-decreasing semantics and cannot accumulate bonuses. Units without admitted vitals keep their existing
 unsupported-vitals state. The GetHeroStr/Agi/Int queries are in [Hero attribute queries](hero-attribute-queries.md).
 
 ## Selected native evidence
@@ -44,6 +43,21 @@ maximum and calls 0x6802d0, which adds the delta to current mana. These
 paths establish an absolute adjustment rather than percentage preservation.
 This is bounded native-code evidence, not an original runtime observation.
 
+## Maximum-state writes
+
+A controlled Reign of Chaos runtime probe with 11 validated markers checked
+`SetUnitState` on a level-10 `Huth` before and after equipping `prvt` (`AIml`
+amount 150). The map hash is
+`b4596bfc996cd6cd4d507182d35025a9bc4f06b91cd8117122eaa8a7afc4ada3` and the
+script hash is
+`5e4df686ee2af12ecbe42356842f23e649d8e01dad95d82c7007f22ece5a1dce`.
+`SetUnitState(UNIT_STATE_MAX_LIFE, 100.0)` left current and maximum life at
+1400, and `SetUnitState(UNIT_STATE_MAX_MANA, 100.0)` left current and maximum
+mana at 495. The same maximum-life request on an unequipped control left its
+1250/1250 life pool unchanged. The executed requests are retained, but the
+admitted setter now leaves live maxima unchanged. Removing the item still
+returned the test unit to its 1250/1250 pools.
+
 ## Boundaries and verification
 
 Negative deltas use the same adjustment while the resulting living life remains
@@ -55,8 +69,9 @@ vitals or level/skill counters. Nonfinite/invalid derived pools also refuse.
 The slice adds no resurrection or death-floor guess.
 
 Synthetic VM tests vary live levels with fractional growth and a nondefault
-admitted baseline, preserve explicit maximum overrides and missing resources,
-check repeated/lower requests and unchanged ordinary units, and verify atomic
-refusal at the unqualified dead boundary. Pure tests cover positive/negative
-deltas, mana clamping and invalid arithmetic. Parser/VM tests do not prove HUD
-projection or original runtime parity; those remain integrated gates.
+admitted baseline, ignore maximum-state writes and preserve the absolute missing
+life/mana, check repeated/lower requests and unchanged ordinary units, and
+verify atomic refusal at the unqualified dead boundary. Pure tests cover
+positive/negative deltas, mana clamping and invalid arithmetic. Parser/VM tests
+do not prove HUD projection or original runtime parity; those remain integrated
+gates.

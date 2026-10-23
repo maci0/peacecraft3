@@ -84,6 +84,7 @@ native TimerGetRemaining takes timer t returns real
 native TimerGetTimeout takes timer t returns real
 native GetExpiredTimer takes nothing returns timer
 native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native SetUnitLookAt takes unit u, string bone, unit target, real x, real y, real z returns nothing
 native ResetUnitLookAt takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
@@ -177,6 +178,144 @@ fn unit_animation_selects_the_retained_model_without_new_unit_or_handle() {
     )
     .unwrap();
     assert_eq!(host.inner().handles(), before);
+}
+
+#[test]
+fn model_admission_checks_the_queue_animation_signature() {
+    let common = script_common_with(
+        "widget",
+        true,
+        "native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\n\
+         native TimerGetElapsed takes timer t returns real\n\
+         native TimerGetRemaining takes timer t returns real\n\
+         native TimerGetTimeout takes timer t returns real\n\
+         native GetExpiredTimer takes nothing returns timer\n\
+         native SetUnitAnimation takes unit u, string s returns nothing\n\
+         native QueueUnitAnimation takes unit u, integer s returns nothing\n",
+    );
+    let ctx = context(300, &common, MAP, "unit-catalog");
+    let (catalog, _, _) = counting();
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+    let mut host = object(&ctx, 64)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::clone(&shared), source(), limits(2))
+        .unwrap()
+        .with_timer_runtime(0.)
+        .unwrap();
+    let model = crate::unit_model::tests::model();
+    let error = host
+        .admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
+        .unwrap_err();
+    assert_eq!(error.failure, Failure::Signature);
+    assert_eq!(error.native, "QueueUnitAnimation");
+}
+
+#[test]
+fn queue_unit_animation_dispatches_and_refuses_bad_inputs_without_mutation() {
+    let mut vm = activity::open();
+    let Value::Handle(id) = vm.global("A") else {
+        panic!("unit")
+    };
+    let host = &mut vm.host().inner;
+    let before = host.inner().handles();
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Death".into())],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Null, Value::Str("Death".into())]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Int(1), Value::Str("Death".into())]
+        )
+        .unwrap_err()
+        .contains("another family")
+    );
+    assert!(
+        host.native("QueueUnitAnimation", &[Value::Handle(id)])
+            .unwrap_err()
+            .contains("QueueUnitAnimation")
+    );
+    let state = host.executed_unit(id).unwrap().animation.clone();
+    assert_eq!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("absent".into())]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert_eq!(host.executed_unit(id).unwrap().animation, state);
+    host.native(
+        "QueueUnitAnimation",
+        &[Value::Handle(id), Value::Str("Walk".into())],
+    )
+    .unwrap();
+    assert!(
+        host.executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .has_pending()
+    );
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Stand".into())],
+    )
+    .unwrap();
+    assert!(
+        !host
+            .executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .has_pending()
+    );
+    assert_eq!(host.inner().handles(), before);
+    host.native("RemoveUnit", &[Value::Handle(id)]).unwrap();
+    assert!(
+        host.native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("Walk".into())]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn queue_animation_refuses_without_admitted_activity_before_mutation() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let Value::Handle(id) = h.vm.global("U") else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    host.native(
+        "SetUnitAnimation",
+        &[Value::Handle(id), Value::Str("Death".into())],
+    )
+    .unwrap();
+    let state = host.executed_unit(id).unwrap().animation.clone();
+    let error = host
+        .native(
+            "QueueUnitAnimation",
+            &[Value::Handle(id), Value::Str("Walk".into())],
+        )
+        .unwrap_err();
+    assert!(error.contains("admitted unit activity"), "{error}");
+    assert_eq!(host.executed_unit(id).unwrap().animation, state);
 }
 
 #[test]
@@ -1996,6 +2135,9 @@ impl ObjectCatalog for OrderCatalog {
             b"u001" => "Qord",
             b"u002" => "Zzzz, Qord",
             b"u003" => "qord",
+            b"v001" | b"v002" => "Amil",
+            b"v003" => "Zzzz",
+            b"v004" => "",
             _ => {
                 return Err(ResolutionProblem::MissingRawcode(pcx_objects::fourcc_text(
                     rawcode,
@@ -2020,6 +2162,136 @@ impl ObjectCatalog for OrderCatalog {
             fields,
         ))
     }
+}
+
+const MILITIA_HEADERS: &[&str] = &[
+    "alias",
+    "code",
+    "hero",
+    "item",
+    "checkDep",
+    "levels",
+    "reqLevel",
+    "levelSkip",
+    "Cool1",
+    "Cost1",
+    "DataA1",
+    "DataB1",
+];
+
+fn militia_tables(
+    levels: &str,
+    base: &str,
+    active: &str,
+    order: &str,
+    unorder: &str,
+) -> DefaultTables {
+    militia_tables_with_code("Amil", levels, base, active, order, unorder)
+}
+
+fn militia_tables_with_code(
+    code: &str,
+    levels: &str,
+    base: &str,
+    active: &str,
+    order: &str,
+    unorder: &str,
+) -> DefaultTables {
+    let row = [
+        "Amil", code, "0", "0", "1", levels, "0", "0", "0", "0", base, active,
+    ];
+    let bytes = sylk(MILITIA_HEADERS, &[&row]);
+    let profile = format!("[Amil]\r\nOrder={order}\r\nUnorder={unorder}\r\n");
+    DefaultTables::from_bytes(
+        Identity {
+            install: "synthetic".into(),
+            edition_version: "fixture edition/version".into(),
+        },
+        &[(SlkId::AbilityData.path(), bytes.as_slice())],
+        &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 2,
+            max_asset_bytes: 64 << 10,
+            max_aggregate_input_bytes: 128 << 10,
+        },
+    )
+    .unwrap_or_else(|error| panic!("synthetic militia tables: {error}"))
+}
+
+fn militia_common() -> String {
+    let mut common = script_common("widget", true);
+    let globals = common.find("\nglobals\n").expect("globals");
+    common.insert_str(
+        globals + 1,
+        "native IssueImmediateOrder takes unit whichUnit, string order returns boolean\n\
+native RemoveUnit takes unit u returns nothing\n",
+    );
+    common
+}
+
+fn militia_vm(tables: &DefaultTables) -> OrderVm {
+    militia_vm_with(tables, &pcx_objects::editor::Overlay::default())
+}
+
+fn militia_vm_with(tables: &DefaultTables, abilities: &pcx_objects::editor::Overlay) -> OrderVm {
+    let common = militia_common();
+    let map = "globals\nplayer P = null\nunit BASE = null\nunit ACTIVE = null\nunit OTHER = null\nunit NOLIST = null\nendglobals\n\
+function main takes nothing returns nothing\n\
+set P = Player(4)\n\
+set BASE = CreateUnit(P, 'v001', 1.0, 2.0, 3.0)\n\
+set ACTIVE = CreateUnit(P, 'v002', 4.0, 5.0, 6.0)\n\
+set OTHER = CreateUnit(P, 'v003', 7.0, 8.0, 9.0)\n\
+set NOLIST = CreateUnit(P, 'v004', 10.0, 11.0, 12.0)\n\
+endfunction\n\
+function issue takes unit target, string text returns boolean\n\
+return IssueImmediateOrder(target, text)\n\
+endfunction\n\
+function remove takes unit target returns nothing\n\
+call RemoveUnit(target)\n\
+endfunction\n";
+    let ctx = context(302, &common, map, "unit-catalog");
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(4))
+        .unwrap()
+        .with_militia_ability(tables, abilities)
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    vm
+}
+
+fn militia_refusal(tables: &DefaultTables) -> String {
+    militia_refusal_with(tables, &pcx_objects::editor::Overlay::default())
+}
+
+fn militia_refusal_with(
+    tables: &DefaultTables,
+    abilities: &pcx_objects::editor::Overlay,
+) -> String {
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    object(&ctx, 8)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(1))
+        .unwrap()
+        .with_militia_ability(tables, abilities)
+        .map(|_| String::new())
+        .unwrap_or_else(|error| error.to_string())
 }
 
 fn order_common() -> String {
@@ -2100,6 +2372,223 @@ fn research(vm: &mut OrderVm, tech: [u8; 4], level: i32) {
         &[Value::Int(i32::from_be_bytes(tech)), Value::Int(level)],
     )
     .unwrap();
+}
+
+#[test]
+fn militia_off_is_false_only_for_the_fresh_base_form_with_the_admitted_list() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut vm = militia_vm(&tables);
+    assert_eq!(
+        issue(&mut vm, "BASE", "militiaoff").unwrap(),
+        Value::Bool(false)
+    );
+    assert!(issue(&mut vm, "BASE", "MILITIAOFF").is_err());
+    assert!(issue(&mut vm, "BASE", "militia").is_err());
+    assert!(issue(&mut vm, "BASE", "other").is_err());
+    assert!(issue(&mut vm, "ACTIVE", "militiaoff").is_err());
+    assert!(issue(&mut vm, "OTHER", "militiaoff").is_err());
+    assert!(issue(&mut vm, "NOLIST", "militiaoff").is_err());
+}
+
+#[test]
+fn militia_null_removed_and_wrong_family_contracts_are_explicit() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut vm = militia_vm(&tables);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Null, Value::Str("militiaoff".into())]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let Value::Handle(base) = vm.global("BASE") else {
+        panic!("base")
+    };
+    vm.call("remove", &[Value::Handle(base)]).unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(base), Value::Str("militiaoff".into())]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let Value::Handle(player) = vm.global("P") else {
+        panic!("player")
+    };
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrder",
+                &[Value::Handle(player), Value::Str("militiaoff".into())]
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn militia_absent_class_keeps_the_order_unsupported() {
+    let good = &["Qord", "Qcls", "0", "0", "1", "1", "0", "0", "0", "0"];
+    let tables = order_tables(ORDER_HEADERS, good, "", "1");
+    let mut vm = militia_vm(&tables);
+    assert!(issue(&mut vm, "BASE", "militiaoff").is_err());
+}
+
+#[test]
+fn militia_malformed_class_refuses_with_its_source_context() {
+    for (levels, base, order, unorder, expected) in [
+        ("2", "v001", "militia", "militiaoff", "levels"),
+        ("1", "", "militia", "militiaoff", "DataA1"),
+        ("1", "v001", "militia", "militia", "same text"),
+        ("1", "v001", "militia", "militiaoff", "not an absent"),
+    ] {
+        let mut tables = militia_tables(levels, base, "v002", order, unorder);
+        if expected == "not an absent" {
+            let bytes = sylk(
+                MILITIA_HEADERS,
+                &[&[
+                    "Amil", "Amil", "0", "0", "1", levels, "0", "0", "0", "0", base, "v002",
+                ]],
+            );
+            let profile = "[Amil]\r\nOrder=militia\r\nUnorder=militiaoff\r\nRequires=Qtec\r\n";
+            tables = DefaultTables::from_bytes(
+                Identity {
+                    install: "synthetic".into(),
+                    edition_version: "fixture edition/version".into(),
+                },
+                &[(SlkId::AbilityData.path(), bytes.as_slice())],
+                &[("Units\\HumanAbilityFunc.txt", profile.as_bytes())],
+                pcx_objects::editor::EditorReadLimits {
+                    max_listed_paths: 2,
+                    max_asset_bytes: 64 << 10,
+                    max_aggregate_input_bytes: 128 << 10,
+                },
+            )
+            .unwrap();
+        }
+        let error = militia_refusal(&tables);
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("militia ability \"Amil\""), "{error}");
+        assert!(error.contains("fixture edition/version"), "{error}");
+    }
+}
+
+#[test]
+fn militia_admission_precedes_unit_creation() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let shared: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(OrderCatalog {
+        hits: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut host = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(shared, source(), limits(2))
+        .unwrap();
+    let player = host.native("Player", &[Value::Int(4)]).unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            player,
+            Value::Int(i32::from_be_bytes(*b"v001")),
+            Value::Real(0.0),
+            Value::Real(0.0),
+            Value::Real(0.0),
+        ],
+    )
+    .unwrap();
+    let Err(error) = host.with_militia_ability(&tables, &pcx_objects::editor::Overlay::default())
+    else {
+        panic!("late admission succeeded");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("admit militia before creating units")
+    );
+}
+
+#[test]
+fn militia_requires_the_unit_catalog_first() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let common = militia_common();
+    let ctx = context(
+        302,
+        &common,
+        "function main takes nothing returns nothing\nendfunction\n",
+        "unit-catalog",
+    );
+    let Err(error) = object(&ctx, 8)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_militia_ability(&tables, &pcx_objects::editor::Overlay::default())
+    else {
+        panic!("militia admitted without a unit catalog");
+    };
+    assert!(error.to_string().contains("not admitted"), "{error}");
+}
+
+#[test]
+fn militia_code_must_name_the_authored_class() {
+    let tables = militia_tables_with_code("AHds", "1", "v001", "v002", "militia", "militiaoff");
+    let error = militia_refusal(&tables);
+    assert!(error.contains("code differs"), "{error}");
+    assert!(error.contains("militia ability \"Amil\""), "{error}");
+    assert!(error.contains("fixture edition/version"), "{error}");
+}
+
+#[test]
+fn militia_map_overlay_modification_is_refused() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert(
+        "Amil".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Data",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Str(b"v002".to_vec()),
+            end_word: 0,
+        }],
+    );
+    let error = militia_refusal_with(&tables, &overlay);
+    assert!(error.contains("overlay modifies Amil"), "{error}");
+}
+
+#[test]
+fn militia_custom_rows_and_unrelated_overlay_edits_are_distinguished() {
+    let tables = militia_tables("1", "v001", "v002", "militia", "militiaoff");
+    let mut custom = pcx_objects::editor::Overlay::default();
+    custom
+        .custom
+        .insert("Amil".into(), ("AHds".into(), Vec::new()));
+    let error = militia_refusal_with(&tables, &custom);
+    assert!(error.contains("overlay modifies Amil"), "{error}");
+
+    let mut unrelated = pcx_objects::editor::Overlay::default();
+    unrelated.mods.insert(
+        "AHds".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Data",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Str(b"v001".to_vec()),
+            end_word: 0,
+        }],
+    );
+    assert_eq!(militia_refusal_with(&tables, &unrelated), "");
 }
 
 fn refused_order(headers: &[&str], row: &[&str], amount: &str) -> String {
@@ -2622,6 +3111,25 @@ fn position_host_admitting(
     selected: &[([u8; 4], ObjectField)],
     before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> ObjectHost {
+    position_host_admitting_placed(
+        queries,
+        memberships,
+        map,
+        declarations,
+        selected,
+        &[],
+        before_catalog,
+    )
+}
+fn position_host_admitting_placed(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+    selected: &[([u8; 4], ObjectField)],
+    placed: &[crate::playercolor_host::PlacedDestructable],
+    before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> ObjectHost {
     let mut extra = String::from(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
@@ -2719,6 +3227,8 @@ fn position_host_admitting(
         "ConvertUnitType",
         "ConvertFGameState",
         "ConvertPlayerScore",
+        "ConvertLimitOp",
+        "ConvertPlayerEvent",
     ] {
         if ctx.scripts.shared_program().natives().get(name).is_some() {
             conversions.push(name);
@@ -2761,6 +3271,7 @@ fn position_host_admitting(
         .unwrap()
         .with_destructables(crate::playercolor_host::DestructableBudget { max_records: 2 })
         .unwrap();
+    host.admit_placed_destructables(placed).unwrap();
     host = host
         .with_filters(crate::playercolor_host::FilterBudget { max_records: 16 })
         .unwrap()
@@ -2899,7 +3410,7 @@ fn failed_creation_and_rectangle_budget_leave_arena_and_members_unchanged() {
             ]
         )
         .unwrap_err()
-        .contains("stationary collision cache")
+        .contains("stationary base pathing is missing")
     );
     assert_eq!(host.inner().handles(), handles);
     let second = position_create(&mut host, 64.0, 64.0).unwrap();
@@ -2964,5 +3475,201 @@ mod group_orders;
 #[path = "unit_runtime_tests.rs"]
 mod runtime;
 
+#[path = "unit_resource_tests.rs"]
+mod resource;
+
 #[path = "inventory_tests.rs"]
 mod inventory;
+
+fn health_create(h: &mut ObjectHost, x: f32) -> pcx_script::HandleId {
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let Value::Handle(id) = h
+        .native(
+            "CreateUnit",
+            &[
+                owner,
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(x),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    id
+}
+
+fn health_vm() -> (ObjectHost, pcx_script::HandleId) {
+    combat::powerup_host::health_fixture()
+}
+
+fn health_apply(h: &mut ObjectHost, factor: f32) -> f32 {
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    h.native("SetPlayerHandicap", &[player, Value::Real(factor)])
+        .unwrap();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let Value::Real(stored) = h.native("GetPlayerHandicap", &[player]).unwrap() else {
+        panic!("handicap")
+    };
+    stored
+}
+
+fn life(h: &mut ObjectHost, unit: pcx_script::HandleId) -> (f32, f32) {
+    let v = h.unit_vitals(unit).unwrap().unwrap();
+    (v.life, v.max_life)
+}
+
+#[test]
+fn health_handicap_scales_components_existing_units_and_threshold_repeats() {
+    let (mut h, hero) = health_vm();
+    assert_eq!(life(&mut h, hero), (750.0, 750.0));
+    h.set_test_life(hero, 300.0);
+    assert_eq!(health_apply(&mut h, 0.6), 0.6);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 0.6005);
+    assert_eq!(life(&mut h, hero), (120.0, 450.0));
+    health_apply(&mut h, 1.0);
+    assert_eq!(life(&mut h, hero), (273.0, 750.0));
+}
+
+#[test]
+fn fresh_units_follow_the_owner_and_held_flat_maximum_life_is_unscaled() {
+    let (mut h, hero) = health_vm();
+    h.set_test_maximum(hero, Some(900.0), None);
+    h.set_test_life(hero, 900.0);
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (600.0, 600.0));
+    let fresh = health_create(&mut h, 32.0);
+    assert_eq!(life(&mut h, fresh), (450.0, 450.0));
+    health_apply(&mut h, 1.0);
+    assert_eq!(life(&mut h, hero), (900.0, 900.0));
+    assert_eq!(life(&mut h, fresh), (750.0, 750.0));
+}
+
+#[test]
+fn empty_owner_clamped_minimum_refuses_fresh_zero_life_unit_before_publication() {
+    let (mut h, _) = combat::powerup_host::health_fixture_hp1();
+    let empty = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native("SetPlayerHandicap", &[empty.clone(), Value::Real(0.0)])
+        .unwrap();
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(0.01)
+    );
+    let handles = h.inner().handles();
+    let units = h.executed_units().count();
+    let error = h
+        .native(
+            "CreateUnit",
+            &[
+                empty.clone(),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(88.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CreateUnit"), "{error}");
+    assert!(error.contains("projected maximum life"), "{error}");
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.executed_units().count(), units);
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(0.01)
+    );
+}
+
+#[test]
+fn destructive_raw_factors_refuse_atomically_without_death_semantics() {
+    let (mut h, hero) = health_vm();
+    let ordinary = health_create(&mut h, 32.0);
+    let before_hero = life(&mut h, hero);
+    let before_ordinary = life(&mut h, ordinary);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    for factor in [0.0, -0.5] {
+        assert!(
+            h.native("SetPlayerHandicap", &[player.clone(), Value::Real(factor)])
+                .is_err()
+        );
+        assert_eq!(life(&mut h, hero), before_hero);
+        assert_eq!(life(&mut h, ordinary), before_ordinary);
+        let Value::Real(stored) = h
+            .native("GetPlayerHandicap", std::slice::from_ref(&player))
+            .unwrap()
+        else {
+            panic!("handicap")
+        };
+        assert_eq!(stored, 1.0);
+    }
+}
+
+#[test]
+fn nonfinite_health_factors_refuse_for_live_owners_even_without_units() {
+    let (mut h, hero) = health_vm();
+    let empty = h.native("Player", &[Value::Int(5)]).unwrap();
+    assert_eq!(
+        h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+            .unwrap(),
+        Value::Real(1.0)
+    );
+    for factor in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            h.native("SetPlayerHandicap", &[empty.clone(), Value::Real(factor)])
+                .is_err()
+        );
+        assert_eq!(
+            h.native("GetPlayerHandicap", std::slice::from_ref(&empty))
+                .unwrap(),
+            Value::Real(1.0)
+        );
+    }
+    assert_eq!(life(&mut h, hero), (750.0, 750.0));
+}
+
+#[test]
+fn ownership_transfer_keeps_current_maxima_and_new_owner_changes_apply_to_it() {
+    let (mut h, hero) = health_vm();
+    health_apply(&mut h, 0.6);
+    assert_eq!(life(&mut h, hero), (450.0, 450.0));
+    let other = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(hero), other, Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(life(&mut h, hero), (450.0, 450.0));
+    let Value::Handle(other) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    let Value::Handle(fresh) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(other),
+                Value::Int(i32::from_be_bytes(*b"H001")),
+                Value::Real(80.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    h.native(
+        "SetPlayerHandicap",
+        &[Value::Handle(other), Value::Real(0.5)],
+    )
+    .unwrap();
+    assert_eq!(life(&mut h, hero), (375.0, 375.0));
+    assert_eq!(life(&mut h, fresh), (375.0, 375.0));
+}

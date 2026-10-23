@@ -33,6 +33,8 @@ pub enum MapStartupError {
     Neutral(#[from] NeutralError),
     #[error("startup observation `{0}` is not an admitted handle")]
     Observation(String),
+    #[error("startup placement: {0}")]
+    Placement(String),
 }
 
 impl From<HostError> for MapStartupError {
@@ -86,6 +88,7 @@ pub struct MapStartupBudgets {
     pub regions: Option<RegionBudget>,
     pub timer_events: usize,
     pub game_state_events: usize,
+    pub player_state_events: usize,
     /// None keeps stock slot natives unsupported.
     pub stock: Option<StockBudget>,
     /// None keeps quest and quest-item natives unsupported.
@@ -199,6 +202,8 @@ pub struct NewGameInput {
     pub initial_alliances: Option<crate::player_alliance_rules::Rules>,
     pub orders: Option<Arc<crate::order_registry::Registry>>,
     pub activity: Option<crate::unit_activity::Rules>,
+    /// The map's `war3map.w3q` upgrade overrides, resolved by upgrade readers.
+    pub upgrades: pcx_objects::editor::Overlay,
     /// Selected client's group-order rules; absent leaves group orders unsupported.
     pub group_orders: Option<crate::group_order_rules::Rules>,
     /// None leaves research queries unsupported rather than installing defaults.
@@ -277,6 +282,9 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    pub ai_source: Option<crate::campaign_ai::SourceNames>,
+    /// Checked client operands used by campaign automatic target selection.
+    pub targeting_policy: Option<crate::campaign_targeting_policy::TargetingPolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -317,8 +325,11 @@ pub struct MapStartupInputs {
     pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
+    pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
+    /// Source-qualified health-factor limits and unit-pool rounding.
+    pub health_handicap: Option<crate::player_handicap::HealthRules>,
     pub hero_skills: Option<HeroSkillsInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
@@ -326,7 +337,7 @@ pub struct MapStartupInputs {
     pub post_config: PostConfigObservations,
 }
 
-type NeutralStack = SelectedMapNeutralHost<
+pub(crate) type NeutralStack = SelectedMapNeutralHost<
     SelectedMapNeutralHost<
         SelectedMapNeutralHost<
             SelectedMapNeutralHost<SelectedMapNeutralHost<SelectedMapNeutralHost<ObjectHost>>>,
@@ -336,7 +347,8 @@ type NeutralStack = SelectedMapNeutralHost<
 
 pub struct MapStartupHost {
     sound_playback: Option<sound_playback::Rules>,
-    inner: NeutralStack,
+    inner: Option<NeutralStack>,
+    ai: crate::campaign_ai::Runtime<NeutralStack>,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
     placement_rules: Option<crate::unit_placement::Rules>,
@@ -356,6 +368,33 @@ type PlacementLoader = Box<
 >;
 
 impl MapStartupHost {
+    fn world(&self) -> &NeutralStack {
+        self.inner.as_ref().expect("map world is not lent to AI")
+    }
+
+    fn world_mut(&mut self) -> &mut NeutralStack {
+        self.inner.as_mut().expect("map world is not lent to AI")
+    }
+
+    pub fn with_ai_loader(
+        mut self,
+        loader: impl FnMut(&str) -> Result<Arc<crate::scripts::MapScripts>, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.ai.set_loader(loader);
+        self
+    }
+
+    pub(crate) fn next_ai_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
+        self.ai.next_wake(until)
+    }
+
+    pub(crate) fn resume_ai(&mut self, player: i32, ticket: u64) -> Result<(), String> {
+        self.ai.resume(&mut self.inner, player, ticket)
+    }
+
     pub fn sound_playback(&self) -> Option<&sound_playback::Rules> {
         self.sound_playback.as_ref()
     }
@@ -382,15 +421,15 @@ impl MapStartupHost {
         self
     }
     pub fn context(&self) -> &Arc<ParsedMapContext> {
-        self.inner.context()
+        self.world().context()
     }
 
     pub fn objects(&self) -> &ObjectHost {
-        self.inner.inner().inner().inner().inner().inner().inner()
+        self.world().inner().inner().inner().inner().inner().inner()
     }
 
     pub fn objects_mut(&mut self) -> &mut ObjectHost {
-        self.inner
+        self.world_mut()
             .inner_mut()
             .inner_mut()
             .inner_mut()
@@ -541,6 +580,8 @@ pub fn assemble(
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        ai_source: _,
+        targeting_policy,
         enumeration,
         rules,
         budgets,
@@ -570,7 +611,9 @@ pub fn assemble(
         random,
         terrain_pathing,
         numeric,
+        destructable_restore,
         experience_handicap,
+        health_handicap,
         hero_skills,
         catalog,
         defend,
@@ -586,6 +629,11 @@ pub fn assemble(
             enumeration.limits,
         )?
     };
+    let empty_abilities = pcx_objects::editor::Overlay::default();
+    let abilities = hero_skills
+        .as_ref()
+        .map_or(&empty_abilities, |input| &input.abilities);
+    let harvest_abilities = abilities.clone();
     let mut object = TimerHost::checked(enum_host)?
         .with_groups(budgets.groups)?
         .with_map_config(budgets.map_config)?
@@ -634,7 +682,9 @@ pub fn assemble(
             budgets.units,
         )?
         .with_unit_states(budgets.unit_states)?
-        .with_defend_ability(&defend.tables, &defend.alias)?;
+        .with_resource_amounts(Arc::clone(&defend.tables))?
+        .with_defend_ability(&defend.tables, &defend.alias)?
+        .with_militia_ability(&defend.tables, abilities)?;
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
     if let Some(rules) = resources {
@@ -701,7 +751,8 @@ pub fn assemble(
     object = object
         .with_trigger_admission(budgets.triggers)?
         .with_timer_events(budgets.timer_events)?
-        .with_game_state_events(budgets.game_state_events)?;
+        .with_game_state_events(budgets.game_state_events)?
+        .with_player_state_events(budgets.player_state_events)?;
     if let Some(limit) = budgets.trigger_conditions {
         object = object.with_trigger_conditions(limit)?;
     }
@@ -767,8 +818,14 @@ pub fn assemble(
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
     }
+    if let Some(policy) = destructable_restore {
+        object = object.with_destructable_restore(policy)?;
+    }
     if let Some(rules) = experience_handicap {
         object = object.with_player_experience_handicap(rules)?;
+    }
+    if let Some(rules) = health_handicap {
+        object = object.with_player_health_handicap(rules)?;
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
@@ -781,6 +838,15 @@ pub fn assemble(
         }
         if let Some(activity) = input.activity {
             object.admit_unit_activity(activity, 65536)?;
+            object = object.with_harvest(
+                Arc::clone(&tables),
+                harvest_abilities,
+                input.upgrades,
+                crate::playercolor_host::harvest_runtime::Budget::new(
+                    budgets.units.max_records,
+                    65536,
+                ),
+            )?;
         }
         if let Some(rules) = input.group_orders {
             object = object.with_group_orders(rules)?;
@@ -838,6 +904,9 @@ pub fn assemble(
             },
         )?;
     }
+    if let Some(policy) = targeting_policy {
+        object.admit_campaign_targeting(&context, policy)?;
+    }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;
     }
@@ -887,7 +956,8 @@ pub fn assemble(
     let neutral_aggressive = inner.inner().selected_result();
     let mut host = MapStartupHost {
         sound_playback,
-        inner,
+        inner: Some(inner),
+        ai: crate::campaign_ai::Runtime::default(),
         research: current_research,
         day_night_loader: None,
         placement_tables: placement_rules.as_ref().map(|_| tables),
@@ -906,31 +976,66 @@ impl Host for MapStartupHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
-        self.inner.begin_script_call(name, args)
+        self.world_mut().begin_script_call(name, args)
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        self.inner.continue_script_call(value)
+        self.world_mut().continue_script_call(value)
     }
     fn abort_script_calls(&mut self) {
-        self.inner.abort_script_calls();
+        self.world_mut().abort_script_calls();
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
-        self.inner.real_ops()
+        self.world().real_ops()
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
-        self.inner.suspend(name, args)
+        self.world_mut().suspend(name, args)
     }
     fn park_thread(&mut self) -> Result<u64, String> {
-        self.inner.park_thread()
+        self.world_mut().park_thread()
     }
     fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
-        self.inner.resume_thread(ticket)
+        self.world_mut().resume_thread(ticket)
     }
     fn leave_thread(&mut self) -> Result<(), String> {
-        self.inner.leave_thread()
+        self.world_mut().leave_thread()
+    }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.world_mut().after_script_spawn()
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if name == "StartCampaignAI" {
+            let scripts = &self.context().scripts;
+            let declaration = scripts
+                .program()
+                .natives()
+                .get(name)
+                .ok_or("StartCampaignAI: selected common does not declare the native")?;
+            if scripts
+                .digests
+                .first()
+                .is_none_or(|common| declaration.source != common.label)
+                || declaration.params.len() != 2
+                || declaration.params[0].ty.kind.name() != "player"
+                || declaration.params[1].ty.kind.name() != "string"
+                || declaration.ret.kind.name() != "nothing"
+            {
+                return Err("StartCampaignAI: selected common declaration differs".into());
+            }
+            let [Value::Handle(player), Value::Str(path)] = args else {
+                return Err("StartCampaignAI: expected player and script path".into());
+            };
+            let slots = self
+                .objects()
+                .player_slots()
+                .ok_or("StartCampaignAI: players are not admitted")?;
+            let ordinal = (0..slots)
+                .filter_map(|slot| i32::try_from(slot).ok())
+                .find(|&slot| self.objects().player_identity(slot) == Some(*player))
+                .ok_or("StartCampaignAI: player is not a current identity")?;
+            self.ai.start(&mut self.inner, ordinal, path)?;
+            return Ok(Value::Null);
+        }
         if name == "CreateUnit"
             && let Some(rules) = &self.placement_rules
         {
@@ -976,20 +1081,20 @@ impl Host for MapStartupHost {
         if name == "GetPlayerTechResearched"
             && let Some(pending) = self.research.take()
         {
-            let context = Arc::clone(self.inner.context());
+            let context = Arc::clone(self.world().context());
             self.objects_mut()
                 .admit_current_research(&context, pending.entries, pending.budget)
                 .map_err(|error| error.to_string())?;
         }
-        self.inner.native(name, args)
+        self.world_mut().native(name, args)
     }
     fn table_string(&self, id: u32) -> Option<String> {
-        self.inner.table_string(id)
+        self.world().table_string(id)
     }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
-        self.inner.resolve_table_string(id)
+        self.world().resolve_table_string(id)
     }
     fn code_tag(&self, tag: &str) -> Option<String> {
-        self.inner.code_tag(tag)
+        self.world().code_tag(tag)
     }
 }

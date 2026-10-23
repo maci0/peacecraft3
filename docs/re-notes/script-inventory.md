@@ -15,7 +15,10 @@ indices and applicable aliases. Their common ability code identifies the invento
 class without copying that code. Shipped `UI/WorldEditStrings.txt` labels these
 fields Item Capacity, Drop Items On Death, Can Use Items, Can Get Items and Can
 Drop Items. Per-level values come from the selected ability rows, with typed W3A
-map overrides retained. The source metadata supplies the capacity bound.
+map overrides retained. A `Data` override applies only when its second selector
+equals that field's metadata `data` ordinal; a mismatched pointer refuses instead
+of falling back or fabricating a value. The source metadata supplies the capacity
+bound.
 Missing, ambiguous, malformed or unsupported input refuses admission or use.
 A unit with a complete known ability list lacking this component has no slots;
 an unadmitted ability list remains unknown.
@@ -64,8 +67,8 @@ native nesting and deletion-edge behavior remain unverified. Stored ground x/y
 are retained while an item is held. Initial item invulnerability is unknown until
 an explicit setter establishes it. Automatic-use powerup effects refuse before
 movement rather than accepting an acquisition that cannot execute. Item use,
-passive item stat effects, consumable effects, drag/drop/give orders and inventory
-HUD interaction remain separate consumers. Ground item rendering/picking is
+unimplemented passive families (life, mana and attack speed), consumable effects,
+drag/drop/give orders and inventory HUD interaction remain separate consumers. Ground item rendering/picking is
 verified separately from these host tests.
 
 Synthetic tests cover changed capacity and permission overrides, full and empty

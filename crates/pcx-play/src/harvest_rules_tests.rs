@@ -1,6 +1,7 @@
 use super::*;
 use pcx_objects::editor::SlkId;
 use pcx_objects::editor::defaults::{DefaultTables, Identity};
+use pcx_objects::{Mod, Value as ObjectValue, ValueType};
 
 fn sylk(headers: &[&str], rows: &[Vec<&str>]) -> String {
     let mut s = String::from("ID;PWXL;N;E\r\n");
@@ -61,11 +62,184 @@ fn tables_with(
     dest_rows: &[Vec<&str>],
     weapon_rows: &[Vec<&str>],
 ) -> DefaultTables {
+    tables_with_upgrades(ability_rows, unit_rows, dest_rows, weapon_rows, &[])
+}
+
+fn tables_with_upgrades(
+    ability_rows: &[Vec<&str>],
+    unit_rows: &[Vec<&str>],
+    dest_rows: &[Vec<&str>],
+    weapon_rows: &[Vec<&str>],
+    upgrade_rows: &[Vec<&str>],
+) -> DefaultTables {
+    tables_with_upgrade_metadata(
+        ability_rows,
+        unit_rows,
+        dest_rows,
+        weapon_rows,
+        upgrade_rows,
+        &default_upgrade_metadata_rows(),
+    )
+}
+
+fn default_upgrade_metadata_rows() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["glvl", "maxlevel", "UpgradeData", "-1", "int", "tech"],
+        vec!["gef1", "effect1", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef2", "effect2", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef3", "effect3", "UpgradeData", "-1", "token", "tech"],
+        vec!["gef4", "effect4", "UpgradeData", "-1", "token", "tech"],
+        vec!["gba1", "base1", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba2", "base2", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba3", "base3", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gba4", "base4", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo1", "mod1", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo2", "mod2", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo3", "mod3", "UpgradeData", "-1", "unreal", "tech"],
+        vec!["gmo4", "mod4", "UpgradeData", "-1", "unreal", "tech"],
+    ]
+}
+
+fn tables_with_upgrade_metadata(
+    ability_rows: &[Vec<&str>],
+    unit_rows: &[Vec<&str>],
+    dest_rows: &[Vec<&str>],
+    weapon_rows: &[Vec<&str>],
+    upgrade_rows: &[Vec<&str>],
+    upgrade_metadata_rows: &[Vec<&str>],
+) -> DefaultTables {
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     members.push((
         SlkId::AbilityData.path().to_string(),
         sylk(ABILITY_HEADERS, ability_rows).into_bytes(),
     ));
+    if !ability_rows.is_empty() {
+        members.push((
+            SlkId::AbilityMetaData.path().to_string(),
+            sylk(
+                &[
+                    "ID",
+                    "field",
+                    "slk",
+                    "index",
+                    "repeat",
+                    "data",
+                    "appendIndex",
+                    "useSpecific",
+                    "notSpecific",
+                    "type",
+                    "category",
+                ],
+                &[
+                    vec![
+                        "Har1",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "1",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "Har2",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "2",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "Har3",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "3",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
+                        "adur",
+                        "Dur",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "aran",
+                        "Rng",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "aare",
+                        "Area",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Ahar",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "Arg1",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "1",
+                        "0",
+                        "Argl",
+                        "-",
+                        "bool",
+                        "stats",
+                    ],
+                    vec![
+                        "Arg2",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "2",
+                        "0",
+                        "Argl",
+                        "-",
+                        "bool",
+                        "stats",
+                    ],
+                ],
+            )
+            .into_bytes(),
+        ));
+    }
     if !unit_rows.is_empty() {
         members.push((
             SlkId::UnitAbilities.path().to_string(),
@@ -82,6 +256,24 @@ fn tables_with(
         members.push((
             SlkId::UnitWeapons.path().to_string(),
             sylk(&weapon_headers(), weapon_rows).into_bytes(),
+        ));
+    }
+    if !upgrade_rows.is_empty() {
+        members.push((
+            SlkId::UpgradeData.path().to_string(),
+            sylk(
+                &["upgradeid", "maxlevel", "effect1", "base1", "mod1"],
+                upgrade_rows,
+            )
+            .into_bytes(),
+        ));
+        members.push((
+            SlkId::UpgradeMetaData.path().to_string(),
+            sylk(
+                &["ID", "field", "slk", "index", "type", "category"],
+                upgrade_metadata_rows,
+            )
+            .into_bytes(),
         ));
     }
     let owned: Vec<(&str, &[u8])> = members
@@ -136,6 +328,38 @@ fn stock_tables() -> DefaultTables {
     tables_with(&ability_rows, &unit_rows, &dest_rows, &weapon_rows)
 }
 
+fn upgrade_tables() -> DefaultTables {
+    let ability_rows = vec![ahar_ability("7", "25", "30", "Ahar", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
+    let weapon_rows = vec![vec![
+        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+        "70", "140",
+    ]];
+    tables_with_upgrades(
+        &ability_rows,
+        &unit_rows,
+        &[],
+        &weapon_rows,
+        &[vec!["Rhlh", "2", "rlum", "10", "10"]],
+    )
+}
+
+fn stock_capacity_tables() -> DefaultTables {
+    let ability_rows = vec![ahar_ability("7", "10", "30", "Ahar", "Ahar")];
+    let unit_rows = vec![vec!["hpea", "Peasant", "Ahar", "-"]];
+    let weapon_rows = vec![vec![
+        "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+        "70", "140",
+    ]];
+    tables_with_upgrades(
+        &ability_rows,
+        &unit_rows,
+        &[],
+        &weapon_rows,
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+    )
+}
+
 #[test]
 fn harvest_rules_read_source_cells() {
     let tables = stock_tables();
@@ -174,6 +398,25 @@ fn custom_ahar_alias_reads_from_the_resolved_alias() {
     assert_eq!(rules.damage, 3.0);
     assert_eq!(rules.lumber_capacity, 11);
     assert_eq!(rules.gold_capacity, 12);
+}
+
+#[test]
+fn harvest_damage_rejects_fractional_and_out_of_range_integer_cells() {
+    for damage in ["0.5", "2147483648", "-2147483649"] {
+        let tables = tables_with(
+            &[ahar_ability(damage, "11", "12", "Harv", "Ahar")],
+            &[vec!["hpea", "Peasant", "Harv", "-"]],
+            &[],
+            &[],
+        );
+        let error = HarvestRules::from_tables(&tables, *b"hpea")
+            .expect_err("DataA1 is an integer source field");
+        assert!(
+            matches!(&error, HarvestError::Malformed { rawcode, column, .. }
+                if rawcode == "Harv" && column == "DataA1"),
+            "{damage}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -320,4 +563,676 @@ fn ambiguous_tree_weapon_slots_are_refused() {
     let tables = tables_with(&ability_rows, &unit_rows, &[], &weapon_rows);
     let err = HarvestRules::from_tables(&tables, *b"hpea").unwrap_err();
     assert!(matches!(err, HarvestError::Ambiguous { .. }), "{err:?}");
+}
+
+fn selected_field(
+    fourcc: [u8; 4],
+    slk: SlkId,
+    column: &str,
+    text: &str,
+) -> pcx_sim::world::ObjectField {
+    pcx_sim::world::ObjectField {
+        metadata: Some(pcx_objects::editor::FieldDef {
+            fourcc,
+            from: slk,
+            field: column.into(),
+            slk: format!("{slk:?}"),
+            index: -1,
+            declared: "token".into(),
+            kind: pcx_objects::editor::FieldKind::Token,
+            category: String::new(),
+            source: pcx_objects::editor::FieldSource::Column {
+                slk,
+                column: column.into(),
+            },
+            measured: true,
+        }),
+        value: Ok(pcx_sim::world::FieldValue::Cell(text.into())),
+    }
+}
+
+fn selected_unit(rawcode: [u8; 4], fields: &[([u8; 4], SlkId, &str, &str)]) -> Definition {
+    let mut map = std::collections::BTreeMap::new();
+    for (fourcc, slk, column, text) in fields {
+        map.insert(*fourcc, selected_field(*fourcc, *slk, column, text));
+    }
+    Definition {
+        rawcode,
+        base_rawcode: String::from_utf8_lossy(&rawcode).into_owned(),
+        kind: pcx_objects::editor::ObjectKind::Unit,
+        fields: map,
+        modifications: Vec::new(),
+    }
+}
+
+#[test]
+fn definition_rules_use_the_selected_unit_fields() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"ua1w", SlkId::UnitWeapons, "weapsOn", "2"),
+            (*b"ua1t", SlkId::UnitWeapons, "targs1", "ground"),
+            (*b"ua1c", SlkId::UnitWeapons, "cool1", "2"),
+            (*b"ua1d", SlkId::UnitWeapons, "dmgpt1", "0.433"),
+            (*b"ua1b", SlkId::UnitWeapons, "backSw1", "0.567"),
+            (*b"ua1r", SlkId::UnitWeapons, "rangeN1", "90"),
+            (*b"ua2t", SlkId::UnitWeapons, "targs2", "tree"),
+            (*b"ua2c", SlkId::UnitWeapons, "cool2", "1.7"),
+            (*b"ua2d", SlkId::UnitWeapons, "dmgpt2", "0.3"),
+            (*b"ua2b", SlkId::UnitWeapons, "backSw2", "0.6"),
+            (*b"ua2r", SlkId::UnitWeapons, "rangeN2", "70"),
+        ],
+    );
+    let rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    assert_eq!(rules.damage, 7.0);
+    assert_eq!(rules.lumber_capacity, 25);
+    let weapon = rules.work_weapon.expect("tree weapon");
+    assert_eq!(weapon.slot, 2);
+    assert_eq!(weapon.range, 70.0);
+    assert_eq!(weapon.cool, 1.7);
+}
+
+#[test]
+fn definition_without_ability_list_is_a_contextual_refusal() {
+    let tables = stock_tables();
+    let definition = selected_unit(*b"hpea", &[]);
+    let error = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .expect_err("missing abilList");
+    match error {
+        HarvestError::Missing { column, .. } => assert_eq!(column, "abilList"),
+        other => panic!("expected missing, got {other:?}"),
+    }
+}
+
+#[test]
+fn definition_without_ahar_is_absent() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hnon",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "-")],
+    );
+    assert!(
+        HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+            .unwrap()
+            .is_none()
+    );
+}
+
+fn edit(
+    rawcode: &str,
+    field: [u8; 4],
+    value_type: pcx_objects::ValueType,
+    value: pcx_objects::Value,
+) -> Overlay {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        rawcode.into(),
+        vec![pcx_objects::Mod {
+            field,
+            value_type,
+            selectors: Some([1, 0]),
+            value,
+            end_word: 0,
+        }],
+    );
+    overlay
+}
+
+fn definition_rules(overlay: &Overlay) -> HarvestRules {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar")],
+    );
+    HarvestRules::from_definition(&tables, overlay, &definition)
+        .unwrap()
+        .expect("Ahar")
+}
+
+#[test]
+fn metadata_data_ordinal_selects_and_accepts_a_typed_override() {
+    let rules = definition_rules(&edit(
+        "Ahar",
+        *b"Har2",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(17),
+    ));
+    assert_eq!(rules.damage, 7.0);
+    assert_eq!(rules.lumber_capacity, 17);
+    assert_eq!(rules.gold_capacity, 30);
+}
+
+#[test]
+fn metadata_data_ordinal_damage_override_and_unrelated_edits_survive() {
+    let mut overlay = edit(
+        "Ahar",
+        *b"Har1",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(11),
+    );
+    overlay
+        .mods
+        .entry("Ahar".into())
+        .or_default()
+        .push(pcx_objects::Mod {
+            field: *b"acdn",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Real(9.5),
+            end_word: 0,
+        });
+    let rules = definition_rules(&overlay);
+    assert_eq!(rules.damage, 11.0);
+    assert_eq!(rules.lumber_capacity, 25);
+}
+
+#[test]
+fn metadata_scalar_override_uses_the_named_field_not_a_data_column() {
+    let rules = definition_rules(&edit(
+        "Ahar",
+        *b"adur",
+        pcx_objects::ValueType::Unreal,
+        pcx_objects::Value::Unreal(4.25),
+    ));
+    assert_eq!(rules.work_duration, 4.25);
+}
+
+#[test]
+fn depot_return_metadata_override_changes_both_authored_flags() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"htow",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Argl")],
+    );
+    let mut overlay = edit(
+        "Argl",
+        *b"Arg1",
+        pcx_objects::ValueType::Int,
+        pcx_objects::Value::Int(0),
+    );
+    overlay
+        .mods
+        .entry("Argl".into())
+        .or_default()
+        .push(pcx_objects::Mod {
+            field: *b"Arg2",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Int(0),
+            end_word: 0,
+        });
+    let returned = DepotReturn::from_definition(&tables, &overlay, &definition).unwrap();
+    assert!(!returned.accepts_gold);
+    assert!(!returned.accepts_lumber);
+}
+#[test]
+fn metadata_override_with_the_wrong_type_is_a_contextual_refusal() {
+    let error = HarvestRules::from_definition(
+        &stock_tables(),
+        &edit(
+            "Ahar",
+            *b"Har2",
+            pcx_objects::ValueType::Real,
+            pcx_objects::Value::Real(17.5),
+        ),
+        &selected_unit(
+            *b"hpea",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar")],
+        ),
+    )
+    .unwrap_err();
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "Data2");
+            assert!(detail.contains("type"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+fn definition_weapon_fields() -> [([u8; 4], SlkId, &'static str, &'static str); 11] {
+    [
+        (*b"ua1w", SlkId::UnitWeapons, "weapsOn", "2"),
+        (*b"ua1t", SlkId::UnitWeapons, "targs1", "ground"),
+        (*b"ua1c", SlkId::UnitWeapons, "cool1", "2"),
+        (*b"ua1d", SlkId::UnitWeapons, "dmgpt1", "0.433"),
+        (*b"ua1b", SlkId::UnitWeapons, "backSw1", "0.567"),
+        (*b"ua1r", SlkId::UnitWeapons, "rangeN1", "90"),
+        (*b"ua2t", SlkId::UnitWeapons, "targs2", "tree"),
+        (*b"ua2c", SlkId::UnitWeapons, "cool2", "1.25"),
+        (*b"ua2d", SlkId::UnitWeapons, "dmgpt2", "0.3"),
+        (*b"ua2b", SlkId::UnitWeapons, "backSw2", "0.6"),
+        (*b"ua2r", SlkId::UnitWeapons, "rangeN2", "73"),
+    ]
+}
+
+#[test]
+fn definition_reads_nonstock_ahar_damage_and_capacity() {
+    let ability_rows = vec![ahar_ability("13", "41", "7", "Ahar", "Ahar")];
+    let tables = tables_with(&ability_rows, &[], &[], &[]);
+    let mut fields = definition_weapon_fields().to_vec();
+    fields.push((*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"));
+    let definition = selected_unit(*b"hpea", &fields);
+    let rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("nonstock Ahar");
+    assert_eq!(rules.ahar_alias, "Ahar");
+    assert_eq!(rules.damage, 13.0);
+    assert_eq!(rules.lumber_capacity, 41);
+    assert_eq!(rules.gold_capacity, 7);
+    let weapon = rules.work_weapon.expect("tree weapon");
+    assert_eq!(weapon.cool, 1.25);
+    assert_eq!(weapon.range, 73.0);
+}
+
+#[test]
+fn definition_with_several_ahar_upgrade_aliases_is_refused() {
+    let ability_rows = vec![
+        ahar_ability("7", "25", "30", "Ahar", "Ahar"),
+        ahar_ability("13", "41", "7", "Ahrl", "Ahar"),
+    ];
+    let tables = tables_with(&ability_rows, &[], &[], &[]);
+    let definition = selected_unit(
+        *b"hpea",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar,Ahrl")],
+    );
+    let error = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .expect_err("two Ahar levels are ambiguous");
+    assert!(matches!(error, HarvestError::Ambiguous { .. }), "{error:?}");
+}
+
+#[test]
+fn definition_reads_nonstock_depot_return_flags() {
+    let ability_rows = vec![vec![
+        "Argl", "Artn", "1", "0", "0", "0", "1", "-", "-", "-", "-",
+    ]];
+    let tables = tables_with(&ability_rows, &[], &[], &[]);
+    let definition = selected_unit(
+        *b"hdep",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Argl")],
+    );
+    let returned = DepotReturn::from_definition(&tables, &Overlay::default(), &definition).unwrap();
+    assert!(!returned.accepts_gold);
+    assert!(returned.accepts_lumber);
+}
+
+#[test]
+fn definition_with_authored_upgrades_keeps_reading_rules() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh,Rguv"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| Ok(0))
+        .unwrap();
+    assert_eq!(rules.damage, 7.0);
+    assert_eq!(rules.lumber_capacity, 25);
+}
+
+#[test]
+fn active_lumber_harvesting_upgrade_adds_authored_capacity() {
+    let tables = upgrade_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    let requested = std::cell::Cell::new(0);
+    rules
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |tech| {
+            requested.set(tech);
+            Ok(2)
+        })
+        .unwrap();
+    assert_eq!(requested.get(), i32::from_be_bytes(*b"Rhlh"));
+    assert_eq!(rules.lumber_capacity, 45);
+}
+
+#[test]
+fn w3q_custom_upgrade_overrides_the_base_capacity_and_maximum() {
+    let tables = upgrade_tables();
+    let mut overlay = Overlay::default();
+    overlay.custom.insert(
+        "R999".into(),
+        (
+            "Rhlh".into(),
+            vec![
+                Mod {
+                    field: *b"glvl",
+                    value_type: ValueType::Int,
+                    selectors: Some([0, 0]),
+                    value: ObjectValue::Int(3),
+                    end_word: 0,
+                },
+                Mod {
+                    field: *b"gmo1",
+                    value_type: ValueType::Unreal,
+                    selectors: Some([0, 0]),
+                    value: ObjectValue::Unreal(15.0),
+                    end_word: 0,
+                },
+            ],
+        ),
+    );
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "R999"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules
+        .apply_lumber_harvesting_upgrades(&tables, &overlay, &definition, |_| Ok(3))
+        .unwrap();
+    assert_eq!(rules.lumber_capacity, 65);
+}
+
+fn w3q_capacity_override(selectors: [u32; 2], value: f32) -> Overlay {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"Rhlh");
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(b"gba1");
+    bytes.extend_from_slice(&ValueType::Unreal.word().to_le_bytes());
+    bytes.extend_from_slice(&selectors[0].to_le_bytes());
+    bytes.extend_from_slice(&selectors[1].to_le_bytes());
+    bytes.extend_from_slice(&value.to_bits().to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(bytes.len(), 48);
+    let file = pcx_objects::ObjectFile::parse("war3map.w3q", &bytes).expect("48-byte W3Q");
+    Overlay::of(&file)
+}
+
+fn apply_capacity_override(tables: &DefaultTables, overlay: &Overlay) -> Result<i32, HarvestError> {
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules.apply_lumber_harvesting_upgrades(tables, overlay, &definition, |_| Ok(1))?;
+    Ok(rules.lumber_capacity)
+}
+
+fn apply_stock_capacity_override(overlay: &Overlay) -> Result<i32, HarvestError> {
+    apply_capacity_override(&stock_capacity_tables(), overlay)
+}
+
+#[test]
+fn w3q_neutral_selector_applies_the_first_level_capacity_override() {
+    assert_eq!(
+        apply_stock_capacity_override(&w3q_capacity_override([0, 0], 9.0)).unwrap(),
+        19
+    );
+}
+
+#[test]
+fn w3q_level_selector_is_refused_for_a_first_level_capacity_override() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([1, 0], 9.0))
+        .expect_err("level-selector base1 must not apply to level 1");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("[0, 0]"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+fn capacity_override(
+    selectors: Option<[u32; 2]>,
+    value_type: ValueType,
+    value: ObjectValue,
+) -> Overlay {
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "Rhlh".into(),
+        vec![Mod {
+            field: *b"gba1",
+            value_type,
+            selectors,
+            value,
+            end_word: 0,
+        }],
+    );
+    overlay
+}
+
+#[test]
+fn w3q_unqualified_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&capacity_override(
+        None,
+        ValueType::Unreal,
+        ObjectValue::Unreal(9.0),
+    ))
+    .expect_err("unqualified base1 must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("[0, 0]"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_fractional_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], 9.5))
+        .expect_err("fractional capacity must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("finite integer"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_non_finite_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], f32::NAN))
+        .expect_err("non-finite capacity must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("finite integer"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_out_of_range_capacity_override_is_refused() {
+    let error = apply_stock_capacity_override(&w3q_capacity_override([0, 0], 3.0e9))
+        .expect_err("capacity outside i32 must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("outside the i32 range"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn w3q_capacity_override_with_the_wrong_wire_type_is_refused() {
+    let error = apply_stock_capacity_override(&capacity_override(
+        Some([0, 0]),
+        ValueType::Int,
+        ObjectValue::Int(9),
+    ))
+    .expect_err("int wire must not satisfy unreal metadata");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("differs from metadata kind"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn ambiguous_upgrade_metadata_is_refused() {
+    let tables = tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &{
+            let mut rows = default_upgrade_metadata_rows();
+            rows.push(vec!["gba9", "base1", "UpgradeData", "-1", "unreal", "tech"]);
+            rows
+        },
+    );
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("ambiguous upgrade metadata must be refused");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "base1");
+            assert!(detail.contains("more than one"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_upgrade_metadata_is_not_read_as_a_scalar_capacity() {
+    let mut metadata = default_upgrade_metadata_rows();
+    metadata.iter_mut().find(|row| row[0] == "gba1").unwrap()[3] = "2";
+    let tables = tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &metadata,
+    );
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("an indexed metadata column is not an admitted scalar");
+    assert!(matches!(error, HarvestError::Malformed { column, .. } if column == "base1"));
+}
+
+fn capacity_tables_without_upgrade_metadata() -> DefaultTables {
+    tables_with_upgrade_metadata(
+        &[ahar_ability("7", "10", "30", "Ahar", "Ahar")],
+        &[vec!["hpea", "Peasant", "Ahar", "-"]],
+        &[],
+        &[vec![
+            "hpea", "2", "ground", "2", "0.433", "0.567", "90", "250", "tree", "1.7", "0.3", "0.6",
+            "70", "140",
+        ]],
+        &[vec!["Rhlh", "2", "rlum", "5", "5"]],
+        &[],
+    )
+}
+
+#[test]
+fn stock_capacity_without_upgrade_metadata_still_reads_the_table() {
+    let tables = capacity_tables_without_upgrade_metadata();
+    assert_eq!(
+        apply_capacity_override(&tables, &Overlay::default()).unwrap(),
+        15
+    );
+}
+
+#[test]
+fn map_override_without_upgrade_metadata_is_refused() {
+    let tables = capacity_tables_without_upgrade_metadata();
+    let error = apply_capacity_override(
+        &tables,
+        &capacity_override(Some([0, 0]), ValueType::Unreal, ObjectValue::Unreal(9.0)),
+    )
+    .expect_err("a map override without metadata must not publish the stock default");
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "maxlevel");
+            assert!(detail.contains("missing upgrade metadata"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn active_upgrade_level_beyond_the_authored_maximum_is_refused() {
+    let tables = upgrade_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    let error = rules
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| Ok(3))
+        .unwrap_err();
+    match error {
+        HarvestError::Malformed { column, detail, .. } => {
+            assert_eq!(column, "maxlevel");
+            assert!(detail.contains("exceeds"), "{detail}");
+        }
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn definition_with_an_empty_upgrade_list_keeps_reading_rules() {
+    let tables = stock_tables();
+    let definition = selected_unit(
+        *b"hpea",
+        &[
+            (*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar"),
+            (*b"upgr", SlkId::UnitBalance, "upgradeList", "-"),
+        ],
+    );
+    let mut rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .expect("Ahar");
+    rules
+        .apply_lumber_harvesting_upgrades(&tables, &Overlay::default(), &definition, |_| {
+            panic!("empty upgrade list must not query player levels")
+        })
+        .unwrap();
+    assert_eq!(rules.damage, 7.0);
 }

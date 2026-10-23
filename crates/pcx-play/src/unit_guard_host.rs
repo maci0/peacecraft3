@@ -23,6 +23,7 @@ pub struct UnitGuard {
 #[derive(Clone, Copy)]
 struct ReturnRules {
     distance: f32,
+    maximum: Option<f32>,
     timeout: f64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,8 +93,9 @@ impl UnitGuard {
         if self.released {
             return Ok(Decision::Continue);
         }
+        let from_home = distance(position, self.home);
         if self.returning {
-            if distance(position, self.home) <= tolerance || !moving {
+            if from_home <= tolerance || !moving {
                 self.returning = false;
                 self.beyond = false;
                 self.chase_since = None;
@@ -106,16 +108,18 @@ impl UnitGuard {
             return Ok(Decision::Continue);
         }
         self.settled_at = None;
-        if distance(position, self.home) > rules.distance {
+        if from_home > rules.distance {
             self.beyond = true;
         }
         if !self.beyond {
             return Ok(Decision::Continue);
         }
         if chasing {
-            let since = *self.chase_since.get_or_insert(now);
-            if now - since < rules.timeout {
-                return Ok(Decision::Continue);
+            if !rules.maximum.is_some_and(|maximum| from_home > maximum) {
+                let since = *self.chase_since.get_or_insert(now);
+                if now - since < rules.timeout {
+                    return Ok(Decision::Continue);
+                }
             }
         } else if moving {
             // A live explicit point order is not an idle AI return request.
@@ -154,7 +158,7 @@ pub(super) fn candidate(definition: &Definition, combat: Option<&Combat>) -> Res
         super::unit_positions::text(definition, pcx_objects::editor::SlkId::UnitData, "movetp")
             .map_err(str::to_owned)?;
     match movement {
-        "foot" | "horse" => Ok(true),
+        "foot" | "horse" | "fly" => Ok(true),
         "" | "_" | "none" => Ok(false),
         _ => Err("guard movement class is not admitted".into()),
     }
@@ -331,6 +335,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
@@ -387,6 +392,9 @@ impl ObjectHost {
             .as_ref()
             .is_some_and(|a| a.moving() || (a.patrolling() || a.following()) && !guard.returning);
         let tolerance = self.unit_collision_radius(unit, REMOVE)?;
+        let maximum = self
+            .creep_owner(guard.owner, REMOVE)?
+            .then_some(state.source.max_guard_distance);
         let decision = guard
             .plan(
                 position,
@@ -396,6 +404,7 @@ impl ObjectHost {
                 tolerance,
                 ReturnRules {
                     distance: state.source.guard_distance,
+                    maximum,
                     timeout: f64::from(state.source.guard_return_time),
                 },
             )
@@ -459,10 +468,40 @@ mod tests {
         HandleId::new(std::num::NonZeroU64::new(7).unwrap())
     }
     #[test]
+    fn maximum_pursuit_distance_bypasses_attack_resets_but_not_release_or_point_orders() {
+        let rules = ReturnRules {
+            distance: 3.,
+            maximum: Some(7.),
+            timeout: 100.,
+        };
+        let mut guard = UnitGuard::new(id(), [0., 0.], 0.);
+        assert_eq!(
+            guard.plan([7., 0.], 1., true, true, 1., rules).unwrap(),
+            Decision::Continue
+        );
+        guard.attacked(1.);
+        let mut released = guard;
+        released.released = true;
+        let mut ordered = guard;
+        assert_eq!(
+            released.plan([8., 0.], 1., true, true, 1., rules).unwrap(),
+            Decision::Continue
+        );
+        assert_eq!(
+            ordered.plan([8., 0.], 1., false, true, 1., rules).unwrap(),
+            Decision::Continue
+        );
+        assert_eq!(
+            guard.plan([8., 0.], 1., true, true, 1., rules).unwrap(),
+            Decision::Return
+        );
+    }
+    #[test]
     fn pause_does_not_spend_the_guard_chase_timeout() {
         let mut guard = UnitGuard::new(id(), [0., 0.], 0.);
         let rules = ReturnRules {
             distance: 10.,
+            maximum: None,
             timeout: 5.,
         };
         assert_eq!(
@@ -483,6 +522,7 @@ mod tests {
     fn guard_return_uses_authored_distance_time_attack_reset_and_release() {
         let rules = ReturnRules {
             distance: 10.,
+            maximum: None,
             timeout: 3.,
         };
         let mut g = UnitGuard::new(id(), [0., 0.], 0.);

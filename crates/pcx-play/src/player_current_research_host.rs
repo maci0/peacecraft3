@@ -215,11 +215,6 @@ impl ObjectHost {
                     "upgrade research is invalidated",
                 )));
             }
-            if model.rules.maximum(*techid).is_none() {
-                return Err(fail(Failure::PlayerState(
-                    "technology is not an admitted upgrade",
-                )));
-            }
             let level = players.rows[at]
                 .research_levels
                 .iter()

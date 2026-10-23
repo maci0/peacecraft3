@@ -1,8 +1,10 @@
 use super::{COMMON, budget, context, id, object, slots_rule};
+use crate::campaign_ai::{AiWorld, Runtime};
 use crate::map_admission::ParsedMapContext;
 use crate::playercolor_host::{ObjectHost, ResearchObservation, TechLimitBudget};
+use crate::scripts::{AssetIdentity, MapScripts, ScriptAsset};
 use pcx_script::{HandleId, Host, Value};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 fn common() -> String {
     format!(
         "{COMMON}\nconstant native GetPlayerTechResearched takes player p, integer tech, boolean specific returns boolean\nconstant native SetPlayerTechResearched takes player p, integer tech, integer level returns nothing\nconstant native GetPlayerTechCount takes player p, integer tech, boolean specific returns integer\n"
@@ -41,6 +43,178 @@ fn query(h: &mut ObjectHost, player: &Value, tech: i32, specific: bool) -> Resul
         "GetPlayerTechResearched",
         &[player.clone(), Value::Int(tech), Value::Bool(specific)],
     )
+}
+fn query_count(
+    h: &mut ObjectHost,
+    player: &Value,
+    tech: i32,
+    specific: bool,
+) -> Result<Value, String> {
+    h.native(
+        "GetPlayerTechCount",
+        &[player.clone(), Value::Int(tech), Value::Bool(specific)],
+    )
+}
+
+struct AiResearchWorld {
+    object: ObjectHost,
+    clock: Arc<Mutex<f64>>,
+}
+
+impl Host for AiResearchWorld {
+    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.object.native(name, args)
+    }
+}
+
+impl AiWorld for AiResearchWorld {
+    fn ai_clock(&self) -> Option<f64> {
+        Some(*self.clock.lock().unwrap())
+    }
+
+    fn has_map_player_state_callbacks(&self) -> bool {
+        false
+    }
+
+    fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String> {
+        let identity = self
+            .object
+            .player_identity(player)
+            .ok_or("GetUpgradeLevel: AI player identity is not admitted")?;
+        match self.object.native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(identity),
+                Value::Int(upgrade),
+                Value::Bool(true),
+            ],
+        )? {
+            Value::Int(level) => Ok(level),
+            _ => Err("GetUpgradeLevel: player research returned a non-integer".into()),
+        }
+    }
+
+    fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
+        Err("unit costs are outside this research fixture".into())
+    }
+
+    fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
+        self.object
+            .activate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_deactivate_player(&mut self, player: i32) {
+        self.object.deactivate_campaign_ai_player(player);
+    }
+
+    fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_target_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[test]
+fn campaign_ai_upgrade_query_uses_live_admitted_player_research_without_side_effects() {
+    let common = common();
+    let (mut object, ctx) = setup(&common, "// map", 2);
+    object
+        .admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let first = object.native("Player", &[Value::Int(0)]).unwrap();
+    let second = object.native("Player", &[Value::Int(1)]).unwrap();
+    for (player, level) in [(&first, 1), (&second, 2)] {
+        object
+            .native(
+                "SetPlayerTechResearched",
+                &[player.clone(), Value::Int(5), Value::Int(level)],
+            )
+            .unwrap();
+    }
+    let source = "globals\ninteger first=0\ninteger unknown=0\ninteger later=0\ninteger repeated=0\nendglobals\nfunction main takes nothing returns nothing\nset first=GetUpgradeLevel(5)\nset unknown=GetUpgradeLevel(6)\ncall Sleep(1.0)\nset later=GetUpgradeLevel(5)\nset repeated=GetUpgradeLevel(5)\nendfunction\n";
+    let ai_common = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n";
+    let script = |name: &'static str| {
+        Arc::new(
+            MapScripts::compile(
+                AssetIdentity {
+                    edition: "synthetic".into(),
+                    version: "upgrade-query".into(),
+                    source: name.into(),
+                },
+                ScriptAsset {
+                    label: "synthetic:common",
+                    bytes: common.as_bytes(),
+                },
+                ScriptAsset {
+                    label: "synthetic:common-ai",
+                    bytes: ai_common.as_bytes(),
+                },
+                ScriptAsset {
+                    label: name,
+                    bytes: source.as_bytes(),
+                },
+                None,
+            )
+            .unwrap(),
+        )
+    };
+    let red = script("red.ai");
+    let purple = script("purple.ai");
+    let mut runtime = Runtime::<AiResearchWorld>::default();
+    runtime.set_loader(move |name| match name {
+        "red.ai" => Ok(Arc::clone(&red)),
+        "purple.ai" => Ok(Arc::clone(&purple)),
+        _ => Err("unknown AI source".into()),
+    });
+    let clock = Arc::new(Mutex::new(0.0));
+    let mut world = Some(AiResearchWorld {
+        object,
+        clock: Arc::clone(&clock),
+    });
+    let snapshot = |world: &Option<AiResearchWorld>| {
+        let host = &world.as_ref().unwrap().object;
+        (
+            host.inner().handles(),
+            host.retained_player_state_events().ok(),
+            host.script_random_state().cloned(),
+            *clock.lock().unwrap(),
+            host.player_settings(id(&first))
+                .unwrap()
+                .research_levels
+                .clone(),
+            host.player_settings(id(&second))
+                .unwrap()
+                .research_levels
+                .clone(),
+        )
+    };
+    runtime.start(&mut world, 0, "red.ai").unwrap();
+    runtime.start(&mut world, 1, "purple.ai").unwrap();
+    assert_eq!(runtime.global(0, "first"), Some(Value::Int(1)));
+    assert_eq!(runtime.global(1, "first"), Some(Value::Int(2)));
+    assert_eq!(runtime.global(0, "unknown"), Some(Value::Int(0)));
+    assert_eq!(runtime.global(1, "unknown"), Some(Value::Int(0)));
+    world
+        .as_mut()
+        .unwrap()
+        .object
+        .native(
+            "SetPlayerTechResearched",
+            &[first.clone(), Value::Int(5), Value::Int(3)],
+        )
+        .unwrap();
+    *clock.lock().unwrap() = 1.0;
+    let before_wake = snapshot(&world);
+    for _ in 0..2 {
+        let (_, player, ticket) = runtime.next_wake(1.0).unwrap();
+        runtime.resume(&mut world, player, ticket).unwrap();
+    }
+    assert_eq!(runtime.global(0, "later"), Some(Value::Int(3)));
+    assert_eq!(runtime.global(1, "later"), Some(Value::Int(2)));
+    assert_eq!(runtime.global(0, "repeated"), Some(Value::Int(3)));
+    assert_eq!(runtime.global(1, "repeated"), Some(Value::Int(2)));
+    assert_eq!(snapshot(&world), before_wake);
 }
 
 #[test]
@@ -109,7 +283,14 @@ fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
         query(vm.host(), &late, 5, true).unwrap(),
         Value::Bool(false)
     );
-    assert!(query(vm.host(), &late, 6, true).is_err());
+    assert_eq!(
+        query(vm.host(), &late, 6, true).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        query_count(vm.host(), &late, 6, true).unwrap(),
+        Value::Int(0)
+    );
     assert!(
         vm.host()
             .admit_current_research(
@@ -137,6 +318,50 @@ fn fresh_upgrade_queries_use_applied_levels_and_preserve_raw_setter_requests() {
         vm.host().player_settings(id(&p)).unwrap().research_levels,
         [(5, 0)]
     );
+}
+
+#[test]
+fn absent_research_ids_answer_false_and_zero_for_both_queries_and_flags() {
+    let (mut h, ctx) = setup(&common(), "globals\nplayer P = Player(0)\nendglobals\n", 1);
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let p = h.native("Player", &[Value::Int(0)]).unwrap();
+    let other = h.native("Player", &[Value::Int(1)]).unwrap();
+    for player in [&p, &other] {
+        for tech in [-37, 5, 6] {
+            for specific in [true, false] {
+                assert_eq!(
+                    query(&mut h, player, tech, specific).unwrap(),
+                    Value::Bool(false)
+                );
+                assert_eq!(
+                    query_count(&mut h, player, tech, specific).unwrap(),
+                    Value::Int(0)
+                );
+            }
+        }
+    }
+    assert!(
+        h.native(
+            "SetPlayerTechResearched",
+            &[p.clone(), Value::Int(6), Value::Int(1)]
+        )
+        .is_err()
+    );
+    let color = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
+    let bad = [
+        vec![],
+        vec![p.clone(), Value::Int(5)],
+        vec![p.clone(), Value::Int(5), Value::Bool(true), Value::Int(0)],
+        vec![p.clone(), Value::Real(5.0), Value::Bool(true)],
+        vec![p.clone(), Value::Int(5), Value::Int(1)],
+        vec![color, Value::Int(5), Value::Bool(true)],
+        vec![Value::Null, Value::Int(5), Value::Bool(true)],
+    ];
+    for args in bad {
+        assert!(h.native("GetPlayerTechResearched", &args).is_err());
+        assert!(h.native("GetPlayerTechCount", &args).is_err());
+    }
 }
 
 #[test]

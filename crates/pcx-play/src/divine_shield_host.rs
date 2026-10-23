@@ -31,7 +31,7 @@ pub(super) struct Rules {
     order: i32,
     unorder: i32,
     /// Game time each caster may cast again.
-    ready_at: BTreeMap<HandleId, f64>,
+    pub(super) ready_at: BTreeMap<HandleId, f64>,
     /// Active shields by caster, keyed by game time.
     active: BTreeMap<HandleId, ActiveShield>,
 }
@@ -48,7 +48,7 @@ struct Spell {
 
 #[derive(Default)]
 pub(super) struct State {
-    rules: Option<Rules>,
+    pub(super) rules: Option<Rules>,
 }
 
 #[cfg(test)]

@@ -941,3 +941,123 @@ context still matches all 155 original creation requests and accepted positions.
 Unchanged Human01 application startup passes ShowUnit and next refuses
 `AttachSoundToUnit` at Blizzard.j:2226; it publishes no session. The earlier
 standalone diagnostic's missing day/night loader is not that application's failure.
+
+## Selected flight movement admission (2026-10-22)
+
+The supplied `UnitData.slk` row `nser` (Searinox) selects `movetp=fly`,
+`moveHeight=280`, `moveFloor=90`, `turnRate=0.1`, `collision=48` and
+`pathTex=_`; its `UnitBalance.slk` `collision` value is `48`. These are the
+authored inputs for Human02's scripted Searinox creation, not defaults invented
+by the recreation.
+
+Selected executable evidence (Legacy 1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`):
+
+- the movement-token decoder's string table at `0x10dccc0` maps `fly` to
+  movement enumerand `2`;
+- the constructor path beginning at `0x67ce7d` indexes a case table at
+  `0x67d90c`: movement `1` (`foot`) reaches `0x67cebc` (`mov ecx,2`) and
+  movement `2` (`fly`) reaches `0x67cec3` (`mov ecx,4`); the selected value is
+  stored at the unit's `+0x1b0` pathing-mask field;
+- the separate pathing-type switch at `0x494460` maps pathing enumerand `1` to
+  mask `2` and enumerand `2` to mask `4`, matching `PATHING_TYPE_FLYABILITY`;
+- the fly predicate at `0x767c30` compares the `movetp` field with `fly`.
+
+The recreation now derives both masks from those reviewed instruction windows.
+`unit_positions::geometry` classifies `foot`, `horse` and `fly`; air keeps the
+authored collision radius and `pathTex`. Placement selects the `fly` mask instead
+of the ground mask for air, skips ground terrain-domain adjacency, ignores dynamic
+unit occupancy and stationary footprints, and does not insert air stamps into
+either ground occupancy array. `prepare_motion` reuses the stamp's class, so
+routes and segment samples also test the fly mask. An all-fly-masked map refuses
+creation rather than falling back to an invented position.
+
+Recreation choices still requiring native qualification: whether air units
+collide with each other, the exact radius/footprint test against no-fly cells,
+`moveFloor` altitude handling and turn-rate-limited facing. The actor consumer
+already reads `moveHeight` as model height above terrain; it does not consume
+`moveFloor` or `turnRate`, and this slice does not change rendering.
+
+A local Human02-derived diagnostic omitted five unsupported
+`IssueImmediateOrder` calls and the later trigger initialization, then reached
+and admitted the authored `CreateUnit('nser', ...)` at script line 858. The
+resulting `gg_unit_nser_0048` global answered `GetUnitTypeId == 'nser'` and
+`GetUnitX/GetUnitY == 2612.25/-5883.25`, the authored 2612.3/-5883.1 request
+snapped to the selected quarter-cell grid. The unmodified map still stops
+earlier at script line 815 on unimplemented `IssueImmediateOrder`, so this is a
+targeted creation-path probe, not an unmodified campaign gate, playability or
+rendered-parity claim.
+
+Synthetic tests cover flight admission, ground-mask/occupancy/domain bypass,
+fly-mask refusal, air stamps leaving ground occupancy unchanged and scripted fly
+movement. Focused library tests, strict Clippy and formatting pass locally.
+
+## Placed destructable life and stationary death (2026-10-22)
+
+Selected `.doo` records in the reference census expose life bytes `0..=100` and
+`255`. Byte `0` creates a dead object, `1..=100` is the authored percentage of
+catalog HP, and `255` is full. Bytes `101..=254` are unobserved in that census;
+clamping them to full is a recreation inference pending native evidence, not a
+measured rule.
+
+Placed rows retain the complete authored record (type, variation, position,
+angle, all three scale components, flags and raw life byte) by handle. The
+script-facing creation fields remain a separate projection. Nonfinite position,
+angle or any scale component is refused before a row is produced. Life getters,
+setters, kill and damage also refuse while the selected catalog has no HP for a
+script-created record; they do not invent zero life or a zero maximum.
+
+Script-created destructables are admitted only before the stationary collision
+cache is built. Later creation is refused because this cache cannot rebuild
+stationary occupancy. Death and life mutation share one path, and a dead object
+swaps only its own live/dead footprint layer without erasing terrain bits or
+other overlapping stationary objects.
+
+A fresh native probe on the pinned Human02-derived map changes only the
+authored flag byte of four separated `LTlt` records and records destructable
+counts around one matching `CreateDestructable` per record. Flag `0` and flag
+`3` produce no automatic object; flags `2` and `6` do, and each script call
+adds a new handle rather than returning the pre-existing one. The pinned map
+contains only flags `0`, `2`, `3` and `6`; the wider corpus also contains `4`
+and `7`, which remain unqualified. The recreation now admits automatic
+placement only for `2` and `6`, leaves `0` and `3` to script creation, and
+refuses other destructable flags with the rawcode and creation number. These
+are observed admission counts, not a claim about the individual flag bits.
+
+The Human02 `.doo` stream contains `LTcr` records at `(-4608, -3264)` and
+`(-2112, -4800)` with flag `0`, while `CreateAllDestructables` allocates
+matching scripted destructables at those positions. The recreation retains
+each skipped `.doo` record as source, but creates neither an arena object nor
+an initial stationary layer for it. Each authored script call produces exactly
+one script-origin arena record and one `StationaryKey::Destructable` layer.
+Non-destructable decorative doodads keep their existing static-footprint
+handling regardless of their flags. Killing one script identity changes only
+that identity's stationary layer.
+
+## Explicit unit team color (2026-10-23)
+
+`SetUnitColor` is admitted optionally alongside the selected `CreateUnit`
+declaration, with the exact `(unit, playercolor) -> nothing` signature and
+same-source `playercolor` type. It retains the admitted symbolic color on the
+existing unit's `team_color` field. Owner, creation color, catalog, position,
+orders and other units remain unchanged; there is no new palette or unit.
+The existing actor projection prioritizes this field over class/creation color
+and retires/rebuilds an actor when its effective palette index changes. Palette
+paths and material binding continue to come from the selected assets.
+
+The reviewed image above registers the working wrapper at `0x4ab260` through
+the registration at `0x49d5fb`. It resolves the unit with `0x483940`, skips a
+null lookup, passes the color through vtable slot `+0x64`, then calls the unit
+color update at `0x6a2a70` and refreshes presentation through `0x5f6e00`.
+The second registration table points to `0xcbda30`, a zero-return stub; that
+table alone is not edition-specific behavior evidence. The local registration
+receipt and disassembly are retained in `.scratch/unit-color/` in the private
+continuation checkout.
+
+Null or removed units have no effect, without resolving the unused color.
+Malformed arguments, wrong-family/reserved handles and foreign declarations
+refuse before mutation. A null color on a live unit is explicitly unsupported
+rather than being assigned an invented palette index. The retained-field implementation
+is a recreation choice supported by the native setter path and existing
+renderer consumer, not a fresh native tint comparison. Exact visual refresh
+phase, null-color behavior and rendered parity remain unqualified.

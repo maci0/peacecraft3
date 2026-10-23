@@ -226,6 +226,9 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
     fn leave_thread(&mut self) -> Result<(), String> {
         self.inner.leave_thread()
     }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.after_script_spawn()
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)
     }
@@ -281,6 +284,9 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
     }
     fn leave_thread(&mut self) -> Result<(), String> {
         self.inner.leave_thread()
+    }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.after_script_spawn()
     }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         self.inner.native(name, args)

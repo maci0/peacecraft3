@@ -31,9 +31,10 @@ original runtime observation.
    same path once in range.
 2. Strength is retained per unit (`ExecutedUnit::permanent_strength`) and added to derived
    STR for combat and vitals. Level-up deltas cancel it, so it is not counted twice.
-3. Life follows the ratio policy: `max' = max + STR × LifePerStrength`,
-   `life' = max' × life / max` (native mode 1, `0x635990`). Level-up keeps its absolute
-   missing-amount policy (mode 2 analogue).
+3. Life follows the ratio policy: `max' = max + STR × LifePerStrength`, with the pool change
+   and `life' = max' × life / max` each rounded by adding one half then flooring
+   (native mode 1, `0x635990`; helper `0x9a1d70`). Level-up keeps its absolute missing-amount
+   policy (mode 2 analogue). Held maximum-life items share the same pool adjustment.
 4. Order of effects: grant, then the pickup event is queued, then the item is claimed.
    It is marked consumed when no queued pickup for it remains. That runs in
    `finish_fired_event` and in the disabled-trigger branch of `begin_fired_event`.
@@ -41,7 +42,15 @@ original runtime observation.
    picked up.
 5. Refusals are atomic: mixed or empty ability lists, multi-level or multi-charge rows,
    agility or intelligence amounts, negative strength, custom item rows, and non-hero
-   targets return an error before any write.
+   targets return an error before any write. Unit cleanup projects every held item's
+   strength removal in held/drop order before cancelling a pending order, dropping an
+   item or queueing a drop event. An item whose removal would make the maximum
+   nonpositive refuses the whole cleanup without partial drops, even when an earlier
+   item removal alone was valid. An authored removal delta whose negation is not
+   representable also refuses before any write instead of overflowing. A grant also
+   preflights retained strength plus the holder's held strength bonuses, so the pickup
+   event, life pools and consumption stay unchanged when the combined total would
+   overflow.
 
 ## Unqualified
 
@@ -61,10 +70,16 @@ These are fidelity gaps in the recreation, not permission gates added for conven
 
 - `inventory_powerup_tests.rs`: window decoding, source amounts, W3A override level,
   refusals, custom rows, image gate.
-- `inventory_powerup_host.rs`: pure life-percentage and retained-strength math.
+- `inventory_powerup_host.rs`: pure life-percentage, maximum-life and retained-strength math,
+  including half-up rounding.
 - `combat_tests.rs` child `inventory_powerup_host_tests.rs`: queued pickup reads the live
   item, claimed grant refused, consumption after finish, full slots, level-up retention,
   percentage policy, mixed and non-hero refusal, multiple queued pickups, disabled trigger.
+  Cleanup tests refuse an oversized strength item after an earlier plain item and two
+  strength items whose second removal would empty the pool, preserving units, items,
+  pending orders and drop events. `powerup_overflows_with_held_strength_before_any_grant`
+  covers a large tome combined with a held strength item: refusal changes no record and
+  queues no pickup.
 - Explicit local gate (`#[ignore]`): `PCX_TOME_CLIENT` and `PCX_TOME_CATALOG`, run with
   `--ignored`.
 

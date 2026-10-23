@@ -7,18 +7,20 @@
 //! `i32::to_be_bytes`. `base_rawcode` is stored as the catalog returned it.
 //!
 //! `SetUnitState` is a separate opt-in on that same unit. It retains the
-//! executed `ConvertUnitState` handle and finite value. It does not spend a
+//! executed `ConvertUnitState` handle and finite value. Current life and mana
+//! assignments are clamped to the live maximum; maximum-life and maximum-mana
+//! requests are retained but leave the pools unchanged. It does not spend a
 //! resource or apply combat.
 //!
-//! `IssueImmediateOrder` is a separate Defend opt-in for one caller-named ability
-//! alias. Admission reads that alias from `DefaultTables` the caller already
-//! holds and keeps a snapshot. It does not open archives or scan every
-//! order pair.
+//! `IssueImmediateOrder` has two separate opt-ins. The Defend opt-in takes one
+//! caller-named ability alias; the Militia opt-in selects the authored `Amil`
+//! row. Admission reads the selected tables the caller already holds and keeps
+//! a snapshot. It does not open archives or scan every order pair.
 use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use super::players::TechRead;
 use pcx_objects::editor::defaults::{self, DefaultTables, Family};
-use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, SlkId};
+use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, Overlay, SlkId};
 use pcx_script::span::Span;
 use pcx_script::{HandleId, Value, ast::Expr};
 use pcx_sim::world::{
@@ -34,6 +36,7 @@ const NATIVE: &str = "CreateUnit";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
 const SET_OWNER: &str = "SetUnitOwner";
+const SET_COLOR: &str = "SetUnitColor";
 const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
@@ -41,9 +44,16 @@ const SET_INVULNERABLE: &str = "SetUnitInvulnerable";
 const GET_INVULNERABLE: &str = "BlzIsUnitInvulnerable";
 const SET_STATE: &str = "SetUnitState";
 const CONVERT_STATE: &str = "ConvertUnitState";
+const SET_RESOURCE: &str = "SetResourceAmount";
+const ADD_RESOURCE: &str = "AddResourceAmount";
+const GET_RESOURCE: &str = "GetResourceAmount";
 const ORDER: &str = "IssueImmediateOrder";
 const STATE_KIND: &str = "unitstate";
 const KIND: &str = "unit";
+/// Binary class binding: `Agld` maps to the amount-owning `Agmb` class.
+const RESOURCE_ALIAS: &str = "Agld";
+/// Authored ability class for the source-backed Call to Arms off slice.
+const MILITIA_ALIAS: &str = "Amil";
 /// Caller bounds. Not a world, population, or rendering limit.
 #[derive(Clone, Copy, Debug)]
 pub struct UnitBudget {
@@ -67,7 +77,9 @@ pub struct UnitStateBudget {
 /// `unitstate` is the handle from the selected `ConvertUnitState` domain.
 /// The domain ordinal is not stored. `value` is the exact finite input:
 /// `0.0` is an assignment, and a handle absent from the unit's list has not
-/// been assigned. This is not a resource balance or a derived maximum.
+/// been assigned. A maximum-life or maximum-mana request keeps the exact
+/// input but does not overwrite the live maximum. This is not a resource
+/// balance or a derived maximum.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExecutedUnitState {
     pub unitstate: HandleId,
@@ -119,6 +131,14 @@ pub struct ExecutedUnit {
     /// Executed `SetUnitState` pairs. Empty means none have run. A stored
     /// `0.0` is an executed value, not an omitted state.
     pub unit_states: Vec<ExecutedUnitState>,
+    /// Executed resource amount. `None` means the unit is not in the
+    /// `UnitData` `buffType=resource` family, or resource amounts were not
+    /// admitted. A resource unit is seeded at creation from the `Agld`
+    /// `DataA1` row (or zero when that alias is absent), matching the original
+    /// ability constructor; the `war3mapUnits.doo` placement amount is not
+    /// derived. `Some` is the exact raw integer: negative values are stored,
+    /// and `AddResourceAmount` wraps instead of clamping.
+    pub resource_amount: Option<i32>,
     /// Explicit protection set on this unit. None means its initial ability effects
     /// have not been derived; queries refuse rather than inventing that state.
     pub invulnerable: Option<bool>,
@@ -146,6 +166,9 @@ pub struct ExecutedUnit {
     pub combat: Option<super::Combat>,
     /// Permanent strength granted by automatic powerups, added to derived STR. Zero before any grant.
     pub permanent_strength: i32,
+    /// Health factor applied to this unit's base and strength life terms.
+    /// Ownership changes retain it; a new unit uses its owner's current factor.
+    pub health_handicap: f32,
 }
 
 type ModelLoader = Box<
@@ -159,6 +182,12 @@ struct DefendAbility {
     off: String,
     tech: i32,
     required_level: i32,
+}
+
+struct MilitiaAbility {
+    alias: String,
+    off: String,
+    base: [u8; 4],
 }
 
 struct UnitStateLimits {
@@ -180,6 +209,7 @@ pub(super) struct Admission {
     /// Present when this program declares `GetOwningPlayer` on the same source.
     owner_span: Option<Span>,
     owner_setter_span: Option<Span>,
+    color_setter_span: Option<Span>,
     collision_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
@@ -189,8 +219,14 @@ pub(super) struct Admission {
     invulnerable_query_span: Option<Span>,
     /// Present after [`ObjectHost::with_unit_states`] admits the setter.
     unit_state: Option<UnitStateLimits>,
+    /// Present after [`ObjectHost::with_resource_amounts`] admits the family.
+    resource_amounts: bool,
+    /// Authoring tables used to seed the constructor's resource slot.
+    resource_tables: Option<Arc<DefaultTables>>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
+    /// Present after [`ObjectHost::with_militia_ability`].
+    militia: Option<MilitiaAbility>,
     heroes: Option<hero::Admission>,
     models: Option<ModelLoader>,
 }
@@ -261,6 +297,7 @@ impl ObjectHost {
         let type_span = self.optional_unit_getter(&declaration_source, GET_TYPE, "integer")?;
         let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
         let owner_setter_span = self.owner_declaration(&declaration_source)?;
+        let color_setter_span = self.color_declaration(&declaration_source)?;
         let collision_span =
             self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
@@ -290,13 +327,17 @@ impl ObjectHost {
             type_span,
             owner_span,
             owner_setter_span,
+            color_setter_span,
             collision_span,
             acquire_span,
             hero_level_span,
             invulnerable_span,
             invulnerable_query_span,
             unit_state: None,
+            resource_amounts: false,
+            resource_tables: None,
             order: None,
+            militia: None,
             heroes: None,
             models: None,
         });
@@ -391,6 +432,78 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admit the original resource amount natives on units from [`Self::with_unit_catalog`].
+    ///
+    /// `SetResourceAmount` is the anchor: a program that omits it keeps these
+    /// natives unsupported. `GetResourceAmount` and `AddResourceAmount` are
+    /// admitted when the program declares them. Every present declaration must
+    /// share `CreateUnit`'s source, and `Add` and `Set` must be non-constant.
+    /// `unit` must extend `widget`.
+    ///
+    /// `tables` is retained to read the constructor seed at `CreateUnit`:
+    /// the `Agld` row's authored `DataA1`. The retained amount is one `i32` on
+    /// an already admitted unit, so [`UnitBudget::max_records`] bounds it;
+    /// this opt-in takes no separate budget.
+    pub fn with_resource_amounts(mut self, tables: Arc<DefaultTables>) -> Result<Self, Error> {
+        let admitted = self.units.as_ref().ok_or_else(|| {
+            self.inner
+                .error(SET_RESOURCE, Failure::UnitState("not admitted"))
+        })?;
+        if admitted.resource_amounts {
+            return Err(self
+                .inner
+                .error(SET_RESOURCE, Failure::UnitState("already admitted")));
+        }
+        if self.inner.program.natives().get(SET_RESOURCE).is_none() {
+            return Ok(self);
+        }
+        let create_source = &admitted.declaration_source;
+        Self::contract(
+            &self.inner,
+            SET_RESOURCE,
+            &["unit", "integer"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        let setter = self
+            .inner
+            .program
+            .natives()
+            .get(SET_RESOURCE)
+            .ok_or_else(|| self.inner.error(SET_RESOURCE, Failure::Signature))?;
+        if setter.source != *create_source {
+            return Err(self.inner.error(SET_RESOURCE, Failure::Source));
+        }
+        if self.inner.program.natives().get(ADD_RESOURCE).is_some() {
+            Self::contract(
+                &self.inner,
+                ADD_RESOURCE,
+                &["unit", "integer"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            let adder = self
+                .inner
+                .program
+                .natives()
+                .get(ADD_RESOURCE)
+                .ok_or_else(|| self.inner.error(ADD_RESOURCE, Failure::Signature))?;
+            if adder.source != *create_source {
+                return Err(self.inner.error(ADD_RESOURCE, Failure::Source));
+            }
+        }
+        self.optional_unit_getter(create_source, GET_RESOURCE, "integer")?;
+        let admitted = self.units.as_mut().ok_or_else(|| {
+            self.inner
+                .error(SET_RESOURCE, Failure::UnitState("not admitted"))
+        })?;
+        admitted.resource_amounts = true;
+        admitted.resource_tables = Some(tables);
+        Ok(self)
+    }
+
     /// Admit the Defend on/off behavior for one caller-selected ability on units from [`Self::with_unit_catalog`].
     ///
     /// `alias` selects one ability row. The retained class id is that row's
@@ -457,6 +570,91 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admit the authored Call to Arms off order for the source-backed `Amil`
+    /// class on units from [`Self::with_unit_catalog`].
+    ///
+    /// The class id is a named constant. The profile's `Order`/`Unorder` text
+    /// and the rank-1 `DataA1`/`DataB1` base and active forms come from the
+    /// selected tables. An absent class leaves this admission off; a present,
+    /// malformed class refuses with the table identity in the error context.
+    /// `abilities` is the caller's selected ability overlay, the same one hero
+    /// admission receives: a map modification or custom row for `Amil` is
+    /// refused because this slice consumes only the default row. This retains
+    /// only the off order and the base form; it does not read `Dur1`, morph, or
+    /// keep per-unit state. The declaration is non-constant
+    /// `unit, string -> boolean` and shares `CreateUnit`'s source. Admit this
+    /// behavior before creating units.
+    pub fn with_militia_ability(
+        mut self,
+        tables: &DefaultTables,
+        abilities: &Overlay,
+    ) -> Result<Self, Error> {
+        let create_source = {
+            let admitted = self
+                .units
+                .as_ref()
+                .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
+            if !tables
+                .rawcodes(Family::Ability)
+                .any(|rawcode| rawcode.eq_ignore_ascii_case(MILITIA_ALIAS))
+            {
+                return Ok(self);
+            }
+            if admitted.militia.is_some() {
+                return Err(self
+                    .inner
+                    .error(ORDER, Failure::UnitState("militia already admitted")));
+            }
+            if admitted.records != 0 {
+                return Err(self.inner.error(
+                    ORDER,
+                    Failure::UnitState("admit militia before creating units"),
+                ));
+            }
+            admitted.declaration_source.clone()
+        };
+        if abilities.new_object(MILITIA_ALIAS).is_some() || !abilities.on(MILITIA_ALIAS).is_empty()
+        {
+            return Err(self.inner.error(
+                ORDER,
+                Failure::UnitState(
+                    "map ability overlay modifies Amil; narrow slice does not consume it",
+                ),
+            ));
+        }
+        Self::contract(
+            &self.inner,
+            ORDER,
+            &["unit", "string"],
+            "boolean",
+            false,
+            Some(KIND),
+        )?;
+        let native = self
+            .inner
+            .program
+            .natives()
+            .get(ORDER)
+            .ok_or_else(|| self.inner.error(ORDER, Failure::Signature))?;
+        if native.source != create_source {
+            return Err(self.inner.error(ORDER, Failure::Source));
+        }
+        let snapshot = read_militia_ability(tables).map_err(|reason| {
+            let mut error = self.inner.error(ORDER, Failure::UnitState(reason));
+            error.source_context.push_str(&format!(
+                "; militia ability {MILITIA_ALIAS:?}, object data {:?}",
+                tables.identity()
+            ));
+            error
+        })?;
+        let admitted = self
+            .units
+            .as_mut()
+            .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
+        admitted.militia = Some(snapshot);
+        Ok(self)
+    }
+
     /// Same catalog allocation passed to [`Self::with_unit_catalog`].
     pub fn unit_catalog(&self) -> Result<Arc<dyn ObjectCatalog + Send + Sync>, Error> {
         Ok(Arc::clone(&self.admitted_units()?.catalog))
@@ -490,6 +688,83 @@ impl ObjectHost {
             })
     }
 
+    /// The factor a newly created unit inherits from its owner. Without player
+    /// admission no factor is assigned and the creation baseline is unchanged.
+    pub(super) fn owner_health_handicap(&self, owner: HandleId) -> Result<f32, Error> {
+        if self.players.is_none() {
+            return Ok(1.0);
+        }
+        Ok(self.player_settings(owner)?.health_handicap.unwrap_or(1.0))
+    }
+
+    /// Apply one owner's raw requested factor to every living-vital record first,
+    /// then commit. Unsupported unit projections refuse the whole change.
+    pub(super) fn apply_owner_health_handicap(
+        &mut self,
+        owner: HandleId,
+        requested: f32,
+    ) -> Result<(), Error> {
+        let fail = |detail: &str| {
+            self.inner.error(
+                "SetPlayerHandicap",
+                Failure::UnitActivity(detail.to_string()),
+            )
+        };
+        if !requested.is_finite() {
+            return Err(fail("finite health handicap required"));
+        }
+        let owned: Vec<HandleId> = self
+            .executed_units()
+            .filter(|(_, record)| record.owner == owner && record.vitals.is_some())
+            .map(|(id, _)| id)
+            .collect();
+        if owned.is_empty() {
+            return Ok(());
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| fail("health handicap requires the game clock"))?;
+        let bonuses = self
+            .vitals_bonuses()
+            .ok_or_else(|| fail("health handicap requires admitted vitals"))?;
+        let rounding = self.health_rounding();
+        let mut work = usize::MAX;
+        let mut projections = Vec::with_capacity(owned.len());
+        for id in owned {
+            let record = self.executed_unit(id)?;
+            let mut vitals = record.vitals.expect("filtered to vitals");
+            if let Some((life, mana)) =
+                self.project_regen_unit(id, &bonuses, now, None, &mut work)?
+            {
+                vitals.life = life;
+                vitals.mana = mana;
+                vitals.regen.through = now;
+            }
+            let projected = self
+                .project_health_handicap(id, record, vitals, requested, rounding)
+                .map_err(|e| {
+                    self.inner
+                        .error("SetPlayerHandicap", Failure::UnitActivity(e))
+                })?;
+            if projected.max_life <= 0.0 || (vitals.life > 0.0 && projected.life <= 0.0) {
+                return Err(fail(
+                    "destructive health handicap requires a death transition",
+                ));
+            }
+            projections.push((id, projected));
+        }
+        for (id, vitals) in projections {
+            match self.inner.entry_mut(id)? {
+                Entry::Unit { record } => {
+                    record.vitals = Some(vitals);
+                    record.health_handicap = requested;
+                }
+                _ => unreachable!("collected unit identity"),
+            }
+        }
+        Ok(())
+    }
+
     /// Retain selected model assets on the existing executed units.
     pub fn admit_unit_models(
         &mut self,
@@ -507,17 +782,19 @@ impl ObjectHost {
                 ),
             ));
         }
-        if let Some(native) = self.inner.program.natives().get("SetUnitAnimation") {
-            Self::contract(
-                &self.inner,
-                "SetUnitAnimation",
-                &["unit", "string"],
-                "nothing",
-                false,
-                Some(KIND),
-            )?;
-            if native.source != units.declaration_source {
-                return Err(self.inner.error("SetUnitAnimation", Failure::Source));
+        for name in ["SetUnitAnimation", "QueueUnitAnimation"] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["unit", "string"],
+                    "nothing",
+                    false,
+                    Some(KIND),
+                )?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
             }
         }
         self.units.as_mut().expect("admitted").models = Some(Box::new(loader));
@@ -525,7 +802,19 @@ impl ObjectHost {
     }
 
     fn set_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
-        let name = "SetUnitAnimation";
+        self.animation_native("SetUnitAnimation", args, false)
+    }
+
+    fn queue_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
+        self.animation_native("QueueUnitAnimation", args, true)
+    }
+
+    fn animation_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        queue: bool,
+    ) -> Result<Value, Error> {
         if self.inner.program.natives().get(name).is_none() {
             return Err(self.inner.error(name, Failure::Signature));
         }
@@ -543,15 +832,27 @@ impl ObjectHost {
                 .error(name, Failure::UnitAnimation("missing game clock".into()))
         })?;
         let mut animation = self.executed_unit(*unit)?.animation.clone();
+        let mut queued = false;
         if let Some(state) = &mut animation {
-            state
-                .select(sequence, now, None)
-                .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            if queue {
+                self.reserve_animation_active(*unit)
+                    .map_err(|failure| self.inner.error(name, failure))?;
+                queued = state
+                    .queue(sequence, now)
+                    .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            } else {
+                state
+                    .select(sequence, now, None)
+                    .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+            }
         }
         let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
             unreachable!()
         };
         record.animation = animation;
+        if queued {
+            self.commit_animation_active(*unit);
+        }
         Ok(Value::Null)
     }
 
@@ -585,6 +886,9 @@ impl ObjectHost {
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));
         }
+        if name == "QueueUnitAnimation" && self.units.as_ref()?.models.is_some() {
+            return Some(self.queue_unit_animation(args));
+        }
         if let Some(result) = self.hero_native(name, args) {
             return Some(result);
         }
@@ -599,6 +903,9 @@ impl ObjectHost {
         }
         if name == SET_OWNER && self.admitted_units().ok()?.owner_setter_span.is_some() {
             return Some(self.set_unit_owner(args));
+        }
+        if name == SET_COLOR && self.admitted_units().ok()?.color_setter_span.is_some() {
+            return Some(self.set_unit_color(args));
         }
         if name == GET_COLLISION && self.admitted_units().ok()?.collision_span.is_some() {
             return Some(self.unit_collision(args));
@@ -624,8 +931,21 @@ impl ObjectHost {
         if name == SET_STATE && self.admitted_units().ok()?.unit_state.is_some() {
             return Some(self.set_unit_state(args));
         }
-        if name == ORDER && self.admitted_units().ok()?.order.is_some() {
-            return self.issue_immediate_order(args);
+        if self.admitted_units().ok()?.resource_amounts {
+            match name {
+                SET_RESOURCE => return Some(self.set_resource_amount(args, false)),
+                ADD_RESOURCE => return Some(self.set_resource_amount(args, true)),
+                GET_RESOURCE => return Some(self.get_resource_amount(args)),
+                _ => {}
+            }
+        }
+        if name == ORDER {
+            if let Some(result) = self.militia_immediate_order(args) {
+                return Some(result);
+            }
+            if self.admitted_units().ok()?.order.is_some() {
+                return self.issue_immediate_order(args);
+            }
         }
         None
     }
@@ -726,6 +1046,70 @@ impl ObjectHost {
             return Err(self.inner.error(SET_OWNER, Failure::Source));
         }
         Ok(Some(native.span))
+    }
+
+    fn color_declaration(&self, source: &str) -> Result<Option<Span>, Error> {
+        let Some(native) = self.inner.program.natives().get(SET_COLOR) else {
+            return Ok(None);
+        };
+        Self::contract(
+            &self.inner,
+            SET_COLOR,
+            &[KIND, "playercolor"],
+            "nothing",
+            false,
+            Some(KIND),
+        )?;
+        if native.source != source {
+            return Err(self.inner.error(SET_COLOR, Failure::Source));
+        }
+        super::trigger_admission::loaded_type(
+            &self.inner,
+            SET_COLOR,
+            "playercolor",
+            "handle",
+            source,
+        )?;
+        if let Some(conversion) = self.inner.conversions.get("ConvertPlayerColor") {
+            if conversion.kind != "playercolor" {
+                return Err(self.inner.error(SET_COLOR, Failure::Signature));
+            }
+            if conversion.source != source {
+                return Err(self.inner.error(SET_COLOR, Failure::Source));
+            }
+        }
+        Ok(Some(native.span))
+    }
+
+    fn set_unit_color(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(SET_COLOR, reason);
+        let [unit, color] = args else {
+            return Err(fail(Failure::Signature));
+        };
+        if !matches!(color, Value::Null | Value::Handle(_)) {
+            return Err(fail(Failure::Signature));
+        }
+        let unit = match unit {
+            Value::Null => return Ok(Value::Null),
+            Value::Handle(unit) => *unit,
+            _ => return Err(fail(Failure::WrongFamily)),
+        };
+        match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
+            Entry::Unit { .. } => {}
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            _ => return Err(fail(Failure::WrongFamily)),
+        }
+        let Value::Handle(color) = color else {
+            return Err(fail(Failure::Signature));
+        };
+        self.inner
+            .player_color(*color)
+            .map_err(|e| fail(e.failure))?;
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("validated unit identity")
+        };
+        record.team_color = Some(*color);
+        Ok(Value::Null)
     }
 
     fn set_unit_owner(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -1184,6 +1568,202 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    fn set_resource_amount(&mut self, args: &[Value], add: bool) -> Result<Value, Error> {
+        let name = if add { ADD_RESOURCE } else { SET_RESOURCE };
+        if matches!(args, [Value::Null, Value::Int(_)]) {
+            return Ok(Value::Null);
+        }
+        let (unit, amount, current, removed) = {
+            let [Value::Handle(unit), Value::Int(amount)] = args else {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitState("arguments do not match the unit native declaration"),
+                ));
+            };
+            match self
+                .inner
+                .entry(*unit)
+                .map_err(|error| self.inner.error(name, error.failure))?
+            {
+                Entry::Unit { record } => {
+                    if !self.resource_amount_family(name, &record.definition)? {
+                        return Ok(Value::Null);
+                    }
+                    (*unit, *amount, record.resource_amount, false)
+                }
+                Entry::RemovedUnit {
+                    removed_at,
+                    resource_amount,
+                    ..
+                } => {
+                    if !self.resource_retained(*removed_at) {
+                        return Ok(Value::Null);
+                    }
+                    (*unit, *amount, *resource_amount, true)
+                }
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        };
+        let current = match current {
+            Some(current) => current,
+            None if removed => return Ok(Value::Null),
+            None => {
+                return Err(self
+                    .inner
+                    .error(name, Failure::UnitState("resource slot was not seeded")));
+            }
+        };
+        if removed {
+            match self.inner.entry_mut(unit)? {
+                Entry::RemovedUnit {
+                    resource_amount, ..
+                } => {
+                    *resource_amount = Some(if add {
+                        current.wrapping_add(amount)
+                    } else {
+                        amount
+                    });
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        } else {
+            match self.inner.entry_mut(unit)? {
+                Entry::Unit { record } => {
+                    record.resource_amount = Some(if add {
+                        current.wrapping_add(amount)
+                    } else {
+                        amount
+                    });
+                    Ok(Value::Null)
+                }
+                _ => Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+        }
+    }
+
+    fn get_resource_amount(&self, args: &[Value]) -> Result<Value, Error> {
+        if matches!(args, [Value::Null]) {
+            return Ok(Value::Int(0));
+        }
+        let [Value::Handle(unit)] = args else {
+            return Err(self.inner.error(
+                GET_RESOURCE,
+                Failure::UnitState("arguments do not match the unit native declaration"),
+            ));
+        };
+        match self
+            .inner
+            .entry(*unit)
+            .map_err(|error| self.inner.error(GET_RESOURCE, error.failure))?
+        {
+            Entry::Unit { record } => {
+                if self.resource_amount_family(GET_RESOURCE, &record.definition)? {
+                    Ok(Value::Int(record.resource_amount.ok_or_else(|| {
+                        self.inner.error(
+                            GET_RESOURCE,
+                            Failure::UnitState("resource slot was not seeded"),
+                        )
+                    })?))
+                } else {
+                    Ok(Value::Int(0))
+                }
+            }
+            Entry::RemovedUnit {
+                removed_at,
+                resource_amount,
+                ..
+            } => Ok(Value::Int(if self.resource_retained(*removed_at) {
+                resource_amount.unwrap_or(0)
+            } else {
+                0
+            })),
+            _ => Err(self.inner.error(GET_RESOURCE, Failure::WrongFamily)),
+        }
+    }
+
+    /// Same-tick tombstone reads/writes retain the captured resource amount.
+    /// Later ticks answer zero and ignore writes, matching the followup probe
+    /// at 5.063 and 6.063 after removal at 5.000. The exact native
+    /// reclamation phase remains unqualified.
+    fn resource_retained(&self, removed_at: Option<f64>) -> bool {
+        removed_at.is_some() && self.timer_game_time() == removed_at
+    }
+
+    /// Read the constructor seed from the original ability row.
+    ///
+    /// The client's class binding maps the asset alias `Agld` to the `Agmb`
+    /// ability class that owns the `+0x70` amount slot. That class constructor
+    /// initializes the slot from the row's `DataA1`. The other gold-mine
+    /// abilities (`Aegm`, `Abgm`) are separate classes and were observed to
+    /// start at zero, so only the bound alias supplies a seed. A resource
+    /// family without that alias starts at the constructor's zero value.
+    fn initial_resource_amount(&self, definition: &Definition) -> Result<Option<i32>, Error> {
+        if !self.resource_amount_family(NATIVE, definition)? {
+            return Ok(None);
+        }
+        let admitted = self.admitted_units()?;
+        let tables = admitted.resource_tables.as_deref().ok_or_else(|| {
+            let mut error = self.inner.error(
+                NATIVE,
+                Failure::UnitState("resource tables are not admitted"),
+            );
+            error.source_context.push_str(&format!(
+                "; unit {:?} needs the selected ability tables",
+                definition.base_rawcode
+            ));
+            error
+        })?;
+        let Some(alias) = resource_amount_alias(definition) else {
+            return Ok(Some(0));
+        };
+        let fail = |detail: String| {
+            let mut error = self.inner.error(
+                NATIVE,
+                Failure::UnitState("resource ability seed is not readable"),
+            );
+            error.source_context.push_str(&format!(
+                "; unit {:?} ability {alias:?}: {detail}",
+                definition.base_rawcode
+            ));
+            error
+        };
+        let ability = tables
+            .object(Family::Ability, alias)
+            .map_err(|error| fail(error.to_string()))?;
+        let cell = ability
+            .cell(SlkId::AbilityData, "DataA1")
+            .map_err(|error| fail(error.to_string()))?;
+        let value = cell
+            .typed(FieldKind::Int)
+            .map_err(|error| fail(error.to_string()))?;
+        let pcx_objects::editor::defaults::Value::Integer(value) = value else {
+            return Err(fail(format!("DataA1 is not an integer: {value:?}")));
+        };
+        let amount = i32::try_from(value)
+            .map_err(|_| fail(format!("DataA1 is outside the integer range: {value}")))?;
+        Ok(Some(amount))
+    }
+
+    /// The original ability read/write is reached only through the unit's
+    /// resource ability. `UnitData` `buffType` is the asset-authored family
+    /// marker: `resource` names the three gold mines; every other token does
+    /// not. A definition that cannot supply the cell is reported rather than
+    /// treated as non-resource.
+    fn resource_amount_family(&self, name: &str, definition: &Definition) -> Result<bool, Error> {
+        let token = super::unit_positions::text(definition, SlkId::UnitData, "buffType").map_err(
+            |reason| {
+                let mut error = self.inner.error(name, Failure::UnitState(reason));
+                error.source_context.push_str(&format!(
+                    "; unit {:?} has no usable UnitData buffType",
+                    definition.base_rawcode
+                ));
+                error
+            },
+        )?;
+        Ok(token.trim() == "resource")
+    }
+
     fn set_acquire_range(&mut self, args: &[Value]) -> Result<Value, Error> {
         let (id, range) = {
             let fail = |reason| self.inner.error(SET_RANGE, reason);
@@ -1334,6 +1914,11 @@ impl ObjectHost {
                 .and_then(|order| {
                     lists_admitted_alias(&definition, &order.alias).then_some((order.code, false))
                 });
+            let resource_amount = if self.admitted_units()?.resource_amounts {
+                self.initial_resource_amount(&definition)?
+            } else {
+                None
+            };
             ExecutedUnit {
                 collision_radius: Self::catalog_collision_radius(&definition),
                 definition,
@@ -1350,6 +1935,7 @@ impl ObjectHost {
                 requested_hero_level: None,
                 requested_show_eye_candy: None,
                 unit_states: Vec::new(),
+                resource_amount,
                 invulnerable: None,
                 admitted_order,
                 abilities: None,
@@ -1362,6 +1948,7 @@ impl ObjectHost {
                 sleep: None,
                 vitals: None,
                 permanent_strength: 0,
+                health_handicap: 1.0,
                 combat: None,
             }
         };
@@ -1379,17 +1966,8 @@ impl ObjectHost {
             record.permanent_strength = saved.permanent_strength;
         }
         record.activity = self.prepare_unit_activity(&record.definition)?;
-        record.vitals = self.prepare_unit_vitals(&record.definition)?;
-        if let Some(saved) = saved {
-            let vitals = record.vitals.as_mut().ok_or_else(|| {
-                self.inner.error(
-                    "RestoreUnit",
-                    Failure::GameCache("cached unit vital admission missing".into()),
-                )
-            })?;
-            [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana] =
-                saved.pools.map(f32::from_bits);
-        }
+        record.health_handicap = self.owner_health_handicap(record.owner)?;
+        record.vitals = self.prepare_unit_vitals(&record.definition, record.health_handicap)?;
         record.combat = self.prepare_unit_combat(&record.definition)?;
         if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
             let model = loader(&record.definition)
@@ -1429,6 +2007,21 @@ impl ObjectHost {
         let inventory = saved
             .map(|saved| self.prepare_cached_inventory(&record, &saved.items))
             .transpose()?;
+        if let Some(prepared) = &inventory {
+            record.vitals =
+                Some(self.prepare_cached_restored_vitals(&record, prepared.definitions())?);
+        }
+        if let Some(vitals) = record.vitals
+            && let Some(problem) = Self::projected_pool_problem(&vitals)
+        {
+            return Err(if saved.is_some() {
+                self.inner
+                    .error("RestoreUnit", Failure::GameCache(problem.into()))
+            } else {
+                self.inner
+                    .error(NATIVE, Failure::UnitActivity(problem.into()))
+            });
+        }
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),
@@ -1451,6 +2044,51 @@ impl ObjectHost {
             self.commit_cached_inventory(id, inventory);
         }
         Ok(Value::Handle(id))
+    }
+
+    /// The authored `militiaoff` request on the rank-1 base form.
+    ///
+    /// Only a successful base-form match returns a boolean. The active form,
+    /// an unrelated unit type, the morph-on text and every other order text
+    /// stay on the unsupported path. Null and removed units return false;
+    /// a non-unit handle refuses as the wrong family.
+    fn militia_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
+        let (alias, off, base) = {
+            let militia = self.units.as_ref()?.militia.as_ref()?;
+            (militia.alias.as_str(), militia.off.as_str(), militia.base)
+        };
+        let [unit, Value::Str(text)] = args else {
+            return None;
+        };
+        if text != off {
+            return None;
+        }
+        let unit = match unit {
+            Value::Null => return Some(Ok(Value::Bool(false))),
+            Value::Handle(unit) => *unit,
+            _ => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
+        };
+        let record = match self
+            .inner
+            .entry(unit)
+            .map_err(|error| self.inner.error(ORDER, error.failure))
+        {
+            Ok(Entry::Unit { record }) => record,
+            Ok(Entry::RemovedUnit { .. }) => return Some(Ok(Value::Bool(false))),
+            Ok(_) => return Some(Err(self.inner.error(ORDER, Failure::WrongFamily))),
+            Err(error) => return Some(Err(error)),
+        };
+        if record.definition.rawcode != base {
+            return None;
+        }
+        if !lists_admitted_alias(&record.definition, alias) {
+            return None;
+        }
+        let ability = one_fourcc(MILITIA_ALIAS).expect("named ability rawcode");
+        Some(
+            self.unit_ability_available(unit, ability)
+                .map(|_| Value::Bool(false)),
+        )
     }
 
     fn issue_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
@@ -1535,6 +2173,64 @@ impl ObjectHost {
             Err(error) => Some(Err(self.inner.error(ORDER, error.failure))),
         }
     }
+}
+
+fn read_militia_ability(tables: &DefaultTables) -> Result<MilitiaAbility, &'static str> {
+    let alias = MILITIA_ALIAS;
+    let object = tables
+        .object(Family::Ability, alias)
+        .map_err(|_| "militia ability lookup failed")?;
+    let alias_cell = present_cell(object.cell(SlkId::AbilityData, "alias"), "alias")?;
+    if alias_cell.text != alias {
+        return Err("militia alias spelling differs from the selected row");
+    }
+    let code_cell = present_cell(object.cell(SlkId::AbilityData, "code"), "code")?;
+    if code_cell.text != alias {
+        return Err("militia code differs from the authored class");
+    }
+    require_int(object.cell(SlkId::AbilityData, "levels"), "levels", 1)?;
+    require_int(object.level_cell("Cost", 1), "Cost1", 0)?;
+    require_real_zero(object.level_cell("Cool", 1), "Cool1")?;
+    require_int(object.cell(SlkId::AbilityData, "reqLevel"), "reqLevel", 0)?;
+    require_int(object.cell(SlkId::AbilityData, "levelSkip"), "levelSkip", 0)?;
+    require_bool(object.cell(SlkId::AbilityData, "hero"), "hero", false)?;
+    require_bool(object.cell(SlkId::AbilityData, "item"), "item", false)?;
+    require_bool(
+        object.cell(SlkId::AbilityData, "checkDep"),
+        "checkDep",
+        true,
+    )?;
+    let on = one_assignment(object, "Order")?;
+    let off = one_assignment(object, "Unorder")?;
+    if on == off {
+        return Err("militia Order and Unorder are the same text");
+    }
+    let base_cell = present_cell(object.level_cell("DataA", 1), "DataA1")?;
+    let base = one_fourcc(base_cell.text).ok_or("militia DataA1 is not one fourcc")?;
+    let active_cell = present_cell(object.level_cell("DataB", 1), "DataB1")?;
+    let active = one_fourcc(active_cell.text).ok_or("militia DataB1 is not one fourcc")?;
+    if base == active {
+        return Err("militia DataA1 and DataB1 are the same form");
+    }
+    let requires = object.profile("Requires");
+    if !(requires.is_empty()
+        || requires.len() == 1
+            && requires[0].parse_error.is_none()
+            && requires[0].text.trim().is_empty())
+    {
+        return Err("militia Requires is not an absent or blank level");
+    }
+    let amount = object.profile("Requiresamount");
+    if !(amount.is_empty()
+        || amount.len() == 1 && amount[0].parse_error.is_none() && amount[0].text.trim().is_empty())
+    {
+        return Err("militia Requiresamount is not an absent or blank level");
+    }
+    Ok(MilitiaAbility {
+        alias: alias.to_string(),
+        off,
+        base,
+    })
 }
 
 fn read_defend_ability(tables: &DefaultTables, alias: &str) -> Result<DefendAbility, &'static str> {
@@ -1723,6 +2419,10 @@ fn column_problem(column: &'static str, problem: &'static str) -> &'static str {
         ("Unorder", "blank") => "blank Unorder",
         ("Unorder", "not-one") => "Unorder is not one text",
         ("Unorder", "ambiguous") => "Unorder has more than one assignment",
+        ("DataA1", "missing") => "missing DataA1",
+        ("DataA1", "blank") => "blank DataA1",
+        ("DataB1", "missing") => "missing DataB1",
+        ("DataB1", "blank") => "blank DataB1",
         ("Requires", "missing") => "missing Requires",
         ("Requires", "blank") => "blank Requires",
         ("Requires", "not-one") => "Requires is not one fourcc",
@@ -1740,6 +2440,16 @@ fn lists_admitted_alias(definition: &Definition, alias: &str) -> bool {
             })
         })
     })
+}
+
+fn resource_amount_alias(definition: &Definition) -> Option<&str> {
+    definition
+        .fields
+        .values()
+        .filter_map(ability_list_text)
+        .flat_map(|text| text.split(','))
+        .map(str::trim)
+        .find(|token| *token == RESOURCE_ALIAS)
 }
 
 fn ability_list_text(field: &ObjectField) -> Option<&str> {

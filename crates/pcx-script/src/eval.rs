@@ -148,6 +148,12 @@ pub trait Host {
         Err("this host cannot leave a script thread".into())
     }
 
+    /// Optional follow-up callback after a spawned thread completes. Returning a
+    /// call runs it in the same native invocation; `None` returns to the caller.
+    fn after_script_spawn(&mut self) -> Result<Option<ScriptCall>, String> {
+        Ok(None)
+    }
+
     /// The body of the map's `war3map.wts` entry `id`, for `TRIGSTR_<id>`.
     fn table_string(&self, id: u32) -> Option<String> {
         let _ = id;
@@ -2006,45 +2012,54 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     fn dispatch_script_call(
         &mut self,
-        call: ScriptCall,
+        mut call: ScriptCall,
         span: Span,
         frame: &mut Frame,
         mut outer: Vec<Zip>,
     ) -> Result<ExprOut, crate::Error> {
-        self.tick(span)?;
-        match call {
-            ScriptCall::Return(value) => self.finish_zip(outer, value, frame),
-            ScriptCall::Call(id) => {
-                let function = self.program.functions().get(id.index()).ok_or_else(|| {
-                    crate::Error::run(span, "native callback is not in the loaded program")
-                })?;
-                if !function.params.is_empty() {
-                    return Err(crate::Error::run(span, "native callback must take nothing"));
+        loop {
+            self.tick(span)?;
+            match call {
+                ScriptCall::Return(value) => return self.finish_zip(outer, value, frame),
+                ScriptCall::Call(id) => {
+                    let function = self.program.functions().get(id.index()).ok_or_else(|| {
+                        crate::Error::run(span, "native callback is not in the loaded program")
+                    })?;
+                    if !function.params.is_empty() {
+                        return Err(crate::Error::run(span, "native callback must take nothing"));
+                    }
+                    let name = function.name.clone();
+                    self.push_activation(&name, Vec::new(), span)?;
+                    outer.push(Zip::ScriptCall { span });
+                    return Ok(ExprOut::Push(outer));
                 }
-                let name = function.name.clone();
-                self.push_activation(&name, Vec::new(), span)?;
-                outer.push(Zip::ScriptCall { span });
-                Ok(ExprOut::Push(outer))
-            }
-            ScriptCall::Spawn(functions) => {
-                if self.spawn_depth >= MAX_SPAWN_DEPTH {
-                    return Err(crate::Error::run(
-                        span,
-                        format!("threads nested past {MAX_SPAWN_DEPTH} spawns"),
-                    ));
+                ScriptCall::Spawn(functions) => {
+                    if self.spawn_depth >= MAX_SPAWN_DEPTH {
+                        return Err(crate::Error::run(
+                            span,
+                            format!("threads nested past {MAX_SPAWN_DEPTH} spawns"),
+                        ));
+                    }
+                    let caller = std::mem::take(&mut self.stack);
+                    let depth = std::mem::replace(&mut self.depth, 0);
+                    self.spawn_depth += 1;
+                    let result = self.run_functions(functions.into(), span);
+                    self.spawn_depth -= 1;
+                    self.stack = caller;
+                    self.depth = depth;
+                    result?;
+                    self.host
+                        .leave_thread()
+                        .map_err(|why| crate::Error::run(span, why))?;
+                    match self
+                        .host
+                        .after_script_spawn()
+                        .map_err(|why| crate::Error::run(span, why))?
+                    {
+                        Some(next) => call = next,
+                        None => return self.finish_zip(outer, Value::Null, frame),
+                    }
                 }
-                let caller = std::mem::take(&mut self.stack);
-                let depth = std::mem::replace(&mut self.depth, 0);
-                self.spawn_depth += 1;
-                let result = self.run_functions(functions.into(), span);
-                self.spawn_depth -= 1;
-                self.stack = caller;
-                self.depth = depth;
-                result?;
-                self.host
-                    .leave_thread()
-                    .map_err(|why| crate::Error::run(span, why))?;
-                self.finish_zip(outer, Value::Null, frame)
             }
         }
     }

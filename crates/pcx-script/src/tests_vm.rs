@@ -63,6 +63,32 @@ fn int_of(expr: &str) -> i32 {
 // ----- resolution: a name error carries the map's own position ------------
 
 #[test]
+fn duplicate_map_globals_refuse_instead_of_replacing_the_first() {
+    for src in [
+        "globals\n integer repeated = 1\n integer repeated = 2\nendglobals\n",
+        "globals\n integer repeated = 1\nendglobals\nglobals\n integer repeated = 2\nendglobals\n",
+    ] {
+        let error = resolve_of(src).expect_err("duplicate globals must refuse");
+        assert!(error.message.contains("repeated"), "{}", error.message);
+        assert!(
+            error.message.contains("declared twice"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn a_map_global_still_replaces_a_prelude_global() {
+    let prelude = parse("globals\n integer shared = 2\nendglobals\n").unwrap();
+    let map = parse("globals\n integer shared = 7\nendglobals\n").unwrap();
+    let program = resolve_with(&map, &[Prelude::new("common.j", &prelude)]).unwrap();
+    let mut vm = Vm::new(&program, NullHost);
+    vm.init_globals().unwrap();
+    assert_eq!(vm.global("shared"), Value::Int(7));
+}
+
+#[test]
 fn an_unresolved_name_reports_the_maps_own_line_and_column() {
     let src = "globals\n    integer a = 0\nendglobals\nfunction f takes nothing returns nothing\n    call Missing(a)\nendfunction\n";
     let (line, col, message) = where_is(src);
@@ -177,6 +203,46 @@ fn a_native_call_arity_is_checked_against_its_declaration() {
 }
 
 #[test]
+fn nested_call_arguments_are_resolved_in_initializers_returns_and_statements() {
+    let declarations = "native Wrap takes integer value returns integer\nnative Leaf takes integer value returns integer\nnative Sink takes integer value returns nothing\n";
+    for (expression, message) in [
+        ("Wrap(Missing())", "name `Missing` is not declared"),
+        ("Wrap(Leaf())", "native `Leaf` takes 1 argument, 0 given"),
+        (
+            "Wrap(Leaf(MissingValue))",
+            "name `MissingValue` is not declared",
+        ),
+    ] {
+        for body in [
+            format!("globals\n integer value = {expression}\nendglobals\n"),
+            format!(
+                "function f takes nothing returns integer\n return {expression}\nendfunction\n"
+            ),
+            format!(
+                "function f takes nothing returns nothing\n call Sink({expression})\nendfunction\n"
+            ),
+        ] {
+            let source = format!("{declarations}{body}");
+            let error = resolve_of(&source).expect_err(&source);
+            assert!(error.message.contains(message), "{}", error.render(&source));
+        }
+    }
+}
+
+#[test]
+fn nested_native_calls_are_included_in_admission_statistics() {
+    let program = program_of(
+        "native Wrap takes integer value returns integer\nnative Leaf takes integer value returns integer\nfunction f takes nothing returns integer\n return Wrap(Leaf(3) + Leaf(4))\nendfunction\n",
+    );
+    assert_eq!(
+        program.natives_called().collect::<Vec<_>>(),
+        [("Leaf", 2), ("Wrap", 1)]
+    );
+    assert_eq!(program.stats.natives_called, 2);
+    assert_eq!(program.unimplemented_natives().count(), 2);
+}
+
+#[test]
 fn a_constant_cannot_be_assigned_to() {
     let src = "globals\n    constant integer FIXED = 3\nendglobals\nfunction f takes nothing returns nothing\n    set FIXED = 4\nendfunction\n";
     let (line, _, message) = where_is(src);
@@ -190,6 +256,27 @@ fn a_scalar_used_with_an_index_is_reported() {
     let (line, _, message) = where_is(src);
     assert_eq!(line, 5, "{message}");
     assert!(message.contains("`one` is not an array"), "{message}");
+}
+
+#[test]
+fn undeclared_array_bases_are_refused_for_reads_and_writes() {
+    for statement in ["return Missing[0]", "set Missing[0] = 1"] {
+        let source =
+            format!("function f takes nothing returns integer\n {statement}\nendfunction\n");
+        let (line, _, message) = where_is(&source);
+        assert_eq!(line, 2);
+        assert!(
+            message.contains("name `Missing` is not declared"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn native_functions_cannot_be_used_as_array_bases() {
+    let source = "native Leaf takes integer value returns integer\nfunction f takes nothing returns integer\n return Leaf[0]\nendfunction\n";
+    let (_, _, message) = where_is(source);
+    assert!(message.contains("`Leaf` is a function"), "{message}");
 }
 
 #[test]
@@ -1756,6 +1843,58 @@ impl crate::Host for Threads {
         self.log.push("leave".into());
         Ok(())
     }
+}
+
+#[test]
+fn sequential_spawn_followups_spend_fuel_without_growing_the_rust_stack() {
+    #[derive(Default)]
+    struct Followups {
+        function: Option<crate::value::FunctionId>,
+        followups: usize,
+    }
+    impl crate::Host for Followups {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(format!("unexpected native {name}"))
+        }
+        fn begin_script_call(
+            &mut self,
+            name: &str,
+            args: &[Value],
+        ) -> Result<Option<crate::ScriptCall>, String> {
+            let [Value::Code(function)] = args else {
+                return Err("callback required".into());
+            };
+            self.function = Some(*function);
+            Ok((name == "Drive").then(|| crate::ScriptCall::Spawn(vec![*function])))
+        }
+        fn after_script_spawn(&mut self) -> Result<Option<crate::ScriptCall>, String> {
+            self.followups += 1;
+            Ok(Some(crate::ScriptCall::Spawn(vec![
+                self.function.expect("script call seeded the function"),
+            ])))
+        }
+        fn leave_thread(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let program = program_of(
+        "native Drive takes code callback returns nothing
+function empty takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call Drive(function empty)
+endfunction
+",
+    );
+    let mut vm = Vm::new(&program, Followups::default());
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.to_string().contains("steps"), "{error}");
+    assert!(vm.host().followups > 0);
+    assert!(
+        vm.host().followups as u64 <= MAX_STEPS,
+        "the fuel check bounds sequential follow-ups: {}",
+        vm.host().followups
+    );
 }
 
 #[test]

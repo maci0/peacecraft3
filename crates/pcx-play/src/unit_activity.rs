@@ -25,6 +25,7 @@ pub struct Rules {
     pub(crate) movement: i32,
     pub(crate) patrol: i32,
     pub(crate) follow: Option<FollowRules>,
+    pub(crate) move_speed: Option<pcx_objects::editor::misc::MoveSpeedLimits>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +94,7 @@ impl Rules {
             movement,
             patrol,
             follow: None,
+            move_speed: None,
         })
     }
 
@@ -124,6 +126,19 @@ impl Rules {
 
     pub fn follow_rules(&self) -> Option<&FollowRules> {
         self.follow.as_ref()
+    }
+    pub fn with_move_speed_profiles(
+        mut self,
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+    ) -> Result<Self, String> {
+        self.move_speed = Some(pcx_objects::editor::misc::MoveSpeedLimits::read(
+            profiles, max_bytes,
+        )?);
+        Ok(self)
+    }
+    pub fn move_speed_limits(&self) -> Option<pcx_objects::editor::misc::MoveSpeedLimits> {
+        self.move_speed
     }
     pub fn binding(&self) -> &Binding {
         &self.binding

@@ -215,8 +215,8 @@ fn read_maximum(
     Ok(maximum)
 }
 
-#[cfg(test)]
-pub(crate) fn fixture(catalog: &AssetIdentity) -> Rules {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture(catalog: &AssetIdentity) -> Rules {
     Rules {
         catalog: defaults::Identity {
             install: catalog.source.clone(),

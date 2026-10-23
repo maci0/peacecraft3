@@ -29,6 +29,7 @@ pub struct ObjectHost {
     locations: bool,
     effects: bool,
     unit_activity: Option<unit_activity::State>,
+    harvest: Option<harvest_runtime::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -60,6 +61,9 @@ pub struct ObjectHost {
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
     unit_placement: Option<crate::unit_placement::Placement>,
+    destructable_catalog: Option<destructables::DestructableCatalog>,
+    destructable_restore: Option<destructables::RestoreLifePolicy>,
+    placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
     map_music: Option<music::State>,
     sound_environments: Option<environments::State>,
     quests: Option<crate::quest_session::QuestSession>,
@@ -93,6 +97,7 @@ pub struct ObjectHost {
     startup_settings: Option<StartupSettings>,
     startup_version: Option<HandleId>,
     game_difficulty: Option<HandleId>,
+    campaign_targeting: Option<targeting::State>,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
     stock: Option<stock::State>,
@@ -101,6 +106,20 @@ pub struct ObjectHost {
     trigger_runtime: Option<trigger_runtime::State>,
     unit_range_runtime: Option<unit_ranges::State>,
     callbacks: Vec<NativeCallback>,
+    synchronous_frames: Vec<SynchronousFrame>,
+}
+pub(super) struct SynchronousFrame {
+    events: std::collections::VecDeque<event_delivery::FiredEvent>,
+    active: bool,
+    spawn_depth: usize,
+    callback_depth: usize,
+    conditions: Option<SynchronousDelivery>,
+}
+/// Remaining callbacks for the event whose conditions just ran.
+pub(super) struct SynchronousDelivery {
+    pub(super) conditions: Vec<pcx_script::value::FunctionId>,
+    pub(super) actions: Vec<pcx_script::value::FunctionId>,
+    pub(super) next: usize,
 }
 enum NativeCallback {
     Trigger(trigger_runtime::DirectCall),
@@ -109,6 +128,23 @@ enum NativeCallback {
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
+    #[cfg(test)]
+    pub(crate) fn test_attach_placement(&mut self, placement: crate::unit_placement::Placement) {
+        self.unit_placement = Some(placement);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_placement_cell(&self, cell: usize) -> Option<u8> {
+        self.unit_placement
+            .as_ref()
+            .map(|placement| placement.test_cell(cell))
+    }
+
+    /// Complete authored `.doo` record retained for one placed handle.
+    pub fn placed_source(&self, id: HandleId) -> Option<destructables::PlacedSource> {
+        self.placed_sources.get(&id).copied()
+    }
+
     pub fn with_script_numeric(mut self, policy: crate::script_numeric::NumericPolicy) -> Self {
         self.numeric = Some(policy);
         self
@@ -169,6 +205,9 @@ impl ObjectHost {
             terrain_pathing: None,
             initial_blight: None,
             unit_placement: None,
+            destructable_catalog: None,
+            destructable_restore: None,
+            placed_sources: std::collections::BTreeMap::new(),
             map_music: None,
             sound_environments: None,
             quests: None,
@@ -185,6 +224,7 @@ impl ObjectHost {
             units: None,
             order_registry: None,
             unit_activity: None,
+            harvest: None,
             locations: false,
             time_of_day: None,
             threads: thread::Threads::default(),
@@ -225,6 +265,7 @@ impl ObjectHost {
             startup_settings: None,
             startup_version: None,
             game_difficulty: None,
+            campaign_targeting: None,
             default_difficulty: None,
             campaign_menu_race: None,
             stock: None,
@@ -233,6 +274,7 @@ impl ObjectHost {
             trigger_runtime: None,
             unit_range_runtime: None,
             callbacks: Vec::new(),
+            synchronous_frames: Vec::new(),
         })
     }
     fn checked_boolean_wrapper(&self, id: HandleId, native: &str) -> Result<(), Error> {
@@ -667,10 +709,29 @@ impl Host for ObjectHost {
         {
             return Ok(Some(call));
         }
+        if let Some(call) = self
+            .begin_synchronous_destructable_death_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
+            .begin_synchronous_player_state_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
+        if self.synchronous_frames.last().is_some_and(|frame| {
+            frame.conditions.is_some() && self.callbacks.len() == frame.callback_depth
+        }) {
+            return self
+                .continue_synchronous_call(value)
+                .map_err(|e| e.to_string());
+        }
         match self.callbacks.last() {
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
@@ -679,9 +740,13 @@ impl Host for ObjectHost {
         }
         .map_err(|e| e.to_string())
     }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.after_synchronous_spawn().map_err(|e| e.to_string())
+    }
     fn abort_script_calls(&mut self) {
-        self.abort_native_callbacks();
         self.abort_threads();
+        self.abort_native_callbacks();
+        self.abort_synchronous_delivery();
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.thread_sleep_requested(name, args)
@@ -800,6 +865,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.order_registry_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.harvest_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.unit_vitals_native(name, args) {
@@ -1032,7 +1100,11 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 
 #[path = "destructable_host.rs"]
 mod destructables;
-pub use destructables::{DestructableBudget, DestructableCreation, DestructableState};
+pub use destructables::{
+    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
+    DestructableState, DestructableStats, PlacedDestructable, PlacedSource, RestoreLifeBinding,
+    RestoreLifePolicy,
+};
 
 #[path = "unit_host.rs"]
 mod unit_creation;
@@ -1069,8 +1141,9 @@ pub use item_use::{UseCheck, UseCommit, UseGrant};
 mod trigger_admission;
 pub use trigger_admission::{
     DeathEventRegistration, GameStateEventRegistration, PlayerEventRegistration,
-    PlayerUnitEventRegistration, TimerEventRegistration, TriggerActionRecord, TriggerBudget,
-    TriggerConditionRegistration, UnitEventRegistration, UnitInRangeRegistration,
+    PlayerStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitEventRegistration,
+    UnitInRangeRegistration,
 };
 
 #[cfg(test)]
@@ -1143,6 +1216,8 @@ mod trigger_runtime_tests;
 mod messages;
 pub use messages::{MessageBudget, MessageState, TimedMessage};
 
+#[path = "harvest_runtime.rs"]
+pub(crate) mod harvest_runtime;
 #[path = "unit_activity_host.rs"]
 mod unit_activity;
 pub use unit_activity::{AcceptedSpan, UnitActivity};
@@ -1202,6 +1277,9 @@ pub use cinematic_scene::CinematicScene;
 #[path = "indicator_host.rs"]
 mod indicators;
 pub use indicators::{Indicator, MinimapPing};
+
+#[path = "campaign_targeting_host.rs"]
+mod targeting;
 
 #[path = "combat_host.rs"]
 mod combat;

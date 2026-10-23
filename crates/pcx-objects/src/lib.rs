@@ -33,10 +33,11 @@
 //! layout exactly (see the framing section), and the file is identified by
 //! its name, not by a magic: the first word is a *version* (`1` in 91 files,
 //! `2` in one).
-//! The other five extensions never ship in either build, so their record
-//! shape is unmeasured — in particular whether ability records carry the
-//! level/variation columns the community format notes describe. [`ObjectFile::parse`]
-//! refuses those extensions rather than running a w3u-shaped walk over them.
+//! The other five extensions were absent from that census. The current reader
+//! accepts all seven families: ability and upgrade entries retain two selector
+//! words, as do version-2 doodad entries; the remaining families use plain
+//! entries. Separate synthetic framing tests cover these paths. That coverage
+//! does not establish how the original engine interprets each selector or field.
 //!
 //! # Container layout (measured on all 92 files)
 //!
@@ -100,10 +101,9 @@
 //!
 //! # What is refused, and why
 //!
-//! * **The other five extensions.** No shipped byte is a `.w3a/.w3b/.w3d/
-//!   .w3h/.w3q`, so nothing proves their record shape. [`ObjectFile::parse`] returns
-//!   [`Error::UnmeasuredExtension`] instead of guessing level/variation
-//!   columns.
+//! * **Unknown extensions.** Names outside [`EXTENSIONS`] return
+//!   [`Error::UnmeasuredExtension`]. Accepted families must consume both object
+//!   tables completely; truncated selector words and trailing bytes refuse.
 //! * **Per-fourcc semantics.** The wire encoding of every one of the 135
 //!   field fourccs is proven — each has exactly one type word across the
 //!   whole corpus (61 int, 9 real, 23 unreal, 42 string), so `unam` is
@@ -139,8 +139,8 @@ pub const VERSION_TWO: u32 = 2;
 /// Every extension in the family.
 pub const EXTENSIONS: [&str; 7] = ["w3u", "w3t", "w3a", "w3b", "w3d", "w3h", "w3q"];
 
-/// Extensions whose record layout is measured by this crate. The other five
-/// never occur in a shipped map and are refused by [`ObjectFile::parse`].
+/// Accepted object-file families. The historical name does not imply that the
+/// shipped-file census or native selector semantics cover every family.
 pub const MEASURED_EXTENSIONS: [&str; 7] = EXTENSIONS;
 
 /// Byte offset of a map's embedded MPQ archive. `pcx-map` measured this on

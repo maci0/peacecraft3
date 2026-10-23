@@ -43,6 +43,7 @@ pub(crate) fn request(f: &binding::Fixture, resolver: Resolver) -> Configuration
     };
     Configuration {
         resolver,
+        campaign: None,
         map: member(input.map),
         common: member(input.common),
         blizzard: member(input.blizzard),

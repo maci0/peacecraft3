@@ -40,6 +40,9 @@ impl ObjectHost {
         if let Some(summoning) = &mut self.summoning {
             summoning.ready.remove(&unit);
         }
+        if let Some(shield) = &mut self.divine_shield.rules {
+            shield.ready_at.remove(&unit);
+        }
         self.reset_item_cooldowns(unit);
     }
 
@@ -96,6 +99,7 @@ impl ObjectHost {
         let admitted = match &ability {
             b"AHhb" => self.holy_light.is_some(),
             b"AHwe" => self.summoning.is_some(),
+            b"AHds" => self.divine_shield.rules.is_some(),
             _ => false,
         };
         if !admitted {
@@ -114,6 +118,14 @@ impl ObjectHost {
             }
             b"AHwe" => {
                 let ready = &mut self.summoning.as_mut().expect("checked").ready;
+                if end {
+                    ready.remove(&unit)
+                } else {
+                    ready.get(&unit).copied()
+                }
+            }
+            b"AHds" => {
+                let ready = &mut self.divine_shield.rules.as_mut().expect("checked").ready_at;
                 if end {
                     ready.remove(&unit)
                 } else {
@@ -247,6 +259,7 @@ impl ObjectHost {
         if !match &ability {
             b"AHhb" => self.holy_light.is_some(),
             b"AHwe" => self.summoning.is_some(),
+            b"AHds" => self.divine_shield.rules.is_some(),
             _ => false,
         } {
             return Err(fail(

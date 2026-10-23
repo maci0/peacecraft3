@@ -3,6 +3,64 @@ fn id(n: u64) -> HandleId {
     HandleId::new(std::num::NonZeroU64::new(n).unwrap())
 }
 
+#[derive(Default)]
+struct SourceLedger {
+    loads: usize,
+    staged: BTreeSet<String>,
+    committed: BTreeSet<String>,
+}
+
+struct TrackingLoader(std::sync::Arc<std::sync::Mutex<SourceLedger>>);
+
+impl TrackingLoader {
+    fn new() -> (Self, std::sync::Arc<std::sync::Mutex<SourceLedger>>) {
+        let ledger = std::sync::Arc::new(std::sync::Mutex::new(SourceLedger::default()));
+        (Self(std::sync::Arc::clone(&ledger)), ledger)
+    }
+}
+
+impl FootprintLoader for TrackingLoader {
+    fn load(&mut self, path: &str) -> Result<Footprint, String> {
+        let mut ledger = self.0.lock().unwrap();
+        ledger.loads += 1;
+        if !ledger.staged.contains(path) && !ledger.committed.contains(path) {
+            ledger.staged.insert(path.into());
+        }
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: format!("synthetic source at {path}"),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0]],
+        })
+    }
+
+    fn commit(&mut self, paths: &[String]) {
+        let mut ledger = self.0.lock().unwrap();
+        for path in paths {
+            ledger.staged.remove(path);
+            ledger.committed.insert(path.clone());
+        }
+    }
+
+    fn rollback(&mut self, paths: &[String]) {
+        let mut ledger = self.0.lock().unwrap();
+        for path in paths {
+            ledger.staged.remove(path);
+        }
+    }
+}
+
+fn script_base() -> Pathing {
+    Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    }
+}
+
 #[test]
 fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
     let mut p = placement(
@@ -27,6 +85,66 @@ fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
     );
     assert!(p.prepare_motion(id(1), [48., 32.], 2.).unwrap().is_none());
     assert!(p.prepare_motion(id(3), [32., 32.], 2.).is_err());
+}
+
+#[test]
+fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_each_other() {
+    let mut base = Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    base.cells[100] = 0x01;
+    base.cells[200] = 0x01;
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "stationary".into(),
+        },
+        1000,
+    )
+    .with_stationary(
+        base,
+        vec![
+            StationaryStamp {
+                key: StationaryKey::Placed(1),
+                live: vec![100, 10],
+                dead: vec![200],
+                mask: 0x04,
+                active: true,
+            },
+            StationaryStamp {
+                key: StationaryKey::Placed(2),
+                live: vec![100],
+                dead: vec![],
+                mask: 0x08,
+                active: true,
+            },
+            StationaryStamp {
+                key: StationaryKey::Placed(3),
+                live: vec![200],
+                dead: vec![100],
+                mask: 0x10,
+                active: false,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(p.grid.pathing.cells[100], 0x1d);
+    assert_eq!(p.grid.pathing.cells[10], 0x04);
+    assert_eq!(p.grid.pathing.cells[200], 0x01);
+    assert!(p.set_placed_active(1, false));
+    assert_eq!(p.grid.pathing.cells[100], 0x19);
+    assert_eq!(p.grid.pathing.cells[10], 0x00);
+    assert_eq!(p.grid.pathing.cells[200], 0x05);
+    assert!(p.set_placed_active(2, false));
+    assert_eq!(p.grid.pathing.cells[100], 0x11);
+    assert!(p.set_placed_active(3, true));
+    assert_eq!(p.grid.pathing.cells[100], 0x01);
+    assert_eq!(p.grid.pathing.cells[200], 0x15);
+    assert!(!p.set_placed_active(99, true));
 }
 
 #[test]
@@ -319,6 +437,176 @@ fn a_multi_cell_isolated_target_pocket_does_not_force_map_wide_search() {
 }
 
 #[test]
+fn script_creation_refuses_a_missing_base_before_resolving_or_loading_sources() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let loads = Arc::new(AtomicUsize::new(0));
+    let hits = Arc::clone(&loads);
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "missing base".into(),
+        },
+        100,
+    )
+    .with_footprint_loader(move |path| {
+        hits.fetch_add(1, Ordering::SeqCst);
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic texture".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0]; if path == "live.tga" { 1 } else { 2 }],
+        })
+    })
+    .with_script_paths(|_, dead| Ok(if dead { "dead.tga" } else { "live.tga" }.into()));
+    let error = p
+        .prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap_err();
+    assert!(error.0.contains("base pathing is missing"), "{error}");
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    assert!(p.stationary.is_empty());
+    assert!(p.stationary_cells.is_empty());
+}
+
+#[test]
+fn unit_source_commit_survives_a_refused_canonical_alias_script_layer() {
+    let (loader, ledger) = TrackingLoader::new();
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "committed unit source".into(),
+        },
+        100,
+    )
+    .with_stationary(script_base(), Vec::new())
+    .unwrap()
+    .with_staged_footprint_loader(loader)
+    .with_script_paths(|_, dead| Ok(if dead { "foo.tga" } else { "FOO.TGA" }.into()));
+    p.prepare([32., 32.], None, "Foo.tga", 0.).unwrap();
+    {
+        let ledger = ledger.lock().unwrap();
+        assert_eq!(ledger.loads, 1);
+        assert!(ledger.staged.is_empty());
+        assert_eq!(
+            ledger.committed.iter().cloned().collect::<Vec<_>>(),
+            ["foo.tga"]
+        );
+    }
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("foo.tga"));
+
+    p.stationary_cells_used = p.budget.stationary_cells;
+    let error = p
+        .prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap_err();
+    assert!(error.0.contains("stationary cell budget"), "{error}");
+    {
+        let ledger = ledger.lock().unwrap();
+        assert_eq!(ledger.loads, 1);
+        assert!(ledger.staged.is_empty());
+        assert!(ledger.committed.contains("foo.tga"));
+    }
+    assert_eq!(p.footprints.len(), 1);
+    p.prepare([40., 32.], None, "Foo.tga", 0.).unwrap();
+    assert_eq!(ledger.lock().unwrap().loads, 1);
+}
+
+#[test]
+fn script_layer_case_and_slash_aliases_share_one_canonical_source() {
+    let (loader, ledger) = TrackingLoader::new();
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "canonical script aliases".into(),
+        },
+        100,
+    )
+    .with_stationary(script_base(), Vec::new())
+    .unwrap()
+    .with_staged_footprint_loader(loader)
+    .with_script_paths(|_, dead| {
+        Ok(if dead {
+            "Textures\\Live.TGA"
+        } else {
+            "textures/live.tga"
+        }
+        .into())
+    });
+    p.prepare_script_destructable(7, [32., 32.], 0., false)
+        .unwrap();
+    let ledger = ledger.lock().unwrap();
+    assert_eq!(ledger.loads, 1);
+    assert!(ledger.staged.is_empty());
+    assert_eq!(
+        ledger.committed.iter().cloned().collect::<Vec<_>>(),
+        ["textures/live.tga"]
+    );
+    drop(ledger);
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("textures/live.tga"));
+}
+
+#[test]
+fn initial_footprint_map_is_canonical_and_refuses_alias_duplicates() {
+    let grid = || Grid {
+        source: Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "canonical initial footprints".into(),
+        },
+        origin: [0.0; 2],
+        pathing: script_base(),
+        domains: vec![5; 1024],
+    };
+    let budget = || Budget {
+        cells: 1024,
+        footprint_cells: 64,
+        stationary_cells: 1 << 20,
+        stationary_work: 1 << 20,
+        queries: 100,
+    };
+    let footprint = || Footprint {
+        origin: AssetIdentity {
+            source: "synthetic source".into(),
+            edition: "test".into(),
+            version: "test".into(),
+        },
+        cells: vec![[0, 0]],
+    };
+    let p = Placement::new(
+        grid(),
+        rules(2, -8192.25),
+        BTreeMap::from([("Textures\\Live.TGA".into(), footprint())]),
+        budget(),
+    )
+    .unwrap();
+    assert_eq!(p.footprints.len(), 1);
+    assert!(p.footprints.contains_key("textures/live.tga"));
+    let error = Placement::new(
+        grid(),
+        rules(2, -8192.25),
+        BTreeMap::from([
+            ("Textures\\Live.TGA".into(), footprint()),
+            ("textures/live.tga".into(), footprint()),
+        ]),
+        budget(),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error.0.contains("duplicate footprint path alias"),
+        "{error}"
+    );
+}
+
+#[test]
 fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_changes() {
     use std::sync::{
         Arc,
@@ -389,6 +677,7 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
     let one_initializer = put(0x340, &initializer(1, address(0x510)));
     let two_initializer = put(0x360, &initializer(2, address(0x514)));
     let ground_mask = put(0x380, &[0xb9, 8, 0, 0, 0]);
+    let fly_mask = put(0x3a0, &[0xb9, 4, 0, 0, 0]);
     for (offset, value) in [(0x500, initial), (0x504, 0.5_f32), (0x508, 1.5)] {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
@@ -403,6 +692,7 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
         one_initializer,
         two_initializer,
         ground_mask,
+        fly_mask,
     };
     (bytes, binding, budget)
 }
@@ -430,6 +720,8 @@ pub(crate) fn placement(source: Source, queries: usize) -> Placement {
         Budget {
             cells: 1024,
             footprint_cells: 64,
+            stationary_cells: 1 << 20,
+            stationary_work: 1 << 20,
             queries,
         },
     )
@@ -466,7 +758,7 @@ fn operands_not_selected_image_values_drive_normalization_and_geometry() {
 
 #[test]
 fn malformed_source_windows_and_budgets_are_refused() {
-    for mutation in 0..9 {
+    for mutation in 0..10 {
         let (mut bytes, mut binding, mut budget) = fixture(2, -8192.25);
         match mutation {
             0 => bytes[0x500] ^= 1,
@@ -486,6 +778,11 @@ fn malformed_source_windows_and_budgets_are_refused() {
             }
             7 => {
                 bytes[0x504..0x508].copy_from_slice(&2.0_f32.to_le_bytes());
+                binding.image_sha256 = sha256(&bytes);
+            }
+            9 => {
+                bytes[0x3a0] = 0xb8;
+                binding.fly_mask.digest = sha256(&bytes[0x3a0..0x3a5]);
                 binding.image_sha256 = sha256(&bytes);
             }
             _ => {
@@ -720,5 +1017,59 @@ fn attack_region_routes_around_a_blocked_contact_point_without_target_occupancy(
     assert!(
         p.route_within(id(1), [16.0, 16.0], [112.0, 16.0], 2.0, f32::NAN, &mut 2000)
             .is_err()
+    );
+}
+
+#[test]
+fn fly_placement_ignores_ground_state_but_respects_the_fly_mask() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "fly".into(),
+        },
+        10000,
+    );
+    let air = p
+        .prepare_class([32., 32.], Some(2.), "_", 0., true)
+        .unwrap();
+    p.commit(id(1), air);
+    let cell = 8 * 32 + 8;
+    assert_eq!(p.occupied[cell], 0);
+    assert_eq!(p.footprint_occupied[cell], 0);
+    let ground = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(2), ground);
+    p.grid.pathing.cells[cell] |= p.rules.ground_mask();
+    p.grid.domains[cell] = 9;
+    assert!(
+        p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_some(),
+        "air ignores the ground mask, ground occupancy and terrain domains"
+    );
+    p.grid.pathing.cells[cell] |= p.rules.fly_mask();
+    assert!(
+        p.prepare_motion(id(1), [32., 32.], 2.).unwrap().is_none(),
+        "the selected fly mask still refuses air motion"
+    );
+}
+
+#[test]
+fn fly_creation_refuses_a_map_with_no_unmasked_cell() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "fly-wall".into(),
+        },
+        10000,
+    );
+    let fly = p.rules.fly_mask();
+    for cell in &mut p.grid.pathing.cells {
+        *cell |= fly;
+    }
+    assert!(
+        p.prepare_class([32., 32.], Some(2.), "_", 0., true)
+            .unwrap_err()
+            .0
+            .contains("no qualified placement")
     );
 }

@@ -243,6 +243,8 @@ fn execution_failure<H: Host>(
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimerSessionError {
+    #[error("campaign AI: {0}")]
+    Ai(String),
     #[error("range callback work budget exhausted")]
     RangeBudget,
     #[error("thread wake budget exhausted")]
@@ -284,11 +286,16 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             {
                 return Ok(delivered);
             }
+            let ai_wake = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .next_ai_wake(until);
+            let step_until = ai_wake.map_or(until, |(at, _, _)| at);
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_thread_wake(until)?;
+                .next_thread_wake(step_until)?;
             if let Some(ticket) = wake {
                 let objects = self
                     .host()
@@ -305,7 +312,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_timer_expiry(until, &mut budget)?;
+                .next_timer_expiry(step_until, &mut budget)?;
             let movement = {
                 let objects = self
                     .host()
@@ -324,6 +331,15 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Err(error.into());
             }
             let Some(expiry) = expiry else {
+                if let Some((_, player, ticket)) = ai_wake {
+                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    self.host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .resume_ai(player, ticket)
+                        .map_err(TimerSessionError::Ai)?;
+                    delivered += 1;
+                    continue;
+                }
                 return Ok(delivered);
             };
             let result = (|| -> Result<(), TimerSessionError> {
@@ -443,6 +459,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .inner
             .objects_mut()
             .poll_region_events(&mut work)?;
+        active
+            .vm
+            .host()
+            .inner
+            .objects_mut()
+            .poll_player_state_events(&mut work)?;
         self.advance_queued_events(work)
             .map(|events| delivered + events)
     }

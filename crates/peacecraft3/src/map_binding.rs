@@ -544,9 +544,13 @@ fn bind_retained(
             bytes: blizzard.bytes,
         },
         catalog_identity: input.catalog_identity.clone(),
+        catalog_label: input.catalog_label.to_owned(),
+        catalog_sources: input.catalog_sources.to_vec(),
+        required_catalog_tables: input.required_catalog_tables.to_vec(),
         catalog: bound,
         required_fields: input.required_fields.to_vec(),
         budget: limits.admission,
         max_map_file_bytes: limits.max_map_file_bytes,
+        limits,
     })
 }

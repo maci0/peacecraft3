@@ -35,6 +35,8 @@ use peacecraft3::map_script_session::{MapScriptSession, ScriptSessionError};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+const AI_COMMON: &str = "native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\nnative SetTargetHeroes takes boolean enabled returns nothing\n";
+
 const COMMON: &str = "\
 type agent extends handle
 type itemtype extends handle
@@ -53,6 +55,7 @@ type force extends agent
 type rect extends agent
 type eventid extends handle
 type unitevent extends eventid
+type playerevent extends eventid
 type gamestate extends handle
 type igamestate extends gamestate
 type fgamestate extends gamestate
@@ -170,6 +173,7 @@ constant native ConvertLimitOp takes integer i returns limitop
 constant native ConvertUnitState takes integer i returns unitstate
 constant native ConvertCameraField takes integer i returns camerafield
 constant native ConvertUnitEvent takes integer i returns unitevent
+constant native ConvertPlayerEvent takes integer i returns playerevent
 native CreateDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable
 native CreateUnit takes player p, integer unitid, real x, real y, real face returns unit
 native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
@@ -179,6 +183,7 @@ native CreateTrigger takes nothing returns trigger
 native TriggerRegisterUnitEvent takes trigger which, unit u, unitevent event returns event
 native TriggerRegisterTimerExpireEvent takes trigger which, timer t returns event
 native TriggerRegisterGameStateEvent takes trigger which, gamestate state, limitop op, real limit returns event
+native TriggerRegisterPlayerStateEvent takes trigger which, player p, playerstate state, limitop op, real limit returns event
 native Filter takes code predicate returns filterfunc
 native CreateForce takes nothing returns force
 native ForceAddPlayer takes force which, player p returns nothing
@@ -198,11 +203,18 @@ globals
 constant fgamestate CLOCK = ConvertFGameState(2)
 constant igamestate IGAME = ConvertIGameState(1)
 constant limitop LIM = ConvertLimitOp(0)
+constant limitop LESS_THAN = ConvertLimitOp(0)
+constant limitop LESS_THAN_OR_EQUAL = ConvertLimitOp(1)
+constant limitop EQUAL = ConvertLimitOp(2)
+constant limitop GREATER_THAN_OR_EQUAL = ConvertLimitOp(3)
+constant limitop GREATER_THAN = ConvertLimitOp(4)
+constant limitop NOT_EQUAL = ConvertLimitOp(5)
 constant unitstate USTATE = ConvertUnitState(1)
 constant camerafield CFIELD = ConvertCameraField(1)
 constant playerstate PSTATE = ConvertPlayerState(1)
 constant alliancetype ALLY = ConvertAllianceType(1)
 constant unitevent UEVENT = ConvertUnitEvent(1)
+constant playerevent EVENT_PLAYER_STATE_LIMIT = ConvertPlayerEvent(47)
 endglobals
 ";
 
@@ -318,6 +330,7 @@ fn budgets() -> MapStartupBudgets {
         regions: None,
         timer_events: 4,
         game_state_events: 4,
+        player_state_events: 4,
         stock: None,
         quests: None,
         dialogs: None,
@@ -622,6 +635,8 @@ pub(crate) fn host_inputs(
     catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
 ) -> MapStartupInputs {
     MapStartupInputs {
+        ai_source: None,
+        targeting_policy: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,
@@ -633,7 +648,9 @@ pub(crate) fn host_inputs(
         random: None,
         terrain_pathing: None,
         numeric: None,
+        destructable_restore: None,
         experience_handicap: None,
+        health_handicap: None,
         hero_skills: None,
         enumeration: EnumContracts {
             context: "synthetic admitted map enumeration".into(),
@@ -646,6 +663,7 @@ pub(crate) fn host_inputs(
                 "ConvertPlayerState",
                 "ConvertAllianceType",
                 "ConvertUnitEvent",
+                "ConvertPlayerEvent",
                 "ConvertItemType",
             ]
             .into_iter()
@@ -776,6 +794,422 @@ fn session_slots(app: &mut App) -> Option<usize> {
         .expect("published host")
         .objects_mut()
         .player_slots()
+}
+
+#[test]
+fn campaign_ai_uses_the_published_world_and_map_timer_order() {
+    use pcx_play::map_startup_host::MapStartupError;
+    use pcx_play::playercolor_host::TriggerRuntimeInput;
+    use pcx_script::Host;
+
+    let script = "globals\ntimer t = CreateTimer()\ninteger seen = -1\nendglobals\nfunction tick takes nothing returns nothing\nset seen = GetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD)\nendfunction\nfunction config takes nothing returns nothing\ncall SetPlayers(3)\nendfunction\nfunction main takes nothing returns nothing\ncall StartCampaignAI(Player(0), \"red.ai\")\ncall StartCampaignAI(Player(1), \"purple.ai\")\ncall TimerStart(t, 0.125, false, function tick)\nendfunction\nfunction register_callback takes nothing returns nothing\nlocal trigger tr = CreateTrigger()\ncall TriggerRegisterPlayerStateEvent(tr, Player(2), PLAYER_STATE_RESOURCE_GOLD, EQUAL, 7.0)\nendfunction\nfunction blocked takes nothing returns nothing\ncall StartCampaignAI(Player(2), \"blocked.ai\")\nendfunction\n";
+    let mut map = fixture(script);
+    let mut common = String::from_utf8(std::mem::take(&mut map.common)).unwrap();
+    let declarations = format!(
+        "type gameevent extends eventid\nconstant native ConvertGameEvent takes integer i returns gameevent\nconstant native GetPlayerState takes player p, playerstate state returns integer\nnative TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic returns event\nnative DestroyTrigger takes trigger t returns nothing\nconstant native GetTriggeringTrigger takes nothing returns trigger\nconstant native GetTriggerEventId takes nothing returns eventid\nnative StartCampaignAI takes player p, string path returns nothing\n{}globals\n",
+        script_timer_cases::TIMER_COMMON
+    );
+    common = common.replacen("globals\n", &declarations, 1);
+    common = common.replacen(
+        "endglobals\n",
+        "constant gameevent EVT = ConvertGameEvent(13)\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD = ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER = ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED = ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP = ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING = ConvertPlayerState(6)\nconstant playerstate PLAYER_STATE_GOLD_GATHERED = ConvertPlayerState(15)\nconstant playerstate PLAYER_STATE_LUMBER_GATHERED = ConvertPlayerState(16)\nendglobals\n",
+        1,
+    );
+    map.common = common.into_bytes();
+    map.rebuild();
+    let reader = map.resolver();
+    let bound = bind_map(&reader, map.input(1), map.limits()).unwrap();
+    let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    inputs.enumeration.names.push("ConvertGameEvent".into());
+    inputs.timer_time = Some(0.0);
+    inputs.trigger_runtime = Some(TriggerRuntimeInput {
+        initial_enabled: true,
+        timer_event_global: "EVT".into(),
+        max_timed_events: 4,
+        max_parked_threads: 0,
+    });
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    let bytes = Arc::clone(&bound.catalog_map_bytes);
+    app.insert_resource(MapRequests {
+        bindings: Some(bound),
+        ..Default::default()
+    });
+    app.world_mut().write_message(MapRequest {
+        label: "synthetic AI map".into(),
+        map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+        identity: map.map_id,
+        binding_revision: 1,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    let context = app
+        .world()
+        .resource::<MapRequests>()
+        .admission
+        .shared_context()
+        .unwrap();
+    let ai_common = AI_COMMON;
+    let programs: std::collections::BTreeMap<_, _> = [
+        ("red.ai", 17, 34),
+        ("purple.ai", 29, 58),
+        ("blocked.ai", 7, 14),
+    ]
+    .into_iter()
+    .map(|(name, first, last)| {
+        let body = format!("function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, {first})\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, {last})\nendfunction\n");
+        let scripts = pcx_play::scripts::MapScripts::compile(
+            AssetIdentity {
+                edition: "synthetic".into(),
+                version: "ai-map-host".into(),
+                source: name.into(),
+            },
+            ScriptAsset {
+                label: "fixture:common.j",
+                bytes: &map.common,
+            },
+            ScriptAsset {
+                label: "fixture:common.ai",
+                bytes: ai_common.as_bytes(),
+            },
+            ScriptAsset {
+                label: name,
+                bytes: body.as_bytes(),
+            },
+            None,
+        )
+        .unwrap();
+        (name, Arc::new(scripts))
+    })
+    .collect();
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    let entries =
+        ["config", "main"].map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            Arc::clone(&context),
+            move |ctx| {
+                Ok::<_, MapStartupError>(
+                    pcx_play::map_startup_host::assemble(ctx, inputs)?.with_ai_loader(
+                        move |name| {
+                            programs
+                                .get(name)
+                                .cloned()
+                                .ok_or_else(|| format!("missing synthetic AI {name}"))
+                        },
+                    ),
+                )
+            },
+            &entries,
+        )
+        .unwrap();
+    let gold = session.global("PLAYER_STATE_RESOURCE_GOLD").unwrap();
+    let bank = |session: &mut MapScriptSession<MapStartupHost>, player| {
+        let host = session.host().unwrap();
+        let player = host.native("Player", &[Value::Int(player)]).unwrap();
+        host.native("GetPlayerState", &[player, gold.clone()])
+            .unwrap()
+    };
+    assert_eq!(bank(&mut session, 0), Value::Int(17));
+    assert_eq!(bank(&mut session, 1), Value::Int(29));
+    session.advance_timers(0.125, 8).unwrap();
+    assert_eq!(session.global("seen"), Some(Value::Int(17)));
+    session.advance_timers(0.25, 8).unwrap();
+    assert_eq!(bank(&mut session, 0), Value::Int(34));
+    assert_eq!(bank(&mut session, 1), Value::Int(58));
+    session
+        .call_function(
+            context
+                .scripts
+                .program()
+                .function_id("register_callback")
+                .unwrap(),
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .retained_player_state_events()
+            .unwrap(),
+        1
+    );
+    let error = session
+        .call_function(
+            context.scripts.program().function_id("blocked").unwrap(),
+            &[],
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("map callbacks"), "{error}");
+    assert_eq!(bank(&mut session, 2), Value::Int(0));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .retained_player_state_events()
+            .unwrap(),
+        1
+    );
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn campaign_ai_upgrade_queries_share_published_research_across_map_timer_and_sleep() {
+    use pcx_play::map_startup_host::MapStartupError;
+    use pcx_script::Host;
+
+    let script = "globals\ntimer t = CreateTimer()\ninteger seen = -1\nendglobals\nfunction tick takes nothing returns nothing\nset seen = GetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD)\ncall SetPlayerTechResearched(Player(0), 5, 3)\ncall SetPlayerTechResearched(Player(1), 5, 3)\nendfunction\nfunction config takes nothing returns nothing\ncall SetPlayers(2)\nendfunction\nfunction main takes nothing returns nothing\ncall SetPlayerTechResearched(Player(0), 5, 1)\ncall SetPlayerTechResearched(Player(1), 5, 2)\ncall StartCampaignAI(Player(0), \"red.ai\")\ncall StartCampaignAI(Player(1), \"purple.ai\")\ncall TimerStart(t, 0.125, false, function tick)\nendfunction\n";
+    let mut map = fixture(script);
+    let mut common = String::from_utf8(std::mem::take(&mut map.common)).unwrap();
+    common = common.replacen(
+        "globals\n",
+        &format!(
+            "constant native GetPlayerState takes player p, playerstate state returns integer\nconstant native GetPlayerTechResearched takes player p, integer tech, boolean specific returns boolean\nconstant native GetPlayerTechCount takes player p, integer tech, boolean specific returns integer\nnative StartCampaignAI takes player p, string path returns nothing\n{}globals\n",
+            script_timer_cases::TIMER_COMMON
+        ),
+        1,
+    );
+    common = common.replacen(
+        "endglobals\n",
+        "constant playerstate PLAYER_STATE_RESOURCE_GOLD = ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER = ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED = ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP = ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING = ConvertPlayerState(6)\nconstant playerstate PLAYER_STATE_GOLD_GATHERED = ConvertPlayerState(15)\nconstant playerstate PLAYER_STATE_LUMBER_GATHERED = ConvertPlayerState(16)\nendglobals\n",
+        1,
+    );
+    map.common = common.into_bytes();
+    map.rebuild();
+    let reader = map.resolver();
+    let bound = bind_map(&reader, map.input(1), map.limits()).unwrap();
+    let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    inputs.timer_time = Some(0.0);
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    let bytes = Arc::clone(&bound.catalog_map_bytes);
+    app.insert_resource(MapRequests {
+        bindings: Some(bound),
+        ..Default::default()
+    });
+    app.world_mut().write_message(MapRequest {
+        label: "synthetic AI research map".into(),
+        map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+        identity: map.map_id,
+        binding_revision: 1,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    let context = app
+        .world()
+        .resource::<MapRequests>()
+        .admission
+        .shared_context()
+        .unwrap();
+    let ai_common = AI_COMMON;
+    let programs: std::collections::BTreeMap<_, _> =
+        [("red.ai", 17, 34), ("purple.ai", 29, 58)]
+            .into_iter()
+            .map(|(name, first, last)| {
+                let body = format!("function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, {first} * GetUpgradeLevel(5) + 1000 * GetUpgradeLevel(6))\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, {last} * GetUpgradeLevel(5) + 1000 * GetUpgradeLevel(6))\nendfunction\n");
+                let scripts = pcx_play::scripts::MapScripts::compile(
+                    AssetIdentity {
+                        edition: "synthetic".into(),
+                        version: "ai-research-map-host".into(),
+                        source: name.into(),
+                    },
+                    ScriptAsset {
+                        label: "fixture:common.j",
+                        bytes: &map.common,
+                    },
+                    ScriptAsset {
+                        label: "fixture:common.ai",
+                        bytes: ai_common.as_bytes(),
+                    },
+                    ScriptAsset {
+                        label: name,
+                        bytes: body.as_bytes(),
+                    },
+                    None,
+                )
+                .unwrap();
+                (name, Arc::new(scripts))
+            })
+            .collect();
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    let entries =
+        ["config", "main"].map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            Arc::clone(&context),
+            move |ctx| {
+                let mut host = pcx_play::map_startup_host::assemble(Arc::clone(&ctx), inputs)?;
+                host.objects_mut()
+                    .admit_upgrade_research(
+                        &ctx,
+                        pcx_play::upgrade_research::fixture(&ctx.sources.catalog),
+                    )
+                    .map_err(|error| MapStartupError::Observation(error.to_string()))?;
+                Ok::<_, MapStartupError>(host.with_ai_loader(move |name| {
+                    programs
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("missing synthetic AI {name}"))
+                }))
+            },
+            &entries,
+        )
+        .unwrap();
+    let gold = session.global("PLAYER_STATE_RESOURCE_GOLD").unwrap();
+    let bank = |session: &mut MapScriptSession<MapStartupHost>, player| {
+        let host = session.host().unwrap();
+        let player = host.native("Player", &[Value::Int(player)]).unwrap();
+        host.native("GetPlayerState", &[player, gold.clone()])
+            .unwrap()
+    };
+    assert_eq!(bank(&mut session, 0), Value::Int(17));
+    assert_eq!(bank(&mut session, 1), Value::Int(58));
+    session.advance_timers(0.125, 8).unwrap();
+    assert_eq!(session.global("seen"), Some(Value::Int(17)));
+    assert_eq!(bank(&mut session, 0), Value::Int(17));
+    assert_eq!(bank(&mut session, 1), Value::Int(58));
+    session.advance_timers(0.25, 8).unwrap();
+    assert_eq!(bank(&mut session, 0), Value::Int(102));
+    assert_eq!(bank(&mut session, 1), Value::Int(174));
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn campaign_ai_unit_cost_reads_selected_catalog_and_live_player_tokens() {
+    use crate::binding::Reply;
+    use pcx_play::map_startup_host::MapStartupError;
+    use pcx_script::Host;
+
+    let script = "globals\ntimer t = CreateTimer()\nendglobals\nfunction tick takes nothing returns nothing\ncall SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_HERO_TOKENS, 1)\nendfunction\nfunction config takes nothing returns nothing\ncall SetPlayers(2)\nendfunction\nfunction main takes nothing returns nothing\ncall StartCampaignAI(Player(0), \"red.ai\")\ncall StartCampaignAI(Player(1), \"purple.ai\")\ncall TimerStart(t, 0.125, false, function tick)\nendfunction\n";
+    let mut map = fixture(script);
+    let mut common = String::from_utf8(std::mem::take(&mut map.common)).unwrap();
+    common = common.replacen(
+        "globals\n",
+        &format!(
+            "constant native GetPlayerState takes player p, playerstate state returns integer\nnative StartCampaignAI takes player p, string path returns nothing\n{}globals\n",
+            script_timer_cases::TIMER_COMMON
+        ),
+        1,
+    );
+    common = common.replacen(
+        "endglobals\n",
+        "constant playerstate PLAYER_STATE_RESOURCE_HERO_TOKENS = ConvertPlayerState(3)\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD = ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER = ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED = ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP = ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING = ConvertPlayerState(6)\nconstant playerstate PLAYER_STATE_GOLD_GATHERED = ConvertPlayerState(15)\nconstant playerstate PLAYER_STATE_LUMBER_GATHERED = ConvertPlayerState(16)\nendglobals\n",
+        1,
+    );
+    map.common = common.into_bytes();
+    let mut metadata = String::from_utf8(std::mem::take(&mut map.metadata)).unwrap();
+    metadata = metadata.replace("B;Y2;X6", "B;Y4;X6");
+    metadata = metadata.replacen(
+        "\r\nE\r\n",
+        "\r\nC;X1;Y3;K\"ugol\"\r\nC;X2;Y3;K\"goldcost\"\r\nC;X3;Y3;K\"UnitBalance\"\r\nC;X4;Y3;K\"int\"\r\nC;X5;Y3;K\"-1\"\r\nC;X6;Y3;K\"synthetic category\"\r\nC;X1;Y4;K\"ulum\"\r\nC;X2;Y4;K\"lumbercost\"\r\nC;X3;Y4;K\"UnitBalance\"\r\nC;X4;Y4;K\"int\"\r\nC;X5;Y4;K\"-1\"\r\nC;X6;Y4;K\"synthetic category\"\r\nE\r\n",
+        1,
+    );
+    map.metadata = metadata.into_bytes();
+    let mut w3u = Vec::new();
+    for word in [1u32, 1] {
+        w3u.extend(word.to_le_bytes());
+    }
+    w3u.extend(b"UNIT");
+    w3u.extend([0; 4]);
+    w3u.extend(2u32.to_le_bytes());
+    for (field, value) in [(*b"STAT", 1u32), (*b"ugol", 137)] {
+        w3u.extend(field);
+        w3u.extend(0u32.to_le_bytes());
+        w3u.extend(value.to_le_bytes());
+        w3u.extend(b"TAIL");
+    }
+    w3u.extend(0u32.to_le_bytes());
+    map.files
+        .iter_mut()
+        .find(|(name, _)| *name == "war3map.w3u")
+        .unwrap()
+        .1 = w3u;
+    map.rebuild();
+    let balance = b"ID;PWXL;N;E\r\nB;Y2;X3\r\nC;X1;Y1;K\"unitBalanceID\"\r\nC;X2;Y1;K\"goldcost\"\r\nC;X3;Y1;K\"lumbercost\"\r\nC;X1;Y2;K\"UNIT\"\r\nC;X2;Y2;K\"125\"\r\nC;X3;Y2;K\"13\"\r\nE\r\n";
+    let reader = map.resolver_with_assets(std::collections::BTreeMap::from([(
+        SlkId::UnitBalance.path().to_owned(),
+        Reply::Bytes(balance.to_vec()),
+    )]));
+    let mut limits = map.limits();
+    limits.reader.max_listed_paths += 1;
+    limits.reader.max_asset_bytes = limits.reader.max_asset_bytes.max(balance.len());
+    limits.reader.max_aggregate_input_bytes += balance.len();
+    limits.max_resolver_input_bytes += balance.len();
+    let mut input = map.input(1);
+    input.required_catalog_tables = &[SlkId::UnitData, SlkId::UnitMetaData, SlkId::UnitBalance];
+    let bound = bind_map(&reader, input, limits).unwrap();
+    let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture_with_unit_cost(3));
+    inputs.timer_time = Some(0.0);
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    let bytes = Arc::clone(&bound.catalog_map_bytes);
+    app.insert_resource(MapRequests {
+        bindings: Some(bound),
+        ..Default::default()
+    });
+    app.world_mut().write_message(MapRequest {
+        label: "synthetic AI cost map".into(),
+        map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+        identity: map.map_id,
+        binding_revision: 1,
+        payload: MapPayload::Shared(bytes),
+    });
+    app.update();
+    let context = app
+        .world()
+        .resource::<MapRequests>()
+        .admission
+        .shared_context()
+        .unwrap();
+    let ai_common = AI_COMMON;
+    let programs: std::collections::BTreeMap<_, _> = ["red.ai", "purple.ai"].into_iter().map(|name| {
+        let body = "function cost takes nothing returns integer\nreturn GetUnitGoldCost('UNIT') + GetUnitWoodCost('UNIT') + GetUnitGoldCost('ZZZZ')\nendfunction\nfunction main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()), PLAYER_STATE_RESOURCE_GOLD, cost())\nendfunction\n";
+        let scripts = pcx_play::scripts::MapScripts::compile(
+            AssetIdentity { edition: "synthetic".into(), version: "ai-cost-map-host".into(), source: name.into() },
+            ScriptAsset { label: "fixture:common.j", bytes: &map.common },
+            ScriptAsset { label: "fixture:common.ai", bytes: ai_common.as_bytes() },
+            ScriptAsset { label: name, bytes: body.as_bytes() }, None,
+        ).unwrap();
+        (name, Arc::new(scripts))
+    }).collect();
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    let entries =
+        ["config", "main"].map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            Arc::clone(&context),
+            move |ctx| {
+                let host = pcx_play::map_startup_host::assemble(Arc::clone(&ctx), inputs)?;
+                Ok::<_, MapStartupError>(host.with_ai_loader(move |name| {
+                    programs
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("missing synthetic AI {name}"))
+                }))
+            },
+            &entries,
+        )
+        .unwrap();
+    let gold = session.global("PLAYER_STATE_RESOURCE_GOLD").unwrap();
+    let bank = |session: &mut MapScriptSession<MapStartupHost>, number| {
+        let host = session.host().unwrap();
+        let player = host.native("Player", &[Value::Int(number)]).unwrap();
+        host.native("GetPlayerState", &[player, gold.clone()])
+            .unwrap()
+    };
+    assert_eq!(bank(&mut session, 0), Value::Int(150));
+    assert_eq!(bank(&mut session, 1), Value::Int(150));
+    session.advance_timers(0.125, 8).unwrap();
+    assert_eq!(bank(&mut session, 0), Value::Int(150));
+    session.advance_timers(0.25, 8).unwrap();
+    assert_eq!(bank(&mut session, 0), Value::Int(0));
+    assert_eq!(bank(&mut session, 1), Value::Int(150));
 }
 
 #[test]
@@ -1443,5 +1877,7 @@ fn post_config_slot_input_reaches_players_created_in_main_without_minting_them_e
     );
 }
 
+#[path = "campaign_targeting_cases.rs"]
+mod campaign_targeting_cases;
 #[path = "unit_range_cases.rs"]
 mod unit_range_cases;

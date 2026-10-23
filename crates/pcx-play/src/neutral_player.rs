@@ -362,6 +362,9 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
     fn leave_thread(&mut self) -> Result<(), String> {
         self.inner.leave_thread()
     }
+    fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.after_script_spawn()
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if name != self.rule.native_name {
             return self.inner.native(name, args);

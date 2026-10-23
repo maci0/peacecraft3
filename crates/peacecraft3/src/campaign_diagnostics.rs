@@ -95,6 +95,7 @@ fn debug_info(
 
 #[derive(SystemParam)]
 struct Stages<'w> {
+    transition: Option<Res<'w, peacecraft3::campaign_runtime::CampaignTransition>>,
     startup: Option<Res<'w, CampaignStartup>>,
     ground: Option<Res<'w, GroundPublication>>,
     camera: Option<Res<'w, CampaignCamera>>,
@@ -112,6 +113,7 @@ struct Stages<'w> {
 
 fn report(stages: Stages, mut reported: ResMut<Reported>) {
     let Stages {
+        transition,
         startup,
         ground,
         camera,
@@ -127,6 +129,10 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         command_card,
     } = stages;
     let current = [
+        (
+            "campaign transition",
+            transition.and_then(|state| state.last_error.as_ref().map(ToString::to_string)),
+        ),
         (
             "campaign startup",
             startup.and_then(|s| s.last_error.as_ref().map(ToString::to_string)),

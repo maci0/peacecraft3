@@ -80,6 +80,59 @@ fn cast(vm: &mut Vm, caster: HandleId) -> bool {
 }
 
 #[test]
+fn summon_count_override_requires_the_metadata_data_pointer() {
+    let count = |pointer| {
+        let mut overlay = pcx_objects::editor::Overlay::default();
+        overlay.mods.insert(
+            "AHwe".into(),
+            vec![pcx_objects::Mod {
+                field: *b"fCnt",
+                value_type: pcx_objects::ValueType::Int,
+                selectors: Some([1, pointer]),
+                value: pcx_objects::Value::Int(2),
+                end_word: 0,
+            }],
+        );
+        overlay
+    };
+    let (mut vm, [caster, _, _, _]) = holy_open_with_inputs(
+        "",
+        "",
+        "AHwe",
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        count(1),
+    );
+    prepare(&mut vm);
+    let before = vm.host().inner.executed_units().count();
+    assert!(cast(&mut vm, caster));
+    step(&mut vm, 0.25);
+    assert_eq!(vm.host().inner.executed_units().count(), before + 2);
+
+    let (mut vm, [caster, _, _, _]) = holy_open_with_inputs(
+        "",
+        "",
+        "AHwe",
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        count(0),
+    );
+    prepare(&mut vm);
+    let error = vm
+        .host()
+        .inner
+        .native(
+            "IssueImmediateOrder",
+            &[Value::Handle(caster), Value::Str("gamma".into())],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("data pointer 0 does not match metadata data column 1"));
+}
+
+#[test]
 fn summoning_rank_reads_its_own_count_unit_cost_and_lifetime() {
     let (mut vm, caster) = open();
     let command = vm

@@ -173,7 +173,7 @@ fn open_selected(
     heroes: Option<crate::hero_skills::Rules>,
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, heroes, combat, false, None)
+    open_fixture(fields, heroes, combat, false, None, None)
 }
 
 /// The same fixture with the source fgamestate clock and time-of-day admitted at hour 9.
@@ -181,7 +181,7 @@ fn open_clocked(
     fields: &[([u8; 4], ObjectField)],
     combat: CombatRules,
 ) -> (Vm, HandleId, HandleId) {
-    open_fixture(fields, None, combat, true, None)
+    open_fixture(fields, None, combat, true, None, None)
 }
 
 /// Clock declarations: the stock `CLOCK` handle and the stock dawn/dusk window.
@@ -219,6 +219,7 @@ fn open_fixture(
     combat: CombatRules,
     clock: bool,
     blight: Option<crate::terrain_blight::InitialBlight>,
+    resource: Option<Arc<DefaultTables>>,
 ) -> (Vm, HandleId, HandleId) {
     let mut extra = format!(
         "{}\n{}{DECLARATIONS}{}{}{}",
@@ -244,6 +245,10 @@ fn open_fixture(
     if blight.is_some() {
         extra.push_str("\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n");
     }
+    if resource.is_some() {
+        extra.push('\n');
+        extra.push_str(super::resource::RESOURCE_FAMILY_NATIVES);
+    }
     let map = if heroes.is_some() {
         MAP.replacen("'u001'", "'H001'", 1)
     } else {
@@ -257,6 +262,10 @@ fn open_fixture(
             h
         }
     });
+    let h = match resource {
+        Some(tables) => h.with_resource_amounts(tables).unwrap(),
+        None => h,
+    };
     let (registry, activity) = super::activity::rules();
     let mut h = h
         .with_locations()
@@ -356,6 +365,64 @@ fn step(vm: &mut Vm, until: f64) {
         assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
         h.advance_unit_activity(next, &mut 65536).unwrap();
     }
+}
+
+fn step_refused(vm: &mut Vm, until: f64) -> String {
+    let h = &mut vm.host().inner;
+    while h.timer_game_time().unwrap() < until {
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(error) = h.advance_unit_activity(next, &mut 65536) {
+            return error.to_string();
+        }
+    }
+    panic!("expected campaign targeting refusal");
+}
+
+#[test]
+fn killed_resource_unit_retains_amount_across_later_activity() {
+    let mut fields = armed("1", "normal");
+    fields.extend(super::resource::resource_fields("resource", "Agld,Avul"));
+    let (mut vm, a, _) = open_fixture(
+        &fields,
+        None,
+        rules(),
+        false,
+        None,
+        Some(super::resource::resource_tables()),
+    );
+    let amount = |vm: &mut Vm| vm.host().inner.executed_unit(a).unwrap().resource_amount;
+    assert_eq!(amount(&mut vm), Some(4242));
+    vm.host()
+        .inner
+        .native("SetResourceAmount", &[Value::Handle(a), Value::Int(777)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(a)])
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
+    );
+    assert_eq!(amount(&mut vm), Some(777));
+    step(&mut vm, 1.0);
+    assert_eq!(amount(&mut vm), Some(777));
+    vm.host()
+        .inner
+        .native("SetResourceAmount", &[Value::Handle(a), Value::Int(5)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native("AddResourceAmount", &[Value::Handle(a), Value::Int(2)])
+        .unwrap();
+    assert_eq!(amount(&mut vm), Some(7));
 }
 
 #[test]
@@ -1600,7 +1667,7 @@ mod guard_positions;
 
 #[cfg(test)]
 #[path = "inventory_powerup_host_tests.rs"]
-mod powerup_host;
+pub(super) mod powerup_host;
 
 #[test]
 fn set_unit_exploded_then_kill_unit_retains_the_flag_through_the_death_path() {
@@ -2250,6 +2317,16 @@ fn holy_tables_with(edits: &[(&str, &str)]) -> DefaultTables {
                 "1",
             ],
             &[
+                "fCnt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "1",
+                "1",
+            ],
+            &[
                 "fCos",
                 "Cost",
                 "AbilityData",
@@ -2814,19 +2891,19 @@ fn holy_nonfinite_and_negative_source_cells_refuse_before_effects_or_payment() {
 #[test]
 fn holy_ranked_map_edits_use_metadata_types_and_leave_other_ranks_authored() {
     let mut overlay = pcx_objects::editor::Overlay::default();
-    let real = |field, value_type, value| pcx_objects::Mod {
+    let real = |field, pointer, value_type, value| pcx_objects::Mod {
         field,
         value_type,
-        selectors: Some([1, 0]),
+        selectors: Some([1, pointer]),
         value: pcx_objects::Value::Real(value),
         end_word: 0,
     };
     overlay.mods.insert(
         "AHhb".into(),
         vec![
-            real(*b"fCoo", pcx_objects::ValueType::Unreal, 1.5),
-            real(*b"fRng", pcx_objects::ValueType::Unreal, 32.5),
-            real(*b"fAmt", pcx_objects::ValueType::Real, 20.25),
+            real(*b"fCoo", 0, pcx_objects::ValueType::Unreal, 1.5),
+            real(*b"fRng", 0, pcx_objects::ValueType::Unreal, 32.5),
+            real(*b"fAmt", 1, pcx_objects::ValueType::Real, 20.25),
             pcx_objects::Mod {
                 field: *b"fCos",
                 value_type: pcx_objects::ValueType::Int,
@@ -3174,6 +3251,49 @@ fn a_new_order_cancels_a_walking_cast_without_spending_mana() {
 }
 
 #[test]
+fn holy_light_data_override_requires_the_metadata_data_pointer() {
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert(
+        "AHhb".into(),
+        vec![pcx_objects::Mod {
+            field: *b"fAmt",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 0]),
+            value: pcx_objects::Value::Real(20.25),
+            end_word: 0,
+        }],
+    );
+    let (mut vm, [caster, target, _, _]) = holy_open_with_inputs(
+        "",
+        LEARNED,
+        NOTHING,
+        HOLY_ART_END_MS,
+        None,
+        holy_tables(),
+        overlay,
+    );
+    vm.call("prime", &[]).unwrap();
+    let mana = holy_mana(&mut vm, caster);
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(caster),
+                    Value::Str("alpha".into()),
+                    Value::Handle(target)
+                ]
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("data pointer 0 does not match metadata data column 1")
+    );
+    assert_eq!(holy_life(&mut vm, target), 100.);
+    assert_eq!(holy_mana(&mut vm, caster), mana);
+}
+
+#[test]
 fn ranks_are_learned_with_skill_points_and_each_rank_uses_its_own_row() {
     let (mut vm, [h, f, _, _]) = holy_open("", UNLEARNED, LEARNABLE);
     vm.call("prime", &[]).unwrap();
@@ -3466,4 +3586,262 @@ fn melee_chase_routes_to_attack_reach_instead_of_the_occupied_target_centre() {
             .unwrap()
             .moving()
     );
+}
+
+fn targeting_policy() -> crate::campaign_targeting_policy::TargetingPolicy {
+    let mut policy = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+    policy.hero_min_game_difficulty = 1;
+    policy.optional_damage_gate = 4;
+    policy.optional_level_gate = 4;
+    policy
+}
+
+fn admit_targeting(vm: &mut Vm, player: i32, enabled: Option<bool>) {
+    admit_targeting_with(vm, player, enabled, targeting_policy(), 1);
+}
+
+fn admit_targeting_with(
+    vm: &mut Vm,
+    player: i32,
+    enabled: Option<bool>,
+    policy: crate::campaign_targeting_policy::TargetingPolicy,
+    difficulty: i32,
+) {
+    let h = &mut vm.host().inner;
+    h.test_set_game_difficulty(difficulty);
+    h.set_neutral_aggressive(20);
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_targeting(&context, policy).unwrap();
+    h.activate_campaign_ai_player(player).unwrap();
+    if let Some(enabled) = enabled {
+        h.set_ai_target_heroes(player, enabled).unwrap();
+    }
+}
+
+fn create_for(vm: &mut Vm, owner_of: HandleId, rawcode: [u8; 4], x: f32, y: f32) -> HandleId {
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(owner_of).unwrap().owner;
+    let Value::Handle(id) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(rawcode)),
+                Value::Real(x),
+                Value::Real(y),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    id
+}
+
+fn acquired(vm: &mut Vm, unit: HandleId) -> Option<HandleId> {
+    vm.host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .combat
+        .as_ref()
+        .unwrap()
+        .target
+}
+
+fn wide_acquire() -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = armed("128", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("256".into()));
+    fields
+}
+
+fn wide_hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
+    let mut fields = hero_fields(primary);
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W005")
+        .unwrap()
+        .1
+        .value = Ok(FieldValue::Cell("256".into()));
+    fields
+}
+
+#[test]
+fn campaign_targeting_hero_selection_uses_the_admitted_flag_and_newest_tie_break() {
+    for (enabled, newest_hero) in [
+        (Some(true), false),
+        (Some(true), true),
+        (None, false),
+        (None, true),
+        (Some(false), false),
+        (Some(false), true),
+    ] {
+        let (hero, combat) = hero_rules();
+        let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+        admit_targeting(&mut vm, 4, enabled);
+        let owner = vm.host().inner.executed_unit(a).unwrap().owner;
+        assert_eq!(
+            vm.host().inner.campaign_targeting_enabled(owner).unwrap(),
+            Some(enabled.unwrap_or(false))
+        );
+        let (hero, ordinary) = if newest_hero {
+            let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+            (create_for(&mut vm, b, *b"J001", 16.0, 48.0), ordinary)
+        } else {
+            let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
+            (hero, create_for(&mut vm, b, *b"u003", 16.0, 48.0))
+        };
+        step(&mut vm, 1.0 / 64.0);
+        let target = acquired(&mut vm, a);
+        let expected_hero = enabled.unwrap_or(false) || newest_hero;
+        assert_eq!(target, Some(if expected_hero { hero } else { ordinary }));
+    }
+}
+
+#[test]
+fn campaign_targeting_false_keeps_a_nearer_hero_eligible() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+    admit_targeting(&mut vm, 4, Some(false));
+    let hero = create_for(&mut vm, b, *b"J001", 16.0, 40.0);
+    create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(hero));
+}
+
+#[test]
+fn campaign_targeting_flag_and_difficulty_are_scoped_to_the_attacking_player() {
+    let (hero, combat) = hero_rules();
+    let (mut vm, a, b) = open_selected(&wide_hero_fields("STR"), Some(hero), combat);
+    let mut policy = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+    policy.hero_min_game_difficulty = 2;
+    policy.optional_level_gate = 4;
+    admit_targeting_with(&mut vm, 4, Some(false), policy, 1);
+    let h = &mut vm.host().inner;
+    h.activate_campaign_ai_player(1).unwrap();
+    h.set_ai_target_heroes(1, true).unwrap();
+    let owner = h.executed_unit(a).unwrap().owner;
+    let player = h.player_settings(owner).unwrap().number;
+    assert_eq!(h.campaign_targeting_enabled(owner).unwrap(), Some(false));
+    let hero = create_for(&mut vm, b, *b"J001", 16.0, 48.0);
+    let ordinary = create_for(&mut vm, b, *b"u003", 16.0, 48.0);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(ordinary));
+
+    let h = &mut vm.host().inner;
+    h.set_ai_target_heroes(player, true).unwrap();
+    h.test_clear_combat_target(a);
+    step(&mut vm, 2.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(ordinary));
+
+    let h = &mut vm.host().inner;
+    h.test_set_game_difficulty(2);
+    h.test_clear_combat_target(a);
+    step(&mut vm, 3.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(hero));
+}
+
+#[test]
+fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
+    for difficulty in [2, 4] {
+        let (mut vm, a, _) = open(&wide_acquire());
+        admit_targeting_with(
+            &mut vm,
+            4,
+            Some(true),
+            crate::campaign_targeting_policy::TargetingPolicy::fixture(),
+            difficulty,
+        );
+        vm.host().inner.enable_combat_trace(8);
+        let error = step_refused(&mut vm, 1.0 / 64.0);
+        assert!(error.contains("campaign targeting"), "{error}");
+        assert!(error.contains("optional scorer bands"), "{error}");
+        assert_eq!(acquired(&mut vm, a), None);
+        assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+    }
+
+    let (mut vm, a, b) = open(&wide_acquire());
+    let special = targeting_policy().unclassified_rawcodes[0];
+    admit_targeting(&mut vm, 4, Some(true));
+    create_for(&mut vm, b, special, 48.0, 48.0);
+    vm.host().inner.enable_combat_trace(8);
+    let error = step_refused(&mut vm, 1.0 / 64.0);
+    assert!(error.contains("campaign targeting"), "{error}");
+    assert!(error.contains("unclassified special object"), "{error}");
+    assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+}
+
+#[test]
+fn campaign_targeting_empty_candidate_sets_do_not_require_scorer_bands() {
+    let (mut vm, a, b) = open(&wide_acquire());
+    admit_targeting_with(
+        &mut vm,
+        4,
+        Some(true),
+        crate::campaign_targeting_policy::TargetingPolicy::fixture(),
+        2,
+    );
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    h.enable_combat_trace(8);
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+}
+
+#[test]
+fn campaign_targeting_refuses_destroyed_and_expired_effect_history() {
+    for (live, expires_at) in [(false, None), (true, Some(0.0))] {
+        let (mut vm, a, b) = open(&wide_acquire());
+        admit_targeting(&mut vm, 4, Some(true));
+        vm.host()
+            .inner
+            .test_record_effect_history(b, live, expires_at);
+        vm.host().inner.enable_combat_trace(8);
+        let error = step_refused(&mut vm, 1.0 / 64.0);
+        assert!(error.contains("campaign targeting"), "{error}");
+        assert!(error.contains("effect history"), "{error}");
+        assert_eq!(acquired(&mut vm, a), None);
+        assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+    }
+}
+
+#[test]
+fn campaign_targeting_refuses_neutral_aggressive_candidates_and_keeps_explicit_targets() {
+    let (mut vm, a, _) = open(&wide_acquire());
+    admit_targeting(&mut vm, 4, Some(true));
+    vm.host().inner.set_neutral_aggressive(5);
+    vm.host().inner.enable_combat_trace(8);
+    let error = step_refused(&mut vm, 1.0 / 64.0);
+    assert!(error.contains("campaign targeting"), "{error}");
+    assert!(error.contains("neutral aggressive"), "{error}");
+    assert_eq!(acquired(&mut vm, a), None);
+    assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
+
+    let (mut vm, a, b) = open(&wide_acquire());
+    admit_targeting(&mut vm, 4, Some(true));
+    vm.host().inner.test_set_game_difficulty(2);
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("alpha".into()),
+                    Value::Handle(b)
+                ]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 1.0 / 64.0);
+    assert_eq!(acquired(&mut vm, a), Some(b));
 }

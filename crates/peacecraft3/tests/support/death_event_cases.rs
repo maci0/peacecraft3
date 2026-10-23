@@ -3,9 +3,14 @@ use super::*;
 
 const EXTRA: &str = "\
 type triggeraction extends handle
+type widgetevent extends eventid
+constant native ConvertWidgetEvent takes integer value returns widgetevent
 native TriggerAddAction takes trigger t, code action returns triggeraction
 native DisableTrigger takes trigger t returns nothing
 native TriggerRegisterDeathEvent takes trigger t, widget w returns event
+globals
+constant widgetevent EVENT_WIDGET_DEATH = ConvertWidgetEvent(47)
+endglobals
 ";
 const MAP: &str = "\
 globals
@@ -36,6 +41,7 @@ fn deliver_deaths(app: &mut App, revision: u64, budget: Option<usize>) {
     let resolver = map.resolver();
     let bound = bind_map(&resolver, map.input(revision), map.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
+    inputs.enumeration.names.push("ConvertWidgetEvent".into());
     inputs.budgets.death_events = budget;
     let bytes = Arc::clone(&bound.catalog_map_bytes);
     app.insert_resource(MapRequests {
@@ -74,7 +80,9 @@ fn published_death_associations_require_opt_in_and_survive_failed_replacement() 
         app.world()
             .resource::<CampaignStartup>()
             .last_error
-            .is_none()
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
     );
     let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
     let witness = session.session_witness().unwrap();

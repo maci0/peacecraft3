@@ -20,9 +20,11 @@ pub use fresh::{FreshSettings, FreshTriggers, fresh_settings, fresh_triggers};
 pub struct Inputs {
     pub camera: CameraMargins,
     pub numeric: script_numeric::NumericPolicy,
+    pub destructable_restore: crate::playercolor_host::RestoreLifePolicy,
     pub random: profile::Policy,
     pub clock: startup_clock::StartupClock,
     pub experience: player_handicap::Rules,
+    pub health: player_handicap::HealthRules,
     pub hero: hero_skills::Rules,
 }
 
@@ -147,6 +149,7 @@ pub fn placement_rules(
             one_initializer: window(0x401460, 16)?,
             two_initializer: window(0x401560, 16)?,
             ground_mask: window(0x67cebc, 5)?,
+            fly_mask: window(0x67cec3, 5)?,
         },
         BUDGET,
     )
@@ -220,6 +223,20 @@ pub fn read(
     )
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
     .map_err(|e| e.to_string())?;
+    let destructable_restore = crate::playercolor_host::RestoreLifePolicy::read(
+        image,
+        crate::playercolor_host::RestoreLifeBinding {
+            origin: origin.clone(),
+            image_sha256,
+            body: window(0x6d2a30, 0x75, true)?,
+            zero_initializer: window(0x401300, 16, true)?,
+            threshold: window(0x10db054, 4, false)?,
+            minimum: window(0x10db0a8, 4, false)?,
+            subtract_va: 0x9a00b0,
+            convert_va: 0x9a1620,
+        },
+        BUDGET,
+    )?;
     let random = profile::Policy::read(
         image,
         profile::Binding {
@@ -288,6 +305,23 @@ pub fn read(
         BUDGET,
     )
     .map_err(|e| e.to_string())?;
+    let health = player_handicap::HealthRules::read(
+        image,
+        player_handicap::HealthBinding {
+            origin: origin.clone(),
+            image_sha256,
+            setter: window(0x4a95a0, 192, true)?,
+            getter: window(0x494590, 33, true)?,
+            maximum_initializer: window(0x401350, 16, true)?,
+            null_initializer: window(0x401460, 16, true)?,
+            reset: window(0x4bdf31, 67, true)?,
+            rounder: window(0x9a1d70, 40, true)?,
+            floor: window(0x9a1520, 232, true)?,
+        },
+        &numeric,
+        BUDGET,
+    )
+    .map_err(|e| e.to_string())?;
     let hero = hero_skills::Rules::read(
         image,
         hero_skills::Binding {
@@ -314,9 +348,11 @@ pub fn read(
     Ok(Inputs {
         camera,
         numeric,
+        destructable_restore,
         random,
         clock,
         experience,
+        health,
         hero,
     })
 }

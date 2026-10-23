@@ -6,6 +6,10 @@ fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
 }
 
 fn guarded() -> (Vm, HandleId, HandleId) {
+    guarded_with_limits(8., 16., 1.)
+}
+
+fn guarded_with_limits(distance: f32, maximum: f32, timeout: f32) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}\n{}\n{}",
         super::super::enumeration::TRIGGERS,
@@ -56,10 +60,11 @@ endglobals
     })
     .unwrap();
     let mut combat = rules();
-    combat.guard_distance = 8.;
-    combat.max_guard_distance = 16.;
-    combat.guard_return_time = 1.;
+    combat.guard_distance = distance;
+    combat.max_guard_distance = maximum;
+    combat.guard_return_time = timeout;
     h.admit_combat(combat.clone(), "alpha").unwrap();
+    h.set_neutral_aggressive(9);
     for (number, control) in [(4, 91), (5, -17)] {
         let p = h.native("Player", &[Value::Int(number)]).unwrap();
         let c = h
@@ -96,6 +101,37 @@ fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
             .unwrap(),
         Value::Bool(true)
     );
+}
+
+#[test]
+fn creep_maximum_tether_does_not_wait_for_the_chase_timeout_or_tether_other_computers() {
+    for creep in [false, true] {
+        let (mut vm, a, b) = guarded_with_limits(3., 7., 100.);
+        if creep {
+            vm.host().inner.set_neutral_aggressive(4);
+        }
+        let home = vm.host().inner.guard_state().unwrap().get(a).unwrap().home;
+        attack(&mut vm, a, b);
+        step(&mut vm, 1.);
+        let h = &vm.host().inner;
+        assert_eq!(h.guard_state().unwrap().get(a).unwrap().returning, creep);
+        let combat = h.executed_unit(a).unwrap().combat.as_ref().unwrap();
+        if creep {
+            assert_eq!(
+                h.executed_unit(a)
+                    .unwrap()
+                    .activity
+                    .as_ref()
+                    .unwrap()
+                    .destination(),
+                Some(home)
+            );
+            assert_eq!(combat.target, None);
+        } else {
+            assert_eq!(combat.target, Some(b));
+            assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) > 7.);
+        }
+    }
 }
 #[test]
 fn a_blocked_patrol_keeps_its_endpoint_and_guard_release_cancels_it() {

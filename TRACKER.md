@@ -2,6 +2,89 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign flee policy operands now decode from 26 checked selected-image
+  windows, preserving conditional life-band grouping and joining the route order
+  to admitted movement rules. Private integration passes 1,530 core tests,
+  strict native/WASM Clippy and the selected-image gate. The runtime consumer
+  remains unfinished: a pure ordinary destination calculation now reuses the
+  selected software arithmetic and internal square root, with unresolved
+  zero-direction geometry refused. Initial authored weapon-range inputs have a verified
+  indexed initialization path, while later modifiers, alternate selection and
+  trigger timing remain open. Original-client pairs establish route persistence
+  after clearing the flag in the tested setup. Human02 still stops at
+  `SetUnitsFlee`; see [campaign flee](docs/re-notes/campaign-ai-flee.md).
+
+- [~] Campaign targeting now has a selected-image policy reader, canonical
+  per-player flags and a bounded automatic-acquisition consumer. The published
+  session fixture and combined 1,521 core / 610 app tests pass, with strict
+  native/WASM Clippy. The unchanged selected Continue startup passes; Human02's
+  opening-minute gate advances past `SetTargetHeroes` to unsupported
+  `SetUnitsFlee` at 7.218750 seconds (script line 1692). Full scoring, effect
+  counter semantics, flee behavior and campaign completion remain unfinished.
+  See [campaign targeting](docs/re-notes/campaign-ai-targeting.md).
+
+- [~] Managed neutral-aggressive creep pursuit now consumes the authored
+  `MaxGuardDistance`, returning beyond it without waiting for the chase timeout
+  or incoming-attack resets. Other computer owners, released guards and explicit
+  point movement retain their prior rules. The game-difficulty getter/setter
+  runtime arities are also corrected. Combined validation passes 1,507 core tests,
+  609 app tests, strict native/WASM Clippy, formatting and selected Continue
+  startup. Original-client creep-boundary parity and the Human02 opening minute
+  remain unqualified; the latest frontier is recorded above. See
+  [unit guards](docs/re-notes/script-unit-guards.md).
+
+- [~] Native campaign index, map admission and Continue retain one source recipe
+  with immutable archive snapshots and source-selected data namespaces. The
+  selected Human01 preparation gate passes, including recipe identity and later
+  launcher-change isolation. Human02 now passes the absent-research and held
+  mana-regeneration paths, and the `prvt` / `AIlf` (`AIml`) held maximum-life
+  passive and the held intelligence effect on `ckng` pass the selected
+  continuation before eager placed-world admission. Gathered gold/lumber
+  counters (`Blizzard.j:7652,7654`) now use
+  source-decoded setter scaling, unsigned getter division and the same
+  synchronous state-event path. The combined private checks passed 1430 core
+  tests, 607 app tests, strict native/WASM Clippy and formatting including the
+  gathered-counter, ranked/inventory Data-pointer and destructable-death imports. The unchanged
+  Continue gate now passes Human01 with 152 executed units and starts Human02
+  with nearby-lumber harvest and health handicap admitted. A separate opening
+  clock check reaches 7.218750 seconds, then refuses the red campaign program's
+  `SetTargetHeroes` through `StartCampaignAI` at Human02 line 1692 in that earlier
+  gate; the latest frontier is recorded above. Startup passes;
+  the opening-minute acceptance check still fails. These selected results are
+  retained in `.scratch/campaign-continuation/health-harvest-final-selected.log`.
+  The latest combined core suite passes 1487 tests and the app suite passes
+  608, including upgrade queries through the production map session. Strict
+  native/WASM Clippy and formatting pass. Receipts remain local under
+  `.scratch/campaign-continuation/health-harvest-*`.
+  Three controlled original-client runs now qualify partial lumber retention
+  across Stop, Move and repeated nearby harvest, followed by an explicit return
+  that credits both counters and ends idle. Automatic return resumes harvesting;
+  its registry identity differs from manual return. See
+  [worker harvest orders](docs/re-notes/worker-harvest-orders.md#partial-cargo-and-explicit-return).
+  Campaign scripts now have source-validated, independent per-player VMs over
+  the shared world, synchronous initial execution and game-clock wake delivery.
+  The production-host fixture checks shared resource writes and timer ordering;
+  map callbacks from those programs still refuse before resource mutation.
+  The selected red/purple source fixtures without targeting-policy admission
+  still refuse `SetTargetHeroes` and `SetHeroLevels`; this is not working campaign
+  strategy or chapter completion.
+  Controlled tree
+  and original-gate probes qualify flags 4/7 for script-only admission; the
+  placement correction passes those same private suites.
+  Pool-clamp corrections and ignored maximum-state writes are integrated.
+  The native-qualified inventory W3A Data-pointer correction and combined-tome
+  overflow preflight are integrated privately. Same-map native cache restore
+  returns full life and mana in the sampled cases, and the cross-map test
+  uses the receiving map's held-life bonus; the saved-pool recreation policy
+  now derives full restored pools from receiving-map definitions privately.
+  The continuation remains private; full chapter
+  completion, Windows snapshot runtime and native passive composition remain
+  unqualified. Receipts: `.scratch/campaign-continuation/intelligence-*.log`
+  and `inventory-review-*.log`, `gathered-pointer-*.log`,
+  `placed-flag-admission-*.log`, `unit-color-final-*.log`, and
+  `late-create-combined-*.log`, `restore-combined-*.log` and
+  `ai-combined-*.log` and `restore-amount-combined-*.log` in that directory.
+
 - [x] Bind headless session admission to actual selected catalog/Misc contents.
   The readiness receipt keys every admitted catalog table/profile and the three
   stock Misc tables (`Units/MiscData.txt`, `Units/MiscGame.txt`,
@@ -27,6 +110,65 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   deadlines without refunds or duration changes; independent holder state and
   removal cleanup pass core/app, selected Human01, Clippy and WASM checks. Native item group
   propagation/transfer timing and other ability classes remain open.
+
+- [~] Human02's easy-difficulty health-handicap behavior is measured on the
+  selected RoC client, including existing/fresh units, a hero-specific pool
+  effect, ownership transfers and isolated bound requests. It remains
+  unimplemented; the separate XP-factor host is not its consumer. See
+  [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
+
+### 2026-10-23: Destructable death delivery
+
+The private host now derives the canonical widget-death event from the selected
+source global, delivers script-produced deaths synchronously through the shared
+reentrant frames, and queues engine-produced deaths for boundary delivery.
+Prepared damage reserves event capacity before changing tree life or collision.
+Nested death/player-state callbacks, sleep and abort context restoration have
+focused coverage. Missing event identity and malformed response contracts refuse.
+
+The selected-install gate exposed an incorrect two-argument restoration fixture;
+`DestructableRestoreLife` actually takes a real life amount before its birth flag.
+The corrected three-argument path now derives its near-zero threshold and life
+floor from the selected client, restores dead targets by the requested amount
+with the catalog maximum as a cap, and leaves live targets unchanged. The source
+windows have an aggregate byte limit. Birth animation remains unsupported and
+refuses before mutation. The app fixture also now supplies a synthetic widget
+event identity instead of relying on an absent source constant.
+
+Combined validation passes 1423 core tests, 606 app tests, strict native/WASM
+Clippy and formatting. The real Continue gate publishes Human01 with 152 executed
+units and then stops at Human02's `IssueImmediateOrder` through `Blizzard.j:7817`.
+It is still a failing campaign acceptance gate. Retained receipts are
+`.scratch/campaign-continuation/restore-combined-*.log` and matching exit files.
+See [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
+
+### 2026-10-23: Late script destructable collision
+
+Script-created live and dead destructables now join the stationary collision
+cache after initial placement. The late admission resolves the selected
+object catalog's live/dead pathing textures, applies the same nearest
+quarter-turn footprint raster as authored placement, and composes over
+terrain, decorations, placed trees and unit occupancy instead of rebuilding
+the cache. The `CreateDead*` forms publish the dead footprint. Later kill and
+revive transitions continue through the shared stationary-layer swap.
+
+Path resolution, footprint work, layer and cell budgets and handle capacity
+are preflighted before the handle, layer or event-visible state is published;
+a failed attempt leaves the arena, prior layers and publication-work balance
+unchanged. Footprint identities are canonical across placement and source
+caches, including public initial maps and case/slash aliases. Script preflight
+rolls back retained source bytes and cells on refusal; successful ordinary unit
+loads commit their sources immediately. Uncached resolve/decode attempts have a
+separate non-refundable bound, so repeated failures cannot refund spent work.
+Synthetic tests cover overlap with an existing placed layer, live/dead swap
+and revive, dead creation, selected-catalog path edits, and missing resolver,
+unknown identity, pathing, work, cell, layer and source failures. The full
+combined `pcx-play` core suite passes 1406 tests with 41 explicitly ignored;
+606 app tests, strict native and WASM Clippy, and formatting pass. The selected
+Continue gate still passes Human01 and refuses Human02's `IssueImmediateOrder`
+through `Blizzard.j:7817`. This is
+collision admission evidence, not an original-map rendered/native creation
+comparison.
 
 ### 2026-10-22: Learned command buttons
 
@@ -240,6 +382,12 @@ integration. A completed prototype does not close its broader milestone.
 | Combat data consumer | Required authored stat fields reach an existing entity consumer with explicit conversions/refusals | Object catalog, world and orders |
 | AI startup | Selected campaign AI entrypoint executes one supported behavior with the next missing interface identified | Script ownership, world and gameplay Host |
 | Remaining-work reconciliation | Every open/partial checkbox maps to a concrete acceptance gate and dependency, with stale claims corrected | Current source and retained verification |
+
+The selected Human02 AI sources load through the pinned campaign recipe and
+compile with the existing VM compiler. Runtime AI support remains open; the
+source audit, bounded comparison with the earlier probe map, and original-client
+evidence for independent AI globals and synchronous initial execution are recorded in
+[campaign-ai-runtime.md](docs/re-notes/campaign-ai-runtime.md).
 
 
 - [x] Shared BLP JPEG color conversion now respects BGR component order. Both
@@ -2294,9 +2442,22 @@ actions, repeated-run stability and scheduler/world integration remain open.
 - [~] Unchanged Human01 passes three destructable death subscriptions through the
   production factory. Globals and `config` finish; `main` next refuses
   `GetRandomReal` at map span `186558..186584`.
-- [ ] Death detection/context/delivery, native random-stream fidelity, the
-  application world/clock, rendered gameplay and the 100-consecutive original
-  baseline remain open. See [the subscription scope](docs/re-notes/script-trigger-admission.md#widget-death-subscriptions).
+- [~] Destructable death detection, synchronous context delivery, collision
+  updates and engine-damage boundary queueing now pass synthetic tests. Native
+  ordering, unregistration, item widgets, rendered gameplay and the
+  100-consecutive original baseline remain open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
+
+### 2026-10-23: Duplicate map globals
+
+- [x] Script resolution now rejects repeated globals within the map script,
+  including declarations in separate globals blocks. The map-over-prelude rule
+  remains unchanged. A regression failed before the correction; the rebuilt CLI
+  rejects the preserved duplicate-observer diagnostic and accepts its corrected
+  map. Verification: 122 script tests, 1,504 core tests, 609 app tests, strict
+  affected native/WASM checks and the selected real Continue startup all pass.
+  Resolution documentation now states that assignment and return types are not
+  validated; a successful resolution is not proof of original-client compilation.
 
 ### 2026-10-17 — selected primary random-generator evidence
 
@@ -3012,8 +3173,8 @@ repeated, and the public site package was not rebuilt.
 ### 2026-10-21 — modeled campaign unit caches
 
 - [x] Store/restore/query/flush unit values in the existing profile. Preserve
-  modeled hero progress, permanent strength, pools, sparse item slots, charge
-  overrides and explicit item flags. Validate source/client identity, current
+  modeled hero progress, permanent strength, source-rebuilt full pools, sparse
+  item slots, charge overrides and explicit item flags. Validate source/client identity, current
   ability rules and creation policies before publishing a restored unit.
 - [x] Read old primitive profiles; use version 2 only when unit values exist.
   Full pcx-play tests: 1,151 passed, 44 ignored with required local fixtures.
@@ -3975,3 +4136,32 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   589 tests pass, plus the selected-install binding gate, strict Clippy and WASM.
   Other ability classes, item groups, duration getters/setter and whole-unit reset
   remain unfinished; native timing parity is not claimed.
+
+### 2026-10-22: Change-level request target
+
+- [~] `ChangeLevel` now admits against the selected `common.j`, validates the
+  `string, boolean` signature and same source as `CreateTimer`, and queues a
+  request-local verbatim target with its score flag. `EndGame` queues no target.
+  The existing `SetNextLevel` ambient request remains separate and is not inherited
+  by either request. Bad arity/type, NUL, oversized targets and a full queue refuse
+  without changing earlier requests. Evidence: `cargo test -p pcx-play --lib`
+  (1,180 passed, 34 ignored), strict `cargo clippy -p pcx-play --all-targets --
+  -D warnings`, WASM `cargo check -p pcx-play --lib`, and the ignored
+  selected-`common.j` gate with `PEACECRAFT3_COMMON_J`, all exit 0. The app-owned
+  map transition, save handoff and score presentation remain open; see
+  [game exit](docs/re-notes/script-game-exit.md).
+
+### 2026-10-23: Destructable death delivery
+
+- [~] Destructable death subscriptions now share a prepared transition producer
+  across script setters, kill/restore and engine damage, with a prepare/commit
+  seam for harvest. The selected `EVENT_WIDGET_DEATH` identity is derived from
+  `ConvertWidgetEvent`; missing, foreign and non-stock declarations are refused,
+  while combat admission keeps the identity optional. Source-qualified
+  `GetTriggerWidget` / `GetTriggerDestructable` responses, synchronous callbacks,
+  cross-family nesting, sleeping actions, conditions, callback aborts and bounded
+  nesting are covered by synthetic owned-VM tests. Core 1,422 tests pass, plus
+  strict Clippy and formatting. Native ordering, unregistration, item widgets,
+  death presentation, rendered/collision parity and the original baseline remain
+  open. See
+  [destructable death delivery](docs/re-notes/destructable-death-delivery.md).

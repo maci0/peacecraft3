@@ -160,8 +160,13 @@ impl Rules {
                     m.field == self.fields[index]
                         && m.selectors.is_none_or(|s| s[0] == level as u32)
                 }) {
-                    if entry.selectors.is_some_and(|s| s[1] != 0) {
-                        return Err("indexed inventory override unsupported".into());
+                    if let Some([_, pointer]) = entry.selectors
+                        && pointer != self.data[index]
+                    {
+                        return Err(format!(
+                            "inventory override data pointer {pointer} does not match metadata data column {}",
+                            self.data[index]
+                        ));
                     }
                     let pcx_objects::Value::Int(n) = entry.value else {
                         return Err("noninteger inventory override".into());

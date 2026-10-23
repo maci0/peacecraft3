@@ -118,15 +118,132 @@ current learning rules. Source changes that make the snapshot unsupported refuse
 
 Every unit/item definition, slot, record/charge policy and arena reservation is
 checked before publishing the unit. Prepared items attach directly to their
-saved slots. This avoids a second pickup or automatic powerup grant. The saved
-pools already include passive bonuses, and removing a restored passive item
+saved slots. This avoids a second pickup or automatic powerup grant. Restore
+rebuilds full life and mana maxima from the receiving map's unit definition,
+restored hero progress and permanent strength, and prepared current-map item
+definitions before publishing any handle. The saved pool bits remain readable
+for existing PC3UNIT payloads but do not set the restored pools. Combined
+passives and all pool changes are checked before publication; later item removal
 uses the ordinary repricing path. Pending orders, pause, animation phase,
 spell/item cooldowns and queued events are not copied into a new chapter.
 Regeneration starts on the receiving host's clock.
 
-Pool preservation, explicit item-flag preservation, omission of transient state
-and the no-pickup-event path are recreation choices still requiring an original
-client comparison. The native cached inventory loop observed here covers six
+### Passive-source interaction corrected
+
+The earlier recreation stored already-boosted pools alongside held item
+rawcodes, charges and flags, but no identity for the passive contribution.
+Restoration resolved those item definitions against the receiving map and
+published the saved pools unchanged. A receiving map can validly override the
+same item's `Ilif` amount: an old pool containing one amount can then be
+repriced on drop using a different amount. Client/install/edition checks do
+not discriminate per-map ability overrides.
+
+The observations below established the correction: rederive receiving-map
+maxima and restore full current pools. A blanket refusal of changed maps or
+retention of the old bonus would contradict the tested cross-map behavior.
+No original W3V bytes are part of the recreation's private profile format.
+
+### Controlled restore observation (2026-10-22)
+
+The RoC run `cross-map-cache-20261022-a` successfully stores and saves a
+level-ten Uther holding `prvt`. Its current/maximum life before `StoreUnit`
+is 350/1400. The immediate same-map `RestoreUnit` returns the held item and
+life 1400/1400, rather than preserving the saved current-life ratio. All
+seven A markers validate, including source identity, cache presence and
+successful store/save. This contradicts the recreation's current-life
+preservation for this tested case; mana and other cached states were not
+sampled here.
+
+`ChangeLevel` reaches the staged B map in the same client, and B finds and
+restores the cached unit. However, B's fresh control receives the original
+150-point bonus rather than the diagnostic 200-point override. The
+cross-map **override comparison remains unqualified**; successful restore
+alone does not establish which modified definition would win.
+
+Fresh-client controls then loaded the identical B map separately in RoC and
+TFT, with each edition confirmed by `VersionGet`. Both again produced a
+150-point item bonus. Thus neither transition data retention nor RoC mode
+alone explains the ineffective override. Its W3A wire/application semantics
+need qualification before another cross-map comparison. Those additional
+seven-marker controls are retained in `direct-b/` and `direct-b-tft/` beside
+the transition receipts; their absent caches are expected and do not qualify
+cross-map restoration.
+
+### Qualified receiving-map override comparison
+
+A one-selector control then changed only the second W3A `Ilif` selector
+from 0 to 1. Level 1, integer amount 200, script and other members stayed
+unchanged. The fresh RoC client now observes the diagnostic 200-point bonus.
+Selected metadata has `data=1`; its SLK `index=-1` is not evidence for a zero
+W3A Data pointer. This qualifies the tested `Ilif` edit, rather than a
+general rule for every ability field or every malformed pointer.
+
+A new single-client A→B run uses the unchanged A above and the now-qualified
+B map SHA-256
+`2b35574dddf9cbcc49375d9716f228f12374f987ba38b476e56153cdcde25939`.
+Its script is byte-identical to the earlier B. Both seven-marker phases
+validate: A stores 350/1400 and restores 1400/1400; A saves successfully;
+B's independent fresh control changes 1250 to 1450; B finds the saved unit
+and restores it at life/max life 1450/1450 with the item held. Removing that
+item returns life/max life to 1250/1250.
+
+For this tested life case, native restoration therefore uses the receiving
+map's item bonus and returns full life. Keeping the old boosted maximum or
+saved current-life ratio contradicts these observations. A correction should
+derive the restored maximum from current source definitions before publishing
+the unit and its held items. The saved format should remain readable; no
+original W3V encoding is implied. Mana, other passive classes, edited base
+units, and native Windows remain outside this comparison.
+
+Exact selector mutation and fresh control are local under
+`.scratch/cross-map-cache-probe/selector1/`; the fully qualified pair and
+all fourteen raw markers are in `selector1-transition/`. Earlier unqualified
+results remain preserved independently.
+
+### Same-map life and mana comparison
+
+The subsequent RoC run `same-map-store-restore-20261022-a` supplies all
+thirteen expected markers, with successful stores and presence checks for
+both plain and held-item cases. Diagnostic map SHA-256 is
+`5cc7b25d0613deee900be002231e63cb9bc1420f1f575331bba3185653a12aef`;
+script SHA-256 is
+`c4b4bbe811675bcae3f5ab64eb24e75ca8399c23afaabfaadc26c90a1ea7648a`.
+No ability override is present. The matched controls have the same level,
+items and quarter-full current pools as the stored units.
+
+| Case | Stored life / maximum | Stored mana / maximum | Restored life / maximum | Restored mana / maximum |
+| --- | --- | --- | --- | --- |
+| Plain Uther | 312.5 / 1250 | 123.75 / 495 | 1250 / 1250 | 495 / 495 |
+| `prvt` + `ciri` | 350 / 1400 | 146.25 / 585 | 1400 / 1400 | 585 / 585 |
+
+The held case retains both slots and effective INT 39 versus base INT 33.
+Removing `prvt` changes life/max life to 1250/1250 and leaves mana/max mana
+585/585. Removing `ciri` then changes mana/max mana to 495/495 and effective
+INT to 33. Both current pools therefore restore full in these tested cases;
+the controls remain quarter-full. These numbers are runtime witnesses,
+not recreation constants. Raw markers, source rows and the collector result
+are local under `.scratch/same-map-store-restore-probe/` in the main checkout.
+The owned run is stopped. Non-heroes, other cached state and native Windows
+are not qualified by this experiment.
+
+The reviewed image is the `3f2ed012…70eed` client identified above, launched
+with `-classic`; both maps report RoC. Revised A map SHA-256 is
+`7cd1280d2ec73e4629e239638452be7f3dc683a0735301f1dbb0ef74132e7248`;
+its script SHA-256 is
+`b64a21a22c3e2731b75de4be27f8b336496b58b48f722324a0450f5cfe86f690`.
+B map SHA-256 is
+`68b837d5df72d0a5cdffe5e8d4f7cebc8b44e0cee70ff07abd498ac298256bd0`.
+Raw markers, packed-member receipts and qualified/unqualified collector
+results remain local in `.scratch/cross-map-cache-probe/transition-a/` in
+the main checkout. These Wine observations do not qualify native Windows
+or a general restore-pool policy beyond the sampled life case.
+
+Those observations qualify life and mana for the tested hero/item cases, not
+non-hero restoration, multi-item rounding order, the native cache layout or
+every cached state. The same full-pool projection for non-heroes and slot-order
+application of multiple passives are recreation choices. Explicit item-flag
+preservation, omission of transient state and the no-pickup-event path remain
+recreation choices. The native cached inventory loop observed here covers six
 slots; the recreation currently uses the admitted inventory policy rather than
 copying that measured limit into code. The native hero payload and its remaining
 mask are not fully decoded. XP and other unimplemented hero state, native W3V
@@ -141,8 +258,9 @@ the existing storage policy, with no new resource knob. An older build cannot
 read a version-2 profile; no original W3V file is modified.
 
 Synthetic tests cover persistence into a new host, owner/position arguments,
-clock rebasing, permanent strength, sparse slots, charge overrides, passive
-removal, typed flushes, v1 compatibility, malformed payloads and refusals without
+clock rebasing, permanent strength, sparse slots, charge overrides, receiving-map
+passives, full restored pools, passive removal, typed flushes, v1 compatibility,
+malformed payloads and refusals without
 partial creation for slot, source/client, item/charge policy and injected held
 powerup failures. The final private-target checks pass: 1,151 pcx-play package
 tests (44 ignored), strict all-target clippy, the WASM library check and the

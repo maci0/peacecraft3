@@ -1658,3 +1658,12 @@ Campaign mesh skinning consumes the aimed skeleton. Human03 retains the actual
 Arthas/Captain request at tick 257 and next refuses `IssueImmediateOrder` at tick
 980. Native aiming limits, blending and rendered comparison remain open; see
 [unit look-at](docs/re-notes/unit-look-at.md).
+
+Change-level follow-up (2026-10-22): the core host now admits the selected
+`ChangeLevel(string, boolean)` declaration and records its verbatim bounded target
+on the same ordered request queue as `EndGame`. Each request owns its target;
+`EndGame` does not inherit an earlier change-level target, and the separate
+`SetNextLevel` ambient request is not used as the transition target. Synthetic VM,
+argument/NUL/oversize/queue, source and selected-`common.j` gates pass. The
+application consumer that opens `Human02.w3m`, saves and score presentation remain
+open; see [game exit](docs/re-notes/script-game-exit.md).

@@ -661,7 +661,7 @@ fn dimensions(fdf: &Fdf, backdrop: &Backdrop) -> Result<Dimensions, String> {
     })
 }
 
-fn label(
+pub(crate) fn label(
     commands: &mut Commands,
     parent: Entity,
     value: &str,

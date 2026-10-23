@@ -30,9 +30,11 @@ fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
 
 /// Source-shaped tome: `amounts` are the ability's `DataA1`, `DataB1`, `DataC1` (agi, int, str).
 struct Tome<'a> {
+    alias: &'a str,
     code: &'a str,
     abilities: &'a str,
     powerup: &'a str,
+    usable: &'a str,
     uses: &'a str,
     use_specific: &'a str,
     amounts: [&'a str; 3],
@@ -41,9 +43,11 @@ struct Tome<'a> {
 impl Default for Tome<'_> {
     fn default() -> Self {
         Self {
+            alias: "AIsm",
             code: "AIsm",
             abilities: "AIsm",
             powerup: "1",
+            usable: "1",
             uses: "1",
             use_specific: "AIsm,AIxm",
             amounts: ["0", "0", "7"],
@@ -61,12 +65,19 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
             "perishable",
             "uses",
         ],
-        &[&["tstr", tome.abilities, tome.powerup, "1", "1", tome.uses]],
+        &[&[
+            "tstr",
+            tome.abilities,
+            tome.powerup,
+            tome.usable,
+            "1",
+            tome.uses,
+        ]],
     );
     let ability = sylk(
         &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
         &[&[
-            "AIsm",
+            tome.alias,
             tome.code,
             "1",
             tome.amounts[0],
@@ -105,6 +116,24 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
                 tome.use_specific,
             ],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &[
+                "Iatt",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "1",
+                tome.use_specific,
+            ],
+            &[
+                "Imrp",
+                "Data",
+                "AbilityData",
+                "-1",
+                "real",
+                "1",
+                tome.use_specific,
+            ],
         ],
     );
     Arc::new(
@@ -139,9 +168,12 @@ fn rules(tome: &Tome, overlay: Overlay, class_key: &str) -> Result<Rules, String
             version: "test".into(),
         },
         [0; 32],
-        &window(class_key, "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window(class_key, "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
 }
 
@@ -210,11 +242,85 @@ fn strength_comes_from_the_ability_amount_not_a_constant() {
 }
 
 #[test]
+fn passive_intelligence_comes_from_the_iint_column() {
+    let passive = |amounts| {
+        rules(
+            &Tome {
+                code: "AIab",
+                powerup: "0",
+                usable: "0",
+                amounts,
+                ..Tome::default()
+            },
+            Overlay::default(),
+            "AIsm",
+        )
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap()
+    };
+    assert_eq!(passive(["0", "3", "0"]).intelligence, 3);
+    assert_eq!(passive(["0", "5", "0"]).intelligence, 5);
+    assert_eq!(passive(["0", "0", "0"]).intelligence, 0);
+}
+
+#[test]
+fn w3a_override_on_the_iint_field_wins_for_passive_intelligence() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 2]), 8)]);
+    let held = rules(
+        &Tome {
+            code: "AIab",
+            powerup: "0",
+            usable: "0",
+            amounts: ["0", "3", "0"],
+            ..Tome::default()
+        },
+        overlay,
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap()
+    .unwrap();
+    assert_eq!(held.intelligence, 8);
+}
+
+#[test]
+fn w3a_override_with_the_wrong_data_pointer_refuses() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsm".into(), vec![int_mod(b"Iint", Some([1, 1]), 8)]);
+    let err = rules(
+        &Tome {
+            code: "AIab",
+            powerup: "0",
+            usable: "0",
+            amounts: ["0", "3", "0"],
+            ..Tome::default()
+        },
+        overlay,
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(
+        err.contains("data pointer 1 does not match metadata data column 2"),
+        "{err}"
+    );
+}
+
+#[test]
 fn w3a_override_on_the_istr_field_wins_at_effect_level() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([1, 0]), 12)]);
+        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([1, 3]), 12)]);
     let rules = rules(&Tome::default(), overlay, "AIsm").unwrap();
     assert_eq!(
         rules.strength_effect(&tstr()).unwrap().unwrap().strength(),
@@ -227,7 +333,7 @@ fn override_at_another_level_is_ignored() {
     let mut overlay = Overlay::default();
     overlay
         .mods
-        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([2, 0]), 12)]);
+        .insert("AIsm".into(), vec![int_mod(b"Istr", Some([2, 3]), 12)]);
     let rules = rules(&Tome::default(), overlay, "AIsm").unwrap();
     assert_eq!(
         rules.strength_effect(&tstr()).unwrap().unwrap().strength(),
@@ -417,8 +523,12 @@ fn local_original_tome_strength_comes_from_the_selected_catalog() {
         .unwrap()
         .unwrap();
     assert_eq!((held.strength, held.agility), (4, 4));
-    let refusal = rules.held_attributes(&catalog_item("hcun")).unwrap_err();
-    assert!(refusal.contains("intelligence passive bonus"), "{refusal}");
+    let intelligence = rules
+        .held_attributes(&catalog_item("hcun"))
+        .unwrap()
+        .unwrap();
+    assert_ne!(intelligence.intelligence, 0);
+    assert_eq!((intelligence.strength, intelligence.agility), (0, 0));
     assert_eq!(rules.held_attributes(&catalog_item("crys")).unwrap(), None);
 }
 
@@ -490,9 +600,12 @@ fn passive_registration_is_read_with_the_same_layout_and_must_name_another_class
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIsm", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIsm", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     );
     assert!(same.unwrap_err().contains("distinct classes"));
 }
@@ -587,6 +700,7 @@ fn armor_rules(amount: &str) -> Rules {
             &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
             &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
         ],
     );
     let tables = Arc::new(
@@ -618,9 +732,12 @@ fn armor_rules(amount: &str) -> Rules {
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
     .unwrap()
 }
@@ -636,7 +753,12 @@ fn armor_points_come_from_the_admitted_source_row() {
         AttributeBonus {
             strength: 0,
             agility: 0,
-            armor: 3
+            intelligence: 0,
+            armor: 3,
+            damage: 0,
+            max_life: 0,
+            life_regen: 0,
+            mana_regen_fraction: 0.0,
         }
     );
 }
@@ -658,6 +780,387 @@ fn negative_authored_armor_refuses() {
         .held_attributes(&catalog_item("parm"))
         .unwrap_err();
     assert!(err.contains("negative armor"), "{err}");
+}
+
+/// Maximum-life fixture: `plif` holds `AIml` admitted by `Ilif`; `plx` holds `AIl9`, which is not.
+/// `Ilif` maps to Data column 2, so the shipped DataA value is a decoy; `index` is unrelated.
+fn max_life_rules_with(amount: &str, overlay: Overlay) -> Rules {
+    let items = sylk(
+        &[
+            "itemID",
+            "abilList",
+            "powerup",
+            "usable",
+            "perishable",
+            "uses",
+        ],
+        &[
+            &["plif", "AIl1", "0", "0", "0", "-"],
+            &["plxx", "AIl9", "0", "0", "0", "-"],
+        ],
+    );
+    let abilities = sylk(
+        &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
+        &[
+            &["AIl1", "AIml", "1", "11", amount, "0"],
+            &["AIl9", "AIml", "1", "9", "0", "0"],
+        ],
+    );
+    let meta = sylk(
+        &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
+        &[
+            &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
+            &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
+            &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+            &["Ilif", "Data", "AbilityData", "9", "int", "2", "AIl1,AIl2"],
+        ],
+    );
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic max life".into(),
+                edition_version: "fixture".into(),
+            },
+            &[
+                (SlkId::ItemData.path(), &items),
+                (SlkId::AbilityData.path(), &abilities),
+                (SlkId::AbilityMetaData.path(), &meta),
+            ],
+            &[],
+            EditorReadLimits {
+                max_listed_paths: 4,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .unwrap(),
+    );
+    Rules::decode(
+        tables,
+        overlay,
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
+    )
+    .unwrap()
+    .with_max_life(&window("AIml", "APbo"))
+    .unwrap()
+}
+
+fn max_life_rules(amount: &str) -> Rules {
+    max_life_rules_with(amount, Overlay::default())
+}
+
+#[test]
+fn max_life_points_come_from_the_admitted_ilif_row() {
+    let held = max_life_rules("37")
+        .held_attributes(&catalog_item("plif"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_life, 37);
+}
+
+#[test]
+fn max_life_w3a_override_on_ilif_wins() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIl1".into(), vec![int_mod(b"Ilif", Some([1, 2]), 41)]);
+    let held = max_life_rules_with("37", overlay)
+        .held_attributes(&catalog_item("plif"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_life, 41);
+}
+
+#[test]
+fn max_life_override_with_the_wrong_data_pointer_refuses() {
+    for pointer in [0, 1] {
+        let mut overlay = Overlay::default();
+        overlay.mods.insert(
+            "AIl1".into(),
+            vec![int_mod(b"Ilif", Some([1, pointer]), 41)],
+        );
+        let err = max_life_rules_with("37", overlay)
+            .held_attributes(&catalog_item("plif"))
+            .unwrap_err();
+        assert!(
+            err.contains("does not match metadata data column 2"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn negative_authored_max_life_refuses() {
+    let err = max_life_rules("-2")
+        .held_attributes(&catalog_item("plif"))
+        .unwrap_err();
+    assert!(err.contains("negative max-life"), "{err}");
+}
+
+#[test]
+fn max_life_row_outside_the_ilif_admission_refuses() {
+    let err = max_life_rules("37")
+        .held_attributes(&catalog_item("plxx"))
+        .unwrap_err();
+    assert!(
+        err.contains("max-life metadata does not admit ability AIl9"),
+        "{err}"
+    );
+}
+
+#[test]
+fn max_life_registration_requires_the_passive_base_and_a_distinct_class() {
+    let wrong_base = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_life(&window("AIml", "AIxn"))
+        .unwrap_err();
+    assert!(wrong_base.contains("base APbo"), "{wrong_base}");
+    let duplicate = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_life(&window("AIsm", "APbo"))
+        .unwrap_err();
+    assert!(duplicate.contains("distinct class"), "{duplicate}");
+}
+
+fn damage_tome<'a>(amount: &'a str) -> Tome<'a> {
+    Tome {
+        alias: "AItf",
+        code: "AIat",
+        abilities: "AItf",
+        powerup: "0",
+        usable: "0",
+        uses: "-",
+        use_specific: "AIat,AItf,AIxm",
+        amounts: [amount, "0", "0"],
+    }
+}
+
+fn mana_tome(fraction: &str) -> Tome<'_> {
+    Tome {
+        alias: "AIrm",
+        code: "AIrm",
+        abilities: "AIrm",
+        powerup: "0",
+        usable: "0",
+        uses: "-",
+        use_specific: "AIrm,AIrn,AIxm",
+        amounts: [fraction, "0", "0"],
+    }
+}
+
+fn real_mod(field: &[u8; 4], selectors: Option<[u32; 2]>, value: f32) -> pcx_objects::Mod {
+    pcx_objects::Mod {
+        field: *field,
+        value_type: pcx_objects::ValueType::Real,
+        selectors,
+        value: pcx_objects::Value::Real(value),
+        end_word: 0,
+    }
+}
+
+fn mana_rules(fraction: &str) -> Rules {
+    rules(&mana_tome(fraction), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+}
+
+#[test]
+fn mana_fraction_comes_from_the_admitted_imrp_column() {
+    let held = mana_rules("0.5")
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.mana_regen_fraction, 0.5);
+}
+
+#[test]
+fn w3a_real_override_on_the_imrp_field_wins_at_effect_level() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIrm".into(), vec![real_mod(b"Imrp", Some([1, 1]), 0.25)]);
+    let held = rules(&mana_tome("0.5"), overlay, "AIsm")
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.mana_regen_fraction, 0.25);
+}
+
+#[test]
+fn malformed_negative_and_overflowing_mana_fractions_refuse() {
+    for fraction in ["broken", "nan", "inf"] {
+        assert!(
+            mana_rules(fraction)
+                .held_attributes(&catalog_item("tstr"))
+                .is_err(),
+            "{fraction}"
+        );
+    }
+    assert!(
+        mana_rules("-0.5")
+            .held_attributes(&catalog_item("tstr"))
+            .unwrap_err()
+            .contains("negative mana regeneration")
+    );
+    assert!(
+        rules(
+            &Tome {
+                abilities: "AIrm,AIrm",
+                ..mana_tome("3.4028235e38")
+            },
+            Overlay::default(),
+            "AIsm",
+        )
+        .unwrap()
+        .with_mana_regen(&window("AIrm", "Arem"))
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err()
+        .contains("passive mana regeneration overflows")
+    );
+    assert!(
+        rules(&mana_tome("0.5"), Overlay::default(), "AIsm")
+            .unwrap()
+            .with_mana_regen(&window("AIsm", "Arem"))
+            .is_err()
+    );
+}
+
+#[test]
+fn flat_damage_comes_from_the_admitted_iatt_column() {
+    let held = rules(&damage_tome("15"), Overlay::default(), "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        held,
+        AttributeBonus {
+            strength: 0,
+            agility: 0,
+            intelligence: 0,
+            armor: 0,
+            damage: 15,
+            max_life: 0,
+            life_regen: 0,
+            mana_regen_fraction: 0.0,
+        }
+    );
+}
+
+#[test]
+fn w3a_override_on_the_iatt_field_wins_at_effect_level() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AItf".into(), vec![int_mod(b"Iatt", Some([1, 1]), 12)]);
+    let held = rules(&damage_tome("15"), overlay, "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.damage, 12);
+}
+
+#[test]
+fn damage_row_outside_the_iatt_admission_refuses() {
+    let err = rules(
+        &Tome {
+            use_specific: "AIat,AIxm",
+            ..damage_tome("3")
+        },
+        Overlay::default(),
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(
+        err.contains("damage metadata does not admit ability AItf"),
+        "{err}"
+    );
+}
+
+#[test]
+fn negative_or_malformed_authored_damage_refuses() {
+    let negative = rules(&damage_tome("-1"), Overlay::default(), "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(negative.contains("negative damage"), "{negative}");
+    let mut overlay = Overlay::default();
+    overlay.mods.insert(
+        "AItf".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Iatt",
+            value_type: pcx_objects::ValueType::Real,
+            selectors: Some([1, 1]),
+            value: pcx_objects::Value::Real(1.5),
+            end_word: 0,
+        }],
+    );
+    let malformed = rules(&damage_tome("15"), overlay, "AIsm")
+        .unwrap()
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(
+        malformed.contains("noninteger attribute override"),
+        "{malformed}"
+    );
+}
+
+#[test]
+fn repeated_damage_aliases_overflow_atomically() {
+    let err = rules(
+        &Tome {
+            abilities: "AItf,AItf",
+            ..damage_tome("2147483647")
+        },
+        Overlay::default(),
+        "AIsm",
+    )
+    .unwrap()
+    .held_attributes(&catalog_item("tstr"))
+    .unwrap_err();
+    assert!(err.contains("passive damage overflows"), "{err}");
+}
+
+#[test]
+fn damage_registration_must_name_a_distinct_class() {
+    let same = Rules::decode(
+        tables(&Tome::default()),
+        Overlay::default(),
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIde", "APbo"),
+        ],
+    );
+    assert!(same.unwrap_err().contains("distinct classes"));
 }
 
 /// Healing window with its base function at `HEAL_BASE_VA`, in the reviewed 25-byte layout.
@@ -725,13 +1228,18 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
         &[
             &["phea", "AIh1", "0", "1", "1", "1"],
             &["tarm", "AId1", "0", "0", "0", "-"],
+            &["plif", "Lr01", "0", "0", "0", "-"],
+            &["plix", "Lr02", "0", "0", "0", "-"],
+            &["pliv", "Lr01,Lr01", "0", "0", "0", "-"],
         ],
     );
     let abilities = sylk(
-        &["alias", "code", "levels", "DataA1", "Rng1"],
+        &["alias", "code", "levels", "DataA1", "Rng1", "DataB1"],
         &[
             &["AIh1", "AIhe", "1", amount, range],
             &["AId1", "AIde", "1", "1", "-"],
+            &["Lr01", "RgnX", "1", "99", "-", amount],
+            &["Lr02", "RgnX", "1", "99", "-", amount],
         ],
     );
     let meta = sylk(
@@ -742,6 +1250,8 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
             &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
             &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
             &["Ihpg", "Data", "AbilityData", "-1", "int", "1", "AIh1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+            &["Ihpr", "Data", "AbilityData", "-1", "int", "2", "Lr01"],
         ],
     );
     let tables = Arc::new(
@@ -773,9 +1283,12 @@ fn healing_rules(amount: &str, range: &str) -> Rules {
             version: "test".into(),
         },
         [0; 32],
-        &window("AIsm", "AIxm"),
-        &window("AIab", "APbo"),
-        &window("AIde", "APbo"),
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
     )
     .unwrap()
     .with_heal(&heal_window("AIhe"), &base_code("AAsm"))
@@ -788,6 +1301,71 @@ fn healing_amount_and_range_come_from_the_admitted_source_row() {
     assert_eq!(rules.heal_effect(&catalog_item("phea")).unwrap(), Some(250));
     assert_eq!(rules.heal_range(&catalog_item("phea")).unwrap(), 100.0);
     assert_eq!(rules.heal_effect(&catalog_item("tarm")).unwrap(), None);
+}
+
+fn life_regen_rules(amount: &str) -> Rules {
+    healing_rules(amount, "100")
+        .with_life_regen(&window("RgnX", "RegB"))
+        .unwrap()
+}
+
+#[test]
+fn life_regeneration_follows_registered_class_metadata_and_map_override() {
+    let mut rules = life_regen_rules("7");
+    assert_eq!(
+        rules
+            .held_attributes(&catalog_item("plif"))
+            .unwrap()
+            .unwrap()
+            .life_regen,
+        7
+    );
+    rules
+        .overlay
+        .mods
+        .insert("Lr01".into(), vec![int_mod(b"Ihpr", Some([1, 2]), 19)]);
+    assert_eq!(
+        rules
+            .held_attributes(&catalog_item("plif"))
+            .unwrap()
+            .unwrap()
+            .life_regen,
+        19
+    );
+    assert!(
+        rules
+            .held_attributes(&catalog_item("plix"))
+            .unwrap_err()
+            .contains("metadata does not admit")
+    );
+}
+
+#[test]
+fn malformed_negative_and_overflowing_life_regeneration_refuse() {
+    for amount in ["-1", "1.5", "broken", "2147483648"] {
+        assert!(
+            life_regen_rules(amount)
+                .held_attributes(&catalog_item("plif"))
+                .is_err(),
+            "{amount}"
+        );
+    }
+    assert!(
+        life_regen_rules("2147483647")
+            .held_attributes(&catalog_item("pliv"))
+            .unwrap_err()
+            .contains("overflows")
+    );
+    assert!(
+        healing_rules("7", "100")
+            .with_life_regen(&window("AIat", "RegB"))
+            .is_err()
+    );
+    assert!(
+        life_regen_rules("7")
+            .with_life_regen(&window("RgnX", "RegB"))
+            .is_err()
+    );
 }
 
 #[test]

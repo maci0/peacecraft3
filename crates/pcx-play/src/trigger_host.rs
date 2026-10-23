@@ -17,6 +17,11 @@ pub use timer_events::TimerEventRegistration;
 mod game_state_events;
 pub use game_state_events::GameStateEventRegistration;
 
+#[path = "player_state_event_host.rs"]
+mod player_state_events;
+pub(super) use player_state_events::PlayerStateChange;
+pub use player_state_events::PlayerStateEventRegistration;
+
 #[path = "player_unit_event_host.rs"]
 mod player_unit_events;
 pub use player_unit_events::PlayerUnitEventRegistration;
@@ -89,6 +94,8 @@ pub(super) struct Admission {
     retained_player_unit_events: usize,
     death_event_limit: Option<usize>,
     retained_death_events: usize,
+    death_event: Option<HandleId>,
+    pub(super) death_event_source: Option<String>,
     unit_in_range_limit: Option<usize>,
     retained_unit_in_range: usize,
     player_event_limit: Option<usize>,
@@ -97,6 +104,11 @@ pub(super) struct Admission {
     retained_timer_events: usize,
     game_state_event_limit: Option<usize>,
     retained_game_state_events: usize,
+    player_state_event_limit: Option<usize>,
+    retained_player_state_events: usize,
+    player_state_ops: Option<[i32; 6]>,
+    player_state_event: Option<HandleId>,
+    player_state_registrations: Vec<HandleId>,
 }
 
 impl ObjectHost {
@@ -224,6 +236,8 @@ impl ObjectHost {
             retained_player_unit_events: 0,
             death_event_limit: None,
             retained_death_events: 0,
+            death_event: None,
+            death_event_source: None,
             unit_in_range_limit: None,
             retained_unit_in_range: 0,
             player_event_limit: None,
@@ -232,6 +246,11 @@ impl ObjectHost {
             retained_timer_events: 0,
             game_state_event_limit: None,
             retained_game_state_events: 0,
+            player_state_event_limit: None,
+            retained_player_state_events: 0,
+            player_state_ops: None,
+            player_state_event: None,
+            player_state_registrations: Vec::new(),
         });
         Ok(self)
     }
@@ -299,6 +318,11 @@ impl ObjectHost {
                 if self.triggers.as_ref()?.game_state_event_limit.is_some() =>
             {
                 Some(self.register_game_state_event(args))
+            }
+            player_state_events::REGISTER
+                if self.triggers.as_ref()?.player_state_event_limit.is_some() =>
+            {
+                Some(self.register_player_state_event(args))
             }
             trigger_conditions::ADD if self.triggers.as_ref()?.condition_limit.is_some() => {
                 Some(self.add_trigger_condition(args))

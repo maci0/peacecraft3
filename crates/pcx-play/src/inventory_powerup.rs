@@ -1,7 +1,7 @@
 //! Source-derived hero attribute abilities: automatic powerups (permanent strength on use) and
-//! passive held-item bonuses (strength and agility while held). Both read ability classes from
-//! the reviewed client's registration operands and amounts from selected ability metadata with
-//! W3A overlays.
+//! passive held-item bonuses (strength, agility, armor and flat attack damage while held). Both
+//! read ability classes from the reviewed client's registration operands and amounts from
+//! selected ability metadata with W3A overlays.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -19,6 +19,14 @@ const POWERUP_WINDOW: u32 = 0xbca0e0;
 const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 /// Registration call for the passive armor class (source `AIde`, base `APbo`).
 const ARMOR_WINDOW: u32 = 0xbc9d40;
+/// Registration call for the held maximum-life class (source `AIml`, base `APbo`).
+const MAX_LIFE_WINDOW: u32 = 0xbc9f40;
+/// Registration call for the passive flat attack-damage class (source `AIat`, base `APbo`).
+const DAMAGE_WINDOW: u32 = 0xbc9c80;
+/// Registration call for the life-regeneration class (source `Arel`, base `AREB`).
+const LIFE_REGEN_WINDOW: u32 = 0xbca040;
+/// Registration call for the mana-regeneration class (source `AIrm`, base `Arem`).
+const MANA_REGEN_WINDOW: u32 = 0xbc9ec0;
 /// Registration call for the healing class (source `AIhe`). Its base comes from a call, so the
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
 pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
@@ -55,17 +63,34 @@ impl StrengthEffect {
     }
 }
 
-/// Flat strength, agility and armor from passive held items. Strength and agility also include
-/// retained powerup strength in a unit total. Armor points are added to unit armor while held.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Flat attributes, armor, attack damage, maximum life and regeneration from passive held
+/// items. Unit strength also includes retained powerups. Armor points are added to unit armor
+/// while held; damage is a flat addition to the unit's attack damage; maximum life applies to
+/// any unit with vitals.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AttributeBonus {
     pub strength: i32,
     pub agility: i32,
+    pub intelligence: i32,
     pub armor: i32,
+    pub damage: i32,
+    pub max_life: i32,
+    /// Life points per game second while held, separate from base regeneration eligibility.
+    pub life_regen: i32,
+    /// Fraction of the unit's normal mana regeneration added while held.
+    pub mana_regen_fraction: f32,
 }
 
 #[derive(Clone, Debug)]
 struct Column {
+    field: [u8; 4],
+    data: u32,
+    aliases: Vec<String>,
+}
+
+/// A real-valued metadata column, such as the mana-regeneration fraction.
+#[derive(Clone, Debug)]
+struct FractionColumn {
     field: [u8; 4],
     data: u32,
     aliases: Vec<String>,
@@ -80,23 +105,36 @@ pub struct Rules {
     powerup_class: String,
     passive_class: String,
     armor_class: String,
+    damage_class: String,
     strength: Column,
     agility: Column,
     intelligence: Column,
     armor: Column,
+    damage: Column,
+    /// Held maximum-life registration, attached by `with_max_life`.
+    max_life: Option<AmountClass>,
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
-    heal: Option<HealClass>,
+    heal: Option<AmountClass>,
+    life_regen: Option<AmountClass>,
+    mana_regen: Option<FractionClass>,
 }
 
-/// The admitted healing class and its amount column (`Ihpg`, the `DataA` column).
+/// One admitted scalar ability class and its metadata-selected amount column.
 #[derive(Clone, Debug)]
-struct HealClass {
+struct AmountClass {
     class: String,
     amount: Column,
 }
 
+/// One admitted real-valued ability class and its metadata-selected amount column.
+#[derive(Clone, Debug)]
+struct FractionClass {
+    class: String,
+    amount: FractionColumn,
+}
+
 impl Rules {
-    /// Reads both registration windows from the reviewed client image and the selected tables.
+    /// Reads registration windows from the reviewed client image and selected metadata.
     pub fn read(
         tables: Arc<DefaultTables>,
         overlay: Overlay,
@@ -125,6 +163,10 @@ impl Rules {
         let powerup = window(POWERUP_WINDOW)?;
         let passive = window(PASSIVE_WINDOW)?;
         let armor = window(ARMOR_WINDOW)?;
+        let damage = window(DAMAGE_WINDOW)?;
+        let max_life = window(MAX_LIFE_WINDOW)?;
+        let life_regen = window(LIFE_REGEN_WINDOW)?;
+        let mana_regen = window(MANA_REGEN_WINDOW)?;
         let heal = pe
             .read_from(HEAL_WINDOW, true)
             .map_err(|e| fail(&e.to_string()))?
@@ -138,20 +180,132 @@ impl Rules {
             .get(..BASE_FN_LEN)
             .map(<[u8]>::to_vec)
             .ok_or_else(|| fail("truncated healing base function"))?;
-        Self::decode(tables, overlay, origin, digest, &powerup, &passive, &armor)
-            .and_then(|rules| rules.with_heal(&heal, &base_code))
-            .map_err(|e| fail(&e))
+        Self::decode(
+            tables,
+            overlay,
+            origin,
+            digest,
+            [&powerup, &passive, &armor, &damage],
+        )
+        .and_then(|rules| rules.with_max_life(&max_life))
+        .and_then(|rules| rules.with_life_regen(&life_regen))
+        .and_then(|rules| rules.with_mana_regen(&mana_regen))
+        .and_then(|rules| rules.with_heal(&heal, &base_code))
+        .map_err(|e| fail(&e))
     }
 
     /// Attaches the healing class. The class key is an immediate in the window; the base comes
     /// from the reviewed base function, which the caller reads from the image.
     pub(crate) fn with_heal(mut self, window: &[u8], base_code: &[u8]) -> Result<Self, String> {
         let (class, _) = class_from_call_window(window, base_code)?;
-        if class == self.powerup_class || class == self.passive_class || class == self.armor_class {
+        if class == self.powerup_class
+            || class == self.passive_class
+            || class == self.armor_class
+            || class == self.damage_class
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+        {
             return Err("healing registration must name a distinct class".into());
         }
         let amount = column(&self.tables, b"Ihpg")?;
-        self.heal = Some(HealClass { class, amount });
+        self.heal = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    /// Attaches the held maximum-life class. Its registration must name the passive base
+    /// `APbo`, and its amount comes from the integer `Ilif` metadata column.
+    pub(crate) fn with_max_life(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != "APbo" {
+            return Err("maximum-life registration must name base APbo".into());
+        }
+        if self.max_life.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+        {
+            return Err("maximum-life registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Ilif")?;
+        self.max_life = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    pub(crate) fn with_life_regen(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_window(window)?;
+        if self.life_regen.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
+        {
+            return Err("life regeneration registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Ihpr")?;
+        self.life_regen = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
+    /// Attaches the real-valued mana-regeneration class.
+    pub(crate) fn with_mana_regen(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_window(window)?;
+        if self.mana_regen.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self
+                .life_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
+            || self.heal.as_ref().is_some_and(|heal| heal.class == class)
+        {
+            return Err("mana regeneration registration must name a distinct class".into());
+        }
+        let amount = fraction_column(&self.tables, b"Imrp")?;
+        self.mana_regen = Some(FractionClass { class, amount });
         Ok(self)
     }
 
@@ -247,18 +401,21 @@ impl Rules {
         overlay: Overlay,
         origin: AssetIdentity,
         image_sha256: Sha256Digest,
-        powerup_window: &[u8],
-        passive_window: &[u8],
-        armor_window: &[u8],
+        windows: [&[u8]; 4],
     ) -> Result<Self, String> {
+        let [powerup_window, passive_window, armor_window, damage_window] = windows;
         let (powerup_class, powerup_base) = class_from_window(powerup_window)?;
-        // The passive and armor bases (`APbo`) are native classes with no ability row, so they are
-        // not checked against metadata.
+        // The passive, armor and damage bases (`APbo`) are native classes with no ability row, so
+        // they are not checked against metadata.
         let (passive_class, _) = class_from_window(passive_window)?;
         let (armor_class, _) = class_from_window(armor_window)?;
+        let (damage_class, _) = class_from_window(damage_window)?;
         if powerup_class == passive_class
             || powerup_class == armor_class
+            || powerup_class == damage_class
             || passive_class == armor_class
+            || passive_class == damage_class
+            || armor_class == damage_class
         {
             return Err("attribute registrations must name distinct classes".into());
         }
@@ -269,11 +426,13 @@ impl Rules {
         let agility = column(&tables, b"Iagi")?;
         let intelligence = column(&tables, b"Iint")?;
         let armor = column(&tables, b"Idef")?;
+        let damage = column(&tables, b"Iatt")?;
         Ok(Self {
             strength,
             agility,
             intelligence,
             armor,
+            damage,
             origin,
             image_sha256,
             tables,
@@ -281,7 +440,11 @@ impl Rules {
             powerup_class,
             passive_class,
             armor_class,
+            damage_class,
+            max_life: None,
             heal: None,
+            life_regen: None,
+            mana_regen: None,
         })
     }
 
@@ -322,9 +485,9 @@ impl Rules {
         Ok(Some(StrengthEffect { strength }))
     }
 
-    /// Passive strength, agility and armor of a held item. `None` for powerups and usable items: a
-    /// usable item is held without activation, so its abilities add no passive attribute here.
-    /// Any passive ability outside the admitted classes, or an intelligence bonus, refuses.
+    /// Passive attributes, armor, attack damage, maximum life and regeneration. `None` for
+    /// powerups and usable items: a usable item is held without activation, so its abilities add
+    /// no passive attribute here. Any passive ability outside the admitted classes refuses.
     pub fn held_attributes(
         &self,
         definition: &Definition,
@@ -356,6 +519,73 @@ impl Rules {
                     .ok_or("passive armor overflows")?;
                 continue;
             }
+            if code == self.damage_class {
+                if !self.damage.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("damage metadata does not admit ability {alias}"));
+                }
+                let points = self.amount(alias, &self.damage)?;
+                if points < 0 {
+                    return Err(format!("negative damage on {}", item.rawcode()));
+                }
+                held.damage = held
+                    .damage
+                    .checked_add(points)
+                    .ok_or("passive damage overflows")?;
+                continue;
+            }
+            if let Some(max_life) = &self.max_life
+                && code == max_life.class
+            {
+                if !max_life.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("max-life metadata does not admit ability {alias}"));
+                }
+                let points = self.amount(alias, &max_life.amount)?;
+                if points < 0 {
+                    return Err(format!("negative max-life on {}", item.rawcode()));
+                }
+                held.max_life = held
+                    .max_life
+                    .checked_add(points)
+                    .ok_or("passive max-life overflows")?;
+                continue;
+            }
+            if let Some(regen) = &self.life_regen
+                && code == regen.class
+            {
+                if !regen.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!(
+                        "life regeneration metadata does not admit ability {alias}"
+                    ));
+                }
+                let points = self.amount(alias, &regen.amount)?;
+                if points < 0 {
+                    return Err(format!("negative life regeneration on {}", item.rawcode()));
+                }
+                held.life_regen = held
+                    .life_regen
+                    .checked_add(points)
+                    .ok_or("passive life regeneration overflows")?;
+                continue;
+            }
+            if let Some(regen) = &self.mana_regen
+                && code == regen.class
+            {
+                if !regen.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!(
+                        "mana regeneration metadata does not admit ability {alias}"
+                    ));
+                }
+                let fraction = self.fraction(alias, &regen.amount)?;
+                if fraction < 0.0 {
+                    return Err(format!("negative mana regeneration on {}", item.rawcode()));
+                }
+                let sum = held.mana_regen_fraction + fraction;
+                if !sum.is_finite() {
+                    return Err("passive mana regeneration overflows".into());
+                }
+                held.mana_regen_fraction = sum;
+                continue;
+            }
             if code != self.passive_class {
                 return Err(format!(
                     "unsupported passive ability {alias} with code {code} on {}",
@@ -363,13 +593,6 @@ impl Rules {
                 ));
             }
             self.admit(alias)?;
-            let intelligence = self.amount(alias, &self.intelligence)?;
-            if intelligence != 0 {
-                return Err(format!(
-                    "intelligence passive bonus on {} needs the unqualified mana path",
-                    item.rawcode()
-                ));
-            }
             held.strength = held
                 .strength
                 .checked_add(self.amount(alias, &self.strength)?)
@@ -378,8 +601,56 @@ impl Rules {
                 .agility
                 .checked_add(self.amount(alias, &self.agility)?)
                 .ok_or("passive agility overflows")?;
+            held.intelligence = held
+                .intelligence
+                .checked_add(self.amount(alias, &self.intelligence)?)
+                .ok_or("passive intelligence overflows")?;
         }
         Ok(Some(held))
+    }
+
+    /// Authored real fraction at the effect level, after the map's W3A override for that field.
+    fn fraction(&self, alias: &str, column: &FractionColumn) -> Result<f32, String> {
+        let mods = self
+            .overlay
+            .new_object(alias)
+            .map(|(_, m)| m)
+            .unwrap_or_else(|| self.overlay.on(alias));
+        if let Some(entry) = mods
+            .iter()
+            .rev()
+            .find(|m| m.field == column.field && m.selectors.is_none_or(|s| s[0] == EFFECT_LEVEL))
+        {
+            if let Some([_, pointer]) = entry.selectors
+                && pointer != column.data
+            {
+                return Err(format!(
+                    "mana regeneration override data pointer {pointer} does not match metadata data column {}",
+                    column.data
+                ));
+            }
+            return match entry.value {
+                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value)
+                    if value.is_finite() =>
+                {
+                    Ok(value)
+                }
+                _ => Err("nonreal mana regeneration override".into()),
+            };
+        }
+        let ability = self
+            .tables
+            .object(Family::Ability, alias)
+            .map_err(|e| e.to_string())?;
+        let letter =
+            char::from_u32(u32::from(b'A') + column.data - 1).ok_or("mana regeneration column")?;
+        let cell = ability
+            .cell(SlkId::AbilityData, &format!("Data{letter}{EFFECT_LEVEL}"))
+            .map_err(|e| e.to_string())?;
+        match cell.typed(FieldKind::Real).map_err(|e| e.to_string())? {
+            Value::Real(value) if value.is_finite() => Ok(value as f32),
+            _ => Err("mana regeneration field is not real".into()),
+        }
     }
 
     fn item_row(&self, definition: &Definition) -> Result<Object<'_>, String> {
@@ -446,8 +717,13 @@ impl Rules {
             .rev()
             .find(|m| m.field == column.field && m.selectors.is_none_or(|s| s[0] == EFFECT_LEVEL))
         {
-            if entry.selectors.is_some_and(|s| s[1] != 0) {
-                return Err("indexed attribute override unsupported".into());
+            if let Some([_, pointer]) = entry.selectors
+                && pointer != column.data
+            {
+                return Err(format!(
+                    "attribute override data pointer {pointer} does not match metadata data column {}",
+                    column.data
+                ));
             }
             let pcx_objects::Value::Int(n) = entry.value else {
                 return Err("noninteger attribute override".into());
@@ -583,6 +859,42 @@ fn column(tables: &DefaultTables, id: &[u8; 4]) -> Result<Column, String> {
         .map(|a| a.trim().to_owned())
         .collect();
     Ok(Column {
+        field: *id,
+        data,
+        aliases,
+    })
+}
+
+/// A real-valued metadata column: the same `Data` mapping as [`column`], with a real or unreal
+/// authored type instead of an integer type.
+fn fraction_column(tables: &DefaultTables, id: &[u8; 4]) -> Result<FractionColumn, String> {
+    let name = std::str::from_utf8(id).map_err(|_| "invalid fraction metadata id")?;
+    let metadata = tables
+        .metadata(*id)
+        .ok_or_else(|| format!("{name} metadata missing"))?;
+    let text = |key: &str| {
+        metadata
+            .attribute(key)
+            .map(|c| c.text.trim().to_owned())
+            .ok_or_else(|| format!("{name} metadata {key} missing"))
+    };
+    if text("field")? != "Data"
+        || text("slk")? != "AbilityData"
+        || !matches!(text("type")?.as_str(), "real" | "unreal")
+    {
+        return Err(format!("unsupported {name} metadata mapping"));
+    }
+    let data: u32 = text("data")?
+        .parse()
+        .map_err(|_| format!("invalid {name} data index"))?;
+    if !(1..=DATA_COLUMNS).contains(&data) {
+        return Err(format!("{name} data index outside column alphabet"));
+    }
+    let aliases = text("useSpecific")?
+        .split(',')
+        .map(|a| a.trim().to_owned())
+        .collect();
+    Ok(FractionColumn {
         field: *id,
         data,
         aliases,

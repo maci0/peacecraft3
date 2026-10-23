@@ -56,13 +56,17 @@
 pub mod ability_profile;
 pub mod camera_margins;
 pub mod campaign;
+pub mod campaign_ai;
 pub mod campaign_assets;
 pub mod campaign_cache;
 pub mod campaign_client;
+pub mod campaign_data_set;
+pub mod campaign_flee_policy;
 pub mod campaign_host;
 pub mod campaign_inputs;
 pub mod campaign_placement;
 pub mod campaign_progress;
+pub mod campaign_targeting_policy;
 pub mod cinematics;
 pub mod command_layout;
 pub mod custom_scripts;
@@ -148,6 +152,7 @@ pub(crate) fn is_valid_name(s: &str) -> bool {
 }
 
 pub mod player_resources;
+mod player_unit_cost;
 
 pub mod cheat_rules;
 pub mod dialog_layout;

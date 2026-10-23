@@ -1482,7 +1482,9 @@ mod tests {
         use pcx_play::map_admission::MapAdmissionBudget;
         use pcx_play::map_scripts_import::MapScriptBudget;
         use pcx_play::scripts::AssetIdentity;
-        use peacecraft3::map_binding::{AssetReceipt, BindingReceipts};
+        use peacecraft3::map_binding::{
+            AssetReceipt, BindingLimits, BindingReceipts, OverlayLimits,
+        };
         use peacecraft3::map_requests::{BoundCatalog, BoundScript, MapBindings, MapOutcome};
         use std::sync::Arc;
 
@@ -1572,6 +1574,9 @@ mod tests {
                     bytes: Vec::new(),
                 },
                 catalog_identity: identity,
+                catalog_label: "fixture".into(),
+                catalog_sources: Vec::new(),
+                required_catalog_tables: Vec::new(),
                 catalog: BoundCatalog(Arc::new(UnusedCatalog)),
                 required_fields: Vec::new(),
                 budget: MapAdmissionBudget {
@@ -1593,6 +1598,38 @@ mod tests {
                     required_fields: 1,
                 },
                 max_map_file_bytes: 1,
+                limits: BindingLimits {
+                    reader: pcx_objects::editor::EditorReadLimits {
+                        max_listed_paths: 1,
+                        max_asset_bytes: 1,
+                        max_aggregate_input_bytes: 1,
+                    },
+                    overlay: OverlayLimits {
+                        unit_bytes: 1,
+                        item_bytes: 1,
+                        aggregate_bytes: 1,
+                    },
+                    admission: MapAdmissionBudget {
+                        scripts: MapScriptBudget {
+                            max_script_bytes: 1,
+                            max_wts_bytes: 1,
+                            max_archive_bytes: 1,
+                            max_archive_table_bytes: 1,
+                            max_raw_packed_bytes: 1,
+                            max_decoded_bytes: 1,
+                            max_prelude_bytes: 1,
+                            max_aggregate_input_bytes: 1,
+                        },
+                        terrain_bytes: 1,
+                        info_bytes: 1,
+                        pathing_bytes: 1,
+                        units_bytes: 1,
+                        aggregate_input_bytes: 1,
+                        required_fields: 1,
+                    },
+                    max_map_file_bytes: 1,
+                    max_resolver_input_bytes: 1,
+                },
             }),
             admission: peacecraft3::map_admission::MapAdmission::default(),
             published_receipts: Some(Arc::new(receipts)),
@@ -1932,7 +1969,9 @@ mod tests {
         use pcx_play::map_admission::{IdentifiedScript, MapAdmissionBudget, MapAdmissionInputs};
         use pcx_play::map_scripts_import::MapScriptBudget;
         use pcx_play::scripts::{AssetIdentity, ScriptAsset};
-        use peacecraft3::map_binding::{AssetReceipt, BindingReceipts};
+        use peacecraft3::map_binding::{
+            AssetReceipt, BindingLimits, BindingReceipts, OverlayLimits,
+        };
         use peacecraft3::map_requests::{BoundCatalog, BoundScript, MapBindings, MapOutcome};
         use std::sync::Arc;
 
@@ -2092,10 +2131,28 @@ mod tests {
                     bytes: blizzard,
                 },
                 catalog_identity,
+                catalog_label: "fixture".into(),
+                catalog_sources: Vec::new(),
+                required_catalog_tables: Vec::new(),
                 catalog: BoundCatalog(Arc::new(IdleCatalog)),
                 required_fields: Vec::new(),
                 budget,
                 max_map_file_bytes: map_len,
+                limits: BindingLimits {
+                    reader: pcx_objects::editor::EditorReadLimits {
+                        max_listed_paths: 1,
+                        max_asset_bytes: 1,
+                        max_aggregate_input_bytes: 1,
+                    },
+                    overlay: OverlayLimits {
+                        unit_bytes: 1,
+                        item_bytes: 1,
+                        aggregate_bytes: 1,
+                    },
+                    admission: budget,
+                    max_map_file_bytes: map_len,
+                    max_resolver_input_bytes: 1,
+                },
             }),
             admission,
             published_receipts: Some(Arc::clone(&receipts)),

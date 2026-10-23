@@ -119,6 +119,8 @@ all text reads retained through the ranked API.
 
 Synthetic cast tests distinguish a fractional range boundary, fractional healing,
 fractional cooldown expiry, typed edits of one rank, and unchanged values at the
-next learned rank. Invalid fields, including a cost outside the signed-integer
-range, leave mana and target life unchanged. Local receipts are under
-`.scratch/holy-fractional/`; original-client fractional-cast parity is not measured.
+next learned rank. A healing `Data` edit also requires the second W3A selector to
+equal `fAmt`'s metadata `data` ordinal; selector zero against ordinal one refuses
+before mana or target life changes. Invalid fields, including a cost outside the
+signed-integer range, leave mana and target life unchanged. Local receipts are
+under `.scratch/holy-fractional/`; original-client fractional-cast parity is not measured.

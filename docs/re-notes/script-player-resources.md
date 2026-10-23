@@ -1,13 +1,18 @@
 # Effective player resources
 
-The selected 1.29.2.9231 executable has SHA-256
+The selected executable is installed 1.29.2.9231, not the 1.27b installer. It
+has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Its registered `GetPlayerState` implementation at `0x494a80` indexes the same
 state-property array that `SetPlayerState` (`0x4a97a0`, helper `0x4a9800`)
 updates. The wrappers share their player lookup. Gold and lumber occupy the
 source-decoded adjacent state range, use a source-decoded internal scale, and
 follow the setter's unsigned comparison and signed clamp after wrapping integer
-multiplication. Raw script requests remain separate from applied values.
+multiplication. Gathered gold and lumber (`PLAYER_STATE_GOLD_GATHERED`,
+`PLAYER_STATE_LUMBER_GATHERED`, states 15 and 16) use the setter's second
+source-decoded state range: it pre-scales the input, calls the same helper
+without entering the clamp, and the getter divides the stored counter as
+unsigned. Raw script requests remain separate from applied values.
 
 The player state-schema initializer at `0x4b8d20` supplies a repeated template to
 the property binder, including money and food state indices. Its template at
@@ -29,9 +34,10 @@ profile sources remain attached to the rules.
 
 The production startup can admit these rules before globals or assignments.
 `GetPlayerState` and `ObjectHost::player_resource_value` then expose effective
-gold, lumber, food used, food supplied and the food ceiling on the existing
-player identity. An unadmitted projection stays unknown. Other player-state
-settings keep their existing request-only behavior; their queries refuse.
+gold, lumber, food used, food supplied, the food ceiling, and gathered gold and
+lumber on the existing player identity. An unadmitted projection stays unknown.
+Other player-state settings keep their existing request-only behavior; their
+queries refuse.
 Requests still use their symbolic handles and retain exact signed inputs, even
 when the effective amount clamps. Failed signatures, identities, domains,
 work allocations or record budgets preserve the previous effective amount.
@@ -54,15 +60,64 @@ This is a recreation of resource counters, not proof of the original's complete
 resource lifecycle. Food assignment adjustments and ceiling application are
 stated recreation choices; exact original death/ownership update ordering,
 construction, resurrection, food disabling and original edge-case behavior
-remain unverified. Harvesting, spending, upkeep deductions and player-state
-change event registration/delivery remain separate consumers; no registered
-player-state event is silently accepted here. Original/native/browser balance
-and rendered parity are not established by parser or counter tests.
+remain unverified. Harvesting, spending and upkeep deductions remain separate
+consumers. Original/native/browser balance and rendered parity are not
+established by parser or counter tests.
+
+## Player-state change events
+
+`ObjectHost::with_player_state_events` admits the loaded
+`TriggerRegisterPlayerStateEvent(trigger, player, playerstate, limitop, real)`
+contract on the existing trigger arena. The signature, `CreateTrigger`,
+`Player`, `ConvertPlayerState` and `ConvertLimitOp` must share their selected
+declaration source. The six `limitop` names (`LESS_THAN`,
+`LESS_THAN_OR_EQUAL`, `EQUAL`, `GREATER_THAN_OR_EQUAL`, `GREATER_THAN`,
+`NOT_EQUAL`) resolve their values through the admitted `ConvertLimitOp` domain
+rather than embedded opcode numbers; missing, duplicate or out-of-domain
+operations refuse. `playerstate` and `limitop` must descend to `handle` through
+source-matching declarations. `GetEventPlayerState` is admitted when present.
+
+Registration validates the trigger and player families, the symbolic state and
+limitop handles, the finite real threshold, and the aggregate caller bound. It
+seeds the observed value from the effective player state without firing. The
+central mutation path used by `SetPlayerState` and gold debits compares each
+intermediate effective value before it is overwritten. Every changed value that
+satisfies the selected comparison queues its own event, so a write that passes
+through a qualifying value and back still fires; equal writes and changes that
+do not satisfy the comparison do not. A script-boundary poll catches effective
+changes computed outside that path, such as live food, and records the last
+observed value. Delivery uses the existing event context, with
+`GetEventPlayerState` returning the registered state handle. States outside the
+effective resource projection refuse instead of inventing a value.
+
+`SetPlayerState` is the mutation with synchronous delivery: when player
+state events are admitted,
+its matching filters, conditions and actions run through the normal
+event-delivery context before the native returns; no later tick is required.
+Other event families still defer to the next script boundary. A
+`TriggerSleepAction` inside an action parks that action and lets the remaining
+matching registrations and the enclosing script continue. `SetPlayerState`
+calls inside a trigger or another state event also deliver synchronously and
+reentrantly. Nested frames restore the caller's trigger and response context;
+a parked action retains its event context when resumed. The controlled native
+ordering and sleep observations are recorded in
+`player-state-event-observation.md`. Other event families and external effective
+food changes retain boundary delivery as a recreation policy.
+
+The shipped witness is `Human02.j:3506` and `:3520`, registering gold below
+1000 and lumber below 300, with the declaration at `common.j:1284` and the
+`EVENT_PLAYER_STATE_LIMIT` response at `:1287`. Synthetic tests cover baseline
+seeding, changed and unchanged values, comparisons from selected constants,
+response context, budgets and missing operation declarations. The selected
+Human02 admission passes through this source contract. The integrated continuation
+still requires a new execution gate after the runtime changes; admission alone
+does not establish that map's startup or mission completion.
 
 Synthetic tests exercise changed source operands and malformed source refusal,
 initial balances, setter clamps with retained raw requests, per-player
-independence, exhausted request budgets, authored food fields, ownership,
-removal and explicit adjustment counters. The ignored original-image reader test
+independence, exhausted request budgets, gathered state scaling and unsigned
+reads, authored food fields, ownership, removal and explicit adjustment
+counters. The ignored original-image reader test
 requires `PCX_PLAYER_RESOURCE_IMAGE`; its food profile is deliberately synthetic
 and does not establish the original game's food ceiling. Private source analysis
 and local validation receipts stay under `.scratch/player-resources-20261020/`.
