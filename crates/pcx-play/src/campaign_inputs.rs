@@ -453,6 +453,17 @@ pub fn prepare(
             )
             .map_err(|e| e.to_string())?,
         ),
+        new_heroes_policy: Some(
+            crate::campaign_new_heroes_policy::NewHeroesPolicy::read(
+                image,
+                crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 64 << 10,
+                    sections: 96,
+                },
+            )
+            .map_err(|e| e.to_string())?,
+        ),
         item_classes: Some(item_classes),
         item_sales: Some(item_sales),
         item_use: None,

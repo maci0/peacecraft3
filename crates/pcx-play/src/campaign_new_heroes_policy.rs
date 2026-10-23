@@ -23,7 +23,7 @@ const WINDOWS: [(u32, usize, bool); 4] = [
     (0xab6166, 20, true),  // SetNewHeroes registration banner (sig/name/handler)
     (0xab72d0, 71, true),  // SetNewHeroes handler through final ret
     (0xe700b0, 5, false),  // signature bytes "(B)V\0"
-    (0xf15aa0, 12, false), // name bytes "SetNewHeroes"
+    (0xf15aa0, 13, false), // NUL-terminated name bytes
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -113,8 +113,8 @@ impl NewHeroesPolicy {
         if call(reg, WINDOWS[0].0, 15)? != 0x8ccc80 {
             return Err(Error("SetNewHeroes registrar changed"));
         }
-        at(sig, 0, b"(B)V")?;
-        at(name, 0, b"SetNewHeroes")?;
+        at(sig, 0, b"(B)V\0")?;
+        at(name, 0, b"SetNewHeroes\0")?;
 
         // Handler: read AI-context global; null context writes 0x57 and jumps to
         // the error sink; else resolve via the shared resolver; then set/clear
@@ -272,8 +272,8 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     put(&mut w, 1, 69, &[0x5d, 0xc3]);
 
     // Signature and name data strings.
-    put(&mut w, 2, 0, b"(B)V");
-    put(&mut w, 3, 0, b"SetNewHeroes");
+    put(&mut w, 2, 0, b"(B)V\0");
+    put(&mut w, 3, 0, b"SetNewHeroes\0");
 
     w
 }
@@ -360,6 +360,8 @@ mod tests {
             |w| w[0][11] ^= 0x10,         // handler change
             |w| w[2][0] ^= 1,             // signature string changed
             |w| w[3][0] ^= 1,             // name string changed
+            |w| w[2][4] = b'X',           // unterminated signature
+            |w| w[3][12] = b'X',          // unterminated name
             |w| w[1][4] ^= 0x10,          // AI context global change
             |w| w[1][11] ^= 1,            // null-context skip changed
             |w| w[1][26] ^= 0x10,         // reference LEA offset changed

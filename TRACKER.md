@@ -2,6 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `SetNewHeroes` now validates its owned source ABI and stores the explicit
+  transition in the canonical per-player context. The selected-image reader
+  binds the registration, handler control flow and complementary flag operands.
+  Combined checks pass 1,617 core / 610 app tests, six reader checks including
+  the actual image, strict native/WASM Clippy and selected startup/Continue.
+  The unchanged Human02 opening-minute gate passes this call and stops at
+  `SetHeroesFlee` at 7.218750 seconds. Hero production, revival and an eventual
+  gameplay consumer of this flag remain unqualified; see
+  [new-hero flag](docs/re-notes/campaign-ai-new-heroes.md).
+
 - [~] Campaign captain creation and home assignment now use source-derived
   selector masks and the canonical per-player registry. The published two-program
   fixture proves independent initial targets before gathering setup and updates

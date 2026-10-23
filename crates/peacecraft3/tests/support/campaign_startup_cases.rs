@@ -640,6 +640,7 @@ pub(crate) fn host_inputs(
         flee_policy: None,
         gathering_policy: None,
         captain_policy: None,
+        new_heroes_policy: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,
