@@ -104,6 +104,12 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())
     }
 
+    fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String> {
+        self.object
+            .ai_ignored_units(player, unit)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_player_unit_type_count(
         &mut self,
         player: Option<HandleId>,

@@ -129,7 +129,17 @@ impl ObjectHost {
             self.inner
                 .error(name, Failure::ConfigState("player is not admitted"))
         })?;
-        self.count_completed_units(owner, unit, name)
+        self.count_completed_units(owner, unit, name, false)
+    }
+
+    pub(crate) fn ai_ignored_units(&self, player: i32, unit: i32) -> Result<i32, Error> {
+        const NAME: &str = "IgnoredUnits";
+        self.require_active_campaign_ai_player(player, NAME)?;
+        let owner = self.player_identity(player).ok_or_else(|| {
+            self.inner
+                .error(NAME, Failure::ConfigState("player is not admitted"))
+        })?;
+        self.count_completed_units(owner, unit, NAME, true)
     }
 
     pub(crate) fn ai_player_unit_type_count(
@@ -139,7 +149,7 @@ impl ObjectHost {
     ) -> Result<i32, Error> {
         match owner {
             None => Ok(0),
-            Some(owner) => self.count_completed_units(owner, unit, "GetPlayerUnitTypeCount"),
+            Some(owner) => self.count_completed_units(owner, unit, "GetPlayerUnitTypeCount", false),
         }
     }
 
@@ -148,6 +158,7 @@ impl ObjectHost {
         owner: HandleId,
         unit: i32,
         name: &'static str,
+        ignored: bool,
     ) -> Result<i32, Error> {
         self.player_settings(owner)
             .map_err(|e| self.inner.error(name, e.failure))?;
@@ -158,7 +169,7 @@ impl ObjectHost {
             .filter(|(_, record)| {
                 record.owner == owner && record.definition.rawcode == unit.to_be_bytes()
             })
-            .try_fold(0i32, |count, (_, record)| {
+            .try_fold(0i32, |count, (id, record)| {
                 if record.combat.is_none() && record.vitals.is_none() {
                     return Err(self
                         .inner
@@ -171,6 +182,16 @@ impl ObjectHost {
                 }
                 if record.combat.as_ref().is_some_and(|c| c.dead)
                     || record.vitals.as_ref().is_some_and(|v| v.life <= 0.)
+                {
+                    return Ok(count);
+                }
+                // shortcut: use canonical guard/captain membership; add autonomous worker associations when that controller is supported.
+                if ignored
+                    && (self
+                        .guard_state()
+                        .and_then(|s| s.get(id))
+                        .is_some_and(|g| g.owner == owner && !g.released)
+                        || self.campaign_ai.captain_member_owner(id).is_some())
                 {
                     return Ok(count);
                 }

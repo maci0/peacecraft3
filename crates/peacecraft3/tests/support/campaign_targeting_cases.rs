@@ -231,6 +231,8 @@ endfunction
     let ai_common = format!(
         "{ai_common}native GetUnitCount takes integer unitid returns integer\nnative GetUnitCountDone takes integer unitid returns integer\nnative GetPlayerUnitTypeCount takes player owner, integer unitid returns integer\nnative CountAssertionFailed takes nothing returns nothing\n"
     );
+    let ai_common =
+        format!("{ai_common}native IgnoredUnits takes integer unitid returns integer\n");
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
         .into_iter()
         .map(|(name, flag)| {
@@ -241,6 +243,9 @@ endfunction
             let body = format!(
                 r#"function VerifyUnitCounts takes nothing returns nothing
 if GetUnitCount('a001') != 1 or GetUnitCountDone('a001') != 1 or GetUnitCount(0) != 0 or GetUnitCountDone(0) != 0 then
+call CountAssertionFailed()
+endif
+if IgnoredUnits('a001') != 1 or IgnoredUnits(0) != 0 then
 call CountAssertionFailed()
 endif
 if GetPlayerUnitTypeCount(Player(2),'a001') != 0 or GetPlayerUnitTypeCount(Player(2),'t001') != 4 or GetPlayerUnitTypeCount(null,'t001') != 0 then

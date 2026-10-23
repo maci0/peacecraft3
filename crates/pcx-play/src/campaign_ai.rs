@@ -117,6 +117,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
     fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
+    fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String>;
     fn ai_player_unit_type_count(
         &mut self,
         player: Option<pcx_script::HandleId>,
@@ -221,6 +222,17 @@ impl AiWorld for NeutralStack {
             .inner()
             .inner()
             .ai_unit_count(player, unit, done)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .ai_ignored_units(player, unit)
             .map_err(|e| e.to_string())
     }
 
@@ -638,6 +650,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     for (name, params) in [
         ("GetUnitCount", &["integer"][..]),
         ("GetUnitCountDone", &["integer"][..]),
+        ("IgnoredUnits", &["integer"][..]),
         ("GetPlayerUnitTypeCount", &["player", "integer"][..]),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
@@ -873,6 +886,15 @@ impl<W: AiWorld> Host for AiHost<W> {
                     name == "GetUnitCountDone",
                 )?))
             }
+            "IgnoredUnits" => {
+                let [Value::Int(unit)] = args else {
+                    return Err("IgnoredUnits: expected one integer unit ID".into());
+                };
+                let player = self.player;
+                Ok(Value::Int(
+                    self.world_mut()?.ai_ignored_units(player, *unit)?,
+                ))
+            }
             "GetPlayerUnitTypeCount" => {
                 let [owner, Value::Int(unit)] = args else {
                     return Err("GetPlayerUnitTypeCount: expected player, integer".into());
@@ -1022,6 +1044,7 @@ mod tests {
         clock: f64,
         gold: BTreeMap<u64, i32>,
         unit_counts: BTreeMap<(i32, i32, bool), i32>,
+        ignored_counts: BTreeMap<(i32, i32), i32>,
         player_unit_counts: BTreeMap<(HandleId, i32), i32>,
         callbacks: bool,
         active: BTreeMap<i32, bool>,
@@ -1067,6 +1090,17 @@ mod tests {
                 .get(&(player, unit, done))
                 .copied()
                 .ok_or("mock unit count is not admitted".into())
+        }
+        fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String> {
+            let state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state
+                .ignored_counts
+                .get(&(player, unit))
+                .copied()
+                .ok_or("mock ignored count is not admitted".into())
         }
         fn ai_player_unit_type_count(
             &mut self,
@@ -1938,11 +1972,17 @@ mod tests {
         {
             let mut state = shared.lock().unwrap();
             state.unit_counts = [((1, 17, false), 9), ((1, 17, true), 3)].into();
+            state.ignored_counts.insert((1, 17), 2);
             state.player_unit_counts.insert((explicit, 17), 5);
         }
         let mut host = AiHost::new(1, World(Arc::clone(&shared)));
         assert!(host.native("GetUnitCount", &[Value::Int(17)]).is_err());
+        assert!(host.native("IgnoredUnits", &[Value::Int(17)]).is_err());
         shared.lock().unwrap().active.insert(1, false);
+        assert_eq!(
+            host.native("IgnoredUnits", &[Value::Int(17)]).unwrap(),
+            Value::Int(2)
+        );
         assert_eq!(
             host.native("GetUnitCount", &[Value::Int(17)]).unwrap(),
             Value::Int(9)
@@ -1964,7 +2004,7 @@ mod tests {
                 .unwrap(),
             Value::Int(0)
         );
-        for name in ["GetUnitCount", "GetUnitCountDone"] {
+        for name in ["GetUnitCount", "GetUnitCountDone", "IgnoredUnits"] {
             for args in [
                 vec![],
                 vec![Value::Bool(true)],
@@ -1991,6 +2031,7 @@ mod tests {
         for (name, params) in [
             ("GetUnitCount", "integer unitid"),
             ("GetUnitCountDone", "integer unitid"),
+            ("IgnoredUnits", "integer unitid"),
             ("GetPlayerUnitTypeCount", "player owner, integer unitid"),
         ] {
             for (common, ai_common) in [

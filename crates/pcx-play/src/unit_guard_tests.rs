@@ -145,6 +145,51 @@ fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
 }
 
 #[test]
+fn ignored_units_follow_guard_release_and_canonical_lifecycle() {
+    let (mut vm, a, b) = guarded();
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_mode(
+        &context,
+        crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+    )
+    .unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    let handles = h.inner().handles();
+    let before = h.executed_unit(a).unwrap().clone();
+    assert_eq!(h.ai_unit_count(4, kind, false).unwrap(), 1);
+    assert_eq!(h.ai_ignored_units(4, kind).unwrap(), 0);
+    assert_eq!(h.ai_ignored_units(4, 0).unwrap(), 0);
+    assert!(h.ai_ignored_units(5, kind).is_err());
+    assert_eq!(h.executed_unit(a).unwrap(), &before);
+    assert_eq!(h.inner().handles(), handles);
+    h.native("RemoveGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert_eq!(h.ai_ignored_units(4, kind).unwrap(), 1);
+    h.native("RemoveGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert_eq!(h.ai_ignored_units(4, kind).unwrap(), 1);
+    let other_owner = h.executed_unit(b).unwrap().owner;
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(a),
+            Value::Handle(other_owner),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(h.ai_ignored_units(4, kind).unwrap(), 0);
+    h.activate_campaign_ai_player(5).unwrap();
+    assert_eq!(h.ai_ignored_units(5, kind).unwrap(), 2);
+    h.kill_unit(a, None).unwrap();
+    assert_eq!(h.ai_ignored_units(5, kind).unwrap(), 1);
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    assert_eq!(h.ai_ignored_units(5, kind).unwrap(), 0);
+}
+
+#[test]
 fn false_timed_life_stops_then_guard_refresh_returns_home() {
     let (mut vm, a, _) = guarded();
     let h = &mut vm.host().inner;

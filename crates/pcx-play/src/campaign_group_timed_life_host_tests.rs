@@ -58,11 +58,14 @@ fn true_membership_tracks_shared_expiry_and_home_route_without_minting_handles()
     let host = &mut vm.host().inner;
     let owner = host.executed_unit(unit).unwrap().owner;
     let handles = host.inner().handles();
+    let kind = i32::from_be_bytes(host.executed_unit(unit).unwrap().definition.rawcode);
+    assert_eq!(host.ai_ignored_units(4, kind).unwrap(), 1);
     assert_eq!(host.campaign_group_timed_life_enabled(owner).unwrap(), None);
     assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(0));
     assert_eq!(host.campaign_captain_is_empty(owner).unwrap(), Some(true));
     host.set_ai_group_timed_life(4, true).unwrap();
     apply(host, unit, key, 1.).unwrap();
+    assert_eq!(host.ai_ignored_units(4, kind).unwrap(), 0);
     assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(1));
     assert_eq!(host.campaign_captain_is_empty(owner).unwrap(), Some(false));
     assert_eq!(

@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `IgnoredUnits` now queries live canonical units outside the current guard
+  and captain memberships. Real guard release, repeat release, owner transfer,
+  death/removal and captain attachment are covered without a second count store.
+  Core 1,692, app-library 55, app-binary 638, the published two-program fixture,
+  selected startup/Continue and strict native/WASM Clippy pass. Human02 reaches
+  `GetUnitBuildTime` at 7.312500 seconds; its unchanged opening-minute test
+  remains red. Additional native controller association classes remain open;
+  see [ignored units](docs/re-notes/campaign-ai-ignored-units.md).
+
 - [~] Campaign AI unit counts now query canonical live units, including hidden
   units, and follow death, removal and owner transfer. Owned/explicit-player
   queries and completed/total dispatch remain distinct. Core 1,691, app-library
