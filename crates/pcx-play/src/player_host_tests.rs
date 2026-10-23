@@ -1,5 +1,6 @@
 use super::{context, context_with_wts, rules, slots_rule};
 use crate::campaign_flee_policy::FleePolicy;
+use crate::campaign_new_heroes_policy::NewHeroesPolicy;
 use crate::campaign_targeting_policy::TargetingPolicy;
 use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{ContextProblem, NeutralError, RuleProblem};
@@ -238,6 +239,133 @@ fn campaign_setters_report_their_own_native_context() {
     assert!(error.contains("SetUnitsFlee"), "{error}");
     assert!(!error.contains("SetTargetHeroes"), "{error}");
 }
+#[test]
+fn campaign_new_heroes_admission_requires_matching_context_and_refuses_duplicates() {
+    let (mut h, ctx) = campaign_host();
+    let owner = player(&mut h, 0);
+    let other = context(
+        300,
+        COMMON,
+        "// no globals",
+        "synthetic:campaign-new-heroes-other",
+    );
+    let first = NewHeroesPolicy::fixture();
+    assert!(h.admit_campaign_new_heroes(&other, first.clone()).is_err());
+    assert!(h.campaign_new_heroes_policy().is_none());
+
+    h.admit_campaign_new_heroes(&ctx, first.clone()).unwrap();
+    assert_eq!(
+        h.campaign_new_heroes_policy().unwrap().context_mask,
+        first.context_mask
+    );
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
+    h.set_ai_new_heroes(0, true).unwrap();
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+
+    assert!(h.admit_campaign_new_heroes(&ctx, first.clone()).is_err());
+    assert_eq!(
+        h.campaign_new_heroes_policy().unwrap().image_sha256,
+        first.image_sha256
+    );
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+}
+
+#[test]
+fn campaign_new_heroes_admission_refuses_invalid_context_masks_without_writing() {
+    let (mut h, ctx) = campaign_host();
+    for mask in [0, 0x3, 0x60] {
+        let mut policy = NewHeroesPolicy::fixture();
+        policy.context_mask = mask;
+        assert!(h.admit_campaign_new_heroes(&ctx, policy).is_err());
+        assert!(h.campaign_new_heroes_policy().is_none());
+    }
+}
+
+#[test]
+fn campaign_new_heroes_unadmitted_and_inactive_players_do_not_grow_the_registry() {
+    let (mut h, ctx) = campaign_host();
+    let owner = player(&mut h, 0);
+    assert!(h.campaign_new_heroes_policy().is_none());
+    assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
+    assert!(h.set_ai_new_heroes(0, true).is_err());
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+
+    h.admit_campaign_new_heroes(&ctx, NewHeroesPolicy::fixture())
+        .unwrap();
+    assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
+    let error = h.set_ai_new_heroes(0, true).unwrap_err().to_string();
+    assert!(error.contains("SetNewHeroes"), "{error}");
+
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let handles = h.inner().handles();
+    assert!(h.campaign_new_heroes_enabled(id(&timer)).is_err());
+    assert_eq!(h.inner().handles(), handles);
+
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
+    h.set_ai_new_heroes(0, true).unwrap();
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
+}
+
+#[test]
+fn campaign_new_heroes_flags_are_isolated_and_inactive_refusal_keeps_peer_state() {
+    let (mut h, ctx) = campaign_host();
+    let first = player(&mut h, 0);
+    let second = player(&mut h, 1);
+    h.admit_campaign_new_heroes(&ctx, NewHeroesPolicy::fixture())
+        .unwrap();
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert!(h.activate_campaign_ai_player(1).unwrap());
+    h.set_ai_new_heroes(0, true).unwrap();
+    h.set_ai_new_heroes(1, false).unwrap();
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_new_heroes_enabled(id(&first)).unwrap(), None);
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+    assert!(h.set_ai_new_heroes(0, true).is_err());
+    assert_eq!(
+        h.campaign_new_heroes_enabled(id(&second)).unwrap(),
+        Some(false)
+    );
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(h.campaign_new_heroes_enabled(id(&first)).unwrap(), None);
+}
+
+#[test]
+fn campaign_new_heroes_setter_reports_its_own_native_context() {
+    let (mut h, ctx) = campaign_host();
+    let _owner = player(&mut h, 0);
+    h.admit_campaign_new_heroes(&ctx, NewHeroesPolicy::fixture())
+        .unwrap();
+    let error = h.set_ai_new_heroes(0, true).unwrap_err().to_string();
+    assert!(error.contains("SetNewHeroes"), "{error}");
+    assert!(!error.contains("SetTargetHeroes"), "{error}");
+    assert!(!error.contains("SetUnitsFlee"), "{error}");
+}
+
 #[test]
 fn slot_domain_is_derived_from_the_approved_rule_and_selected_word() {
     for (word, count) in [(300, 6), (301, 9), (u32::MAX, 9)] {
