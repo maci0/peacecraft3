@@ -674,6 +674,33 @@ impl ObjectHost {
         Ok(value)
     }
 
+    /// Whether a stored upgrade is active for a player row. Record-only
+    /// setters are used only when the applied research model is unavailable.
+    pub(super) fn campaign_flee_upgrade_is_active(
+        &self,
+        number: i32,
+        techid: i32,
+        settings: &PlayerSettings,
+    ) -> bool {
+        match self.stored_tech_level(number, techid) {
+            players::TechRead::Level(level) => level > 0,
+            players::TechRead::Absent => false,
+            players::TechRead::Unavailable => {
+                if settings.research_levels.is_empty() {
+                    settings
+                        .tech_researched
+                        .iter()
+                        .any(|(id, level)| *id == techid && *level > 0)
+                } else {
+                    settings
+                        .research_levels
+                        .iter()
+                        .any(|(id, level)| *id == techid && *level > 0)
+                }
+            }
+        }
+    }
+
     /// Selected software math; absent policy leaves these natives unsupported.
     fn math_native(&self, name: &str, args: &[Value]) -> Option<Result<Value, Error>> {
         let numeric = self.numeric.as_ref()?;

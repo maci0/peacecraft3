@@ -1,7 +1,12 @@
-//! Ordinary campaign flee consumer: the pressure valve that starts one
-//! accepted retreat after incoming combat damage. It owns only the decision
-//! and the bounded set of units whose accepted route is a retreat; movement,
-//! route work and arrival stay in the activity host.
+//! Ordinary campaign flee consumer. The recreation trigger is positive incoming
+//! combat damage that lands on a live ordinary victim, not the start of a guard
+//! swing. The source envelope is a live nonhero ordinary unit with one initial
+//! weapon, no active weapon-slot upgrades and no effect history; other sources
+//! are refused with their unit context instead of being approximated. The
+//! victim must be a shown, mobile, nonhero ordinary unit whose owner enabled
+//! `SetUnitsFlee` and whose resulting life is in a source life band. It owns
+//! only the decision and the bounded set of units whose accepted route is a
+//! retreat; movement, route work and arrival stay in the activity host.
 use super::{Error, Failure, ObjectHost};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::HandleId;
@@ -24,15 +29,39 @@ impl ObjectHost {
         self.campaign_flee_motion.active.remove(&unit);
     }
 
+    /// Clear retreat ownership as soon as the accepted route is no longer
+    /// moving, including for units that combat no longer considers attackers.
+    pub(super) fn prune_campaign_flee_motion(&mut self) {
+        let units: Vec<_> = self.campaign_flee_motion.active.iter().copied().collect();
+        for unit in units {
+            let moving = self
+                .live(unit)
+                .and_then(|record| record.activity.as_ref())
+                .is_some_and(|activity| activity.moving());
+            if !moving {
+                self.campaign_flee_motion.active.remove(&unit);
+            }
+        }
+    }
+
     /// Evaluate the ordinary flee leaf for one positive incoming hit. Returns
     /// the accepted destination when the unit must retreat. The caller applies
     /// vitals and trace only after this decision, so a refused source leaves
     /// them untouched.
-    pub(super) fn campaign_flee_damage_decision(
+    #[cfg(test)]
+    pub(crate) fn test_disarm_unit(&mut self, unit: HandleId) {
+        if let Ok(super::Entry::Unit { record }) = self.inner.entry_mut(unit)
+            && let Some(combat) = record.combat.as_mut()
+        {
+            combat.weapon = None;
+        }
+    }
+
+    pub(crate) fn campaign_flee_damage_decision(
         &self,
         source: HandleId,
         target: HandleId,
-        life_before: Option<f32>,
+        resulting_life: Option<f32>,
     ) -> Result<Option<[f32; 2]>, Error> {
         let Some(policy) = self.campaign_flee.as_ref() else {
             return Ok(None);
@@ -47,13 +76,18 @@ impl ObjectHost {
         if victim.definition.rawcode[0].is_ascii_uppercase() {
             return Ok(None);
         }
+        if self.unit_has_effect_history(target) {
+            return Err(
+                self.campaign_flee_error(target, "victim has an unqualified active effect history")
+            );
+        }
         if !self.campaign_flee_victim_ready(target, victim)? {
             return Ok(None);
         }
-        let Some(life) = life_before else {
+        let Some(life) = resulting_life else {
             return Ok(None);
         };
-        if !campaign_flee_low_life(policy, life) {
+        if life <= 0.0 {
             return Ok(None);
         }
 
@@ -75,6 +109,12 @@ impl ObjectHost {
                 self.campaign_flee_error(source, "incoming attacker has no admitted combat weapon")
             );
         };
+        if !campaign_flee_low_life(policy, life) {
+            return Err(self.campaign_flee_error(
+                target,
+                "resulting life is above the ordinary cutoff in a score-dependent band",
+            ));
+        }
         let numeric = self.numeric.as_ref().ok_or_else(|| {
             self.campaign_flee_error(target, "selected numeric policy is not admitted")
         })?;
@@ -120,23 +160,54 @@ impl ObjectHost {
         if attacker.definition.rawcode[0].is_ascii_uppercase() {
             return Err(self.campaign_flee_error(source, "incoming attacker is a hero"));
         }
-        if attacker.definition.rawcode == *b"Bens" {
-            return Err(
-                self.campaign_flee_error(source, "incoming attacker is the unsupported Bens unit")
-            );
-        }
         if attacker.summoned || attacker.admitted_order.is_some_and(|(_, active)| active) {
+            return Err(self
+                .campaign_flee_error(source, "incoming attacker has an unqualified active order"));
+        }
+        if self.unit_has_effect_history(source) {
             return Err(self.campaign_flee_error(
                 source,
-                "incoming attacker has an unqualified active effect",
+                "incoming attacker has an unqualified active effect history",
             ));
         }
-        if campaign_flee_second_weapon(&attacker.definition)
-            .map_err(|detail| self.campaign_flee_error(source, &detail))?
-        {
-            return Err(
-                self.campaign_flee_error(source, "incoming attacker enables a second weapon")
-            );
+        let mask = campaign_flee_weapon_mask(&attacker.definition)
+            .map_err(|detail| self.campaign_flee_error(source, &detail))?;
+        if mask != 1 {
+            return Err(self.campaign_flee_error(
+                source,
+                &format!("incoming attacker weapsOn mask {mask} is not one initial weapon"),
+            ));
+        }
+        self.campaign_flee_source_has_no_active_upgrades(source, attacker)?;
+        Ok(())
+    }
+
+    fn campaign_flee_source_has_no_active_upgrades(
+        &self,
+        source: HandleId,
+        attacker: &super::ExecutedUnit,
+    ) -> Result<(), Error> {
+        let codes = crate::harvest_rules::definition_upgrade_codes(&attacker.definition)
+            .map_err(|error| self.campaign_flee_error(source, &error.to_string()))?;
+        if codes.is_empty() {
+            return Ok(());
+        }
+        let settings = self.player_settings(attacker.owner)?;
+        for code in codes {
+            let bytes = code.as_bytes();
+            let [a, b, c, d] = bytes else {
+                return Err(self.campaign_flee_error(
+                    source,
+                    &format!("upgrade code {code:?} is not a four-character identifier"),
+                ));
+            };
+            let techid = i32::from_be_bytes([*a, *b, *c, *d]);
+            if self.campaign_flee_upgrade_is_active(settings.number, techid, settings) {
+                return Err(self.campaign_flee_error(
+                    source,
+                    &format!("incoming attacker has active weapon-slot upgrade {code}"),
+                ));
+            }
         }
         Ok(())
     }
@@ -150,7 +221,7 @@ impl ObjectHost {
 
     /// Start the accepted retreat. A route that cannot be accepted leaves no
     /// ownership behind; the accepted route itself is the movement owner.
-    pub(super) fn initiate_campaign_flee(
+    pub(crate) fn initiate_campaign_flee(
         &mut self,
         unit: HandleId,
         destination: [f32; 2],
@@ -191,10 +262,20 @@ fn campaign_flee_can_flee(definition: &Definition) -> Result<bool, String> {
     }
 }
 
-fn campaign_flee_second_weapon(definition: &Definition) -> Result<bool, String> {
+fn campaign_flee_weapon_mask(definition: &Definition) -> Result<u32, String> {
     let Some(value) = super::combat::column(definition, SlkId::UnitWeapons, "weapsOn")? else {
-        return Ok(false);
+        return Err("UnitWeapons weapsOn is missing".into());
     };
-    let enabled = super::combat::number(value, "weapsOn")?.unwrap_or(0.0) as i32;
-    Ok(enabled & 2 != 0)
+    match value {
+        FieldValue::Cell(text) => {
+            let text = text.trim();
+            if text.is_empty() || matches!(text, "-" | "_") {
+                return Err("UnitWeapons weapsOn is not an admitted weapon-slot mask".into());
+            }
+            text.parse::<u32>()
+                .map_err(|_| format!("UnitWeapons weapsOn {text:?} is not an integer mask"))
+        }
+        FieldValue::Override(pcx_objects::Value::Int(mask)) => Ok(*mask),
+        _ => Err("UnitWeapons weapsOn is not an integer mask".into()),
+    }
 }
