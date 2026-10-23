@@ -198,6 +198,9 @@ impl UnitActivity {
     pub(super) fn can_start_motion(&self) -> bool {
         self.movable && self.speed.is_some_and(|speed| speed > 0.0)
     }
+    pub(super) fn speed(&self) -> Option<f32> {
+        self.speed
+    }
     /// The accepted route's waypoints, in travel order, and the index of the next one. Empty
     /// when no route is pending.
     pub fn waypoints(&self) -> (&[[f32; 2]], usize) {
@@ -1196,6 +1199,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.forget_campaign_flee(unit);
         self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);

@@ -132,6 +132,22 @@ fn campaign_flee_unadmitted_and_inactive_players_do_not_grow_the_registry() {
 }
 
 #[test]
+fn activation_without_policies_still_refuses_an_invalid_player_without_state_growth() {
+    let (mut h, _) = campaign_host();
+    assert!(h.player_identity(3).is_none());
+    let handles = h.inner().handles();
+    let error = h.activate_campaign_ai_player(3).unwrap_err().to_string();
+    assert!(error.contains("StartCampaignAI"), "{error}");
+    assert!(error.contains("player is not admitted"), "{error}");
+    assert!(h.player_identity(3).is_none());
+    assert_eq!(h.inner().handles(), handles);
+
+    let owner = player(&mut h, 0);
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), None);
+}
+
+#[test]
 fn campaign_flee_activation_requires_an_existing_player_without_minting_one() {
     let (mut h, ctx) = campaign_host();
     h.admit_campaign_flee(&ctx, FleePolicy::fixture()).unwrap();

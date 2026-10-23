@@ -608,11 +608,11 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{camera_margins::SourceWindow, script_math, script_numeric};
 
-    fn route_fixture() -> (FleePolicy, NumericPolicy) {
+    pub(crate) fn route_fixture() -> (FleePolicy, NumericPolicy) {
         let (mut image, mut numeric_binding, budget) = script_numeric::tests::fixture();
         let base = 0x301000u32;
         fn put(image: &mut [u8], base: u32, at: usize, bytes: &[u8]) -> SourceWindow {

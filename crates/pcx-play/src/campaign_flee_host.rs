@@ -11,6 +11,7 @@ use std::sync::Arc;
 const NATIVE: &str = "SetUnitsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
 const GATHERING_NATIVE: &str = "StopGathering";
+const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct PlayerFlags {
@@ -141,8 +142,9 @@ impl ObjectHost {
         self.campaign_flee.as_ref()
     }
 
-    /// `None` when flee operands are not admitted, the owner is not admitted, or
-    /// the owner is not an active campaign AI player.
+    /// `None` when flee operands are not admitted, the owner has no active
+    /// campaign AI context, or that player is not active. An invalid owner
+    /// handle is an `Err`, not `None`.
     pub fn campaign_flee_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
         if self.campaign_flee.is_none() {
             return Ok(None);
@@ -163,20 +165,14 @@ impl ObjectHost {
             .campaign_flee
             .as_ref()
             .map(|policy| policy.units_flee_default);
+        if self.player_identity(player).is_none() {
+            return Err(self.inner.error(
+                START_CAMPAIGN_AI,
+                Failure::ConfigState("player is not admitted"),
+            ));
+        }
         if target_heroes.is_none() && units_flee.is_none() && self.campaign_gathering.is_none() {
             return Ok(false);
-        }
-        if self.player_identity(player).is_none() {
-            let native = if target_heroes.is_some() {
-                TARGETING_NATIVE
-            } else if units_flee.is_some() {
-                NATIVE
-            } else {
-                GATHERING_NATIVE
-            };
-            return Err(self
-                .inner
-                .error(native, Failure::ConfigState("player is not admitted")));
         }
         Ok(self.campaign_ai.activate(player, target_heroes, units_flee))
     }
