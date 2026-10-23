@@ -40,6 +40,15 @@ impl ObjectHost {
                 Failure::ConfigState("context mask is not a single positive imm8 bit"),
             ));
         }
+        if !policy.tree_damage.is_normal()
+            || policy.tree_damage <= 0.0
+            || policy.deposit_lumber <= 0
+        {
+            return Err(self.inner.error(
+                NATIVE,
+                Failure::ConfigState("ordinary harvest overrides must be finite and positive"),
+            ));
+        }
         self.campaign_slow_chopping = Some(policy);
         Ok(())
     }
@@ -51,7 +60,7 @@ impl ObjectHost {
     /// `None` when slow-chopping operands are not admitted, the owner has no
     /// active campaign AI context, or that player has not run the setter. An
     /// invalid owner handle is an `Err`, not `None`.
-    // shortcut: native worker effects are unqualified; bind the harvest consumer after a matched tree-life probe.
+    // shortcut: controller effects and modified workers remain unqualified; extend after their behavior is mapped.
     pub fn campaign_slow_chopping_enabled(&self, owner: HandleId) -> Result<Option<bool>, Error> {
         if self.campaign_slow_chopping.is_none() {
             return Ok(None);

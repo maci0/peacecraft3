@@ -1002,6 +1002,16 @@ fn slow_chopping_admission_and_setter_refusals_preserve_existing_state() {
         assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
         assert!(host.campaign_slow_chopping_policy().is_none());
     }
+    for damage in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+        let mut policy = SlowChoppingPolicy::fixture();
+        policy.tree_damage = damage;
+        assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+        assert!(host.campaign_slow_chopping_policy().is_none());
+    }
+    let mut policy = SlowChoppingPolicy::fixture();
+    policy.deposit_lumber = 0;
+    assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+    assert!(host.campaign_slow_chopping_policy().is_none());
     host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
         .unwrap();
     assert!(host.set_ai_slow_chopping(0, true).is_err());
