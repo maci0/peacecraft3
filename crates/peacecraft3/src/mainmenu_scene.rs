@@ -88,9 +88,12 @@ use bevy::{
 
 /// The original background uses a logical camera rectangle across the full target.
 #[derive(Clone, Debug)]
-struct MenuCameraProjection(PerspectiveProjection);
+pub(crate) struct MenuCameraProjection(PerspectiveProjection);
 
-fn source_camera_pose(eye: [f32; 3], target: [f32; 3]) -> Result<Transform, &'static str> {
+pub(crate) fn source_camera_pose(
+    eye: [f32; 3],
+    target: [f32; 3],
+) -> Result<Transform, &'static str> {
     let eye = Vec3::from(eye);
     let target = Vec3::from(target);
     if !eye.is_finite() || !target.is_finite() {
@@ -106,7 +109,7 @@ fn source_camera_pose(eye: [f32; 3], target: [f32; 3]) -> Result<Transform, &'st
 }
 
 impl MenuCameraProjection {
-    fn checked(
+    pub(crate) fn checked(
         source_angle: f32,
         logical_size: [f32; 2],
         near: f32,

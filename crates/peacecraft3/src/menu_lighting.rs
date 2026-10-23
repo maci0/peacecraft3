@@ -59,6 +59,7 @@ struct Light {
 }
 
 pub(crate) struct Lighting {
+    directional: Option<pcx_play::day_night::Sun>,
     source: String,
     parameters: Parameters,
     lights: Vec<Light>,
@@ -224,6 +225,7 @@ impl Lighting {
             });
         }
         Ok(Self {
+            directional: None,
             source: source.into(),
             parameters,
             lights,
@@ -234,7 +236,20 @@ impl Lighting {
     }
 
     pub(crate) fn count(&self) -> usize {
-        self.lights.len()
+        self.lights.len() + usize::from(self.directional.is_some())
+    }
+
+    pub(crate) fn with_directional(mut self, light: pcx_play::day_night::Sun) -> Self {
+        self.directional = Some(light);
+        self
+    }
+
+    fn directional_colour(&self, normal: Vec3) -> Vec3 {
+        self.directional.map_or(Vec3::ZERO, |light| {
+            let direction = Vec3::from_array(light.direction).normalize();
+            Vec3::from_array(light.ambient_colour) * light.ambient_intensity
+                + Vec3::from_array(light.colour) * light.intensity * normal.dot(-direction).max(0.)
+        })
     }
 
     /// Retain authored shading flags before the materials switch off PBR.
@@ -306,7 +321,7 @@ impl Lighting {
                 .iter()
                 .zip(normals)
                 .map(|(p, n)| {
-                    let mut rgb = Vec3::ZERO;
+                    let mut rgb = self.directional_colour(n);
                     for light in &lights {
                         let delta = light.position - Vec3::from(*p);
                         let distance = delta.length();
@@ -517,6 +532,7 @@ pub(crate) mod tests {
     }
     pub(crate) fn lighting() -> Lighting {
         Lighting {
+            directional: None,
             source: "synthetic".into(),
             parameters: parameters(),
             lights: vec![Light {
@@ -531,6 +547,21 @@ pub(crate) mod tests {
             interval: [0, 100],
             lit: vec![],
         }
+    }
+    #[test]
+    fn shared_directional_light_illuminates_a_model_without_embedded_lights() {
+        let mut plan = lighting();
+        plan.lights.clear();
+        let plan = plan.with_directional(pcx_play::day_night::Sun {
+            direction: [0., 0., -2.],
+            colour: [0.5, 0.25, 0.75],
+            intensity: 0.8,
+            ambient_colour: [0.2, 0.4, 0.6],
+            ambient_intensity: 0.5,
+        });
+        assert_eq!(plan.count(), 1);
+        assert!((plan.directional_colour(Vec3::Z) - Vec3::new(0.5, 0.4, 0.9)).length() < 1e-6);
+        assert!((plan.directional_colour(-Vec3::Z) - Vec3::new(0.1, 0.2, 0.3)).length() < 1e-6);
     }
     fn mesh() -> pcx_gfx::LoadedMesh {
         pcx_gfx::LoadedMesh {

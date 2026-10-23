@@ -109,6 +109,7 @@ struct Stages<'w> {
     hud_prepare: Option<Res<'w, crate::hud_render::HudPrepare>>,
     inventory: Option<Res<'w, crate::campaign_inventory::CampaignInventory>>,
     unit_panel: Option<Res<'w, crate::campaign_unit_panel::UnitPanel>>,
+    portrait: Option<Res<'w, crate::campaign_portrait::CampaignPortrait>>,
     command_card: Option<Res<'w, crate::campaign_command_card::CommandCard>>,
     minimap: Option<Res<'w, crate::campaign_minimap::CampaignMinimap>>,
 }
@@ -129,10 +130,19 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         hud_prepare,
         inventory,
         unit_panel,
+        portrait,
         command_card,
         minimap,
     } = stages;
     let current = [
+        (
+            "unit portrait",
+            portrait.and_then(|p| {
+                p.last_error
+                    .as_ref()
+                    .map(|e| format!("{e} ({} source receipts)", p.receipt_count()))
+            }),
+        ),
         (
             "unit panel",
             unit_panel.and_then(|p| {

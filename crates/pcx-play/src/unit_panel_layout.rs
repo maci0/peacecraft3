@@ -23,6 +23,7 @@ pub struct Rules {
     pub shadow_offset: [f32; 2],
     pub mana_colour: u32,
     pub justification: u8,
+    pub portrait: Portrait,
     format: [String; 3],
     health_colour: u32,
     high: f32,
@@ -31,6 +32,48 @@ pub struct Rules {
     scale: f32,
     low_divisor: f32,
     full_channel: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct Portrait {
+    pub light: crate::day_night::Sun,
+    base: Rect,
+    aspect: f32,
+    center: f32,
+    numerator: f32,
+    logical_width: f32,
+    model_format: String,
+    path_bytes: usize,
+}
+impl Portrait {
+    pub fn rect(&self, aspect: f32) -> Result<Rect, String> {
+        if !aspect.is_finite() || aspect <= 0. {
+            return Err("unit portrait: invalid target aspect".into());
+        }
+        let mut rect = self.base;
+        if aspect > self.aspect {
+            rect.width *= self.aspect / aspect;
+            rect.x = (self.center - self.numerator / aspect) * self.logical_width;
+        }
+        Ok(rect)
+    }
+    /// The selected unit model has already resolved its edition/variation.
+    pub fn member(&self, unit_model: &str) -> Result<String, String> {
+        let (stem, extension) = unit_model
+            .rsplit_once('.')
+            .ok_or("unit portrait: model extension missing")?;
+        if !extension.eq_ignore_ascii_case("mdx")
+            || stem.is_empty()
+            || extension.contains(['\\', '/'])
+        {
+            return Err("unit portrait: unsupported source model path".into());
+        }
+        let member = self.model_format.replacen("%s", stem, 1);
+        if member.len() >= self.path_bytes || member.chars().any(char::is_control) {
+            return Err("unit portrait: model path budget".into());
+        }
+        Ok(member)
+    }
 }
 
 struct Reader<F>(F);
@@ -135,6 +178,67 @@ impl Rules {
         read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         let mut r = Reader(read);
+        let model_format = r.string(0x695503)?;
+        if model_format.matches("%s").count() != 1 || model_format.replace("%s", "").contains('%') {
+            return Err("unit portrait: unsupported path format".into());
+        }
+        let portrait = Portrait {
+            light: crate::day_night::Sun {
+                ambient_intensity: r.number(0x6210c9, &[0xc7, 4, 0x24])?,
+                intensity: r.number(0x6210fe, &[0xc7, 4, 0x24])?,
+                ambient_colour: [
+                    r.number(0x6210dd, &[0xc7, 0x45, 0xd8])?,
+                    r.number(0x6210e8, &[0xc7, 0x45, 0xdc])?,
+                    r.number(0x6210ef, &[0xc7, 0x45, 0xe0])?,
+                ],
+                colour: [
+                    r.number(0x621110, &[0xc7, 0x45, 0xd8])?,
+                    r.number(0x62111b, &[0xc7, 0x45, 0xdc])?,
+                    r.number(0x621122, &[0xc7, 0x45, 0xe0])?,
+                ],
+                direction: [
+                    r.number(0x621133, &[0xc7, 0x45, 0xd8])?,
+                    r.number(0x62113a, &[0xc7, 0x45, 0xdc])?,
+                    r.number(0x621141, &[0xc7, 0x45, 0xe0])?,
+                ],
+            },
+            base: Rect {
+                x: r.referenced(0x6416cb, &[0xf3, 0x0f, 0x10, 5])?,
+                y: r.number(0x641781, &[0xc7, 0x44, 0x24, 4])?,
+                width: r.referenced(0x6416b6, &[0xf3, 0x0f, 0x10, 5])?,
+                height: r.number(0x641758, &[0xc7, 4, 0x24])?,
+            },
+            aspect: r.referenced(0x6416f7, &[0xf3, 0x0f, 0x10, 5])?,
+            center: r.referenced(0x641721, &[0xf3, 0x0f, 0x10, 0x0d])?,
+            numerator: r.referenced(0x641715, &[0xf3, 0x0f, 0x10, 5])?,
+            logical_width: r.referenced(0x64172d, &[0xf3, 0x0f, 0x59, 0x0d])?,
+            path_bytes: r.word(0x69550e, &[0x68])? as usize,
+            model_format,
+        };
+        if r.bytes(0x641702, 2, true)? != [0x76, 0x36]
+            || r.bytes(0x641790, 5, true)? != [0x6a, 6, 0x52, 0x6a, 6]
+            || [
+                portrait.base.width,
+                portrait.base.height,
+                portrait.aspect,
+                portrait.logical_width,
+            ]
+            .iter()
+            .any(|v| *v <= 0.)
+            || portrait.path_bytes == 0
+            || portrait.path_bytes > 64 << 10
+            || portrait.light.direction.iter().all(|v| *v == 0.)
+            || portrait.light.ambient_intensity < 0.
+            || portrait.light.intensity < 0.
+            || portrait
+                .light
+                .ambient_colour
+                .iter()
+                .chain(&portrait.light.colour)
+                .any(|v| !(0.0..=1.0).contains(v))
+        {
+            return Err("unit portrait: unsupported placement/path bounds".into());
+        }
         let frame = r.string(0x61e690)?;
         let title = r.string(0x632bcb)?;
         let health = r.rect([0x659d33, 0x659d2b, 0x659d4b, 0x659d5e], 0x659d3a)?;
@@ -202,6 +306,7 @@ impl Rules {
             return Err("unit panel: health colour channels".into());
         }
         Ok(Self {
+            portrait,
             origin,
             image_sha256,
             frame,
@@ -290,6 +395,7 @@ mod tests {
         let mut map = BTreeMap::new();
         let mut pointer = 0x1000;
         for (sites, value) in [
+            (&[0x695503][..], "%s_head.mdx"),
             (&[0x61e690][..], "UnitFrame"),
             (&[0x632bcb][..], "UnitTitle"),
             (&[0x659e04, 0x659f47][..], "TextFont"),
@@ -383,6 +489,42 @@ mod tests {
             &[0xc6, 0x85, 0xe6, 0xfe, 0xff, 0xff, 230],
         );
         put(&mut map, 0x65a11d, &[0xf3, 0x0f, 0x58, 0xc9]);
+        op(&mut map, 0x69550e, &[0x68], 777);
+        op(
+            &mut map,
+            0x641781,
+            &[0xc7, 0x44, 0x24, 4],
+            0.02f32.to_bits(),
+        );
+        op(&mut map, 0x641758, &[0xc7, 4, 0x24], 0.11f32.to_bits());
+        for (va, prefix, value, address) in [
+            (0x6416cb, &[0xf3, 0x0f, 0x10, 5][..], 0.25f32, 0x2400),
+            (0x6416b6, &[0xf3, 0x0f, 0x10, 5][..], 0.13, 0x2410),
+            (0x6416f7, &[0xf3, 0x0f, 0x10, 5][..], 1.4, 0x2420),
+            (0x641721, &[0xf3, 0x0f, 0x10, 0x0d][..], 0.5, 0x2430),
+            (0x641715, &[0xf3, 0x0f, 0x10, 5][..], 0.3, 0x2440),
+            (0x64172d, &[0xf3, 0x0f, 0x59, 0x0d][..], 0.9, 0x2450),
+        ] {
+            op(&mut map, va, prefix, address);
+            put(&mut map, address, &value.to_le_bytes());
+        }
+        put(&mut map, 0x641702, &[0x76, 0x36]);
+        put(&mut map, 0x641790, &[0x6a, 6, 0x52, 0x6a, 6]);
+        for (va, prefix, value) in [
+            (0x6210c9, &[0xc7, 4, 0x24][..], 0.2f32),
+            (0x6210fe, &[0xc7, 4, 0x24][..], 0.7),
+            (0x6210dd, &[0xc7, 0x45, 0xd8][..], 0.3),
+            (0x6210e8, &[0xc7, 0x45, 0xdc][..], 0.4),
+            (0x6210ef, &[0xc7, 0x45, 0xe0][..], 0.5),
+            (0x621110, &[0xc7, 0x45, 0xd8][..], 0.6),
+            (0x62111b, &[0xc7, 0x45, 0xdc][..], 0.7),
+            (0x621122, &[0xc7, 0x45, 0xe0][..], 0.8),
+            (0x621133, &[0xc7, 0x45, 0xd8][..], -0.5),
+            (0x62113a, &[0xc7, 0x45, 0xdc][..], 0.3),
+            (0x621141, &[0xc7, 0x45, 0xe0][..], -0.2),
+        ] {
+            op(&mut map, va, prefix, value.to_bits());
+        }
         map
     }
     fn decode(map: &BTreeMap<u32, u8>) -> Result<Rules, String> {
@@ -404,6 +546,29 @@ mod tests {
         assert_eq!(r.font, "TextFont");
         assert_eq!(r.section, "Sizes");
         assert_eq!(r.justification, 1);
+        assert_eq!(r.portrait.light.ambient_intensity, 0.2);
+        assert_eq!(r.portrait.light.intensity, 0.7);
+        assert_eq!(r.portrait.light.ambient_colour, [0.3, 0.4, 0.5]);
+        assert_eq!(r.portrait.light.colour, [0.6, 0.7, 0.8]);
+        assert_eq!(r.portrait.light.direction, [-0.5, 0.3, -0.2]);
+        assert_eq!(
+            r.portrait.member("Models/Unit.mdx").unwrap(),
+            "Models/Unit_head.mdx"
+        );
+        assert_eq!(
+            r.portrait.rect(1.).unwrap(),
+            Rect {
+                x: 0.25,
+                y: 0.02,
+                width: 0.13,
+                height: 0.11
+            }
+        );
+        let wide = r.portrait.rect(2.).unwrap();
+        assert!((wide.x - 0.315).abs() < 1e-6);
+        assert!((wide.width - 0.091).abs() < 1e-6);
+        assert!(r.portrait.rect(f32::NAN).is_err());
+        assert!(r.portrait.member("bad.blp").is_err());
         assert_eq!(r.readout(4.2, 10.1, true).unwrap(), "[5 of 11]");
         assert_eq!(r.readout(4.9, 10.9, false).unwrap(), "[4 of 10]");
         assert_eq!(r.health_colour(1.).unwrap(), 0xaa00e612);

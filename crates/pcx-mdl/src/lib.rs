@@ -1244,10 +1244,10 @@ pub struct AnimTrack {
 }
 
 impl AnimTrack {
-    /// Components in one key value: one for a scalar track, three for a colour.
+    /// Components in one key value: one for a scalar, three for a colour or camera vector.
     fn components(&self) -> usize {
         match &self.magic[..] {
-            b"KGAC" | b"KLAC" | b"KLBC" => 3,
+            b"KGAC" | b"KLAC" | b"KLBC" | b"KCTR" | b"KTTR" => 3,
             _ => 1,
         }
     }
@@ -1738,6 +1738,11 @@ pub fn sample_scalar(track: &AnimTrack, frame: u32) -> f32 {
 /// Returns raw stored components with one shared key-span search. The caller
 /// supplies a validated colour curve; material channel mapping is separate.
 pub fn sample_colour(track: &AnimTrack, frame: u32) -> [f32; 3] {
+    sample_vector(track, frame)
+}
+
+/// Samples a validated three-component curve, including camera eye/target offsets.
+pub fn sample_vector(track: &AnimTrack, frame: u32) -> [f32; 3] {
     let n = track.count as usize;
     if n == 0 {
         return [0.0; 3];

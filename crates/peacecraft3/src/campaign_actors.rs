@@ -188,7 +188,7 @@ fn look_at_target<'a>(
     )))
 }
 
-fn team_color(
+pub(crate) fn team_color(
     objects: &pcx_play::playercolor_host::ObjectHost,
     unit: &ExecutedUnit,
 ) -> Result<i32, String> {
@@ -278,12 +278,12 @@ pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
 }
 
 #[derive(Clone)]
-struct TeamPalette {
+pub(crate) struct TeamPalette {
     prefixes: [String; 2],
     count: i32,
 }
 impl TeamPalette {
-    fn read(bytes: &[u8]) -> Result<Self, String> {
+    pub(crate) fn read(bytes: &[u8]) -> Result<Self, String> {
         let skin = crate::menu_skin::SkinTable::parse(
             std::str::from_utf8(bytes).map_err(|e| e.to_string())?,
         )
@@ -309,7 +309,7 @@ impl TeamPalette {
             count,
         })
     }
-    fn path<'a>(
+    pub(crate) fn path<'a>(
         &self,
         paths: impl Iterator<Item = &'a pcx_assets::AssetPath>,
         slot: u32,
@@ -343,7 +343,7 @@ impl TeamPalette {
 }
 
 // Each source layer gets a draw while keeping the source geometry, GEOA and clocks.
-fn expand_layers(
+pub(crate) fn expand_layers(
     model: &mut pcx_gfx::LoadedModel,
     runtime: &mut pcx_gfx::mdx_runtime::RuntimePlan,
     maximum_vertices: usize,

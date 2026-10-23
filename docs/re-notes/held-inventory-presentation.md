@@ -233,7 +233,68 @@ The preserved default executable has SHA-256
 The application and private display were stopped. The earlier left-aligned run
 remains preserved in `.scratch/unit-panel-native/` and is superseded.
 
-Portrait models, remaining unit/hero statistics, group-selection icons, readout
+Remaining unit/hero statistics, group-selection icons, readout
 hover tooltips and randomized proper-name state remain unfinished. Original-client
 pixel parity and other viewport/DPI combinations were not verified here. The
 existing sky illumination and sight-occlusion gaps remain open.
+
+## Animated selected-unit portrait
+
+`campaign_portrait.rs` renders the canonical single selection through the existing
+MDX material, skinning, opacity, texture-animation and lighting paths. It owns an
+offscreen image and camera beneath the receipt-bound console art, rather than a
+second unit store. Selection replacement and session retirement release the scene
+and its private meshes, materials and images. Cinematic interface hiding pauses
+and hides it. Missing or unsupported source data reports a diagnostic.
+
+The reviewed client's unit-model loader at `0x695070` supplies the portrait path
+format and missing-portrait fallback to the resolved unit model. The portrait draw
+at `0x6416b0` supplies its logical rectangle and widescreen relationship. The
+`CPortraitButton` constructor at `0x620ee0` adds a shared directional light with
+separate ambient/diffuse colour and intensity operands. `unit_panel_layout.rs`
+reads these values from the checked selected image; none is copied into an authored
+value constant. This scene light matters for the Footman portrait, which contains
+no embedded `LITE` chunk. Embedded model lights remain additional inputs.
+
+The camera position, target, field of view and clips come from `CAMS`; `KCTR`,
+`KTTR` and `KCRL` retain their local/global animation clocks and interpolation.
+The renderer keeps source Z-up coordinates and reuses the model renderer's camera
+projection. It does not fit a camera to the model bounds. Models without a camera
+currently refuse. Portrait idle selection follows source sequence order; speech,
+acknowledgement-driven animation and rarity selection remain unfinished.
+
+Native evidence and locally extracted model inspections remain ignored under
+`.scratch/campaign-portrait/`. The first desktop replay exposed a dark Footman
+because it used embedded lights alone; `.scratch/portrait-native/` preserves that
+superseded diagnostic. An empty-ground click retained the Footman selection, so
+its checkpoint named `selection-cleared` is not deselection evidence. The mounted
+panel and portrait lifecycle tests exercise actual deselection/scene retirement.
+
+The corrected source passes 1,684 core, 58 MDX, 66 graphics, 55 app-library and
+638 app-binary tests. Explicit original-input gates admit the reviewed layout/
+lighting operands, authored camera curves and the Human01 Arthas and Footman
+models; the portrait test advances and retires its GPU-facing assets. Strict
+native all-target and WASM library/binary Clippy pass. Exact commands and logs
+remain in `.scratch/campaign-portrait/gates-lit/`.
+
+The corrected 1280x1024/96-DPI software-Vulkan desktop replay enters Human01
+through the menus, selects Arthas, switches to a Footman and back, and shows both
+lit portraits with idle motion beneath the console border. It uses no fixed
+seed and does not verify audio. Balanced-input receipts are retained in
+`.scratch/portrait-native-lit/`: `receipt-launcher.json` has SHA-256
+`70ea5c421626ad67cf105cd10b416c2c5f0e12ca7f5ab1e30889f6f6e0dbb4d3`,
+and `receipt-hero-before-switch.json` has SHA-256
+`b3bf8eaf1601c2e957e71ee3a197f2ec3a6b07b4f3efc52af5d10e04e64d4eba`.
+The preserved tested executable has SHA-256
+`7e0cd1e2df82bf8bf0902b42156c57a9814ae692650442452c93e2cff2804be3`;
+`captures/footman-lit.png` has SHA-256
+`d4d5b9305c2f176a6b22c35c78ec68573fe272ce48c6be236259344f5f8cd66e`.
+`verification.json` records the remaining image/source/build receipts and
+portrait-region changes between idle captures. The owned application and display
+were stopped. The default desktop build and formatting also pass.
+
+The isolated framebuffer's opaque empty background and the existing console-art
+overlap are composition choices. Original-client pixel parity, portrait-mask model
+composition, dialogue portraits, speech synchronization and other viewport/DPI
+combinations remain unverified. Native rendering internals are not a compatibility
+requirement; the remaining target is the same visible behaviour.

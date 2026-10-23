@@ -35,7 +35,13 @@ pub(crate) struct UnitPanel {
     view: Option<View>,
     pub last_error: Option<String>,
 }
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct UnitPanelSet;
 impl UnitPanel {
+    pub(crate) fn portrait_binding(&self) -> Option<(&Rules, [f32; 2], Entity)> {
+        let source = self.source.as_ref()?;
+        Some((&source.rules, source.viewport, self.parent?))
+    }
     pub(crate) fn receipt_count(&self) -> usize {
         self.source.as_ref().map_or(0, |s| s.receipts.len())
     }
@@ -71,9 +77,11 @@ struct Inputs<'w, 's> {
 }
 
 pub(crate) fn install(app: &mut App) {
+    crate::campaign_portrait::install(app);
     app.init_resource::<UnitPanel>().add_systems(
         Update,
         project
+            .in_set(UnitPanelSet)
             .after(crate::campaign_input::CampaignInputSet)
             .before(CampaignPresentationSet),
     );

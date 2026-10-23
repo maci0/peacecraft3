@@ -2,6 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Selected campaign units now have an animated MDX portrait, using authored
+  cameras/tracks, source-derived placement/model lookup and the shared portrait
+  light. It reuses the renderer and canonical selection. Models without embedded
+  lights receive the scene light too. The original-client decoder, Human01
+  portrait/readout lifecycle tests, 1,684 core, 58 MDX, 66 graphics, 55 app-library
+  and 638 app-binary tests pass, with strict native/WASM Clippy. A calibrated
+  menu-to-Human01 desktop replay shows lit Arthas/Footman portraits, idle motion
+  and selection switching. Speech animation,
+  idle rarity, portrait-mask composition and original-client pixel parity remain
+  open; see [animated portrait](docs/re-notes/held-inventory-presentation.md#animated-selected-unit-portrait).
+
 - [~] A single selected unit now shows its source-derived name and live health/
   mana readouts in the campaign console. The selected detail FDF supplies title
   style/anchor; checked client operands supply portrait text geometry, formatting,
@@ -9,7 +20,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   verify selection changes, life updates, deselection and session cleanup; a
   calibrated desktop menu-to-Human01 replay shows the centered title/readouts.
   All 1,684 core, 55 app-library and 634 app-binary tests pass, with strict
-  native/WASM checks. Portrait rendering, additional statistics, group selection
+  native/WASM checks. Additional statistics, group selection
   and randomized hero-name state remain open; see
   [selected-unit readouts](docs/re-notes/held-inventory-presentation.md#selected-unit-title-and-portrait-readouts).
 
