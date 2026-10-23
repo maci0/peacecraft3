@@ -85,7 +85,7 @@ It still lacks terrain/tree sight occlusion and sight-changing upgrades/effects.
 Presentation-frame exploration sampling, exact camera-margin projection,
 modifier masking behavior and blend/filter parity need original-client
 comparison. World terrain/actor fog and public visibility queries do not yet
-consume this raster. Markers, unit icons, camera overlay and minimap orders
+consume this raster. Markers, unit icons, camera overlay and unit-icon targeting
 remain unfinished. The renderer keeps an explicit missing-occlusion
 diagnostic rather than claiming completed visibility fidelity.
 
@@ -100,13 +100,24 @@ same running pan. No separate camera or copied map dimensions are introduced.
 
 Releasing the button stops tracking. Control/interface locks, quest/script
 dialogs, an inactive view, a retired session or a departed local player prevent
-camera changes. Session retirement clears pending presses and drags. Right
-clicks and clicks with an armed command still refuse targeting instead of
-moving the camera or issuing an unintended ground order.
+camera or order changes. Session retirement clears pending presses and drags.
+
+Right clicks issue point Move orders through the existing standard-order
+consumer. Armed Move, Attack and Patrol use a left click as their point target;
+right clicking an armed command cancels without issuing a replacement move.
+Unit-targeted spells cancel as on bare ground; targeting unit icons remains
+unimplemented. Orders recheck the live selection and local ownership, derive
+their IDs from the admitted command policy, and enter the existing player
+journal only after native acceptance. Point orders do not pan the camera.
+Hotkey/source preparation runs before minimap input, which consumes the pointer
+before world picking. A bounded, fallible press queue preserves multiple presses
+in one frame instead of replacing them with the last event. This queue is input
+collection, not Shift waypoint queuing; movement/formation semantics remain
+those of the existing unit router.
 
 This uses the current house map-image projection; exact native camera-margin
 mapping and padding behavior still need comparison. It does not implement the
-camera-footprint overlay or minimap orders.
+camera-footprint overlay or unit-icon targets.
 
 ### Fog alpha source join
 
@@ -144,7 +155,7 @@ These are static observations on the image identified above, not a client run.
 ## Runtime evidence and limits
 
 The current suites pass 69 object tests, 1,682 core tests, 55 app-library tests
-and 630 app-binary tests. Synthetic fixtures vary day/night sight, alliances,
+and 631 app-binary tests. Synthetic fixtures vary day/night sight, alliances,
 modifier states/order, opacity and clear-pixel values. Movement, exploration,
 switch combinations, canonical removal, budgets and refusal without history
 mutation are covered. The selected-image minimap decoder passes separately.
@@ -154,7 +165,10 @@ build and formatting pass.
 The explicit selected-Human01 camera test also passes. It changes the camera
 through the minimap consumer, checks the shared raster inverse and executed
 bounds, holds and releases a drag, then verifies control/UI locks, a quest modal,
-camera suspension and a stale session cannot move it. A separate unit test
+camera suspension and a stale session cannot move it. The same selected-map
+gate checks two owned units versus a foreign selected unit, accepted-only
+journaling, armed Move/Attack/Patrol, cancellation without a pointer coordinate,
+and multiple point-order presses in one update. A separate unit test
 cancels a held drag with no cursor position; projection tests cover nonsquare
 maps, padding, out-of-surface coordinates and non-finite refusal. This is
 application behavior evidence, not an original-client camera comparison.
@@ -173,6 +187,22 @@ used, audio was disabled and no fixed seed or original-client parity is claimed.
 The private application/display were stopped afterward. Failed launcher and
 pre-input replay-validation attempts remain separate; no game input was sent in
 those attempts.
+
+A subsequent desktop replay in `.scratch/minimap-orders-native/` reaches the
+same chapter, selects the hero, sends a right-click minimap Move and then an
+armed Attack click. The installed command-string members agree on the Attack
+hotkey; their bytes and hashes remain local in `hotkey-source.json`. The replay
+uses that derived key. The application records one accepted player command for
+each press and no minimap camera requests; captures show unit movement while
+the terrain view remains fixed. This verifies application dispatch/motion, not
+original-client arrival, formation or timing parity.
+
+The balanced-input receipt SHA-256 is
+`4b7e92759904787602db34a421689c360b7d0a3dffb76b28e872e07c72ec9d80`;
+the tested default binary is preserved with SHA-256
+`7ebae3e0d2ab0d170c1f82b8f50f6bff77f2abae04b0fc458b7bc3caf1bc12fc`.
+This run also uses software Vulkan at 1280x1024/96 DPI, disabled audio and no
+fixed seed. Its private application and display were stopped after collection.
 
 The production offscreen Vulkan run in
 `.scratch/campaign-minimap-render/vision-2/` follows mounted menu and mission

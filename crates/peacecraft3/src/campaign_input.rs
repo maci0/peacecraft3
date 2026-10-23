@@ -57,7 +57,12 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(
             Update,
             (
-                (command_hotkey, load_circles, click)
+                (
+                    (command_hotkey, load_circles)
+                        .chain()
+                        .before(crate::campaign_minimap::MinimapInputSet),
+                    click.after(crate::campaign_minimap::MinimapInputSet),
+                )
                     .chain()
                     .in_set(CampaignInputSet)
                     .after(crate::campaign_command_card::CommandCardSet)
@@ -220,7 +225,7 @@ fn owned_standard_orders(
     Ok(orders)
 }
 
-fn activate_standard(
+pub(crate) fn activate_standard(
     host: &mut MapStartupHost,
     input: &mut CampaignInput,
     unit: HandleId,
@@ -262,7 +267,7 @@ fn record_order_result(
     }
 }
 
-fn standard_target(
+pub(crate) fn standard_target(
     objects: &mut pcx_play::playercolor_host::ObjectHost,
     input: &mut CampaignInput,
     kind: pcx_play::standard_command::Kind,
@@ -526,6 +531,35 @@ pub(crate) struct ArmedCommand {
 impl ArmedCommand {
     fn is_for(&self, session: Option<Weak<()>>) -> bool {
         session.is_some_and(|session| Weak::ptr_eq(&session, &self.session))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MinimapAction {
+    Camera,
+    PointOrder(pcx_play::standard_command::Kind),
+    Cancel,
+}
+
+/// The minimap has point targets; unit-targeted spells cancel as on bare ground.
+pub(crate) fn minimap_action(
+    input: &mut CampaignInput,
+    session: Option<Weak<()>>,
+    primary: bool,
+) -> MinimapAction {
+    use pcx_play::standard_command::Kind;
+    if let Some(armed) = input.command.take().filter(|a| a.is_for(session)) {
+        return match armed.kind {
+            crate::campaign_command_card::Kind::Standard(kind) if primary && !kind.immediate() => {
+                MinimapAction::PointOrder(kind)
+            }
+            _ => MinimapAction::Cancel,
+        };
+    }
+    if primary {
+        MinimapAction::Camera
+    } else {
+        MinimapAction::PointOrder(Kind::Move)
     }
 }
 
@@ -1511,6 +1545,66 @@ mod tests {
         assert!(armed.is_for(Some(Arc::downgrade(&first))));
         assert!(!armed.is_for(Some(Arc::downgrade(&second))));
         assert!(!armed.is_for(None));
+    }
+
+    #[test]
+    fn minimap_selects_point_orders_camera_or_cancellation_without_reusing_stale_commands() {
+        use crate::campaign_command_card::Kind;
+        use pcx_play::standard_command::Kind as Standard;
+        let live = Arc::new(());
+        let stale = Arc::new(());
+        let mut input = CampaignInput::default();
+        assert_eq!(
+            minimap_action(&mut input, Some(Arc::downgrade(&live)), true),
+            MinimapAction::Camera
+        );
+        assert_eq!(
+            minimap_action(&mut input, Some(Arc::downgrade(&live)), false),
+            MinimapAction::PointOrder(Standard::Move)
+        );
+        for kind in [Standard::Move, Standard::Attack, Standard::Patrol] {
+            input.command = Some(ArmedCommand {
+                order: 99,
+                kind: Kind::Standard(kind),
+                session: Arc::downgrade(&live),
+            });
+            assert_eq!(
+                minimap_action(&mut input, Some(Arc::downgrade(&live)), true),
+                MinimapAction::PointOrder(kind)
+            );
+            assert!(input.command.is_none());
+            input.command = Some(ArmedCommand {
+                order: 99,
+                kind: Kind::Standard(kind),
+                session: Arc::downgrade(&live),
+            });
+            assert_eq!(
+                minimap_action(&mut input, Some(Arc::downgrade(&live)), false),
+                MinimapAction::Cancel
+            );
+        }
+        for kind in [Kind::TargetUnit, Kind::Immediate] {
+            input.command = Some(ArmedCommand {
+                order: 99,
+                kind,
+                session: Arc::downgrade(&live),
+            });
+            assert_eq!(
+                minimap_action(&mut input, Some(Arc::downgrade(&live)), true),
+                MinimapAction::Cancel
+            );
+            assert!(input.command.is_none());
+        }
+        input.command = Some(ArmedCommand {
+            order: 99,
+            kind: Kind::Standard(Standard::Attack),
+            session: Arc::downgrade(&stale),
+        });
+        assert_eq!(
+            minimap_action(&mut input, Some(Arc::downgrade(&live)), true),
+            MinimapAction::Camera
+        );
+        assert!(input.command.is_none());
     }
 
     #[test]
