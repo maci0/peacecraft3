@@ -1105,23 +1105,25 @@ fn create_snapshot_file(directory: &Path, source: &Path) -> Result<File, Error> 
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let file = options.open(&path).map_err(|error| {
-        Error::Message(format!(
-            "{}: cannot create a private snapshot in {}: {error}",
-            source.display(),
-            directory.display()
-        ))
-    })?;
-    if let Err(error) = std::fs::remove_file(&path) {
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        return Err(Error::Message(format!(
-            "{}: cannot unlink private snapshot {} before copying source bytes: {error}",
-            source.display(),
-            path.display()
-        )));
-    }
-    Ok(file)
+    let error = {
+        let file = options.open(&path).map_err(|error| {
+            Error::Message(format!(
+                "{}: cannot create a private snapshot in {}: {error}",
+                source.display(),
+                directory.display()
+            ))
+        })?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(file),
+            Err(error) => error,
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    Err(Error::Message(format!(
+        "{}: cannot unlink private snapshot {} before copying source bytes: {error}",
+        source.display(),
+        path.display()
+    )))
 }
 
 fn snapshot_archive(
