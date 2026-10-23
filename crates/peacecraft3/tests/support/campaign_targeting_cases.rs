@@ -158,6 +158,8 @@ endfunction
         max_secondary: 8,
     });
     inputs.targeting_policy = Some(pcx_play::campaign_targeting_policy::TargetingPolicy::fixture());
+    let flee_policy = pcx_play::campaign_flee_policy::FleePolicy::fixture();
+    inputs.flee_policy = Some(flee_policy);
     inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
     inputs.enumeration.names.extend(
         [
@@ -191,9 +193,10 @@ endfunction
         .admission
         .shared_context()
         .unwrap();
-    let ai_common = AI_COMMON;
+    let ai_common =
+        format!("{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\n");
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall Sleep(0.25)\ncall SetTargetHeroes({})\nendfunction\n", !flag);
+        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\nendfunction\n", !flag, !flag);
         let program = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -273,6 +276,13 @@ endfunction
     };
     assert_eq!(flag(&mut session, a), Some(false));
     assert_eq!(flag(&mut session, b), Some(true));
+    let flee_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_flee_enabled(owner).unwrap()
+    };
+    assert_eq!(flee_flag(&mut session, a), Some(true));
+    assert_eq!(flee_flag(&mut session, b), Some(false));
     session.advance_timers(0.125, 1000).unwrap();
     let acquired: Vec<_> = session
         .host()
@@ -294,6 +304,8 @@ endfunction
     session.advance_timers(0.25, 1000).unwrap();
     assert_eq!(flag(&mut session, a), Some(true));
     assert_eq!(flag(&mut session, b), Some(false));
+    assert_eq!(flee_flag(&mut session, a), Some(false));
+    assert_eq!(flee_flag(&mut session, b), Some(true));
     for (unit, target) in [(a, a_new), (b, b_new)] {
         assert_eq!(
             session

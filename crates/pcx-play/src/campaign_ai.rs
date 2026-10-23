@@ -121,6 +121,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_activate_player(&mut self, player: i32) -> Result<bool, String>;
     fn ai_deactivate_player(&mut self, player: i32);
     fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String>;
+    fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -207,6 +208,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .set_ai_target_heroes(player, enabled)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_units_flee(player, enabled)
             .map_err(|e| e.to_string())
     }
 }
@@ -326,6 +338,8 @@ impl<W: AiWorld> Runtime<W> {
         *world = vm.host().world.take();
         if result.is_ok() {
             self.active.insert(player, vm);
+        } else if let Some(world) = world.as_mut() {
+            world.ai_deactivate_player(player);
         }
         result.map_err(|e| format!("campaign AI player {player}: {e}"))
     }
@@ -372,7 +386,10 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
-    if let Some(native) = scripts.program().natives().get("SetTargetHeroes") {
+    for name in ["SetTargetHeroes", "SetUnitsFlee"] {
+        let Some(native) = scripts.program().natives().get(name) else {
+            continue;
+        };
         let expected = scripts
             .digests
             .get(1)
@@ -388,7 +405,9 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             || native.ret.array
             || native.ret.kind.name() != "nothing"
         {
-            return Err("StartCampaignAI: SetTargetHeroes AI common declaration differs".into());
+            return Err(format!(
+                "StartCampaignAI: {name} AI common declaration differs"
+            ));
         }
     }
     Ok(())
@@ -545,6 +564,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_set_target_heroes(player, *enabled)?;
                 Ok(Value::Null)
             }
+            "SetUnitsFlee" => {
+                let [Value::Bool(enabled)] = args else {
+                    return Err("SetUnitsFlee: expected a boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_units_flee(player, *enabled)?;
+                Ok(Value::Null)
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -571,6 +598,7 @@ mod tests {
         callbacks: bool,
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
+        units_flee: BTreeMap<i32, bool>,
     }
 
     struct World(Arc<Mutex<State>>);
@@ -602,6 +630,7 @@ mod tests {
         fn ai_deactivate_player(&mut self, player: i32) {
             self.0.lock().unwrap().active.remove(&player);
             self.0.lock().unwrap().target_heroes.remove(&player);
+            self.0.lock().unwrap().units_flee.remove(&player);
         }
         fn ai_set_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
@@ -609,6 +638,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.target_heroes.insert(player, enabled);
+            Ok(())
+        }
+        fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.units_flee.insert(player, enabled);
             Ok(())
         }
     }
@@ -688,6 +725,148 @@ mod tests {
     }
 
     const AI_TARGET: &str = "native SetTargetHeroes takes boolean flag returns nothing\n";
+    const AI_FLEE: &str = "native SetUnitsFlee takes boolean flag returns nothing\n";
+
+    #[test]
+    fn flee_flags_use_each_ai_player_and_wake_without_changing_targeting_flags() {
+        let ai_common = format!("{AI_COMMON}{AI_TARGET}{AI_FLEE}");
+        let script = program_with_ai_common(
+            "synthetic:flee.ai",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(GetAiPlayer() == 2)\ncall SetUnitsFlee(GetAiPlayer() == 1)\ncall Sleep(0.25)\ncall SetUnitsFlee(GetAiPlayer() != 1)\nendfunction\n",
+            &ai_common,
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "flee.ai").unwrap();
+        }
+        let loads = runtime.remaining_loads;
+        runtime.start(&mut world, 1, "other.ai").unwrap();
+        assert_eq!(runtime.remaining_loads, loads);
+        {
+            let state = shared.lock().unwrap();
+            assert_eq!(state.units_flee, [(1, true), (2, false)].into());
+            assert_eq!(state.target_heroes, [(1, false), (2, true)].into());
+        }
+        shared.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        let state = shared.lock().unwrap();
+        assert_eq!(state.units_flee, [(1, false), (2, true)].into());
+        assert_eq!(state.target_heroes, [(1, false), (2, true)].into());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn malformed_flee_declarations_refuse_before_activation_or_main_writes() {
+        let body = "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()), null, 17)\ncall SetUnitsFlee(true)\nendfunction\n";
+        for (common, ai_common) in [
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_FLEE.replace("boolean flag", "integer flag")
+                ),
+            ),
+            (
+                COMMON.into(),
+                format!(
+                    "{AI_COMMON}{}",
+                    AI_FLEE.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (COMMON.into(), format!("{AI_COMMON}constant {AI_FLEE}")),
+            (format!("{COMMON}{AI_FLEE}"), AI_COMMON.into()),
+        ] {
+            let script = program_with_sources("synthetic:flee.ai", body, &common, &ai_common);
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let shared = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&shared)));
+            let error = runtime.start(&mut world, 1, "flee.ai").unwrap_err();
+            assert!(error.contains("SetUnitsFlee"), "{error}");
+            let state = shared.lock().unwrap();
+            assert!(state.active.is_empty());
+            assert!(state.units_flee.is_empty());
+            assert!(state.gold.is_empty());
+            assert!(world.is_some());
+        }
+    }
+
+    #[test]
+    fn flee_dispatch_refuses_bad_arguments_and_failed_main_retires_both_flags() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(true), Value::Bool(false)],
+        ] {
+            let error = host.native("SetUnitsFlee", &args).unwrap_err();
+            assert!(error.contains("SetUnitsFlee"), "{error}");
+            assert!(shared.lock().unwrap().units_flee.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:flee.ai",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall SetUnitsFlee(true)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &format!("{AI_COMMON}{AI_TARGET}{AI_FLEE}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let mut world = Some(World(Arc::clone(&shared)));
+        assert!(runtime.start(&mut world, 1, "flee.ai").is_err());
+        let state = shared.lock().unwrap();
+        assert!(state.active.is_empty());
+        assert!(state.target_heroes.is_empty());
+        assert!(state.units_flee.is_empty());
+        assert!(world.is_some());
+    }
+
+    #[test]
+    fn failed_wake_retires_only_its_discarded_vm_and_shared_flags() {
+        let common = format!("{AI_COMMON}{AI_TARGET}{AI_FLEE}");
+        let failed = program_with_ai_common(
+            "synthetic:failed.ai",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(true)\ncall SetUnitsFlee(true)\ncall Sleep(0.25)\ncall GetUnitGoldCost(0)\nendfunction\n",
+            &common,
+        );
+        let peer = program_with_ai_common(
+            "synthetic:peer.ai",
+            "function main takes nothing returns nothing\ncall SetTargetHeroes(false)\ncall SetUnitsFlee(false)\ncall Sleep(1.0)\nendfunction\n",
+            &common,
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |name| match name {
+            "failed.ai" => Ok(Arc::clone(&failed)),
+            "peer.ai" => Ok(Arc::clone(&peer)),
+            _ => Err("missing synthetic program".into()),
+        });
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "failed.ai").unwrap();
+        runtime.start(&mut world, 2, "peer.ai").unwrap();
+        let loads = runtime.remaining_loads;
+        shared.lock().unwrap().clock = 0.25;
+        let (_, player, ticket) = runtime.next_wake(0.25).unwrap();
+        assert_eq!(player, 1);
+        let error = runtime.resume(&mut world, player, ticket).unwrap_err();
+        assert!(error.contains("GetUnitGoldCost"), "{error}");
+        assert!(!runtime.active.contains_key(&1));
+        assert!(runtime.active.contains_key(&2));
+        assert_eq!(runtime.remaining_loads, loads);
+        assert!(world.is_some());
+        assert!(world.as_mut().unwrap().ai_set_units_flee(1, true).is_err());
+        let state = shared.lock().unwrap();
+        assert_eq!(state.active.keys().copied().collect::<Vec<_>>(), [2]);
+        assert_eq!(state.target_heroes, [(2, false)].into());
+        assert_eq!(state.units_flee, [(2, false)].into());
+        drop(state);
+        assert_eq!(runtime.next_wake(1.0).unwrap().1, 2);
+    }
 
     #[test]
     fn set_target_heroes_requires_the_admitted_ai_common_declaration_and_active_player() {

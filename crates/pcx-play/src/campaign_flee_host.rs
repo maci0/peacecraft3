@@ -64,10 +64,6 @@ impl Registry {
         true
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "admitted by callers in a later integration")
-    )]
     pub(super) fn set_units_flee(&mut self, player: i32, enabled: bool) -> bool {
         let Some(flags) = self.players.get_mut(&player) else {
             return false;
@@ -179,13 +175,6 @@ impl ObjectHost {
         Ok(())
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "wired by the campaign AI caller in a later integration"
-        )
-    )]
     pub(crate) fn set_ai_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), Error> {
         if self.campaign_flee.is_none() {
             return Err(self

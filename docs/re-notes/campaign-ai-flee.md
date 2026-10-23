@@ -298,3 +298,21 @@ false map SHA-256:
 All staged-member identities, source comparisons, loader captures, raw markers
 and summaries remain local under `.scratch/flee-unpaused-threat-runs/`. Both
 clients are stopped.
+
+## Shared state and startup admission
+
+Campaign preparation now decodes the flee policy from the selected image and
+admits it into the published map host. `SetUnitsFlee` validates its owned
+AI-common boolean-to-nothing declaration and updates the same canonical player
+registry as targeting. Two programs in a published map session prove isolated
+flags and changes after sleep. Failed startup rolls back newly created state;
+a failed wake retires the discarded program's flags without removing its peer.
+The latter is failure cleanup, not a native error-behavior claim.
+
+Private verification passes 1,543 core tests and 610 application tests, strict
+native/WASM Clippy, formatting and diff checks. Explicit selected Human01 startup
+and Continue tests each run and pass; startup also checks that the admitted flee
+policy binds the selected recipe image. Receipts remain local under
+`.scratch/campaign-flee-integration/`. These gates establish dispatch, shared
+state and production input wiring. Incoming-damage retreat execution remains a
+separate integration gate.
