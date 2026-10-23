@@ -10,11 +10,14 @@ use std::sync::Arc;
 
 const NATIVE: &str = "SetUnitsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
+const GATHERING_NATIVE: &str = "StopGathering";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
+    gathering: Option<bool>,
+    gathering_unit: Option<HandleId>,
 }
 
 #[derive(Default)]
@@ -37,6 +40,8 @@ impl Registry {
             PlayerFlags {
                 target_heroes,
                 units_flee,
+                gathering: None,
+                gathering_unit: None,
             },
         );
         true
@@ -54,6 +59,21 @@ impl Registry {
 
     pub(super) fn units_flee(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.units_flee)
+    }
+
+    pub(super) fn gathering(&self, player: i32) -> Option<(Option<bool>, Option<HandleId>)> {
+        self.players
+            .get(&player)
+            .map(|flags| (flags.gathering, flags.gathering_unit))
+    }
+
+    pub(super) fn stop_gathering(&mut self, player: i32, unit: Option<HandleId>) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.gathering = Some(false);
+        flags.gathering_unit = unit;
+        true
     }
 
     pub(super) fn set_target_heroes(&mut self, player: i32, enabled: bool) -> bool {
@@ -143,14 +163,16 @@ impl ObjectHost {
             .campaign_flee
             .as_ref()
             .map(|policy| policy.units_flee_default);
-        if target_heroes.is_none() && units_flee.is_none() {
+        if target_heroes.is_none() && units_flee.is_none() && self.campaign_gathering.is_none() {
             return Ok(false);
         }
         if self.player_identity(player).is_none() {
             let native = if target_heroes.is_some() {
                 TARGETING_NATIVE
-            } else {
+            } else if units_flee.is_some() {
                 NATIVE
+            } else {
+                GATHERING_NATIVE
             };
             return Err(self
                 .inner

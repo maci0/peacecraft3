@@ -822,7 +822,8 @@ pub use objects::{
 pub use objects::{
     CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState, DialogBudget,
     DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent, FogModifier,
-    GameExitRequest, HeroEvent, Indicator, MinimapPing, PlacedDestructable, PlacedSource,
-    PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog, SummonContext, Vitals, Weapon,
+    GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing, PlacedDestructable,
+    PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog, SummonContext, Vitals,
+    Weapon,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};
