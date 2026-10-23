@@ -10,6 +10,18 @@ fn guarded() -> (Vm, HandleId, HandleId) {
 }
 
 fn guarded_with_limits(distance: f32, maximum: f32, timeout: f32) -> (Vm, HandleId, HandleId) {
+    guarded_with_flee(distance, maximum, timeout, None)
+}
+
+fn guarded_with_flee(
+    distance: f32,
+    maximum: f32,
+    timeout: f32,
+    flee: Option<(
+        crate::campaign_flee_policy::FleePolicy,
+        crate::script_numeric::NumericPolicy,
+    )>,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}\n{}\n{}",
         super::super::enumeration::TRIGGERS,
@@ -26,13 +38,23 @@ endglobals
 "#
     );
     let mut fields = armed("1", "normal");
+    let speed = if flee.is_some() { "100" } else { "8" };
     fields.push(column(
         b"S001",
         SlkId::UnitBalance,
         "spd",
         FieldKind::Real,
-        "8",
+        speed,
     ));
+    if flee.is_some() {
+        fields.push(column(
+            b"C001",
+            SlkId::UnitData,
+            "canFlee",
+            FieldKind::Bool,
+            "1",
+        ));
+    }
     let mut h = position_host_admitting(1000, 16, MAP, &extra, &fields, |h| h);
     let (registry, activity) = super::super::activity::rules();
     let mut native = crate::unit_guard_rules::tests::fixture(registry.id("beta").unwrap());
@@ -72,13 +94,28 @@ endglobals
             .unwrap();
         h.native("SetPlayerController", &[p, c]).unwrap();
     }
+    let (policy, numeric) = match flee {
+        Some((policy, numeric)) => (Some(policy), Some(numeric)),
+        None => (None, None),
+    };
+    if let Some(numeric) = numeric {
+        h = h.with_script_numeric(numeric);
+    }
     h = h
         .with_unit_guards(native, combat, GuardBudget { max_units: 2 })
         .unwrap();
+    let flee = policy.is_some();
+    if let Some(policy) = policy {
+        let context = Arc::clone(h.player_context().unwrap());
+        h.admit_campaign_flee(&context, policy).unwrap();
+    }
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
     vm.call("setup", &[]).unwrap();
+    if flee {
+        vm.host().inner.activate_campaign_ai_player(4).unwrap();
+    }
     let id = |v| match v {
         Value::Handle(id) => id,
         _ => panic!("unit"),
@@ -322,4 +359,36 @@ fn invalid_guard_calls_leave_current_activity_and_membership_unchanged() {
     assert_eq!(h.executed_unit(a).unwrap().activity, activity);
     h.native("RemoveGuardPosition", &[Value::Null]).unwrap();
     assert_eq!(*h.guard_state().unwrap().get(a).unwrap(), guard);
+}
+
+#[test]
+fn guard_return_cancels_an_active_campaign_flee_route() {
+    let flee = crate::campaign_flee_policy::tests::route_fixture();
+    let (mut vm, a, b) = guarded_with_flee(3., 7., 0.2, Some(flee));
+    let home = vm.host().inner.guard_state().unwrap().get(a).unwrap().home;
+    let state = vm.global("UNIT_STATE_LIFE");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(a), state, Value::Real(20.0)],
+        )
+        .unwrap();
+    vm.host().inner.combat_damage_unit(b, a, 1.0).unwrap();
+    assert!(vm.host().inner.campaign_flee_motion_owns(a));
+    let away = vm
+        .host()
+        .inner
+        .executed_unit(a)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap()
+        .destination()
+        .unwrap();
+    assert_ne!(Some(away), Some(home));
+    step(&mut vm, 0.2);
+    let h = &vm.host().inner;
+    assert!(!h.campaign_flee_motion_owns(a));
+    assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) <= 8.);
 }
