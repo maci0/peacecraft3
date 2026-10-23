@@ -63,6 +63,37 @@ It supersedes the preserved first receipt, which incorrectly described the
 order difference as preceding application.
 Both original-client containers were stopped and preserved after collection.
 
+## Declared-home comparison
+
+A second matched pair uses an explicit diagnostic random seed in both arms
+and calls public `SetCaptainHome` with the image-decoded first selector before
+the AI acknowledgment. The base target is the authored town-hall position
+`(-3776,-4032)`; the other target is a declared diagnostic translation to
+`(-2752,-4032)`. Both points are inside the source map. The static pathing row
+has no walk-block flags, but the base point is occupied by the live town hall.
+
+Both runs qualify, with the same count transitions and life reaching zero as
+the earlier true arm. The base actor settles at `(-3753.063,-4244.123)`, while
+the east-target actor settles at `(-2778.204,-4022.425)`. This supports using
+the declared captain target in the movement consumer. Positions already differ
+at sample 3, before timed-life application; the comparison does not isolate
+the effect's movement from other home-dependent AI activity.
+
+The approximate endpoint distances of 213 and 28 are observations, not arrival
+rules. The existing canonical point router already handles occupied goals by
+finding a nearest reachable cell, using source pathing scale, collision and live
+occupancy. Reusing it avoids a separate captain router or a distance fitted to
+these endpoints. Exact native arrival, formation and later target updates
+remain fidelity questions.
+
+The base/east map hashes are
+`40bdaac7348dcc9eb915baeb9cb113102deb4d0e3779857d268e95412c9e05b0`
+and `16bc12a9718cab69eb895a37c8f86b4e26831512c6d1c2e3bfbd344c8f80ae61`.
+The compact receipt has SHA-256
+`06f6af39f768a1d3315d163b3f3159ccc66b22975127e7bac4f42b6128d33360`;
+all inputs, scripts, markers and stopped reference runs remain local under
+`.scratch/group-timed-life-home-probe/` and its recorded run directories.
+
 ## Remaining implementation
 
 Use canonical player and unit identities for membership and existing death,
