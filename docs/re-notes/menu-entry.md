@@ -118,6 +118,9 @@ the completed pointer click. A synthetic spawn test checks both boundaries.
 - Ignored install-gated integration: `selected_install_chapter_activation_publishes_the_production_session`
   (requires `PCX_NATIVE_CHAPTER_INSTALL` / `_MAP` / `_ADDON`).
 
+Corrected source checkpoint: `0f1ee38ea1f551ff4de9a5e10a5ac1ccb71329d2`,
+on top of `5b0ac54756b8832c4b5ab09a0d980b731ccf1e4b`.
+
 Worktree-private checks (`CARGO_BUILD_JOBS=1`, `--locked --offline`):
 
 | Check | Result |
