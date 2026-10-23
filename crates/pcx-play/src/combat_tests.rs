@@ -24,6 +24,90 @@ mod natural_sleep;
 mod patrol;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;
 
+#[test]
+fn campaign_unit_counts_follow_the_shared_unit_lifecycle_without_mutating_it() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    let h = &mut vm.host().inner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_mode(
+        &ctx,
+        crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+    )
+    .unwrap();
+    let owner = h.executed_unit(a).unwrap().owner;
+    let other = h.executed_unit(b).unwrap().owner;
+    let rawcode = i32::from_be_bytes(*b"u001");
+    assert!(h.ai_unit_count(4, rawcode, false).is_err());
+    h.activate_campaign_ai_player(4).unwrap();
+    let mut made = Vec::new();
+    for x in [80., 112.] {
+        let Value::Handle(unit) = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(rawcode),
+                    Value::Real(x),
+                    Value::Real(16.),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("unit")
+        };
+        made.push(unit);
+    }
+    let snapshot: Vec<_> = h
+        .executed_units()
+        .map(|(id, record)| (id, record.clone()))
+        .collect();
+    let handles = h.inner().handles();
+    for _ in 0..3 {
+        assert_eq!(h.ai_unit_count(4, rawcode, false).unwrap(), 3);
+        assert_eq!(h.ai_unit_count(4, rawcode, true).unwrap(), 3);
+        assert_eq!(
+            h.ai_player_unit_type_count(Some(other), rawcode).unwrap(),
+            1
+        );
+        assert_eq!(h.ai_unit_count(4, 0, false).unwrap(), 0);
+        assert_eq!(h.ai_player_unit_type_count(None, rawcode).unwrap(), 0);
+    }
+    assert_eq!(
+        h.executed_units()
+            .map(|(id, record)| (id, record.clone()))
+            .collect::<Vec<_>>(),
+        snapshot
+    );
+    assert_eq!(h.inner().handles(), handles);
+    h.native("ShowUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.ai_unit_count(4, rawcode, false).unwrap(), 3);
+    h.native("ShowUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.ai_unit_count(4, rawcode, false).unwrap(), 2);
+    assert_eq!(h.ai_unit_count(4, rawcode, true).unwrap(), 2);
+    h.native("RemoveUnit", &[Value::Handle(made[0])]).unwrap();
+    assert_eq!(h.ai_unit_count(4, rawcode, true).unwrap(), 1);
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(made[1]),
+            Value::Handle(other),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(h.ai_unit_count(4, rawcode, false).unwrap(), 0);
+    assert_eq!(
+        h.ai_player_unit_type_count(Some(other), rawcode).unwrap(),
+        2
+    );
+    assert!(h.ai_unit_count(3, rawcode, false).is_err());
+    assert!(h.ai_player_unit_type_count(Some(a), rawcode).is_err());
+}
+
 const DECLARATIONS: &str = r#"
 constant native GetLocalPlayer takes nothing returns player
 native SetPlayerAlliance takes player a, player b, alliancetype s, boolean v returns nothing

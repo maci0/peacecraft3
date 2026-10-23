@@ -98,6 +98,22 @@ impl AiWorld for AiResearchWorld {
         Err("unit costs are outside this research fixture".into())
     }
 
+    fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String> {
+        self.object
+            .ai_unit_count(player, unit, done)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_player_unit_type_count(
+        &mut self,
+        player: Option<HandleId>,
+        unit: i32,
+    ) -> Result<i32, String> {
+        self.object
+            .ai_player_unit_type_count(player, unit)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
         self.object
             .activate_campaign_ai_player(player)

@@ -15,6 +15,24 @@ use std::sync::{Arc, Mutex};
 const PLACEMENT_OWNER: i16 = 7;
 
 #[test]
+fn campaign_counts_refuse_unknown_liveness_instead_of_guessing_alive() {
+    let mut fixture = open(4, 32, MAP);
+    fixture.vm.init_globals().unwrap();
+    fixture.vm.call("main", &[]).unwrap();
+    let Value::Handle(owner) = fixture.vm.global("P") else {
+        panic!("owner")
+    };
+    let host = &mut fixture.vm.host().inner;
+    let handles = host.inner().handles();
+    let error = host
+        .ai_player_unit_type_count(Some(owner), i32::from_be_bytes(*b"hfoo"))
+        .unwrap_err();
+    assert!(error.to_string().contains("liveness"));
+    assert_eq!(host.ai_player_unit_type_count(Some(owner), 0).unwrap(), 0);
+    assert_eq!(host.inner().handles(), handles);
+}
+
+#[test]
 fn look_at_retains_target_and_offsets_refuses_atomically_and_reset_restores_animation() {
     let (mut h, _) = animation_vm(false);
     h.vm.init_globals().unwrap();

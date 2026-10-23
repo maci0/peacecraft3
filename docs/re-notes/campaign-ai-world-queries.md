@@ -112,3 +112,41 @@ effects, hero revival/production, signed or overflowing query results and
 native Windows behavior remain open. Production values must still come from
 the selected catalog, metadata and player state; the observations above are
 evidence, not constants to copy into the implementation.
+
+## Canonical world count implementation
+
+`GetUnitCount`, `GetUnitCountDone` and `GetPlayerUnitTypeCount` now query the
+existing canonical unit arena. They match the current exact type and owner,
+exclude dead/removed units, and include hidden live units. Unknown type IDs and
+a null explicit player return zero. Invalid player identities, unavailable
+liveness and nonfinite life refuse with the query name. Queries do not mutate
+units, handles, clocks or random state. Owned queries use the running AI's
+canonical player; an explicit player's query does not require that player to
+have an AI program. Owned AI-common declaration and argument checks happen
+before world execution.
+
+All currently accepted factories create completed units, so total and completed
+counts coincide in this supported world. The dispatch retains the completion
+mode separately; production/training/construction natives still refuse, and
+their future pending work must feed these queries rather than a second count
+cache. This is a recreation using shared world state, not a copy of native
+counter tables.
+
+The selected-image REA review retained under `.scratch/ai-unit-counts/` confirms
+the distinct handler paths listed above. In `0x513620`, masks `0x30` and `0x36`
+select different backing counter contributions; `0xac0ad0` also walks attached
+unit records matching the requested type. The exact lifecycle meaning of every
+native backing counter remains unqualified. This static review supplements the
+earlier completed-unit runtime experiment; no new original-client run was made.
+
+Synthetic lifecycle tests cover death, removal, transfer, hiding, unknown type,
+unknown liveness and query immutability. Dispatch fixtures deliberately return
+different total/completed values to check forwarding. The published two-AI
+session checks owner separation and all three queries before and after sleep.
+Validation retained in `.scratch/ai-unit-counts/gates/`: 1,691 core tests,
+55 app-library and 638 app-binary tests, the published fixture, selected Human01
+startup and victory Continue, strict native/WASM Clippy and default desktop
+build pass. The existing campaign-mode image gate also passes; it is not a new
+count-policy decoder. The unchanged Human02 opening-minute test remains red,
+now at `IgnoredUnits` at 7.312500 seconds rather than `GetUnitCount`. Full
+campaign AI and pending production behavior remain unfinished.

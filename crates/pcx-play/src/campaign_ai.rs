@@ -116,6 +116,12 @@ pub(crate) trait AiWorld: Host {
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
     fn ai_unit_cost(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
+    fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
+    fn ai_player_unit_type_count(
+        &mut self,
+        player: Option<pcx_script::HandleId>,
+        unit: i32,
+    ) -> Result<i32, String>;
     /// Registers the player as active before its AI main runs. Returns whether
     /// this call created the context so a failed start can roll it back.
     fn ai_activate_player(&mut self, player: i32) -> Result<bool, String>;
@@ -204,6 +210,32 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .activate_campaign_ai_player(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .ai_unit_count(player, unit, done)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_player_unit_type_count(
+        &mut self,
+        player: Option<pcx_script::HandleId>,
+        unit: i32,
+    ) -> Result<i32, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .ai_player_unit_type_count(player, unit)
             .map_err(|e| e.to_string())
     }
 
@@ -603,6 +635,31 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
+    for (name, params) in [
+        ("GetUnitCount", &["integer"][..]),
+        ("GetUnitCountDone", &["integer"][..]),
+        ("GetPlayerUnitTypeCount", &["player", "integer"][..]),
+    ] {
+        let Some(native) = scripts.program().natives().get(name) else {
+            continue;
+        };
+        if native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || native.params.len() != params.len()
+            || native
+                .params
+                .iter()
+                .zip(params)
+                .any(|(p, expected)| p.ty.array || p.ty.kind.name() != *expected)
+            || native.ret.array
+            || native.ret.kind.name() != "integer"
+        {
+            return Err(format!(
+                "StartCampaignAI: {name} AI common declaration differs"
+            ));
+        }
+    }
     if let Some(native) = scripts.program().natives().get("StopGathering")
         && (native.source != *source
             || !native.also_declared_in.is_empty()
@@ -805,6 +862,30 @@ impl<W: AiWorld> Host for AiHost<W> {
                     self.world_mut()?.ai_unit_cost(player, *unit, column)?,
                 ))
             }
+            "GetUnitCount" | "GetUnitCountDone" => {
+                let [Value::Int(unit)] = args else {
+                    return Err(format!("{name}: expected one integer unit ID"));
+                };
+                let player = self.player;
+                Ok(Value::Int(self.world_mut()?.ai_unit_count(
+                    player,
+                    *unit,
+                    name == "GetUnitCountDone",
+                )?))
+            }
+            "GetPlayerUnitTypeCount" => {
+                let [owner, Value::Int(unit)] = args else {
+                    return Err("GetPlayerUnitTypeCount: expected player, integer".into());
+                };
+                let owner = match owner {
+                    Value::Null => None,
+                    Value::Handle(owner) => Some(*owner),
+                    _ => return Err("GetPlayerUnitTypeCount: expected player, integer".into()),
+                };
+                Ok(Value::Int(
+                    self.world_mut()?.ai_player_unit_type_count(owner, *unit)?,
+                ))
+            }
             "SetTargetHeroes" => {
                 let [Value::Bool(enabled)] = args else {
                     return Err("SetTargetHeroes: expected a boolean".into());
@@ -940,6 +1021,8 @@ mod tests {
     struct State {
         clock: f64,
         gold: BTreeMap<u64, i32>,
+        unit_counts: BTreeMap<(i32, i32, bool), i32>,
+        player_unit_counts: BTreeMap<(HandleId, i32), i32>,
         callbacks: bool,
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
@@ -973,6 +1056,31 @@ mod tests {
         }
         fn ai_unit_cost(&mut self, _player: i32, _unit: i32, _column: &str) -> Result<i32, String> {
             Err("mock costs are not admitted".into())
+        }
+        fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String> {
+            let state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state
+                .unit_counts
+                .get(&(player, unit, done))
+                .copied()
+                .ok_or("mock unit count is not admitted".into())
+        }
+        fn ai_player_unit_type_count(
+            &mut self,
+            player: Option<HandleId>,
+            unit: i32,
+        ) -> Result<i32, String> {
+            let Some(player) = player else { return Ok(0) };
+            self.0
+                .lock()
+                .unwrap()
+                .player_unit_counts
+                .get(&(player, unit))
+                .copied()
+                .ok_or("mock explicit unit count is not admitted".into())
         }
         fn ai_activate_player(&mut self, player: i32) -> Result<bool, String> {
             Ok(self
@@ -1821,6 +1929,108 @@ mod tests {
             [(1, -29), (2, -58)].into()
         );
         assert!(world.is_some());
+    }
+
+    #[test]
+    fn unit_count_dispatch_preserves_owner_and_completion_mode() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let explicit = HandleId::new(NonZeroU64::new(99).unwrap());
+        {
+            let mut state = shared.lock().unwrap();
+            state.unit_counts = [((1, 17, false), 9), ((1, 17, true), 3)].into();
+            state.player_unit_counts.insert((explicit, 17), 5);
+        }
+        let mut host = AiHost::new(1, World(Arc::clone(&shared)));
+        assert!(host.native("GetUnitCount", &[Value::Int(17)]).is_err());
+        shared.lock().unwrap().active.insert(1, false);
+        assert_eq!(
+            host.native("GetUnitCount", &[Value::Int(17)]).unwrap(),
+            Value::Int(9)
+        );
+        assert_eq!(
+            host.native("GetUnitCountDone", &[Value::Int(17)]).unwrap(),
+            Value::Int(3)
+        );
+        assert_eq!(
+            host.native(
+                "GetPlayerUnitTypeCount",
+                &[Value::Handle(explicit), Value::Int(17)]
+            )
+            .unwrap(),
+            Value::Int(5)
+        );
+        assert_eq!(
+            host.native("GetPlayerUnitTypeCount", &[Value::Null, Value::Int(17)])
+                .unwrap(),
+            Value::Int(0)
+        );
+        for name in ["GetUnitCount", "GetUnitCountDone"] {
+            for args in [
+                vec![],
+                vec![Value::Bool(true)],
+                vec![Value::Int(17), Value::Int(17)],
+            ] {
+                assert!(host.native(name, &args).is_err());
+            }
+        }
+        for args in [
+            vec![Value::Int(17)],
+            vec![Value::Int(1), Value::Int(17)],
+            vec![Value::Handle(explicit), Value::Real(17.)],
+        ] {
+            assert!(host.native("GetPlayerUnitTypeCount", &args).is_err());
+        }
+        assert_eq!(
+            shared.lock().unwrap().unit_counts,
+            [((1, 17, false), 9), ((1, 17, true), 3)].into()
+        );
+    }
+
+    #[test]
+    fn unit_count_declarations_are_checked_before_activation_or_world_writes() {
+        for (name, params) in [
+            ("GetUnitCount", "integer unitid"),
+            ("GetUnitCountDone", "integer unitid"),
+            ("GetPlayerUnitTypeCount", "player owner, integer unitid"),
+        ] {
+            for (common, ai_common) in [
+                (
+                    COMMON.to_owned(),
+                    format!("{AI_COMMON}native {name} takes {params} returns boolean\n"),
+                ),
+                (
+                    COMMON.to_owned(),
+                    format!("{AI_COMMON}constant native {name} takes {params} returns integer\n"),
+                ),
+                (
+                    COMMON.to_owned(),
+                    format!("{AI_COMMON}native {name} takes nothing returns integer\n"),
+                ),
+                (
+                    format!("{COMMON}native {name} takes {params} returns integer\n"),
+                    AI_COMMON.to_owned(),
+                ),
+                (
+                    format!("{COMMON}native {name} takes {params} returns integer\n"),
+                    format!("{AI_COMMON}native {name} takes {params} returns integer\n"),
+                ),
+            ] {
+                let script = program_with_sources(
+                    "synthetic:count.ai",
+                    "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                    &common,
+                    &ai_common,
+                );
+                let mut runtime = Runtime::<World>::default();
+                runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+                let shared = Arc::new(Mutex::new(State::default()));
+                let mut world = Some(World(Arc::clone(&shared)));
+                let error = runtime.start(&mut world, 1, "count.ai").unwrap_err();
+                assert!(error.contains(name), "{error}");
+                assert!(shared.lock().unwrap().gold.is_empty());
+                assert!(shared.lock().unwrap().active.is_empty());
+            }
+        }
     }
 
     #[test]

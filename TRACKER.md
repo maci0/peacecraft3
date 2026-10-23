@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Campaign AI unit counts now query canonical live units, including hidden
+  units, and follow death, removal and owner transfer. Owned/explicit-player
+  queries and completed/total dispatch remain distinct. Core 1,691, app-library
+  55 and app-binary 638 tests, published two-program checks, selected
+  startup/Continue, strict native/WASM Clippy and the desktop build pass.
+  Unchanged Human02 now refuses `IgnoredUnits` at 7.312500 seconds; the
+  opening-minute test remains red. Training/construction queues remain
+  unsupported; see [world counts](docs/re-notes/campaign-ai-world-queries.md#canonical-world-count-implementation).
+
 - [~] `SetReplacementCount` now validates the selected registration/setter and
   owned AI-common integer ABI, then retains the exact signed quantity in the
   canonical active-player context. Player isolation, sleep, repeat starts,

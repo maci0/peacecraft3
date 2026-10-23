@@ -1,4 +1,4 @@
-//! Campaign mode shares the canonical AI player context and unit ownership.
+//! Campaign context configuration and queries over canonical unit ownership.
 use super::{Error, Failure, ObjectHost};
 use crate::{campaign_mode_policy::CampaignModePolicy, map_admission::ParsedMapContext};
 use pcx_script::HandleId;
@@ -116,5 +116,70 @@ impl ObjectHost {
         self.require_active_campaign_ai_player(player, SETTER)?;
         self.campaign_ai.set_replacement_count(player, count);
         Ok(())
+    }
+
+    pub(crate) fn ai_unit_count(&self, player: i32, unit: i32, done: bool) -> Result<i32, Error> {
+        let name = if done {
+            "GetUnitCountDone"
+        } else {
+            "GetUnitCount"
+        };
+        self.require_active_campaign_ai_player(player, name)?;
+        let owner = self.player_identity(player).ok_or_else(|| {
+            self.inner
+                .error(name, Failure::ConfigState("player is not admitted"))
+        })?;
+        self.count_completed_units(owner, unit, name)
+    }
+
+    pub(crate) fn ai_player_unit_type_count(
+        &self,
+        owner: Option<HandleId>,
+        unit: i32,
+    ) -> Result<i32, Error> {
+        match owner {
+            None => Ok(0),
+            Some(owner) => self.count_completed_units(owner, unit, "GetPlayerUnitTypeCount"),
+        }
+    }
+
+    fn count_completed_units(
+        &self,
+        owner: HandleId,
+        unit: i32,
+        name: &'static str,
+    ) -> Result<i32, Error> {
+        self.player_settings(owner)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        self.unit_declaration()
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        // shortcut: all accepted unit factories create completed units; add canonical pending work when training/construction is admitted.
+        self.executed_units()
+            .filter(|(_, record)| {
+                record.owner == owner && record.definition.rawcode == unit.to_be_bytes()
+            })
+            .try_fold(0i32, |count, (_, record)| {
+                if record.combat.is_none() && record.vitals.is_none() {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::ConfigState("unit liveness is not admitted")));
+                }
+                if record.vitals.as_ref().is_some_and(|v| !v.life.is_finite()) {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::ConfigState("unit life is not finite")));
+                }
+                if record.combat.as_ref().is_some_and(|c| c.dead)
+                    || record.vitals.as_ref().is_some_and(|v| v.life <= 0.)
+                {
+                    return Ok(count);
+                }
+                count.checked_add(1).ok_or_else(|| {
+                    self.inner.error(
+                        name,
+                        Failure::ConfigState("unit count exceeds integer range"),
+                    )
+                })
+            })
     }
 }

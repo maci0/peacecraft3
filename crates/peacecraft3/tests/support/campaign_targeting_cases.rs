@@ -228,6 +228,9 @@ endfunction
     let ai_common = format!(
         "{ai_common}native SetCampaignAI takes nothing returns nothing\nnative SetReplacementCount takes integer count returns nothing\n"
     );
+    let ai_common = format!(
+        "{ai_common}native GetUnitCount takes integer unitid returns integer\nnative GetUnitCountDone takes integer unitid returns integer\nnative GetPlayerUnitTypeCount takes player owner, integer unitid returns integer\nnative CountAssertionFailed takes nothing returns nothing\n"
+    );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)]
         .into_iter()
         .map(|(name, flag)| {
@@ -236,12 +239,21 @@ endfunction
             let replacements = if flag { 17 } else { -29 };
             let later_replacements = -replacements;
             let body = format!(
-                r#"function VerifyEmptyCaptains takes nothing returns nothing
+                r#"function VerifyUnitCounts takes nothing returns nothing
+if GetUnitCount('a001') != 1 or GetUnitCountDone('a001') != 1 or GetUnitCount(0) != 0 or GetUnitCountDone(0) != 0 then
+call CountAssertionFailed()
+endif
+if GetPlayerUnitTypeCount(Player(2),'a001') != 0 or GetPlayerUnitTypeCount(Player(2),'t001') != 4 or GetPlayerUnitTypeCount(null,'t001') != 0 then
+call CountAssertionFailed()
+endif
+endfunction
+function VerifyEmptyCaptains takes nothing returns nothing
 if CaptainGroupSize() != 0 or not CaptainIsEmpty() or GetPlayers() != 3 then
 call SetCaptainHome({captain_selector},0.0,0.0)
 endif
 endfunction
 function main takes nothing returns nothing
+call VerifyUnitCounts()
 call SetTargetHeroes({flag})
 call SetUnitsFlee({opposite})
 call SetHeroesFlee({flag})
@@ -257,6 +269,7 @@ call CreateCaptains()
 call VerifyEmptyCaptains()
 call StopGathering()
 call Sleep(0.25)
+call VerifyUnitCounts()
 call SetTargetHeroes({opposite})
 call SetUnitsFlee({flag})
 call SetHeroesFlee({opposite})
