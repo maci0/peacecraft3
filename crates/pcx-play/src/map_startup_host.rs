@@ -292,6 +292,7 @@ pub struct MapStartupInputs {
     /// Checked client selector operands used by campaign captain targets.
     pub captain_policy: Option<crate::campaign_captain_policy::CaptainPolicy>,
     pub new_heroes_policy: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
+    pub slow_chopping_policy: Option<crate::campaign_slow_chopping_policy::SlowChoppingPolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -593,6 +594,7 @@ pub fn assemble(
         gathering_policy,
         captain_policy,
         new_heroes_policy,
+        slow_chopping_policy,
         enumeration,
         rules,
         budgets,
@@ -929,6 +931,9 @@ pub fn assemble(
     }
     if let Some(policy) = new_heroes_policy {
         object.admit_campaign_new_heroes(&context, policy)?;
+    }
+    if let Some(policy) = slow_chopping_policy {
+        object.admit_campaign_slow_chopping(&context, policy)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

@@ -989,6 +989,10 @@ pub(crate) mod tests {
                 .campaign_new_heroes_policy()
                 .expect("campaign preparation admits the selected new-heroes policy");
             assert_eq!(new_heroes.image_sha256, recipe.image_sha256());
+            let slow_chopping = objects
+                .campaign_slow_chopping_policy()
+                .expect("campaign preparation admits the selected slow-chopping policy");
+            assert_eq!(slow_chopping.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
         assert!(units > 0, "unchanged chapter main must create units");

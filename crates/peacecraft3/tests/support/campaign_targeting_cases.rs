@@ -182,6 +182,8 @@ endfunction
     inputs.captain_policy = Some(captain_policy);
     inputs.new_heroes_policy =
         Some(pcx_play::campaign_new_heroes_policy::NewHeroesPolicy::fixture());
+    inputs.slow_chopping_policy =
+        Some(pcx_play::campaign_slow_chopping_policy::SlowChoppingPolicy::fixture());
     inputs.post_config.difficulty_global = Some("MAP_DIFFICULTY_NORMAL".into());
     inputs.enumeration.names.extend(
         [
@@ -217,11 +219,12 @@ endfunction
         .shared_context()
         .unwrap();
     let ai_common = format!(
-        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\n"
+        "{AI_COMMON}native SetUnitsFlee takes boolean enabled returns nothing\nnative SetHeroesFlee takes boolean enabled returns nothing\nnative SetGroupsFlee takes boolean enabled returns nothing\nnative StopGathering takes nothing returns nothing\nnative CreateCaptains takes nothing returns nothing\nnative SetCaptainHome takes integer which, real x, real y returns nothing\nnative SetNewHeroes takes boolean enabled returns nothing\nnative SetSlowChopping takes boolean enabled returns nothing\n"
     );
     let programs: std::collections::BTreeMap<_, _> = [("false.ai", false), ("true.ai", true)].into_iter().map(|(name, flag)| {
         let home_x = if flag { 112.0 } else { 48.0 };
-        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetHeroesFlee({flag})\ncall SetGroupsFlee({flag})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetHeroesFlee({})\ncall SetGroupsFlee({})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag, !flag, !flag);
+        let opposite = !flag;
+        let body = format!("function main takes nothing returns nothing\ncall SetTargetHeroes({flag})\ncall SetUnitsFlee({})\ncall SetHeroesFlee({flag})\ncall SetGroupsFlee({flag})\ncall SetSlowChopping({flag})\ncall SetNewHeroes({flag})\ncall CreateCaptains()\ncall StopGathering()\ncall Sleep(0.25)\ncall SetTargetHeroes({})\ncall SetUnitsFlee({flag})\ncall SetHeroesFlee({})\ncall SetGroupsFlee({})\ncall SetSlowChopping({opposite})\ncall SetNewHeroes({})\ncall StopGathering()\ncall SetCaptainHome({captain_selector},{home_x:.1},24.0)\nendfunction\n", !flag, !flag, !flag, !flag, !flag);
         let program = pcx_play::scripts::MapScripts::compile(
             AssetIdentity { edition: "synthetic".into(), version: "targeting".into(), source: name.into() },
             ScriptAsset { label: "fixture:common.j", bytes: &map.common },
@@ -331,6 +334,13 @@ endfunction
     };
     assert_eq!(groups_flee_flag(&mut session, a), Some(false));
     assert_eq!(groups_flee_flag(&mut session, b), Some(true));
+    let slow_chopping_flag = |session: &mut MapScriptSession<MapStartupHost>, unit| {
+        let objects = session.host().unwrap().objects();
+        let owner = objects.executed_unit(unit).unwrap().owner;
+        objects.campaign_slow_chopping_enabled(owner).unwrap()
+    };
+    assert_eq!(slow_chopping_flag(&mut session, a), Some(false));
+    assert_eq!(slow_chopping_flag(&mut session, b), Some(true));
     let check_gathering = |session: &mut MapScriptSession<MapStartupHost>| {
         let objects = session.host().unwrap().objects();
         for (unit, base) in [(a, a_base), (b, b_base)] {
@@ -387,6 +397,8 @@ endfunction
     assert_eq!(heroes_flee_flag(&mut session, b), Some(false));
     assert_eq!(groups_flee_flag(&mut session, a), Some(true));
     assert_eq!(groups_flee_flag(&mut session, b), Some(false));
+    assert_eq!(slow_chopping_flag(&mut session, a), Some(true));
+    assert_eq!(slow_chopping_flag(&mut session, b), Some(false));
     check_gathering(&mut session);
     check_captains(&mut session, true);
     for (unit, target) in [(a, a_new), (b, b_new)] {

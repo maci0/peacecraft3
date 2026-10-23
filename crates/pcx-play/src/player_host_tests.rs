@@ -983,3 +983,80 @@ mod script_dialogs;
 
 #[path = "player_removal_tests.rs"]
 mod player_removal;
+
+#[test]
+fn slow_chopping_admission_and_setter_refusals_preserve_existing_state() {
+    use crate::campaign_slow_chopping_policy::SlowChoppingPolicy;
+    let (mut host, ctx) = campaign_host();
+    let owner = player(&mut host, 0);
+    assert!(host.set_ai_slow_chopping(0, true).is_err());
+    assert!(!host.activate_campaign_ai_player(0).unwrap());
+    let other = context(300, COMMON, "// map", "other-chopping-map");
+    assert!(
+        host.admit_campaign_slow_chopping(&other, SlowChoppingPolicy::fixture())
+            .is_err()
+    );
+    for mask in [0, 3, 0x80, 0x100] {
+        let mut policy = SlowChoppingPolicy::fixture();
+        policy.context_mask = mask;
+        assert!(host.admit_campaign_slow_chopping(&ctx, policy).is_err());
+        assert!(host.campaign_slow_chopping_policy().is_none());
+    }
+    host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+        .unwrap();
+    assert!(host.set_ai_slow_chopping(0, true).is_err());
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        None
+    );
+    host.set_ai_slow_chopping(0, true).unwrap();
+    assert!(!host.activate_campaign_ai_player(0).unwrap());
+    assert!(
+        host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+            .is_err()
+    );
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+    let timer = host.native("CreateTimer", &[]).unwrap();
+    assert!(host.campaign_slow_chopping_enabled(id(&timer)).is_err());
+    assert!(host.set_ai_slow_chopping(-1, false).is_err());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&owner)).unwrap(),
+        Some(true)
+    );
+}
+
+#[test]
+fn slow_chopping_players_and_lifecycles_are_independent() {
+    use crate::campaign_slow_chopping_policy::SlowChoppingPolicy;
+    let (mut host, ctx) = campaign_host();
+    let a = player(&mut host, 0);
+    let b = player(&mut host, 1);
+    host.admit_campaign_slow_chopping(&ctx, SlowChoppingPolicy::fixture())
+        .unwrap();
+    for number in [0, 1] {
+        assert!(host.activate_campaign_ai_player(number).unwrap());
+    }
+    host.set_ai_slow_chopping(0, true).unwrap();
+    host.set_ai_slow_chopping(1, false).unwrap();
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&a)).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
+        Some(false)
+    );
+    host.deactivate_campaign_ai_player(0);
+    assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
+    assert!(host.set_ai_slow_chopping(0, false).is_err());
+    assert_eq!(
+        host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
+        Some(false)
+    );
+    assert!(host.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
+}

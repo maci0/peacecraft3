@@ -21,6 +21,7 @@ struct PlayerFlags {
     heroes_flee: Option<bool>,
     groups_flee: Option<bool>,
     new_heroes: Option<bool>,
+    slow_chopping: Option<bool>,
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
     captains_created: bool,
@@ -50,6 +51,7 @@ impl Registry {
                 heroes_flee: None,
                 groups_flee: None,
                 new_heroes: None,
+                slow_chopping: None,
                 gathering: None,
                 gathering_unit: None,
                 captains_created: false,
@@ -91,6 +93,12 @@ impl Registry {
 
     pub(super) fn new_heroes(&self, player: i32) -> Option<bool> {
         self.players.get(&player).and_then(|flags| flags.new_heroes)
+    }
+
+    pub(super) fn slow_chopping(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.slow_chopping)
     }
 
     pub(super) fn gathering(&self, player: i32) -> Option<(Option<bool>, Option<HandleId>)> {
@@ -188,6 +196,14 @@ impl Registry {
             return false;
         };
         flags.new_heroes = Some(enabled);
+        true
+    }
+
+    pub(super) fn set_slow_chopping(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.slow_chopping = Some(enabled);
         true
     }
 
@@ -311,6 +327,7 @@ impl ObjectHost {
             && self.campaign_gathering.is_none()
             && self.campaign_captains.is_none()
             && self.campaign_new_heroes.is_none()
+            && self.campaign_slow_chopping.is_none()
         {
             return Ok(false);
         }
