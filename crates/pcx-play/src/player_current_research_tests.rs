@@ -113,6 +113,11 @@ impl AiWorld for AiResearchWorld {
             .set_ai_target_heroes(player, enabled)
             .map_err(|e| e.to_string())
     }
+    fn ai_set_units_flee(&mut self, player: i32, enabled: bool) -> Result<(), String> {
+        self.object
+            .set_ai_units_flee(player, enabled)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[test]

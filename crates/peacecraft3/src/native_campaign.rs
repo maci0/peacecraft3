@@ -1431,14 +1431,17 @@ pub(crate) mod tests {
             "the activated mission must publish the admitted context"
         );
         assert_eq!(app.world().resource::<CampaignSeed>().prepared, Some(1));
-        let units = app
-            .world_mut()
-            .resource_mut::<MapScriptSession<MapStartupHost>>()
-            .host()
-            .expect("published production host")
-            .objects()
-            .executed_units()
-            .count();
+        let units = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().expect("published production host").objects();
+            let flee = objects
+                .campaign_flee_policy()
+                .expect("campaign preparation admits the selected flee policy");
+            assert_eq!(flee.image_sha256, recipe.image_sha256());
+            objects.executed_units().count()
+        };
         assert!(units > 0, "unchanged chapter main must create units");
         println!("chapter={map} seed=1 executed_units={units} published=true");
         app

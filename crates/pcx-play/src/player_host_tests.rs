@@ -1,4 +1,6 @@
 use super::{context, context_with_wts, rules, slots_rule};
+use crate::campaign_flee_policy::FleePolicy;
+use crate::campaign_targeting_policy::TargetingPolicy;
 use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{ContextProblem, NeutralError, RuleProblem};
 use crate::playercolor_host::{
@@ -61,6 +63,164 @@ fn id(v: &Value) -> HandleId {
         panic!("player handle")
     };
     *id
+}
+
+fn campaign_host() -> (ObjectHost, Arc<ParsedMapContext>) {
+    let ctx = context(300, COMMON, "// no globals", "synthetic:campaign-flee");
+    let h = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap();
+    (h, ctx)
+}
+
+#[test]
+fn campaign_flee_admission_requires_matching_context_and_refuses_duplicates() {
+    let (mut h, ctx) = campaign_host();
+    let owner = player(&mut h, 0);
+    let other = context(
+        300,
+        COMMON,
+        "// no globals",
+        "synthetic:campaign-flee-other",
+    );
+    let mut first = FleePolicy::fixture();
+    first.units_flee_default = false;
+    assert!(h.admit_campaign_flee(&other, first.clone()).is_err());
+    assert!(h.campaign_flee_policy().is_none());
+
+    h.admit_campaign_flee(&ctx, first.clone()).unwrap();
+    h.activate_campaign_ai_player(0).unwrap();
+    h.set_ai_units_flee(0, true).unwrap();
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), Some(true));
+
+    let mut second = first.clone();
+    second.units_flee_default = true;
+    second.minimum_move_speed += 1.0;
+    assert!(h.admit_campaign_flee(&ctx, second).is_err());
+    assert_eq!(
+        h.campaign_flee_policy().unwrap().units_flee_default,
+        first.units_flee_default
+    );
+    assert_eq!(
+        h.campaign_flee_policy().unwrap().minimum_move_speed,
+        first.minimum_move_speed
+    );
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), Some(true));
+}
+
+#[test]
+fn campaign_flee_unadmitted_and_inactive_players_do_not_grow_the_registry() {
+    let (mut h, ctx) = campaign_host();
+    let owner = player(&mut h, 0);
+    assert!(h.campaign_flee_policy().is_none());
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), None);
+    assert!(h.set_ai_units_flee(0, true).is_err());
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+
+    let mut policy = FleePolicy::fixture();
+    policy.units_flee_default = false;
+    h.admit_campaign_flee(&ctx, policy.clone()).unwrap();
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), None);
+    let error = h.set_ai_units_flee(0, true).unwrap_err().to_string();
+    assert!(error.contains("SetUnitsFlee"), "{error}");
+
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        h.campaign_flee_enabled(id(&owner)).unwrap(),
+        Some(policy.units_flee_default)
+    );
+}
+
+#[test]
+fn campaign_flee_activation_requires_an_existing_player_without_minting_one() {
+    let (mut h, ctx) = campaign_host();
+    h.admit_campaign_flee(&ctx, FleePolicy::fixture()).unwrap();
+    assert!(h.player_identity(3).is_none());
+    let error = h.activate_campaign_ai_player(3).unwrap_err().to_string();
+    assert!(error.contains("player is not admitted"), "{error}");
+    assert!(h.player_identity(3).is_none());
+
+    let owner = player(&mut h, 3);
+    assert_eq!(h.campaign_flee_enabled(id(&owner)).unwrap(), None);
+    assert!(h.activate_campaign_ai_player(3).unwrap());
+
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let handles = h.inner().handles();
+    assert!(h.campaign_flee_enabled(id(&timer)).is_err());
+    assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn campaign_flags_follow_independent_admission_and_repeat_activation() {
+    let (mut h, ctx) = campaign_host();
+    let first = player(&mut h, 0);
+    let second = player(&mut h, 1);
+    let targeting = TargetingPolicy::fixture();
+    let mut flee = FleePolicy::fixture();
+    flee.units_flee_default = false;
+
+    h.admit_campaign_targeting(&ctx, targeting.clone()).unwrap();
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    h.set_ai_target_heroes(0, true).unwrap();
+    assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
+
+    h.admit_campaign_flee(&ctx, flee.clone()).unwrap();
+    assert_eq!(
+        h.campaign_flee_enabled(id(&first)).unwrap(),
+        Some(flee.units_flee_default)
+    );
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    h.set_ai_units_flee(0, true).unwrap();
+    assert!(!h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), Some(true));
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&first)).unwrap(),
+        Some(true)
+    );
+
+    assert!(h.activate_campaign_ai_player(1).unwrap());
+    assert_eq!(
+        h.campaign_flee_enabled(id(&second)).unwrap(),
+        Some(flee.units_flee_default)
+    );
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&second)).unwrap(),
+        Some(targeting.target_heroes_default)
+    );
+
+    h.deactivate_campaign_ai_player(0);
+    assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
+    assert_eq!(h.campaign_targeting_enabled(id(&first)).unwrap(), None);
+    assert!(h.activate_campaign_ai_player(0).unwrap());
+    assert_eq!(
+        h.campaign_flee_enabled(id(&first)).unwrap(),
+        Some(flee.units_flee_default)
+    );
+    assert_eq!(
+        h.campaign_targeting_enabled(id(&first)).unwrap(),
+        Some(targeting.target_heroes_default)
+    );
+}
+
+#[test]
+fn campaign_setters_report_their_own_native_context() {
+    let (mut h, ctx) = campaign_host();
+    let _owner = player(&mut h, 0);
+    h.admit_campaign_targeting(&ctx, TargetingPolicy::fixture())
+        .unwrap();
+    let error = h.set_ai_target_heroes(0, true).unwrap_err().to_string();
+    assert!(error.contains("SetTargetHeroes"), "{error}");
+    assert!(!error.contains("SetUnitsFlee"), "{error}");
+
+    h.admit_campaign_flee(&ctx, FleePolicy::fixture()).unwrap();
+    let error = h.set_ai_units_flee(0, true).unwrap_err().to_string();
+    assert!(error.contains("SetUnitsFlee"), "{error}");
+    assert!(!error.contains("SetTargetHeroes"), "{error}");
 }
 #[test]
 fn slot_domain_is_derived_from_the_approved_rule_and_selected_word() {

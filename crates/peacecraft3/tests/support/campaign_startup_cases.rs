@@ -637,6 +637,7 @@ pub(crate) fn host_inputs(
     MapStartupInputs {
         ai_source: None,
         targeting_policy: None,
+        flee_policy: None,
         inventory: None,
         inventory_powerup: None,
         item_classes: None,

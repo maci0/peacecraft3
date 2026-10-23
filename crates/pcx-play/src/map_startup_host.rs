@@ -285,6 +285,8 @@ pub struct MapStartupInputs {
     pub ai_source: Option<crate::campaign_ai::SourceNames>,
     /// Checked client operands used by campaign automatic target selection.
     pub targeting_policy: Option<crate::campaign_targeting_policy::TargetingPolicy>,
+    /// Checked client operands used by ordinary campaign retreat decisions.
+    pub flee_policy: Option<crate::campaign_flee_policy::FleePolicy>,
     pub enumeration: EnumContracts,
     pub rules: NeutralRuleSet,
     pub budgets: MapStartupBudgets,
@@ -582,6 +584,7 @@ pub fn assemble(
     let MapStartupInputs {
         ai_source: _,
         targeting_policy,
+        flee_policy,
         enumeration,
         rules,
         budgets,
@@ -906,6 +909,9 @@ pub fn assemble(
     }
     if let Some(policy) = targeting_policy {
         object.admit_campaign_targeting(&context, policy)?;
+    }
+    if let Some(policy) = flee_policy {
+        object.admit_campaign_flee(&context, policy)?;
     }
     if let Some(input) = terrain_pathing {
         object = object.with_terrain_pathing(input)?;

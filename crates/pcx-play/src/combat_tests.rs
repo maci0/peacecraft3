@@ -3724,6 +3724,7 @@ fn campaign_targeting_flag_and_difficulty_are_scoped_to_the_attacking_player() {
     policy.optional_level_gate = 4;
     admit_targeting_with(&mut vm, 4, Some(false), policy, 1);
     let h = &mut vm.host().inner;
+    h.native("Player", &[Value::Int(1)]).unwrap();
     h.activate_campaign_ai_player(1).unwrap();
     h.set_ai_target_heroes(1, true).unwrap();
     let owner = h.executed_unit(a).unwrap().owner;
