@@ -182,7 +182,7 @@ fn heroes_flee_is_explicit_per_player_and_rejected_masks_do_not_backfill() {
         h.campaign_heroes_flee_enabled(id(&first)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_heroes_flee_enabled(id(&first)).unwrap(), None);
 }
 
@@ -282,7 +282,7 @@ fn groups_flee_uses_existing_players_and_refuses_overlapping_policy_before_backf
         h.campaign_groups_flee_enabled(id(&first)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_groups_flee_enabled(id(&first)).unwrap(), None);
     assert_eq!(
         h.campaign_groups_flee_enabled(id(&second)).unwrap(),
@@ -368,7 +368,7 @@ fn campaign_flags_follow_independent_admission_and_repeat_activation() {
         Some(targeting.target_heroes_default)
     );
 
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_flee_enabled(id(&first)).unwrap(), None);
     assert_eq!(h.campaign_targeting_enabled(id(&first)).unwrap(), None);
     assert!(h.activate_campaign_ai_player(0).unwrap());
@@ -473,7 +473,7 @@ fn campaign_new_heroes_unadmitted_and_inactive_players_do_not_grow_the_registry(
         h.campaign_new_heroes_enabled(id(&owner)).unwrap(),
         Some(true)
     );
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_new_heroes_enabled(id(&owner)).unwrap(), None);
 }
 
@@ -497,7 +497,7 @@ fn campaign_new_heroes_flags_are_isolated_and_inactive_refusal_keeps_peer_state(
         Some(false)
     );
 
-    h.deactivate_campaign_ai_player(0);
+    h.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(h.campaign_new_heroes_enabled(id(&first)).unwrap(), None);
     assert_eq!(
         h.campaign_new_heroes_enabled(id(&second)).unwrap(),
@@ -1060,7 +1060,7 @@ fn slow_chopping_players_and_lifecycles_are_independent() {
         host.campaign_slow_chopping_enabled(id(&b)).unwrap(),
         Some(false)
     );
-    host.deactivate_campaign_ai_player(0);
+    host.deactivate_campaign_ai_player(0).unwrap();
     assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
     assert!(host.set_ai_slow_chopping(0, false).is_err());
     assert_eq!(

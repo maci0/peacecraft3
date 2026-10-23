@@ -1332,7 +1332,7 @@ fn loaded_returnresources_refuses_an_unknown_slow_chopping_flag_before_credit() 
     tick(&mut vm, 0.5);
     issue_id(&mut vm, worker, 744);
     assert_eq!(vm.host().inner.harvest_cargo(worker), Some(9.0));
-    vm.host().inner.deactivate_campaign_ai_player(0);
+    vm.host().inner.deactivate_campaign_ai_player(0).unwrap();
     assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
 
     let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
@@ -1367,7 +1367,7 @@ fn a_new_unknown_ai_context_stops_an_existing_order_before_its_hit() {
     admit_slow_chopping(&mut vm, Some(true));
     let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
     start_harvest(&mut vm, worker);
-    vm.host().inner.deactivate_campaign_ai_player(0);
+    vm.host().inner.deactivate_campaign_ai_player(0).unwrap();
     assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
     assert!(advance(&mut vm, 0.5, 64).is_err());
     assert_eq!(tree_life(&mut vm, tree), 80.0);
@@ -1399,7 +1399,7 @@ fn slow_chopping_does_not_gate_an_accepted_return_walk() {
             .unwrap()
             .is_empty()
     );
-    vm.host().inner.deactivate_campaign_ai_player(0);
+    vm.host().inner.deactivate_campaign_ai_player(0).unwrap();
     assert!(vm.host().inner.activate_campaign_ai_player(0).unwrap());
 
     let before = position(&mut vm, worker);

@@ -14,7 +14,7 @@ const GROUPS_FLEE_NATIVE: &str = "SetGroupsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
 const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct PlayerFlags {
     target_heroes: Option<bool>,
     units_flee: Option<bool>,
@@ -26,6 +26,9 @@ struct PlayerFlags {
     gathering_unit: Option<HandleId>,
     captains_created: bool,
     captain_homes: [Option<[f32; 2]>; 2],
+    group_timed_life: Option<bool>,
+    captain_members: Vec<HandleId>,
+    captain_routes: Vec<HandleId>,
 }
 
 #[derive(Default)]
@@ -56,6 +59,9 @@ impl Registry {
                 gathering_unit: None,
                 captains_created: false,
                 captain_homes: [None; 2],
+                group_timed_life: None,
+                captain_members: Vec::new(),
+                captain_routes: Vec::new(),
             },
         );
         true
@@ -120,6 +126,103 @@ impl Registry {
         self.players
             .get(&player)
             .map(|flags| (flags.captains_created, flags.captain_homes))
+    }
+
+    pub(super) fn group_timed_life(&self, player: i32) -> Option<bool> {
+        self.players
+            .get(&player)
+            .and_then(|flags| flags.group_timed_life)
+    }
+
+    pub(super) fn set_group_timed_life(&mut self, player: i32, enabled: bool) -> bool {
+        let Some(flags) = self.players.get_mut(&player) else {
+            return false;
+        };
+        flags.group_timed_life = Some(enabled);
+        true
+    }
+
+    pub(super) fn captain_members(&self, player: i32) -> Option<&[HandleId]> {
+        self.players
+            .get(&player)
+            .map(|flags| flags.captain_members.as_slice())
+    }
+
+    pub(super) fn reserve_captain_member(
+        &mut self,
+        player: i32,
+    ) -> Result<(), std::collections::TryReserveError> {
+        if let Some(flags) = self.players.get_mut(&player) {
+            flags.captain_members.try_reserve(1)?;
+            flags.captain_routes.try_reserve(1)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn reserve_captain_routes(
+        &mut self,
+        player: i32,
+        count: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        if let Some(flags) = self.players.get_mut(&player) {
+            flags.captain_routes.try_reserve(count)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn attach_captain_member(&mut self, player: i32, unit: HandleId) {
+        let flags = self
+            .players
+            .get_mut(&player)
+            .expect("active AI player preflighted");
+        if let Err(at) = flags.captain_members.binary_search(&unit) {
+            flags.captain_members.insert(at, unit);
+        }
+    }
+
+    pub(super) fn detach_captain_member(&mut self, unit: HandleId) {
+        for flags in self.players.values_mut() {
+            if let Ok(at) = flags.captain_members.binary_search(&unit) {
+                flags.captain_members.remove(at);
+            }
+            if let Ok(at) = flags.captain_routes.binary_search(&unit) {
+                flags.captain_routes.remove(at);
+            }
+        }
+    }
+
+    pub(super) fn clear_captain_route(&mut self, unit: HandleId) {
+        for flags in self.players.values_mut() {
+            if let Ok(at) = flags.captain_routes.binary_search(&unit) {
+                flags.captain_routes.remove(at);
+            }
+        }
+    }
+
+    pub(super) fn mark_captain_route(&mut self, player: i32, unit: HandleId) {
+        let flags = self
+            .players
+            .get_mut(&player)
+            .expect("active AI player preflighted");
+        if let Err(at) = flags.captain_routes.binary_search(&unit) {
+            flags.captain_routes.insert(at, unit);
+        }
+    }
+
+    pub(super) fn has_captain_route(&self, player: i32, unit: HandleId) -> bool {
+        self.players
+            .get(&player)
+            .is_some_and(|flags| flags.captain_routes.binary_search(&unit).is_ok())
+    }
+
+    pub(super) fn captain_member_owner(&self, unit: HandleId) -> Option<i32> {
+        self.players.iter().find_map(|(&player, flags)| {
+            flags
+                .captain_members
+                .binary_search(&unit)
+                .is_ok()
+                .then_some(player)
+        })
     }
 
     pub(super) fn create_captains(&mut self, player: i32, home: Option<[f32; 2]>) -> bool {
@@ -328,14 +431,42 @@ impl ObjectHost {
             && self.campaign_captains.is_none()
             && self.campaign_new_heroes.is_none()
             && self.campaign_slow_chopping.is_none()
+            && self.campaign_group_timed_life.is_none()
         {
             return Ok(false);
         }
         Ok(self.campaign_ai.activate(player, target_heroes, units_flee))
     }
 
-    pub(crate) fn deactivate_campaign_ai_player(&mut self, player: i32) {
+    pub(crate) fn deactivate_campaign_ai_player(&mut self, player: i32) -> Result<(), Error> {
+        let members = self.campaign_ai.captain_members(player).unwrap_or_default();
+        let mut stops = Vec::new();
+        stops
+            .try_reserve(members.len())
+            .map_err(|_| self.inner.error(START_CAMPAIGN_AI, Failure::Capacity))?;
+        for &unit in members {
+            if !self.captain_route_owned(unit) {
+                continue;
+            }
+            let stop = self
+                .prepare_steer_unit_in_range(unit, None, 0., START_CAMPAIGN_AI)?
+                .ok_or_else(|| {
+                    self.inner.error(
+                        START_CAMPAIGN_AI,
+                        Failure::UnitActivity("captain route cannot stop".into()),
+                    )
+                })?;
+            stops.push((unit, stop));
+        }
+        if !stops.is_empty() {
+            self.reserve_steer_commits(stops.len(), START_CAMPAIGN_AI)?;
+        }
+        for (unit, stop) in stops {
+            self.commit_steer_unit(unit, stop, START_CAMPAIGN_AI)?;
+            self.clear_combat_target(unit);
+        }
         self.campaign_ai.deactivate(player);
+        Ok(())
     }
 
     pub(crate) fn set_ai_target_heroes(&mut self, player: i32, enabled: bool) -> Result<(), Error> {

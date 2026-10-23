@@ -153,6 +153,8 @@ pub struct ExecutedUnit {
     pub animation: Option<crate::unit_model::Animation>,
     pub look_at: Option<super::UnitLookAt>,
     pub summoned: bool,
+    /// Restored from game cache rather than created by the ordinary unit factory.
+    pub cached: bool,
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
@@ -200,7 +202,7 @@ pub(super) struct Admission {
     source: Source,
     declaration_source: String,
     span: Span,
-    max_records: usize,
+    pub(super) max_records: usize,
     max_retained_fields: usize,
     max_modifications: usize,
     records: usize,
@@ -950,7 +952,7 @@ impl ObjectHost {
         None
     }
 
-    fn admitted_units(&self) -> Result<&Admission, Error> {
+    pub(super) fn admitted_units(&self) -> Result<&Admission, Error> {
         self.units
             .as_ref()
             .ok_or_else(|| self.inner.error(NATIVE, Failure::UnitState("not admitted")))
@@ -1195,14 +1197,34 @@ impl ObjectHost {
         } else {
             None
         };
+        let captain_stop = if self.captain_route_owned(*unit) {
+            let prepared = self
+                .prepare_steer_unit_in_range(*unit, None, 0., SET_OWNER)?
+                .ok_or_else(|| {
+                    self.inner.error(
+                        SET_OWNER,
+                        Failure::UnitActivity("captain route cannot stop".into()),
+                    )
+                })?;
+            self.reserve_steer_commits(1, SET_OWNER)?;
+            Some(prepared)
+        } else {
+            None
+        };
         if self
             .guard_state()
             .and_then(|state| state.get(*unit))
             .is_some_and(|guard| guard.returning)
+            && captain_stop.is_none()
         {
             self.steer_unit(*unit, None, SET_OWNER)?;
             self.clear_combat_target(*unit);
         }
+        if let Some(prepared) = captain_stop {
+            self.commit_steer_unit(*unit, prepared, SET_OWNER)?;
+            self.clear_combat_target(*unit);
+        }
+        self.forget_captain_member(*unit);
         match self.inner.entry_mut(*unit)? {
             Entry::Unit { record } => {
                 record.owner = *player;
@@ -1942,6 +1964,7 @@ impl ObjectHost {
                 animation: None,
                 look_at: None,
                 summoned,
+                cached: saved.is_some(),
                 activity: None,
                 shown: true,
                 paused_since: None,

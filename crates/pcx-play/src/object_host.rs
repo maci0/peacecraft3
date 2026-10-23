@@ -105,6 +105,8 @@ pub struct ObjectHost {
     campaign_slow_chopping: Option<crate::campaign_slow_chopping_policy::SlowChoppingPolicy>,
     campaign_gathering: Option<crate::campaign_gathering_policy::GatheringPolicy>,
     campaign_captains: Option<crate::campaign_captain_policy::CaptainPolicy>,
+    campaign_group_timed_life:
+        Option<crate::campaign_group_timed_life_policy::GroupTimedLifePolicy>,
     campaign_flee_motion: campaign_flee_motion::State,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
@@ -281,6 +283,7 @@ impl ObjectHost {
             campaign_slow_chopping: None,
             campaign_gathering: None,
             campaign_captains: None,
+            campaign_group_timed_life: None,
             campaign_flee_motion: campaign_flee_motion::State::default(),
             default_difficulty: None,
             campaign_menu_race: None,
@@ -803,6 +806,9 @@ impl Host for ObjectHost {
     #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if let Some(result) = self.summoning_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.unit_timed_life_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if name == "CreateUnitAtLoc" && self.locations && self.units.is_some() {
@@ -1334,6 +1340,9 @@ pub use campaign_gathering::GatheringObservation;
 #[path = "campaign_captain_host.rs"]
 mod campaign_captains;
 pub use campaign_captains::CaptainObservation;
+
+#[path = "campaign_group_timed_life_host.rs"]
+mod campaign_group_timed_life;
 
 #[path = "combat_host.rs"]
 mod combat;
