@@ -40,9 +40,10 @@ resolved afterward; this is evidence of life reaching zero, not unit removal.
 Query sequences reached 120 in both arms, so unchanged readings were not a
 stopped query loop.
 
-Actor orders and positions also differed, but the experiment did not set an
-explicit random seed and orders already differed before application. These
-are raw observations, not an isolated movement rule. They do not justify
+The before-application actor observations match in both arms. Immediately
+afterward, the false arm reports no order and the true arm reports a movement
+order. Later positions also differ. The experiment did not set an explicit
+random seed; these observations do not establish a complete movement rule or justify
 fitting a route, stop distance or timing constant to the samples. The native
 association path's additional effects remain a separate implementation boundary.
 
@@ -52,7 +53,9 @@ and `545ac4df91650f9c10a3ed1ffadc25621cbad96188bd7e6ff60dbdedb51a5949`.
 Their scripts differ only in diagnostic identities and the boolean flag.
 Original member bytes, generated maps, raw markers and source hashes remain
 local under `.scratch/group-timed-life-probe-r2/`. The compact runtime receipt
-has SHA-256 `88cc5537e41c6404a442486e69bb9f4ba5305f686406bd2135f519bfde1c4018`.
+has SHA-256 `9ad8194d33b46e08f9f0d23552cbe8130daa019bd685401fcfe74a24c6599728`.
+It supersedes the preserved first receipt, which incorrectly described the
+order difference as preceding application.
 Both original-client containers were stopped and preserved after collection.
 
 ## Remaining implementation
