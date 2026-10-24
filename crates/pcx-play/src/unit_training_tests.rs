@@ -5,6 +5,8 @@ constant native GetTrainedUnit takes nothing returns unit
 constant native GetTrainedUnitType takes nothing returns integer
 constant native SetPlayerTechMaxAllowed takes player p, integer kind, integer maximum returns nothing
 constant native GetPlayerTechMaxAllowed takes player p, integer kind returns integer
+constant native SetPlayerTechResearched takes player p, integer kind, integer level returns nothing
+constant native GetPlayerTechResearched takes player p, integer kind, boolean specific returns boolean
 globals
 constant unitevent EVENT_UNIT_TRAIN_START=ConvertUnitEvent(78)
 constant unitevent EVENT_UNIT_TRAIN_FINISH=ConvertUnitEvent(79)
@@ -34,6 +36,7 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
         profile_field(b"T002", "Requires", "techList", ""),
+        requirement_amount(""),
         column(
             b"T003",
             SlkId::UnitBalance,
@@ -70,6 +73,8 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
         .with_player_resources(resources)
         .unwrap()
         .with_player_tech_limits(crate::playercolor_host::TechLimitBudget { max_records: 8 })
+        .unwrap()
+        .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 8 })
         .unwrap()
     });
     let h = &mut vm.host().inner;
@@ -120,6 +125,135 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
             .unwrap();
     }
     (vm, actor, producer)
+}
+
+fn requirement_amount(text: &str) -> ([u8; 4], ObjectField) {
+    let mut field = profile_field(b"T008", "Requiresamount", "intList", text);
+    field.1.metadata.as_mut().unwrap().kind = FieldKind::IntList;
+    field
+}
+
+#[test]
+fn upgrade_prerequisite_waits_without_spending_then_trains_after_research() {
+    for amount in ["", "1"] {
+        let (mut vm, actor, producer) = fixture_with(&[
+            profile_field(b"T002", "Requires", "techList", "Qtec"),
+            requirement_amount(amount),
+        ]);
+        let h = &mut vm.host().inner;
+        let owner = h.executed_unit(actor).unwrap().owner;
+        let ctx = Arc::clone(h.player_context().unwrap());
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .unwrap();
+        h.set_ai_replacement_count(4, 4).unwrap();
+        h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+        for _ in 0..2 {
+            h.fill_ai_guard_posts(4).unwrap();
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 3);
+            assert!(h.next_training_completion(100.).is_none());
+            assert!(h.take_fired_event().is_none());
+        }
+        h.native(
+            "SetPlayerTechResearched",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"Qtec")),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+        let trigger = h.native("CreateTrigger", &[]).unwrap();
+        let event = vm.global("EVENT_PLAYER_UNIT_TRAIN_FINISH");
+        let h = &mut vm.host().inner;
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[trigger, Value::Handle(owner), event, Value::Null],
+        )
+        .unwrap();
+        h.fill_ai_guard_posts(4).unwrap();
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 6);
+        step(&mut vm, 9.);
+        let h = &mut vm.host().inner;
+        assert_eq!(
+            h.ai_unit_count(4, i32::from_be_bytes(*b"u001"), true)
+                .unwrap(),
+            1
+        );
+        let unit = h
+            .executed_units()
+            .find(|(_, r)| {
+                r.definition.rawcode == *b"u001" && r.combat.as_ref().is_some_and(|c| !c.dead)
+            })
+            .map(|(id, _)| id)
+            .unwrap();
+        observe_event(h, producer, Some(unit));
+        assert!(h.take_fired_event().is_none());
+    }
+}
+
+#[test]
+fn malformed_or_unqualified_requirements_preserve_resources_and_pending_jobs() {
+    for (requires, amount) in [
+        ("Qtec", "0"),
+        ("Qtec", "-1"),
+        ("Qtec", "1.5"),
+        ("Qtec", "2147483648"),
+        ("Qtec", "1,2"),
+        ("Qtec,Qtec", "1"),
+        ("Qtec,", ""),
+        ("Qte", ""),
+        ("Qtec,Rbad", "1,1"),
+    ] {
+        let (mut vm, actor, _) = fixture_with(&[
+            profile_field(b"T002", "Requires", "techList", requires),
+            requirement_amount(amount),
+        ]);
+        let h = &mut vm.host().inner;
+        let ctx = Arc::clone(h.player_context().unwrap());
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .unwrap();
+        let owner = h.executed_unit(actor).unwrap().owner;
+        h.set_ai_replacement_count(4, 4).unwrap();
+        h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+        assert!(h.fill_ai_guard_posts(4).is_err(), "{requires}/{amount}");
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 3);
+        assert!(h.next_training_completion(100.).is_none());
+        assert!(h.take_fired_event().is_none());
+    }
+}
+
+#[test]
+fn prerequisite_uses_its_declared_amount_and_the_actual_producer_owner() {
+    for (amount, researcher) in [("1", 5), ("2", 4)] {
+        let (mut vm, actor, _) = fixture_with(&[
+            profile_field(b"T002", "Requires", "techList", "Qtec"),
+            requirement_amount(amount),
+        ]);
+        let h = &mut vm.host().inner;
+        let ctx = Arc::clone(h.player_context().unwrap());
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .unwrap();
+        let owner = h.executed_unit(actor).unwrap().owner;
+        let researcher = h.native("Player", &[Value::Int(researcher)]).unwrap();
+        h.native(
+            "SetPlayerTechResearched",
+            &[
+                researcher,
+                Value::Int(i32::from_be_bytes(*b"Qtec")),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+        h.set_ai_replacement_count(4, 4).unwrap();
+        h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+        h.fill_ai_guard_posts(4).unwrap();
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+        assert!(h.next_training_completion(100.).is_none());
+        assert!(h.take_fired_event().is_none());
+    }
 }
 
 fn bank(h: &ObjectHost, owner: HandleId, name: &str) -> i32 {

@@ -21,6 +21,33 @@ pub(super) struct UpgradeResearch {
     pub(super) count_admitted: bool,
 }
 impl ObjectHost {
+    pub(in super::super) fn upgrade_requirement_met(
+        &self,
+        owner: pcx_script::HandleId,
+        techid: i32,
+        required: Option<i32>,
+    ) -> Result<bool, Error> {
+        let fail = |reason| self.inner.error(GET_RESEARCH, Failure::PlayerState(reason));
+        let player = self.player_settings(owner)?;
+        let model = self
+            .players
+            .as_ref()
+            .and_then(|players| players.upgrade_research.as_ref())
+            .filter(|model| model.active)
+            .ok_or_else(|| fail("current upgrade model is not admitted"))?;
+        if model.rules.maximum(techid).is_none() {
+            return Err(fail("prerequisite is not an admitted upgrade"));
+        }
+        let super::TechRead::Level(level) = self.stored_tech_level(player.number, techid) else {
+            return Err(fail("prerequisite level is unavailable"));
+        };
+        match required {
+            Some(required) if required > 0 => Ok(level >= required),
+            Some(_) => Err(fail("prerequisite level must be positive")),
+            None => Ok(model.rules.researched(level)),
+        }
+    }
+
     /// Admit fresh upgrade counters before any research assignment. Unit/item
     /// technology counts and upgrade gameplay/stat effects remain separate.
     pub fn admit_upgrade_research(

@@ -175,3 +175,28 @@ Structure construction, hero replacement/revival, other training event paths,
 multiple producers, cancellation and exact spawn/arrival behavior are not
 qualified by this ordinary one-producer experiment. The game goal and the
 unchanged campaign acceptance test remain incomplete.
+
+## Upgrade prerequisites
+
+Ordinary replacement training now reads the resolved unit's `Requires` and
+`Requiresamount` fields before requesting resources, food or start callbacks.
+The selected UnitMetaData identifies these as profile `techList` and `intList`
+fields with unindexed list values. Map overrides use that same resolved field
+path. Empty amounts use the admitted research predicate; explicit positive
+amounts compare against the applied upgrade level. No measured level is copied
+into production code.
+
+The check uses the canonical producer owner's current, source-admitted upgrade
+model. An unmet upgrade leaves the request pending without spending, publishing
+a training job or firing a training event. A later fill call rechecks research
+and can start normal timed production. All listed requirements are validated,
+including entries following an unmet one. Unknown technology categories,
+unadmitted current research and malformed amounts report contextual errors.
+Unit prerequisites and technology equivalence relationships remain unsupported
+at this seam; they must not be treated as researched upgrades or guessed absent.
+
+Nonstock synthetic tests exercise waiting, research mutation, actual completion
+and its event, explicit level discrimination, owner isolation and malformed
+lists. The earlier matched original runs qualify ordinary training, resources
+and callbacks; they do not newly qualify this prerequisite transition. A matched
+original prerequisite run remains required before a native parity claim.

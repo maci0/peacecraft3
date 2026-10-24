@@ -55,6 +55,15 @@ fn live(record: &ExecutedUnit) -> bool {
 }
 
 fn profile<'a>(definition: &'a Definition, key: &str, declared: &str) -> Result<&'a str, String> {
+    profile_value(definition, key, declared, FieldKind::Token)
+}
+
+fn profile_value<'a>(
+    definition: &'a Definition,
+    key: &str,
+    declared: &str,
+    kind: FieldKind,
+) -> Result<&'a str, String> {
     let mut matches = definition.fields.values().filter(|field| {
         field.metadata.as_ref().is_some_and(
         |m| matches!(&m.source, FieldSource::Profile { key: k, .. } if k.eq_ignore_ascii_case(key))
@@ -65,7 +74,7 @@ fn profile<'a>(definition: &'a Definition, key: &str, declared: &str) -> Result<
         .ok_or_else(|| format!("{key} profile metadata is not admitted"))?;
     let metadata = field.metadata.as_ref().expect("matched metadata");
     if matches.next().is_some()
-        || metadata.kind != FieldKind::Token
+        || metadata.kind != kind
         || metadata.declared != declared
         || metadata.from != SlkId::UnitMetaData
         || metadata.index != -1
@@ -92,6 +101,59 @@ impl ObjectHost {
     fn training_error(&self, detail: impl Into<String>) -> Error {
         self.inner
             .error(NATIVE, Failure::UnitActivity(detail.into()))
+    }
+
+    fn training_prerequisites_met(
+        &self,
+        definition: &Definition,
+        owner: HandleId,
+    ) -> Result<bool, Error> {
+        let fail = |detail| self.training_error(detail);
+        let requires = profile(definition, "Requires", "techList").map_err(fail)?;
+        if requires.is_empty() {
+            return Ok(true);
+        }
+        let amounts = profile_value(definition, "Requiresamount", "intList", FieldKind::IntList)
+            .map_err(fail)?;
+        let mut amounts = (!amounts.is_empty()).then(|| amounts.split(','));
+        let mut eligible = true;
+        for token in requires.split(',') {
+            let code: [u8; 4] = token
+                .trim()
+                .as_bytes()
+                .try_into()
+                .map_err(|_| fail("malformed Requires rawcode".into()))?;
+            if !code.iter().all(u8::is_ascii_graphic) {
+                return Err(fail("malformed Requires rawcode".into()));
+            }
+            let id = i32::from_be_bytes(code);
+            // shortcut: upgrade counters only; admit source unit/equivalence requirements before widening production.
+            let required = if let Some(amounts) = &mut amounts {
+                let required = amounts
+                    .next()
+                    .ok_or_else(|| fail("Requiresamount has fewer entries than Requires".into()))?
+                    .trim()
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| fail("Requiresamount must contain positive integers".into()))?;
+                Some(required)
+            } else {
+                None
+            };
+            eligible &= self
+                .upgrade_requirement_met(owner, id, required)
+                .map_err(|error| {
+                    fail(format!(
+                        "training prerequisite {}: {error}",
+                        String::from_utf8_lossy(&code)
+                    ))
+                })?;
+        }
+        if amounts.is_some_and(|mut amounts| amounts.next().is_some()) {
+            return Err(fail("Requiresamount has more entries than Requires".into()));
+        }
+        Ok(eligible)
     }
 
     pub(super) fn prepare_initial_guard_posts(&self, player: i32) -> Result<Vec<GuardPost>, Error> {
@@ -447,12 +509,9 @@ impl ObjectHost {
         let Some(producer) = selected else {
             return Ok(());
         };
-        // shortcut: ordinary unmodified production only; add prerequisite/revival and cancellation behavior before widening this seam.
-        if !profile(&definition, "Requires", "techList")
-            .map_err(|e| self.training_error(e))?
-            .is_empty()
-        {
-            return Err(self.training_error("training prerequisites are not admitted"));
+        // shortcut: ordinary production only; add revival and cancellation before widening this seam.
+        if !self.training_prerequisites_met(&definition, owner)? {
+            return Ok(());
         }
         if !self.training_limit_allows(owner, kind)? {
             return Ok(());
