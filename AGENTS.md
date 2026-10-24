@@ -50,6 +50,14 @@ machine load; report live timing and FPS separately.
 Do not add attribution to generated tools or agents in source, documentation,
 commit messages or pull requests.
 
+## Test isolation
+
+Run all automated game, menu, browser and original-client tests fully headless
+and muted. Use an isolated offscreen display and a null audio sink; never open
+test windows on the user's desktop, steal focus, move their pointer or play
+audio through their speakers. Verify display and audio isolation before launch.
+Visible or audible testing requires an explicit user request for that run.
+
 ## CLI contracts
 
 Follow [The CLI Spec](https://clispec.dev/) when creating or changing command-line
