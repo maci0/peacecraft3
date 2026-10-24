@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `ReturnGuardPosts` now has three stopped matched RoC observations: an idle
+  ordinary guard receives the source attack-point order and returns toward its
+  retained post; no-return and released-guard controls remain displaced. The
+  selected registration, owned-context forwarding and post/action call are
+  byte-checked. The runtime consumer is still absent; active-order interaction,
+  eligibility and arrival parity remain open. Human02 still stops at this call
+  at 8.312500 seconds. See [guard returns](docs/re-notes/campaign-ai-return-guard-posts.md).
+
 - [~] `FillGuardPosts` now retains vacant canonical guard posts and requests real
   pending ordinary-unit production. Source costs, food, duration and train lists
   drive resource debit, pending counts, callbacks, normal unit creation and post
