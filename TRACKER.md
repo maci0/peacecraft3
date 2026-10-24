@@ -2,6 +2,18 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `HarvestWood` now assigns canonical workers through the shared prepared
+  harvest path. Matched stopped RoC one/zero-worker runs show real chopping,
+  depot credit and repeated work versus an idle control. Rollover keeps work
+  clocks and cargo, gold assignments stay separate, and a lumber mill does not
+  become a second AI town. Source-derived order IDs preserve the initial
+  `smart` leg and later harvest/return reporting. Core 1,730, app-library 55,
+  app-binary 638, published two-program, actual-image, startup/Continue and
+  strict native/WASM checks pass. Unchanged Human02 now reaches `AddDefenders`
+  at 8.312500 seconds; its opening-minute test remains red. Native town ordering,
+  other race-specific harvesters and rendered parity remain unqualified. See
+  [wood harvesting](docs/re-notes/campaign-ai-wood-harvest.md).
+
 - [~] `HarvestGold` now assigns canonical workers and runs source-derived mine
   entry, capacity, duration, integer cargo, depot credit and repeated work through
   the shared harvest runtime. Original-client one/zero-worker and final-load

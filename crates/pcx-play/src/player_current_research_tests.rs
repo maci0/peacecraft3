@@ -193,6 +193,11 @@ impl AiWorld for AiResearchWorld {
             .harvest_ai_gold(player, town, count)
             .map_err(|error| error.to_string())
     }
+    fn ai_harvest_wood(&mut self, player: i32, town: i32, count: i32) -> Result<(), String> {
+        self.object
+            .harvest_ai_wood(player, town, count)
+            .map_err(|error| error.to_string())
+    }
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
         self.object
             .create_ai_captains(player)

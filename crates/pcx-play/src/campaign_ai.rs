@@ -139,6 +139,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String>;
     fn ai_harvest_gold(&mut self, player: i32, town: i32, count: i32) -> Result<(), String>;
+    fn ai_harvest_wood(&mut self, player: i32, town: i32, count: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_captain_home(
         &mut self,
@@ -393,6 +394,16 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .harvest_ai_gold(player, town, count)
+            .map_err(|error| error.to_string())
+    }
+    fn ai_harvest_wood(&mut self, player: i32, town: i32, count: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .harvest_ai_wood(player, town, count)
             .map_err(|error| error.to_string())
     }
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
@@ -769,6 +780,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("CreateCaptains", &[][..]),
         ("ClearHarvestAI", &[][..]),
         ("HarvestGold", &["integer", "integer"][..]),
+        ("HarvestWood", &["integer", "integer"][..]),
         ("SetCampaignAI", &[][..]),
         ("SetReplacementCount", &["integer"][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
@@ -1120,6 +1132,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_harvest_gold(player, *town, *count)?;
                 Ok(Value::Null)
             }
+            "HarvestWood" => {
+                let [Value::Int(town), Value::Int(count)] = args else {
+                    return Err("HarvestWood: expected town and worker count integers".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_harvest_wood(player, *town, *count)?;
+                Ok(Value::Null)
+            }
             "CreateCaptains" => {
                 if !args.is_empty() {
                     return Err("CreateCaptains: expected no arguments".into());
@@ -1225,6 +1245,7 @@ mod tests {
         gathering: BTreeMap<i32, bool>,
         harvest_clears: BTreeMap<i32, usize>,
         gold_requests: Vec<(i32, i32, i32)>,
+        wood_requests: Vec<(i32, i32, i32)>,
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
         captain_combat: BTreeMap<(i32, bool), bool>,
@@ -1413,6 +1434,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.gold_requests.push((player, town, count));
+            Ok(())
+        }
+        fn ai_harvest_wood(&mut self, player: i32, town: i32, count: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.wood_requests.push((player, town, count));
             Ok(())
         }
         fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
@@ -2041,7 +2070,17 @@ mod tests {
 
     #[test]
     fn harvest_gold_requires_owned_integer_abi_and_forwards_player_across_sleep() {
-        let declaration = "native HarvestGold takes integer town, integer count returns nothing\n";
+        check_harvest_abi_and_forwarding("HarvestGold");
+    }
+
+    #[test]
+    fn harvest_wood_requires_owned_integer_abi_and_forwards_player_across_sleep() {
+        check_harvest_abi_and_forwarding("HarvestWood");
+    }
+
+    fn check_harvest_abi_and_forwarding(name: &str) {
+        let declaration =
+            format!("native {name} takes integer town, integer count returns nothing\n");
         for (common, ai_common) in [
             (
                 COMMON.to_string(),
@@ -2081,14 +2120,16 @@ mod tests {
                 runtime
                     .start(&mut world, 1, "gold.ai")
                     .unwrap_err()
-                    .contains("HarvestGold")
+                    .contains(name)
             );
             assert!(state.lock().unwrap().active.is_empty());
             assert!(state.lock().unwrap().gold.is_empty());
         }
         let script = program_with_ai_common(
             "synthetic:gold.ai",
-            "function main takes nothing returns nothing\ncall HarvestGold(7,-13)\ncall Sleep(0.25)\ncall HarvestGold(9,17)\nendfunction\n",
+            &format!(
+                "function main takes nothing returns nothing\ncall {name}(7,-13)\ncall Sleep(0.25)\ncall {name}(9,17)\nendfunction\n"
+            ),
             &format!("{AI_COMMON}{declaration}"),
         );
         let mut runtime = Runtime::<World>::default();
@@ -2101,8 +2142,15 @@ mod tests {
         while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
             runtime.resume(&mut world, player, ticket).unwrap();
         }
+        let requests = |state: &State| {
+            if name == "HarvestGold" {
+                state.gold_requests.clone()
+            } else {
+                state.wood_requests.clone()
+            }
+        };
         assert_eq!(
-            state.lock().unwrap().gold_requests,
+            requests(&state.lock().unwrap()),
             [(1, 7, -13), (2, 7, -13), (1, 9, 17), (2, 9, 17)]
         );
         let mut host = AiHost::new(1, world.take().unwrap());
@@ -2112,9 +2160,9 @@ mod tests {
             vec![Value::Int(1), Value::Bool(false)],
             vec![Value::Real(1.0), Value::Int(1)],
         ] {
-            assert!(host.native("HarvestGold", &args).is_err());
+            assert!(host.native(name, &args).is_err());
         }
-        assert_eq!(state.lock().unwrap().gold_requests.len(), 4);
+        assert_eq!(requests(&state.lock().unwrap()).len(), 4);
     }
 
     #[test]

@@ -32,8 +32,10 @@ The following `HarvestGold`/`HarvestWood` handlers call a different assignment
 helper. The [gold harvest investigation](campaign-ai-gold-harvest.md) now
 qualifies a one-worker cycle, its zero-worker control and a partial final load.
 `HarvestGold` now assigns canonical workers and uses the shared harvest runtime
-for mine entry, cargo, depot credit and repeated work. `HarvestWood` remains a
-separate pending assignment consumer.
+for mine entry, cargo, depot credit and repeated work.
+[Wood harvesting](campaign-ai-wood-harvest.md) now uses the same prepared
+assignment path and the existing tree-work loop. Its matched one/zero-worker
+reference runs qualify real chopping and depot credit.
 
 Bounded REA byte observations:
 
@@ -70,15 +72,15 @@ explicit worker's order and motion and still credits its carried load.
 The published two-program fixture calls the native before and after sleep.
 
 Rollover itself does not allocate workers or transfer resources. The later
-`HarvestGold` consumer now performs that work through the same canonical unit
-records; `HarvestWood` is still pending. A successful empty rollover alone is not
+`HarvestGold` and `HarvestWood` consumers now perform that work through the same
+canonical unit records. A successful empty rollover alone is not
 evidence for autonomous harvesting or a complete campaign strategy.
 
-Combined verification passes 1,707 core tests, 55 app-library and 638 app-binary
+The original rollover verification passed 1,707 core tests, 55 app-library and 638 app-binary
 tests, the published two-program session, actual selected-image decoding,
 Human01 startup and victory Continue, strict native/WASM Clippy, formatting
 and the default desktop build.
-The unchanged Human02 opening-minute test passes this call and now refuses
+At that revision the unchanged Human02 opening-minute test passed this call and refused
 `CaptainInCombat` at 8.312500 seconds. Its full failure remains retained under
 `.scratch/clear-harvest/gates/`; chapter completion and rendered parity remain
 unverified.

@@ -18,6 +18,7 @@ use crate::harvest_rules::{
 };
 use crate::order_registry::Registry;
 
+use super::unit_activity::PreparedSteer;
 use super::{Entry, Error, Failure, ObjectHost};
 
 pub const ORDER: &str = "autoharvestlumber";
@@ -67,6 +68,8 @@ struct Worker {
     paused_at: Option<f64>,
     reroute: bool,
     manual_return: bool,
+    initial_order: Option<i32>,
+    ai_town: Option<HandleId>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +89,12 @@ struct HarvestSetup {
     base_rules: HarvestRules,
     rules: HarvestRules,
     upgrade_codes: Vec<String>,
+}
+
+struct PreparedHarvest {
+    worker: Worker,
+    route: PreparedSteer,
+    animation: Option<crate::unit_model::Animation>,
 }
 
 pub(super) struct State {
@@ -182,7 +191,7 @@ impl ObjectHost {
             } else {
                 match worker.phase {
                     Phase::ToDepot => state.resume_order,
-                    _ => state.harvest_order,
+                    _ => worker.initial_order.unwrap_or(state.harvest_order),
                 }
             };
             return Some(Ok(Value::Int(order)));
@@ -347,6 +356,8 @@ impl ObjectHost {
             paused_at: None,
             reroute: true,
             manual_return: true,
+            initial_order: None,
+            ai_town: None,
         };
         self.route_depot(&mut worker, position)?;
         if let Some(state) = &mut self.harvest {
@@ -429,6 +440,24 @@ impl ObjectHost {
     }
 
     fn start_harvest(&mut self, unit: HandleId) -> Result<Value, Error> {
+        let Some(prepared) = self.prepare_lumber_harvest(unit)? else {
+            return Ok(Value::Bool(false));
+        };
+        let new_task = usize::from(
+            !self
+                .harvest
+                .as_ref()
+                .expect("admitted")
+                .workers
+                .iter()
+                .any(|worker| worker.unit == unit),
+        );
+        self.reserve_harvest_tasks(new_task, 1)?;
+        self.publish_harvest_worker(prepared)?;
+        Ok(Value::Bool(true))
+    }
+
+    fn prepare_lumber_harvest(&mut self, unit: HandleId) -> Result<Option<PreparedHarvest>, Error> {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
@@ -439,7 +468,7 @@ impl ObjectHost {
             || record.paused_since.is_some()
             || record.combat.as_ref().is_some_and(|combat| combat.dead)
         {
-            return Ok(Value::Bool(false));
+            return Ok(None);
         }
         let Some(position) = record.position else {
             return Err(self.harvest_error("accepted unit position required"));
@@ -482,29 +511,20 @@ impl ObjectHost {
                     |worker| worker.carrying,
                 )
         };
-        if let Some(state) = &mut self.harvest
-            && !state.workers.iter().any(|worker| worker.unit == unit)
-        {
-            if state.workers.len() >= state.budget.max_workers {
-                return Err(self.harvest_error("harvest worker budget exhausted"));
-            }
-            if state.workers.try_reserve(1).is_err() {
-                return Err(self.harvest_error("harvest worker capacity"));
-            }
-        }
         let distance = distance(position, tree_position);
         let phase = if distance <= reach {
             Phase::Work
         } else {
-            if !self.steer_unit_in_range(unit, Some(tree_position), reach, ORDER)?
-                && distance > reach
-            {
-                return Err(self.harvest_error("worker cannot move to the selected tree"));
-            }
-            if distance > reach && self.activity_waypoints_empty(unit)? {
-                return Err(self.harvest_error("selected tree is not reachable"));
-            }
             Phase::ToTree
+        };
+        let Some(route) = self.prepare_steer_unit_in_range(
+            unit,
+            (distance > reach).then_some(tree_position),
+            reach,
+            ORDER,
+        )?
+        else {
+            return Err(self.harvest_error("worker cannot move to the selected tree"));
         };
         let delay = f64::from(work_delay(&rules));
         let worker = Worker {
@@ -523,22 +543,27 @@ impl ObjectHost {
             paused_at: None,
             reroute: false,
             manual_return: false,
+            initial_order: None,
+            ai_town: None,
         };
-        if phase == Phase::Work {
-            self.enter_work_animation(unit, now)?;
-        }
-        if let Some(state) = &mut self.harvest {
-            state.cargo.remove(&unit);
-            match state
-                .workers
-                .iter()
-                .position(|existing| existing.unit == unit)
-            {
-                Some(index) => state.workers[index] = worker,
-                None => state.workers.push(worker),
-            }
-        }
-        Ok(Value::Bool(true))
+        let animation = if phase == Phase::Work {
+            let mut animation = self
+                .executed_unit(unit)?
+                .animation
+                .clone()
+                .expect("work animation preflighted");
+            animation
+                .select("attack", now, None)
+                .map_err(|detail| self.harvest_error(detail))?;
+            Some(animation)
+        } else {
+            None
+        };
+        Ok(Some(PreparedHarvest {
+            worker,
+            route,
+            animation,
+        }))
     }
 
     pub(super) fn advance_harvest(&mut self, now: f64, work: &mut usize) -> Result<(), Error> {
@@ -868,6 +893,7 @@ impl ObjectHost {
             self.stop_unit(worker.unit)?;
         }
         worker.carrying = 0.0;
+        worker.initial_order = None;
         if let Some(gold) = &mut worker.gold {
             gold.carrying = 0;
         }

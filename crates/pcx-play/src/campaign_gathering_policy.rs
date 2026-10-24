@@ -30,7 +30,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 17] = [
+const WINDOWS: [(u32, usize, bool); 20] = [
     (0xac3f5b, 7, true),   // context clear (andl $-2, ctx+0x2d0)
     (0xabb4e9, 7, true),   // context reader (testb $1, ctx+0x2d0)
     (0xabf9e2, 10, true),  // constructor zero-initialize
@@ -48,6 +48,9 @@ const WINDOWS: [(u32, usize, bool); 17] = [
     (0xabf11a, 9, true),   // unsigned town bound
     (0xe6f5ec, 6, false),  // (II)V
     (0xf15cc8, 12, false), // HarvestGold
+    (0xab63e1, 20, true),  // HarvestWood registration
+    (0xab5810, 83, true),  // owned-context forwarding with wood selector
+    (0xf15cd4, 12, false), // HarvestWood
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -278,7 +281,8 @@ impl GatheringPolicy {
             return Err(Error("incomplete gathering-policy windows"));
         };
         let (harvest_current_masks, harvest_previous_masks) = harvest_windows(&w[6..12])?;
-        let harvest_town_slots = gold_windows(&w[12..])?;
+        let harvest_town_slots = gold_windows(&w[12..17])?;
+        wood_windows(&w[17..], w[13])?;
 
         at(clear, 0, &[0x83, 0xa0])?;
         let ctx_offset = word(clear, 2)?;
@@ -420,6 +424,45 @@ impl GatheringPolicy {
     }
 }
 
+fn wood_windows(w: &[&[u8]], gold_handler: &[u8]) -> Result<(), Error> {
+    let [registration, handler, name] = w else {
+        return Err(Error("incomplete wood-harvest windows"));
+    };
+    for (offset, target) in [(0, WINDOWS[15].0), (5, WINDOWS[19].0), (10, WINDOWS[18].0)] {
+        at(registration, offset, &[0x68])?;
+        if word(registration, offset + 1)? != target {
+            return Err(Error("HarvestWood registration changed"));
+        }
+    }
+    relative(registration, WINDOWS[17].0, 15, 0xe8, 0x8ccc80)?;
+    at(name, 0, b"HarvestWood\0")?;
+    at(
+        handler,
+        0,
+        gold_handler.get(..14).ok_or(Error("short gold handler"))?,
+    )?;
+    relative(handler, WINDOWS[18].0, 14, 0xe8, 0x43eca0)?;
+    at(
+        handler,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x5d, 0xc3, 0x83, 0x7d, 0x0c, 0, 0x7e, 0x33, 0x8d, 0x48, 0x2c, 0x8b,
+            0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x12, 0x33, 0xc0, 0x50, 0xff, 0x75,
+            0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08,
+        ],
+    )?;
+    relative(handler, WINDOWS[18].0, 54, 0xe8, 0xabf110)?;
+    at(handler, 59, &[0x5d, 0xc3])?;
+    relative(handler, WINDOWS[18].0, 61, 0xe8, 0x7fc7e0)?;
+    at(
+        handler,
+        66,
+        &[0x6a, 0, 0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08],
+    )?;
+    relative(handler, WINDOWS[18].0, 76, 0xe8, 0xabf110)?;
+    at(handler, 81, &[0x5d, 0xc3])
+}
+
 fn gold_windows(w: &[&[u8]]) -> Result<u32, Error> {
     let [registration, handler, bound, signature, name] = w else {
         return Err(Error("incomplete gold-harvest windows"));
@@ -510,6 +553,42 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     relative(&mut w, 12, 15, 0xe8, 0x8ccc80);
     put(&mut w, 15, 0, b"(II)V\0");
     put(&mut w, 16, 0, b"HarvestGold\0");
+    for (offset, target) in [(0, WINDOWS[15].0), (5, WINDOWS[19].0), (10, WINDOWS[18].0)] {
+        put(&mut w, 17, offset, &[0x68]);
+        dword(&mut w, 17, offset + 1, target);
+    }
+    relative(&mut w, 17, 15, 0xe8, 0x8ccc80);
+    put(&mut w, 19, 0, b"HarvestWood\0");
+    put(
+        &mut w,
+        18,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0c, 0x6a, 0x57,
+        ],
+    );
+    relative(&mut w, 18, 14, 0xe8, 0x43eca0);
+    put(
+        &mut w,
+        18,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x5d, 0xc3, 0x83, 0x7d, 0x0c, 0, 0x7e, 0x33, 0x8d, 0x48, 0x2c, 0x8b,
+            0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x12, 0x33, 0xc0, 0x50, 0xff, 0x75,
+            0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08,
+        ],
+    );
+    relative(&mut w, 18, 54, 0xe8, 0xabf110);
+    put(&mut w, 18, 59, &[0x5d, 0xc3]);
+    relative(&mut w, 18, 61, 0xe8, 0x7fc7e0);
+    put(
+        &mut w,
+        18,
+        66,
+        &[0x6a, 0, 0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08],
+    );
+    relative(&mut w, 18, 76, 0xe8, 0xabf110);
+    put(&mut w, 18, 81, &[0x5d, 0xc3]);
     put(
         &mut w,
         13,
@@ -698,6 +777,47 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wood_handler_binds_owned_abi_and_the_shared_assignment_helper() {
+        let source = synthetic_windows();
+        GatheringPolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0x42; 32],
+        )
+        .unwrap();
+        for (window, offset) in [
+            (17, 1),
+            (17, 6),
+            (17, 11),
+            (17, 16),
+            (18, 4),
+            (18, 10),
+            (18, 28),
+            (18, 29),
+            (18, 37),
+            (18, 43),
+            (18, 45),
+            (18, 55),
+            (18, 60),
+            (18, 62),
+            (18, 67),
+            (18, 77),
+            (18, 82),
+            (19, 11),
+        ] {
+            let mut altered = source.clone();
+            altered[window][offset] ^= 1;
+            assert!(
+                GatheringPolicy::decode(
+                    &altered.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0x42; 32]
+                )
+                .is_err(),
+                "window {window} offset {offset}"
+            );
+        }
+    }
 
     #[test]
     fn gold_town_bound_and_owned_handler_are_source_bound() {

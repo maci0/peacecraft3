@@ -154,6 +154,7 @@ fn harvest_tables_for_range(
             "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, "600", duration,
         ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
+        &["Arlm", "Artn", "1", "0", "0", "0", "1", "-", "-", "-", "-"],
     ];
     let metadata_rows: &[&[&str]] = &[
         &[
@@ -268,7 +269,7 @@ fn harvest_tables_for_range(
             "4",
             "1",
             "0",
-            "Argl",
+            "Argl,Arlm",
             "-",
             "bool",
             "stats",
@@ -281,7 +282,7 @@ fn harvest_tables_for_range(
             "4",
             "2",
             "0",
-            "Argl",
+            "Argl,Arlm",
             "-",
             "bool",
             "stats",
@@ -384,6 +385,7 @@ fn harvest_rules() -> (
         (0x6A0, 901),
         (0x6C0, 902),
         (0x6E0, 903),
+        (0x760, 967),
     ] {
         let name_va = 0x301000 + (at as u32 - 0x200);
         let mut record = vec![0x68];
@@ -400,6 +402,7 @@ fn harvest_rules() -> (
     image[0x6A0..0x6B0].copy_from_slice(b"returnresources\0");
     image[0x6C0..0x6C8].copy_from_slice(b"harvest\0");
     image[0x6E0..0x6F1].copy_from_slice(b"resumeharvesting\0");
+    image[0x760..0x766].copy_from_slice(b"smart\0");
     image[0x220..0x220 + initializer.len()].copy_from_slice(&initializer);
     binding.initializer.len = initializer.len() as u32;
     let mut put = |at: usize, prefix: &[u8], id: i32| {
@@ -419,7 +422,7 @@ fn harvest_rules() -> (
     binding.initializer.digest = sha256(&image[0x220..0x220 + binding.initializer.len as usize]);
     binding.image_sha256 = sha256(&image);
     let registry = Arc::new(
-        crate::order_registry::Registry::read(&image, binding.clone(), budget, 8, 32).unwrap(),
+        crate::order_registry::Registry::read(&image, binding.clone(), budget, 9, 32).unwrap(),
     );
     let rules = crate::unit_activity::Rules::read(
         &image,
@@ -1445,6 +1448,161 @@ fn carried_gold_survives_stop_and_manual_return_credits_once() {
         bank + 30
     );
     assert_eq!(current_order(&mut vm, worker), 0);
+}
+
+#[test]
+fn campaign_wood_keeps_its_town_when_returning_to_a_separate_lumber_mill() {
+    let (mut vm, _) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let mill = create_unit(&mut vm, *b"hlum", 32.0, 36.0);
+    let hall = create_unit(&mut vm, *b"htow", 100.0, 32.0);
+    let spare = create_unit(&mut vm, *b"hpea", 64.0, 32.0);
+    for unit in [worker, spare] {
+        gold_role(&mut vm, unit, "Ahar", false, None);
+    }
+    gold_role(&mut vm, mill, "Arlm", true, None);
+    gold_role(&mut vm, hall, "Argl", true, None);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    host.harvest_ai_wood(0, 1, 1).unwrap();
+    assert_eq!(
+        host.harvest_worker_count(worker),
+        0,
+        "the mill is not a separate town slot"
+    );
+    host.harvest_ai_wood(0, 0, 1).unwrap();
+    tick(&mut vm, 0.5);
+    let host = &mut vm.host().inner;
+    let before = host.executed_unit(worker).unwrap().clone();
+    host.clear_ai_harvest(0).unwrap();
+    host.harvest_ai_wood(0, 0, 1).unwrap();
+    assert_eq!(
+        host.executed_unit(worker).unwrap().animation,
+        before.animation
+    );
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(host.harvest_worker_count(spare), 0);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    for time in [2.5, 4.5, 5.5] {
+        tick(&mut vm, time);
+    }
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 20
+    );
+}
+
+#[test]
+fn campaign_wood_assignment_chops_credits_and_reuses_the_original_cycle() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let depot = create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let other = create_unit_for(&mut vm, 1, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, worker, "Ahar", false, None);
+    gold_role(&mut vm, depot, "Argl", true, None);
+    gold_role(&mut vm, other, "Ahar", false, None);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED");
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let policy = crate::campaign_gathering_policy::GatheringPolicy::fixture();
+    let wood_mask = policy.harvest_current_masks[1];
+    host.admit_campaign_gathering(&context, policy).unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    for (town, count) in [(0, 0), (-1, 1), (6, 1), (0, -7)] {
+        host.harvest_ai_wood(0, town, count).unwrap();
+    }
+    assert_eq!(host.harvest_worker_count(worker), 0);
+    assert!(host.harvest_ai_wood(1, 0, 1).is_err());
+    host.harvest_ai_wood(0, 0, 1).unwrap();
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(host.harvest_worker_count(other), 0);
+    assert_ne!(
+        host.executed_unit(worker)
+            .unwrap()
+            .ai_harvest_flags
+            .unwrap()
+            & wood_mask,
+        0
+    );
+    assert_eq!(current_order(&mut vm, worker), 967);
+    tick(&mut vm, 0.5);
+    assert_eq!(tree_life(&mut vm, tree), 71.0);
+    let host = &mut vm.host().inner;
+    let before = host.executed_unit(worker).unwrap().clone();
+    host.clear_ai_harvest(0).unwrap();
+    host.harvest_ai_wood(0, 0, 1).unwrap();
+    let after = host.executed_unit(worker).unwrap();
+    assert_eq!(after.activity, before.activity);
+    assert_eq!(after.animation, before.animation);
+    tick(&mut vm, 2.5);
+    tick(&mut vm, 4.5);
+    assert_eq!(tree_life(&mut vm, tree), 53.0);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"), bank);
+    tick(&mut vm, 5.5);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 20
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_LUMBER_GATHERED"),
+        gathered + 20
+    );
+    assert_eq!(current_order(&mut vm, worker), 902);
+    assert_eq!(current_order(&mut vm, other), 0);
+}
+
+#[test]
+fn campaign_wood_does_not_steal_the_gold_assignment() {
+    let (mut vm, worker, _, mine) = gold_fixture();
+    let wood = create_unit(&mut vm, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, wood, "Ahar", false, None);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    host.harvest_ai_gold(0, 0, 1).unwrap();
+    let gold = host.executed_unit(worker).unwrap().clone();
+    host.harvest_ai_wood(0, 0, 1).unwrap();
+    assert_eq!(host.executed_unit(worker).unwrap(), &gold);
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(host.harvest_worker_count(wood), 1);
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+}
+
+#[test]
+fn campaign_wood_reserves_all_worker_routes_before_publishing_any() {
+    let (mut vm, worker, _, mine) = gold_fixture_budget(1);
+    let other = create_unit(&mut vm, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, other, "Ahar", false, None);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    let before = [
+        host.executed_unit(worker).unwrap().clone(),
+        host.executed_unit(other).unwrap().clone(),
+    ];
+    assert!(host.harvest_ai_wood(0, 0, 2).is_err());
+    assert_eq!(host.executed_unit(worker).unwrap(), &before[0]);
+    assert_eq!(host.executed_unit(other).unwrap(), &before[1]);
+    assert_eq!(host.harvest_worker_count(worker), 0);
+    assert_eq!(host.harvest_worker_count(other), 0);
+    assert_eq!(gold_amount(&mut vm, mine), 500);
 }
 
 #[test]

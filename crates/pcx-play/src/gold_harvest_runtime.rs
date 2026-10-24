@@ -1,5 +1,4 @@
-//! Gold work uses the shared harvest task, canonical mines and prepared movement.
-use super::super::unit_activity::PreparedSteer;
+//! Gold work and campaign assignments use shared harvest tasks and prepared movement.
 use super::*;
 
 impl ObjectHost {
@@ -8,25 +7,31 @@ impl ObjectHost {
         unit: HandleId,
         mine: HandleId,
     ) -> Result<Value, Error> {
-        let Some((worker, route)) = self.prepare_gold_harvest(unit, mine)? else {
+        let Some(prepared) = self.prepare_gold_harvest(unit, mine)? else {
             return Ok(Value::Bool(false));
         };
-        self.reserve_steer_commits(1, HARVEST_ORDER)?;
-        self.reserve_gold_tasks(usize::from(
-            !self
-                .harvest
-                .as_ref()
-                .expect("harvest admitted")
-                .workers
-                .iter()
-                .any(|task| task.unit == unit),
-        ))?;
-        self.publish_gold_harvest(worker, route)?;
+        self.reserve_harvest_tasks(
+            usize::from(
+                !self
+                    .harvest
+                    .as_ref()
+                    .expect("harvest admitted")
+                    .workers
+                    .iter()
+                    .any(|task| task.unit == unit),
+            ),
+            1,
+        )?;
+        self.publish_harvest_worker(prepared)?;
         Ok(Value::Bool(true))
     }
 
-    fn reserve_gold_tasks(&mut self, count: usize) -> Result<(), Error> {
-        self.reserve_steer_commits(count, HARVEST_ORDER)?;
+    pub(super) fn reserve_harvest_tasks(
+        &mut self,
+        count: usize,
+        routes: usize,
+    ) -> Result<(), Error> {
+        self.reserve_steer_commits(routes, HARVEST_ORDER)?;
         let state = self.harvest.as_mut().expect("harvest admitted");
         if state.workers.len().saturating_add(count) > state.budget.max_workers {
             return Err(self.harvest_error("harvest worker budget exhausted"));
@@ -41,7 +46,7 @@ impl ObjectHost {
         &mut self,
         unit: HandleId,
         mine: HandleId,
-    ) -> Result<Option<(Worker, PreparedSteer)>, Error> {
+    ) -> Result<Option<PreparedHarvest>, Error> {
         let record = self.executed_unit(unit)?;
         if !record.shown
             || record.paused_since.is_some()
@@ -110,8 +115,8 @@ impl ObjectHost {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
-        Ok(Some((
-            Worker {
+        Ok(Some(PreparedHarvest {
+            worker: Worker {
                 unit,
                 owner,
                 rules: setup.rules,
@@ -131,13 +136,29 @@ impl ObjectHost {
                 paused_at: None,
                 reroute: false,
                 manual_return: false,
+                initial_order: None,
+                ai_town: None,
             },
             route,
-        )))
+            animation: None,
+        }))
     }
 
-    fn publish_gold_harvest(&mut self, worker: Worker, route: PreparedSteer) -> Result<(), Error> {
+    pub(super) fn publish_harvest_worker(
+        &mut self,
+        prepared: PreparedHarvest,
+    ) -> Result<(), Error> {
+        let PreparedHarvest {
+            worker,
+            route,
+            animation,
+        } = prepared;
         self.commit_steer_unit(worker.unit, route, HARVEST_ORDER)?;
+        if let Some(animation) = animation
+            && let Entry::Unit { record } = self.inner.entry_mut(worker.unit)?
+        {
+            record.animation = Some(animation);
+        }
         self.clear_combat_target(worker.unit);
         let state = self.harvest.as_mut().expect("harvest admitted");
         state.cargo.remove(&worker.unit);
@@ -356,31 +377,52 @@ impl ObjectHost {
         town: i32,
         count: i32,
     ) -> Result<(), Error> {
-        const NAME: &str = "HarvestGold";
+        self.harvest_ai_workers(player, town, count, true)
+    }
+
+    pub(crate) fn harvest_ai_wood(
+        &mut self,
+        player: i32,
+        town: i32,
+        count: i32,
+    ) -> Result<(), Error> {
+        self.harvest_ai_workers(player, town, count, false)
+    }
+
+    fn harvest_ai_workers(
+        &mut self,
+        player: i32,
+        town: i32,
+        count: i32,
+        gold: bool,
+    ) -> Result<(), Error> {
+        let name = if gold { "HarvestGold" } else { "HarvestWood" };
         let policy = self.campaign_gathering.as_ref().ok_or_else(|| {
             self.inner.error(
-                NAME,
+                name,
                 Failure::ConfigState("gathering policy is not admitted"),
             )
         })?;
         let slots = policy.harvest_town_slots;
-        let [current, other] = policy.harvest_current_masks;
-        let previous = policy.harvest_previous_masks[0];
+        let index = usize::from(!gold);
+        let current = policy.harvest_current_masks[index];
+        let other = policy.harvest_current_masks[1 - index];
+        let previous = policy.harvest_previous_masks[index];
         let owner = self.player_identity(player).ok_or_else(|| {
             self.inner
-                .error(NAME, Failure::ConfigState("player is not admitted"))
+                .error(name, Failure::ConfigState("player is not admitted"))
         })?;
         if !self.campaign_ai.is_active(player) {
             return Err(self
                 .inner
-                .error(NAME, Failure::ConfigState("AI player is not active")));
+                .error(name, Failure::ConfigState("AI player is not active")));
         }
         if count <= 0 || town < 0 || town as u32 >= slots {
             return Ok(());
         }
         let state = self.harvest.as_ref().ok_or_else(|| {
             self.inner.error(
-                NAME,
+                name,
                 Failure::ConfigState("harvest runtime is not admitted"),
             )
         })?;
@@ -388,11 +430,11 @@ impl ObjectHost {
         let mut units = Vec::new();
         for (unit, record) in self.executed_units() {
             if units.len() >= budget {
-                return Err(self.inner.error(NAME, Failure::Capacity));
+                return Err(self.inner.error(name, Failure::Capacity));
             }
             units
                 .try_reserve(1)
-                .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
             units.push((
                 unit,
                 record.owner,
@@ -403,11 +445,12 @@ impl ObjectHost {
         let mut towns = Vec::new();
         towns
             .try_reserve(units.len())
-            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         for &(unit, unit_owner, live, rawcode) in &units {
             if unit_owner != owner || !live {
                 continue;
             }
+            // Both resource calls share town slots; return buildings are selected separately.
             if self
                 .depot_return(rawcode)?
                 .is_some_and(|depot| depot.accepts_gold)
@@ -421,13 +464,18 @@ impl ObjectHost {
         let Some(&depot) = towns.get(town as usize) else {
             return Ok(());
         };
-        let Some(mine) = self.select_gold_mine(self.unit_position(depot)?)? else {
-            return Ok(());
+        let mine = if gold {
+            let Some(mine) = self.select_gold_mine(self.unit_position(depot)?)? else {
+                return Ok(());
+            };
+            Some(mine)
+        } else {
+            None
         };
         let mut candidates = Vec::new();
         candidates
             .try_reserve(units.len())
-            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         for &(unit, unit_owner, live, _) in &units {
             if unit_owner != owner {
                 continue;
@@ -444,8 +492,16 @@ impl ObjectHost {
                 .workers
                 .iter()
                 .find(|worker| worker.unit == unit);
-            let reuse = existing
-                .is_some_and(|worker| worker.gold.as_ref().is_some_and(|gold| gold.mine == mine));
+            let reuse = existing.is_some_and(|worker| {
+                worker.ai_town.is_none_or(|town| town == depot)
+                    && match mine {
+                        Some(mine) => worker.gold.as_ref().is_some_and(|gold| gold.mine == mine),
+                        None => {
+                            worker.gold.is_none()
+                                && (worker.ai_town == Some(depot) || worker.depot == Some(depot))
+                        }
+                    }
+            });
             if reuse {
                 candidates.push((flags & previous == 0, unit, true));
                 continue;
@@ -467,7 +523,13 @@ impl ObjectHost {
             let state = self.harvest.as_ref().expect("harvest admitted");
             if HarvestRules::from_definition(&state.tables, &state.abilities, &record.definition)
                 .map_err(|error| self.harvest_read_error("Ahar", error))?
-                .is_some_and(|rules| rules.gold_capacity > 0)
+                .is_some_and(|rules| {
+                    if gold {
+                        rules.gold_capacity > 0
+                    } else {
+                        rules.lumber_capacity > 0
+                    }
+                })
             {
                 candidates.push((flags & previous == 0, unit, false));
             }
@@ -477,30 +539,51 @@ impl ObjectHost {
         let mut reused = Vec::new();
         plans
             .try_reserve(candidates.len())
-            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         reused
             .try_reserve(candidates.len())
-            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         for &(_, unit, reuse) in candidates.iter().take(count as usize) {
             if reuse {
                 reused.push(unit);
                 continue;
             }
-            let (worker, route) = self.prepare_gold_harvest(unit, mine)?.ok_or_else(|| {
+            let mut prepared = match mine {
+                Some(mine) => self.prepare_gold_harvest(unit, mine)?,
+                None => self.prepare_lumber_harvest(unit)?,
+            }
+            .ok_or_else(|| {
                 self.inner.error(
-                    NAME,
-                    Failure::UnitActivity("selected worker cannot mine".into()),
+                    name,
+                    Failure::UnitActivity("selected worker cannot harvest".into()),
                 )
             })?;
-            plans.push((worker, route));
+            if !gold {
+                prepared.worker.initial_order = Some(self.order_id("smart").ok_or_else(|| {
+                    self.inner
+                        .error(name, Failure::ConfigState("smart order is not admitted"))
+                })?);
+            }
+            prepared.worker.ai_town = Some(depot);
+            plans.push(prepared);
         }
-        self.reserve_gold_tasks(plans.len())?;
-        for (worker, route) in plans {
-            let unit = worker.unit;
-            self.publish_gold_harvest(worker, route)?;
+        self.reserve_harvest_tasks(plans.len(), plans.len())?;
+        for prepared in plans {
+            let unit = prepared.worker.unit;
+            self.publish_harvest_worker(prepared)?;
             reused.push(unit);
         }
         for unit in reused {
+            if let Some(worker) = self
+                .harvest
+                .as_mut()
+                .expect("admitted")
+                .workers
+                .iter_mut()
+                .find(|worker| worker.unit == unit)
+            {
+                worker.ai_town = Some(depot);
+            }
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                 *record.ai_harvest_flags.get_or_insert(0) |= current;
             }
