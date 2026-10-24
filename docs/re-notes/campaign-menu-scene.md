@@ -101,12 +101,45 @@ The original and recreated capture clocks are retained, not treated as a
 frame-exact timing or performance gate. Earlier unfocused setup/intro captures
 are separate from these four navigation sequences. The owned runtime is stopped.
 
+## Authored campaign entrance
+
+The longer fresh reference run under `.scratch/campaign-menu-birth/original-r2/`
+confirms an entrance after the black transition: the archer and camera move into
+their settled composition before the idle motion continues. Its 64 captured
+frames retain actual monotonic times. The diagnostic profile was created and
+selected first, and the profile panel's closure was visually confirmed before
+entry. The first attempt stayed on Single Player and is excluded from entrance
+evidence. Both original reference containers were stopped and preserved.
+
+Campaign backgrounds now select their named `Birth` once, then the selected
+authored `Stand`. An instantaneous Birth enters Stand immediately. Glue scenes
+retain their existing idle selection. Both phases' camera, opacity, texture,
+UV and lighting plans are admitted before publication. The handoff carries
+excess local time into Stand while retaining the monotonic elapsed clock used
+by global tracks. Menu background presentation now uses real time, independent
+of the simulation clock's pause and maximum-delta policy.
+The first presented delta excludes asset-admission time, so loading cannot
+consume the beginning of the authored entrance before it is visible.
+
+The particle plan admits the same entrance/idle pair without replacing its live
+simulation. Emitter identity, static properties and global channels must match;
+local channels follow their selected interval. Existing particles, RNG state
+and fractional emission survive. Local burst keys begin once per selected clip;
+global bursts retain their existing clock and endpoint semantics. This is a
+shared rendering implementation, not a reconstruction of a native queue.
+
+A cold desktop candidate exposed a real-time hitch exceeding the PRE2 tick
+budget and permanently disabling the batch. Presentation now retains excess
+time as bounded catch-up work instead of dropping time or disabling particles.
+The strict simulation API still refuses an oversized tick request; the menu
+caller uses its queued counterpart. A synthetic hitch regression checks the
+pending fraction, live particles, cumulative work and subsequent random stream
+against uninterrupted simulation. Failed captures remain preserved separately.
+
 ## Remaining differences
 
-This slice does not complete the transition or screen rendering. The shared
-background renderer currently starts the looping Stand
-instead of playing the campaign model's Birth and then Stand. The campaign row
-layout, unlock/profile rules, cursor, ambient sound and exact control fades also
+This slice does not complete the transition or screen rendering. The campaign row
+layout, unlock/profile rules, cursor, ambient sound and exact control fades
 remain distinct work. In particular, a successful scene import or parser test
 does not establish matching pixels, sound or timing.
 
@@ -120,7 +153,24 @@ successful visual-parity gates.
 
 ## Validation
 
-The final source passes 700 application tests (55 library and 645 binary) and
+The entrance source passes 709 application tests (55 library and 654 binary),
+69 graphics tests and 38 checked particle tests. Three explicit original-input
+gates cover the first TFT campaign's Birth/Stand handoff, the full-screen fade
+and incoming Single Player panels. Strict native all-target and WASM
+library/binary Clippy, the desktop build, formatting and diff checks pass.
+The source freeze is retained in
+`.scratch/campaign-menu-birth/checks-queued-final/`.
+
+The fresh cold desktop run in
+`.scratch/campaign-menu-birth/native-queued-final/` was visually reviewed through
+Main → Single Player → Campaign → Single Player → Main. It shows the entrance
+then idle, both fade reveals and no retained overlay or particle-disable error.
+The loading-clock and particle-budget failed candidates remain preserved under
+separate paths. The owned desktop and reference processes are stopped; the
+verification receipt binds the rendered binary and checked source hashes.
+This confirms the implemented sequence, not matching pixels or exact timing.
+
+The earlier composition source passed 700 application tests (55 library and 645 binary) and
 69 graphics tests. Five explicit original-input gates pass: logo parsing,
 edition-switch ownership, destination FDF admission, initial Single Player
 panel poses, and all supplied campaign-camera clips. Strict native all-target

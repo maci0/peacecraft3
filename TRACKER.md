@@ -5,6 +5,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Campaign backgrounds now play the source Birth once before Stand, keeping
+  global tracks, live particles, RNG and fractional emission continuous. Loading
+  time cannot consume the first visible pose; long presentation frames retain
+  bounded particle catch-up work instead of disabling the batch. Fresh original
+  and recreated entry captures were compared; desktop entry/Back/Main completes
+  without a retained fade or particle-disable error. Application 709, graphics
+  69, checked particles 38, three original-input gates, strict native/WASM checks
+  and the desktop build pass. Profile/selector layout, exact control fades,
+  foliage/sorted particles and audible parity remain unfinished.
+  See [campaign scene review](docs/re-notes/campaign-menu-scene.md).
+
 - [~] Campaign entry and Back now render the FDF-bound full-screen fade model.
   Entry retires the source panels before covering; the scene changes at black,
   loading holds that endpoint, and return panels wait for the reveal. Source

@@ -128,6 +128,39 @@ fn live(age: f64) -> Particle {
 }
 
 #[test]
+fn queued_hitches_preserve_time_particles_and_random_stream() {
+    let mut properties = properties();
+    properties.variation = 0.5;
+    properties.speed = 7.;
+    let plan = plan(&[emitter(properties)], &[], [100, 1100], true);
+    let mut expected = Simulation::new(Arc::clone(&plan), 17, limits()).unwrap();
+    let mut queued = Simulation::new(plan, 17, limits()).unwrap();
+    let bounded = Limits {
+        max_ticks: 2,
+        ..limits()
+    };
+    let hitch = Duration::from_millis(3037);
+    expected.advance(hitch, limits()).unwrap();
+    queued.advance_queued(hitch, bounded).unwrap();
+    assert_eq!(queued.elapsed(), Duration::from_millis(250));
+    assert_eq!(queued.elapsed() + queued.pending(), hitch);
+    for _ in 0..11 {
+        queued.advance_queued(Duration::ZERO, bounded).unwrap();
+    }
+    assert_eq!(queued.pending(), Duration::from_millis(37));
+    assert_eq!(queued.work, expected.work);
+    assert_eq!(queued.particles(), expected.particles());
+    expected
+        .advance(Duration::from_millis(213), limits())
+        .unwrap();
+    queued
+        .advance_queued(Duration::from_millis(213), bounded)
+        .unwrap();
+    assert_eq!(queued.work, expected.work);
+    assert_eq!(queued.particles(), expected.particles());
+}
+
+#[test]
 fn authored_rate_fraction_and_partition_are_deterministic_and_both_is_one_particle() {
     let mut p = properties();
     p.emission_rate = 2.5;
@@ -961,6 +994,142 @@ fn burst_plan(keys: &[TrackKey<'_>], global: u32, globals: &[u32], looping: bool
         .push(track(*b"KP2E", Interpolation::None, global, keys));
     finish(&mut e);
     plan(&[e], globals, [0, 1000], looping)
+}
+
+fn entrance_plan(e: &[Particle2], globals: &[u32]) -> Arc<Plan> {
+    let first = Arc::try_unwrap(plan(e, globals, [10, 260], false)).unwrap();
+    let next = Arc::try_unwrap(plan(e, globals, [1000, 1500], true)).unwrap();
+    Arc::new(first.then(next).unwrap())
+}
+
+#[test]
+fn entrance_changes_local_tracks_without_resetting_particles_rng_or_global_visibility() {
+    let mut e = emitter(properties());
+    e.node_tracks.push(track(
+        *b"KGTR",
+        Interpolation::Linear,
+        NO_ID,
+        &[
+            (10, &[0., 0., 0.], &[], &[]),
+            (260, &[10., 0., 0.], &[], &[]),
+            (1000, &[40., 0., 0.], &[], &[]),
+            (1500, &[60., 0., 0.], &[], &[]),
+        ],
+    ));
+    e.tracks.push(track(
+        *b"KP2V",
+        Interpolation::None,
+        0,
+        &[(0, &[1.], &[], &[]), (500, &[0.], &[], &[])],
+    ));
+    finish(&mut e);
+    let p = entrance_plan(&[e], &[1000]);
+    assert_eq!(
+        [p.frame(249), p.frame(250), p.frame(375), p.frame(875)],
+        [259, 1000, 1125, 1125]
+    );
+    approx(p.sample_emitter(0, 375).unwrap().translation[0], 45.);
+    assert!(
+        !p.sample_emitter(0, 750).unwrap().visible,
+        "GLBS does not restart at Stand"
+    );
+    let mut a = Simulation::new(Arc::clone(&p), 17, limits()).unwrap();
+    a.advance(Duration::from_millis(250), limits()).unwrap();
+    assert_eq!(a.particles().len(), 1);
+    a.advance(Duration::from_millis(125), limits()).unwrap();
+    assert_eq!(
+        a.particles().len(),
+        1,
+        "fractional emission must survive the handoff"
+    );
+    approx(a.particles()[0].age as f32, 0.25);
+    a.advance(Duration::from_millis(625), limits()).unwrap();
+    let mut b = Simulation::new(p, 17, limits()).unwrap();
+    b.advance(Duration::from_secs(1), limits()).unwrap();
+    assert_eq!(a.work, b.work);
+    assert_eq!(a.particles(), b.particles());
+}
+
+#[test]
+fn entrance_local_bursts_start_once_and_global_bursts_keep_their_clock() {
+    for global in [NO_ID, 0] {
+        let mut props = properties();
+        props.squirt = 1;
+        props.emission_rate = 0.;
+        let mut e = emitter(props);
+        let keys: &[TrackKey<'_>] = if global == NO_ID {
+            &[
+                (10, &[1.6], &[], &[]),
+                (135, &[0.], &[], &[]),
+                (1000, &[2.4], &[], &[]),
+                (1125, &[0.], &[], &[]),
+                (1250, &[1.], &[], &[]),
+            ]
+        } else {
+            &[
+                (0, &[1.6], &[], &[]),
+                (125, &[0.], &[], &[]),
+                (250, &[2.4], &[], &[]),
+                (375, &[0.], &[], &[]),
+            ]
+        };
+        e.tracks
+            .push(track(*b"KP2E", Interpolation::None, global, keys));
+        finish(&mut e);
+        let globals = if global == NO_ID { &[][..] } else { &[500][..] };
+        let p = entrance_plan(&[e.clone()], globals);
+        let mut a = Simulation::new(Arc::clone(&p), 37, limits()).unwrap();
+        a.advance(Duration::from_secs(1), limits()).unwrap();
+        let mut b = Simulation::new(p, 37, limits()).unwrap();
+        for _ in 0..8 {
+            b.advance(Duration::from_millis(125), limits()).unwrap();
+        }
+        assert_eq!(a.work, b.work);
+        assert_eq!(a.particles(), b.particles());
+        assert_eq!(a.work.births, if global == NO_ID { 8 } else { 9 });
+        if global != NO_ID {
+            let mut baseline =
+                Simulation::new(plan(&[e], globals, [0, 1000], true), 37, limits()).unwrap();
+            baseline.advance(Duration::from_secs(1), limits()).unwrap();
+            assert_eq!(a.work.births, baseline.work.births);
+            assert_eq!(a.particles(), baseline.particles());
+        }
+    }
+}
+
+#[test]
+fn entrance_rejects_a_different_emitter_batch_or_global_channel() {
+    let mut a = emitter(properties());
+    a.tracks.push(track(
+        *b"KP2V",
+        Interpolation::None,
+        0,
+        &[(0, &[1.], &[], &[])],
+    ));
+    finish(&mut a);
+    let first = || Arc::try_unwrap(plan(&[a.clone()], &[500], [10, 260], false)).unwrap();
+    let mut other = a.clone();
+    other.state = {
+        let mut p = properties();
+        p.life_span = 9.;
+        p.to_bytes()
+    };
+    finish(&mut other);
+    assert!(
+        first()
+            .then(Arc::try_unwrap(plan(&[other], &[500], [1000, 1500], true)).unwrap())
+            .is_err()
+    );
+    let mut other = a.clone();
+    other.tracks[0] = track(*b"KP2V", Interpolation::None, 0, &[(0, &[0.], &[], &[])]);
+    finish(&mut other);
+    assert!(
+        first()
+            .then(Arc::try_unwrap(plan(&[other], &[500], [1000, 1500], true)).unwrap())
+            .is_err()
+    );
+    let looping = Arc::try_unwrap(plan(&[a.clone()], &[500], [10, 260], true)).unwrap();
+    assert!(looping.then(first()).is_err());
 }
 
 #[test]

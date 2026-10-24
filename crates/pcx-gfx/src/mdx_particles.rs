@@ -51,14 +51,14 @@ pub struct Limits {
     pub tick: Duration,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Key {
     frame: i32,
     value: [f64; 4],
     incoming: [f64; 4],
     outgoing: [f64; 4],
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Channel {
     keys: Vec<Key>,
     interpolation: Interpolation,
@@ -354,9 +354,10 @@ pub struct Plan {
     interval: [u32; 2],
     looping: bool,
     native_appearance: Option<NativeAppearance>,
+    following: Option<Box<Plan>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct NativeAppearance {
     source: String,
     phase_scale: f32,
@@ -682,7 +683,101 @@ impl Plan {
             interval,
             looping,
             native_appearance: None,
+            following: None,
         })
+    }
+
+    /// One nonlooping entrance followed by an admitted clip of the same emitter batch.
+    /// The simulation, live particles, RNG, fractional emission and global clock survive.
+    pub fn then(mut self, next: Plan) -> Result<Self, Error> {
+        let global_matches = |a: &Option<Channel>, b: &Option<Channel>| {
+            a.as_ref().filter(|channel| channel.global.is_some())
+                == b.as_ref().filter(|channel| channel.global.is_some())
+        };
+        let same = self.source == next.source
+            && self.native_appearance == next.native_appearance
+            && self.profiles.len() == next.profiles.len()
+            && self.profiles.iter().zip(&next.profiles).all(|(a, b)| {
+                a.object_id == b.object_id
+                    && a.properties == b.properties
+                    && a.flags == b.flags
+                    && a.texture_flags == b.texture_flags
+                    && a.pivot == b.pivot
+                    && global_matches(&a.translation, &b.translation)
+                    && global_matches(&a.rotation, &b.rotation)
+                    && global_matches(&a.visibility, &b.visibility)
+                    && global_matches(&a.emission, &b.emission)
+            });
+        if self.looping
+            || self.interval[0] == self.interval[1]
+            || self.following.is_some()
+            || next.following.is_some()
+            || !same
+        {
+            return Err(self.error(0, Failure::Malformed("entrance/following emitter identity")));
+        }
+        self.following = Some(Box::new(next));
+        Ok(self)
+    }
+
+    fn phase(&self, elapsed_ms: u64) -> (&Self, u64) {
+        let boundary = u64::from(self.interval[1] - self.interval[0]);
+        match &self.following {
+            Some(next) if elapsed_ms >= boundary => (next, boundary),
+            _ => (self, 0),
+        }
+    }
+
+    fn burst_windows(
+        &self,
+        from: Duration,
+        to: Duration,
+    ) -> [Option<(&Self, Duration, Duration, Duration)>; 2] {
+        let boundary = Duration::from_millis(u64::from(self.interval[1] - self.interval[0]));
+        match &self.following {
+            Some(next) => [
+                (from < boundary).then_some((self, from, to.min(boundary), Duration::ZERO)),
+                (to > boundary).then_some((
+                    next,
+                    from.saturating_sub(boundary),
+                    to.saturating_sub(boundary),
+                    boundary,
+                )),
+            ],
+            None => [Some((self, from, to, Duration::ZERO)), None],
+        }
+    }
+
+    fn burst_keys(&self, index: usize, from: Duration, to: Duration) -> usize {
+        self.burst_windows(from, to)
+            .into_iter()
+            .flatten()
+            .map(|(plan, _, _, _)| {
+                plan.profiles[index]
+                    .emission
+                    .as_ref()
+                    .expect("checked burst channel")
+                    .keys
+                    .len()
+            })
+            .sum()
+    }
+
+    fn burst_amount(&self, index: usize, from: Duration, to: Duration) -> Result<f64, Failure> {
+        let mut amount = 0.;
+        for (plan, from, to, origin) in self.burst_windows(from, to).into_iter().flatten() {
+            let channel = plan.profiles[index]
+                .emission
+                .as_ref()
+                .expect("checked burst channel");
+            let (from, to) = if channel.global.is_some() {
+                (from + origin, to + origin)
+            } else {
+                (from, to)
+            };
+            amount += channel.bursts(from, to, plan.looping)?;
+        }
+        Ok(amount)
     }
     fn error(&self, index: usize, failure: Failure) -> Error {
         Error {
@@ -692,6 +787,11 @@ impl Plan {
         }
     }
     pub fn frame(&self, elapsed_ms: u64) -> u32 {
+        let (phase, origin) = self.phase(elapsed_ms);
+        phase.local_frame(elapsed_ms - origin)
+    }
+
+    fn local_frame(&self, elapsed_ms: u64) -> u32 {
         let duration = u64::from(self.interval[1] - self.interval[0]);
         self.interval[0]
             + if duration == 0 {
@@ -729,8 +829,9 @@ impl Plan {
     }
 
     pub fn sample_emitter(&self, index: usize, elapsed_ms: u64) -> Result<EmitterSample, Error> {
+        let (phase, _) = self.phase(elapsed_ms);
         let result = || -> Result<EmitterSample, Failure> {
-            let profile = self
+            let profile = phase
                 .profiles
                 .get(index)
                 .ok_or(Failure::Malformed("emitter ordinal"))?;
@@ -872,6 +973,18 @@ impl Simulation {
         self.pending
     }
     pub fn advance(&mut self, delta: Duration, limits: Limits) -> Result<Work, Error> {
+        self.advance_inner(delta, limits, false)
+    }
+    /// Retains excess presentation time for bounded catch-up on later frames.
+    pub fn advance_queued(&mut self, delta: Duration, limits: Limits) -> Result<Work, Error> {
+        self.advance_inner(delta, limits, true)
+    }
+    fn advance_inner(
+        &mut self,
+        delta: Duration,
+        limits: Limits,
+        queue_excess_ticks: bool,
+    ) -> Result<Work, Error> {
         let plan = &self.plan;
         let error = |failure| Error {
             source_name: plan.source.clone(),
@@ -886,13 +999,14 @@ impl Simulation {
             .checked_add(delta)
             .ok_or_else(|| error(Failure::Clock))?;
         let ticks = pending.as_nanos() / self.tick.as_nanos();
-        if ticks > u128::from(limits.max_ticks) {
+        if !queue_excess_ticks && ticks > u128::from(limits.max_ticks) {
             return Err(error(Failure::Budget {
                 kind: "ticks",
                 needed: ticks,
                 limit: u128::from(limits.max_ticks),
             }));
         }
+        let ticks = ticks.min(u128::from(limits.max_ticks));
         self.pending = pending;
         let mut work = Work::default();
         for _ in 0..ticks {
@@ -933,18 +1047,13 @@ impl Simulation {
                     expired += 1;
                 }
             }
-            for (index, profile) in plan.profiles.iter().enumerate() {
+            for (index, profile) in plan.phase(ms).0.profiles.iter().enumerate() {
                 let sample = plan.sample_emitter(index, ms)?;
                 if !sample.visible {
                     continue;
                 }
                 if profile.properties.squirt == 1 {
-                    let keys = profile
-                        .emission
-                        .as_ref()
-                        .expect("checked burst channel")
-                        .keys
-                        .len();
+                    let keys = plan.burst_keys(index, self.elapsed, end);
                     updates = updates
                         .checked_add(
                             u64::try_from(keys)
@@ -967,11 +1076,7 @@ impl Simulation {
                     }
                 }
                 let amount = if profile.properties.squirt == 1 {
-                    profile
-                        .emission
-                        .as_ref()
-                        .expect("checked burst channel")
-                        .bursts(self.elapsed, end, plan.looping)
+                    plan.burst_amount(index, self.elapsed, end)
                         .map_err(|failure| plan.error(index, failure))?
                 } else {
                     profile

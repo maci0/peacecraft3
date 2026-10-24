@@ -1429,7 +1429,7 @@ fn selected_original_background_reaches_the_offscreen_menu_graph() {
         member,
         &bytes,
         &textures,
-        (fog, parameters),
+        (fog, parameters, crate::mainmenu_scene::Entrance::Idle),
     )
     .unwrap();
     app.world_mut().flush();

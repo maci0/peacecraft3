@@ -1886,13 +1886,14 @@ fn initialize_menu_scene(
             &scene_context,
             &bytes,
             &textures,
-            (fog, lighting),
+            (fog, lighting, if campaign.is_some() { crate::mainmenu_scene::Entrance::Birth } else { crate::mainmenu_scene::Entrance::Idle }),
         ).map_err(|error| error.to_string())?;
         info!(
-                "Original menu background: {} geosets, {} textures, {} ms loop; missing {:?}; PRE2 {} emitters, gap {:?}",
+                "Original menu background: {} geosets, {} textures, {} ms {}; missing {:?}; PRE2 {} emitters, gap {:?}",
                 info.geosets,
                 textures.len(),
                 info.duration_ms,
+                info.sequence,
                 info.missing_textures,
                 info.particle_emitters,
                 info.particle_gap

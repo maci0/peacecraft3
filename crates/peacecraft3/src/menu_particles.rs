@@ -131,7 +131,7 @@ pub fn prepare<'a>(
     bytes: &[u8],
     runtime: &RuntimePlan,
     textures: &'a [pcx_gfx::LoadedTexture],
-    clip: Option<Clip>,
+    clips: Option<(Clip, Option<Clip>)>,
     native_parameters: Option<&pcx_play::menu_lighting::Parameters>,
 ) -> Result<Admission<'a>, Error> {
     let emitters = model
@@ -147,15 +147,23 @@ pub fn prepare<'a>(
     let pivots = model
         .pivots(bytes)
         .map_err(|e| Error::Decode(e.to_string()))?;
-    let plan = match Plan::checked(
-        &emitters,
-        &source_textures,
-        &pivots,
-        &runtime.global_sequences,
-        clip.ok_or(Error::Invalid("PRE2 requires an authored selected clip"))?,
-        source,
-        policy.cpu,
-    ) {
+    let (clip, following) =
+        clips.ok_or(Error::Invalid("PRE2 requires an authored selected clip"))?;
+    let build_plan = |clip| {
+        Plan::checked(
+            &emitters,
+            &source_textures,
+            &pivots,
+            &runtime.global_sequences,
+            clip,
+            source,
+            policy.cpu,
+        )
+    };
+    let plan = match build_plan(clip).and_then(|plan| match following {
+        Some(clip) => plan.then(build_plan(clip)?),
+        None => Ok(plan),
+    }) {
         Ok(plan) => plan,
         Err(error) if matches!(error.failure, cpu::Failure::Unsupported(_)) => {
             return Ok(Admission::Unsupported(Error::Cpu(error)));
@@ -547,7 +555,7 @@ impl ParticleScene {
             (camera.rotation * Vec3::Z).to_array(),
         )
         .map_err(|_| Error::Invalid("invalid source camera basis"))?;
-        self.simulation.advance(delta, self.policy.cpu)?;
+        self.simulation.advance_queued(delta, self.policy.cpu)?;
         let mut counts = vec![0usize; self.emitters.len()];
         let mut pieces = Vec::new();
         let max_pieces = self

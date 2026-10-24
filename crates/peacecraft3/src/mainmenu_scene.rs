@@ -2,7 +2,7 @@
 //!
 //! Everything here reads the model the game ships at
 //! `UI\Glues\MainMenu\MainMenu3d\MainMenu3d.mdx` — its own geometry, its own
-//! camera, its own lights, its own texture list and its own `Stand` sequence.
+//! camera, its own lights, its own texture list and its authored sequences.
 //! Nothing is substituted: a piece this module cannot read is reported as a
 //! gap, never replaced with an invented effect.
 //!
@@ -17,8 +17,9 @@
 //!          Stand Alternate 36933..53600 (loop), Morph Alternate 67700..69767
 //! ```
 //!
-//! The entry clip is the first `Stand`, `0..16667` ms, looping — that is what
-//! [`SceneInfo::duration_ms`] reports and what the advance system plays.
+//! Glue entry selects its idle clip. Campaign entry plays `Birth` once and then
+//! the selected `Stand`; materials, camera and lighting share that local clock,
+//! while particles and global sequences retain monotonic elapsed time.
 //!
 //! ## Known fidelity gaps, stated rather than papered over
 //!
@@ -83,6 +84,7 @@ use bevy::{
     camera::{CameraProjection, SubCameraView},
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
     math::Vec3A,
+    platform::time::Instant,
     prelude::*,
 };
 
@@ -713,9 +715,14 @@ pub fn validate_particle_import(
         bytes,
         &runtime,
         textures,
-        clip.map(|clip| pcx_gfx::mdx_particles::Clip {
-            interval: [clip.interval_start, clip.interval_end],
-            looping: !clip.non_looping,
+        clip.map(|clip| {
+            (
+                pcx_gfx::mdx_particles::Clip {
+                    interval: [clip.interval_start, clip.interval_end],
+                    looping: !clip.non_looping,
+                },
+                None,
+            )
         }),
         None,
     )
@@ -819,6 +826,42 @@ pub struct MainMenuScene {
     elapsed: std::time::Duration,
     /// `GLBS` durations, indexed by global-sequence id.
     global_durations: Vec<u32>,
+    following: Option<ScenePhase>,
+    clip_origin_ms: u64,
+    created_at: Option<Instant>,
+}
+
+impl MainMenuScene {
+    fn presentation_delta(&mut self, time: &Time<Real>) -> std::time::Duration {
+        match (self.created_at, time.last_update()) {
+            (Some(created), Some(frame)) if frame <= created => std::time::Duration::ZERO,
+            (Some(created), Some(frame)) => {
+                self.created_at = None;
+                // Import work before publication belongs to neither animation phase.
+                frame.duration_since(created).min(time.delta())
+            }
+            _ => {
+                self.created_at = None;
+                time.delta()
+            }
+        }
+    }
+}
+
+/// A campaign backdrop plays its authored entrance once before its idle sequence.
+#[derive(Clone, Copy)]
+pub enum Entrance {
+    Idle,
+    Birth,
+}
+
+struct ScenePhase {
+    clip: Option<pcx_gfx::mdx_particles::Clip>,
+    camera: pcx_gfx::mdx_camera::CameraPlan,
+    opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    textures: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+    lighting: crate::menu_lighting::Lighting,
 }
 
 /// Build the background from the model's bytes.
@@ -836,9 +879,10 @@ pub fn spawn(
     source: &str,
     bytes: &[u8],
     textures: &[pcx_gfx::LoadedTexture],
-    (fog, lighting_parameters): (
+    (fog, lighting_parameters, entrance): (
         crate::menu_fog::MenuFog,
         pcx_play::menu_lighting::Parameters,
+        Entrance,
     ),
 ) -> Result<SceneInfo, SceneError> {
     let GeosetAssets {
@@ -868,49 +912,113 @@ pub fn spawn(
     let bones = joints.joints().to_vec();
     let pivots = Some(joints.pivots().clone());
 
-    // Use the selected model's looping idle clip and its authored intervals.
+    // Each phase is admitted before any entity is published.
     let sequences = m
         .sequences(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
-    let clip = sequences
+    let idle = sequences
         .iter()
         .find(|s| s.name == "Stand" && !s.non_looping)
         .or_else(|| sequences.iter().find(|s| s.name == "Stand"))
         .or_else(|| sequences.first());
-    let interval = clip.map_or([0, 0], |clip| [clip.interval_start, clip.interval_end]);
-    let camera_animation =
-        pcx_gfx::mdx_camera::CameraPlan::checked(cam, interval, &runtime.global_sequences)
-            .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
+    let (clip, following_clip) = match entrance {
+        Entrance::Idle => (idle, None),
+        Entrance::Birth => {
+            let mut births = sequences.iter().filter(|sequence| sequence.name == "Birth");
+            let birth = births
+                .next()
+                .ok_or_else(|| SceneError::Decode(format!("{source}: missing Birth")))?;
+            let stand = idle
+                .filter(|sequence| sequence.name == "Stand")
+                .ok_or_else(|| {
+                    SceneError::Decode(format!("{source}: missing Stand after Birth"))
+                })?;
+            if births.next().is_some() || birth.interval_end < birth.interval_start {
+                return Err(SceneError::Decode(format!(
+                    "{source}: ambiguous or reversed Birth"
+                )));
+            }
+            if birth.interval_start == birth.interval_end {
+                (Some(stand), None)
+            } else {
+                (Some(birth), Some(stand))
+            }
+        }
+    };
+    let phase =
+        |sequence: Option<&pcx_mdl::Sequence>, birth: bool| -> Result<ScenePhase, SceneError> {
+            let interval = sequence.map_or([0, 0], |clip| [clip.interval_start, clip.interval_end]);
+            Ok(ScenePhase {
+                clip: sequence.map(|clip| pcx_gfx::mdx_particles::Clip {
+                    interval,
+                    looping: !birth && !clip.non_looping,
+                }),
+                camera: pcx_gfx::mdx_camera::CameraPlan::checked(
+                    cam,
+                    interval,
+                    &runtime.global_sequences,
+                )
+                .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?,
+                opacity: pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
+                    .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?,
+                textures: texture_selection(&runtime, interval, source)?,
+                uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(
+                    &runtime, interval, source,
+                )?,
+                lighting: crate::menu_lighting::Lighting::checked(
+                    source,
+                    &m,
+                    bytes,
+                    &runtime,
+                    interval,
+                    lighting_parameters.clone(),
+                )
+                .map_err(SceneError::Decode)?,
+            })
+        };
+    let ScenePhase {
+        clip: selected_clip,
+        camera: camera_animation,
+        opacity,
+        textures: texture_selection,
+        uv: uv_translation,
+        mut lighting,
+    } = phase(clip, following_clip.is_some())?;
+    let mut following = following_clip
+        .map(|clip| phase(Some(clip), false))
+        .transpose()?;
+    let interval = selected_clip.map_or([0, 0], |clip| clip.interval);
     let camera_pose = animated_camera_pose(&camera_animation, interval[0], 0)
         .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
     let camera_pose_plan =
         pcx_gfx::mdx_billboard::CameraPosePlan::checked(&runtime.joints, camera_pose.rotation)
             .map_err(|error| SceneError::Decode(format!("{source}: BONE/HELP: {error}")))?;
-    let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
-        .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
-
-    let mut lighting = crate::menu_lighting::Lighting::checked(
-        source,
-        &m,
-        bytes,
-        &runtime,
-        interval,
-        lighting_parameters.clone(),
-    )
-    .map_err(SceneError::Decode)?;
-    let texture_selection = texture_selection(&runtime, interval, source)?;
-    let uv_translation =
-        pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(&runtime, interval, source)?;
+    if let Some(next) = &following {
+        preflight_geosets(
+            &GeosetSource {
+                m: &m,
+                bytes,
+                source,
+                model: &model,
+                textures,
+                runtime: &runtime,
+                selection: &next.textures,
+                uv_translation: &next.uv,
+                native_cutout_reference: Some(lighting_parameters.cutout_reference),
+                material_layers: None,
+                culls_back_faces: false,
+            },
+            &next.opacity,
+            next.clip.map_or(0, |clip| clip.interval[0]),
+        )?;
+    }
     let particle_admission = particles::prepare(
         source,
         &m,
         bytes,
         &runtime,
         textures,
-        clip.map(|clip| pcx_gfx::mdx_particles::Clip {
-            interval,
-            looping: !clip.non_looping,
-        }),
+        selected_clip.map(|clip| (clip, following.as_ref().and_then(|phase| phase.clip))),
         Some(&lighting_parameters),
     )
     .map_err(|error| SceneError::Particles {
@@ -1021,6 +1129,9 @@ pub fn spawn(
 
     info.lights = lighting.count();
     lighting.bind(&opacity_materials, materials);
+    if let Some(next) = &mut following {
+        next.lighting.bind(&opacity_materials, materials);
+    }
     let skeleton = skin_geosets(
         Rig {
             interval,
@@ -1053,10 +1164,7 @@ pub fn spawn(
         lighting: Some(lighting),
         camera_pose: Some(camera_pose_plan),
         camera_animation: Some((camera, camera_animation)),
-        clip: clip.map(|clip| pcx_gfx::mdx_particles::Clip {
-            interval,
-            looping: !clip.non_looping,
-        }),
+        clip: selected_clip,
         bones,
         pivots,
         handles,
@@ -1070,6 +1178,9 @@ pub fn spawn(
         time_ms: 0.0,
         elapsed: std::time::Duration::ZERO,
         global_durations: runtime.global_sequences,
+        following,
+        clip_origin_ms: 0,
+        created_at: Some(Instant::now()),
     });
     info!(bones = info.bones, helpers = info.helpers, sequence = %info.sequence, global_sequence_tracks = info.global_sequence_tracks, "Original menu animation source");
     Ok(info)
@@ -1837,10 +1948,9 @@ pub fn tracked_pose(
 /// matrix convention, and each geoset's positions are rewritten. It is the same
 /// composition `pcx-gfx`'s viewer uses — [`pcx_gfx::pose_from_poses`] and
 /// [`pcx_gfx::skin_mesh`] — driven by a clock this module owns rather than by
-/// Bevy's animation graph, because the background is a single looping clip and
-/// nothing waits on `Stand Alternate` or `Morph Alternate`.
+/// The entrance retires into the admitted idle plans without resetting global time.
 pub fn advance(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut scene: ResMut<MainMenuScene>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<MenuMaterial>>,
@@ -1851,13 +1961,14 @@ pub fn advance(
     if scene.model.is_none() {
         return;
     }
+    let delta = scene.presentation_delta(&time);
     let elapsed_result = {
         let MainMenuScene {
             elapsed,
             texture_bindings,
             ..
         } = &mut *scene;
-        advance_elapsed(&texture_bindings.source, elapsed, time.delta())
+        advance_elapsed(&texture_bindings.source, elapsed, delta)
     };
     let elapsed_ms = match elapsed_result {
         Ok(elapsed) => elapsed,
@@ -1866,13 +1977,33 @@ pub fn advance(
             return;
         }
     };
+    if scene.following.is_some()
+        && elapsed_ms >= scene.clip_origin_ms + u64::from(scene.duration_ms)
+    {
+        let next = scene.following.take().expect("checked following phase");
+        scene.clip_origin_ms += u64::from(scene.duration_ms);
+        scene.clip = next.clip;
+        scene.interval_start = next.clip.map_or(0, |clip| clip.interval[0]);
+        scene.duration_ms = next
+            .clip
+            .map_or(0, |clip| clip.interval[1] - clip.interval[0]);
+        scene.opacity = Some(next.opacity);
+        scene.texture_selection = Some(next.textures);
+        scene.uv_translation = Some(next.uv);
+        scene.lighting = Some(next.lighting);
+        if let Some((_, camera)) = &mut scene.camera_animation {
+            *camera = next.camera;
+        }
+        info!(source=%scene.texture_bindings.source, "Original menu backdrop: Birth completed; Stand retains global clock");
+    }
+    let clip_elapsed_ms = elapsed_ms.saturating_sub(scene.clip_origin_ms);
     let looping = scene.clip.is_none_or(|clip| clip.looping);
     let local_ms = if scene.duration_ms == 0 {
         0
     } else if looping {
-        elapsed_ms % u64::from(scene.duration_ms)
+        clip_elapsed_ms % u64::from(scene.duration_ms)
     } else {
-        elapsed_ms.min(u64::from(scene.duration_ms))
+        clip_elapsed_ms.min(u64::from(scene.duration_ms))
     };
     scene.time_ms = local_ms as f32;
     let frame = scene.interval_start + local_ms as u32;
@@ -1915,7 +2046,7 @@ pub fn advance(
             .map_err(|_| particles::Error::Invalid("source camera ownership was lost"))
             .and_then(|camera| {
                 particles.advance(
-                    time.delta(),
+                    delta,
                     elapsed,
                     camera,
                     &mut meshes,
@@ -2039,6 +2170,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn presentation_clock_does_not_charge_import_time_to_the_first_pose() {
+        let origin = Instant::now();
+        let ms = std::time::Duration::from_millis;
+        let mut time = Time::<Real>::new(origin);
+        time.update_with_instant(origin);
+        let mut scene = MainMenuScene {
+            created_at: Some(origin + ms(83)),
+            ..default()
+        };
+        assert_eq!(scene.presentation_delta(&time), ms(0));
+        assert!(scene.created_at.is_some());
+        time.update_with_instant(origin + ms(100));
+        assert_eq!(scene.presentation_delta(&time), ms(17));
+        assert!(scene.created_at.is_none());
+        time.update_with_instant(origin + ms(129));
+        assert_eq!(scene.presentation_delta(&time), ms(29));
+        let mut manual = Time::<Real>::default();
+        manual.advance_by(ms(37));
+        scene.created_at = Some(origin);
+        assert_eq!(scene.presentation_delta(&manual), ms(37));
+    }
+
+    #[test]
     fn authored_camera_and_billboards_advance_together_on_the_scene_clock() {
         use bevy::ecs::system::RunSystemOnce;
         let track = |magic, width, values: [&[f32]; 2]| pcx_mdl::KeyTrack {
@@ -2098,7 +2252,7 @@ mod tests {
         world.init_resource::<Assets<MenuMaterial>>();
         world.init_resource::<Assets<ParticleMaterial>>();
         world.init_resource::<Assets<Mesh>>();
-        let mut time = Time::<()>::default();
+        let mut time = Time::<Real>::default();
         time.advance_by(std::time::Duration::from_millis(20));
         world.insert_resource(time);
         world.insert_resource(MainMenuScene {
@@ -2248,7 +2402,7 @@ mod tests {
         world.insert_resource(materials);
         world.insert_resource(Assets::<ParticleMaterial>::default());
         world.insert_resource(Assets::<Mesh>::default());
-        let mut time = Time::<()>::default();
+        let mut time = Time::<Real>::default();
         time.advance_by(std::time::Duration::from_millis(50));
         world.insert_resource(time);
         world.insert_resource(MainMenuScene {
@@ -2478,6 +2632,7 @@ mod tests {
                 (
                     fog,
                     crate::menu_lighting::parameters(Some(&install)).unwrap(),
+                    Entrance::Idle,
                 ),
             )
             .unwrap();
@@ -2611,7 +2766,7 @@ mod tests {
                 world.insert_resource(materials);
                 world.insert_resource(particle_materials);
                 world.insert_resource(images);
-                let mut time = Time::<()>::default();
+                let mut time = Time::<Real>::default();
                 time.advance_by(std::time::Duration::from_secs(1));
                 world.insert_resource(time);
                 world.run_system_once(advance).unwrap();
@@ -2669,7 +2824,7 @@ mod tests {
     fn global_clock_keeps_fractional_milliseconds_across_frames() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        let mut time = Time::<()>::default();
+        let mut time = Time::<Real>::default();
         time.advance_by(std::time::Duration::from_nanos(16_666_667));
         world.insert_resource(time);
         world.insert_resource(Assets::<Mesh>::default());
@@ -3928,7 +4083,7 @@ mod texture_selection_tests {
         let mut spawned = spawn(&f);
         let geosets = spawned.result.unwrap();
         let selection = texture_selection(&f.runtime, [100, 117], "background").unwrap();
-        let mut time = Time::<()>::default();
+        let mut time = Time::<Real>::default();
         time.advance_by(std::time::Duration::from_millis(20));
         spawned.world.insert_resource(time);
         spawned.world.insert_resource(spawned.meshes);
@@ -3979,7 +4134,7 @@ mod texture_selection_tests {
             let selection =
                 texture_selection(&f.runtime, [interval_start, interval_start], "background")
                     .unwrap();
-            let mut time = Time::<()>::default();
+            let mut time = Time::<Real>::default();
             time.advance_by(std::time::Duration::from_millis(7));
             spawned.world.insert_resource(time);
             spawned.world.insert_resource(spawned.meshes);
@@ -4486,7 +4641,7 @@ mod texture_selection_tests {
             "background",
         )
         .unwrap();
-        let mut time = Time::<()>::default();
+        let mut time = Time::<Real>::default();
         time.advance_by(std::time::Duration::from_millis(20));
         spawned.world.insert_resource(time);
         spawned.world.insert_resource(spawned.meshes);
@@ -4698,10 +4853,13 @@ mod texture_selection_tests {
             &fixture.bytes,
             &fixture.runtime,
             &fixture.textures,
-            Some(pcx_gfx::mdx_particles::Clip {
-                interval: [0, 1000],
-                looping: true,
-            }),
+            Some((
+                pcx_gfx::mdx_particles::Clip {
+                    interval: [0, 1000],
+                    looping: true,
+                },
+                None,
+            )),
             Some(&crate::menu_lighting::tests::parameters()),
         )
         .unwrap() else {
@@ -4835,7 +4993,11 @@ mod fog_camera_tests {
             "synthetic-background",
             &empty_scene_with_camera(),
             &[],
-            (fog, crate::menu_lighting::tests::parameters()),
+            (
+                fog,
+                crate::menu_lighting::tests::parameters(),
+                Entrance::Idle,
+            ),
         )
         .unwrap();
         world.flush();
