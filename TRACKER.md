@@ -2,6 +2,14 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `FillGuardPosts` replacement behavior is now qualified in three matched,
+  stopped original-client runs: a dead ordinary guard triggers resource debit,
+  pending food and a completed replacement; no-fill and released-guard controls
+  do not. The selected code joins persistent posts, assignment counters and the
+  signed replacement limit. The game-runtime consumer and shared unit production
+  remain unfinished, so Human02 still refuses this native at 8.312500 seconds.
+  See [guard-post replacement](docs/re-notes/campaign-ai-guard-posts.md).
+
 - [~] `AddDefenders` now recruits canonical units into the defensive captain,
   preserves partial/repeated request behavior, and shares home routing, combat,
   ownership and death/removal cleanup. Four stopped original-client arms qualify

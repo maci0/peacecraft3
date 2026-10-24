@@ -58,6 +58,9 @@ source-bound policy needs no separate startup option or policy module.
 This implements the setter's state transition. It does not implement guard-post
 population, training, resource costs or replacement waves. `FillGuardPosts` and
 other unsupported production/controller calls continue to refuse explicitly.
+The [guard-post follow-up](campaign-ai-guard-posts.md) now records matched
+original-client replacement and release controls. The production consumer is
+still unfinished; these observations do not turn the setter into unit creation.
 
 ## Validation and frontier
 
