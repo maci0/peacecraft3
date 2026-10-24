@@ -21,7 +21,7 @@ pub(super) struct UpgradeResearch {
     pub(super) count_admitted: bool,
 }
 impl ObjectHost {
-    pub(in super::super) fn upgrade_requirement_met(
+    pub(in super::super) fn technology_requirement_met(
         &self,
         owner: pcx_script::HandleId,
         techid: i32,
@@ -35,11 +35,15 @@ impl ObjectHost {
             .and_then(|players| players.upgrade_research.as_ref())
             .filter(|model| model.active)
             .ok_or_else(|| fail("current upgrade model is not admitted"))?;
-        if model.rules.maximum(techid).is_none() {
-            return Err(fail("prerequisite is not an admitted upgrade"));
-        }
-        let super::TechRead::Level(level) = self.stored_tech_level(player.number, techid) else {
-            return Err(fail("prerequisite level is unavailable"));
+        let level = if model.rules.maximum(techid).is_some() {
+            let super::TechRead::Level(level) = self.stored_tech_level(player.number, techid)
+            else {
+                return Err(fail("prerequisite level is unavailable"));
+            };
+            level
+        } else {
+            self.unit_technology_count(owner, techid, false)?
+                .ok_or_else(|| fail("prerequisite is not an admitted technology"))?
         };
         match required {
             Some(required) if required > 0 => Ok(level >= required),
@@ -48,8 +52,8 @@ impl ObjectHost {
         }
     }
 
-    /// Admit fresh upgrade counters before any research assignment. Unit/item
-    /// technology counts and upgrade gameplay/stat effects remain separate.
+    /// Admit fresh upgrade counters before any research assignment. Unit counts
+    /// use the canonical unit arena; item counts and upgrade effects remain separate.
     pub fn admit_upgrade_research(
         &mut self,
         context: &Arc<ParsedMapContext>,
@@ -242,11 +246,18 @@ impl ObjectHost {
                     "upgrade research is invalidated",
                 )));
             }
-            let level = players.rows[at]
+            let mut level = players.rows[at]
                 .research_levels
                 .iter()
                 .find(|(id, _)| id == techid)
                 .map_or(model.rules.initial, |(_, level)| *level);
+            if model.rules.maximum(*techid).is_none()
+                && let Some(count) = self
+                    .unit_technology_count(players.rows[at].identity, *techid, *specific)
+                    .map_err(|error| fail(error.failure))?
+            {
+                level = count;
+            }
             return Ok(if name == GET_COUNT {
                 Value::Int(level)
             } else {

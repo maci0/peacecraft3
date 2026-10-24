@@ -54,7 +54,11 @@ fn live(record: &ExecutedUnit) -> bool {
             .is_some_and(|v| v.life.is_finite() && v.life > 0.)
 }
 
-fn profile<'a>(definition: &'a Definition, key: &str, declared: &str) -> Result<&'a str, String> {
+pub(super) fn profile<'a>(
+    definition: &'a Definition,
+    key: &str,
+    declared: &str,
+) -> Result<&'a str, String> {
     profile_value(definition, key, declared, FieldKind::Token)
 }
 
@@ -127,7 +131,6 @@ impl ObjectHost {
                 return Err(fail("malformed Requires rawcode".into()));
             }
             let id = i32::from_be_bytes(code);
-            // shortcut: upgrade counters only; admit source unit/equivalence requirements before widening production.
             let required = if let Some(amounts) = &mut amounts {
                 let required = amounts
                     .next()
@@ -142,7 +145,7 @@ impl ObjectHost {
                 None
             };
             eligible &= self
-                .upgrade_requirement_met(owner, id, required)
+                .technology_requirement_met(owner, id, required)
                 .map_err(|error| {
                     fail(format!(
                         "training prerequisite {}: {error}",

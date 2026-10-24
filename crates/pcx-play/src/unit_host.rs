@@ -1701,7 +1701,7 @@ impl ObjectHost {
                     resource_amount,
                     ..
                 } => {
-                    if !self.resource_retained(*removed_at) {
+                    if !self.removed_unit_state_retained(*removed_at) {
                         return Ok(Value::Null);
                     }
                     (*unit, *amount, *resource_amount, true)
@@ -1778,11 +1778,13 @@ impl ObjectHost {
                 removed_at,
                 resource_amount,
                 ..
-            } => Ok(Value::Int(if self.resource_retained(*removed_at) {
-                resource_amount.unwrap_or(0)
-            } else {
-                0
-            })),
+            } => Ok(Value::Int(
+                if self.removed_unit_state_retained(*removed_at) {
+                    resource_amount.unwrap_or(0)
+                } else {
+                    0
+                },
+            )),
             _ => Err(self.inner.error(GET_RESOURCE, Failure::WrongFamily)),
         }
     }
@@ -1791,7 +1793,7 @@ impl ObjectHost {
     /// Later ticks answer zero and ignore writes, matching the followup probe
     /// at 5.063 and 6.063 after removal at 5.000. The exact native
     /// reclamation phase remains unqualified.
-    fn resource_retained(&self, removed_at: Option<f64>) -> bool {
+    pub(super) fn removed_unit_state_retained(&self, removed_at: Option<f64>) -> bool {
         removed_at.is_some() && self.timer_game_time() == removed_at
     }
 

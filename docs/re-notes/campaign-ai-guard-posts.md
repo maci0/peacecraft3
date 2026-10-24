@@ -192,11 +192,13 @@ a training job or firing a training event. A later fill call rechecks research
 and can start normal timed production. All listed requirements are validated,
 including entries following an unmet one. Unknown technology categories,
 unadmitted current research and malformed amounts report contextual errors.
-Unit prerequisites and technology equivalence relationships remain unsupported
-at this seam; they must not be treated as researched upgrades or guessed absent.
+Unit prerequisites now share canonical unit technology counts and source
+`Upgrade`/`DependencyOr` relationships; see
+[unit technology prerequisites](unit-technology-prerequisites.md).
 
 Nonstock synthetic tests exercise waiting, research mutation, actual completion
 and its event, explicit level discrimination, owner isolation and malformed
 lists. The earlier matched original runs qualify ordinary training, resources
-and callbacks; they do not newly qualify this prerequisite transition. A matched
-original prerequisite run remains required before a native parity claim.
+and callbacks. The later matched unit-requirement run qualifies quantity and
+ordinary upgrade-provider discrimination; it does not newly qualify every
+upgrade-level, hero or custom technology category.

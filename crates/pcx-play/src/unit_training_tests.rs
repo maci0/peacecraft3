@@ -7,6 +7,7 @@ constant native SetPlayerTechMaxAllowed takes player p, integer kind, integer ma
 constant native GetPlayerTechMaxAllowed takes player p, integer kind returns integer
 constant native SetPlayerTechResearched takes player p, integer kind, integer level returns nothing
 constant native GetPlayerTechResearched takes player p, integer kind, boolean specific returns boolean
+constant native GetPlayerTechCount takes player p, integer kind, boolean specific returns integer
 globals
 constant unitevent EVENT_UNIT_TRAIN_START=ConvertUnitEvent(78)
 constant unitevent EVENT_UNIT_TRAIN_FINISH=ConvertUnitEvent(79)
@@ -37,6 +38,8 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
         profile_field(b"T001", "Trains", "unitList", "u001"),
         profile_field(b"T002", "Requires", "techList", ""),
         requirement_amount(""),
+        profile_field(b"T009", "Upgrade", "unitList", ""),
+        profile_field(b"T010", "DependencyOr", "unitList", ""),
         column(
             b"T003",
             SlkId::UnitBalance,
@@ -63,20 +66,23 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
             metadata.declared = "int".into();
         }
     }
-    let (mut vm, actor, other) = guarded_configured(8., 16., 1., None, (&fields, EVENTS), |h| {
-        let mut resources = crate::player_resources::fixture::rules();
-        resources.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(17, b'J', b'Q', 3));
-        h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
-            max_records: 16,
-        })
-        .unwrap()
-        .with_player_resources(resources)
-        .unwrap()
-        .with_player_tech_limits(crate::playercolor_host::TechLimitBudget { max_records: 8 })
-        .unwrap()
-        .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 8 })
-        .unwrap()
-    });
+    let (mut vm, actor, other) =
+        guarded_configured_with_capacity(8., 16., 1., None, (&fields, EVENTS), 4, |h| {
+            let mut resources = crate::player_resources::fixture::rules();
+            resources.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(17, b'J', b'Q', 3));
+            h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
+                max_records: 16,
+            })
+            .unwrap()
+            .with_player_resources(resources)
+            .unwrap()
+            .with_player_tech_limits(crate::playercolor_host::TechLimitBudget { max_records: 8 })
+            .unwrap()
+            .with_player_tech_researched(crate::playercolor_host::TechLimitBudget {
+                max_records: 8,
+            })
+            .unwrap()
+        });
     let h = &mut vm.host().inner;
     h.native("RemoveUnit", &[Value::Handle(other)]).unwrap();
     let owner = h.executed_unit(actor).unwrap().owner;
@@ -131,6 +137,135 @@ fn requirement_amount(text: &str) -> ([u8; 4], ObjectField) {
     let mut field = profile_field(b"T008", "Requiresamount", "intList", text);
     field.1.metadata.as_mut().unwrap().kind = FieldKind::IntList;
     field
+}
+
+#[test]
+fn unit_technology_queries_follow_owner_liveness_and_removal_retirement() {
+    let (mut vm, actor, producer) = fixture();
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let count = |h: &mut ObjectHost, owner, code| {
+        h.native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(code)),
+                Value::Bool(false),
+            ],
+        )
+        .unwrap()
+    };
+    assert_eq!(count(h, owner, *b"u001"), Value::Int(1));
+    h.native("ShowUnit", &[Value::Handle(actor), Value::Bool(false)])
+        .unwrap();
+    h.native("PauseUnit", &[Value::Handle(actor), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(count(h, owner, *b"u001"), Value::Int(1));
+    let Value::Handle(other) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("owner")
+    };
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(actor),
+            Value::Handle(other),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(count(h, owner, *b"u001"), Value::Int(0));
+    assert_eq!(count(h, other, *b"u001"), Value::Int(1));
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    assert_eq!(count(h, other, *b"u001"), Value::Int(0));
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    assert_eq!(count(h, owner, *b"b001"), Value::Int(1));
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    assert_eq!(count(h, owner, *b"b001"), Value::Int(1));
+    step(&mut vm, 2.);
+    assert_eq!(count(&mut vm.host().inner, owner, *b"b001"), Value::Int(0));
+}
+
+#[test]
+fn unit_technology_relationships_reach_public_queries_on_the_canonical_arena() {
+    let (mut vm, actor, _) = fixture_with(&[
+        profile_field(b"T009", "Upgrade", "unitList", "d001"),
+        profile_field(b"T010", "DependencyOr", "unitList", "e001"),
+    ]);
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    for (code, x) in [(*b"d001", 64.), (*b"e001", 80.)] {
+        h.native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(code)),
+                Value::Real(x),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+    }
+    for (specific, expected) in [(false, 3), (true, 2)] {
+        let args = [
+            Value::Handle(owner),
+            Value::Int(i32::from_be_bytes(*b"u001")),
+            Value::Bool(specific),
+        ];
+        assert_eq!(
+            h.native("GetPlayerTechCount", &args).unwrap(),
+            Value::Int(expected)
+        );
+        assert_eq!(
+            h.native("GetPlayerTechResearched", &args).unwrap(),
+            Value::Bool(true)
+        );
+    }
+}
+
+#[test]
+fn unit_prerequisites_count_canonical_providers_before_spending() {
+    let (mut vm, actor, _) = fixture_with(&[
+        profile_field(b"T002", "Requires", "techList", "d001"),
+        requirement_amount("2"),
+    ]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    h.set_ai_replacement_count(4, 4).unwrap();
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    for x in [64., 80.] {
+        h.fill_ai_guard_posts(4).unwrap();
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+        h.native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"d001")),
+                Value::Real(x),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+    }
+    h.fill_ai_guard_posts(4).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
+    assert_eq!(
+        h.ai_unit_count(4, i32::from_be_bytes(*b"u001"), false)
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -204,7 +339,7 @@ fn malformed_or_unqualified_requirements_preserve_resources_and_pending_jobs() {
         ("Qtec,Qtec", "1"),
         ("Qtec,", ""),
         ("Qte", ""),
-        ("Qtec,Rbad", "1,1"),
+        ("Qtec,Rbadextra", "1,1"),
     ] {
         let (mut vm, actor, _) = fixture_with(&[
             profile_field(b"T002", "Requires", "techList", requires),

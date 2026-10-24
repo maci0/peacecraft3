@@ -5,6 +5,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Replacement training now checks source unit requirements and
+  `Upgrade`/`DependencyOr` providers against canonical owner/life state before
+  spending or start events. Public technology queries share that count;
+  hidden units count and `KillUnit` now kills them. Matched original-runtime
+  runs qualify one/two-provider training, directional alternatives, ordinary
+  upgraded providers and deferred removal observations. Core 1,764, application
+  711, strict native/WASM, desktop build and the Human02 opening-minute
+  regression pass. Player queues, construction/research and a genuine unchanged
+  first-mission playthrough remain open. See
+  [unit technology prerequisites](docs/re-notes/unit-technology-prerequisites.md).
+
 - [~] The [core mechanics plan](docs/core-mechanics-plan.md) now orders complete
   orders/combat, economy/production, abilities, vision, AI, mission and persistence
   loops with behavioral acceptance gates. Replacement training checks resolved

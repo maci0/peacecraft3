@@ -39,13 +39,20 @@ impl ObjectHost {
                 [Value::Handle(unit)] => *unit,
                 _ => return Err(self.inner.error(REMOVE, Failure::Signature)),
             };
-            let (shown, position, resource_amount) = match self
+            let (shown, position, resource_amount, owner, kind, alive) = match self
                 .inner
                 .entry(unit)
                 .map_err(|e| self.inner.error(REMOVE, e.failure))?
             {
                 Entry::RemovedUnit { .. } => return Ok(Value::Null),
-                Entry::Unit { record } => (record.shown, record.position, record.resource_amount),
+                Entry::Unit { record } => (
+                    record.shown,
+                    record.position,
+                    record.resource_amount,
+                    record.owner,
+                    record.definition.rawcode,
+                    super::unit_technology::live(record).ok(),
+                ),
                 _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
             };
             self.forget_inventory_unit(unit, true)?;
@@ -82,6 +89,9 @@ impl ObjectHost {
             let now = self.timer_game_time();
             let location = now.zip(position);
             *self.inner.entry_mut(unit)? = Entry::RemovedUnit {
+                owner,
+                kind,
+                alive,
                 location,
                 removed_at: now,
                 resource_amount,

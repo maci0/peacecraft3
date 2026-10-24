@@ -269,6 +269,9 @@ enum Entry {
     },
     /// A unit after `RemoveUnit`; its handle stays allocated.
     RemovedUnit {
+        owner: HandleId,
+        kind: [u8; 4],
+        alive: Option<bool>,
         location: Option<(f64, [f32; 2])>,
         /// Game time the removal ran, when a clock was available.
         removed_at: Option<f64>,

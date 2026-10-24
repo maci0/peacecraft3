@@ -36,6 +36,21 @@ fn guarded_configured(
     source: (&[([u8; 4], ObjectField)], &str),
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId, HandleId) {
+    guarded_configured_with_capacity(distance, maximum, timeout, flee, source, 2, configure)
+}
+
+fn guarded_configured_with_capacity(
+    distance: f32,
+    maximum: f32,
+    timeout: f32,
+    flee: Option<(
+        crate::campaign_flee_policy::FleePolicy,
+        crate::script_numeric::NumericPolicy,
+    )>,
+    source: (&[([u8; 4], ObjectField)], &str),
+    max_units: usize,
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}\n{}\n{}\n{}",
         super::super::enumeration::TRIGGERS,
@@ -123,7 +138,7 @@ endglobals
         h = h.with_script_numeric(numeric);
     }
     h = h
-        .with_unit_guards(native, combat, GuardBudget { max_units: 2 })
+        .with_unit_guards(native, combat, GuardBudget { max_units })
         .unwrap();
     let flee = policy.is_some();
     if let Some(policy) = policy {

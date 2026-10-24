@@ -1154,6 +1154,8 @@ pub use destructables::{
 
 #[path = "unit_host.rs"]
 mod unit_creation;
+#[path = "unit_technology_host.rs"]
+mod unit_technology;
 #[path = "unit_training_host.rs"]
 mod unit_training;
 pub use unit_creation::{

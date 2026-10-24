@@ -828,7 +828,11 @@ impl ObjectHost {
         killer: Option<HandleId>,
     ) -> Result<(), Error> {
         let name = "unit death";
-        let Some(record) = self.live(unit) else {
+        let Some(record) = self
+            .executed_unit(unit)
+            .ok()
+            .filter(|record| record.combat.as_ref().is_some_and(|combat| !combat.dead))
+        else {
             return Ok(());
         };
         let owner = record.owner;

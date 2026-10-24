@@ -58,8 +58,9 @@ reused rather than duplicated for scripts, AI or UI.
 5. Expand the mechanic matrix across all races, ability families and custom
    maps; complete deterministic, persistence and multiplayer acceptance.
 
-The first delivered production path checks admitted upgrade prerequisites before
-costs and callbacks; unit/equivalence prerequisites remain open. The mission
+The delivered replacement production path checks admitted upgrade and unit
+prerequisites, including source upgrade/alternative relationships, before costs
+and callbacks. Player queues and the rest of the economy stage remain open. The mission
 loading audit also exposed model-cinematic rows in the source index: they are
 retained and typed, and standalone playback remains a stage 7 requirement.
 Neither result closes a whole mechanics stage.
