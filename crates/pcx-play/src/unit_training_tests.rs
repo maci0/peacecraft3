@@ -34,6 +34,13 @@ fn fixture() -> (Vm, HandleId, HandleId) {
 }
 
 fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
+    fixture_with_capacity(overrides, 4)
+}
+
+fn fixture_with_capacity(
+    overrides: &[([u8; 4], ObjectField)],
+    capacity: usize,
+) -> (Vm, HandleId, HandleId) {
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
         profile_field(b"T002", "Requires", "techList", ""),
@@ -67,8 +74,11 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
         }
     }
     let (mut vm, actor, other) =
-        guarded_configured_with_capacity(8., 16., 1., None, (&fields, EVENTS), 4, |h| {
+        guarded_configured_with_capacity(8., 16., 1., None, (&fields, EVENTS), capacity, |h| {
             let mut resources = crate::player_resources::fixture::rules();
+            let mut training = crate::training_rules::Rules::fixture(3, 0.37);
+            training.image_sha256 = resources.image_sha256;
+            resources.training = Ok(training);
             resources.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(17, b'J', b'Q', 3));
             h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
                 max_records: 16,
@@ -743,4 +753,160 @@ fn training_deadline_does_not_drift_with_timer_partition() {
         );
         assert!(h.next_training_completion(10.).is_none());
     }
+}
+
+#[test]
+fn player_orders_share_a_paid_fifo_with_one_active_food_reservation() {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[column(
+            b"T003",
+            SlkId::UnitBalance,
+            "goldcost",
+            FieldKind::Int,
+            "13",
+        )],
+        8,
+    );
+    let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+    let start = vm.global("EVENT_PLAYER_UNIT_TRAIN_START");
+    let finish = vm.global("EVENT_PLAYER_UNIT_TRAIN_FINISH");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), gold, Value::Int(90)],
+    )
+    .unwrap();
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    for event in [start, finish] {
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[trigger.clone(), Value::Handle(owner), event, Value::Null],
+        )
+        .unwrap();
+    }
+    let order = [
+        Value::Handle(producer),
+        Value::Int(i32::from_be_bytes(*b"u001")),
+    ];
+    for _ in 0..3 {
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(true)
+        );
+    }
+    assert_eq!(
+        h.native("IssueImmediateOrderById", &order).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 51);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 62);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+    assert_eq!(h.unit_training_queue(producer).unwrap().len(), 3);
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(producer)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    observe_event(h, producer, None);
+    assert_eq!(
+        h.native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Bool(false)
+            ]
+        )
+        .unwrap(),
+        Value::Int(1)
+    );
+    step(&mut vm, 9.);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.unit_training_queue(producer).unwrap().len(), 2);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 12);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 51);
+    let mut finished = 0;
+    let mut started = 0;
+    while let Some(event) = h.take_fired_event() {
+        assert_eq!(event.subject.unit, Some(producer));
+        assert_eq!(
+            event.subject.trained_type,
+            Some(i32::from_be_bytes(*b"u001"))
+        );
+        if event.subject.trained.is_some() {
+            finished += 1;
+        } else {
+            started += 1;
+        }
+    }
+    assert_eq!((finished, started), (1, 1));
+    step(&mut vm, 18.);
+    step(&mut vm, 27.);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.unit_training_queue(producer).unwrap().len(), 0);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 15);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 51);
+}
+
+#[test]
+fn paid_pending_head_waits_for_food_without_another_money_debit() {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[column(
+            b"T003",
+            SlkId::UnitBalance,
+            "goldcost",
+            FieldKind::Int,
+            "13",
+        )],
+        8,
+    );
+    let cap = vm.global("PLAYER_STATE_RESOURCE_FOOD_CAP");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let order = [
+        Value::Handle(producer),
+        Value::Int(i32::from_be_bytes(*b"u001")),
+    ];
+    for _ in 0..2 {
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(true)
+        );
+    }
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), cap.clone(), Value::Int(9)],
+    )
+    .unwrap();
+    step(&mut vm, 9.);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.unit_training_queue(producer).unwrap(),
+        vec![(i32::from_be_bytes(*b"u001"), None)]
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 64);
+    step(&mut vm, 18.);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.unit_training_queue(producer).unwrap()[0].1, None);
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), cap, Value::Int(40)],
+    )
+    .unwrap();
+    step(&mut vm, 19.);
+    let h = &mut vm.host().inner;
+    assert!(h.unit_training_queue(producer).unwrap()[0].1.is_some());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 12);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 64);
+    step(&mut vm, 28.);
+    let h = &mut vm.host().inner;
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 12);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 64);
 }

@@ -5,6 +5,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Player `IssueImmediateOrderById` training now shares the canonical
+  production state with guard replacement. Source `Trains`, prerequisites,
+  limits, money and queue bounds gate requests; accepted entries pay once and
+  only the active head reserves food and emits start. Pending heads wait for
+  food and completion creates canonical units. A read-only queue view is
+  available for presentation. Nonstock FIFO/resource/event tests and all 1,769
+  core tests pass. Original-client probes separately qualify paid-head food
+  waiting and producer-death refund without cancel events. Queue UI,
+  cancellation, producer cleanup and same-callback wake timing remain open;
+  this is not a completed campaign training loop.
+
 - [~] Campaign resource admission now derives training queue bounds from the
   selected executable and `TrainRefundRate` from ordered game/map profiles.
   Refund calculations use the matching source numeric policy and truncate each
@@ -20,7 +31,8 @@ reports current progress.
   the selected client and is not a working cancellation API. The
   [connected implementation contract](docs/re-notes/player-production-queues.md)
   replaces those assumptions before the shared production-state refactor.
-  Player queues and their command-card/animation presentation remain unimplemented.
+  The later shared-state entry supersedes the runtime gap; command-card/animation
+  presentation remains unimplemented.
 
 - [~] Replacement training now checks source unit requirements and
   `Upgrade`/`DependencyOr` providers against canonical owner/life state before

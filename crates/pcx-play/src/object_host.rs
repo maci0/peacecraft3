@@ -994,6 +994,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.activity_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.training_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.group_order_native(name, args) {
             return result.map_err(|e| e.to_string());
         }

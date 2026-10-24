@@ -1,4 +1,4 @@
-//! Guard-post replacement through canonical pending production and unit creation.
+//! Shared producer queues and guard replacement through canonical unit creation.
 use super::{Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost};
 use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
 use pcx_script::{HandleId, Value, value::FunctionId};
@@ -18,8 +18,9 @@ pub(super) struct GuardPost {
 struct Training {
     producer: HandleId,
     owner: HandleId,
-    player: i32,
-    post: usize,
+    guard: Option<(i32, usize)>,
+    active: bool,
+    duration: i32,
     kind: i32,
     food: i32,
     finish: f64,
@@ -361,7 +362,7 @@ impl ObjectHost {
                     .training
                     .jobs
                     .iter()
-                    .any(|job| job.player == player && job.post == index && job.kind == post.kind)
+                    .any(|job| job.guard == Some((player, index)) && job.kind == post.kind)
             {
                 continue;
             }
@@ -452,6 +453,118 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// FIFO entries with a completion clock only for the active head.
+    pub fn unit_training_queue(
+        &self,
+        producer: HandleId,
+    ) -> Result<Vec<(i32, Option<f64>)>, Error> {
+        self.executed_unit(producer)?;
+        let count = self
+            .training
+            .jobs
+            .iter()
+            .filter(|job| job.producer == producer)
+            .count();
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(count)
+            .map_err(|_| self.training_error("queue observation capacity"))?;
+        entries.extend(
+            self.training
+                .jobs
+                .iter()
+                .filter(|job| job.producer == producer)
+                .map(|job| (job.kind, job.active.then_some(job.finish))),
+        );
+        Ok(entries)
+    }
+
+    pub(super) fn training_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if name != "IssueImmediateOrderById" {
+            return None;
+        }
+        let [Value::Handle(producer), Value::Int(kind)] = args else {
+            return None;
+        };
+        // Match the unit catalog's FourCC domain before asking synthetic catalogs to resolve it.
+        if !kind.to_be_bytes().iter().all(u8::is_ascii_graphic) {
+            return None;
+        }
+        let definition = self.unit_catalog().ok()?.resolve(kind.to_be_bytes()).ok()?;
+        Some(
+            (|| {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["unit", "integer"],
+                    "boolean",
+                    false,
+                    None,
+                )?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .expect("checked")
+                    .source
+                    != self.unit_declaration()?.0
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                let record = self.executed_unit(*producer)?;
+                if !live(record) {
+                    return Ok(Value::Bool(false));
+                }
+                let list = profile(&record.definition, "Trains", "unitList")
+                    .map_err(|e| self.training_error(e))?;
+                let mut allowed = false;
+                for token in list.split(',').filter(|s| !s.trim().is_empty()) {
+                    let token = token.trim();
+                    if token.len() != 4 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+                        return Err(self.training_error("malformed Trains rawcode"));
+                    }
+                    allowed |= token.as_bytes() == kind.to_be_bytes();
+                }
+                if !allowed {
+                    return Ok(Value::Bool(false));
+                }
+                if record.cached
+                    || record.summoned
+                    || record.admitted_order.is_some()
+                    || self.unit_has_effect_history(*producer)
+                {
+                    return Err(self.training_error("producer state is unsupported"));
+                }
+                if record.paused_since.is_some() {
+                    return Ok(Value::Bool(false));
+                }
+                let owner = record.owner;
+                let slots = self.training_queue_slots()?;
+                if self
+                    .training
+                    .jobs
+                    .iter()
+                    .filter(|j| j.producer == *producer)
+                    .count()
+                    >= slots
+                {
+                    return Ok(Value::Bool(false));
+                }
+                if super::unit_types::structure(&definition).map_err(|e| self.training_error(e))? {
+                    return Err(self.training_error("construction is not a training order"));
+                }
+                self.enqueue_training(*producer, owner, None, *kind, definition)
+                    .map(Value::Bool)
+            })()
+            .map_err(|e: Error| self.inner.error(name, e.failure)),
+        )
+    }
+
     fn start_guard_training(
         &mut self,
         player: i32,
@@ -512,12 +625,23 @@ impl ObjectHost {
         let Some(producer) = selected else {
             return Ok(());
         };
-        // shortcut: ordinary production only; add revival and cancellation before widening this seam.
+        self.enqueue_training(producer, owner, Some((player, post)), kind, definition)
+            .map(|_| ())
+    }
+
+    fn enqueue_training(
+        &mut self,
+        producer: HandleId,
+        owner: HandleId,
+        guard: Option<(i32, usize)>,
+        kind: i32,
+        definition: Definition,
+    ) -> Result<bool, Error> {
         if !self.training_prerequisites_met(&definition, owner)? {
-            return Ok(());
+            return Ok(false);
         }
         if !self.training_limit_allows(owner, kind)? {
-            return Ok(());
+            return Ok(false);
         }
         let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
         let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
@@ -536,24 +660,45 @@ impl ObjectHost {
         if !completion.is_finite() || completion <= now {
             return Err(self.training_error("training deadline cannot advance"));
         }
-        if self.training.jobs.len() >= self.guards.as_ref().expect("guards").capacity() {
+        let active = !self
+            .training
+            .jobs
+            .iter()
+            .any(|job| job.producer == producer);
+        let budget = if guard.is_some() {
+            self.guards.as_ref().expect("guard caller").capacity()
+        } else {
+            self.inner.max_handles
+        };
+        if self.training.jobs.len() >= budget {
             return Err(self.training_error("training job budget exhausted"));
         }
         self.training
             .jobs
             .try_reserve(1)
             .map_err(|_| self.training_error("training job capacity"))?;
-        let events = self.prepare_training_events(producer, false)?;
-        let Some(debit) = self.prepare_training_debit(owner, gold, lumber, food, events.len())?
+        let events = if active {
+            self.prepare_training_events(producer, false)?
+        } else {
+            Vec::new()
+        };
+        let Some(debit) = self.prepare_training_debit(
+            owner,
+            gold,
+            lumber,
+            if active { food } else { 0 },
+            events.len(),
+        )?
         else {
-            return Ok(());
+            return Ok(false);
         };
         // shortcut: catalog duration uses the session clock; qualify native production polling before sub-tick parity claims.
         self.training.jobs.push(Training {
             producer,
             owner,
-            player,
-            post,
+            guard,
+            active,
+            duration,
             kind,
             food,
             finish: completion,
@@ -562,14 +707,14 @@ impl ObjectHost {
         });
         self.commit_training_debit(debit);
         self.commit_training_events(events, producer, kind, None);
-        Ok(())
+        Ok(true)
     }
 
     pub(super) fn pending_training_food(&self, owner: HandleId) -> Result<i32, Error> {
         self.training
             .jobs
             .iter()
-            .filter(|j| j.owner == owner)
+            .filter(|j| j.owner == owner && j.active)
             .try_fold(0i32, |total, job| {
                 total
                     .checked_add(job.food)
@@ -605,6 +750,34 @@ impl ObjectHost {
                 return Err(self.training_error(
                     "producer removal or transfer during training is unsupported",
                 ));
+            }
+            if !job.active {
+                if self.training.jobs[..index]
+                    .iter()
+                    .any(|other| other.producer == job.producer)
+                    || producer.paused_since.is_some()
+                {
+                    index += 1;
+                    continue;
+                }
+                let events = self.prepare_training_events(job.producer, false)?;
+                let Some(debit) =
+                    self.prepare_training_debit(job.owner, 0, 0, job.food, events.len())?
+                else {
+                    index += 1;
+                    continue;
+                };
+                job.active = true;
+                job.finish = now + f64::from(job.duration);
+                if !job.finish.is_finite() || job.finish <= now {
+                    return Err(self.training_error("training deadline cannot advance"));
+                }
+                job.through = now;
+                self.training.jobs[index] = job;
+                self.commit_training_debit(debit);
+                self.commit_training_events(events, job.producer, job.kind, None);
+                index += 1;
+                continue;
             }
             if let Some(since) = producer.paused_since {
                 let (at, base) = *job
@@ -650,6 +823,7 @@ impl ObjectHost {
         self.training
             .jobs
             .iter()
+            .filter(|job| job.active)
             .filter_map(|job| {
                 let producer = self.executed_unit(job.producer).ok()?;
                 if producer.paused_since.is_some() {

@@ -2033,6 +2033,27 @@ impl ObjectHost {
         Ok(self.ai_player_unit_type_count(Some(owner), kind)? < maximum)
     }
 
+    pub(super) fn training_queue_slots(&self) -> Result<usize, Error> {
+        let fail = |why| {
+            self.inner
+                .error("IssueImmediateOrderById", Failure::UnitActivity(why))
+        };
+        let rules = &self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("training resources are not admitted".into()))?
+            .rules;
+        let training = rules.training_rules().map_err(|e| fail(e.into()))?;
+        if training.image_sha256 != rules.image_sha256
+            || training.queue_slots == 0
+            || training.queue_slots > u32::BITS as usize
+        {
+            return Err(fail("training source or queue bound differs".into()));
+        }
+        Ok(training.queue_slots)
+    }
+
     pub(super) fn prepare_training_debit(
         &mut self,
         owner: HandleId,

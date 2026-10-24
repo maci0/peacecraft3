@@ -1,8 +1,9 @@
 # Player production queues: source and behavioral contract
 
 This is the implementation contract for extending the existing replacement
-production lifecycle. Player training is not implemented by this note. It must
-use the canonical ObjectHost units, banks, food accounting, clock, placement and
+production lifecycle. The shared-state implementation now admits queued player
+training orders, but cancellation, presentation and producer lifecycle remain
+unfinished. It uses the canonical ObjectHost units, banks, food accounting, clock, placement and
 event delivery, with an optional guard-post binding for replacement jobs.
 
 ## Qualified original behavior
@@ -41,8 +42,9 @@ producer and captured queue controls. Actions occur before any unit finishes:
 | Allow that job to complete | One living unit and finish event; the following job starts. Used food includes the completed unit plus the new active reservation. |
 
 These observations qualify the ordinary single-type case. They do not prove
-mixed-type callback ordering, a food-blocked head, producer death/removal,
-ownership transfer, revival or construction behavior. The earlier manual UI
+mixed-type callback ordering, explicit producer removal, ownership transfer,
+revival or construction behavior. Separate food-blocked-head and producer-death
+observations are recorded below. The earlier manual UI
 rehearsal is retained separately; its late pending-entry click is not used as
 the bounded cancellation-event proof.
 
@@ -92,6 +94,30 @@ The complete evidence records are `rea-session-queue-strings.json`,
 `rea-single-cancel-function.json` and `rea-refund-integer-conversion.json`.
 No native wrapper layout or linked list needs to be reproduced to implement
 the observed queue faithfully.
+
+## Food-blocked pending head observation
+
+A separate preserved `queue-probe-food/native` run lowers the food cap to the
+current food used after all seven requests have been accepted. The original
+client completes the active unit, keeps the next entry pending, and emits no
+second start while at the cap. Restoring the cap starts the next head and adds
+its food reservation without another money debit. The strict collector retained
+481 markers; `food-transition.json` checks the bounded wait and restore against
+those rows and pins the result hash. The run was stopped after collection.
+This tests a previously paid pending head, not an initial request made at a full
+food cap. Same-callback activation timing and producer interruption still need
+separate connected recreation checks.
+
+## Producer death observation
+
+A separate `queue-probe-death/native` run kills the producer after seven paid
+requests and before the first finish. Money returns to its initial value, active
+food is released, and no train-cancel or finish event is emitted. The bounded
+80-tick run retained 161 markers; `death-transition.json` pins the result and
+checks the post-death state through the terminal sample. This does not qualify
+explicit removal, owner transfer or a fractional refund override. The host's
+producer-loss refusal remains debt until its cleanup uses this distinct lifecycle
+path rather than replaying UI cancellation events.
 
 ## Connected implementation and acceptance
 
