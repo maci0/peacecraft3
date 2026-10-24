@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `ClearHarvestAI` now rolls source-derived current/previous assignments on
+  canonical owned units, preserving explicit worker orders, cargo and deposits.
+  Active-player/source ABI checks precede mutation; transfers, death/removal and
+  context retirement clean up assignment state. Core 1,707, app-library 55,
+  app-binary 638, published two-program, actual-image, startup/Continue, strict
+  native/WASM and desktop-build checks pass. Unchanged Human02 now reaches `CaptainInCombat` at
+  8.312500 seconds; its opening-minute test remains red. AI worker selection is
+  still unimplemented. See [harvest assignments](docs/re-notes/campaign-ai-harvest-assignments.md).
+
 - [~] `GetFoodMade` and `GetFoodUsed` now query source-derived unit food through
   the shared map/AI catalog. Live totals reuse the strict integer path, preserving
   exact values and admitted marker conversion. Core 1,703, app-library 55,

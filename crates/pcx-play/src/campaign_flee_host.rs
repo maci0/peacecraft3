@@ -1,7 +1,7 @@
 //! Canonical per-player campaign AI flags shared by targeting and flee policy.
 //! Admission only stores source operands; it never invents a flag for an
 //! unadmitted policy or mints a player identity.
-use super::{Error, Failure, ObjectHost};
+use super::{Entry, Error, Failure, ObjectHost};
 use crate::campaign_flee_policy::FleePolicy;
 use crate::map_admission::ParsedMapContext;
 use pcx_script::HandleId;
@@ -495,6 +495,15 @@ impl ObjectHost {
         for (unit, stop) in stops {
             self.commit_steer_unit(unit, stop, START_CAMPAIGN_AI)?;
             self.clear_combat_target(unit);
+        }
+        if let Some(owner) = self.player_identity(player) {
+            for entry in &mut self.inner.arena {
+                if let Entry::Unit { record } = entry
+                    && record.owner == owner
+                {
+                    record.ai_harvest_flags = None;
+                }
+            }
         }
         self.campaign_ai.deactivate(player);
         Ok(())

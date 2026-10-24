@@ -19,6 +19,8 @@ pub struct GatheringPolicy {
     pub initial_flags: u32,
     pub conditional_initial_mask: u32,
     pub conditional_excluded_kind: u32,
+    pub harvest_current_masks: [u8; 2],
+    pub harvest_previous_masks: [u8; 2],
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -27,13 +29,19 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 6] = [
-    (0xac3f5b, 7, true),  // context clear (andl $-2, ctx+0x2d0)
-    (0xabb4e9, 7, true),  // context reader (testb $1, ctx+0x2d0)
-    (0xabf9e2, 10, true), // constructor zero-initialize
-    (0xabfa1e, 16, true), // constructor conditional OR (kind gate)
-    (0x696b50, 49, true), // candidate structure/excluded-state predicate
-    (0xac3f9d, 7, true),  // immediate-candidate mask (testb $0x10, unit+0x454)
+const WINDOWS: [(u32, usize, bool); 12] = [
+    (0xac3f5b, 7, true),   // context clear (andl $-2, ctx+0x2d0)
+    (0xabb4e9, 7, true),   // context reader (testb $1, ctx+0x2d0)
+    (0xabf9e2, 10, true),  // constructor zero-initialize
+    (0xabfa1e, 16, true),  // constructor conditional OR (kind gate)
+    (0x696b50, 49, true),  // candidate structure/excluded-state predicate
+    (0xac3f9d, 7, true),   // immediate-candidate mask (testb $0x10, unit+0x454)
+    (0xab63b9, 20, true),  // ClearHarvestAI primary registration
+    (0xab44d0, 54, true),  // owned-context handler
+    (0xe70fac, 4, false),  // ()V
+    (0xf15cb8, 15, false), // ClearHarvestAI
+    (0xabc550, 176, true), // assignment rollover, without unit orders
+    (0x6933c0, 27, true),  // canonical unit's AI-component accessor
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -65,7 +73,160 @@ fn budgeted_windows(budget: RuleInputBudget) -> Result<(), Error> {
     Ok(())
 }
 
+fn relative(bytes: &[u8], va: u32, offset: usize, opcode: u8, target: u32) -> Result<(), Error> {
+    at(bytes, offset, &[opcode])?;
+    (va.wrapping_add(offset as u32 + 5)
+        .wrapping_add(word(bytes, offset + 1)?)
+        == target)
+        .then_some(())
+        .ok_or(Error("harvest control-flow target changed"))
+}
+
+fn harvest_windows(w: &[&[u8]]) -> Result<([u8; 2], [u8; 2]), Error> {
+    let [registration, handler, signature, name, body, accessor] = w else {
+        return Err(Error("incomplete harvest windows"));
+    };
+    for (offset, target) in [(0, WINDOWS[8].0), (5, WINDOWS[9].0), (10, WINDOWS[7].0)] {
+        at(registration, offset, &[0x68])?;
+        if word(registration, offset + 1)? != target {
+            return Err(Error("harvest registration pointer changed"));
+        }
+    }
+    relative(registration, WINDOWS[6].0, 15, 0xe8, 0x8ccc80)?;
+    at(signature, 0, b"()V\0")?;
+    at(name, 0, b"ClearHarvestAI\0")?;
+    at(
+        handler,
+        0,
+        &[
+            0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0b, 0x6a, 0x57,
+        ],
+    )?;
+    relative(handler, WINDOWS[7].0, 11, 0xe8, 0x43eca0)?;
+    at(
+        handler,
+        16,
+        &[
+            0x83, 0xc4, 0x04, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x09, 0x33, 0xc0, 0x8b, 0xc8,
+        ],
+    )?;
+    relative(handler, WINDOWS[7].0, 37, 0xe9, WINDOWS[10].0)?;
+    relative(handler, WINDOWS[7].0, 42, 0xe8, 0x7fc7e0)?;
+    at(handler, 47, &[0x8b, 0xc8])?;
+    relative(handler, WINDOWS[7].0, 49, 0xe9, WINDOWS[10].0)?;
+    at(
+        accessor,
+        0,
+        &[
+            0x8b, 0x81, 0x14, 0x05, 0, 0, 0x81, 0xc1, 0x10, 0x05, 0, 0, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x03, 0x33, 0xc0, 0xc3,
+        ],
+    )?;
+    relative(accessor, WINDOWS[11].0, 22, 0xe9, 0x7fc7e0)?;
+    at(
+        body,
+        0,
+        &[
+            0x8b, 0x41, 0x2c, 0x83, 0xc1, 0x28, 0x56, 0x57, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75,
+            0x2d, 0x33, 0xf6, 0x33, 0xc9, 0x33, 0xff, 0x85, 0xc9, 0x0f, 0x84, 0x90, 0, 0, 0, 0x0f,
+            0x1f, 0,
+        ],
+    )?;
+    relative(body, WINDOWS[10].0, 32, 0xe8, WINDOWS[11].0)?;
+    at(body, 37, &[0x85, 0xc0, 0x74, 0x44])?;
+    relative(body, WINDOWS[10].0, 60, 0xe8, 0x7fc7e0)?;
+    at(body, 65, &[0x8b, 0xf0, 0x85, 0xf6, 0x74, 0xca, 0x8b, 0xce])?;
+    relative(body, WINDOWS[10].0, 73, 0xe8, 0x7f2610)?;
+    at(body, 78, &[0x8b, 0xc8, 0xeb, 0xc1])?;
+    let field = body[43];
+    let mut current = [0; 2];
+    let mut previous = [0; 2];
+    let mut used = 0u8;
+    for (lane, read, test, branch, clear, set, store, end, remove) in [
+        (0, 41, 44, 47, 49, 52, 55, 58, 82),
+        (1, 86, 89, 92, 94, 97, 100, 103, 105),
+    ] {
+        at(body, read, &[0x8b, 0x48, field])?;
+        at(body, test, &[0xf6, 0xc1])?;
+        at(
+            body,
+            branch,
+            if lane == 0 {
+                &[0x74, 0x21]
+            } else {
+                &[0x74, 0x0b]
+            },
+        )?;
+        at(body, clear, &[0x83, 0xe1])?;
+        at(body, set, &[0x83, 0xc9])?;
+        at(body, store, &[0x89, 0x48, field])?;
+        at(
+            body,
+            end,
+            if lane == 0 {
+                &[0xeb, 0x1a]
+            } else {
+                &[0xeb, 0x04]
+            },
+        )?;
+        at(body, remove, &[0x83, 0x60, field])?;
+        current[lane] = body[test + 2];
+        previous[lane] = body[set + 2];
+        let a = current[lane];
+        let b = previous[lane];
+        if !a.is_power_of_two()
+            || !b.is_power_of_two()
+            || (a | b) & 0x80 != 0
+            || a == b
+            || used & (a | b) != 0
+            || body[clear + 2] != !a
+            || body[remove + 3] != !b
+        {
+            return Err(Error(
+                "harvest current/previous masks or signed clears differ",
+            ));
+        }
+        used |= a | b;
+    }
+    at(
+        body,
+        109,
+        &[
+            0x85, 0xf6, 0x74, 0x27, 0x8b, 0x46, 0x28, 0x8d, 0x4e, 0x24, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x04, 0x33, 0xf6, 0xeb, 0x07,
+        ],
+    )?;
+    relative(body, WINDOWS[10].0, 130, 0xe8, 0x7fc7e0)?;
+    at(body, 135, &[0x8b, 0xf0, 0x85, 0xf6, 0x74, 0x0d, 0x8b, 0xce])?;
+    relative(body, WINDOWS[10].0, 143, 0xe8, 0x7f2610)?;
+    at(
+        body,
+        148,
+        &[
+            0x8b, 0xc8, 0xeb, 0x04, 0x33, 0xf6, 0x8b, 0xcf, 0x33, 0xc0, 0x85, 0xf6, 0x0f, 0x45,
+            0xc7, 0x8b, 0xf8, 0x85, 0xc9, 0x0f, 0x85, 0x73, 0xff, 0xff, 0xff, 0x5f, 0x5e, 0xc3,
+        ],
+    )?;
+    Ok((current, previous))
+}
+
 impl GatheringPolicy {
+    pub(crate) fn clear_harvest_flags(&self, mut flags: u8) -> u8 {
+        for (current, previous) in self
+            .harvest_current_masks
+            .into_iter()
+            .zip(self.harvest_previous_masks)
+        {
+            let assigned = flags & current != 0;
+            flags &= !(current | previous);
+            if assigned {
+                flags |= previous;
+            }
+        }
+        flags
+    }
+
     /// The context bit is set on construction unless the context kind equals the
     /// excluded kind (source comparison). Consumers must resolve context-kind to
     /// `StartCampaignAI` separately; do not guess a kind value here.
@@ -100,9 +261,17 @@ impl GatheringPolicy {
     }
 
     fn decode(w: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
-        let [clear, reader, init_zero, init_cond, candidate, immediate] = w else {
+        if w.len() != WINDOWS.len()
+            || w.iter()
+                .zip(WINDOWS)
+                .any(|(bytes, (_, len, _))| bytes.len() < len)
+        {
+            return Err(Error("incomplete gathering-policy windows"));
+        }
+        let [clear, reader, init_zero, init_cond, candidate, immediate] = &w[..6] else {
             return Err(Error("incomplete gathering-policy windows"));
         };
+        let (harvest_current_masks, harvest_previous_masks) = harvest_windows(&w[6..])?;
 
         at(clear, 0, &[0x83, 0xa0])?;
         let ctx_offset = word(clear, 2)?;
@@ -227,6 +396,8 @@ impl GatheringPolicy {
             initial_flags,
             conditional_initial_mask,
             conditional_excluded_kind,
+            harvest_current_masks,
+            harvest_previous_masks,
         })
     }
 
@@ -312,12 +483,176 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     dword(&mut w, 5, 2, 0x454);
     put(&mut w, 5, 6, &[IMM_MASK]);
 
+    fn relative(w: &mut [Vec<u8>], i: usize, offset: usize, opcode: u8, target: u32) {
+        put(w, i, offset, &[opcode]);
+        dword(
+            w,
+            i,
+            offset + 1,
+            target.wrapping_sub(WINDOWS[i].0 + offset as u32 + 5),
+        );
+    }
+    for (offset, target) in [(0, WINDOWS[8].0), (5, WINDOWS[9].0), (10, WINDOWS[7].0)] {
+        put(&mut w, 6, offset, &[0x68]);
+        dword(&mut w, 6, offset + 1, target);
+    }
+    relative(&mut w, 6, 15, 0xe8, 0x8ccc80);
+    put(&mut w, 8, 0, b"()V\0");
+    put(&mut w, 9, 0, b"ClearHarvestAI\0");
+    put(
+        &mut w,
+        7,
+        0,
+        &[
+            0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0b, 0x6a, 0x57,
+        ],
+    );
+    relative(&mut w, 7, 11, 0xe8, 0x43eca0);
+    put(
+        &mut w,
+        7,
+        16,
+        &[
+            0x83, 0xc4, 0x04, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x09, 0x33, 0xc0, 0x8b, 0xc8,
+        ],
+    );
+    relative(&mut w, 7, 37, 0xe9, WINDOWS[10].0);
+    relative(&mut w, 7, 42, 0xe8, 0x7fc7e0);
+    put(&mut w, 7, 47, &[0x8b, 0xc8]);
+    relative(&mut w, 7, 49, 0xe9, WINDOWS[10].0);
+    put(
+        &mut w,
+        11,
+        0,
+        &[
+            0x8b, 0x81, 0x14, 0x05, 0, 0, 0x81, 0xc1, 0x10, 0x05, 0, 0, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x03, 0x33, 0xc0, 0xc3,
+        ],
+    );
+    relative(&mut w, 11, 22, 0xe9, 0x7fc7e0);
+    put(
+        &mut w,
+        10,
+        0,
+        &[
+            0x8b, 0x41, 0x2c, 0x83, 0xc1, 0x28, 0x56, 0x57, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75,
+            0x2d, 0x33, 0xf6, 0x33, 0xc9, 0x33, 0xff, 0x85, 0xc9, 0x0f, 0x84, 0x90, 0, 0, 0, 0x0f,
+            0x1f, 0,
+        ],
+    );
+    relative(&mut w, 10, 32, 0xe8, WINDOWS[11].0);
+    put(&mut w, 10, 37, &[0x85, 0xc0, 0x74, 0x44]);
+    relative(&mut w, 10, 60, 0xe8, 0x7fc7e0);
+    put(
+        &mut w,
+        10,
+        65,
+        &[0x8b, 0xf0, 0x85, 0xf6, 0x74, 0xca, 0x8b, 0xce],
+    );
+    relative(&mut w, 10, 73, 0xe8, 0x7f2610);
+    put(&mut w, 10, 78, &[0x8b, 0xc8, 0xeb, 0xc1]);
+    for (read, test, branch, clear, set, store, end, remove, current, previous, skip, jump) in [
+        (41, 44, 47, 49, 52, 55, 58, 82, 0x10u8, 0x01u8, 0x21, 0x1a),
+        (
+            86, 89, 92, 94, 97, 100, 103, 105, 0x20u8, 0x02u8, 0x0b, 0x04,
+        ),
+    ] {
+        put(&mut w, 10, read, &[0x8b, 0x48, 0x38]);
+        put(&mut w, 10, test, &[0xf6, 0xc1, current]);
+        put(&mut w, 10, branch, &[0x74, skip]);
+        put(&mut w, 10, clear, &[0x83, 0xe1, !current]);
+        put(&mut w, 10, set, &[0x83, 0xc9, previous]);
+        put(&mut w, 10, store, &[0x89, 0x48, 0x38]);
+        put(&mut w, 10, end, &[0xeb, jump]);
+        put(&mut w, 10, remove, &[0x83, 0x60, 0x38, !previous]);
+    }
+    put(
+        &mut w,
+        10,
+        109,
+        &[
+            0x85, 0xf6, 0x74, 0x27, 0x8b, 0x46, 0x28, 0x8d, 0x4e, 0x24, 0x23, 0x01, 0x83, 0xf8,
+            0xff, 0x75, 0x04, 0x33, 0xf6, 0xeb, 0x07,
+        ],
+    );
+    relative(&mut w, 10, 130, 0xe8, 0x7fc7e0);
+    put(
+        &mut w,
+        10,
+        135,
+        &[0x8b, 0xf0, 0x85, 0xf6, 0x74, 0x0d, 0x8b, 0xce],
+    );
+    relative(&mut w, 10, 143, 0xe8, 0x7f2610);
+    put(
+        &mut w,
+        10,
+        148,
+        &[
+            0x8b, 0xc8, 0xeb, 0x04, 0x33, 0xf6, 0x8b, 0xcf, 0x33, 0xc0, 0x85, 0xf6, 0x0f, 0x45,
+            0xc7, 0x8b, 0xf8, 0x85, 0xc9, 0x0f, 0x85, 0x73, 0xff, 0xff, 0xff, 0x5f, 0x5e, 0xc3,
+        ],
+    );
+
     w
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harvest_rollover_uses_decoded_nonstock_masks_and_preserves_other_flags() {
+        let policy = GatheringPolicy::fixture();
+        assert_eq!(policy.harvest_current_masks, [0x10, 0x20]);
+        assert_eq!(policy.harvest_previous_masks, [0x01, 0x02]);
+        for current in 0..4 {
+            for previous in 0..4 {
+                let input = 0x80 | ((current & 1) << 4) | ((current & 2) << 4) | previous;
+                let result = policy.clear_harvest_flags(input);
+                assert_eq!(result, 0x80 | current);
+                assert_eq!(policy.clear_harvest_flags(result), 0x80);
+            }
+        }
+        let source = synthetic_windows();
+        for (i, offset) in [
+            (6, 1),
+            (6, 16),
+            (7, 7),
+            (7, 38),
+            (8, 3),
+            (9, 14),
+            (10, 46),
+            (10, 48),
+            (10, 51),
+            (10, 54),
+            (10, 85),
+            (10, 91),
+            (10, 96),
+            (10, 99),
+            (10, 108),
+            (10, 131),
+            (11, 23),
+        ] {
+            let mut broken = source.clone();
+            broken[i][offset] ^= 1;
+            assert!(
+                GatheringPolicy::decode(
+                    &broken.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0; 32]
+                )
+                .is_err(),
+                "window {i} byte {offset}"
+            );
+        }
+        for (i, bytes) in source.iter().enumerate() {
+            for length in 0..bytes.len() {
+                let mut short = source.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                short[i] = &bytes[..length];
+                assert!(GatheringPolicy::decode(&short, [0; 32]).is_err());
+            }
+        }
+    }
 
     #[test]
     fn window_budget_is_exact() {
@@ -476,6 +811,8 @@ mod tests {
         assert_eq!(policy.excluded_state_mask, 0x0800_0080);
         assert_eq!(policy.excluded_state_value, 0x80);
         assert_eq!(policy.immediate_candidate_mask, 0x10);
+        assert_eq!(policy.harvest_current_masks, [0x01, 0x02]);
+        assert_eq!(policy.harvest_previous_masks, [0x04, 0x08]);
         assert_eq!(policy.initial_flags, 0);
         assert_eq!(policy.conditional_initial_mask, 0x0008_0181);
         assert_eq!(policy.conditional_excluded_kind, 0x18);

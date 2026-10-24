@@ -155,6 +155,8 @@ pub struct ExecutedUnit {
     pub summoned: bool,
     /// Restored from game cache rather than created by the ordinary unit factory.
     pub cached: bool,
+    /// Accepted AI harvest-cycle assignments; explicit harvest orders do not set these.
+    pub ai_harvest_flags: Option<u8>,
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
@@ -1300,6 +1302,7 @@ impl ObjectHost {
         match self.inner.entry_mut(*unit)? {
             Entry::Unit { record } => {
                 record.owner = *player;
+                record.ai_harvest_flags = None;
                 if *change_color {
                     record.team_color = color;
                 }
@@ -2037,6 +2040,7 @@ impl ObjectHost {
                 look_at: None,
                 summoned,
                 cached: saved.is_some(),
+                ai_harvest_flags: None,
                 activity: None,
                 shown: true,
                 paused_since: None,

@@ -249,6 +249,7 @@ endfunction
     );
     let ai_common =
         format!("{ai_common}native IgnoredUnits takes integer unitid returns integer\n");
+    let ai_common = format!("{ai_common}native ClearHarvestAI takes nothing returns nothing\n");
     let ai_common = format!(
         "{ai_common}native DisplayText takes integer p, string text returns nothing\nnative DisplayTextI takes integer p, string text, integer v returns nothing\nnative DisplayTextII takes integer p, string text, integer a, integer b returns nothing\nnative DisplayTextIII takes integer p, string text, integer a, integer b, integer c returns nothing\n"
     );
@@ -267,6 +268,7 @@ call DisplayTextII(99,null,-3,17)
 call DisplayTextIII(GetAiPlayer(),"",1,2,3)
 endfunction
 function VerifyUnitCounts takes nothing returns nothing
+call ClearHarvestAI()
 call VerifySilentDebug()
 if GetFoodMade('a001') != 17 or GetFoodUsed('a001') != 3 or GetFoodMade('t001') != 31 or GetFoodUsed(0) != 0 or GetFoodMade(0) != 0 then
 call CountAssertionFailed()

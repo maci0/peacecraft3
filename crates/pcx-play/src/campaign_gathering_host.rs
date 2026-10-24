@@ -17,6 +17,40 @@ pub struct GatheringObservation {
 }
 
 impl ObjectHost {
+    pub(crate) fn clear_ai_harvest(&mut self, player: i32) -> Result<(), Error> {
+        const CALL: &str = "ClearHarvestAI";
+        let policy = self.campaign_gathering.as_ref().ok_or_else(|| {
+            self.inner
+                .error(CALL, Failure::ConfigState("operands are not admitted"))
+        })?;
+        let owner = self.player_identity(player).ok_or_else(|| {
+            self.inner
+                .error(CALL, Failure::ConfigState("player is not admitted"))
+        })?;
+        if !self.campaign_ai.is_active(player) {
+            return Err(self
+                .inner
+                .error(CALL, Failure::ConfigState("AI player is not active")));
+        }
+        for entry in &mut self.inner.arena {
+            if let Entry::Unit { record } = entry
+                && record.owner == owner
+                && let Some(flags) = &mut record.ai_harvest_flags
+            {
+                *flags = policy.clear_harvest_flags(*flags);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_ai_harvest_flags(&mut self, unit: HandleId, flags: u8) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("fixture unit") else {
+            panic!("fixture unit family")
+        };
+        record.ai_harvest_flags = Some(flags);
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture_gathering_class(&mut self, unit: HandleId, class: &str) {
         let Entry::Unit { record } = self.inner.entry_mut(unit).expect("fixture unit") else {

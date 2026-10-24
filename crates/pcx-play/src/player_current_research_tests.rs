@@ -183,6 +183,11 @@ impl AiWorld for AiResearchWorld {
             .stop_ai_gathering(player)
             .map_err(|e| e.to_string())
     }
+    fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .clear_ai_harvest(player)
+            .map_err(|e| e.to_string())
+    }
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
         self.object
             .create_ai_captains(player)

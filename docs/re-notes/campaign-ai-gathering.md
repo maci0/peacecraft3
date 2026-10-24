@@ -41,7 +41,7 @@ context flag, so a context-free successful no-op would lose state.
 
 ## Policy reader checks
 
-The reader binds six checked image windows and charges their complete lengths
+The original StopGathering reader binds six checked image windows and charges their complete lengths
 against the input budget. It preserves the constructor condition and joins the
 context clear to its later reader. Candidate branches must reach the actual
 boolean returns. Six focused tests, including a real selected-image decode,
@@ -82,3 +82,8 @@ strategy, rendered behavior and chapter completion remain open. The retained
 local evidence is under `.scratch/campaign-basics-native/`, including the
 selection, callback and initialized type-mask lineage notes and their mapped
 window hashes. No original assets are tracked.
+
+The same admission now additionally binds
+[`ClearHarvestAI` assignment rollover](campaign-ai-harvest-assignments.md).
+Its assignment flags remain separate from the context gathering flag and the
+one selected-unit association; clearing assignments does not issue worker stops.

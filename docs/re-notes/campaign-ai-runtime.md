@@ -4,7 +4,9 @@
 
 The private campaign continuation passes Human02 initialization with nearby
 lumber harvesting admitted. The latest authored opening reaches 8.312500
-seconds, then refuses the red program's `ClearHarvestAI`. The
+seconds, then refuses the red program's `CaptainInCombat`. The
+[AI harvest-cycle clear](campaign-ai-harvest-assignments.md) now preserves
+explicit worker orders and carried-resource deposits. The
 [unit-type food queries](script-unit-food-queries.md) now read exact catalog
 integers through the shared map/AI world. The selected
 [AI diagnostic handlers](campaign-ai-debug-text.md) are now admitted with their

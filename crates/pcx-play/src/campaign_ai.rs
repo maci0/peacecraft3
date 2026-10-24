@@ -137,6 +137,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_replacement_count(&mut self, player: i32, count: i32) -> Result<(), String>;
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
+    fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_captain_home(
         &mut self,
@@ -369,6 +370,16 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .stop_ai_gathering(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .clear_ai_harvest(player)
             .map_err(|e| e.to_string())
     }
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
@@ -723,8 +734,17 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     {
         return Err("StartCampaignAI: StopGathering AI common declaration differs".into());
     }
+    if scripts
+        .program()
+        .natives()
+        .ambiguous("ClearHarvestAI")
+        .is_some()
+    {
+        return Err("StartCampaignAI: ClearHarvestAI AI common declaration is ambiguous".into());
+    }
     for (name, params) in [
         ("CreateCaptains", &[][..]),
+        ("ClearHarvestAI", &[][..]),
         ("SetCampaignAI", &[][..]),
         ("SetReplacementCount", &["integer"][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
@@ -1044,6 +1064,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_stop_gathering(player)?;
                 Ok(Value::Null)
             }
+            "ClearHarvestAI" => {
+                if !args.is_empty() {
+                    return Err("ClearHarvestAI: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_clear_harvest(player)?;
+                Ok(Value::Null)
+            }
             "CreateCaptains" => {
                 if !args.is_empty() {
                     return Err("CreateCaptains: expected no arguments".into());
@@ -1138,6 +1166,7 @@ mod tests {
         replacement_counts: BTreeMap<i32, i32>,
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
+        harvest_clears: BTreeMap<i32, usize>,
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
         group_timed_life: BTreeMap<i32, bool>,
@@ -1308,6 +1337,14 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             state.gathering.insert(player, false);
+            Ok(())
+        }
+        fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            *state.harvest_clears.entry(player).or_default() += 1;
             Ok(())
         }
         fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
@@ -1752,6 +1789,86 @@ mod tests {
         assert!(error.contains("CreateCaptains"), "{error}");
         assert!(shared.lock().unwrap().gold.is_empty());
         assert!(world.is_some());
+    }
+
+    #[test]
+    fn clear_harvest_validates_owned_abi_and_dispatches_across_sleep() {
+        let declaration = "native ClearHarvestAI takes nothing returns nothing\n";
+        for (common, ai_common) in [
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("takes nothing", "takes integer value")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}constant {declaration}"),
+            ),
+            (format!("{COMMON}{declaration}"), AI_COMMON.to_string()),
+            (
+                format!("{COMMON}{declaration}"),
+                format!("{AI_COMMON}{declaration}"),
+            ),
+        ] {
+            let script = program_with_sources(
+                "synthetic:harvest.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &common,
+                &ai_common,
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let state = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&state)));
+            let error = runtime.start(&mut world, 1, "harvest.ai").unwrap_err();
+            assert!(error.contains("ClearHarvestAI"), "{error}");
+            assert!(state.lock().unwrap().gold.is_empty());
+            assert!(state.lock().unwrap().active.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:harvest.ai",
+            "function main takes nothing returns nothing\ncall ClearHarvestAI()\ncall Sleep(0.25)\ncall ClearHarvestAI()\nendfunction\n",
+            &format!("{AI_COMMON}{declaration}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let state = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&state)));
+        runtime.start(&mut world, 1, "harvest.ai").unwrap();
+        runtime.start(&mut world, 2, "harvest.ai").unwrap();
+        assert_eq!(
+            state.lock().unwrap().harvest_clears,
+            [(1, 1), (2, 1)].into()
+        );
+        state.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(
+            state.lock().unwrap().harvest_clears,
+            [(1, 2), (2, 2)].into()
+        );
+        let mut host = AiHost::new(1, world.take().unwrap());
+        for args in [
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(false)],
+        ] {
+            assert!(host.native("ClearHarvestAI", &args).is_err());
+        }
+        assert_eq!(
+            state.lock().unwrap().harvest_clears,
+            [(1, 2), (2, 2)].into()
+        );
     }
 
     #[test]

@@ -1247,6 +1247,9 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit) {
+            record.ai_harvest_flags = None;
+        }
         self.forget_captain_member(unit);
         self.unit_expirations.remove(&unit);
         self.forget_campaign_flee(unit);

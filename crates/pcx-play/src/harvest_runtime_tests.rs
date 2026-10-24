@@ -808,6 +808,42 @@ fn harvest_orders_are_four_distinct_registry_identities() {
 }
 
 #[test]
+fn clear_harvest_ai_preserves_a_loaded_explicit_worker_and_its_deposit() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for("9", "18", "4"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32., 32.);
+    create_unit(&mut vm, *b"htow", 36., 32.);
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER");
+    start_harvest(&mut vm, worker);
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    host.fixture_ai_harvest_flags(worker, 0x10);
+    let mut expected = host.executed_unit(worker).unwrap().clone();
+    expected.ai_harvest_flags = Some(0x01);
+    host.clear_ai_harvest(0).unwrap();
+    assert_eq!(host.executed_unit(worker).unwrap(), &expected);
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    tick(&mut vm, 3.5);
+    assert_eq!(tree_life(&mut vm, tree), 62.);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_LUMBER"),
+        bank + 18
+    );
+}
+
+#[test]
 fn stop_preserves_partial_cargo_across_reissue_and_manual_return() {
     let (mut vm, tree) = open_harvest_with(
         harvest_tables_for("9", "18", "4"),

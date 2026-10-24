@@ -1247,6 +1247,7 @@ mod tests {
             look_at: None,
             summoned: false,
             cached: false,
+            ai_harvest_flags: None,
             activity: None,
             shown: true,
             paused_since: None,

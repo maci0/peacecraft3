@@ -55,6 +55,64 @@ fn admit(vm: &mut Vm) -> HandleId {
 }
 
 #[test]
+fn clear_harvest_rolls_only_the_active_owners_assignments_without_changing_units() {
+    let mut vm = opened(false);
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    let host = &mut vm.host().inner;
+    host.fixture_ai_harvest_flags(a, 0x92);
+    let unchanged = host.executed_unit(a).unwrap().clone();
+    assert!(host.clear_ai_harvest(4).is_err());
+    assert_eq!(host.executed_unit(a).unwrap(), &unchanged);
+    let owner = admit(&mut vm);
+    let host = &mut vm.host().inner;
+    let Value::Handle(other) = host.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    let Value::Handle(foreign) = host
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(other),
+                Value::Int(i32::from_be_bytes(*b"U001")),
+                Value::Real(48.),
+                Value::Real(80.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    host.fixture_ai_harvest_flags(foreign, 0xb3);
+    let foreign_before = host.executed_unit(foreign).unwrap().clone();
+    let b_before = host.executed_unit(b).unwrap().clone();
+    assert!(host.clear_ai_harvest(5).is_err());
+    assert!(host.clear_ai_harvest(-1).is_err());
+    let handles = host.inner().handles();
+    let gathering = host.campaign_gathering_state(owner).unwrap();
+    host.clear_ai_harvest(4).unwrap();
+    let mut expected = unchanged;
+    expected.ai_harvest_flags = Some(0x81);
+    assert_eq!(host.executed_unit(a).unwrap(), &expected);
+    assert_eq!(host.executed_unit(b).unwrap(), &b_before);
+    assert_eq!(host.executed_unit(foreign).unwrap(), &foreign_before);
+    assert_eq!(host.inner().handles(), handles);
+    assert_eq!(host.campaign_gathering_state(owner).unwrap(), gathering);
+    host.clear_ai_harvest(4).unwrap();
+    assert_eq!(host.executed_unit(a).unwrap().ai_harvest_flags, Some(0x80));
+    host.native(
+        "SetUnitOwner",
+        &[Value::Handle(a), Value::Handle(other), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(host.executed_unit(a).unwrap().ai_harvest_flags, None);
+    host.activate_campaign_ai_player(5).unwrap();
+    host.deactivate_campaign_ai_player(5).unwrap();
+    assert_eq!(host.executed_unit(foreign).unwrap().ai_harvest_flags, None);
+}
+
+#[test]
 fn stop_gathering_keeps_one_canonical_live_association_and_future_birth() {
     let mut vm = opened(true);
     let a = unit(&vm, "A");
