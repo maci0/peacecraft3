@@ -112,14 +112,44 @@ pub fn equal_origins_and_ambiguity() {
 #[cfg_attr(test, test)]
 pub fn named_archives_use_the_selected_client_priority() {
     let mut archives = [
-        fixtures::archive(&[2, 3], 2, fixtures::FLAGS, 0, "install/War3.mpq"),
-        fixtures::archive(&[4, 5], 2, fixtures::FLAGS, 0, "ISO:/WAR3X.MPQ;1@1024"),
+        fixtures::archive(
+            &[2, 3],
+            2,
+            fixtures::FLAGS,
+            0,
+            "Complete Edition.iso (stored, unpatched):/elamigos-1.bin::War3.mpq",
+        ),
+        fixtures::archive(
+            &[4, 5],
+            2,
+            fixtures::FLAGS,
+            0,
+            "Complete Edition.iso (stored, unpatched):/elamigos-1.bin::WAR3X.MPQ",
+        ),
     ];
     let read = extract_fallible(&mut archives, 12, "fixture", 2)
         .unwrap()
         .unwrap();
     assert_eq!(read.bytes, [4, 5]);
     assert_eq!(read.receipt.archives.unwrap()[0].ordinal, 1);
+    let bounded = read_bounded(
+        &Dir::default(),
+        &mut archives,
+        12,
+        "fixture",
+        BoundedReadPolicy {
+            max_copy_bytes: 2,
+            extraction: pcx_mpq::ExtractionBudget {
+                max_raw_packed_bytes: 2,
+                max_decoded_bytes: 2,
+            },
+            huffman: None,
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(bounded.bytes, [4, 5]);
+    assert_eq!(bounded.receipt.archives.unwrap()[0].ordinal, 1);
 
     archives[0] = fixtures::archive(&[2, 3], 2, fixtures::FLAGS, 0, "War3x.mpq");
     archives[1] = fixtures::archive(&[8, 9], 2, fixtures::FLAGS, 0, "War3xLocal.mpq");

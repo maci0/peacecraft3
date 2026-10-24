@@ -131,3 +131,14 @@ production FFI route, live-browser acceptance or gameplay execution.
 Root acceptance records are local under `.scratch/browser-source-root-review/`.
 Source mounting UI, script Host effects, game rendering and the public-site
 refresh remain separate work.
+
+## Installer source labels
+
+Installer staging keeps the `stored, unpatched` provenance marker before the
+member path (`source (stored, unpatched):member`) so the archive basename stays
+recognizable by the existing selector. Previously the trailing marker made
+recognized archive families refuse unequal members such as `GlobalStrings.fdf`.
+Synthetic transaction and bounded/unbounded reader tests cover this label shape.
+This does not qualify the repack's release, apply language patches, or extend
+Huffman/ADPCM source recognition; missing assets and unsupported codec sources
+remain separate import limitations.

@@ -57,7 +57,7 @@ export async function stageStoredInstallerFiles(files, sourceName, api, { signal
       onProgress?.({ phase: 'archive', path: entry.path });
       const bytes = new Uint8Array(await entry.file.arrayBuffer());
       signal?.throwIfAborted();
-      api.stage_archive(`${sourceName}:${entry.path} (stored, unpatched)`, bytes);
+      api.stage_archive(`${sourceName} (stored, unpatched):${entry.path}`, bytes);
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     if (clientImage) {

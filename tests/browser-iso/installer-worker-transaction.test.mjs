@@ -75,7 +75,7 @@ test('retired installer extract cannot change the active import revision', async
   assert.equal(api.commitCount, 1);
   assert.equal(staged.revision, 12);
   assert.equal(api.asset_revision(), 12);
-  assert.deepEqual(api.stored_assets(), ['FixtureSource:live.mpq (stored, unpatched)']);
+  assert.deepEqual(api.stored_assets(), ['FixtureSource (stored, unpatched):live.mpq']);
 
   worker.onmessage({ data: { id: retiredId, result: stale } });
   assert.equal(api.beginCount, 1);
