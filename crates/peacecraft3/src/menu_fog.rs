@@ -15,6 +15,81 @@ pub struct MenuFog {
 }
 
 impl MenuFog {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub fn campaign(table: &SkinTable, campaign: &str) -> Result<Option<Self>, String> {
+        let sections: Vec<_> = table
+            .sections()
+            .iter()
+            .filter(|section| section.name.eq_ignore_ascii_case(campaign))
+            .collect();
+        let [section] = sections.as_slice() else {
+            return Err(format!("campaign {campaign}: missing or duplicate section"));
+        };
+        let fields = ["Style", "Color", "Density", "Start", "End"]
+            .map(|field| format!("BackgroundFog{field}"));
+        if !section
+            .entries
+            .iter()
+            .any(|(key, _)| fields.iter().any(|field| key.eq_ignore_ascii_case(field)))
+        {
+            return Ok(None);
+        }
+        let row = |field: &str| -> Result<Vec<f32>, String> {
+            let key = format!("BackgroundFog{field}");
+            let values: Vec<_> = section
+                .entries
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case(&key))
+                .collect();
+            let [(_, value)] = values.as_slice() else {
+                return Err(format!("campaign {campaign}: missing or duplicate {key}"));
+            };
+            value
+                .split(',')
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| format!("campaign {campaign}: invalid {key}"))
+                })
+                .collect()
+        };
+        let scalar = |field| -> Result<f32, String> {
+            let values = row(field)?;
+            let [value] = values.as_slice() else {
+                return Err(format!(
+                    "campaign {campaign}: expected one BackgroundFog{field} value"
+                ));
+            };
+            Ok(*value)
+        };
+        if scalar("Style")? != 0.0 {
+            return Err(format!("campaign {campaign}: unsupported fog style"));
+        }
+        let colors = row("Color")?;
+        if colors.len() != 4
+            || colors
+                .iter()
+                .any(|value| !(0.0..=f32::from(u8::MAX)).contains(value) || value.fract() != 0.0)
+        {
+            return Err(format!("campaign {campaign}: invalid fog ARGB bytes"));
+        }
+        let fog = Self {
+            color_argb: std::array::from_fn(|i| colors[i] as u8),
+            density: scalar("Density")?,
+            start: scalar("Start")?,
+            end: scalar("End")?,
+        };
+        if fog.density < 0.0 || fog.start < 0.0 || fog.end <= fog.start {
+            return Err(format!(
+                "campaign {campaign}: invalid fog interval or density"
+            ));
+        }
+        Ok(Some(fog))
+    }
+
     pub fn checked(table: &SkinTable, edition: usize) -> Result<Self, String> {
         let mut sections = table
             .sections()
@@ -120,6 +195,35 @@ pub fn material_fog_enabled(shading_flags: u32, filter_mode: u32) -> bool {
 mod tests {
     use super::*;
     use bevy::color::ColorToComponents;
+    #[test]
+    fn campaign_fog_uses_its_source_section_and_refuses_partial_or_invalid_rows() {
+        let source = "[One]\nBackgroundFogStyle=0\nBackgroundFogColor=117,19,43,71\nBackgroundFogDensity=.37\nBackgroundFogStart=13\nBackgroundFogEnd=97\n[Other]\nBackgroundFogEnd=999\n";
+        let parsed = SkinTable::parse(source).unwrap();
+        let fog = MenuFog::campaign(&parsed, "oNe").unwrap().unwrap();
+        assert_eq!(fog.color_argb, [117, 19, 43, 71]);
+        assert_eq!((fog.density, fog.start, fog.end), (0.37, 13.0, 97.0));
+        assert!(MenuFog::campaign(&parsed, "Other").is_err());
+        assert_eq!(
+            MenuFog::campaign(&SkinTable::parse("[Empty]\nName=x\n").unwrap(), "Empty"),
+            Ok(None)
+        );
+        for mutant in [
+            source.replace("Style=0", "Style=1"),
+            source.replace("Density=.37", "Density=NaN"),
+            source.replace("Start=13", "Start=-1"),
+            source.replace("End=97", "End=12"),
+            source.replace("117,19,43,71", "117,19,43"),
+            source.replace("117,19,43,71", "117,19.5,43,71"),
+            source.replace(
+                "BackgroundFogDensity=.37",
+                "BackgroundFogDensity=.37\nbackgroundfogdensity=.6",
+            ),
+            source.replace("BackgroundFogStart=13\n", ""),
+            format!("{source}[ONE]\nBackgroundFogStyle=0\n"),
+        ] {
+            assert!(MenuFog::campaign(&SkinTable::parse(&mutant).unwrap(), "One").is_err());
+        }
+    }
     fn table(source: &str) -> SkinTable {
         SkinTable::parse(source).unwrap()
     }

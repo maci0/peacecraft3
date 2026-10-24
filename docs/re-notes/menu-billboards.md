@@ -16,12 +16,20 @@ No model-specific ID, camera angle, pivot or scale is copied into production.
 The immutable plan caches hierarchy order; each pose visits each joint once.
 
 A bad camera, wrong pose count, nonfinite transform or unsupported transform
-flags in a full-billboard family refuse before mesh updates. Degenerate,
-reflected or sheared parent bases refuse rather than being silently normalized
-into a different pose. Axis locks and inheritance flags outside those families
+flags in a full-billboard family refuse before mesh updates. Parent rotation
+now comes from the authored quaternion chain, preserving signed scale, collapsed
+axes and shear in the full affine matrix. Invalid quaternions refuse. The camera
+basis can update without rebuilding the hierarchy. Axis locks and inheritance flags outside those families
 retain the ordinary path's existing behavior; they are not implemented here.
 Panels retain their separate ordinary posing path. Their caller now propagates
 pose errors, preserving the shared function's checked result.
+
+The [campaign scene follow-up](campaign-menu-scene.md) exercises this with the
+Night Elf background and samples its animated CAMS pose on the scene clock.
+It retains explicit gaps for foliage, sorted particles and the Bonus scene's
+light hierarchy; complete rendered parity is still not established.
+
+## Initial qualification receipts
 
 Six synthetic tests cover nested/late-parent/sparse IDs, pivot preservation,
 unchanged plain hierarchy composition, local spin/scale and refusal cases.

@@ -352,6 +352,11 @@ fn particle_whole_scene_binds_flags_sampler_union_camera_clock_and_owned_handles
         .attribute(Mesh::ATTRIBUTE_POSITION)
         .unwrap()
         .clone();
+    // This case supplies an external camera pose, independently of an authored CAMS driver.
+    spawned
+        .world
+        .resource_mut::<MainMenuScene>()
+        .camera_animation = None;
     spawned
         .world
         .get_mut::<Transform>(camera)

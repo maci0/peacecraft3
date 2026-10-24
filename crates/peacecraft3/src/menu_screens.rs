@@ -252,6 +252,8 @@ impl Navigation {
             (self.screen, screen),
             (Screen::Main, Screen::SinglePlayer | Screen::Options(_))
                 | (Screen::SinglePlayer | Screen::Options(_), Screen::Main)
+                | (Screen::SinglePlayer, Screen::Campaign)
+                | (Screen::Campaign, Screen::SinglePlayer)
         ) {
             if matches!(screen, Screen::Options(_)) {
                 self.restore_draft();
@@ -824,7 +826,13 @@ Frame "FRAME" "A" {
         assert_eq!(n.requested.take(), Some(Screen::SinglePlayer));
         n.commit_panel_owner(Screen::SinglePlayer);
         n.action("CampaignButton");
+        assert_eq!(n.screen, Screen::SinglePlayer);
+        assert_eq!(n.requested.take(), Some(Screen::Campaign));
+        n.commit_panel_owner(Screen::Campaign);
         n.action("BackButton");
+        assert_eq!(n.screen, Screen::Campaign);
+        assert_eq!(n.requested.take(), Some(Screen::SinglePlayer));
+        n.commit_panel_owner(Screen::SinglePlayer);
         assert_eq!(n.screen, Screen::SinglePlayer);
         n.action("CancelButton");
         assert_eq!(n.screen, Screen::SinglePlayer);

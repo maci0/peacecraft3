@@ -146,8 +146,10 @@ impl Channel {
             let d = *globals
                 .get(track.global_seq_id as usize)
                 .ok_or(Failure::Malformed("global reference"))?;
-            if d == 0 {
-                return Err(Failure::Malformed("zero global duration"));
+            if d == 0 && track.count != 1 {
+                return Err(Failure::Unsupported(
+                    "nonconstant zero-duration global track",
+                ));
             }
             Some(d)
         };
@@ -196,6 +198,11 @@ impl Channel {
         let constant = keys
             .first()
             .is_some_and(|first| keys.iter().all(|key| key.value == first.value));
+        if global == Some(0) && keys.len() != 1 {
+            return Err(Failure::Unsupported(
+                "zero-duration global key outside range",
+            ));
+        }
         Ok(Self {
             keys,
             constant,
@@ -249,14 +256,15 @@ impl Channel {
         if self.keys.is_empty() {
             return Ok(identity);
         }
+        // A single authored value needs no clock, including a zero-duration GLBS.
+        if self.constant {
+            return Ok(self.keys[0].value);
+        }
         let at = i64::from(
             self.global
                 .map_or(frame, |duration| (elapsed % u64::from(duration)) as u32),
         );
         // Pinned sd.ts sequence selection and cyclic end-gap convention.
-        if self.constant {
-            return Ok(self.keys[0].value);
-        }
         let after = self.keys.partition_point(|key| i64::from(key.frame) <= at);
         let (left, right) = if after == 0 || after == self.keys.len() {
             (&self.keys[self.keys.len() - 1], &self.keys[0])
@@ -1367,5 +1375,44 @@ impl Appearance {
         let top = row as f32 / self.rows as f32;
         let bottom = (u64::from(row) + 1) as f32 / self.rows as f32;
         Some([[right, top], [left, top], [left, bottom], [right, bottom]])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_global_key_does_not_need_a_nonzero_clock_period() {
+        let mut raw = 37i32.to_le_bytes().to_vec();
+        for value in [0.0f32, 0.0, 0.6, 0.8] {
+            raw.extend(value.to_le_bytes());
+        }
+        let mut track = KeyTrack {
+            magic: *b"KGRT",
+            count: 1,
+            interpolation: Interpolation::None,
+            global_seq_id: 0,
+            width: 4,
+            stride: 20,
+            raw,
+        };
+        let channel = Channel::checked(&track, 4, true, [113, 173], &[0]).unwrap();
+        let first = channel.sample(113, 0, [0.; 4]).unwrap();
+        assert!((first[2] - 0.6).abs() < 1e-7);
+        assert!((first[3] - 0.8).abs() < 1e-7);
+        assert_eq!(channel.sample(173, u64::MAX, [0.; 4]).unwrap(), first);
+        track.raw[..4].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(Channel::checked(&track, 4, true, [113, 173], &[0]).is_err());
+        track.raw[..4].copy_from_slice(&37i32.to_le_bytes());
+        track.raw.extend(71i32.to_le_bytes());
+        for value in [0.0f32, 0.0, 0.8, 0.6] {
+            track.raw.extend(value.to_le_bytes());
+        }
+        track.count = 2;
+        assert!(matches!(
+            Channel::checked(&track, 4, true, [113, 173], &[0]),
+            Err(Failure::Unsupported(_))
+        ));
     }
 }

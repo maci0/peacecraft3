@@ -14,7 +14,7 @@ struct Joint {
     billboard: bool,
 }
 
-/// Immutable hierarchy and camera basis for a static source camera.
+/// Checked hierarchy with a camera basis that can follow authored camera motion.
 /// Axis locks and inheritance flags outside a full-billboard family retain the
 /// ordinary pose path's existing behavior; this plan does not implement them.
 pub struct CameraPosePlan {
@@ -25,9 +25,7 @@ pub struct CameraPosePlan {
 
 impl CameraPosePlan {
     pub fn checked(plan: &JointPlan, camera: Quat) -> Result<Self, &'static str> {
-        if !camera.is_finite() || (camera.length_squared() - 1.0).abs() > 1e-5 {
-            return Err("invalid billboard camera rotation");
-        }
+        let camera = camera_basis(camera)?;
         let bones = plan.joints();
         let parents: Vec<_> = bones
             .iter()
@@ -84,14 +82,17 @@ impl CameraPosePlan {
                 billboard: bone.flags & BILLBOARD != 0,
             })
             .collect();
-        // Bevy camera columns are right/up/toward-eye; MDX faces local +X.
-        let basis = Mat3::from_quat(camera);
-        let camera = Quat::from_mat3(&Mat3::from_cols(basis.z_axis, basis.x_axis, basis.y_axis));
         Ok(Self {
             joints,
             order,
-            camera: camera.normalize(),
+            camera,
         })
+    }
+
+    /// Update facing without rebuilding the hierarchy; invalid input preserves the current basis.
+    pub fn set_camera(&mut self, camera: Quat) -> Result<(), &'static str> {
+        self.camera = camera_basis(camera)?;
+        Ok(())
     }
 
     pub fn pose(&self, poses: &[pcx_mdl::Pose]) -> Result<Skeleton, &'static str> {
@@ -99,9 +100,17 @@ impl CameraPosePlan {
             return Err("billboard pose count differs from checked hierarchy");
         }
         let mut matrices = vec![pcx_mdl::identity(); self.joints.len()];
+        let mut rotations = vec![Quat::IDENTITY; self.joints.len()];
         for &i in &self.order {
             let joint = &self.joints[i];
             let parent = joint.parent.map_or(pcx_mdl::identity(), |p| matrices[p]);
+            let parent_rotation = joint.parent.map_or(Quat::IDENTITY, |p| rotations[p]);
+            let local_rotation = Quat::from_array(poses[i].rotation);
+            let length = local_rotation.length();
+            if !length.is_finite() || length == 0.0 {
+                return Err("invalid billboard hierarchy quaternion");
+            }
+            let mut rotation = parent_rotation * (local_rotation / length);
             let mut matrix =
                 Mat4::from_cols_array(&pcx_mdl::compose(parent, poses[i], joint.pivot));
             if !matrix.is_finite() {
@@ -109,19 +118,17 @@ impl CameraPosePlan {
             }
             if joint.billboard {
                 let pivot = matrix.transform_point3(Vec3::from(joint.pivot));
-                let parent_rotation = if joint.parent.is_some() {
-                    rotation(Mat4::from_cols_array(&parent))?
-                } else {
-                    Quat::IDENTITY
-                };
+                // Keep authored scale/shear; rotation comes from the source quaternion chain.
                 let correction = self.camera * parent_rotation.conjugate();
                 matrix = Mat4::from_rotation_translation(correction, pivot - correction * pivot)
                     * matrix;
+                rotation = correction * rotation;
             }
             if !matrix.is_finite() {
                 return Err("nonfinite camera-facing pose");
             }
             matrices[i] = matrix.to_cols_array();
+            rotations[i] = rotation.normalize();
         }
         Ok(Skeleton {
             matrices,
@@ -131,25 +138,13 @@ impl CameraPosePlan {
     }
 }
 
-// Cancel rotation only; authored translation and scale remain in the matrix.
-fn rotation(matrix: Mat4) -> Result<Quat, &'static str> {
-    let axes = [
-        matrix.x_axis.truncate(),
-        matrix.y_axis.truncate(),
-        matrix.z_axis.truncate(),
-    ];
-    let [Some(x), Some(y), Some(z)] = axes.map(Vec3::try_normalize) else {
-        return Err("degenerate billboard parent rotation");
-    };
-    // Numerical acceptance of an orthogonal, orientation-preserving parent.
-    if x.dot(y).abs() > 1e-5
-        || x.dot(z).abs() > 1e-5
-        || y.dot(z).abs() > 1e-5
-        || x.cross(y).dot(z) < 1.0 - 1e-5
-    {
-        return Err("sheared or reflected billboard parent is unsupported");
+fn camera_basis(camera: Quat) -> Result<Quat, &'static str> {
+    if !camera.is_finite() || (camera.length_squared() - 1.0).abs() > 1e-5 {
+        return Err("invalid billboard camera rotation");
     }
-    Ok(Quat::from_mat3(&Mat3::from_cols(x, y, z)).normalize())
+    // Bevy camera columns are right/up/toward-eye; MDX faces local +X.
+    let basis = Mat3::from_quat(camera);
+    Ok(Quat::from_mat3(&Mat3::from_cols(basis.z_axis, basis.x_axis, basis.y_axis)).normalize())
 }
 
 #[cfg(test)]
@@ -175,6 +170,24 @@ mod tests {
     }
     fn near(a: Vec3, b: Vec3) {
         assert!((a - b).length() < 1e-4, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn animated_camera_updates_facing_and_refuses_bad_updates_atomically() {
+        let joints = JointPlan::checked(&[bone(3, -1, BILLBOARD)], &[], &pivots()).unwrap();
+        let mut plan = CameraPosePlan::checked(&joints, Quat::IDENTITY).unwrap();
+        let camera = Quat::from_rotation_y(0.37) * Quat::from_rotation_z(-0.21);
+        plan.set_camera(camera).unwrap();
+        let first = plan.pose(&[Pose::default()]).unwrap();
+        near(
+            Mat4::from_cols_array(&first.matrices[0]).transform_vector3(Vec3::X),
+            camera * Vec3::Z,
+        );
+        assert!(plan.set_camera(Quat::from_xyzw(0., 0., 0., 0.)).is_err());
+        assert_eq!(
+            plan.pose(&[Pose::default()]).unwrap().matrices,
+            first.matrices
+        );
     }
 
     #[test]
@@ -294,6 +307,13 @@ mod tests {
             }])
             .is_err()
         );
+        assert!(
+            plan.pose(&[Pose {
+                rotation: [0.0; 4],
+                ..Pose::default()
+            }])
+            .is_err()
+        );
         for bones in [
             vec![bone(3, -1, BILLBOARD | 0x10)],
             vec![bone(3, -1, 0x40), bone(9, 3, BILLBOARD)],
@@ -315,32 +335,33 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_reflected_and_sheared_parents_refuse() {
+    fn signed_scale_and_shear_survive_rotation_cancellation() {
         let bones = [bone(3, -1, 0), bone(9, 3, 0), bone(12, 9, BILLBOARD)];
         let joints = JointPlan::checked(&bones, &[], &pivots()).unwrap();
         let plan = CameraPosePlan::checked(&joints, Quat::IDENTITY).unwrap();
-        for scale in [[0.0, 1.0, 1.0], [-1.0, 1.0, 1.0]] {
+        let spin = Quat::from_rotation_z(0.4);
+        let facing = Quat::from_mat3(&Mat3::from_cols(Vec3::Z, Vec3::X, Vec3::Y));
+        for scale in [[0.0, 1.0, 1.0], [-2.0, 1.0, 3.0], [2.0, 1.0, 3.0]] {
             let poses = [
                 Pose {
                     scale,
                     ..Pose::default()
                 },
-                Pose::default(),
+                Pose {
+                    rotation: spin.to_array(),
+                    ..Pose::default()
+                },
                 Pose::default(),
             ];
-            assert!(plan.pose(&poses).is_err());
+            let skeleton = plan.pose(&poses).unwrap();
+            let actual = Mat4::from_cols_array(&skeleton.matrices[2]);
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                near(
+                    actual.transform_vector3(axis),
+                    facing * (spin.conjugate() * (Vec3::from(scale) * (spin * axis))),
+                );
+            }
+            near(actual.transform_point3(Vec3::ZERO), Vec3::ZERO);
         }
-        let poses = [
-            Pose {
-                scale: [2.0, 1.0, 1.0],
-                ..Pose::default()
-            },
-            Pose {
-                rotation: Quat::from_rotation_z(0.4).to_array(),
-                ..Pose::default()
-            },
-            Pose::default(),
-        ];
-        assert!(plan.pose(&poses).is_err());
     }
 }

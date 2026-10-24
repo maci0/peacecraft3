@@ -1047,6 +1047,7 @@ pub struct MenuPanels {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Transition {
     Animated,
+    Incoming,
     Unavailable(String),
 }
 
@@ -1095,6 +1096,26 @@ impl MenuPanels {
         }
         if self.panels.is_empty() {
             return Ok(Transition::Unavailable("no admitted menu panels".into()));
+        }
+        if from == crate::menu_screens::Screen::SinglePlayer
+            && to == crate::menu_screens::Screen::Campaign
+        {
+            for panel in &self.panels {
+                if let Some(error) = &panel.navigation_error {
+                    return Ok(Transition::Unavailable(format!("{}: {error}", panel.path)));
+                }
+                if panel.plan(Phase::SingleDeath).is_none() {
+                    return Ok(Transition::Unavailable(format!(
+                        "{}: missing SinglePlayer Death",
+                        panel.path
+                    )));
+                }
+            }
+            self.clock
+                .begin_exit(Owner::Single)
+                .map_err(str::to_string)?;
+            self.destination = Some(to);
+            return Ok(Transition::Animated);
         }
         let owner = |s| match s {
             crate::menu_screens::Screen::Main => Ok(Owner::Main),
@@ -1213,6 +1234,7 @@ pub fn spawn(
     assets: scene::GeosetAssets,
     install: Option<&std::path::Path>,
     sources: Vec<PanelSource>,
+    initial: crate::menu_screens::Screen,
 ) -> Result<usize, PanelError> {
     let scene::GeosetAssets {
         meshes,
@@ -1362,10 +1384,37 @@ pub fn spawn(
             reason: "empty panel batch".into(),
         });
     }
+    let clock = Clock::incoming(match initial {
+        crate::menu_screens::Screen::SinglePlayer => Owner::Single,
+        crate::menu_screens::Screen::Options(_) => Owner::Options,
+        _ => Owner::Main,
+    });
+    fn incoming_plan(p: &Prepared, phase: Phase) -> Result<(&ClipPlan, u32), PanelError> {
+        let required = |phase| {
+            Panel::plan_for(&p.plans, &p.options, &p.category, phase).ok_or_else(|| {
+                PanelError::Decode {
+                    path: p.path.clone(),
+                    reason: format!("missing incoming phase {phase:?}"),
+                }
+            })
+        };
+        let birth = required(phase)?.clip.duration();
+        let (phase, local) = phases::layer_sample(
+            phase,
+            std::time::Duration::ZERO,
+            birth,
+            std::time::Duration::ZERO,
+        );
+        let plan = required(phase)?;
+        Ok((plan, plan.clip.frame(local)))
+    }
+    for p in &prepared {
+        incoming_plan(p, clock.phase)?;
+    }
     let mut panels = Vec::with_capacity(prepared.len());
     let (mut low, mut high) = (f32::MAX, f32::MIN);
     for p in prepared {
-        let plan = &p.plans[Phase::MainBirth as usize];
+        let (plan, frame) = incoming_plan(&p, clock.phase)?;
         let mut info = scene::SceneInfo::default();
         let geosets = scene::spawn_geosets(
             commands,
@@ -1388,7 +1437,7 @@ pub fn spawn(
                 culls_back_faces: false,
             },
             &plan.opacity,
-            plan.clip.interval[0],
+            frame,
             &mut info,
             (
                 scene::MainMenuSceneEntity,
@@ -1396,6 +1445,25 @@ pub fn spawn(
                 NoFrustumCulling,
             ),
         )?;
+        scene::skin_geosets(
+            scene::Rig {
+                interval: plan.clip.interval,
+                model: &p.model,
+                bones: p.runtime.joints.joints(),
+                pivots: p.runtime.joints.pivots(),
+                global_durations: &p.runtime.global_sequences,
+                camera_pose: None,
+                look_at: None,
+            },
+            &geosets.handles,
+            frame,
+            0,
+            meshes,
+        )
+        .map_err(|error| PanelError::Decode {
+            path: p.path.clone(),
+            reason: error.to_string(),
+        })?;
         low = low.min(p.model.minimum_extent[2]);
         high = high.max(p.model.maximum_extent[2]);
         panels.push(Panel {
@@ -1485,7 +1553,7 @@ pub fn spawn(
     let count = panels.len();
     commands.insert_resource(MenuPanels {
         panels,
-        clock: Clock::default(),
+        clock,
         destination: None,
         install: selection.0,
         edition: selection.1,
@@ -1782,7 +1850,13 @@ pub fn advance(
             &state.panels[panel].sounds(phase)[sound],
         );
     }
-    if let Some(owner) = entered {
+    if next.retired && !state.clock.retired {
+        let Some(destination) = state.destination else {
+            navigation.notice = "Missing admitted destination for retiring menu panels".into();
+            return;
+        };
+        navigation.commit_panel_owner(destination);
+    } else if let Some(owner) = entered {
         navigation.commit_panel_owner(match owner {
             Owner::Main => crate::menu_screens::Screen::Main,
             Owner::Single => crate::menu_screens::Screen::SinglePlayer,
@@ -1795,11 +1869,7 @@ pub fn advance(
             },
         });
     }
-    navigation.transition_active = next.target.is_some()
-        || matches!(
-            next.phase,
-            Phase::OptionsMorph | Phase::OptionsMorphAlternate
-        );
+    navigation.transition_active = next.transition_active();
     if next.phase.owner() != Owner::Options {
         state.category_stand_origin = None;
     }
@@ -2504,6 +2574,70 @@ mod tests {
 
     #[test]
     #[ignore = "requires PEACECRAFT3_INSTALL with the original TFT archives"]
+    fn original_single_player_panels_start_in_their_incoming_pose() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        let mut world = World::new();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<MenuMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        spawn(
+            &mut world.commands(),
+            scene::GeosetAssets {
+                meshes: &mut meshes,
+                materials: &mut materials,
+                images: &mut images,
+            },
+            Some(&install),
+            load(Some(&install), 1).unwrap(),
+            crate::menu_screens::Screen::SinglePlayer,
+        )
+        .unwrap();
+        world.flush();
+        let panels = world.resource::<MenuPanels>();
+        assert_eq!(panels.clock.phase, Phase::SingleBirth);
+        assert!(panels.clock.transition_active());
+        let mut changed_meshes = 0;
+        for panel in &panels.panels {
+            let birth = panel.plan(Phase::SingleBirth).unwrap();
+            let (phase, local) = phases::layer_sample(
+                Phase::SingleBirth,
+                std::time::Duration::ZERO,
+                birth.clip.duration(),
+                std::time::Duration::ZERO,
+            );
+            let plan = panel.plan(phase).unwrap();
+            let frame = plan.clip.frame(local);
+            let poses: Vec<_> = panel
+                .bones
+                .iter()
+                .map(|bone| {
+                    scene::tracked_pose(bone, frame, 0, &panel.global_durations, plan.clip.interval)
+                })
+                .collect();
+            let skeleton =
+                pcx_gfx::pose_from_poses(&panel.model, &panel.bones, &panel.pivots, &poses);
+            for (source, handle) in panel.model.meshes.iter().zip(&panel.geosets.handles) {
+                let expected = pcx_gfx::skin_mesh(source, &skeleton);
+                changed_meshes += usize::from(expected != source.positions);
+                assert_eq!(
+                    meshes
+                        .get(handle)
+                        .unwrap()
+                        .attribute(Mesh::ATTRIBUTE_POSITION),
+                    Some(&bevy::mesh::VertexAttributeValues::Float32x3(expected))
+                );
+            }
+        }
+        println!(
+            "incoming_single_player_layers={} changed_rest_meshes={changed_meshes}",
+            panels.panels.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL with the original TFT archives"]
     fn original_panels_spawn_with_checked_birth_and_stand_opacity() {
         let install = std::path::PathBuf::from(
             std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
@@ -2553,6 +2687,7 @@ mod tests {
             },
             Some(&install),
             sources,
+            crate::menu_screens::Screen::Main,
         )
         .unwrap();
         world.flush();

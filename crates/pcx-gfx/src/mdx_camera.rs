@@ -75,10 +75,9 @@ impl CameraPlan {
             let mut previous = None;
             let mut raw = Vec::new();
             for key in input.raw.chunks_exact(stride) {
-                let frame = u32::from_le_bytes(key[..4].try_into().unwrap());
-                if frame > i32::MAX as u32
-                    || previous.replace(frame).is_some_and(|p| frame <= p)
-                    || duration.is_some_and(|d| frame > d)
+                let frame = i32::from_le_bytes(key[..4].try_into().unwrap());
+                if previous.replace(frame).is_some_and(|p| frame <= p)
+                    || duration.is_some_and(|d| frame < 0 || i64::from(frame) > i64::from(d))
                     || key[4..]
                         .as_chunks::<4>()
                         .0
@@ -87,7 +86,9 @@ impl CameraPlan {
                 {
                     return Err("invalid camera key/tangent");
                 }
-                if duration.is_some() || (interval[0]..=interval[1]).contains(&frame) {
+                if duration.is_some()
+                    || (i64::from(interval[0])..=i64::from(interval[1])).contains(&i64::from(frame))
+                {
                     raw.extend_from_slice(key);
                 }
             }
@@ -203,6 +204,24 @@ mod tests {
         }
     }
     #[test]
+    fn negative_local_preroll_is_valid_but_stays_outside_the_selected_clip() {
+        let mut camera = camera();
+        camera.tracks = vec![track(
+            *b"KCTR",
+            3,
+            &[
+                ((-17i32) as u32, &[900., 900., 900.]),
+                (20, &[3., 0., 0.]),
+                (40, &[7., 0., 0.]),
+            ],
+        )];
+        let plan = CameraPlan::checked(&camera, [20, 40], &[]).unwrap();
+        assert_eq!(plan.sample(30, 99).unwrap().eye, [15., 20., 30.]);
+        camera.tracks[0].global_seq_id = 0;
+        assert!(CameraPlan::checked(&camera, [20, 40], &[40]).is_err());
+    }
+
+    #[test]
     fn local_vectors_keep_source_bases_and_global_roll_keeps_its_clock() {
         let mut camera = camera();
         camera.tracks[2].global_seq_id = 0;
@@ -230,7 +249,7 @@ mod tests {
                 2 => c.tracks[0].width = 1,
                 3 => c.tracks[0].raw.pop().map(|_| ()).unwrap(),
                 4 => c.tracks.push(c.tracks[0].clone()),
-                5 => c.tracks[0].raw[0..4].copy_from_slice(&u32::MAX.to_le_bytes()),
+                5 => c.tracks[0].raw[0..4].copy_from_slice(&30i32.to_le_bytes()),
                 6 => c.tracks[0].raw[4..8].copy_from_slice(&f32::INFINITY.to_le_bytes()),
                 _ => c.tracks[0].global_seq_id = 0,
             }

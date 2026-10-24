@@ -45,7 +45,7 @@ pub(crate) struct Mission {
 }
 
 /// One campaign section of the selected index.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Campaign {
     /// The section key (`CampaignList` id), not a display string.
     pub key: String,
@@ -57,6 +57,7 @@ pub(crate) struct Campaign {
     pub default_open: bool,
     /// The authored `Background` skin key, resolved through war3skins.txt.
     pub background: Option<String>,
+    pub fog: Option<crate::menu_fog::MenuFog>,
     pub missions: Vec<Mission>,
 }
 
@@ -186,6 +187,8 @@ fn asset_mode(mode: GameMode) -> Result<pcx_assets::GameMode, String> {
 fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapter>), String> {
     let index =
         parse_campaign_index(member, text.as_bytes(), INDEX_LIMITS).map_err(|e| e.to_string())?;
+    let profile =
+        crate::menu_skin::SkinTable::parse(text).map_err(|error| format!("{member}: {error}"))?;
     let mut campaigns = Vec::new();
     let mut chapters = Vec::new();
     for slot in index.slots {
@@ -201,6 +204,8 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
         let title = entry.name.clone().unwrap_or_else(|| entry.id.clone());
         let default_open = entry.default_open == Some(true);
         let background = entry.background.clone();
+        let fog = crate::menu_fog::MenuFog::campaign(&profile, &entry.id)
+            .map_err(|error| format!("{member}: {error}"))?;
         let missions: Vec<Mission> = entry
             .missions
             .iter()
@@ -224,6 +229,7 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
             title,
             default_open,
             background,
+            fog,
             missions,
         });
     }
@@ -1506,10 +1512,26 @@ pub(crate) mod tests {
 
     #[test]
     fn mission_row_background_key_does_not_match_prefix_fields() {
-        let text = "[Index]\nCampaignList=\"One\"\n[One]\nDefaultOpen=1\nBackground=\"HumanBackdrop\"\nBackgroundFogStyle=0\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
+        let text = "[Index]\nCampaignList=\"One\"\n[One]\nDefaultOpen=1\nBackground=\"HumanBackdrop\"\nBackgroundFogStyle=0\nBackgroundFogColor=97,17,37,57\nBackgroundFogDensity=.29\nBackgroundFogStart=11\nBackgroundFogEnd=83\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n";
         let (campaigns, _) = parse_campaigns("member", text).unwrap();
         assert_eq!(campaigns[0].background.as_deref(), Some("HumanBackdrop"));
         assert!(campaigns[0].default_open);
+    }
+
+    #[test]
+    fn campaign_fog_retains_source_values_without_borrowing_another_sections_defaults() {
+        let source = "[Index]\nCampaignList=\"One\",\"Two\"\n[One]\nBackground=\"Scene\"\nBackgroundFogStyle=0\nBackgroundFogColor=97,17,37,57\nBackgroundFogDensity=.29\nBackgroundFogStart=11\nBackgroundFogEnd=83\nMission0=\"H\",\"N\",\"Maps\\One.w3m\"\n[Two]\nName=\"Other\"\nMission0=\"H\",\"N\",\"Maps\\Two.w3m\"\n";
+        let (campaigns, _) = parse_campaigns("synthetic.txt", source).unwrap();
+        let fog = campaigns[0].fog.unwrap();
+        assert_eq!(fog.color_argb, [97, 17, 37, 57]);
+        assert_eq!((fog.density, fog.start, fog.end), (0.29, 11.0, 83.0));
+        assert_eq!(campaigns[1].fog, None);
+        let error = parse_campaigns(
+            "synthetic.txt",
+            &source.replace("BackgroundFogEnd=83\n", ""),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("synthetic.txt: campaign One:"), "{error}");
     }
 
     #[test]

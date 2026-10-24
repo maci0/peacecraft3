@@ -108,6 +108,17 @@ pub(crate) fn source_camera_pose(
     Ok(Transform::from_translation(eye).looking_at(target, Vec3::Z))
 }
 
+fn animated_camera_pose(
+    plan: &pcx_gfx::mdx_camera::CameraPlan,
+    frame: u32,
+    elapsed_ms: u64,
+) -> Result<Transform, &'static str> {
+    let pose = plan.sample(frame, elapsed_ms)?;
+    let mut transform = source_camera_pose(pose.eye, pose.target)?;
+    transform.rotation *= Quat::from_rotation_z(pose.roll);
+    Ok(transform)
+}
+
 impl MenuCameraProjection {
     pub(crate) fn checked(
         source_angle: f32,
@@ -796,6 +807,7 @@ pub struct MainMenuScene {
     particles: Option<particles::ParticleScene>,
     lighting: Option<crate::menu_lighting::Lighting>,
     camera_pose: Option<pcx_gfx::mdx_billboard::CameraPosePlan>,
+    camera_animation: Option<(Entity, pcx_gfx::mdx_camera::CameraPlan)>,
     clip: Option<pcx_gfx::mdx_particles::Clip>,
     /// The clip's first frame.
     interval_start: u32,
@@ -848,20 +860,15 @@ pub fn spawn(
         cam.far,
     )
     .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
-    let camera_pose = source_camera_pose(cam.eye, cam.target)
-        .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
     let model =
         pcx_gfx::load_model(bytes, source).map_err(|e| SceneError::Decode(e.to_string()))?;
     let runtime = pcx_gfx::mdx_runtime::RuntimePlan::parse(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
-    let camera_pose_plan =
-        pcx_gfx::mdx_billboard::CameraPosePlan::checked(&runtime.joints, camera_pose.rotation)
-            .map_err(|error| SceneError::Decode(format!("{source}: BONE/HELP: {error}")))?;
     let joints = &runtime.joints;
     let bones = joints.joints().to_vec();
     let pivots = Some(joints.pivots().clone());
 
-    // The entry clip: the *first* looping `Stand`, which is the 0..16667 one.
+    // Use the selected model's looping idle clip and its authored intervals.
     let sequences = m
         .sequences(bytes)
         .map_err(|e| SceneError::Decode(e.to_string()))?;
@@ -871,6 +878,14 @@ pub fn spawn(
         .or_else(|| sequences.iter().find(|s| s.name == "Stand"))
         .or_else(|| sequences.first());
     let interval = clip.map_or([0, 0], |clip| [clip.interval_start, clip.interval_end]);
+    let camera_animation =
+        pcx_gfx::mdx_camera::CameraPlan::checked(cam, interval, &runtime.global_sequences)
+            .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
+    let camera_pose = animated_camera_pose(&camera_animation, interval[0], 0)
+        .map_err(|e| SceneError::Decode(format!("{source}: CAMS {}: {e}", cam.name)))?;
+    let camera_pose_plan =
+        pcx_gfx::mdx_billboard::CameraPosePlan::checked(&runtime.joints, camera_pose.rotation)
+            .map_err(|error| SceneError::Decode(format!("{source}: BONE/HELP: {error}")))?;
     let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
         .map_err(|e| SceneError::Decode(format!("{source}: {e}")))?;
 
@@ -1037,6 +1052,7 @@ pub fn spawn(
         particles,
         lighting: Some(lighting),
         camera_pose: Some(camera_pose_plan),
+        camera_animation: Some((camera, camera_animation)),
         clip: clip.map(|clip| pcx_gfx::mdx_particles::Clip {
             interval,
             looping: !clip.non_looping,
@@ -1395,7 +1411,7 @@ pub struct Rig<'a> {
     pub pivots: &'a pcx_mdl::Pivots,
     /// `GLBS` durations, indexed by global-sequence id.
     pub global_durations: &'a [u32],
-    /// Checked static source camera; panels retain their independent pose path.
+    /// Checked camera basis for this frame; panels retain their independent pose path.
     pub camera_pose: Option<&'a pcx_gfx::mdx_billboard::CameraPosePlan>,
     /// Script-selected bone and target in source model space.
     pub look_at: Option<(&'a str, Vec3)>,
@@ -1830,7 +1846,7 @@ pub fn advance(
     mut materials: ResMut<Assets<MenuMaterial>>,
     particle_materials: Res<Assets<ParticleMaterial>>,
     mut visibility: Query<&mut Visibility, With<MainMenuSceneEntity>>,
-    cameras: Query<&Transform, With<MainMenuSceneCamera>>,
+    mut cameras: Query<&mut Transform, With<MainMenuSceneCamera>>,
 ) {
     if scene.model.is_none() {
         return;
@@ -1861,6 +1877,36 @@ pub fn advance(
     scene.time_ms = local_ms as f32;
     let frame = scene.interval_start + local_ms as u32;
     let elapsed = scene.elapsed;
+    let next_camera = scene
+        .camera_animation
+        .as_ref()
+        .map(|(entity, plan)| {
+            animated_camera_pose(plan, frame, elapsed_ms).map(|pose| (*entity, pose))
+        })
+        .transpose();
+    let next_camera = match next_camera {
+        Ok(camera) => camera,
+        Err(error) => {
+            error!("{}: CAMS: {error}", scene.texture_bindings.source);
+            return;
+        }
+    };
+    if let Some((entity, pose)) = next_camera {
+        let Ok(mut camera) = cameras.get_mut(entity) else {
+            error!(
+                "{}: CAMS entity ownership was lost",
+                scene.texture_bindings.source
+            );
+            return;
+        };
+        if let Some(billboards) = scene.camera_pose.as_mut()
+            && let Err(error) = billboards.set_camera(pose.rotation)
+        {
+            error!("{}: CAMS: {error}", scene.texture_bindings.source);
+            return;
+        }
+        *camera = pose;
+    }
     if let Some(particles) = scene.particles.as_mut()
         && particles.enabled()
     {
@@ -1991,6 +2037,118 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_camera_and_billboards_advance_together_on_the_scene_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+        let track = |magic, width, values: [&[f32]; 2]| pcx_mdl::KeyTrack {
+            magic,
+            count: 2,
+            interpolation: pcx_mdl::Interpolation::Linear,
+            global_seq_id: pcx_mdl::NO_ID,
+            width,
+            stride: 4 + 4 * width,
+            raw: [20u32, 60]
+                .into_iter()
+                .zip(values)
+                .flat_map(|(frame, values)| {
+                    frame
+                        .to_le_bytes()
+                        .into_iter()
+                        .chain(values.iter().flat_map(|value| value.to_le_bytes()))
+                })
+                .collect(),
+        };
+        let input = pcx_mdl::Camera {
+            offset: 0,
+            size: 120,
+            name: "synthetic camera".into(),
+            eye: [7., 4., 9.],
+            target: [1., 0., 0.],
+            field_of_view: 0.7,
+            near: 1.,
+            far: 97.,
+            tracks: vec![
+                track(*b"KCTR", 3, [&[2., 0., 0.], &[6., 0., 0.]]),
+                track(*b"KTTR", 3, [&[0., 1., 0.], &[0., 3., 0.]]),
+                track(*b"KCRL", 1, [&[0.1], &[0.3]]),
+            ],
+        };
+        let bone = pcx_mdl::Bone {
+            offset: 0,
+            span: 104,
+            name: "synthetic billboard".into(),
+            object_id: 0,
+            parent_id: -1,
+            flags: 0x8,
+            tracks: vec![],
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        let pivots = pcx_mdl::Pivots(vec![[0.; 3]]);
+        let joints =
+            pcx_gfx::mdx_runtime::JointPlan::checked(std::slice::from_ref(&bone), &[], &pivots)
+                .unwrap();
+        let mut world = World::new();
+        let camera = world
+            .spawn((MainMenuSceneCamera, Transform::default()))
+            .id();
+        let unrelated = Transform::from_xyz(91., 83., 71.);
+        let other = world.spawn((MainMenuSceneCamera, unrelated)).id();
+        world.init_resource::<Assets<MenuMaterial>>();
+        world.init_resource::<Assets<ParticleMaterial>>();
+        world.init_resource::<Assets<Mesh>>();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(20));
+        world.insert_resource(time);
+        world.insert_resource(MainMenuScene {
+            model: Some(pcx_gfx::LoadedModel {
+                name: String::new(),
+                minimum_extent: [0.; 3],
+                maximum_extent: [0.; 3],
+                meshes: vec![],
+                bone_names: vec![bone.name.clone()],
+                bone_parents: vec![-1],
+                sequences: vec![],
+            }),
+            camera_animation: Some((
+                camera,
+                pcx_gfx::mdx_camera::CameraPlan::checked(&input, [20, 60], &[]).unwrap(),
+            )),
+            camera_pose: Some(
+                pcx_gfx::mdx_billboard::CameraPosePlan::checked(&joints, Quat::IDENTITY).unwrap(),
+            ),
+            bones: vec![bone],
+            pivots: Some(pivots),
+            interval_start: 20,
+            duration_ms: 40,
+            clip: Some(pcx_gfx::mdx_particles::Clip {
+                interval: [20, 60],
+                looping: true,
+            }),
+            ..default()
+        });
+        world.run_system_once(advance).unwrap();
+        let actual = world.get::<Transform>(camera).unwrap();
+        assert!(actual.translation.abs_diff_eq(Vec3::new(11., 4., 9.), 1e-6));
+        let mut expected =
+            Transform::from_xyz(11., 4., 9.).looking_at(Vec3::new(1., 2., 0.), Vec3::Z);
+        expected.rotation *= Quat::from_rotation_z(0.2);
+        assert!(actual.rotation.abs_diff_eq(expected.rotation, 1e-6));
+        assert_eq!(*world.get::<Transform>(other).unwrap(), unrelated);
+        let skeleton = world
+            .resource::<MainMenuScene>()
+            .camera_pose
+            .as_ref()
+            .unwrap()
+            .pose(&[pcx_mdl::Pose::default()])
+            .unwrap();
+        assert!(
+            Mat4::from_cols_array(&skeleton.matrices[0])
+                .transform_vector3(Vec3::X)
+                .abs_diff_eq(expected.rotation * Vec3::Z, 1e-6)
+        );
+    }
 
     #[test]
     fn alpha_update_follows_geoset_id_and_hides_zero_opacity_without_touching_other_materials() {

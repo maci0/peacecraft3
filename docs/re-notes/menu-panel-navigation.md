@@ -1,5 +1,9 @@
 # Source-selected menu panel navigation
 
+The later [campaign scene review](campaign-menu-scene.md) adds the outgoing
+Single Player phase and source-backed campaign background/camera ownership.
+It also records the remaining full-screen fade, entrance and rendering gaps.
+
 ## Transition review, 2026-10-24
 
 Fresh 1280×960 TFT captures compare the original 1.29.2.9231 executable

@@ -336,7 +336,6 @@ pub(crate) fn app_with_plugins(
                     process_panel_navigation,
                     build_control_layer,
                     build_setting_controls,
-                    sync_control_transition,
                     sync_settings_cog,
                     update_menu_notice,
                     apply_menu_text,
@@ -344,7 +343,9 @@ pub(crate) fn app_with_plugins(
                     position_screen_nodes,
                     initialize_menu_logo,
                     show_logo_for_screen,
+                    position_menu_logo,
                     initialize_menu_scene,
+                    sync_control_transition,
                     show_menu_or_launcher.after(peacecraft3::campaign_camera::CampaignCameraSet),
                     scroll_launcher,
                     refresh,
@@ -1376,6 +1377,13 @@ struct LogoLayer;
 struct SceneLoad {
     finished: bool,
     addon: Option<Addon>,
+    owner: Option<BackdropOwner>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackdropOwner {
+    Glue,
+    Campaign(usize),
 }
 
 /// The page's asset-store generation, or `0` when there is no store to ask.
@@ -1622,6 +1630,55 @@ fn sync_control_transition(
     }
 }
 
+fn position_menu_logo(
+    cache: Res<MenuArtCache>,
+    entrance: Res<crate::menu_panel::LogoEntrance>,
+    mut logos: Query<(&mut Node, &mut Visibility), With<crate::menu_panel::MenuLogo>>,
+    mut reported: Local<Option<String>>,
+) {
+    let (Some(fdf), Some(data)) = (cache.fdf.as_ref(), entrance.data.as_ref()) else {
+        return;
+    };
+    if fdf.frame(crate::menu_panel::LOGO_FRAME).is_none() {
+        return;
+    }
+    match crate::menu_panel::logo_rect(fdf, data) {
+        Ok(rect) => {
+            *reported = None;
+            for (mut node, mut visibility) in &mut logos {
+                node.position_type = PositionType::Absolute;
+                node.margin = UiRect::ZERO;
+                node.left = Val::Percent(rect.left / crate::mainmenu::FRAME_W * 100.0);
+                node.top = Val::Percent(
+                    (crate::mainmenu::FRAME_H - rect.top()) / crate::mainmenu::FRAME_H * 100.0,
+                );
+                node.width = Val::Percent(rect.width / crate::mainmenu::FRAME_W * 100.0);
+                node.height = Val::Percent(rect.height / crate::mainmenu::FRAME_H * 100.0);
+                *visibility = Visibility::Inherited;
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            if reported.as_ref() != Some(&message) {
+                warn!("Original menu logo placement: {message}");
+                *reported = Some(message);
+            }
+            for (_, mut visibility) in &mut logos {
+                *visibility = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+#[derive(SystemParam)]
+struct SceneNavigation<'w> {
+    navigation: ResMut<'w, crate::menu_screens::Navigation>,
+    #[cfg(not(target_arch = "wasm32"))]
+    chapters: Option<Res<'w, crate::native_campaign::Chapters>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    campaign_state: Option<Res<'w, crate::native_campaign::CampaignMenuState>>,
+}
+
 fn initialize_menu_scene(
     mut commands: Commands,
     mut state: ResMut<SceneLoad>,
@@ -1629,8 +1686,15 @@ fn initialize_menu_scene(
     launcher: Res<Launcher>,
     menu: Query<Entity, With<MenuLayer>>,
     scene_entities: Query<Entity, With<crate::mainmenu_scene::MainMenuSceneEntity>>,
-    mut navigation: ResMut<crate::menu_screens::Navigation>,
+    navigation: SceneNavigation,
 ) {
+    let SceneNavigation {
+        mut navigation,
+        #[cfg(not(target_arch = "wasm32"))]
+        chapters,
+        #[cfg(not(target_arch = "wasm32"))]
+        campaign_state,
+    } = navigation;
     let SceneAssets {
         mut meshes,
         mut materials,
@@ -1640,23 +1704,70 @@ fn initialize_menu_scene(
     if menu.is_empty() {
         return;
     }
-    if state.addon != Some(launcher.mode.addon) {
-        if state.addon.is_some() {
-            crate::menu_sprites::cancel_event_sounds();
-            navigation.reset_panels();
-        }
+    let addon_changed = state.addon != Some(launcher.mode.addon);
+    if addon_changed && state.addon.is_some() {
+        crate::menu_sprites::cancel_event_sounds();
+        navigation.reset_panels();
+    }
+    let owner = if navigation.screen == crate::menu_screens::Screen::Campaign {
+        #[cfg(not(target_arch = "wasm32"))]
+        let selected = campaign_state
+            .as_ref()
+            .and_then(|state| state.selected_campaign)
+            .unwrap_or(0);
+        #[cfg(target_arch = "wasm32")]
+        let selected = 0;
+        BackdropOwner::Campaign(selected)
+    } else {
+        BackdropOwner::Glue
+    };
+    if addon_changed || state.owner != Some(owner) {
+        crate::menu_sprites::cancel_event_sounds();
         for entity in &scene_entities {
             commands.entity(entity).despawn();
         }
         commands.remove_resource::<crate::mainmenu_scene::MainMenuScene>();
         commands.remove_resource::<crate::menu_sprites::MenuPanels>();
         state.addon = Some(launcher.mode.addon);
+        state.owner = Some(owner);
         state.finished = false;
     }
     if state.finished {
         return;
     }
     let install = selected_install(&launcher);
+    #[cfg(target_arch = "wasm32")]
+    if matches!(owner, BackdropOwner::Campaign(_)) {
+        state.finished = true;
+        navigation.notice = "Campaign background is unavailable for this source selection.".into();
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let campaign: Option<(&str, Option<&str>, Option<crate::menu_fog::MenuFog>)> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let campaign = match owner {
+        BackdropOwner::Glue => None,
+        BackdropOwner::Campaign(selected) => {
+            let Some(campaign) = chapters
+                .as_ref()
+                .and_then(|chapters| chapters.campaigns.get(selected))
+            else {
+                navigation.notice = chapters
+                    .as_ref()
+                    .and_then(|chapters| chapters.error.as_ref())
+                    .map_or_else(
+                        || "Campaign background is unavailable for this source selection.".into(),
+                        |error| format!("Campaign background unavailable: {error}"),
+                    );
+                return;
+            };
+            Some((
+                campaign.key.as_str(),
+                campaign.background.as_deref(),
+                campaign.fog,
+            ))
+        }
+    };
     let (_, served, directory) =
         crate::mainmenu_scene::scene_source(launcher.mode.addon == Addon::Tft);
     let source = crate::mainmenu::art_bytes(install.as_deref(), crate::mainmenu::SKIN_TABLE)
@@ -1664,15 +1775,32 @@ fn initialize_menu_scene(
         .and_then(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
         .and_then(|text| crate::menu_skin::SkinTable::parse(&text).map_err(|e| e.to_string()))
         .and_then(|skin| {
-            crate::mainmenu_scene::skin_scene_source(&skin, launcher.mode.addon == Addon::Tft)
-                .map_err(|e| e.to_string())
+            if let Some(campaign) = campaign {
+                let key = campaign
+                    .1
+                    .ok_or_else(|| format!("campaign {}: missing Background", campaign.0))?;
+                let key = format!("{key}_V{}", u32::from(launcher.mode.addon == Addon::Tft));
+                skin.unique_file(&key)
+                    .map(|binding| pcx_mdl::binary_model_path(&binding.file))
+                    .map_err(|error| error.to_string())
+            } else {
+                crate::mainmenu_scene::skin_scene_source(&skin, launcher.mode.addon == Addon::Tft)
+                    .map_err(|e| e.to_string())
+            }
         });
     let source = match source {
         Ok(path) => path,
         Err(error) => {
+            state.finished = true;
             warn!("Original menu background: {error}");
+            navigation.notice = format!("Menu background unavailable: {error}");
             return;
         }
+    };
+    let directory = if campaign.is_some() {
+        "campaign-scene"
+    } else {
+        directory
     };
     let bytes = crate::mainmenu::art_bytes_named(install.as_deref(), &source, served);
     let Some(bytes) = bytes else {
@@ -1690,33 +1818,45 @@ fn initialize_menu_scene(
     {
         return;
     }
-    let fog_path = crate::mainmenu::MENU_FOG_CONFIG;
-    let Some(fog_bytes) = crate::mainmenu::art_bytes(install.as_deref(), fog_path) else {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
+    let fog = if let Some(campaign) = campaign {
+        let Some(fog) = campaign.2 else {
             state.finished = true;
-            warn!(
-                "Original menu background: {fog_path} unavailable in {:?}",
-                install
+            navigation.notice = format!(
+                "Campaign background {} has no admitted fog settings.",
+                campaign.0
             );
-        }
-        return;
-    };
-    let fog = std::str::from_utf8(&fog_bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|text| crate::menu_skin::SkinTable::parse(text).map_err(|e| e.to_string()))
-        .and_then(|table| {
-            crate::menu_fog::MenuFog::checked(
-                &table,
-                usize::from(launcher.mode.addon == Addon::Tft),
-            )
-        });
-    let fog = match fog {
-        Ok(fog) => fog,
-        Err(error) => {
-            state.finished = true;
-            warn!("Original menu background: {fog_path}: {error}");
             return;
+        };
+        fog
+    } else {
+        let fog_path = crate::mainmenu::MENU_FOG_CONFIG;
+        let Some(fog_bytes) = crate::mainmenu::art_bytes(install.as_deref(), fog_path) else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                state.finished = true;
+                warn!(
+                    "Original menu background: {fog_path} unavailable in {:?}",
+                    install
+                );
+            }
+            return;
+        };
+        let fog = std::str::from_utf8(&fog_bytes)
+            .map_err(|e| e.to_string())
+            .and_then(|text| crate::menu_skin::SkinTable::parse(text).map_err(|e| e.to_string()))
+            .and_then(|table| {
+                crate::menu_fog::MenuFog::checked(
+                    &table,
+                    usize::from(launcher.mode.addon == Addon::Tft),
+                )
+            });
+        match fog {
+            Ok(fog) => fog,
+            Err(error) => {
+                state.finished = true;
+                warn!("Original menu background: {fog_path}: {error}");
+                return;
+            }
         }
     };
     state.finished = true;
@@ -1756,6 +1896,10 @@ fn initialize_menu_scene(
         navigation.notice = "Menu background unavailable for these source files.".into();
     }
 
+    if campaign.is_some() {
+        return;
+    }
+
     // The skin keys' `_V%d` is the edition: 0 Reign of Chaos, 1 The Frozen Throne.
     let edition = u32::from(launcher.mode.addon == Addon::Tft);
     let panels = crate::menu_sprites::load(install.as_deref(), edition).and_then(|sources| {
@@ -1768,10 +1912,13 @@ fn initialize_menu_scene(
             },
             install.as_deref(),
             sources,
+            navigation.screen,
         )
     });
     match panels {
-        Ok(count) => info!("Original menu panels: {count} sprite layers, MainMenu Birth"),
+        Ok(count) => {
+            info!(initial = ?navigation.screen, "Original menu panels: {count} sprite layers")
+        }
         Err(error) => warn!("Original menu panels: {error}"),
     }
 }
@@ -2263,16 +2410,22 @@ fn process_panel_navigation(
             cache.strings.as_deref(),
             &cache.preview,
         );
-        let transition = match panels.as_mut() {
-            Some(panels) => panels.request(
-                navigation.screen,
-                target,
-                install.as_deref(),
-                u32::from(launcher.mode.addon == Addon::Tft),
-            )?,
-            None => crate::menu_sprites::Transition::Unavailable(
-                "original menu panels are unavailable".into(),
-            ),
+        let transition = if navigation.screen == crate::menu_screens::Screen::Campaign
+            && target == crate::menu_screens::Screen::SinglePlayer
+        {
+            crate::menu_sprites::Transition::Incoming
+        } else {
+            match panels.as_mut() {
+                Some(panels) => panels.request(
+                    navigation.screen,
+                    target,
+                    install.as_deref(),
+                    u32::from(launcher.mode.addon == Addon::Tft),
+                )?,
+                None => crate::menu_sprites::Transition::Unavailable(
+                    "original menu panels are unavailable".into(),
+                ),
+            }
         };
         Ok((target, fdf, menu, preview, candidate_key, transition))
     })();
@@ -2280,6 +2433,10 @@ fn process_panel_navigation(
         Ok((target, fdf, menu, preview, candidate_key, transition)) => {
             cache.pending_fdf = Some((target, fdf, menu, preview, candidate_key));
             match transition {
+                crate::menu_sprites::Transition::Incoming => {
+                    navigation.commit_panel_owner(target);
+                    navigation.transition_active = false;
+                }
                 crate::menu_sprites::Transition::Animated => {
                     navigation.transition_active = true;
                     navigation.notice.clear();

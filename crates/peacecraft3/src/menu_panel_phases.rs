@@ -325,6 +325,8 @@ pub struct Clock {
     pub local: Duration,
     pub global: Duration,
     pub target: Option<Owner>,
+    pub exiting: bool,
+    pub retired: bool,
     first: bool,
 }
 
@@ -335,21 +337,57 @@ impl Default for Clock {
             local: Duration::ZERO,
             global: Duration::ZERO,
             target: None,
+            exiting: false,
+            retired: false,
             first: true,
         }
     }
 }
 
 impl Clock {
+    pub fn transition_active(&self) -> bool {
+        self.target.is_some()
+            || self.exiting
+            || matches!(
+                self.phase,
+                Phase::MainBirth
+                    | Phase::SingleBirth
+                    | Phase::OptionsBirth
+                    | Phase::OptionsMorph
+                    | Phase::OptionsMorphAlternate
+            )
+    }
+
+    pub fn incoming(owner: Owner) -> Self {
+        Self {
+            phase: owner.phases()[0],
+            ..Self::default()
+        }
+    }
+
+    pub fn begin_exit(&mut self, owner: Owner) -> Result<(), &'static str> {
+        if self.target.is_some() || self.exiting || self.retired || self.phase != owner.phases()[1]
+        {
+            return Err("panel exit requires a settled owner");
+        }
+        self.phase = owner.phases()[2];
+        self.local = Duration::ZERO;
+        self.first = true;
+        self.exiting = true;
+        Ok(())
+    }
+
     pub fn settle_main(&mut self, elapsed: Duration) {
         self.phase = Phase::MainStand;
         self.local = elapsed;
         self.target = None;
+        self.exiting = false;
+        self.retired = false;
         self.first = false;
     }
 
     pub fn begin(&mut self, from: Owner, to: Owner) -> Result<(), &'static str> {
-        if self.target.is_some() || !from.can_transition(to) {
+        if self.target.is_some() || self.exiting || self.retired || !from.can_transition(to) {
             return Err("panel transition is active or owner pair is unsupported");
         }
         if self.phase == Phase::OptionsStandAlternate && from == Owner::Options && to == Owner::Main
@@ -373,7 +411,11 @@ impl Clock {
 
     /// Source `Options Morph` from a settled Options Stand, with no owner target.
     pub fn begin_category(&mut self) -> Result<(), &'static str> {
-        if self.target.is_some() || self.phase != Phase::OptionsStand {
+        if self.target.is_some()
+            || self.exiting
+            || self.retired
+            || self.phase != Phase::OptionsStand
+        {
             return Err("panel category morph requires a settled options stand");
         }
         self.phase = Phase::OptionsMorph;
@@ -402,8 +444,12 @@ impl Clock {
         let mut entered = None;
         for _ in 0..4 {
             let end = duration(self.phase);
-            let successor = self.phase.next(self.target)?;
-            let bounded = successor.is_some();
+            let successor = if self.exiting || self.retired {
+                None
+            } else {
+                self.phase.next(self.target)?
+            };
+            let bounded = successor.is_some() || self.exiting;
             let available = end.saturating_sub(self.local);
             let step = if bounded {
                 remaining.min(available)
@@ -426,6 +472,12 @@ impl Clock {
             if !bounded || self.local < end {
                 self.global = global;
                 return Ok((segments, entered));
+            }
+            if self.exiting {
+                self.exiting = false;
+                self.retired = true;
+                self.global = global;
+                return Ok((segments, None));
             }
             let previous = self.phase;
             self.phase = successor.expect("bounded phase has successor");
@@ -458,6 +510,36 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_scene_waits_for_the_outgoing_clip_and_holds_its_endpoint() {
+        let mut clock = Clock::incoming(Owner::Single);
+        assert!(clock.transition_active());
+        assert!(clock.begin_exit(Owner::Single).is_err());
+        clock.advance(ms(3), |_| ms(3)).unwrap();
+        assert!(!clock.transition_active());
+        assert!(clock.begin_exit(Owner::Main).is_err());
+        clock.begin_exit(Owner::Single).unwrap();
+        assert!(clock.exiting);
+        assert!(clock.transition_active());
+        assert!(!clock.phase.controls_visible());
+        assert!(clock.begin(Owner::Single, Owner::Main).is_err());
+        clock.advance(ms(2), |_| ms(3)).unwrap();
+        assert!(!clock.retired);
+        let (segments, entered) = clock.advance(ms(1), |_| ms(3)).unwrap();
+        assert_eq!(entered, None);
+        assert_eq!(segments.last().unwrap().phase, Phase::SingleDeath);
+        assert_eq!(clock.local, ms(3));
+        assert!(clock.retired);
+        assert!(!clock.exiting);
+        assert!(!clock.transition_active());
+        assert!(clock.begin_exit(Owner::Single).is_err());
+        clock.advance(ms(10), |_| ms(3)).unwrap();
+        assert_eq!(clock.phase, Phase::SingleDeath);
+        clock.settle_main(Duration::ZERO);
+        assert!(!clock.retired);
+        assert_eq!(clock.phase, Phase::MainStand);
+    }
 
     #[test]
     fn explicit_reset_does_not_replay_a_zero_length_stand_event() {

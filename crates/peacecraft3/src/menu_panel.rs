@@ -491,6 +491,65 @@ pub fn logo_anchor(fdf: &crate::fdf::Fdf) -> Result<(f32, f32), crate::fdf::FdfE
     }
 }
 
+pub fn logo_rect(
+    fdf: &crate::fdf::Fdf,
+    data: &LogoData,
+) -> Result<crate::fdf::Rect, crate::fdf::FdfError> {
+    use crate::fdf::{FdfError, Point};
+    let frame = fdf
+        .frame(LOGO_FRAME)
+        .ok_or_else(|| FdfError::UnknownFrame(LOGO_FRAME.into()))?;
+    let [point] = frame.props.set_points.as_slice() else {
+        return Err(FdfError::Unsupported {
+            frame: LOGO_FRAME.into(),
+            property: "SetPoint",
+            value: "expected one logo anchor".into(),
+        });
+    };
+    if !matches!(point.point, Point::TopLeft | Point::TopRight)
+        || point.point != point.relative_point
+        || !point.x.is_finite()
+        || !point.y.is_finite()
+    {
+        return Err(FdfError::Unsupported {
+            frame: LOGO_FRAME.into(),
+            property: "SetPoint",
+            value: "unsupported logo anchor".into(),
+        });
+    }
+    let parent = fdf.rect(
+        &point.relative,
+        (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+    )?;
+    let anchor_x = parent.left
+        + point.x
+        + if point.point == Point::TopRight {
+            parent.width - data.quad_width()
+        } else {
+            0.0
+        };
+    let top = crate::mainmenu::FRAME_H - parent.top() + data.quad_height() - point.y - data.quad.3;
+    let rect = crate::fdf::Rect {
+        left: anchor_x + data.quad.0,
+        bottom: crate::mainmenu::FRAME_H - top - data.quad_height(),
+        width: data.quad_width(),
+        height: data.quad_height(),
+    };
+    if [rect.left, rect.bottom, rect.width, rect.height]
+        .iter()
+        .any(|value| !value.is_finite())
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+    {
+        return Err(FdfError::Unsupported {
+            frame: LOGO_FRAME.into(),
+            property: "model quad",
+            value: "invalid logo bounds".into(),
+        });
+    }
+    Ok(rect)
+}
+
 fn load_logo_with(
     skin: &crate::menu_skin::SkinTable,
     tft: bool,
@@ -592,6 +651,31 @@ pub fn advance_logo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_logo_anchor_moves_between_left_and_right_edges_using_model_size() {
+        let data = LogoData {
+            sequences: Vec::new(),
+            quad: (-0.12, -0.04, 0.08, 0.06),
+            planar: true,
+            texture: "synthetic.blp".into(),
+            alpha: AlphaCurve::Bezier(Vec::new()),
+        };
+        let fdf = crate::fdf::Fdf::parse("Frame \"FRAME\" \"Root\" {\nSetAllPoints,\nFrame \"SPRITE\" \"WarCraftIIILogo\" {\nSetPoint TOPLEFT,\"Root\",TOPLEFT,.21,-.03,\n}\n}\n").unwrap();
+        let left = logo_rect(&fdf, &data).unwrap();
+        assert!((left.left - 0.09).abs() < 1e-6);
+        assert!((crate::mainmenu::FRAME_H - left.top() - 0.07).abs() < 1e-6);
+        let right_fdf = crate::fdf::Fdf::parse("Frame \"FRAME\" \"Root\" {\nSetAllPoints,\nFrame \"SPRITE\" \"WarCraftIIILogo\" {\nSetPoint TOPRIGHT,\"Root\",TOPRIGHT,.05,.02,\n}\n}\n").unwrap();
+        let right = logo_rect(&right_fdf, &data).unwrap();
+        assert!((right.left - 0.53).abs() < 1e-6);
+        assert!((crate::mainmenu::FRAME_H - right.top() - 0.02).abs() < 1e-6);
+        assert_eq!(left.width, right.width);
+        let wrong = crate::fdf::Fdf::parse("Frame \"SPRITE\" \"WarCraftIIILogo\" {\nSetPoint BOTTOMLEFT,\"Root\",BOTTOMLEFT,0,0,\n}\n").unwrap();
+        assert!(logo_rect(&wrong, &data).is_err());
+        let mut malformed = data;
+        malformed.quad.2 = f32::INFINITY;
+        assert!(logo_rect(&right_fdf, &malformed).is_err());
+    }
 
     #[test]
     fn sequence_alpha_uses_named_exit_keys_and_elapsed_time() {

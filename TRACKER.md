@@ -5,6 +5,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Campaign entry now retires the Single Player panels, resolves the selected
+  campaign's source background/fog/camera and positions the logo from its FDF
+  anchor. Return requests rebuild the incoming panel pose before visibility
+  synchronization and retain the Birth input lock. Constant zero-duration
+  particle rotations, signed camera preroll and mirrored/sheared billboard
+  parents no longer reject this scene. Application 700, graphics 69, five explicit
+  original-input gates, strict native/WASM checks and the desktop build pass;
+  fresh TFT desktop entry/return captures were reviewed. Full-screen fades,
+  campaign Birth, selector/profile flow, foliage rendering and sorted particles
+  remain unfinished; the Bonus backdrop reports an unsupported light hierarchy.
+  This is not visual parity. See [campaign scene review](docs/re-notes/campaign-menu-scene.md).
+
 - [~] Menu switching now hides controls during the authored panel travel and
   plays the logo's source Birth/Death alpha curves on the panel clock. Fresh TFT
   desktop captures confirm the floating buttons are gone on Main ↔ Options;
