@@ -132,6 +132,7 @@ pub mod startup_clock;
 pub mod terrain_blight;
 pub mod terrain_pathing;
 pub mod trace;
+pub mod training_rules;
 pub mod unit_placement;
 pub mod upgrade_research;
 pub use map_scripts_import::*;

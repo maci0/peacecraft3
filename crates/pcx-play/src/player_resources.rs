@@ -19,6 +19,7 @@ pub struct Rules {
     pub(crate) gathered_states: [i32; 2],
     pub(crate) gathered_scale: i32,
     pub(crate) unit_cost: Result<crate::player_unit_cost::Policy, String>,
+    pub(crate) training: Result<crate::training_rules::Rules, String>,
     upkeep: Result<upkeep::Upkeep, String>,
     food_limit: Option<i32>,
     food_defaults: Vec<i32>,
@@ -45,6 +46,7 @@ impl Rules {
             gathered_states: [15, 16],
             gathered_scale: 1,
             unit_cost: Err("synthetic cost policy is not admitted".into()),
+            training: Err("synthetic training rules are not admitted".into()),
             upkeep: Err("synthetic upkeep is not admitted".into()),
             food_limit: None,
             food_defaults: vec![0],
@@ -626,11 +628,30 @@ impl Rules {
             gathered_states: [gathered_first, gathered_first + gathered_offset],
             gathered_scale: gathered_get_scale,
             unit_cost: crate::player_unit_cost::Policy::selected(image),
+            training: Err("training profiles are not admitted".into()),
             food_limit,
             food_defaults: food_defaults.clone(),
             food_marker_default,
         })
     }
+    pub fn with_training_profiles(
+        mut self,
+        image: &[u8],
+        profiles: &[(&str, &[u8])],
+        budget: RuleInputBudget,
+    ) -> Self {
+        self.training = if sha256(image) != self.image_sha256 {
+            Err("training and resource client identities differ".into())
+        } else {
+            crate::training_rules::Rules::read(image, self.origin.clone(), profiles, budget)
+        };
+        self
+    }
+
+    pub fn training_rules(&self) -> Result<&crate::training_rules::Rules, &str> {
+        self.training.as_ref().map_err(String::as_str)
+    }
+
     pub(crate) fn food_ceiling(&self, version: Option<i32>) -> Option<i32> {
         if let Some(value) = self.food_limit {
             return Some(value);

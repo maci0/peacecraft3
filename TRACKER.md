@@ -5,6 +5,13 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Campaign resource admission now derives training queue bounds from the
+  selected executable and `TrainRefundRate` from ordered game/map profiles.
+  Refund calculations use the matching source numeric policy and truncate each
+  entry before credit. Nonstock/malformed-input tests, an explicit original-input
+  decode and 1,767 core tests pass. This is rule admission only: player queue
+  dispatch, cancellation, command-card presentation and lifecycle remain open.
+
 - [~] Player-production preparation now has original-runtime queue and UI
   cancellation observations, plus source queue-loop/refund bindings. Queued
   entries spend money immediately, while only the active entry reserves food

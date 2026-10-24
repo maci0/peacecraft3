@@ -134,6 +134,17 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         game_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
+    inputs.resources = inputs.resources.take().map(|rules| {
+        rules.with_training_profiles(
+            image,
+            &game_profiles,
+            crate::neutral_player::RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 8 << 20,
+                sections: 96,
+            },
+        )
+    });
     let activity = activity.with_move_speed_profiles(&game_profiles, 8 << 20)?;
     let hero = inputs
         .hero_skills
