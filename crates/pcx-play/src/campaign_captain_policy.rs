@@ -12,6 +12,15 @@ pub struct CaptainPolicy {
     pub image_sha256: Sha256Digest,
     pub first_selector_mask: u8,
     pub second_selector_mask: u8,
+    pub defenders: DefenderRules,
+}
+
+#[derive(Clone, Debug)]
+pub struct DefenderRules {
+    pub alternates: [([u8; 4], [u8; 4]); 5],
+    pub count_step: i32,
+    pub health_priority: f32,
+    pub excluded_orders: [i32; 2],
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +29,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 23] = [
+const WINDOWS: [(u32, usize, bool); 35] = [
     (0xab645c, 20, true),  // SetCaptainHome registration banner (sig/name/handler)
     (0xab6f10, 80, true),  // SetCaptainHome handler entry
     (0xac26d0, 124, true), // selector (masks + slots + resolver/home write)
@@ -44,6 +53,18 @@ const WINDOWS: [(u32, usize, bool); 23] = [
     (0xf15e8c, 16, false), // CaptainInCombat name
     (0xf15e84, 5, false),  // (B)B signature
     (0xad5b57, 40, true),  // initial empty target-reference pairs
+    (0xab66c3, 20, true),  // AddDefenders registration
+    (0xab3a30, 76, true),  // owned AI context and argument forwarding
+    (0xabaa10, 70, true),  // second captain reference and recruiting dispatch
+    (0xabb130, 296, true), // directed alternate types and completion paths
+    (0xabaf8d, 25, true),  // current-order exclusions
+    (0xabafac, 28, true),  // health-priority comparison
+    (0x10db0ac, 4, false), // health-priority threshold
+    (0xabb0d9, 8, true),   // newly recruited unit decrements remaining count
+    (0xabca05, 8, true),   // existing member decrements remaining count
+    (0xf15f28, 13, false), // AddDefenders name
+    (0xf15c88, 6, false),  // (II)B
+    (0xabb076, 19, true),  // canonical association and AI-component update
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -335,12 +356,14 @@ impl CaptainPolicy {
         {
             return Err(Error("captain query and association counters differ"));
         }
-        combat_query(&w[17..], first_slot, second_slot)?;
+        combat_query(&w[17..23], first_slot, second_slot)?;
+        let defenders = defender_rules(&w[23..], second_slot, w[18])?;
 
         Ok(Self {
             image_sha256,
             first_selector_mask,
             second_selector_mask,
+            defenders,
         })
     }
 
@@ -353,6 +376,279 @@ impl CaptainPolicy {
         )
         .expect("synthetic captain-policy instructions")
     }
+}
+
+impl DefenderRules {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if !(self.count_step < 0 && i8::try_from(self.count_step).is_ok())
+            || !self.health_priority.is_finite()
+            || !(0.0..=1.0).contains(&self.health_priority)
+            || self.excluded_orders.iter().any(|order| *order <= 0)
+            || self.excluded_orders[0] == self.excluded_orders[1]
+        {
+            return Err(Error("invalid defender count, health or order operands"));
+        }
+        for (i, (base, alternate)) in self.alternates.iter().enumerate() {
+            if base == alternate
+                || base
+                    .iter()
+                    .chain(alternate)
+                    .any(|b| *b == 0 || !b.is_ascii())
+                || self.alternates[..i]
+                    .iter()
+                    .any(|(a, b)| a == base || a == alternate || b == base || b == alternate)
+            {
+                return Err(Error("ambiguous defender alternate types"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn defender_rules(w: &[&[u8]], second: u32, combat_handler: &[u8]) -> Result<DefenderRules, Error> {
+    let [
+        registration,
+        handler,
+        selector,
+        recruit,
+        orders,
+        priority,
+        threshold,
+        new_count,
+        old_count,
+        name,
+        signature,
+        attach,
+    ] = w
+    else {
+        return Err(Error("incomplete defender windows"));
+    };
+    for (offset, target) in [(0, WINDOWS[33].0), (5, WINDOWS[32].0), (10, WINDOWS[24].0)] {
+        at(registration, offset, &[0x68])?;
+        if word(registration, offset + 1)? != target {
+            return Err(Error("AddDefenders registration changed"));
+        }
+    }
+    if call(registration, WINDOWS[23].0, 15)? != 0x8ccc80 {
+        return Err(Error("AddDefenders registrar changed"));
+    }
+    at(name, 0, b"AddDefenders\0")?;
+    at(signature, 0, b"(II)B\0")?;
+    at(
+        handler,
+        0,
+        combat_handler
+            .get(..14)
+            .ok_or(Error("short context handler"))?,
+    )?;
+    if call(handler, WINDOWS[24].0, 14)? != 0x43eca0
+        || call(handler, WINDOWS[24].0, 56)? != 0x7fc7e0
+        || call(handler, WINDOWS[24].0, 49)? != WINDOWS[25].0
+        || call(handler, WINDOWS[24].0, 69)? != WINDOWS[25].0
+    {
+        return Err(Error("AddDefenders context forwarding changed"));
+    }
+    at(
+        handler,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x33, 0xc0, 0x5d, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23,
+            0x01, 0x83, 0xf8, 0xff, 0x75, 0x11, 0xff, 0x75, 0x0c, 0x33, 0xc0, 0xff, 0x75, 0x08,
+            0x8b, 0xc8,
+        ],
+    )?;
+    at(handler, 54, &[0x5d, 0xc3])?;
+    at(
+        handler,
+        61,
+        &[0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08],
+    )?;
+    at(handler, 74, &[0x5d, 0xc3])?;
+
+    at(
+        selector,
+        0,
+        &[0x55, 0x8b, 0xec, 0x56, 0x8b, 0xf1, 0x8b, 0x86],
+    )?;
+    at(selector, 12, &[0x8d, 0x8e])?;
+    if word(selector, 8)?
+        != second
+            .checked_add(4)
+            .ok_or(Error("defender reference overflow"))?
+        || word(selector, 14)? != second
+    {
+        return Err(Error("defender reference differs from second captain"));
+    }
+    at(
+        selector,
+        18,
+        &[
+            0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x15, 0xff, 0x75, 0x0c, 0x33, 0xc0, 0x8b, 0xce,
+            0xff, 0x75, 0x08, 0x50,
+        ],
+    )?;
+    at(selector, 41, &[0x5e, 0x5d, 0xc2, 0x08, 0])?;
+    at(
+        selector,
+        51,
+        &[0xff, 0x75, 0x0c, 0x8b, 0xce, 0xff, 0x75, 0x08, 0x50],
+    )?;
+    at(selector, 65, &[0x5e, 0x5d, 0xc2, 0x08, 0])?;
+    if call(selector, WINDOWS[25].0, 46)? != 0x7fc7e0
+        || call(selector, WINDOWS[25].0, 36)? != WINDOWS[26].0
+        || call(selector, WINDOWS[25].0, 60)? != WINDOWS[26].0
+    {
+        return Err(Error("defender controller resolution changed"));
+    }
+
+    at(
+        recruit,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0x51, 0x53, 0x8b, 0x5d, 0x08, 0x89, 0x4d, 0xfc, 0x85, 0xdb, 0x75,
+            0x13, 0x6a, 0x57,
+        ],
+    )?;
+    if call(recruit, WINDOWS[26].0, 17)? != 0x43eca0 {
+        return Err(Error("missing defender controller error path"));
+    }
+    at(
+        recruit,
+        22,
+        &[
+            0x83, 0xc4, 0x04, 0x33, 0xc0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0, 0x56, 0x57, 0x8b,
+            0x7d, 0x10,
+        ],
+    )?;
+    for (offset, bytes) in [
+        (39, &[0x81, 0xff][..]),
+        (45, &[0x77, 0x25, 0x74, 0x1c, 0x8b, 0xc7, 0x2d]),
+        (56, &[0x74, 0x0c, 0x83, 0xe8]),
+        (61, &[0x75, 0x25, 0xbe]),
+        (68, &[0xeb, 0x2e, 0xbe]),
+        (75, &[0xeb, 0x27, 0xbe]),
+        (82, &[0xeb, 0x20, 0x81, 0xff]),
+        (90, &[0x74, 0x13, 0x81, 0xff]),
+        (98, &[0x74, 0x04, 0x33, 0xf6, 0xeb, 0x0c, 0xbe]),
+        (109, &[0xeb, 0x05, 0xbe]),
+        (116, &[0x57, 0x8d, 0x45, 0x0c, 0x50, 0x53]),
+        (
+            271,
+            &[
+                0x33, 0xc0, 0x5f, 0x5e, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0,
+            ],
+        ),
+        (
+            282,
+            &[
+                0x5f, 0x5e, 0xb8, 1, 0, 0, 0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0,
+            ],
+        ),
+    ] {
+        at(recruit, offset, bytes)?;
+    }
+    for offset in [122, 151] {
+        if call(recruit, WINDOWS[26].0, offset)? != 0xabc8c0 {
+            return Err(Error("existing defender counting changed"));
+        }
+    }
+    for offset in [174, 201, 226, 252] {
+        if call(recruit, WINDOWS[26].0, offset)? != 0xabaeb0 {
+            return Err(Error("defender recruiting passes changed"));
+        }
+    }
+    at(recruit, 127, &[0x8b, 0x45, 0x0c, 0x85, 0xc0, 0x0f, 0x84])?;
+    if WINDOWS[26]
+        .0
+        .wrapping_add(138)
+        .wrapping_add(word(recruit, 134)?)
+        != WINDOWS[26].0 + 282
+    {
+        return Err(Error("defender completion branch changed"));
+    }
+    at(recruit, 257, &[0x8b, 0x45, 0x0c, 0x85, 0xc0, 0x74, 0x12])?;
+
+    at(orders, 0, &[0x8b, 0x40, 0x24, 0x3d])?;
+    at(orders, 8, &[0x0f, 0x84])?;
+    at(orders, 14, &[0x3d])?;
+    at(orders, 19, &[0x0f, 0x84])?;
+    for (end, offset) in [(14, 10), (25, 21)] {
+        if WINDOWS[27]
+            .0
+            .wrapping_add(end)
+            .wrapping_add(word(orders, offset)?)
+            != 0xabb0e1
+        {
+            return Err(Error("defender order exclusions no longer skip the unit"));
+        }
+    }
+    at(priority, 0, &[0x8d, 0x45, 0xf0, 0x8b, 0xce, 0x50])?;
+    at(priority, 11, &[0xf3, 0x0f, 0x10, 0x05])?;
+    at(priority, 19, &[0x0f, 0x2f, 0, 0x0f, 0x87])?;
+    if call(priority, WINDOWS[28].0, 6)? != 0x635990
+        || word(priority, 15)? != WINDOWS[29].0
+        || WINDOWS[28]
+            .0
+            .wrapping_add(28)
+            .wrapping_add(word(priority, 24)?)
+            != 0xabb0e1
+    {
+        return Err(Error("defender health priority changed"));
+    }
+    for (window, end) in [(new_count, 0xabb127u32), (old_count, 0xabca54u32)] {
+        at(window, 0, &[0x8b, 0x45, 0x0c, 0x83, 0])?;
+        at(window, 6, &[0x74])?;
+        let address = if end == 0xabb127 {
+            WINDOWS[30].0
+        } else {
+            WINDOWS[31].0
+        };
+        let branch = *window.get(7).ok_or(Error("short defender count"))? as i8;
+        if address
+            .wrapping_add(8)
+            .wrapping_add_signed(i32::from(branch))
+            != end
+        {
+            return Err(Error("defender count completion target changed"));
+        }
+    }
+    let step = i32::from(*new_count.get(5).ok_or(Error("short defender decrement"))? as i8);
+    if old_count.get(5) != new_count.get(5) {
+        return Err(Error("old and new defender count steps differ"));
+    }
+    at(attach, 0, &[0x8b, 0x5d, 0x08, 0x8b, 0xcb, 0x56])?;
+    at(attach, 11, &[0x8b, 0x4d, 0xf4])?;
+    if call(attach, WINDOWS[34].0, 6)? != 0xac9090 || call(attach, WINDOWS[34].0, 14)? != 0xabc600 {
+        return Err(Error("defender unit association changed"));
+    }
+    let base = word(recruit, 52)?;
+    let delta = i32::from(*recruit.get(60).ok_or(Error("short alternate type"))? as i8);
+    let rules = DefenderRules {
+        alternates: [
+            (base.to_be_bytes(), word(recruit, 71)?.to_be_bytes()),
+            (
+                base.wrapping_add_signed(delta).to_be_bytes(),
+                word(recruit, 64)?.to_be_bytes(),
+            ),
+            (
+                word(recruit, 41)?.to_be_bytes(),
+                word(recruit, 78)?.to_be_bytes(),
+            ),
+            (
+                word(recruit, 86)?.to_be_bytes(),
+                word(recruit, 112)?.to_be_bytes(),
+            ),
+            (
+                word(recruit, 94)?.to_be_bytes(),
+                word(recruit, 105)?.to_be_bytes(),
+            ),
+        ],
+        count_step: step,
+        health_priority: f32::from_bits(word(threshold, 0)?),
+        excluded_orders: [word(orders, 4)? as i32, word(orders, 15)? as i32],
+    };
+    rules.validate()?;
+    Ok(rules)
 }
 
 fn combat_query(w: &[&[u8]], first: u32, second: u32) -> Result<(), Error> {
@@ -678,12 +974,245 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
         dword(&mut w, 22, offset + 6, u32::MAX);
     }
 
+    for (offset, target) in [(0, WINDOWS[33].0), (5, WINDOWS[32].0), (10, WINDOWS[24].0)] {
+        put(&mut w, 23, offset, &[0x68]);
+        dword(&mut w, 23, offset + 1, target);
+    }
+    call(&mut w, 23, 15, 0x8ccc80);
+    let context = w[18][..14].to_vec();
+    put(&mut w, 24, 0, &context);
+    call(&mut w, 24, 14, 0x43eca0);
+    put(
+        &mut w,
+        24,
+        19,
+        &[
+            0x83, 0xc4, 4, 0x33, 0xc0, 0x5d, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 4, 0x23, 1, 0x83,
+            0xf8, 0xff, 0x75, 0x11, 0xff, 0x75, 0x0c, 0x33, 0xc0, 0xff, 0x75, 8, 0x8b, 0xc8,
+        ],
+    );
+    call(&mut w, 24, 49, WINDOWS[25].0);
+    put(&mut w, 24, 54, &[0x5d, 0xc3]);
+    call(&mut w, 24, 56, 0x7fc7e0);
+    put(
+        &mut w,
+        24,
+        61,
+        &[0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 8],
+    );
+    call(&mut w, 24, 69, WINDOWS[25].0);
+    put(&mut w, 24, 74, &[0x5d, 0xc3]);
+    put(
+        &mut w,
+        25,
+        0,
+        &[0x55, 0x8b, 0xec, 0x56, 0x8b, 0xf1, 0x8b, 0x86],
+    );
+    dword(&mut w, 25, 8, SECOND_SLOT + 4);
+    put(&mut w, 25, 12, &[0x8d, 0x8e]);
+    dword(&mut w, 25, 14, SECOND_SLOT);
+    put(
+        &mut w,
+        25,
+        18,
+        &[
+            0x23, 1, 0x83, 0xf8, 0xff, 0x75, 0x15, 0xff, 0x75, 0x0c, 0x33, 0xc0, 0x8b, 0xce, 0xff,
+            0x75, 8, 0x50,
+        ],
+    );
+    call(&mut w, 25, 36, WINDOWS[26].0);
+    put(&mut w, 25, 41, &[0x5e, 0x5d, 0xc2, 8, 0]);
+    call(&mut w, 25, 46, 0x7fc7e0);
+    put(
+        &mut w,
+        25,
+        51,
+        &[0xff, 0x75, 0x0c, 0x8b, 0xce, 0xff, 0x75, 8, 0x50],
+    );
+    call(&mut w, 25, 60, WINDOWS[26].0);
+    put(&mut w, 25, 65, &[0x5e, 0x5d, 0xc2, 8, 0]);
+    put(
+        &mut w,
+        26,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0x51, 0x53, 0x8b, 0x5d, 8, 0x89, 0x4d, 0xfc, 0x85, 0xdb, 0x75, 0x13,
+            0x6a, 0x57,
+        ],
+    );
+    call(&mut w, 26, 17, 0x43eca0);
+    put(
+        &mut w,
+        26,
+        22,
+        &[
+            0x83, 0xc4, 4, 0x33, 0xc0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0, 0x56, 0x57, 0x8b,
+            0x7d, 0x10,
+        ],
+    );
+    for (offset, bytes) in [
+        (39, &[0x81, 0xff][..]),
+        (45, &[0x77, 0x25, 0x74, 0x1c, 0x8b, 0xc7, 0x2d]),
+        (56, &[0x74, 0x0c, 0x83, 0xe8]),
+        (61, &[0x75, 0x25, 0xbe]),
+        (68, &[0xeb, 0x2e, 0xbe]),
+        (75, &[0xeb, 0x27, 0xbe]),
+        (82, &[0xeb, 0x20, 0x81, 0xff]),
+        (90, &[0x74, 0x13, 0x81, 0xff]),
+        (98, &[0x74, 4, 0x33, 0xf6, 0xeb, 0x0c, 0xbe]),
+        (109, &[0xeb, 5, 0xbe]),
+        (116, &[0x57, 0x8d, 0x45, 0x0c, 0x50, 0x53]),
+        (127, &[0x8b, 0x45, 0x0c, 0x85, 0xc0, 0x0f, 0x84]),
+        (257, &[0x8b, 0x45, 0x0c, 0x85, 0xc0, 0x74, 0x12]),
+        (
+            271,
+            &[
+                0x33, 0xc0, 0x5f, 0x5e, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0,
+            ],
+        ),
+        (
+            282,
+            &[
+                0x5f, 0x5e, 0xb8, 1, 0, 0, 0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc2, 0x0c, 0,
+            ],
+        ),
+    ] {
+        put(&mut w, 26, offset, bytes);
+    }
+    for (offset, code) in [
+        (41, b"c001"),
+        (52, b"a001"),
+        (64, b"b002"),
+        (71, b"b001"),
+        (78, b"c002"),
+        (86, b"d001"),
+        (94, b"e001"),
+        (105, b"e002"),
+        (112, b"d002"),
+    ] {
+        dword(&mut w, 26, offset, u32::from_be_bytes(*code));
+    }
+    put(&mut w, 26, 60, &[1]);
+    for offset in [122, 151] {
+        call(&mut w, 26, offset, 0xabc8c0);
+    }
+    for offset in [174, 201, 226, 252] {
+        call(&mut w, 26, offset, 0xabaeb0);
+    }
+    dword(&mut w, 26, 134, 282 - 138);
+    put(&mut w, 27, 0, &[0x8b, 0x40, 0x24, 0x3d]);
+    dword(&mut w, 27, 4, 1701);
+    put(&mut w, 27, 8, &[0x0f, 0x84]);
+    dword(&mut w, 27, 10, 0xabb0e1 - (WINDOWS[27].0 + 14));
+    put(&mut w, 27, 14, &[0x3d]);
+    dword(&mut w, 27, 15, 1702);
+    put(&mut w, 27, 19, &[0x0f, 0x84]);
+    dword(&mut w, 27, 21, 0xabb0e1 - (WINDOWS[27].0 + 25));
+    put(&mut w, 28, 0, &[0x8d, 0x45, 0xf0, 0x8b, 0xce, 0x50]);
+    call(&mut w, 28, 6, 0x635990);
+    put(&mut w, 28, 11, &[0xf3, 0x0f, 0x10, 5]);
+    dword(&mut w, 28, 15, WINDOWS[29].0);
+    put(&mut w, 28, 19, &[0x0f, 0x2f, 0, 0x0f, 0x87]);
+    dword(&mut w, 28, 24, 0xabb0e1 - (WINDOWS[28].0 + 28));
+    dword(&mut w, 29, 0, 0.25f32.to_bits());
+    for (i, target) in [(30, 0xabb127u32), (31, 0xabca54)] {
+        put(&mut w, i, 0, &[0x8b, 0x45, 0x0c, 0x83, 0, 0xff, 0x74]);
+        put(&mut w, i, 7, &[(target - (WINDOWS[i].0 + 8)) as u8]);
+    }
+    put(&mut w, 32, 0, b"AddDefenders\0");
+    put(&mut w, 33, 0, b"(II)B\0");
+    put(&mut w, 34, 0, &[0x8b, 0x5d, 8, 0x8b, 0xcb, 0x56]);
+    call(&mut w, 34, 6, 0xac9090);
+    put(&mut w, 34, 11, &[0x8b, 0x4d, 0xf4]);
+    call(&mut w, 34, 14, 0xabc600);
+
     w
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defender_operands_drive_aliases_priority_and_counting() {
+        let source = synthetic_windows();
+        let decode = |source: &[Vec<u8>]| {
+            CaptainPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0x42; 32],
+            )
+        };
+        let rules = decode(&source).unwrap().defenders;
+        assert_eq!(
+            rules.alternates,
+            [
+                (*b"a001", *b"b001"),
+                (*b"a002", *b"b002"),
+                (*b"c001", *b"c002"),
+                (*b"d001", *b"d002"),
+                (*b"e001", *b"e002")
+            ]
+        );
+        assert_eq!(rules.count_step, -1);
+        assert_eq!(rules.health_priority, 0.25);
+        assert_eq!(rules.excluded_orders, [1701, 1702]);
+        let mut changed = source.clone();
+        changed[26][52..56].copy_from_slice(&u32::from_be_bytes(*b"z003").to_le_bytes());
+        changed[26][60] = 2;
+        changed[29].copy_from_slice(&0.75f32.to_le_bytes());
+        changed[30][5] = (-2i8) as u8;
+        changed[31][5] = (-2i8) as u8;
+        let rules = decode(&changed).unwrap().defenders;
+        assert_eq!(rules.alternates[0].0, *b"z003");
+        assert_eq!(rules.alternates[1].0, *b"z005");
+        assert_eq!(rules.count_step, -2);
+        assert_eq!(rules.health_priority, 0.75);
+        for (i, at) in [
+            (23, 1),
+            (23, 16),
+            (24, 10),
+            (24, 37),
+            (24, 50),
+            (24, 75),
+            (25, 8),
+            (25, 14),
+            (25, 24),
+            (25, 37),
+            (26, 14),
+            (26, 40),
+            (26, 46),
+            (26, 123),
+            (26, 134),
+            (26, 175),
+            (26, 263),
+            (26, 285),
+            (27, 10),
+            (27, 21),
+            (28, 7),
+            (28, 15),
+            (28, 24),
+            (30, 7),
+            (31, 7),
+            (32, 12),
+            (33, 5),
+            (34, 7),
+        ] {
+            let mut mutant = source.clone();
+            mutant[i][at] ^= 1;
+            assert!(decode(&mutant).is_err(), "window {i} byte {at}");
+        }
+        for value in [f32::NAN, -0.1, 1.1] {
+            let mut mutant = source.clone();
+            mutant[29].copy_from_slice(&value.to_le_bytes());
+            assert!(decode(&mutant).is_err());
+        }
+        for step in [0, 1] {
+            let mut mutant = source.clone();
+            mutant[30][5] = step;
+            mutant[31][5] = step;
+            assert!(decode(&mutant).is_err());
+        }
+    }
 
     #[test]
     fn combat_query_joins_selector_targets_and_initial_empty_references() {
@@ -951,5 +1480,9 @@ mod tests {
         assert_eq!(policy.first_selector_mask, 0x01);
         assert_eq!(policy.second_selector_mask, 0x02);
         assert_ne!(policy.first_selector_mask, policy.second_selector_mask);
+        assert_eq!(policy.defenders.count_step, -1);
+        assert_eq!(policy.defenders.health_priority, 0.5);
+        assert_eq!(policy.defenders.alternates[0], (*b"edoc", *b"edcm"));
+        assert_eq!(policy.defenders.alternates[1], (*b"edot", *b"edtm"));
     }
 }

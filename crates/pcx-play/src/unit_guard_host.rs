@@ -334,12 +334,49 @@ impl ObjectHost {
             state.records.push((unit, guard));
         }
     }
+
+    pub(super) fn prepare_captain_guard(
+        &self,
+        unit: HandleId,
+        owner: HandleId,
+        home: [f32; 2],
+        name: &str,
+    ) -> Result<UnitGuard, Error> {
+        let guard = self
+            .guard_state()
+            .and_then(|state| state.get(unit))
+            .ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::UnitActivity("captain unit guard is not admitted".into()),
+                )
+            })?;
+        let now = self.timer_game_time().ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::UnitActivity("guard clock is not admitted".into()),
+            )
+        })?;
+        if guard.owner != owner
+            || guard.released
+            || !home.iter().all(|v| v.is_finite())
+            || !now.is_finite()
+            || now < 0.
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitActivity("captain guard state is unqualified".into()),
+            ));
+        }
+        Ok(UnitGuard::new(owner, home, now))
+    }
     pub(super) fn forget_unit_guard(&mut self, unit: HandleId) {
         if let Some(state) = &mut self.guards {
             state.records.retain(|(id, _)| *id != unit);
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.campaign_ai.clear_captain_route(unit);
         self.forget_campaign_flee(unit);
         self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);

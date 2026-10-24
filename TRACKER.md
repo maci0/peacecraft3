@@ -2,6 +2,18 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `AddDefenders` now recruits canonical units into the defensive captain,
+  preserves partial/repeated request behavior, and shares home routing, combat,
+  ownership and death/removal cleanup. Four stopped original-client arms qualify
+  zero, one, partial and negative requests and their defensive combat query.
+  Source-derived aliases, count steps, health priority and order exclusions are
+  checked against the selected image. Core 1,737, app-library 55, app-binary 638,
+  published two-program, startup/Continue and strict native/WASM checks pass.
+  The unchanged Human02
+  opening-minute gate now reaches `FillGuardPosts` at 8.312500 seconds and remains
+  red. Native controller cadence and formation remain fidelity questions. See
+  [defensive recruitment](docs/re-notes/campaign-ai-defenders.md).
+
 - [~] `HarvestWood` now assigns canonical workers through the shared prepared
   harvest path. Matched stopped RoC one/zero-worker runs show real chopping,
   depot credit and repeated work versus an idle control. Rollover keeps work

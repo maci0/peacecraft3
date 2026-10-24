@@ -88,9 +88,10 @@ state remain separate from the no-argument first-captain count/empty queries.
 
 Native priority selection and controller cadence are recreation limits: the
 host publishes at its existing combat step rather than copying the native
-callback system. The measured delay is not fitted into a timer. Defensive
-worker assignment and other captain command producers remain unimplemented;
-their absence is not replaced by counting every guard or same-owner unit.
+callback system. The measured delay is not fitted into a timer.
+[Defensive recruitment](campaign-ai-defenders.md) now attaches qualified units
+to the second role through `AddDefenders`; other captain command producers
+remain unfinished. Their absence is not replaced by counting every guard or same-owner unit.
 An unqualified non-unit target class refuses explicitly.
 
 Tests exercise accepted target orders and real combat stepping, ungrouped

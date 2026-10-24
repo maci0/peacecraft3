@@ -32,13 +32,17 @@ native RemoveGuardPosition takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
 native SetUnitOwner takes unit u, player p, boolean color returns nothing
 native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
+type unittype extends handle
+constant native ConvertUnitType takes integer n returns unittype
 globals
+constant unittype UNIT_TYPE_PEON=ConvertUnitType(16)
 constant mapcontrol MAP_CONTROL_COMPUTER=ConvertMapControl(91)
 constant mapcontrol MAP_CONTROL_USER=ConvertMapControl(-17)
 endglobals
 "#
     );
     let mut fields = armed("1", "normal");
+    fields.extend(super::super::activity::gathering::source_fields(false));
     let speed = if flee.is_some() { "100" } else { "8" };
     fields.push(column(
         b"S001",
@@ -142,6 +146,180 @@ fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
             .unwrap(),
         Value::Bool(true)
     );
+}
+
+fn defender_fixture(quantity: i32) -> (Vm, HandleId, HandleId, bool) {
+    defender_fixture_with_policy(
+        quantity,
+        crate::campaign_captain_policy::CaptainPolicy::fixture(),
+    )
+}
+
+fn defender_fixture_with_policy(
+    quantity: i32,
+    policy: crate::campaign_captain_policy::CaptainPolicy,
+) -> (Vm, HandleId, HandleId, bool) {
+    let (mut vm, a, b) = guarded_with_limits(128., 256., 1.);
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    h.admit_campaign_captains(&context, policy).unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    h.create_ai_captains(4).unwrap();
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    let result = h.add_ai_defenders(4, quantity, kind).unwrap();
+    (vm, a, b, result)
+}
+
+#[test]
+fn defenders_keep_partial_and_negative_recruits_without_touching_attack_captain() {
+    for (quantity, expected) in [(0, true), (1, true), (2, false), (-1, false)] {
+        let (mut vm, a, _, result) = defender_fixture(quantity);
+        let h = &mut vm.host().inner;
+        assert_eq!(result, expected);
+        assert!(h.fixture_captain_members(4, true).is_empty());
+        let expected_members = if quantity == 0 { vec![] } else { vec![a] };
+        assert_eq!(h.fixture_captain_members(4, false), expected_members);
+        let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+        let before = h.executed_unit(a).unwrap().clone();
+        assert_eq!(h.add_ai_defenders(4, quantity, kind).unwrap(), expected);
+        assert_eq!(h.executed_unit(a).unwrap(), &before);
+        if quantity != 0 {
+            assert!(!h.add_ai_defenders(4, 0, kind).unwrap());
+        }
+        assert!(
+            !h.add_ai_defenders(4, 1, i32::from_be_bytes(*b"zzzz"))
+                .unwrap()
+        );
+        assert!(h.add_ai_defenders(5, 1, kind).is_err());
+    }
+}
+
+#[test]
+fn defender_routes_home_changes_combat_and_retirement_share_the_same_unit() {
+    let (mut vm, a, b, success) = defender_fixture(1);
+    assert!(success);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let second = i32::from(h.campaign_captain_policy().unwrap().second_selector_mask);
+    h.set_ai_captain_home(4, second, [16., 80.]).unwrap();
+    assert!(h.captain_route_owned(a));
+    assert_eq!(h.guard_state().unwrap().get(a).unwrap().home, [16., 80.]);
+    step(&mut vm, 1.);
+    assert!(vm.host().inner.executed_unit(a).unwrap().position.unwrap()[1] > 16.);
+    attack(&mut vm, a, b);
+    assert!(!vm.host().inner.captain_route_owned(a));
+    step(&mut vm, 1.25);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        h.campaign_captain_in_combat(owner, false).unwrap(),
+        Some(true)
+    );
+    let explicit = h.executed_unit(a).unwrap().clone();
+    h.deactivate_campaign_ai_player(4).unwrap();
+    assert_eq!(h.executed_unit(a).unwrap(), &explicit);
+    assert_eq!(h.campaign_captain_in_combat(owner, false).unwrap(), None);
+
+    let (mut vm, a, _, _) = defender_fixture(1);
+    let h = &mut vm.host().inner;
+    let second = i32::from(h.campaign_captain_policy().unwrap().second_selector_mask);
+    h.set_ai_captain_home(4, second, [16., 80.]).unwrap();
+    h.deactivate_campaign_ai_player(4).unwrap();
+    assert!(
+        !h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+}
+
+#[test]
+fn defender_aliases_are_directed_and_failures_preserve_routes_and_membership() {
+    let (mut vm, a, _, _) = defender_fixture(0);
+    let rawcode = vm.host().inner.executed_unit(a).unwrap().definition.rawcode;
+    let mut policy = crate::campaign_captain_policy::CaptainPolicy::fixture();
+    policy.defenders.alternates[0] = (*b"z001", rawcode);
+    let (mut vm, a, _, _) = defender_fixture_with_policy(0, policy);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.add_ai_defenders(4, 1, i32::from_be_bytes(*b"z001"))
+            .unwrap()
+    );
+    assert_eq!(h.fixture_captain_members(4, false), &[a]);
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    assert!(h.fixture_captain_members(4, false).is_empty());
+
+    let (mut vm, a, _, _) = defender_fixture(0);
+    let h = &mut vm.host().inner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    h.test_set_summoned(a, true);
+    let before = h.executed_unit(a).unwrap().clone();
+    assert!(h.add_ai_defenders(4, 1, kind).is_err());
+    assert_eq!(h.executed_unit(a).unwrap(), &before);
+    assert!(h.fixture_captain_members(4, false).is_empty());
+}
+
+#[test]
+fn defenders_prefer_healthy_candidates_and_canonical_lifecycle_detaches_them() {
+    let (mut vm, a, b, _) = defender_fixture(0);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(b), Value::Handle(owner), Value::Bool(false)],
+    )
+    .unwrap();
+    h.set_test_life(a, 1.);
+    assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, false), &[b]);
+    let foreign = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(b), foreign, Value::Bool(false)],
+    )
+    .unwrap();
+    assert!(h.fixture_captain_members(4, false).is_empty());
+    assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, false), &[a]);
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    assert!(h.fixture_captain_members(4, false).is_empty());
+}
+
+#[test]
+fn defenders_use_nonstock_count_steps_and_preflight_the_whole_selected_batch() {
+    let mut policy = crate::campaign_captain_policy::CaptainPolicy::fixture();
+    policy.defenders.count_step = -2;
+    let (mut vm, a, _, result) = defender_fixture_with_policy(2, policy);
+    assert!(result);
+    assert_eq!(vm.host().inner.fixture_captain_members(4, false), &[a]);
+
+    let (mut vm, a, b, _) = defender_fixture(0);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(b), Value::Handle(owner), Value::Bool(false)],
+    )
+    .unwrap();
+    h.test_set_summoned(b, true);
+    let before = h.executed_unit(a).unwrap().clone();
+    assert!(h.add_ai_defenders(4, 2, kind).is_err());
+    assert_eq!(h.executed_unit(a).unwrap(), &before);
+    assert!(h.fixture_captain_members(4, false).is_empty());
+    assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, false), &[a]);
 }
 
 #[test]

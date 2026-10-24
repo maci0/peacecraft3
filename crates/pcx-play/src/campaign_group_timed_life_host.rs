@@ -105,10 +105,14 @@ impl ObjectHost {
     }
 
     pub(crate) fn captain_route_owned(&self, unit: HandleId) -> bool {
-        let Some(player) = self.campaign_ai.captain_member_owner(unit) else {
+        let Some((player, attack)) = self.campaign_ai.captain_member_role(unit) else {
             return false;
         };
-        let Some((_, [Some(home), _])) = self.campaign_ai.captains(player) else {
+        let Some(home) = self
+            .campaign_ai
+            .captains(player)
+            .and_then(|(_, homes)| homes[usize::from(!attack)])
+        else {
             return false;
         };
         self.campaign_ai.has_captain_route(player, unit)

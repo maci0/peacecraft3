@@ -249,6 +249,12 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "captain policy absent".into())
     }
+
+    fn ai_add_defenders(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String> {
+        self.object
+            .add_ai_defenders(player, quantity, kind)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[test]

@@ -151,9 +151,20 @@ pub(crate) trait AiWorld: Host {
     fn ai_captain_group_size(&mut self, player: i32) -> Result<i32, String>;
     fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String>;
     fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String>;
+    fn ai_add_defenders(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String>;
 }
 
 impl AiWorld for NeutralStack {
+    fn ai_add_defenders(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .add_ai_defenders(player, quantity, kind)
+            .map_err(|error| error.to_string())
+    }
     fn ai_debug_text(&mut self) -> Result<(), String> {
         self.inner()
             .inner()
@@ -824,6 +835,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("CaptainGroupSize", &[][..], "integer"),
         ("CaptainIsEmpty", &[][..], "boolean"),
         ("CaptainInCombat", &["boolean"][..], "boolean"),
+        ("AddDefenders", &["integer", "integer"][..], "boolean"),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
             if scripts.program().natives().ambiguous(name).is_some() {
@@ -1182,6 +1194,16 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .ai_set_group_timed_life(player, *enabled)?;
                 Ok(Value::Null)
             }
+            "AddDefenders" => {
+                let [Value::Int(quantity), Value::Int(kind)] = args else {
+                    return Err("AddDefenders: expected quantity and unit type integers".into());
+                };
+                let player = self.player;
+                Ok(Value::Bool(
+                    self.world_mut()?
+                        .ai_add_defenders(player, *quantity, *kind)?,
+                ))
+            }
             "CaptainGroupSize" => {
                 if !args.is_empty() {
                     return Err("CaptainGroupSize: expected no arguments".into());
@@ -1249,6 +1271,7 @@ mod tests {
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
         captain_combat: BTreeMap<(i32, bool), bool>,
+        defender_requests: Vec<(i32, i32, i32)>,
         group_timed_life: BTreeMap<i32, bool>,
         retirement_blocked: bool,
     }
@@ -1256,6 +1279,19 @@ mod tests {
     struct World(Arc<Mutex<State>>);
 
     impl AiWorld for World {
+        fn ai_add_defenders(
+            &mut self,
+            player: i32,
+            quantity: i32,
+            kind: i32,
+        ) -> Result<bool, String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.defender_requests.push((player, quantity, kind));
+            Ok(quantity == 0)
+        }
         fn ai_debug_text(&mut self) -> Result<(), String> {
             if self.0.lock().unwrap().silent_debug {
                 Ok(())
@@ -1977,6 +2013,88 @@ mod tests {
             state.lock().unwrap().harvest_clears,
             [(1, 2), (2, 2)].into()
         );
+    }
+
+    #[test]
+    fn defenders_validate_owned_abi_and_forward_each_players_request_after_sleep() {
+        let declaration = "native AddDefenders takes integer qty, integer id returns boolean\n";
+        for (common, ai_common) in [
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("returns boolean", "returns integer")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("integer qty", "real qty")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}constant {declaration}"),
+            ),
+            (format!("{COMMON}{declaration}"), AI_COMMON.to_string()),
+        ] {
+            let script = program_with_sources(
+                "synthetic:defenders.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &common,
+                &ai_common,
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let state = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&state)));
+            assert!(
+                runtime
+                    .start(&mut world, 1, "defenders.ai")
+                    .unwrap_err()
+                    .contains("AddDefenders")
+            );
+            assert!(state.lock().unwrap().active.is_empty());
+            assert!(state.lock().unwrap().gold.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:defenders.ai",
+            "function main takes nothing returns nothing\nif AddDefenders(0,'x001') then\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendif\ncall Sleep(0.25)\nif not AddDefenders(2,'x002') then\ncall SetPlayerState(Player(GetAiPlayer()),null,29)\nendif\nendfunction\n",
+            &format!("{AI_COMMON}{declaration}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let state = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&state)));
+        for player in [1, 2] {
+            runtime.start(&mut world, player, "defenders.ai").unwrap();
+        }
+        assert_eq!(state.lock().unwrap().gold, [(2, 17), (3, 17)].into());
+        state.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(state.lock().unwrap().gold, [(2, 29), (3, 29)].into());
+        assert_eq!(
+            state.lock().unwrap().defender_requests,
+            vec![
+                (1, 0, i32::from_be_bytes(*b"x001")),
+                (2, 0, i32::from_be_bytes(*b"x001")),
+                (1, 2, i32::from_be_bytes(*b"x002")),
+                (2, 2, i32::from_be_bytes(*b"x002"))
+            ]
+        );
+        let mut host = AiHost::new(1, world.take().unwrap());
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Int(1), Value::Bool(false)],
+            vec![Value::Real(1.), Value::Int(1)],
+        ] {
+            assert!(host.native("AddDefenders", &args).is_err());
+        }
+        assert_eq!(state.lock().unwrap().defender_requests.len(), 4);
     }
 
     #[test]

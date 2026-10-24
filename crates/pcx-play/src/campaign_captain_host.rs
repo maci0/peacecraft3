@@ -72,6 +72,13 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn fixture_captain_members(&self, player: i32, attack: bool) -> &[HandleId] {
+        self.campaign_ai
+            .captain_members_for(player, attack)
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_captain_member(&mut self, player: i32, attack: bool, unit: HandleId) {
         self.campaign_ai
             .reserve_captain_member(player, attack)
@@ -106,6 +113,10 @@ impl ObjectHost {
                 Failure::ConfigState("captain selectors must be distinct single bits"),
             ));
         }
+        policy.defenders.validate().map_err(|error| {
+            self.inner
+                .error(CREATE, Failure::UnitActivity(error.to_string()))
+        })?;
         if self
             .campaign_gathering
             .as_ref()
@@ -121,6 +132,157 @@ impl ObjectHost {
 
     pub fn campaign_captain_policy(&self) -> Option<&CaptainPolicy> {
         self.campaign_captains.as_ref()
+    }
+
+    pub(crate) fn add_ai_defenders(
+        &mut self,
+        player: i32,
+        quantity: i32,
+        kind: i32,
+    ) -> Result<bool, Error> {
+        const NAME: &str = "AddDefenders";
+        let policy = self.campaign_captains.as_ref().ok_or_else(|| {
+            self.inner
+                .error(NAME, Failure::ConfigState("captain policy is not admitted"))
+        })?;
+        let rules = policy.defenders.clone();
+        let owner = self.player_identity(player).ok_or_else(|| {
+            self.inner
+                .error(NAME, Failure::ConfigState("player is not admitted"))
+        })?;
+        let Some((true, [_, Some(home)])) = self.campaign_ai.captains(player) else {
+            return Err(self.inner.error(
+                NAME,
+                Failure::ConfigState("defensive captain is not created"),
+            ));
+        };
+        let requested = kind.to_be_bytes();
+        let matches = |code| {
+            code == requested
+                || rules
+                    .alternates
+                    .iter()
+                    .any(|&(base, alternate)| base == requested && alternate == code)
+        };
+        let mut remaining = quantity;
+        for &unit in self
+            .campaign_ai
+            .captain_members_for(player, false)
+            .unwrap_or_default()
+        {
+            if self
+                .live(unit)
+                .is_some_and(|unit| unit.owner == owner && matches(unit.definition.rawcode))
+            {
+                remaining = remaining.wrapping_add(rules.count_step);
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if remaining == 0 {
+            return Ok(true);
+        }
+
+        // shortcut: canonical creation order breaks equal-priority ties; qualify native controller ordering before matching formation details.
+        let mut candidates = Vec::new();
+        for (unit, record) in self
+            .executed_units()
+            .filter(|(_, r)| r.owner == owner && matches(r.definition.rawcode))
+        {
+            if !record.shown
+                || record.combat.as_ref().is_some_and(|combat| combat.dead)
+                || record.vitals.is_some_and(|vitals| vitals.life <= 0.)
+                || self.campaign_ai.captain_member_owner(unit).is_some()
+                || self
+                    .combat_attack_order(unit)
+                    .is_some_and(|order| rules.excluded_orders.contains(&order))
+            {
+                continue;
+            }
+            if self
+                .guard_state()
+                .and_then(|state| state.get(unit))
+                .is_some_and(|guard| guard.released)
+            {
+                continue;
+            }
+            let vitals = record.vitals.ok_or_else(|| {
+                self.inner.error(
+                    NAME,
+                    Failure::UnitActivity("defender life is not admitted".into()),
+                )
+            })?;
+            if !vitals.life.is_finite() || !vitals.max_life.is_finite() || vitals.max_life <= 0. {
+                return Err(self.inner.error(
+                    NAME,
+                    Failure::UnitActivity("defender life ratio is invalid".into()),
+                ));
+            }
+            candidates
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+            candidates.push((unit, vitals.life / vitals.max_life >= rules.health_priority));
+        }
+        let mut accepted = Vec::new();
+        accepted
+            .try_reserve(candidates.len())
+            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+        for healthy in [true, false] {
+            for &(unit, priority) in &candidates {
+                if priority != healthy {
+                    continue;
+                }
+                let record = self.executed_unit(unit)?;
+                if record.combat.is_none()
+                    || record.cached
+                    || record.summoned
+                    || record.paused_since.is_some()
+                    || record.admitted_order.is_some()
+                    || self.unit_has_effect_history(unit)
+                    || self.harvest_owns_unit(unit)
+                    || self.summon_current_order(unit).is_some()
+                {
+                    return Err(self.inner.error(
+                        NAME,
+                        Failure::UnitActivity(
+                            "defender creation, effect or activity state is unqualified".into(),
+                        ),
+                    ));
+                }
+                let guard = self.prepare_captain_guard(unit, owner, home, NAME)?;
+                let route = self
+                    .prepare_steer_unit_in_range(unit, Some(home), 0., NAME)?
+                    .ok_or_else(|| {
+                        self.inner.error(
+                            NAME,
+                            Failure::UnitActivity("defender cannot route home".into()),
+                        )
+                    })?;
+                accepted.push((unit, guard, route));
+                remaining = remaining.wrapping_add(rules.count_step);
+                if remaining == 0 {
+                    break;
+                }
+            }
+            if remaining == 0 {
+                break;
+            }
+        }
+        if !accepted.is_empty() {
+            self.reserve_steer_commits(accepted.len(), NAME)?;
+        }
+        self.campaign_ai
+            .reserve_captain_members(player, false, accepted.len())
+            .map_err(|_| self.inner.error(NAME, Failure::Capacity))?;
+        for (unit, guard, route) in accepted {
+            self.clear_combat_target(unit);
+            self.commit_steer_unit(unit, route, NAME)?;
+            self.publish_unit_guard(unit, Some(guard));
+            self.campaign_ai.attach_captain_member(player, false, unit);
+            self.campaign_ai.mark_captain_route(player, unit);
+        }
+        Ok(remaining == 0)
     }
 
     pub fn campaign_captain_state(
@@ -229,16 +391,23 @@ impl ObjectHost {
         }
         let first = (selector as u32 & u32::from(policy.first_selector_mask)) != 0;
         let second = (selector as u32 & u32::from(policy.second_selector_mask)) != 0;
-        let members = if first {
-            self.campaign_ai.captain_members(player).unwrap_or_default()
-        } else {
-            &[]
-        };
+        let members = self
+            .campaign_ai
+            .captain_members_for(player, true)
+            .unwrap_or_default()
+            .iter()
+            .filter(|_| first)
+            .map(|&unit| (unit, true))
+            .chain(
+                self.campaign_ai
+                    .captain_members_for(player, false)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|_| second)
+                    .map(|&unit| (unit, false)),
+            );
         let mut routes = Vec::new();
-        routes
-            .try_reserve(members.len())
-            .map_err(|_| self.inner.error(SET_HOME, Failure::Capacity))?;
-        for &unit in members {
+        for (unit, attack) in members {
             let record = self.executed_unit(unit)?;
             if record.owner != self.player_identity(player).expect("validated owner")
                 || self.live(unit).is_none()
@@ -256,7 +425,15 @@ impl ObjectHost {
                         Failure::UnitActivity("captain member cannot route home".into()),
                     )
                 })?;
-            routes.push((unit, prepared));
+            let guard = if attack {
+                None
+            } else {
+                Some(self.prepare_captain_guard(unit, record.owner, home, SET_HOME)?)
+            };
+            routes
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(SET_HOME, Failure::Capacity))?;
+            routes.push((unit, prepared, guard));
         }
         if !routes.is_empty() {
             self.reserve_steer_commits(routes.len(), SET_HOME)?;
@@ -273,8 +450,11 @@ impl ObjectHost {
                 Failure::ConfigState("selected captain home is not present"),
             ));
         }
-        for (unit, prepared) in routes {
+        for (unit, prepared, guard) in routes {
             self.commit_steer_unit(unit, prepared, SET_HOME)?;
+            if guard.is_some() {
+                self.publish_unit_guard(unit, guard);
+            }
             self.campaign_ai.mark_captain_route(player, unit);
         }
         Ok(())

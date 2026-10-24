@@ -175,9 +175,13 @@ impl Registry {
     }
 
     pub(super) fn captain_members(&self, player: i32) -> Option<&[HandleId]> {
+        self.captain_members_for(player, true)
+    }
+
+    pub(super) fn captain_members_for(&self, player: i32, attack: bool) -> Option<&[HandleId]> {
         self.players
             .get(&player)
-            .map(|flags| flags.captain_members[0].as_slice())
+            .map(|flags| flags.captain_members[usize::from(!attack)].as_slice())
     }
 
     pub(super) fn captain_focus(&self, player: i32, attack: bool) -> Option<Option<HandleId>> {
@@ -202,9 +206,18 @@ impl Registry {
         player: i32,
         attack: bool,
     ) -> Result<(), std::collections::TryReserveError> {
+        self.reserve_captain_members(player, attack, 1)
+    }
+
+    pub(super) fn reserve_captain_members(
+        &mut self,
+        player: i32,
+        attack: bool,
+        count: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
         if let Some(flags) = self.players.get_mut(&player) {
-            flags.captain_members[usize::from(!attack)].try_reserve(1)?;
-            flags.captain_routes.try_reserve(1)?;
+            flags.captain_members[usize::from(!attack)].try_reserve(count)?;
+            flags.captain_routes.try_reserve(count)?;
         }
         Ok(())
     }
@@ -270,12 +283,21 @@ impl Registry {
     }
 
     pub(super) fn captain_member_owner(&self, unit: HandleId) -> Option<i32> {
+        self.captain_member_role(unit).map(|(player, _)| player)
+    }
+
+    pub(super) fn captain_member_role(&self, unit: HandleId) -> Option<(i32, bool)> {
         self.players.iter().find_map(|(&player, flags)| {
             flags
                 .captain_members
                 .iter()
-                .any(|members| members.binary_search(&unit).is_ok())
-                .then_some(player)
+                .enumerate()
+                .find_map(|(role, members)| {
+                    members
+                        .binary_search(&unit)
+                        .is_ok()
+                        .then_some((player, role == 0))
+                })
         })
     }
 
@@ -494,15 +516,24 @@ impl ObjectHost {
     }
 
     pub(crate) fn deactivate_campaign_ai_player(&mut self, player: i32) -> Result<(), Error> {
-        let members = self.campaign_ai.captain_members(player).unwrap_or_default();
+        let members = self
+            .campaign_ai
+            .captain_members_for(player, true)
+            .unwrap_or_default()
+            .iter()
+            .chain(
+                self.campaign_ai
+                    .captain_members_for(player, false)
+                    .unwrap_or_default(),
+            );
         let mut stops = Vec::new();
-        stops
-            .try_reserve(members.len())
-            .map_err(|_| self.inner.error(START_CAMPAIGN_AI, Failure::Capacity))?;
         for &unit in members {
             if !self.captain_route_owned(unit) {
                 continue;
             }
+            stops
+                .try_reserve(1)
+                .map_err(|_| self.inner.error(START_CAMPAIGN_AI, Failure::Capacity))?;
             let stop = self
                 .prepare_steer_unit_in_range(unit, None, 0., START_CAMPAIGN_AI)?
                 .ok_or_else(|| {

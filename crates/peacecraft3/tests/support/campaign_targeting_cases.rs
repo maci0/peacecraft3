@@ -253,8 +253,9 @@ endfunction
     let ai_common = format!(
         "{ai_common}native HarvestGold takes integer town, integer count returns nothing\nnative HarvestWood takes integer town, integer count returns nothing\n"
     );
-    let ai_common =
-        format!("{ai_common}native CaptainInCombat takes boolean attack returns boolean\n");
+    let ai_common = format!(
+        "{ai_common}native CaptainInCombat takes boolean attack returns boolean\nnative AddDefenders takes integer quantity, integer kind returns boolean\n"
+    );
     let ai_common = format!(
         "{ai_common}native DisplayText takes integer p, string text returns nothing\nnative DisplayTextI takes integer p, string text, integer v returns nothing\nnative DisplayTextII takes integer p, string text, integer a, integer b returns nothing\nnative DisplayTextIII takes integer p, string text, integer a, integer b, integer c returns nothing\n"
     );
@@ -293,6 +294,9 @@ call CountAssertionFailed()
 endif
 endfunction
 function VerifyEmptyCaptains takes nothing returns nothing
+if not AddDefenders(0,'zzzz') then
+call CountAssertionFailed()
+endif
 if CaptainInCombat(true) or CaptainInCombat(false) then
 call CountAssertionFailed()
 endif
