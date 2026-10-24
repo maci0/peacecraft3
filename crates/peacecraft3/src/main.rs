@@ -46,6 +46,7 @@ mod menu_audio;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod menu_colour_gpu_tests;
 mod menu_composition;
+mod menu_fade;
 mod menu_fog;
 mod menu_lighting;
 mod menu_material;

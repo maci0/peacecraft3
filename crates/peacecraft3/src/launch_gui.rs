@@ -333,6 +333,7 @@ pub(crate) fn app_with_plugins(
                     .chain(),
                 (
                     apply_menu_art,
+                    advance_menu_fade,
                     process_panel_navigation,
                     build_control_layer,
                     build_setting_controls,
@@ -383,6 +384,10 @@ pub(crate) fn app_with_plugins(
     app.add_systems(
         Update,
         crate::menu_sprites::follow_ui_viewport.after(show_menu_or_launcher),
+    );
+    app.add_systems(
+        Update,
+        crate::menu_fade::follow_ui_viewport.after(show_menu_or_launcher),
     );
     app.add_systems(
         Update,
@@ -1752,6 +1757,9 @@ fn initialize_menu_scene(
                 .as_ref()
                 .and_then(|chapters| chapters.campaigns.get(selected))
             else {
+                state.finished = chapters.as_ref().is_some_and(|chapters| {
+                    chapters.error.is_some() || !chapters.campaigns.is_empty()
+                });
                 navigation.notice = chapters
                     .as_ref()
                     .and_then(|chapters| chapters.error.as_ref())
@@ -2379,6 +2387,8 @@ fn process_panel_navigation(
     mut cache: ResMut<MenuArtCache>,
     launcher: Res<Launcher>,
     mut panels: Option<ResMut<crate::menu_sprites::MenuPanels>>,
+    mut commands: Commands,
+    mut assets: FadeAssets,
 ) {
     let Some(target) = navigation.requested.take() else {
         if let Some(panels) = panels.as_mut()
@@ -2410,6 +2420,29 @@ fn process_panel_navigation(
             cache.strings.as_deref(),
             &cache.preview,
         );
+        let cross_scene = matches!(
+            (navigation.screen, target),
+            (
+                crate::menu_screens::Screen::SinglePlayer,
+                crate::menu_screens::Screen::Campaign
+            ) | (
+                crate::menu_screens::Screen::Campaign,
+                crate::menu_screens::Screen::SinglePlayer
+            )
+        );
+        let fade = if cross_scene {
+            let campaign_fdf = if target == crate::menu_screens::Screen::Campaign {
+                &fdf
+            } else {
+                cache.fdf.as_ref().ok_or("missing displayed Campaign FDF")?
+            };
+            Some(crate::menu_fade::Prepared::read(
+                install.as_deref(),
+                campaign_fdf,
+            )?)
+        } else {
+            None
+        };
         let transition = if navigation.screen == crate::menu_screens::Screen::Campaign
             && target == crate::menu_screens::Screen::SinglePlayer
         {
@@ -2427,23 +2460,51 @@ fn process_panel_navigation(
                 ),
             }
         };
-        Ok((target, fdf, menu, preview, candidate_key, transition))
+        Ok((target, fdf, menu, preview, candidate_key, transition, fade))
     })();
     match result {
-        Ok((target, fdf, menu, preview, candidate_key, transition)) => {
+        Ok((target, fdf, menu, preview, candidate_key, transition, fade)) => {
+            let fading = fade.is_some();
+            if let Some(fade) = fade {
+                match fade.spawn(
+                    &mut commands,
+                    crate::mainmenu_scene::GeosetAssets {
+                        meshes: &mut assets.meshes,
+                        materials: &mut assets.materials,
+                        images: &mut assets.images,
+                    },
+                    target,
+                    candidate_key.clone(),
+                ) {
+                    Ok(mut fade) => {
+                        fade.wait_for_panels =
+                            transition == crate::menu_sprites::Transition::Animated;
+                        info!(?target, "Original menu fade: covering outgoing owner");
+                        commands.insert_resource(fade);
+                    }
+                    Err(error) => {
+                        navigation.notice = format!("Menu fade unavailable: {error}");
+                        return;
+                    }
+                }
+            }
             cache.pending_fdf = Some((target, fdf, menu, preview, candidate_key));
             match transition {
                 crate::menu_sprites::Transition::Incoming => {
-                    navigation.commit_panel_owner(target);
-                    navigation.transition_active = false;
+                    if !fading {
+                        navigation.commit_panel_owner(target);
+                    }
+                    navigation.transition_active = fading;
                 }
                 crate::menu_sprites::Transition::Animated => {
                     navigation.transition_active = true;
                     navigation.notice.clear();
                 }
                 crate::menu_sprites::Transition::Unavailable(reason) => {
-                    navigation.screen = target;
-                    navigation.transition_active = false;
+                    if !fading {
+                        navigation.screen = target;
+                    }
+                    navigation.transition_active = fading;
                     navigation.notice = format!("Menu animation unavailable: {reason}");
                 }
             }
@@ -2452,6 +2513,71 @@ fn process_panel_navigation(
             navigation.transition_active = false;
             navigation.notice = format!("Menu transition refused: {error}");
         }
+    }
+}
+
+#[derive(SystemParam)]
+struct FadeAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<MenuMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
+#[derive(SystemParam)]
+struct FadePresentation<'w, 's> {
+    materials: ResMut<'w, Assets<MenuMaterial>>,
+    visibility: Query<'w, 's, &'static mut Visibility>,
+    entities: Query<'w, 's, Entity, With<crate::menu_fade::FadeEntity>>,
+    panels: Option<Res<'w, crate::menu_sprites::MenuPanels>>,
+    cache: ResMut<'w, MenuArtCache>,
+    scene: Res<'w, SceneLoad>,
+    launcher: Res<'w, Launcher>,
+}
+
+fn advance_menu_fade(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    fade: Option<ResMut<crate::menu_fade::Fade>>,
+    mut navigation: ResMut<crate::menu_screens::Navigation>,
+    mut presentation: FadePresentation,
+) {
+    let Some(mut fade) = fade else {
+        return;
+    };
+    if fade.source_key != menu_source_key(&presentation.launcher, presentation.cache.revision) {
+        for entity in &presentation.entities {
+            commands.entity(entity).despawn();
+        }
+        commands.remove_resource::<crate::menu_fade::Fade>();
+        presentation.cache.pending_fdf = None;
+        navigation.transition_active = false;
+        navigation.notice = "Menu transition cancelled: source selection changed.".into();
+        return;
+    }
+    let outgoing_done = !fade.wait_for_panels
+        || presentation
+            .panels
+            .as_ref()
+            .is_none_or(|panels| panels.retired());
+    let incoming_ready = presentation.scene.finished
+        && presentation.cache.screen == fade.destination
+        && navigation.screen == fade.destination;
+    let (commit, finished) = fade.tick(time.delta(), outgoing_done, incoming_ready);
+    fade.draw(&mut presentation.materials, &mut presentation.visibility);
+    if commit {
+        info!(target=?fade.destination, "Original menu fade: replacing owner at opaque endpoint");
+        navigation.commit_panel_owner(fade.destination);
+    }
+    if finished {
+        info!(target=?fade.destination, "Original menu fade: reveal complete");
+        for entity in &presentation.entities {
+            commands.entity(entity).despawn();
+        }
+        commands.remove_resource::<crate::menu_fade::Fade>();
+        navigation.transition_active = presentation
+            .panels
+            .as_ref()
+            .is_some_and(|panels| panels.transition_active());
     }
 }
 
@@ -5921,6 +6047,105 @@ mod resize_bridge_tests {
 #[cfg(test)]
 #[path = "settings_cog_tests.rs"]
 mod settings_cog_tests;
+
+#[cfg(test)]
+mod fade_tests {
+    use super::*;
+    use crate::menu_screens::{Navigation, Screen};
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn world() -> World {
+        let mut world = World::new();
+        let launcher = Launcher::default();
+        let mut fade = crate::menu_fade::tests::fade();
+        fade.source_key = menu_source_key(&launcher, 0);
+        fade.wait_for_panels = false;
+        world.insert_resource(launcher);
+        world.insert_resource(fade);
+        world.insert_resource(Navigation {
+            screen: Screen::SinglePlayer,
+            transition_active: true,
+            ..default()
+        });
+        world.insert_resource(MenuArtCache {
+            screen: Screen::SinglePlayer,
+            ..default()
+        });
+        world.init_resource::<SceneLoad>();
+        world.init_resource::<Time<Real>>();
+        world.init_resource::<Assets<MenuMaterial>>();
+        world.spawn(crate::menu_fade::FadeEntity);
+        world
+    }
+
+    fn tick(world: &mut World, milliseconds: u64) {
+        world
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(milliseconds));
+        world.run_system_once(advance_menu_fade).unwrap();
+        world.flush();
+    }
+
+    #[test]
+    fn destination_changes_only_at_black_and_loading_does_not_consume_reveal() {
+        let mut world = world();
+        tick(&mut world, 119);
+        assert_eq!(world.resource::<Navigation>().screen, Screen::SinglePlayer);
+        tick(&mut world, 1);
+        assert_eq!(world.resource::<Navigation>().screen, Screen::Campaign);
+        tick(&mut world, 9000);
+        assert_eq!(
+            world.resource::<crate::menu_fade::Fade>().stage,
+            crate::menu_fade::Stage::Loading
+        );
+        assert!(world.resource::<Navigation>().transition_active);
+        world.resource_mut::<MenuArtCache>().screen = Screen::Campaign;
+        world.resource_mut::<SceneLoad>().finished = true;
+        tick(&mut world, 9000);
+        assert_eq!(
+            world.resource::<crate::menu_fade::Fade>().stage,
+            crate::menu_fade::Stage::Revealing
+        );
+        world
+            .resource_mut::<Navigation>()
+            .open(Screen::SinglePlayer);
+        assert!(world.resource::<Navigation>().requested.is_none());
+        tick(&mut world, 39);
+        assert!(world.contains_resource::<crate::menu_fade::Fade>());
+        tick(&mut world, 1);
+        assert!(!world.contains_resource::<crate::menu_fade::Fade>());
+        assert!(!world.resource::<Navigation>().transition_active);
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<crate::menu_fade::FadeEntity>>()
+                .iter(&world)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn changed_source_cancels_the_overlay_and_unlocks_the_menu() {
+        let mut world = world();
+        world.resource_mut::<MenuArtCache>().revision = 1;
+        tick(&mut world, 10);
+        assert!(!world.contains_resource::<crate::menu_fade::Fade>());
+        assert!(!world.resource::<Navigation>().transition_active);
+        assert!(
+            world
+                .resource::<Navigation>()
+                .notice
+                .contains("source selection changed")
+        );
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<crate::menu_fade::FadeEntity>>()
+                .iter(&world)
+                .count(),
+            0
+        );
+    }
+}
 
 #[cfg(test)]
 #[path = "resolution_popup_tests.rs"]

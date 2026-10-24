@@ -2,7 +2,8 @@
 
 The later [campaign scene review](campaign-menu-scene.md) adds the outgoing
 Single Player phase and source-backed campaign background/camera ownership.
-It also records the remaining full-screen fade, entrance and rendering gaps.
+It also records the source-driven full-screen fade and remaining entrance,
+control-fade and rendering gaps.
 
 ## Transition review, 2026-10-24
 

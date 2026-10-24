@@ -5,6 +5,16 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Campaign entry and Back now render the FDF-bound full-screen fade model.
+  Entry retires the source panels before covering; the scene changes at black,
+  loading holds that endpoint, and return panels wait for the reveal. Source
+  changes clean up the overlay and campaign actions respect the input lock.
+  Application 704 tests, three explicit original-input gates, strict native/WASM
+  checks and the desktop build pass. Fresh 1280×960 TFT entry/Back/Main captures
+  show both fades completing without a retained overlay. Exact timing, control
+  fades, campaign Birth, selector/profile flow and scenery rendering remain open.
+  See [campaign scene review](docs/re-notes/campaign-menu-scene.md).
+
 - [~] Campaign entry now retires the Single Player panels, resolves the selected
   campaign's source background/fog/camera and positions the logo from its FDF
   anchor. Return requests rebuild the incoming panel pose before visibility

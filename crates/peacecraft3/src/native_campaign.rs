@@ -512,7 +512,11 @@ fn select_campaign(
     buttons: Query<&CampaignButton>,
     mut state: ResMut<CampaignMenuState>,
     chapters: Res<Chapters>,
+    navigation: Option<Res<crate::menu_screens::Navigation>>,
 ) {
+    if navigation.is_some_and(|navigation| navigation.transition_active) {
+        return;
+    }
     for entity in &actions.entities {
         let Ok(button) = buttons.get(*entity) else {
             continue;
@@ -534,7 +538,11 @@ fn launch_mission(
     launcher: Res<crate::launch_gui::Launcher>,
     inbox: Res<ConfigurationInbox>,
     mut chapters: ResMut<Chapters>,
+    navigation: Option<Res<crate::menu_screens::Navigation>>,
 ) {
+    if navigation.is_some_and(|navigation| navigation.transition_active) {
+        return;
+    }
     for entity in &actions.entities {
         let Ok(mission) = buttons.get(*entity) else {
             continue;
@@ -1570,6 +1578,18 @@ pub(crate) mod tests {
         world.insert_resource(crate::button_actions::ButtonActions {
             entities: vec![btn],
         });
+        world.insert_resource(crate::menu_screens::Navigation::default());
+        world
+            .resource_mut::<crate::menu_screens::Navigation>()
+            .transition_active = true;
+        world.run_system_once(select_campaign).unwrap();
+        assert_eq!(
+            world.resource::<CampaignMenuState>().selected_campaign,
+            None
+        );
+        world
+            .resource_mut::<crate::menu_screens::Navigation>()
+            .transition_active = false;
         world.run_system_once(select_campaign).unwrap();
         let state = world.resource::<CampaignMenuState>();
         assert_eq!(state.selected_campaign, Some(0));

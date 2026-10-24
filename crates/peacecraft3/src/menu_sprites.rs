@@ -1052,6 +1052,14 @@ pub enum Transition {
 }
 
 impl MenuPanels {
+    pub(crate) fn retired(&self) -> bool {
+        self.clock.retired
+    }
+
+    pub(crate) fn transition_active(&self) -> bool {
+        self.clock.transition_active()
+    }
+
     pub fn controls_visible(&self, screen: crate::menu_screens::Screen) -> bool {
         let owner = match screen {
             crate::menu_screens::Screen::Main => Owner::Main,
@@ -1652,7 +1660,14 @@ pub fn advance(
     mut navigation: ResMut<crate::menu_screens::Navigation>,
     assets: PanelAdvanceAssets,
     mut sink: SoundSink,
+    fade: Option<Res<crate::menu_fade::Fade>>,
 ) {
+    if fade
+        .as_ref()
+        .is_some_and(|_| !state.clock.exiting && !state.clock.retired)
+    {
+        return;
+    }
     let PanelAdvanceAssets {
         mut meshes,
         mut materials,
@@ -1855,7 +1870,9 @@ pub fn advance(
             navigation.notice = "Missing admitted destination for retiring menu panels".into();
             return;
         };
-        navigation.commit_panel_owner(destination);
+        if fade.is_none() {
+            navigation.commit_panel_owner(destination);
+        }
     } else if let Some(owner) = entered {
         navigation.commit_panel_owner(match owner {
             Owner::Main => crate::menu_screens::Screen::Main,
@@ -1869,7 +1886,7 @@ pub fn advance(
             },
         });
     }
-    navigation.transition_active = next.transition_active();
+    navigation.transition_active = fade.is_some() || next.transition_active();
     if next.phase.owner() != Owner::Options {
         state.category_stand_origin = None;
     }

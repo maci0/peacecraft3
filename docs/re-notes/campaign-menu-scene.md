@@ -71,12 +71,40 @@ camera at the clip's start and then updates the owned camera, roll and billboard
 facing on the same frame/elapsed clocks as the scene. A production-system fixture
 checks eye, target, roll, billboard direction and preservation of another camera.
 
+## Full-screen transition follow-up
+
+The retained original entry frames show the housings leaving before the whole
+picture darkens. Back darkens the campaign picture before revealing the glue
+scene. The Campaign FDF's full-frame `SlidingDoors` sprite names the fade model;
+its mesh, texture, material and `Birth`/`Death` opacity tracks now drive a separate
+overlay above the menu UI. No fade duration or opacity ramp is copied into code.
+
+Single Player entry waits for the longest outgoing panel clip before starting
+the cover. Navigation changes at the opaque endpoint. That endpoint holds while
+the destination FDF and background are admitted, and loading time does not skip
+the reveal. Returning panels keep their initial pose until the overlay retires.
+The shared transition input lock also covers dynamic campaign selection and
+mission activation. Source replacement cancels the overlay; a reported backdrop
+failure is revealed as an unavailable state rather than trapping the menu at
+black. The loading handoff and incoming-pose hold are recreation scheduling
+choices, not claims of native screen-manager internals or frame-exact timing.
+
+The follow-up passes 704 application tests, three explicit original-input gates
+(fade import/spawn, incoming panel poses and destination controls), strict native
+all-target and WASM library/binary Clippy, the desktop build and formatting.
+Receipts are under `.scratch/campaign-menu-scene/checks-fade-first/`. A new
+isolated 1280×960 TFT run records 32 timed frames for each of Single Player,
+Campaign, Back and return to Main under `native-fade-final/`. The entry and Back
+sequences show darkening, the hidden owner replacement and a completed reveal;
+Main remains reachable afterward. There are no rendering errors in that run.
+The original and recreated capture clocks are retained, not treated as a
+frame-exact timing or performance gate. Earlier unfocused setup/intro captures
+are separate from these four navigation sequences. The owned runtime is stopped.
+
 ## Remaining differences
 
-This slice does not complete the transition or screen rendering. The FDF's `SlidingDoors` references
-the source `Campaign-Fade` model; its sequence intervals and material opacity
-track are retained in the local evidence, but the full-screen fade is not yet
-rendered. The shared background renderer currently starts the looping Stand
+This slice does not complete the transition or screen rendering. The shared
+background renderer currently starts the looping Stand
 instead of playing the campaign model's Birth and then Stand. The campaign row
 layout, unlock/profile rules, cursor, ambient sound and exact control fades also
 remain distinct work. In particular, a successful scene import or parser test
