@@ -312,6 +312,81 @@ impl ObjectHost {
         Ok(())
     }
 
+    pub(crate) fn return_ai_guard_posts(&mut self, player: i32) -> Result<(), Error> {
+        let name = "ReturnGuardPosts";
+        self.require_active_campaign_ai_player(player, name)?;
+        let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        let policy = self
+            .campaign_mode
+            .as_ref()
+            .ok_or_else(|| fail("guard-post rules are not admitted"))?;
+        if self
+            .order_registry
+            .as_ref()
+            .is_none_or(|r| r.binding().image_sha256 != policy.image_sha256)
+            || !self.is_attack_order(policy.guard_posts.return_order)
+        {
+            return Err(fail("guard return order/source differs"));
+        }
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| fail("AI owner missing"))?;
+        let posts = self.campaign_ai.guard_posts(player).expect("active player");
+        let mut routes = Vec::new();
+        for post in posts {
+            if !self.post_occupied(post, owner) {
+                continue;
+            }
+            let unit = post.unit.expect("occupied post");
+            if self
+                .current_unit_order(unit)
+                .map_err(|e| self.inner.error(name, e.failure))?
+                != 0
+            {
+                continue;
+            }
+            let record = self.executed_unit(unit)?;
+            if record.cached
+                || record.summoned
+                || record.admitted_order.is_some()
+                || record.paused_since.is_some()
+                || !record.shown
+                || self.unit_has_effect_history(unit)
+                || record.combat.is_none()
+            {
+                return Err(fail("guard return state is unsupported"));
+            }
+            let position = record
+                .position
+                .ok_or_else(|| fail("guard position is not admitted"))?;
+            if position == post.home {
+                continue;
+            }
+            // shortcut: reuse canonical point routing; native arrival extent/polling remains to be qualified.
+            if let Some(route) =
+                self.prepare_steer_unit_in_range(unit, Some(post.home), 0., name)?
+            {
+                routes
+                    .try_reserve(1)
+                    .map_err(|_| fail("guard return capacity"))?;
+                routes.push((unit, post.home, route));
+            }
+        }
+        self.reserve_steer_commits(routes.len(), name)?;
+        for (unit, home, route) in routes {
+            self.commit_steer_unit(unit, route, name)?;
+            self.clear_combat_target(unit);
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                record
+                    .combat
+                    .as_mut()
+                    .expect("admitted combat")
+                    .attack_destination = Some(home);
+            }
+        }
+        Ok(())
+    }
+
     fn start_guard_training(
         &mut self,
         player: i32,

@@ -20,13 +20,14 @@ pub struct GuardPostRules {
     pub initial_count: i32,
     pub binding_increment: i32,
     pub released_count: i32,
+    pub return_order: i32,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("campaign mode policy: {0}")]
 pub struct Error(&'static str);
 
-const WINDOWS: [(u32, usize, bool); 35] = [
+const WINDOWS: [(u32, usize, bool); 40] = [
     (0xab6887, 20, true),
     (0xab6e80, 60, true),
     (0xe70fac, 4, false),
@@ -62,6 +63,11 @@ const WINDOWS: [(u32, usize, bool); 35] = [
     (0xabacb0, 21, true),
     (0xad3ab1, 3, true),
     (0xac15a7, 21, true),
+    (0xab6434, 20, true),
+    (0xab6ca0, 54, true),
+    (0xac1b20, 97, true),
+    (0xf15d10, 17, false),
+    (0xad3b50, 156, true),
 ];
 
 const DEBUG_TEXT: [(&[u8], &[u8]); 4] = [
@@ -304,8 +310,13 @@ impl CampaignModePolicy {
             at(windows[base + 2], 0, signature)?;
             at(windows[base + 3], 0, name)?;
         }
-        let guard_posts =
-            guard_post_rules(&windows[28..], replacement_count_field, word(handler, 1)?)?;
+        let return_order = return_post_order(windows, word(handler, 1)?)?;
+        let guard_posts = guard_post_rules(
+            &windows[28..35],
+            replacement_count_field,
+            word(handler, 1)?,
+            return_order,
+        )?;
         Ok(Self {
             image_sha256,
             context_mask,
@@ -327,7 +338,12 @@ impl CampaignModePolicy {
     }
 }
 
-fn guard_post_rules(w: &[&[u8]], limit: u32, context: u32) -> Result<GuardPostRules, Error> {
+fn guard_post_rules(
+    w: &[&[u8]],
+    limit: u32,
+    context: u32,
+    return_order: i32,
+) -> Result<GuardPostRules, Error> {
     let [reg, handler, consumer, name, initial, bind, release] = w else {
         return Err(Error("incomplete guard-post windows"));
     };
@@ -429,7 +445,125 @@ fn guard_post_rules(w: &[&[u8]], limit: u32, context: u32) -> Result<GuardPostRu
         initial_count: word(initial, 17)? as i32,
         binding_increment: 1, // x86 INC increments by one, independently of its operand.
         released_count: word(release, 17)? as i32,
+        return_order,
     })
+}
+
+fn return_post_order(w: &[&[u8]], context: u32) -> Result<i32, Error> {
+    let (reg, handler, consumer, action) = (w[35], w[36], w[37], w[39]);
+    for (offset, target) in [(0, WINDOWS[2].0), (5, WINDOWS[38].0), (10, WINDOWS[36].0)] {
+        at(reg, offset, &[0x68])?;
+        if word(reg, offset + 1)? != target {
+            return Err(Error("ReturnGuardPosts registration changed"));
+        }
+    }
+    call(reg, WINDOWS[35].0, 15, 0x8ccc80)?;
+    at(w[38], 0, b"ReturnGuardPosts\0")?;
+    // Both natives use the same owned-context wrapper, with different tail targets.
+    at(handler, 0, &w[29][..11])?;
+    call(handler, WINDOWS[36].0, 11, 0x43eca0)?;
+    at(handler, 16, &w[29][16..37])?;
+    if word(handler, 1)? != context {
+        return Err(Error("return-post context differs"));
+    }
+    at(handler, 37, &[0xe9])?;
+    call(handler, WINDOWS[36].0, 42, 0x7fc7e0)?;
+    at(handler, 47, &[0x8b, 0xc8, 0xe9])?;
+    for offset in [37, 49] {
+        if WINDOWS[36]
+            .0
+            .wrapping_add(offset + 5)
+            .wrapping_add(word(handler, offset as usize + 1)?)
+            != WINDOWS[37].0
+        {
+            return Err(Error("return-post forwarding changed"));
+        }
+    }
+    for (offset, bytes) in [
+        (0, &[0x8b, 0x81][..]),
+        (6, &[0x81, 0xc1]),
+        (12, &[0x23, 1, 0x83, 0xf8, 0xff, 0x74, 0x4d, 0x56]),
+        (25, &[0x8b, 0xf0, 0x85, 0xf6, 0x74, 0x40, 0x90, 0x8b, 0x56]),
+        (35, &[0x8d, 0x4e]),
+        (38, &[0x23, 0x11, 0x83, 0xfa, 0xff, 0x74, 0x1a]),
+        (50, &[0x85, 0xc0, 0x74, 0x11, 0x83, 0xb8]),
+        (60, &[0, 0x75, 8, 0x50, 0x8b, 0xce]),
+        (71, &[0x8b, 0x46]),
+        (74, &[0x8d, 0x4e]),
+        (77, &[0x23, 1, 0x83, 0xf8, 0xff, 0x74, 0x0b]),
+        (89, &[0x8b, 0xf0, 0x85, 0xf6, 0x75, 0xc1, 0x5e, 0xc3]),
+    ] {
+        at(consumer, offset, bytes)?;
+    }
+    for offset in [20, 45, 84] {
+        call(consumer, WINDOWS[37].0, offset, 0x7fc7e0)?;
+    }
+    call(consumer, WINDOWS[37].0, 66, WINDOWS[39].0)?;
+    if word(consumer, 2)? != word(w[30], 5)?
+        || word(consumer, 8)? != word(w[30], 11)?
+        || consumer[34] != w[30][37]
+        || consumer[37] != w[30][40]
+        || consumer[73] != w[30][103]
+        || consumer[76] != w[30][106]
+    {
+        return Err(Error("return and fill post fields differ"));
+    }
+    for (offset, bytes) in [
+        (
+            0,
+            &[
+                0x55, 0x8b, 0xec, 0x83, 0xec, 8, 0x56, 0x8b, 0x75, 8, 0x57, 0x8b, 0xf9, 0x8b, 0xce,
+                0x6a, 1,
+            ][..],
+        ),
+        (17, &[0x8b, 0x47]),
+        (20, &[0x89, 0x45, 0xfc, 0x8b, 0x47]),
+        (
+            26,
+            &[
+                0x89, 0x45, 0xf8, 0x8d, 0x45, 0xfc, 0x50, 0x8d, 0x45, 0xf8, 0x50, 0x8b, 6, 0x68,
+            ],
+        ),
+        (44, &[0xff, 0x90, 0xb8, 0, 0, 0, 0x8b, 0xc8]),
+        (57, &[0x85, 0xc0, 0x75, 0x57, 0x8b, 0x86]),
+        (67, &[0x85, 0xc0, 0x74, 0x4d, 0x83, 0x78]),
+        (
+            74,
+            &[
+                0, 0x7f, 0x47, 0x8b, 6, 0x8b, 0xce, 0xff, 0x90, 0xec, 0, 0, 0,
+            ],
+        ),
+        (87, &[0x8b, 0x4f]),
+        (90, &[0x6a, 1, 0x6a, 1, 0x6a, 0, 0x89, 0x4d, 8, 0x8b, 0x4f]),
+        (
+            102,
+            &[
+                0x6a, 0, 0x89, 0x4d, 0xf8, 0x8d, 0x4d, 8, 0x51, 0x8d, 0x4d, 0xf8, 0x51, 0x6a, 0,
+                0x6a, 0, 0x50, 0x68,
+            ],
+        ),
+        (130, &[0x83, 0xc4, 0x20, 0x8b, 0xce, 0x50]),
+        (141, &[0x8b, 0xce]),
+        (148, &[0x5f, 0x5e, 0x8b, 0xe5, 0x5d, 0xc2, 4, 0]),
+    ] {
+        at(action, offset, bytes)?;
+    }
+    for (offset, target) in [
+        (52, 0x7ff460),
+        (125, 0x69f760),
+        (136, 0x690590),
+        (143, 0x699d90),
+    ] {
+        call(action, WINDOWS[39].0, offset, target)?;
+    }
+    if action[19] != action[89]
+        || action[25] != action[101]
+        || action[25].checked_add(8) != Some(action[19])
+        || action[19].checked_add(8) != Some(consumer[37])
+    {
+        return Err(Error("return-post home fields differ"));
+    }
+    Ok(word(action, 121)? as i32)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -648,6 +782,109 @@ fn synthetic() -> Vec<Vec<u8>> {
         word(&mut w, index, 17, count);
     }
     put(&mut w, 33, 0, &[0xff, 0x46, 0x60]);
+    for (offset, target) in [(0, WINDOWS[2].0), (5, WINDOWS[38].0), (10, WINDOWS[36].0)] {
+        put(&mut w, 35, offset, &[0x68]);
+        word(&mut w, 35, offset + 1, target);
+    }
+    call(&mut w, 35, 15, 0x8ccc80);
+    put(&mut w, 38, 0, b"ReturnGuardPosts\0");
+    w[36] = w[29].clone();
+    call(&mut w, 36, 11, 0x43eca0);
+    call(&mut w, 36, 42, 0x7fc7e0);
+    for offset in [37, 49] {
+        word(
+            &mut w,
+            36,
+            offset + 1,
+            WINDOWS[37]
+                .0
+                .wrapping_sub(WINDOWS[36].0 + offset as u32 + 5),
+        );
+    }
+    for (offset, bytes) in [
+        (0, &[0x8b, 0x81][..]),
+        (6, &[0x81, 0xc1]),
+        (12, &[0x23, 1, 0x83, 0xf8, 0xff, 0x74, 0x4d, 0x56]),
+        (
+            25,
+            &[
+                0x8b, 0xf0, 0x85, 0xf6, 0x74, 0x40, 0x90, 0x8b, 0x56, 0x54, 0x8d, 0x4e, 0x50,
+            ],
+        ),
+        (38, &[0x23, 0x11, 0x83, 0xfa, 0xff, 0x74, 0x1a]),
+        (50, &[0x85, 0xc0, 0x74, 0x11, 0x83, 0xb8]),
+        (60, &[0, 0x75, 8, 0x50, 0x8b, 0xce]),
+        (
+            71,
+            &[
+                0x8b, 0x46, 0x6c, 0x8d, 0x4e, 0x68, 0x23, 1, 0x83, 0xf8, 0xff, 0x74, 0x0b,
+            ],
+        ),
+        (89, &[0x8b, 0xf0, 0x85, 0xf6, 0x75, 0xc1, 0x5e, 0xc3]),
+    ] {
+        put(&mut w, 37, offset, bytes);
+    }
+    word(&mut w, 37, 2, 0x404);
+    word(&mut w, 37, 8, 0x400);
+    word(&mut w, 37, 56, 0x510);
+    for offset in [20, 45, 84] {
+        call(&mut w, 37, offset, 0x7fc7e0);
+    }
+    call(&mut w, 37, 66, WINDOWS[39].0);
+    for (offset, bytes) in [
+        (
+            0,
+            &[
+                0x55, 0x8b, 0xec, 0x83, 0xec, 8, 0x56, 0x8b, 0x75, 8, 0x57, 0x8b, 0xf9, 0x8b, 0xce,
+                0x6a, 1,
+            ][..],
+        ),
+        (17, &[0x8b, 0x47, 0x48]),
+        (20, &[0x89, 0x45, 0xfc, 0x8b, 0x47, 0x40]),
+        (
+            26,
+            &[
+                0x89, 0x45, 0xf8, 0x8d, 0x45, 0xfc, 0x50, 0x8d, 0x45, 0xf8, 0x50, 0x8b, 6, 0x68,
+            ],
+        ),
+        (44, &[0xff, 0x90, 0xb8, 0, 0, 0, 0x8b, 0xc8]),
+        (57, &[0x85, 0xc0, 0x75, 0x57, 0x8b, 0x86]),
+        (67, &[0x85, 0xc0, 0x74, 0x4d, 0x83, 0x78, 0x58]),
+        (
+            74,
+            &[
+                0, 0x7f, 0x47, 0x8b, 6, 0x8b, 0xce, 0xff, 0x90, 0xec, 0, 0, 0,
+            ],
+        ),
+        (87, &[0x8b, 0x4f, 0x48]),
+        (
+            90,
+            &[0x6a, 1, 0x6a, 1, 0x6a, 0, 0x89, 0x4d, 8, 0x8b, 0x4f, 0x40],
+        ),
+        (
+            102,
+            &[
+                0x6a, 0, 0x89, 0x4d, 0xf8, 0x8d, 0x4d, 8, 0x51, 0x8d, 0x4d, 0xf8, 0x51, 0x6a, 0,
+                0x6a, 0, 0x50, 0x68,
+            ],
+        ),
+        (130, &[0x83, 0xc4, 0x20, 0x8b, 0xce, 0x50]),
+        (141, &[0x8b, 0xce]),
+        (148, &[0x5f, 0x5e, 0x8b, 0xe5, 0x5d, 0xc2, 4, 0]),
+    ] {
+        put(&mut w, 39, offset, bytes);
+    }
+    word(&mut w, 39, 40, 0x330000);
+    word(&mut w, 39, 63, 0x570);
+    word(&mut w, 39, 121, 431);
+    for (offset, target) in [
+        (52, 0x7ff460),
+        (125, 0x69f760),
+        (136, 0x690590),
+        (143, 0x699d90),
+    ] {
+        call(&mut w, 39, offset, target);
+    }
     w
 }
 
@@ -685,6 +922,7 @@ mod tests {
         assert_eq!(p.guard_posts.initial_count, 3);
         assert_eq!(p.guard_posts.binding_increment, 1);
         assert_eq!(p.guard_posts.released_count, 910);
+        assert_eq!(p.guard_posts.return_order, 431);
         w[32][17..21].copy_from_slice(&(-4i32).to_le_bytes());
         w[34][17..21].copy_from_slice(&1234i32.to_le_bytes());
         let p = decode(&w).unwrap();
@@ -712,6 +950,57 @@ mod tests {
             let mut w = synthetic();
             w[window][offset] ^= 1;
             assert!(decode(&w).is_err(), "window {window} offset {offset}");
+        }
+    }
+
+    #[test]
+    fn return_order_and_post_relationships_are_source_bound() {
+        let mut w = synthetic();
+        w[39][121..125].copy_from_slice(&1931i32.to_le_bytes());
+        assert_eq!(decode(&w).unwrap().guard_posts.return_order, 1931);
+        for (window, offset) in [
+            (35, 1),
+            (35, 11),
+            (36, 1),
+            (36, 12),
+            (36, 38),
+            (36, 43),
+            (36, 50),
+            (37, 2),
+            (37, 8),
+            (37, 18),
+            (37, 34),
+            (37, 37),
+            (37, 53),
+            (37, 60),
+            (37, 61),
+            (37, 67),
+            (37, 73),
+            (37, 94),
+            (38, 16),
+            (39, 19),
+            (39, 25),
+            (39, 59),
+            (39, 69),
+            (39, 75),
+            (39, 89),
+            (39, 101),
+            (39, 120),
+            (39, 126),
+            (39, 137),
+            (39, 144),
+            (39, 155),
+        ] {
+            let mut bad = w.clone();
+            bad[window][offset] ^= 1;
+            assert!(decode(&bad).is_err(), "window {window} offset {offset}");
+        }
+        for index in 35..40 {
+            for len in 0..w[index].len() {
+                let mut short = w.clone();
+                short[index].truncate(len);
+                assert!(decode(&short).is_err());
+            }
         }
     }
 
@@ -823,6 +1112,7 @@ mod tests {
         assert_eq!(p.guard_posts.initial_count, 0);
         assert_eq!(p.guard_posts.binding_increment, 1);
         assert_eq!(p.guard_posts.released_count, 99999);
+        assert_eq!(p.guard_posts.return_order, 0xd000f);
         assert!(
             CampaignModePolicy::read(
                 &image,

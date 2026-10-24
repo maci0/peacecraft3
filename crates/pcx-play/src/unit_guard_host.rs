@@ -19,6 +19,7 @@ pub struct UnitGuard {
     chase_since: Option<f64>,
     observed_through: f64,
     settled_at: Option<[f32; 2]>,
+    explicit_move: bool,
 }
 #[derive(Clone, Copy)]
 struct ReturnRules {
@@ -78,6 +79,7 @@ impl UnitGuard {
             chase_since: None,
             observed_through: now,
             settled_at: None,
+            explicit_move: false,
         }
     }
     fn plan(
@@ -154,6 +156,7 @@ impl UnitGuard {
         self.beyond = false;
         self.chase_since = None;
         self.settled_at = None;
+        self.explicit_move = false;
     }
 }
 /// Current recreation eligibility: normal mobile armed units participate in
@@ -392,6 +395,14 @@ impl ObjectHost {
             g.ordered();
         }
     }
+
+    pub(super) fn set_explicit_guard_move(&mut self, unit: HandleId, active: bool) {
+        if let Some(state) = &mut self.guards
+            && let Some((_, guard)) = state.records.iter_mut().find(|(id, _)| *id == unit)
+        {
+            guard.explicit_move = active;
+        }
+    }
     #[cfg(test)]
     pub(crate) fn test_set_guard_returning(&mut self, unit: HandleId, returning: bool) {
         if let Some(state) = &mut self.guards
@@ -511,6 +522,16 @@ impl ObjectHost {
             .activity
             .as_ref()
             .is_some_and(|a| a.moving() || (a.patrolling() || a.following()) && !guard.returning);
+        if record.activity.as_ref().is_some_and(|a| a.held()) {
+            return Ok(GuardCombatStep::default());
+        }
+        // An explicit move settles at its accepted endpoint; an attack-point leg can return to its post.
+        if guard.explicit_move && !moving && !chasing {
+            guard.explicit_move = false;
+            guard.beyond = false;
+            guard.chase_since = None;
+            guard.settled_at = Some(position);
+        }
         let tolerance = self.unit_collision_radius(unit, REMOVE)?;
         let maximum = self
             .creep_owner(guard.owner, REMOVE)?

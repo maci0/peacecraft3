@@ -116,6 +116,7 @@ pub(crate) trait AiWorld: Host {
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_debug_text(&mut self) -> Result<(), String>;
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String>;
+    fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String>;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
     fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
@@ -156,6 +157,16 @@ pub(crate) trait AiWorld: Host {
 }
 
 impl AiWorld for NeutralStack {
+    fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .return_ai_guard_posts(player)
+            .map_err(|error| error.to_string())
+    }
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String> {
         self.inner_mut()
             .inner_mut()
@@ -801,6 +812,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     for (name, params) in [
         ("CreateCaptains", &[][..]),
         ("FillGuardPosts", &[][..]),
+        ("ReturnGuardPosts", &[][..]),
         ("ClearHarvestAI", &[][..]),
         ("HarvestGold", &["integer", "integer"][..]),
         ("HarvestWood", &["integer", "integer"][..]),
@@ -980,6 +992,14 @@ impl<W: AiWorld> Host for AiHost<W> {
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         match name {
+            "ReturnGuardPosts" => {
+                if !args.is_empty() {
+                    return Err("ReturnGuardPosts: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_return_guard_posts(player)?;
+                Ok(Value::Null)
+            }
             "FillGuardPosts" => {
                 if !args.is_empty() {
                     return Err("FillGuardPosts: expected no arguments".into());
@@ -1284,6 +1304,7 @@ mod tests {
         campaign_modes: BTreeSet<i32>,
         replacement_counts: BTreeMap<i32, i32>,
         guard_fills: Vec<i32>,
+        guard_returns: Vec<i32>,
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         harvest_clears: BTreeMap<i32, usize>,
@@ -1300,6 +1321,14 @@ mod tests {
     struct World(Arc<Mutex<State>>);
 
     impl AiWorld for World {
+        fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.guard_returns.push(player);
+            Ok(())
+        }
         fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
             if !state.active.contains_key(&player) {
@@ -2617,11 +2646,13 @@ mod tests {
     }
 
     #[test]
-    fn fill_guard_posts_uses_each_owned_player_and_checks_its_abi_before_main() {
+    fn guard_post_calls_use_each_owned_player_and_check_their_abi_before_main() {
         let script = program_with_ai_common(
             "synthetic:fill.ai",
-            "function main takes nothing returns nothing\ncall FillGuardPosts()\ncall Sleep(0.25)\ncall FillGuardPosts()\nendfunction\n",
-            &format!("{AI_COMMON}native FillGuardPosts takes nothing returns nothing\n"),
+            "function main takes nothing returns nothing\ncall FillGuardPosts()\ncall ReturnGuardPosts()\ncall Sleep(0.25)\ncall FillGuardPosts()\ncall ReturnGuardPosts()\nendfunction\n",
+            &format!(
+                "{AI_COMMON}native FillGuardPosts takes nothing returns nothing\nnative ReturnGuardPosts takes nothing returns nothing\n"
+            ),
         );
         let mut runtime = Runtime::<World>::default();
         runtime.set_loader(move |_| Ok(Arc::clone(&script)));
@@ -2631,15 +2662,20 @@ mod tests {
             runtime.start(&mut world, player, "fill.ai").unwrap();
         }
         assert_eq!(shared.lock().unwrap().guard_fills, [1, 2]);
+        assert_eq!(shared.lock().unwrap().guard_returns, [1, 2]);
         shared.lock().unwrap().clock = 0.25;
         while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
             runtime.resume(&mut world, player, ticket).unwrap();
         }
         assert_eq!(shared.lock().unwrap().guard_fills, [1, 2, 1, 2]);
+        assert_eq!(shared.lock().unwrap().guard_returns, [1, 2, 1, 2]);
         for declaration in [
             "native FillGuardPosts takes integer n returns nothing\n",
             "native FillGuardPosts takes nothing returns integer\n",
             "constant native FillGuardPosts takes nothing returns nothing\n",
+            "native ReturnGuardPosts takes integer n returns nothing\n",
+            "native ReturnGuardPosts takes nothing returns integer\n",
+            "constant native ReturnGuardPosts takes nothing returns nothing\n",
         ] {
             let script = program_with_ai_common(
                 "synthetic:bad-fill.ai",
@@ -2654,7 +2690,7 @@ mod tests {
                 runtime
                     .start(&mut world, 1, "bad-fill.ai")
                     .unwrap_err()
-                    .contains("FillGuardPosts")
+                    .contains("GuardPosts")
             );
             assert!(shared.lock().unwrap().gold.is_empty());
             assert!(shared.lock().unwrap().active.is_empty());
@@ -2663,6 +2699,8 @@ mod tests {
         let mut host = AiHost::new(1, World(Arc::clone(&shared)));
         assert!(host.native("FillGuardPosts", &[Value::Int(1)]).is_err());
         assert!(host.native("FillGuardPosts", &[]).is_err());
+        assert!(host.native("ReturnGuardPosts", &[Value::Int(1)]).is_err());
+        assert!(host.native("ReturnGuardPosts", &[]).is_err());
     }
 
     #[test]

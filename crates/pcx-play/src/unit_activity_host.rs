@@ -319,6 +319,32 @@ impl ObjectHost {
             .is_some_and(UnitActivity::moving))
     }
 
+    pub(super) fn current_unit_order(&self, unit: HandleId) -> Result<i32, Error> {
+        let name = "GetUnitCurrentOrder";
+        let state = self.unit_activity.as_ref().ok_or_else(|| {
+            self.inner
+                .error(name, Failure::UnitActivity("activity not admitted".into()))
+        })?;
+        let record = self.executed_unit(unit)?;
+        let activity = record.activity.as_ref().ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::UnitActivity("activity not initialized".into()),
+            )
+        })?;
+        Ok(self
+            .summon_current_order(unit)
+            .or_else(|| self.inventory_order(unit))
+            .or_else(|| activity.patrol.map(|_| state.rules.patrol))
+            .or_else(|| activity.follow.map(|_| state.rules.movement))
+            .or_else(|| self.combat_attack_order(unit))
+            .unwrap_or(if activity.moving() {
+                state.rules.movement
+            } else {
+                0
+            }))
+    }
+
     pub(super) fn activity_waypoints_empty(&self, unit: HandleId) -> Result<bool, Error> {
         let (path, next) = self
             .executed_unit(unit)?
@@ -620,19 +646,7 @@ impl ObjectHost {
                 )
             })?;
             if getter {
-                return Ok(Value::Int(
-                    match self
-                        .summon_current_order(unit)
-                        .or_else(|| self.inventory_order(unit))
-                        .or_else(|| activity.patrol.map(|_| patrol))
-                        .or_else(|| activity.follow.map(|_| movement))
-                        .or_else(|| self.combat_attack_order(unit))
-                    {
-                        Some(attack) => attack,
-                        None if activity.moving() => movement,
-                        None => 0,
-                    },
-                ));
+                return Ok(Value::Int(self.current_unit_order(unit)?));
             }
             if record.paused_since.is_some() || record.combat.as_ref().is_some_and(|c| c.dead) {
                 return Ok(Value::Bool(false));
@@ -771,6 +785,9 @@ impl ObjectHost {
                 _ => {}
             }
             self.unit_ordered(unit);
+            if point && order == movement {
+                self.set_explicit_guard_move(unit, true);
+            }
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                 record.activity.as_mut().expect("activity").patrol = patrol_plan;
             }
@@ -1171,7 +1188,7 @@ impl ObjectHost {
                     started: now,
                 }))
             }
-            None if !was_moving => {
+            None if !was_moving && !activity.held() => {
                 return Ok(Some(PreparedSteer {
                     motion: None,
                     animation: None,
@@ -1208,6 +1225,7 @@ impl ObjectHost {
         name: &str,
     ) -> Result<(), Error> {
         if prepared.no_op {
+            self.set_explicit_guard_move(unit, false);
             return Ok(());
         }
         self.unit_activity
@@ -1216,6 +1234,7 @@ impl ObjectHost {
             .active
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        self.set_explicit_guard_move(unit, false);
         self.campaign_ai.clear_captain_route(unit);
         let moving = prepared.motion.is_some();
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {

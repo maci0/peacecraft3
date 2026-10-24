@@ -149,6 +149,8 @@ endglobals
     (vm, a, b)
 }
 
+#[path = "unit_guard_return_tests.rs"]
+mod returns;
 #[path = "unit_training_tests.rs"]
 mod training;
 fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
@@ -394,46 +396,74 @@ fn ignored_units_follow_guard_release_and_canonical_lifecycle() {
 
 #[test]
 fn false_timed_life_stops_then_guard_refresh_returns_home() {
-    let (mut vm, a, _) = guarded();
-    let h = &mut vm.host().inner;
-    let context = Arc::clone(h.player_context().unwrap());
-    let policy = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
-    let key = i32::from_be_bytes(policy.timed_life_factory);
-    h.admit_campaign_group_timed_life(&context, policy).unwrap();
-    h.activate_campaign_ai_player(4).unwrap();
-    h.set_ai_group_timed_life(4, false).unwrap();
-    let home = h.guard_state().unwrap().get(a).unwrap().home;
-    assert!(h.steer_unit(a, Some([64., 16.]), "test").unwrap());
-    step(&mut vm, 2.);
-    let h = &mut vm.host().inner;
-    assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) > 8.);
-    assert!(!h.guard_state().unwrap().get(a).unwrap().returning);
-    h.native(
-        "UnitApplyTimedLife",
-        &[Value::Handle(a), Value::Int(key), Value::Real(10.)],
-    )
-    .unwrap();
-    assert_eq!(
-        h.executed_unit(a)
-            .unwrap()
-            .activity
-            .as_ref()
-            .unwrap()
-            .destination(),
-        None
-    );
-    step(&mut vm, 2.0 + 1.0 / 64.0);
-    let h = &vm.host().inner;
-    assert!(h.guard_state().unwrap().get(a).unwrap().returning);
-    assert_eq!(
-        h.executed_unit(a)
-            .unwrap()
-            .activity
-            .as_ref()
-            .unwrap()
-            .destination(),
-        Some(home)
-    );
+    for held in [false, true] {
+        let (mut vm, a, _) = guarded();
+        let h = &mut vm.host().inner;
+        let context = Arc::clone(h.player_context().unwrap());
+        let policy = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
+        let key = i32::from_be_bytes(policy.timed_life_factory);
+        h.admit_campaign_group_timed_life(&context, policy).unwrap();
+        h.activate_campaign_ai_player(4).unwrap();
+        h.set_ai_group_timed_life(4, false).unwrap();
+        let home = h.guard_state().unwrap().get(a).unwrap().home;
+        assert!(h.steer_unit(a, Some([64., 16.]), "test").unwrap());
+        step(&mut vm, 2.);
+        let h = &mut vm.host().inner;
+        assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), home) > 8.);
+        assert!(!h.guard_state().unwrap().get(a).unwrap().returning);
+        if held {
+            assert_eq!(
+                h.native(
+                    "IssueImmediateOrder",
+                    &[Value::Handle(a), Value::Str("alpha".into())]
+                )
+                .unwrap(),
+                Value::Bool(true)
+            );
+            assert!(
+                h.executed_unit(a)
+                    .unwrap()
+                    .activity
+                    .as_ref()
+                    .unwrap()
+                    .held()
+            );
+        }
+        h.native(
+            "UnitApplyTimedLife",
+            &[Value::Handle(a), Value::Int(key), Value::Real(10.)],
+        )
+        .unwrap();
+        assert!(
+            !h.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .held()
+        );
+        assert_eq!(
+            h.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .destination(),
+            None
+        );
+        step(&mut vm, 2.0 + 1.0 / 64.0);
+        let h = &vm.host().inner;
+        assert!(h.guard_state().unwrap().get(a).unwrap().returning);
+        assert_eq!(
+            h.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .destination(),
+            Some(home)
+        );
+    }
 }
 
 #[test]

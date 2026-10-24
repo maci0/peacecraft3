@@ -1,9 +1,9 @@
 # Returning ordinary campaign guards to their posts
 
-The unchanged Human02 opening-minute gate currently reaches `ReturnGuardPosts`
-at 8.312500 seconds. The host still refuses this native. The stopped experiments
-below qualify a real return action for an idle ordinary guard; they do not justify
-an empty success or returning every same-owner unit.
+`ReturnGuardPosts` now returns eligible ordinary guards through the shared
+canonical post and activity state. It does not create units or treat every
+same-owner unit as a guard. The stopped observations below distinguish explicit
+return requests from other movement and from released posts.
 
 ## Selected-code evidence
 
@@ -88,16 +88,90 @@ positive used an incorrect pre-start sequence value; that fixture was corrected.
 The map loading-screen prompt was captured and advanced explicitly in each run.
 No screenshot matching or full campaign acceptance is claimed.
 
-## Implementation direction and open behavior
+## Active-order controls
 
-Reuse the canonical per-player posts retained by fill, the source-bound attack
-order and the existing prepared activity/placement path. Released, dead and
-foreign-owned post references must not become a new all-owner return list. No
-native linked-list or packet-layout clone is needed to reproduce the behavior.
+Six additional stopped RoC runs retain the idle probe's setup, seed and sampling
+protocol. They add a source-named `move`, `holdposition` or `attack` call before
+the return request, with a matched no-return arm for each. The point-order target
+is another diagnostic +1024 X translation, not game data. The source map contains
+all three order names. Map and AI sources resolve, archive members round-trip,
+and normalized sources retain only the declared order, return-call and diagnostic
+identity differences.
 
-Before widening the consumer, qualify the interaction with an existing move or
-hold order. The native eligibility gates, combat/ability/effect states, blocked
-routes, repeated calls and arrival/polling parity remain open. Source-derived
-order identity and admission need a connected reader/host test; parser success
-alone will not prove the return movement. Human02 and the full game goal remain
-incomplete while the runtime consumer is absent.
+The comparison reparses every retained marker and verifies its hash before
+comparing outcomes. Move and attack-point arms have identical actor records in
+all 100 samples with or without the return call. The move completes and remains
+at its accepted destination through the terminal sample. Both attack-point arms
+later return toward the post: the matched control prevents assigning that later
+movement to `ReturnGuardPosts`.
+
+The hold-call pair reports current order zero before the request. The return arm
+then follows the same return leg as the idle guard; its control remains displaced.
+The stimulus does not record the boolean result of the hold call, so that result
+is not independently qualified by these markers. The collector's initial
+assumption that every explicit command must report a nonzero current order was
+wrong for this case. Its corrected validation preserves the emitted maps and raw
+markers; move and attack-point runs still require continuing nonzero orders
+through the request boundary.
+
+| Pair | Return result SHA-256 | Control result SHA-256 |
+| --- | --- | --- |
+| Move | `d227436fb3efbf38fac611058f8936345d8a38568a7b1b517b339771eb0fad1a` | `affcabfb894fc6332297ffef7ea5b73020fa7fd7733447624a3752a3a18936e2` |
+| Hold call | `cf4d116f3bc53d0b83aef7ab365a974d8090d908463f9ac3ae8274d179bbd625` | `9621f5bdbe3dda1e371c1eabb0441c9e41e7dfda6a9daada22db23712480cb54` |
+| Attack point | `da26a08b3ffbe0ae4e02acf88ce6948ef9fdc282174ab7d9b2b64b8ed17157aa` | `b7e9573d1fd05f1f46305cf7bca6b8176a8e3228c1242a487a4e881198192b13` |
+
+The three original collector tests and two active-order tests pass, including
+retained-marker reparsing and request-boundary mutants. All reference containers
+are stopped and preserved.
+
+## Runtime implementation and remaining fidelity
+
+`CampaignModePolicy` now binds the return registration, NUL-terminated name,
+owned-context forwarding and action-order operand. It joins the return list and
+post-reference fields to those decoded for fill. Nonstock synthetic order data,
+relationship/opcode/branch mutants and every truncated new window are tested;
+the actual selected image decodes. No measured order or distance is copied into
+a production constant.
+
+AI-owned declaration checks admit exactly `ReturnGuardPosts() -> nothing` before
+globals or world lending. Dispatch uses the existing active per-player registry
+and persistent posts. The runtime checks source-image and attack-order agreement,
+ignores released, dead, removed and foreign-owned references, and preserves units
+with an existing reported order. An affected idle unit must have admitted ordinary
+creation, visibility, pause, ability and effect state. Unsupported affected states
+refuse before route publication. All selected routes are prepared and reserved
+before committing the batch. The ordinary point-order path supplies motion,
+animation, attack-point reporting and normal combat behavior; there is no second
+unit world or native packet-layout clone.
+
+The controls also exposed a distinction in background guard activity. A completed
+explicit move now settles at its accepted endpoint, while an attack-point leg
+can naturally return. A held unit is not automatically pulled home by a normal
+guard tick. Explicit return can replace that held idle state. Internal prepared
+stops clear held state before a later guard refresh; connected timed-life tests
+cover that shared stop path. These use the existing canonical activity and guard
+state, without copying native controller storage.
+
+The full core suite passes 1,754 tests, with the actual-image gate run separately.
+Coverage includes two-player AI ownership/ABI checks, idle/held return and arrival,
+active move and attack-point preservation, explicit-move settlement, release/death/removal/owner
+isolation, source mismatch and route-work refusal/retry. These tests do not prove
+rendered or exact native movement parity.
+
+The unchanged selected-source application Continue test now admits Human02 and
+advances the shared chapter session through 60 game seconds without a script
+refusal. It invokes the selected victory BJ as an explicit stimulus, activates
+the source Continue button, and checks the new map/context and retained campaign
+generation. It does not play Human01 to victory or verify rendered gameplay.
+
+The app library/binary suites (55/638 tests), published-session integration,
+selected startup and Continue checks pass. Strict native and WASM Clippy,
+formatting and the default desktop build also pass. Failed preliminary compile
+and lint receipts remain in the ignored evidence directory beside the final
+gates; no blanket warning suppression was used.
+
+The meanings of the native eligibility fields, other controller/ability/effect
+states, blocked-route outcomes, ownership-return/post reuse, and exact arrival
+extent/polling remain fidelity questions. The implementation reuses the house
+point-routing path rather than fitting the observed settled coordinates. Human02
+and the full game goal remain under end-to-end acceptance testing.

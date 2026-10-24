@@ -2,13 +2,21 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [~] `ReturnGuardPosts` now has three stopped matched RoC observations: an idle
-  ordinary guard receives the source attack-point order and returns toward its
-  retained post; no-return and released-guard controls remain displaced. The
-  selected registration, owned-context forwarding and post/action call are
-  byte-checked. The runtime consumer is still absent; active-order interaction,
-  eligibility and arrival parity remain open. Human02 still stops at this call
-  at 8.312500 seconds. See [guard returns](docs/re-notes/campaign-ai-return-guard-posts.md).
+Frontiers in older entries retain the result at that slice; the newest entry
+reports current progress.
+
+- [~] `ReturnGuardPosts` now routes ordinary idle guards through the canonical
+  posts and prepared activity path. Nine stopped RoC runs distinguish idle,
+  released, move, hold-call and attack-point behavior. Shared guard state now
+  preserves explicit-move settlement and held controls. The source-derived order,
+  owned AI ABI, lifecycle exclusions and route refusal/retry have connected tests.
+  Core 1,754, app-library 55, app-binary 638, published-session, selected startup,
+  actual-image, strict native/WASM checks and the default desktop build pass.
+  The unchanged application Continue
+  test now admits Human02 and advances its shared session through 60 game seconds.
+  This uses an explicit victory stimulus, not a completed Human01 playthrough.
+  Exact arrival/controller parity, rendered gameplay and full mission completion
+  remain open. See [guard returns](docs/re-notes/campaign-ai-return-guard-posts.md).
 
 - [~] `FillGuardPosts` now retains vacant canonical guard posts and requests real
   pending ordinary-unit production. Source costs, food, duration and train lists
