@@ -201,6 +201,10 @@ impl ObjectHost {
                 ));
             }
             let linked = self.campaign_ai.captain_member_owner(unit);
+            let already_first = self
+                .campaign_ai
+                .captain_members(player)
+                .is_some_and(|members| members.binary_search(&unit).is_ok());
             if linked.is_some_and(|owner| owner != player) {
                 return Err(self.inner.error(
                     APPLY,
@@ -214,18 +218,18 @@ impl ObjectHost {
                         .inner
                         .error(APPLY, Failure::ConfigState("first captain home is absent")));
                 };
-                if linked.is_some() {
+                if already_first {
                     None
                 } else {
                     self.campaign_ai
-                        .reserve_captain_member(player)
+                        .reserve_captain_member(player, true)
                         .map_err(|_| self.inner.error(APPLY, Failure::Capacity))?;
                     Some(home)
                 }
             } else {
                 None
             };
-            if enabled && linked.is_some() {
+            if enabled && already_first {
                 None
             } else {
                 if !enabled {
@@ -249,7 +253,7 @@ impl ObjectHost {
             self.commit_steer_unit(unit, prepared, APPLY)?;
             self.clear_combat_target(unit);
             if enabled == Some(true) {
-                self.campaign_ai.attach_captain_member(player, unit);
+                self.campaign_ai.attach_captain_member(player, true, unit);
                 self.campaign_ai.mark_captain_route(player, unit);
             } else {
                 self.campaign_ai.detach_captain_member(unit);

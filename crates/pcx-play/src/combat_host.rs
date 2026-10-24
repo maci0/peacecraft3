@@ -1453,6 +1453,7 @@ impl ObjectHost {
                 _ => {}
             }
         }
+        self.refresh_captain_combat();
         Ok(())
     }
 }

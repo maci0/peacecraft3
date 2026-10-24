@@ -29,7 +29,8 @@ struct PlayerFlags {
     captains_created: bool,
     captain_homes: [Option<[f32; 2]>; 2],
     group_timed_life: Option<bool>,
-    captain_members: Vec<HandleId>,
+    captain_members: [Vec<HandleId>; 2],
+    captain_focus: [Option<HandleId>; 2],
     captain_routes: Vec<HandleId>,
 }
 
@@ -64,7 +65,8 @@ impl Registry {
                 captains_created: false,
                 captain_homes: [None; 2],
                 group_timed_life: None,
-                captain_members: Vec::new(),
+                captain_members: [Vec::new(), Vec::new()],
+                captain_focus: [None; 2],
                 captain_routes: Vec::new(),
             },
         );
@@ -175,15 +177,33 @@ impl Registry {
     pub(super) fn captain_members(&self, player: i32) -> Option<&[HandleId]> {
         self.players
             .get(&player)
-            .map(|flags| flags.captain_members.as_slice())
+            .map(|flags| flags.captain_members[0].as_slice())
+    }
+
+    pub(super) fn captain_focus(&self, player: i32, attack: bool) -> Option<Option<HandleId>> {
+        self.players
+            .get(&player)
+            .map(|flags| flags.captain_focus[usize::from(!attack)])
+    }
+
+    pub(super) fn refresh_captain_focus(
+        &mut self,
+        mut resolve: impl FnMut(i32, HandleId) -> Option<HandleId>,
+    ) {
+        for (&player, flags) in &mut self.players {
+            for (focus, members) in flags.captain_focus.iter_mut().zip(&flags.captain_members) {
+                *focus = members.iter().find_map(|&unit| resolve(player, unit));
+            }
+        }
     }
 
     pub(super) fn reserve_captain_member(
         &mut self,
         player: i32,
+        attack: bool,
     ) -> Result<(), std::collections::TryReserveError> {
         if let Some(flags) = self.players.get_mut(&player) {
-            flags.captain_members.try_reserve(1)?;
+            flags.captain_members[usize::from(!attack)].try_reserve(1)?;
             flags.captain_routes.try_reserve(1)?;
         }
         Ok(())
@@ -200,20 +220,24 @@ impl Registry {
         Ok(())
     }
 
-    pub(super) fn attach_captain_member(&mut self, player: i32, unit: HandleId) {
+    pub(super) fn attach_captain_member(&mut self, player: i32, attack: bool, unit: HandleId) {
+        self.detach_captain_member(unit);
         let flags = self
             .players
             .get_mut(&player)
             .expect("active AI player preflighted");
-        if let Err(at) = flags.captain_members.binary_search(&unit) {
-            flags.captain_members.insert(at, unit);
+        let members = &mut flags.captain_members[usize::from(!attack)];
+        if let Err(at) = members.binary_search(&unit) {
+            members.insert(at, unit);
         }
     }
 
     pub(super) fn detach_captain_member(&mut self, unit: HandleId) {
         for flags in self.players.values_mut() {
-            if let Ok(at) = flags.captain_members.binary_search(&unit) {
-                flags.captain_members.remove(at);
+            for members in &mut flags.captain_members {
+                if let Ok(at) = members.binary_search(&unit) {
+                    members.remove(at);
+                }
             }
             if let Ok(at) = flags.captain_routes.binary_search(&unit) {
                 flags.captain_routes.remove(at);
@@ -249,8 +273,8 @@ impl Registry {
         self.players.iter().find_map(|(&player, flags)| {
             flags
                 .captain_members
-                .binary_search(&unit)
-                .is_ok()
+                .iter()
+                .any(|members| members.binary_search(&unit).is_ok())
                 .then_some(player)
         })
     }

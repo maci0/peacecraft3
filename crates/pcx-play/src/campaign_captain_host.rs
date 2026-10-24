@@ -1,5 +1,5 @@
 //! Per-player captain home targets in the canonical campaign AI context.
-use super::{Error, Failure, ObjectHost};
+use super::{Entry, Error, Failure, ObjectHost};
 use crate::campaign_captain_policy::CaptainPolicy;
 use crate::map_admission::ParsedMapContext;
 use pcx_script::HandleId;
@@ -15,6 +15,70 @@ pub struct CaptainObservation {
 }
 
 impl ObjectHost {
+    pub fn campaign_captain_in_combat(
+        &self,
+        owner: HandleId,
+        attack: bool,
+    ) -> Result<Option<bool>, Error> {
+        const NAME: &str = "CaptainInCombat";
+        if self.campaign_captains.is_none() {
+            return Ok(None);
+        }
+        let player = self.player_settings(owner)?.number;
+        let Some((created, homes)) = self.campaign_ai.captains(player) else {
+            return Ok(None);
+        };
+        if !created || homes[usize::from(!attack)].is_none() {
+            return Err(self.inner.error(
+                NAME,
+                Failure::ConfigState("selected captain is not created"),
+            ));
+        }
+        let focus = self
+            .campaign_ai
+            .captain_focus(player, attack)
+            .expect("active player row");
+        match focus.and_then(|target| self.inner.entry(target).ok()) {
+            Some(Entry::Unit { .. }) => Ok(Some(true)),
+            Some(Entry::RemovedUnit { .. }) | None => Ok(Some(false)),
+            Some(_) => Err(self.inner.error(
+                NAME,
+                Failure::ConfigState("captain target class is not qualified"),
+            )),
+        }
+    }
+
+    pub(super) fn refresh_captain_combat(&mut self) {
+        let inner = &self.inner;
+        // shortcut: publish canonical member targets at the house combat step;
+        // qualify native controller cadence and target priority before timing parity.
+        self.campaign_ai.refresh_captain_focus(|player, unit| {
+            let Entry::Unit { record } = inner.entry(unit).ok()? else { return None; };
+            if !matches!(inner.entry(record.owner).ok(), Some(Entry::Player { number }) if *number == player) {
+                return None;
+            }
+            let combat = record.combat.as_ref()?;
+            if combat.dead {
+                return None;
+            }
+            let target = combat.target?;
+            match inner.entry(target).ok()? {
+                Entry::Unit { record } if record.combat.as_ref().is_none_or(|combat| !combat.dead)
+                    && record.vitals.is_none_or(|vitals| vitals.life > 0.) => Some(target),
+                Entry::Destructable { state, .. } if !state.dead && state.life.is_none_or(|life| life > 0.) => Some(target),
+                _ => None,
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_captain_member(&mut self, player: i32, attack: bool, unit: HandleId) {
+        self.campaign_ai
+            .reserve_captain_member(player, attack)
+            .unwrap();
+        self.campaign_ai.attach_captain_member(player, attack, unit);
+    }
+
     pub fn admit_campaign_captains(
         &mut self,
         context: &Arc<ParsedMapContext>,

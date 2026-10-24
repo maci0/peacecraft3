@@ -53,6 +53,134 @@ fn apply(host: &mut ObjectHost, unit: HandleId, key: i32, duration: f32) -> Resu
 }
 
 #[test]
+fn captain_combat_is_published_from_members_not_other_owned_fighters() {
+    let (mut vm, unit, target, key) = opened();
+    let owner = vm.host().inner.executed_unit(unit).unwrap().owner;
+    for attack in [false, true] {
+        assert_eq!(
+            vm.host()
+                .inner
+                .campaign_captain_in_combat(owner, attack)
+                .unwrap(),
+            Some(false)
+        );
+    }
+    vm.host()
+        .inner
+        .native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(unit),
+                Value::Str("alpha".into()),
+                Value::Handle(target),
+            ],
+        )
+        .unwrap();
+    step(&mut vm, 0.1);
+    assert_eq!(
+        vm.host()
+            .inner
+            .campaign_captain_in_combat(owner, true)
+            .unwrap(),
+        Some(false)
+    );
+    let host = &mut vm.host().inner;
+    host.set_ai_group_timed_life(4, true).unwrap();
+    apply(host, unit, key, 10.).unwrap();
+    host.native(
+        "IssueTargetOrder",
+        &[
+            Value::Handle(unit),
+            Value::Str("alpha".into()),
+            Value::Handle(target),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(false)
+    );
+    let life = host.executed_unit(target).unwrap().vitals.unwrap().life;
+    step(&mut vm, 2.);
+    let host = &mut vm.host().inner;
+    assert!(host.executed_unit(target).unwrap().vitals.unwrap().life < life);
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, false).unwrap(),
+        Some(false)
+    );
+    assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(1));
+    host.fixture_captain_member(4, false, unit);
+    step(&mut vm, 2.1);
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, false).unwrap(),
+        Some(true)
+    );
+    assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(0));
+    let other_owner = host.executed_unit(target).unwrap().owner;
+    host.activate_campaign_ai_player(5).unwrap();
+    host.create_ai_captains(5).unwrap();
+    assert_eq!(
+        host.campaign_captain_in_combat(other_owner, false).unwrap(),
+        Some(false)
+    );
+    host.native("KillUnit", &[Value::Handle(target)]).unwrap();
+    step(&mut vm, 2.2);
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, false).unwrap(),
+        Some(false)
+    );
+    host.deactivate_campaign_ai_player(4).unwrap();
+    assert_eq!(host.campaign_captain_in_combat(owner, true).unwrap(), None);
+    assert_eq!(
+        host.campaign_captain_in_combat(other_owner, true).unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
+fn removing_a_captain_combat_target_invalidates_the_query_reference() {
+    let (mut vm, unit, target, key) = opened();
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(unit).unwrap().owner;
+    host.set_ai_group_timed_life(4, true).unwrap();
+    apply(host, unit, key, 10.).unwrap();
+    assert_eq!(
+        host.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(unit),
+                Value::Str("alpha".into()),
+                Value::Handle(target)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 0.25);
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(true)
+    );
+    host.native("RemoveUnit", &[Value::Handle(target)]).unwrap();
+    assert_eq!(
+        host.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(false)
+    );
+    assert_eq!(host.campaign_captain_group_size(owner).unwrap(), Some(1));
+}
+
+#[test]
 fn true_membership_tracks_shared_expiry_and_home_route_without_minting_handles() {
     let (mut vm, unit, other, key) = opened();
     let host = &mut vm.host().inner;

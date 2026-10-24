@@ -53,8 +53,9 @@ Creation and assignment use the runtime's canonical player context; mutable
 Creation does not clone units, create script groups or substitute the anchor's
 current position for a moving captain. The later grouped timed-life consumer
 uses these declared targets for its supported members and enables count/empty
-queries. Readiness, combat, home queries and reset remain unsupported until
-their shared-world relationships are modeled.
+queries. The later [combat query](campaign-ai-captain-combat.md) reads separately
+published canonical target state. Readiness, home queries and reset remain
+unsupported until their shared-world relationships are modeled.
 
 ## Validation
 

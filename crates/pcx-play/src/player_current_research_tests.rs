@@ -229,6 +229,16 @@ impl AiWorld for AiResearchWorld {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "captain policy absent".into())
     }
+    fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String> {
+        let owner = self
+            .object
+            .player_identity(player)
+            .ok_or("player not admitted")?;
+        self.object
+            .campaign_captain_in_combat(owner, attack)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "captain policy absent".into())
+    }
 }
 
 #[test]

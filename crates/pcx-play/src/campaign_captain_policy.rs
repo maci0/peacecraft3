@@ -20,7 +20,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 17] = [
+const WINDOWS: [(u32, usize, bool); 23] = [
     (0xab645c, 20, true),  // SetCaptainHome registration banner (sig/name/handler)
     (0xab6f10, 80, true),  // SetCaptainHome handler entry
     (0xac26d0, 124, true), // selector (masks + slots + resolver/home write)
@@ -38,6 +38,12 @@ const WINDOWS: [(u32, usize, bool); 17] = [
     (0xf15e24, 15, false), // CaptainIsEmpty name
     (0xe6f674, 4, false),  // integer query signature
     (0xe700c8, 4, false),  // boolean query signature
+    (0xab65e4, 20, true),  // CaptainInCombat registration
+    (0xab3e40, 70, true),  // owned AI context + boolean forwarding
+    (0xabbd90, 118, true), // captain selection + target-reference predicate
+    (0xf15e8c, 16, false), // CaptainInCombat name
+    (0xf15e84, 5, false),  // (B)B signature
+    (0xad5b57, 40, true),  // initial empty target-reference pairs
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -106,6 +112,9 @@ impl CaptainPolicy {
     }
 
     fn decode(w: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
+        if w.len() != WINDOWS.len() {
+            return Err(Error("incomplete captain-policy windows"));
+        }
         let [
             home_reg,
             home_handler,
@@ -124,7 +133,7 @@ impl CaptainPolicy {
             empty_name,
             size_signature,
             empty_signature,
-        ] = w
+        ] = &w[..17]
         else {
             return Err(Error("incomplete captain-policy windows"));
         };
@@ -326,6 +335,7 @@ impl CaptainPolicy {
         {
             return Err(Error("captain query and association counters differ"));
         }
+        combat_query(&w[17..], first_slot, second_slot)?;
 
         Ok(Self {
             image_sha256,
@@ -343,6 +353,110 @@ impl CaptainPolicy {
         )
         .expect("synthetic captain-policy instructions")
     }
+}
+
+fn combat_query(w: &[&[u8]], first: u32, second: u32) -> Result<(), Error> {
+    let [registration, handler, query, name, signature, initial] = w else {
+        return Err(Error("incomplete combat-query windows"));
+    };
+    for (offset, target) in [(0, WINDOWS[21].0), (5, WINDOWS[20].0), (10, WINDOWS[18].0)] {
+        at(registration, offset, &[0x68])?;
+        if word(registration, offset + 1)? != target {
+            return Err(Error("CaptainInCombat registration changed"));
+        }
+    }
+    if call(registration, WINDOWS[17].0, 15)? != 0x8ccc80 {
+        return Err(Error("CaptainInCombat registrar changed"));
+    }
+    at(name, 0, b"CaptainInCombat\0")?;
+    at(signature, 0, b"(B)B\0")?;
+    at(
+        handler,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0e, 0x6a, 0x57,
+        ],
+    )?;
+    if call(handler, WINDOWS[18].0, 14)? != 0x43eca0
+        || call(handler, WINDOWS[18].0, 53)? != 0x7fc7e0
+        || call(handler, WINDOWS[18].0, 46)? != WINDOWS[19].0
+        || call(handler, WINDOWS[18].0, 63)? != WINDOWS[19].0
+    {
+        return Err(Error("CaptainInCombat context dispatch changed"));
+    }
+    at(
+        handler,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x33, 0xc0, 0x5d, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23,
+            0x01, 0x83, 0xf8, 0xff, 0x75, 0x0e, 0xff, 0x75, 0x08, 0x33, 0xc0, 0x8b, 0xc8,
+        ],
+    )?;
+    at(handler, 51, &[0x5d, 0xc3])?;
+    at(handler, 58, &[0xff, 0x75, 0x08, 0x8b, 0xc8])?;
+    at(handler, 68, &[0x5d, 0xc3])?;
+    at(
+        query,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0x83, 0x7d, 0x08, 0, 0x56, 0x74, 0x08, 0x81, 0xc1,
+        ],
+    )?;
+    at(query, 16, &[0xeb, 0x06, 0x81, 0xc1])?;
+    if word(query, 12)? != first || word(query, 20)? != second {
+        return Err(Error("combat selector differs from captain references"));
+    }
+    at(
+        query,
+        24,
+        &[
+            0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x04, 0x33, 0xf6, 0xeb, 0x07,
+        ],
+    )?;
+    for offset in [38, 64, 92] {
+        if call(query, WINDOWS[19].0, offset)? != 0x7fc7e0 {
+            return Err(Error("combat target reference resolver changed"));
+        }
+    }
+    at(query, 43, &[0x8b, 0xf0, 0x8b, 0x96])?;
+    at(query, 51, &[0x8d, 0x8e])?;
+    at(query, 57, &[0x23, 0x11, 0x83, 0xfa, 0xff, 0x74, 0x09])?;
+    at(query, 69, &[0x85, 0xc0, 0x75, 0x1c, 0x8b, 0x86])?;
+    at(query, 79, &[0x8d, 0x8e])?;
+    at(query, 85, &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x74, 0x13])?;
+    at(
+        query,
+        97,
+        &[
+            0x85, 0xc0, 0x74, 0x0a, 0xb8, 1, 0, 0, 0, 0x5e, 0x5d, 0xc2, 4, 0, 0x33, 0xc0, 0x5e,
+            0x5d, 0xc2, 4, 0,
+        ],
+    )?;
+    let a = word(query, 53)?;
+    let b = word(query, 81)?;
+    let a_end = a
+        .checked_add(8)
+        .ok_or(Error("combat target pair overflow"))?;
+    let b_end = b
+        .checked_add(8)
+        .ok_or(Error("combat target pair overflow"))?;
+    if a == 0
+        || b == 0
+        || a < b_end && b < a_end
+        || word(query, 47)? != a_end - 4
+        || word(query, 75)? != b_end - 4
+    {
+        return Err(Error("combat target pairs overlap or differ"));
+    }
+    for (offset, field) in [(0, a_end - 4), (10, a), (20, b_end - 4), (30, b)] {
+        at(initial, offset, &[0xc7, 0x83])?;
+        if word(initial, offset + 2)? != field || word(initial, offset + 6)? != u32::MAX {
+            return Err(Error(
+                "initial combat targets differ from queried references",
+            ));
+        }
+    }
+    Ok(())
 }
 
 // Non-stock synthetic operands prove decode reads operands, not constants. The
@@ -486,6 +600,83 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     ] {
         put(&mut w, index, 0, bytes);
     }
+    for (offset, target) in [(0, WINDOWS[21].0), (5, WINDOWS[20].0), (10, WINDOWS[18].0)] {
+        put(&mut w, 17, offset, &[0x68]);
+        dword(&mut w, 17, offset + 1, target);
+    }
+    call(&mut w, 17, 15, 0x8ccc80);
+    put(&mut w, 20, 0, b"CaptainInCombat\0");
+    put(&mut w, 21, 0, b"(B)B\0");
+    put(
+        &mut w,
+        18,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0e, 0x6a, 0x57,
+        ],
+    );
+    call(&mut w, 18, 14, 0x43eca0);
+    put(
+        &mut w,
+        18,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x33, 0xc0, 0x5d, 0xc3, 0x8d, 0x48, 0x2c, 0x8b, 0x41, 0x04, 0x23,
+            0x01, 0x83, 0xf8, 0xff, 0x75, 0x0e, 0xff, 0x75, 0x08, 0x33, 0xc0, 0x8b, 0xc8,
+        ],
+    );
+    call(&mut w, 18, 46, WINDOWS[19].0);
+    put(&mut w, 18, 51, &[0x5d, 0xc3]);
+    call(&mut w, 18, 53, 0x7fc7e0);
+    put(&mut w, 18, 58, &[0xff, 0x75, 0x08, 0x8b, 0xc8]);
+    call(&mut w, 18, 63, WINDOWS[19].0);
+    put(&mut w, 18, 68, &[0x5d, 0xc3]);
+    put(
+        &mut w,
+        19,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0x83, 0x7d, 0x08, 0, 0x56, 0x74, 0x08, 0x81, 0xc1,
+        ],
+    );
+    dword(&mut w, 19, 12, FIRST_SLOT);
+    put(&mut w, 19, 16, &[0xeb, 0x06, 0x81, 0xc1]);
+    dword(&mut w, 19, 20, SECOND_SLOT);
+    put(
+        &mut w,
+        19,
+        24,
+        &[
+            0x8b, 0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x04, 0x33, 0xf6, 0xeb, 0x07,
+        ],
+    );
+    for offset in [38, 64, 92] {
+        call(&mut w, 19, offset, 0x7fc7e0);
+    }
+    put(&mut w, 19, 43, &[0x8b, 0xf0, 0x8b, 0x96]);
+    dword(&mut w, 19, 47, 0x314);
+    put(&mut w, 19, 51, &[0x8d, 0x8e]);
+    dword(&mut w, 19, 53, 0x310);
+    put(&mut w, 19, 57, &[0x23, 0x11, 0x83, 0xfa, 0xff, 0x74, 0x09]);
+    put(&mut w, 19, 69, &[0x85, 0xc0, 0x75, 0x1c, 0x8b, 0x86]);
+    dword(&mut w, 19, 75, 0x32c);
+    put(&mut w, 19, 79, &[0x8d, 0x8e]);
+    dword(&mut w, 19, 81, 0x328);
+    put(&mut w, 19, 85, &[0x23, 0x01, 0x83, 0xf8, 0xff, 0x74, 0x13]);
+    put(
+        &mut w,
+        19,
+        97,
+        &[
+            0x85, 0xc0, 0x74, 0x0a, 0xb8, 1, 0, 0, 0, 0x5e, 0x5d, 0xc2, 4, 0, 0x33, 0xc0, 0x5e,
+            0x5d, 0xc2, 4, 0,
+        ],
+    );
+    for (offset, field) in [(0, 0x314), (10, 0x310), (20, 0x32c), (30, 0x328)] {
+        put(&mut w, 22, offset, &[0xc7, 0x83]);
+        dword(&mut w, 22, offset + 2, field);
+        dword(&mut w, 22, offset + 6, u32::MAX);
+    }
 
     w
 }
@@ -493,6 +684,58 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combat_query_joins_selector_targets_and_initial_empty_references() {
+        let source = synthetic_windows();
+        let decode = |source: &[Vec<u8>]| {
+            CaptainPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0; 32],
+            )
+        };
+        assert!(decode(&source).is_ok());
+        for (index, offset) in [
+            (17, 1),
+            (17, 16),
+            (18, 10),
+            (18, 39),
+            (18, 47),
+            (18, 68),
+            (19, 9),
+            (19, 12),
+            (19, 20),
+            (19, 47),
+            (19, 63),
+            (19, 72),
+            (19, 75),
+            (19, 91),
+            (19, 100),
+            (19, 102),
+            (20, 15),
+            (21, 4),
+            (22, 6),
+        ] {
+            let mut mutant = source.clone();
+            mutant[index][offset] ^= 1;
+            assert!(decode(&mutant).is_err(), "window {index} byte {offset}");
+        }
+        for (a, b) in [(0x410u32, 0x428u32), (0x428, 0x410)] {
+            let mut changed = source.clone();
+            for (offset, value) in [(47, a + 4), (53, a), (75, b + 4), (81, b)] {
+                changed[19][offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            for (offset, value) in [(2, a + 4), (12, a), (22, b + 4), (32, b)] {
+                changed[22][offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            assert!(decode(&changed).is_ok());
+            changed[19][81..85].copy_from_slice(&a.to_le_bytes());
+            changed[19][75..79].copy_from_slice(&(a + 4).to_le_bytes());
+            changed[22][22..26].copy_from_slice(&(a + 4).to_le_bytes());
+            changed[22][32..36].copy_from_slice(&a.to_le_bytes());
+            assert!(decode(&changed).is_err());
+        }
+    }
 
     #[test]
     fn window_budget_is_exact() {
@@ -640,6 +883,7 @@ mod tests {
             (5, 11, slot + 4),
             (11, 2, slot + 4),
             (11, 8, slot),
+            (19, 12, slot),
             (9, 7, 0x620),
             (9, 26, 0x620),
             (10, 16, 0x620),

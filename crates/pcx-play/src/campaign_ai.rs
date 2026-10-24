@@ -148,6 +148,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_group_timed_life(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_captain_group_size(&mut self, player: i32) -> Result<i32, String>;
     fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String>;
+    fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -440,6 +441,16 @@ impl AiWorld for NeutralStack {
             .campaign_captain_is_empty(owner)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "CaptainIsEmpty: captain policy is not admitted".into())
+    }
+    fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String> {
+        let objects = self.inner().inner().inner().inner().inner().inner();
+        let owner = objects
+            .player_identity(player)
+            .ok_or("CaptainInCombat: player is not admitted")?;
+        objects
+            .campaign_captain_in_combat(owner, attack)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "CaptainInCombat: captain policy or active player is absent".into())
     }
 }
 
@@ -779,17 +790,28 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
             ));
         }
     }
-    for (name, result) in [
-        ("CaptainGroupSize", "integer"),
-        ("CaptainIsEmpty", "boolean"),
+    for (name, params, result) in [
+        ("CaptainGroupSize", &[][..], "integer"),
+        ("CaptainIsEmpty", &[][..], "boolean"),
+        ("CaptainInCombat", &["boolean"][..], "boolean"),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
+            if scripts.program().natives().ambiguous(name).is_some() {
+                return Err(format!(
+                    "StartCampaignAI: {name} AI common declaration is ambiguous"
+                ));
+            }
             continue;
         };
         if native.source != *source
             || !native.also_declared_in.is_empty()
             || native.is_constant
-            || !native.params.is_empty()
+            || native.params.len() != params.len()
+            || native
+                .params
+                .iter()
+                .zip(params)
+                .any(|(param, kind)| param.ty.array || param.ty.kind.name() != *kind)
             || native.ret.array
             || native.ret.kind.name() != result
         {
@@ -1121,6 +1143,15 @@ impl<W: AiWorld> Host for AiHost<W> {
                 let player = self.player;
                 Ok(Value::Int(self.world_mut()?.ai_captain_group_size(player)?))
             }
+            "CaptainInCombat" => {
+                let [Value::Bool(attack)] = args else {
+                    return Err("CaptainInCombat: expected one boolean".into());
+                };
+                let player = self.player;
+                Ok(Value::Bool(
+                    self.world_mut()?.ai_captain_in_combat(player, *attack)?,
+                ))
+            }
             "CaptainIsEmpty" => {
                 if !args.is_empty() {
                     return Err("CaptainIsEmpty: expected no arguments".into());
@@ -1169,6 +1200,7 @@ mod tests {
         harvest_clears: BTreeMap<i32, usize>,
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
+        captain_combat: BTreeMap<(i32, bool), bool>,
         group_timed_life: BTreeMap<i32, bool>,
         retirement_blocked: bool,
     }
@@ -1383,6 +1415,17 @@ mod tests {
         }
         fn ai_captain_is_empty(&mut self, _player: i32) -> Result<bool, String> {
             Ok(true)
+        }
+        fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String> {
+            let state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state
+                .captain_combat
+                .get(&(player, attack))
+                .copied()
+                .ok_or_else(|| "captain target is not admitted".into())
         }
     }
 
@@ -1869,6 +1912,95 @@ mod tests {
             state.lock().unwrap().harvest_clears,
             [(1, 2), (2, 2)].into()
         );
+    }
+
+    #[test]
+    fn captain_combat_uses_the_owned_boolean_contract_and_keeps_player_targets_separate() {
+        let declaration = "native CaptainInCombat takes boolean attack returns boolean\n";
+        for (common, ai_common) in [
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("returns boolean", "returns integer")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("takes boolean attack", "takes nothing")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}constant {declaration}"),
+            ),
+            (format!("{COMMON}{declaration}"), AI_COMMON.to_string()),
+            (
+                format!("{COMMON}{declaration}"),
+                format!("{AI_COMMON}{declaration}"),
+            ),
+        ] {
+            let script = program_with_sources(
+                "synthetic:captain-query.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &common,
+                &ai_common,
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let state = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&state)));
+            assert!(
+                runtime
+                    .start(&mut world, 1, "captain-query.ai")
+                    .unwrap_err()
+                    .contains("CaptainInCombat")
+            );
+            assert!(state.lock().unwrap().active.is_empty());
+            assert!(state.lock().unwrap().gold.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:captain-query.ai",
+            "function query takes nothing returns nothing\nif CaptainInCombat(true) then\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nelse\ncall SetPlayerState(Player(GetAiPlayer()),null,29)\nendif\nif CaptainInCombat(false) == CaptainInCombat(true) then\ncall SetPlayerState(Player(GetAiPlayer()),null,-1)\nendif\nendfunction\nfunction main takes nothing returns nothing\ncall query()\ncall Sleep(0.25)\ncall query()\nendfunction\n",
+            &format!("{AI_COMMON}{declaration}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let state = Arc::new(Mutex::new(State::default()));
+        state.lock().unwrap().captain_combat = [
+            ((1, true), true),
+            ((1, false), false),
+            ((2, true), false),
+            ((2, false), true),
+        ]
+        .into();
+        let mut world = Some(World(Arc::clone(&state)));
+        runtime.start(&mut world, 1, "captain-query.ai").unwrap();
+        runtime.start(&mut world, 2, "captain-query.ai").unwrap();
+        assert_eq!(state.lock().unwrap().gold, [(2, 17), (3, 29)].into());
+        {
+            let mut state = state.lock().unwrap();
+            for value in state.captain_combat.values_mut() {
+                *value = !*value;
+            }
+            state.clock = 0.25;
+        }
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(state.lock().unwrap().gold, [(2, 29), (3, 17)].into());
+        let mut host = AiHost::new(1, world.take().unwrap());
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Null],
+            vec![Value::Bool(true), Value::Bool(false)],
+        ] {
+            assert!(host.native("CaptainInCombat", &args).is_err());
+        }
+        assert_eq!(state.lock().unwrap().gold, [(2, 29), (3, 17)].into());
     }
 
     #[test]

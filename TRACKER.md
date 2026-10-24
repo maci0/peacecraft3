@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] `CaptainInCombat` now reads separate attack/defensive captain target state
+  through canonical membership and combat updates. A matched original-client
+  pair confirms fighting outside the group leaves both queries false. Core
+  1,711, app-library 55, app-binary 638, published two-program, actual-image,
+  startup/Continue and strict native/WASM checks pass. Unchanged Human02 now
+  reaches `HarvestGold` at 8.312500 seconds; its opening-minute test remains
+  red. Native controller cadence, target priority and defensive-worker assignment
+  remain unqualified. See [captain combat](docs/re-notes/campaign-ai-captain-combat.md).
+
 - [~] `ClearHarvestAI` now rolls source-derived current/previous assignments on
   canonical owned units, preserving explicit worker orders, cargo and deposits.
   Active-player/source ABI checks precede mutation; transfers, death/removal and

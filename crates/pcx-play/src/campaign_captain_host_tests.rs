@@ -64,6 +64,7 @@ fn creation_before_stop_uses_canonical_anchor_and_setter_changes_selected_homes(
         None
     );
     assert!(!host.campaign_captain_state(owner).unwrap().unwrap().created);
+    assert!(host.campaign_captain_in_combat(owner, true).is_err());
     let handles = host.inner().handles();
     // Source selector bits with no selected slot do not require captain creation.
     host.set_ai_captain_home(4, 0, [48., 64.]).unwrap();
@@ -114,6 +115,7 @@ fn empty_anchor_creates_absent_targets_and_selected_set_refuses_atomically() {
     let empty = host.campaign_captain_state(owner).unwrap().unwrap();
     assert!(empty.created);
     assert_eq!(empty.homes, [None; 2]);
+    assert!(host.campaign_captain_in_combat(owner, false).is_err());
     let both = (policy.first_selector_mask | policy.second_selector_mask) as i32;
     assert!(host.set_ai_captain_home(4, both, [24., 32.]).is_err());
     assert_eq!(host.campaign_captain_state(owner).unwrap().unwrap(), empty);
