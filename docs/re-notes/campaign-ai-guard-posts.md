@@ -105,6 +105,37 @@ expected the diagnostic `-1` lumber write to read back negative; the selected
 client instead reports zero. The corrected check preserves the maps and raw
 markers and uses the independent gold acknowledgment for startup qualification.
 
+## Pending counts and training callbacks
+
+A fourth stopped run repeats the fill arm with map-side training event observers
+and numeric AI query results transferred through diagnostic player resources.
+Its map SHA-256 is
+`2f3d229ed4adfcdbd05b1a7dfb78cd357454c02ca80405b608d99c940df5e2a4`;
+the collected result is
+`392b103caf24f8fa9c14e4435896e9482adf0647f0fe32dd71d6e006c20f728c`.
+There are 240 query samples and two training callbacks. At the start callback,
+15.500 seconds, the producer is the barracks, `GetTrainedUnit()` is null,
+`GetTrainedUnitType()` is the grunt type, gold is already debited, food is
+reserved, and the live grunt roster is empty. At the finish callback, 45.563,
+`GetTrainedUnit()` identifies a grunt distinct from the dead original, the
+declared type still reports grunt, and the live roster contains one.
+
+During pending work, `GetUnitCount` and `GetPlayerUnitTypeCount` both report one,
+while `GetUnitCountDone` reports zero. After completion all three report one.
+These AI observations are sampled through the resource handoff, so the death
+sample can still contain the prior AI query and the done-query transition can
+lag the finish callback by one sample. This does not establish exact scheduler
+ordering between the two VMs. No cancellation was requested or observed.
+
+The initial observer draft attempted preload text generation inside the AI VM.
+It produced malformed query filenames and the original client's error dialog
+after sample 20. That run is stopped, preserved, and explicitly unqualified;
+its partial callback is not the basis of the contract above. The successful
+revision keeps preload output and string formatting in the map VM. Its map/AI
+sources resolve, every packed member round-trips, and the four collector tests
+cover numeric, wrapper, identity, progress and truncated-data refusal. All
+artifacts remain ignored under `.scratch/fill-guard-posts/`.
+
 ## Implementation work remaining
 
 The current host still refuses `FillGuardPosts`. The qualified next change is
@@ -116,7 +147,17 @@ guard binding, callbacks and failure atomicity need connected tests. The existin
 live-guard list alone loses the vacant post on death and cannot supply that
 replacement behavior.
 
-Structure construction, hero replacement/revival, training event delivery,
+`CampaignModePolicy` now derives the initial and release counters from selected
+instructions, checks the binding increment and signed-limit branch, and binds
+the `FillGuardPosts` registration/forwarding to those fields. Nonstock synthetic
+operands and malformed/truncated relationships are tested; the actual selected
+image decodes. The full library suite passes 1,738 tests; strict native/WASM
+Clippy and formatting pass. This is source-data admission, not a completed
+runtime consumer. A shared pending-production job can preserve the observed
+counts, food, resource and callback phases without reproducing native record
+layout, linked lists or queue wrappers.
+
+Structure construction, hero replacement/revival, other training event paths,
 multiple producers, cancellation and exact spawn/arrival behavior are not
 qualified by this ordinary one-producer experiment. The game goal and the
 unchanged campaign acceptance test remain incomplete.

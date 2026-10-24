@@ -8,6 +8,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
   do not. The selected code joins persistent posts, assignment counters and the
   signed replacement limit. The game-runtime consumer and shared unit production
   remain unfinished, so Human02 still refuses this native at 8.312500 seconds.
+  The source policy now derives post counters and validates their relationships;
+  1,738 core tests and strict native/WASM checks pass. A fourth stopped run
+  qualifies pending count queries and training start/finish payloads. Native
+  record layout is not an implementation requirement.
   See [guard-post replacement](docs/re-notes/campaign-ai-guard-posts.md).
 
 - [~] `AddDefenders` now recruits canonical units into the defensive captain,
