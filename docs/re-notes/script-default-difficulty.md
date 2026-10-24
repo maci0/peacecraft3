@@ -30,6 +30,10 @@
 - `DefaultDifficultyObservation::NoProfile { native_fallback }` (`map_startup_host.rs`) is the only
   source. The campaign builder derives `native_fallback` from the selected client image it already
   reads (`campaign_inputs::prepare_new_game`).
+- Fresh campaign current difficulty now resolves that same no-profile fallback
+  through the loaded script's `ConvertGameDifficulty` constants. It no longer
+  selects the literal `MAP_DIFFICULTY_NORMAL`. Missing or ambiguous source
+  declarations refuse preparation. Later current/default setters remain separate.
 - The app reads no `.w3p` or Battle.net registry profile. The native reads a profile entry through
   the `Difficulty` key. Static evidence: the registry prefix `Software\Battle.net\` and the
   `/Campaigns` and `.w3p` strings appear in the selected image. The app does not enumerate them.

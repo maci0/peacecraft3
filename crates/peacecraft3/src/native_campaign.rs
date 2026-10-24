@@ -36,7 +36,7 @@ const INDEX_LIMITS: IndexLimits = IndexLimits {
     max_missions_per_campaign: 128,
 };
 
-/// One mission row (`Header`, `Name`, map filename) as authored.
+/// One mission row (`Header`, `Name`, target filename) as authored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Mission {
     pub header: String,
@@ -158,6 +158,29 @@ fn index_member(mode: &GameMode) -> &'static str {
     match mode.addon {
         Addon::Roc => "UI\\CampaignStrings.txt",
         Addon::Tft => "UI\\CampaignStrings_exp.txt",
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TargetKind {
+    Map,
+    Model,
+}
+
+fn target_kind(member: &str) -> Result<TargetKind, String> {
+    let extension = member.rsplit_once('.').map(|(_, extension)| extension);
+    match extension {
+        Some(extension)
+            if extension.eq_ignore_ascii_case("w3m") || extension.eq_ignore_ascii_case("w3x") =>
+        {
+            Ok(TargetKind::Map)
+        }
+        Some(extension)
+            if extension.eq_ignore_ascii_case("mdl") || extension.eq_ignore_ascii_case("mdx") =>
+        {
+            Ok(TargetKind::Model)
+        }
+        _ => Err(format!("{member}: unsupported campaign target format")),
     }
 }
 
@@ -367,6 +390,12 @@ fn configuration(
     chapter: &Chapter,
     revision: u64,
 ) -> Result<Configuration, String> {
+    if target_kind(&chapter.map)? == TargetKind::Model {
+        return Err(format!(
+            "{}: standalone campaign model cinematic playback is not implemented",
+            chapter.map
+        ));
+    }
     let base = recipe.base_resolver().map_err(|error| error.to_string())?;
     let map = base
         .resolve_bounded(&chapter.map, MAX_ASSET_BYTES as u64)
@@ -1342,6 +1371,56 @@ pub(crate) mod tests {
         drop(started_app());
     }
 
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL with original RoC and TFT campaign assets"]
+    fn selected_install_all_indexed_entries_resolve_their_authored_target_types() {
+        let install =
+            std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL");
+        for expansion in [false, true] {
+            let launcher = crate::launch_gui::Launcher::test_source(install.clone(), expansion);
+            let mode = launcher.mode();
+            let chapters = read_campaigns(Path::new(&install), &mode).unwrap();
+            let recipe = chapters.recipe.expect("source recipe");
+            let reader = recipe.base_resolver().unwrap();
+            assert!(
+                !chapters.entries.is_empty(),
+                "selected campaign index is empty"
+            );
+            let mut map_headers = 0;
+            let mut model_cinematics = 0;
+            for chapter in &chapters.entries {
+                if target_kind(&chapter.map).unwrap() == TargetKind::Model {
+                    let member = pcx_mdl::binary_model_path(&chapter.map);
+                    let asset = reader
+                        .resolve_bounded(&member, MAX_ASSET_BYTES as u64)
+                        .unwrap();
+                    pcx_mdl::Mdlx::parse(&asset.bytes).unwrap();
+                    model_cinematics += 1;
+                    continue;
+                }
+                let asset = reader
+                    .resolve_bounded(&chapter.map, MAX_ASSET_BYTES as u64)
+                    .unwrap();
+                let map = pcx_map::Map::parse(&asset.bytes).unwrap();
+                let info = map
+                    .extract_checked(&chapter.map, "war3map.w3i", map_read_budget())
+                    .unwrap()
+                    .expect("indexed mission needs map information");
+                let info = pcx_map::info::MapInfo::from_bytes(info).unwrap();
+                recipe
+                    .rules()
+                    .campaign_data_set(&info, recipe.edition())
+                    .unwrap();
+                map_headers += 1;
+            }
+            assert_eq!(map_headers + model_cinematics, chapters.entries.len());
+            println!(
+                "edition={:?} map_headers={} model_cinematics={}",
+                mode.addon, map_headers, model_cinematics,
+            );
+        }
+    }
+
     pub(crate) fn started_app() -> App {
         let install_dir = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
             .expect("set PCX_NATIVE_CHAPTER_INSTALL to the selected local install");
@@ -1502,6 +1581,50 @@ pub(crate) mod tests {
         assert_eq!(chapters.len(), 3);
         assert_eq!(chapters[0].campaign, "Exodus");
         assert_eq!(chapters[2].map, "Maps\\Human01.w3m");
+    }
+
+    #[test]
+    fn changed_index_data_changes_mission_order_labels_maps_and_availability() {
+        let source = "[Index]\nCampaignList=Two,One\n[One]\nName=First Authored\nDefaultOpen=0\nMission0=Late Header,Late Name,Maps\\Changed\\Zulu.w3x\n[Two]\nName=Other Authored\nDefaultOpen=1\nMission0=Early Header,Early Name,Maps\\Elsewhere\\Alpha.w3m\nMission1=Next Header,Next Name,Maps\\Elsewhere\\Beta.w3x\n";
+        let (campaigns, chapters) = parse_campaigns("synthetic:reordered-index", source).unwrap();
+        assert_eq!(
+            campaigns
+                .iter()
+                .map(|c| (c.key.as_str(), c.default_open))
+                .collect::<Vec<_>>(),
+            [("Two", true), ("One", false)]
+        );
+        assert_eq!(
+            chapters
+                .iter()
+                .map(|c| (c.name.as_str(), c.map.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("Early Name", "Maps\\Elsewhere\\Alpha.w3m"),
+                ("Next Name", "Maps\\Elsewhere\\Beta.w3x"),
+                ("Late Name", "Maps\\Changed\\Zulu.w3x")
+            ]
+        );
+        let changed = source
+            .replace("CampaignList=Two,One", "CampaignList=One,Two")
+            .replace("Late Name", "Replacement Title")
+            .replace("Zulu.w3x", "Replacement.w3m");
+        let (_, changed) = parse_campaigns("synthetic:changed-index", &changed).unwrap();
+        assert_eq!(changed[0].name, "Replacement Title");
+        assert_eq!(changed[0].map, "Maps\\Changed\\Replacement.w3m");
+    }
+
+    #[test]
+    fn indexed_targets_follow_file_formats_without_stock_campaign_special_cases() {
+        for path in ["Elsewhere\\NewChapter.w3m", "Other/NewMap.W3X"] {
+            assert_eq!(target_kind(path).unwrap(), TargetKind::Map);
+        }
+        for path in ["Other\\DifferentFinale.mdl", "Arbitrary/Scene.MDX"] {
+            assert_eq!(target_kind(path).unwrap(), TargetKind::Model);
+        }
+        for path in ["Other/Unknown.bin", "MissingExtension", "Other/.w3n"] {
+            assert!(target_kind(path).is_err());
+        }
     }
 
     #[test]

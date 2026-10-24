@@ -5,6 +5,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] The [core mechanics plan](docs/core-mechanics-plan.md) now orders complete
+  orders/combat, economy/production, abilities, vision, AI, mission and persistence
+  loops with behavioral acceptance gates. Replacement training checks resolved
+  upgrade prerequisites against canonical owner research before spending or
+  publishing events; unit/equivalence requirements remain open. Mission loading
+  no longer fixes current difficulty to Normal and distinguishes source-indexed
+  maps from model cinematics. The explicit selected-install check reads all 42
+  RoC map headers, 37 TFT map headers and one cinematic model, deriving that
+  inventory from the data. Core 1,758, application 711, strict native/WASM,
+  desktop build and Human02 opening-minute checks pass. This still uses the earlier victory
+  stimulus to reach Human02; it is not a completed first mission. Standalone
+  cinematic playback, profiles/unlocks and the remaining mechanics matrix are
+  unfinished. See [mission data loading](docs/re-notes/mission-data-loading.md)
+  and [production prerequisites](docs/re-notes/campaign-ai-guard-posts.md#upgrade-prerequisites).
+
 - [~] Campaign backgrounds now play the source Birth once before Stand, keeping
   global tracks, live particles, RNG and fractional emission continuous. Loading
   time cannot consume the first visible pose; long presentation frames retain

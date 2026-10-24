@@ -13,6 +13,8 @@ events and deterministic RNG. Player input, map scripts, AI and replay commands
 must reach that same state. Rendering reads accepted simulation results. Parse
 rules from the selected installation and map overrides; keep those identities
 in traces. Missing rules must be visible errors, not invented defaults.
+The [mission loading audit](re-notes/mission-data-loading.md) records the source
+chain for campaign rows, map paths, map headers, scripts and initial difficulty.
 
 For each loop, implement source admission, simulation, lifecycle cleanup,
 script events, player commands and presentation together. Validate malformed
@@ -55,6 +57,12 @@ reused rather than duplicated for scripts, AI or UI.
    an unchanged-map playthrough, then advance through the authored mission list.
 5. Expand the mechanic matrix across all races, ability families and custom
    maps; complete deterministic, persistence and multiplayer acceptance.
+
+The first delivered production path checks admitted upgrade prerequisites before
+costs and callbacks; unit/equivalence prerequisites remain open. The mission
+loading audit also exposed model-cinematic rows in the source index: they are
+retained and typed, and standalone playback remains a stage 7 requirement.
+Neither result closes a whole mechanics stage.
 
 ## Evidence to retain for every completed mechanic
 

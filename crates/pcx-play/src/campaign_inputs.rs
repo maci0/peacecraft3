@@ -253,8 +253,12 @@ pub fn prepare_new_game(
             fog_enabled: settings.fog_enabled,
             fog_mask_enabled: settings.fog_mask_enabled,
         }),
-        // ponytail: Normal until the campaign menu offers the difficulty choice.
-        difficulty_global: Some("MAP_DIFFICULTY_NORMAL".into()),
+        // shortcut: no persisted profile choice; use the selected client's no-profile fallback.
+        difficulty_global: Some(conversion_global(
+            context.scripts.program(),
+            "ConvertGameDifficulty",
+            default_difficulty_fallback,
+        )?),
         default_difficulty: Some(DefaultDifficultyObservation::NoProfile {
             native_fallback: default_difficulty_fallback,
         }),
@@ -907,5 +911,25 @@ mod tests {
         )
         .unwrap();
         assert!(super::conversion_global(&program, "ConvertGameEvent", 19).is_err());
+    }
+
+    #[test]
+    fn difficulty_selection_follows_source_ordinal_and_name_instead_of_normal() {
+        let source = pcx_script::parse_script("type gamedifficulty extends handle\nconstant native ConvertGameDifficulty takes integer n returns gamedifficulty\nglobals\nconstant gamedifficulty MAP_DIFFICULTY_NORMAL = ConvertGameDifficulty(2)\nconstant gamedifficulty AuthoredChoice = ConvertGameDifficulty(37)\nendglobals\n").unwrap();
+        let empty = pcx_script::parse_script("").unwrap();
+        let program = pcx_script::resolve_with(
+            &empty,
+            &[pcx_script::Prelude::new("selected common", &source)],
+        )
+        .unwrap();
+        assert_eq!(
+            super::conversion_global(&program, "ConvertGameDifficulty", 37).unwrap(),
+            "AuthoredChoice"
+        );
+        assert_eq!(
+            super::conversion_global(&program, "ConvertGameDifficulty", 2).unwrap(),
+            "MAP_DIFFICULTY_NORMAL"
+        );
+        assert!(super::conversion_global(&program, "ConvertGameDifficulty", 1).is_err());
     }
 }
