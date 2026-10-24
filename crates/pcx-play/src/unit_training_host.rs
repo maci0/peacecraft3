@@ -21,6 +21,8 @@ struct Training {
     guard: Option<(i32, usize)>,
     active: bool,
     duration: i32,
+    gold: i32,
+    lumber: i32,
     kind: i32,
     food: i32,
     finish: f64,
@@ -31,6 +33,11 @@ struct Training {
 #[derive(Default)]
 pub(super) struct State {
     jobs: Vec<Training>,
+}
+
+pub(super) struct TrainingDeath {
+    producer: HandleId,
+    credit: super::players::TrainingDebit,
 }
 
 pub(super) struct GuardBinding {
@@ -453,6 +460,141 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Cancel one queue entry; public script order strings are not cancellation commands.
+    pub fn cancel_unit_training(&mut self, producer: HandleId, slot: usize) -> Result<bool, Error> {
+        let record = self.executed_unit(producer)?;
+        if !live(record) {
+            return Ok(false);
+        }
+        let Some(index) = self
+            .training
+            .jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, job)| job.producer == producer)
+            .nth(slot)
+            .map(|(index, _)| index)
+        else {
+            return Ok(false);
+        };
+        let job = self.training.jobs[index];
+        if record.owner != job.owner {
+            return Err(self.training_error("training owner changed"));
+        }
+        let paused = record.paused_since.is_some();
+        let refund = [
+            self.training_refund(job.gold)?,
+            self.training_refund(job.lumber)?,
+        ];
+        let cancel = self.prepare_training_events(producer, "CANCEL")?;
+        let mut next = None;
+        let mut start = Vec::new();
+        let released = if job.active { job.food } else { 0 };
+        if job.active
+            && !paused
+            && let Some((next_index, mut head)) = self
+                .training
+                .jobs
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .find(|(_, head)| head.producer == producer)
+                .map(|(i, head)| (i, *head))
+        {
+            let used = self
+                .player_resource_value(job.owner, "PLAYER_STATE_RESOURCE_FOOD_USED")?
+                .ok_or_else(|| self.training_error("food not admitted"))?;
+            let cap = self
+                .player_resource_value(job.owner, "PLAYER_STATE_RESOURCE_FOOD_CAP")?
+                .ok_or_else(|| self.training_error("food cap not admitted"))?;
+            let after = used
+                .checked_sub(released)
+                .and_then(|n| n.checked_add(head.food))
+                .ok_or_else(|| self.training_error("replacement food overflow"))?;
+            if after <= cap {
+                let now = self
+                    .timer_game_time()
+                    .filter(|n| n.is_finite() && *n >= 0.)
+                    .ok_or_else(|| self.training_error("training clock not admitted"))?;
+                head.active = true;
+                head.through = now;
+                head.finish = now + f64::from(head.duration);
+                if !head.finish.is_finite() || head.finish <= now {
+                    return Err(self.training_error("replacement deadline cannot advance"));
+                }
+                start = self.prepare_training_events(producer, "START")?;
+                next = Some((next_index, head));
+            }
+        }
+        let food = next
+            .as_ref()
+            .map_or(0, |(_, head)| head.food)
+            .checked_sub(released)
+            .ok_or_else(|| self.training_error("cancel food overflow"))?;
+        let events = cancel
+            .len()
+            .checked_add(start.len())
+            .ok_or_else(|| self.training_error("cancel event overflow"))?;
+        let credit = self
+            .prepare_training_change(job.owner, refund, food, events)?
+            .ok_or_else(|| self.training_error("cancel resource transition refused"))?;
+        if let Some((next_index, head)) = next {
+            self.training.jobs[next_index] = head;
+        }
+        self.training.jobs.remove(index);
+        self.commit_training_debit(credit);
+        self.commit_training_events(cancel, producer, job.kind, None);
+        if let Some((_, head)) = next {
+            self.commit_training_events(start, producer, head.kind, None);
+        }
+        Ok(true)
+    }
+
+    pub(super) fn prepare_training_death(
+        &mut self,
+        producer: HandleId,
+    ) -> Result<Option<TrainingDeath>, Error> {
+        let current_owner = self.executed_unit(producer)?.owner;
+        let mut owner = None;
+        let mut refund = [0_i32; 2];
+        let mut food = 0_i32;
+        for job in self
+            .training
+            .jobs
+            .iter()
+            .filter(|job| job.producer == producer)
+        {
+            if current_owner != job.owner || owner.is_some_and(|owner| owner != job.owner) {
+                return Err(self.training_error("queue owners differ"));
+            }
+            owner = Some(job.owner);
+            for (sum, cost) in refund.iter_mut().zip([job.gold, job.lumber]) {
+                *sum = sum
+                    .checked_add(self.training_refund(cost)?)
+                    .ok_or_else(|| self.training_error("death refund overflow"))?;
+            }
+            if job.active {
+                food = food
+                    .checked_add(job.food)
+                    .ok_or_else(|| self.training_error("death food overflow"))?;
+            }
+        }
+        let Some(owner) = owner else {
+            return Ok(None);
+        };
+        let credit = self
+            .prepare_training_change(owner, refund, -food, 0)?
+            .ok_or_else(|| self.training_error("death refund refused"))?;
+        Ok(Some(TrainingDeath { producer, credit }))
+    }
+
+    pub(super) fn commit_training_death(&mut self, death: TrainingDeath) {
+        self.training
+            .jobs
+            .retain(|job| job.producer != death.producer);
+        self.commit_training_debit(death.credit);
+    }
+
     /// FIFO entries with a completion clock only for the active head.
     pub fn unit_training_queue(
         &self,
@@ -637,6 +779,7 @@ impl ObjectHost {
         kind: i32,
         definition: Definition,
     ) -> Result<bool, Error> {
+        self.require_ordinary_training(kind)?;
         if !self.training_prerequisites_met(&definition, owner)? {
             return Ok(false);
         }
@@ -678,7 +821,7 @@ impl ObjectHost {
             .try_reserve(1)
             .map_err(|_| self.training_error("training job capacity"))?;
         let events = if active {
-            self.prepare_training_events(producer, false)?
+            self.prepare_training_events(producer, "START")?
         } else {
             Vec::new()
         };
@@ -699,6 +842,8 @@ impl ObjectHost {
             guard,
             active,
             duration,
+            gold,
+            lumber,
             kind,
             food,
             finish: completion,
@@ -760,7 +905,7 @@ impl ObjectHost {
                     index += 1;
                     continue;
                 }
-                let events = self.prepare_training_events(job.producer, false)?;
+                let events = self.prepare_training_events(job.producer, "START")?;
                 let Some(debit) =
                     self.prepare_training_debit(job.owner, 0, 0, job.food, events.len())?
                 else {
@@ -800,7 +945,7 @@ impl ObjectHost {
                 .position
                 .ok_or_else(|| self.training_error("producer position is not admitted"))?;
             let face = producer.face;
-            let events = self.prepare_training_events(job.producer, true)?;
+            let events = self.prepare_training_events(job.producer, "FINISH")?;
             let prepared = self.prepare_unit_creation(
                 &[
                     Value::Handle(job.owner),
@@ -838,7 +983,7 @@ impl ObjectHost {
     fn prepare_training_events(
         &mut self,
         producer: HandleId,
-        finish: bool,
+        phase: &str,
     ) -> Result<Vec<TrainingEvent>, Error> {
         let source = self.unit_declaration()?.0;
         for (name, result) in [
@@ -852,13 +997,10 @@ impl ObjectHost {
                 }
             }
         }
-        let (unit_name, player_name) = if finish {
-            ("EVENT_UNIT_TRAIN_FINISH", "EVENT_PLAYER_UNIT_TRAIN_FINISH")
-        } else {
-            ("EVENT_UNIT_TRAIN_START", "EVENT_PLAYER_UNIT_TRAIN_START")
-        };
-        let unit_event = self.source_constant_enumerand(unit_name, "unitevent")?;
-        let player_event = self.source_constant_enumerand(player_name, "playerunitevent")?;
+        let unit_name = format!("EVENT_UNIT_TRAIN_{phase}");
+        let player_name = format!("EVENT_PLAYER_UNIT_TRAIN_{phase}");
+        let unit_event = self.source_constant_enumerand(&unit_name, "unitevent")?;
+        let player_event = self.source_constant_enumerand(&player_name, "playerunitevent")?;
         let owner = self.executed_unit(producer)?.owner;
         let mut events = Vec::new();
         for entry in &self.inner.arena {

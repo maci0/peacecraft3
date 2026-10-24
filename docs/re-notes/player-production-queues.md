@@ -2,8 +2,9 @@
 
 This is the implementation contract for extending the existing replacement
 production lifecycle. The shared-state implementation now admits queued player
-training orders, but cancellation, presentation and producer lifecycle remain
-unfinished. It uses the canonical ObjectHost units, banks, food accounting, clock, placement and
+training orders and explicit queue cancellation, with producer-death refunds.
+Presentation, input delivery, removal and transfer remain unfinished. It uses
+the canonical ObjectHost units, banks, food accounting, clock, placement and
 event delivery, with an optional guard-post binding for replacement jobs.
 
 ## Qualified original behavior
@@ -115,9 +116,31 @@ requests and before the first finish. Money returns to its initial value, active
 food is released, and no train-cancel or finish event is emitted. The bounded
 80-tick run retained 161 markers; `death-transition.json` pins the result and
 checks the post-death state through the terminal sample. This does not qualify
-explicit removal, owner transfer or a fractional refund override. The host's
-producer-loss refusal remains debt until its cleanup uses this distinct lifecycle
-path rather than replaying UI cancellation events.
+explicit removal, owner transfer or a fractional refund override. The host now
+prepares this distinct death refund before death mutations and
+clears production without replaying UI cancellation events. Explicit removal
+and owner transfer still need their own qualified lifecycle handling.
+
+## Fractional producer-death refund observation
+
+The separate `queue-probe-death-refund/native` run adds an explicitly experimental
+map override, `[Misc] TrainRefundRate=0.37`, while retaining the producer and unit
+source setup. Killing the producer refunds 602 gold across seven entries;
+truncating the combined cost would yield 608. Food returns to zero and no cancel
+event fires. `fractional-refund-transition.json` pins the strict 161-marker
+result, derives each cost from the observed debits, and discriminates per-entry
+conversion from aggregate conversion. The generated map and original inputs
+remain local. This qualifies the positive fractional death-refund case; negative
+rates, overflow classes and UI cancellation with this override were not tested.
+
+The host's `cancel_unit_training(producer, slot)` prepares the source refund,
+food release, successor activation and combined event capacity before mutation.
+Pending cancellation leaves the active deadline unchanged. Active cancellation
+starts the successor only when food permits. Invalid slots and repeats return
+false. The operation is not exposed as an invented script order. Tests use
+nonstock fractional rates and costs, exercise missing numeric-policy refusal,
+and distinguish counted living units from pending entries. Hero training refuses
+through the source cost classifier until token transitions are implemented.
 
 ## Connected implementation and acceptance
 
@@ -133,7 +156,7 @@ path rather than replaying UI cancellation events.
 3. Complete through existing canonical unit creation/placement and train-finish
    delivery; activate the next head without publishing duplicate debit or
    callbacks. Use the existing pause and clock boundaries, with interruption
-   regressions. Current producer-loss/transfer refusal remains an open lifecycle
+   regressions. Explicit producer-removal/transfer refusal remains an open lifecycle
    gap, not a completed cancellation implementation.
 4. Add queue cancellation by index as a shared-world operation used by UI and
    input/replay delivery. Prepare the source-derived per-entry refund, food,

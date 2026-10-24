@@ -5,6 +5,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Shared training queues now support explicit pending/active cancellation
+  with source-derived, per-entry refunds and preflighted food/event transitions.
+  Producer death refunds and clears jobs without cancellation events, matching
+  original stock and fractional-override probes. Missing refund math refuses
+  before queue/life changes; source-classified hero training refuses pending
+  token support. Core 1,774 tests pass. Queue command-card/input presentation,
+  explicit removal/transfer and same-callback pending-head wake remain open;
+  no new complete mission playthrough is claimed.
+
 - [~] Player `IssueImmediateOrderById` training now shares the canonical
   production state with guard replacement. Source `Trains`, prerequisites,
   limits, money and queue bounds gate requests; accepted entries pay once and

@@ -2033,6 +2033,26 @@ impl ObjectHost {
         Ok(self.ai_player_unit_type_count(Some(owner), kind)? < maximum)
     }
 
+    pub(super) fn require_ordinary_training(&self, kind: i32) -> Result<(), Error> {
+        let fail = |why| {
+            self.inner
+                .error("training queue", Failure::UnitActivity(why))
+        };
+        let rules = &self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("training resources not admitted".into()))?
+            .rules;
+        let policy = rules.unit_cost.as_ref().map_err(|why| fail(why.clone()))?;
+        if policy.is_hero(kind) {
+            return Err(fail(
+                "hero training and token transitions are not admitted".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn training_queue_slots(&self) -> Result<usize, Error> {
         let fail = |why| {
             self.inner
@@ -2054,6 +2074,32 @@ impl ObjectHost {
         Ok(training.queue_slots)
     }
 
+    pub(super) fn training_refund(&self, cost: i32) -> Result<i32, Error> {
+        self.training_queue_slots()?;
+        let rules = &self
+            .players
+            .as_ref()
+            .expect("checked")
+            .resources
+            .as_ref()
+            .expect("checked")
+            .rules;
+        let numeric = self.numeric.as_ref().ok_or_else(|| {
+            self.inner.error(
+                "training refund",
+                Failure::UnitActivity("source numeric rules are not admitted".into()),
+            )
+        })?;
+        rules
+            .training_rules()
+            .expect("checked")
+            .refund(numeric, cost)
+            .map_err(|why| {
+                self.inner
+                    .error("training refund", Failure::UnitActivity(why))
+            })
+    }
+
     pub(super) fn prepare_training_debit(
         &mut self,
         owner: HandleId,
@@ -2069,6 +2115,20 @@ impl ObjectHost {
         if gold < 0 || lumber < 0 || food < 0 {
             return Err(fail("negative training cost"));
         }
+        self.prepare_training_change(owner, [-gold, -lumber], food, pending)
+    }
+
+    pub(super) fn prepare_training_change(
+        &mut self,
+        owner: HandleId,
+        money: [i32; 2],
+        food: i32,
+        pending: usize,
+    ) -> Result<Option<TrainingDebit>, Error> {
+        let fail = |why| {
+            self.inner
+                .error("training resources", Failure::PlayerState(why))
+        };
         let at = self.player_index(&Value::Handle(owner), "FillGuardPosts")?;
         let states = [
             "PLAYER_STATE_RESOURCE_GOLD",
@@ -2090,15 +2150,25 @@ impl ObjectHost {
         let used = current[2]
             .checked_add(food)
             .ok_or_else(|| fail("training food overflow"))?;
-        if current[0] < gold || current[1] < lumber || used > cap {
+        let gold = current[0]
+            .checked_add(money[0])
+            .ok_or_else(|| fail("training gold overflow"))?;
+        let lumber = current[1]
+            .checked_add(money[1])
+            .ok_or_else(|| fail("training lumber overflow"))?;
+        if gold < 0 || lumber < 0 || used < 0 || (food > 0 && used > cap) {
             return Ok(None);
         }
-        let next = [current[0] - gold, current[1] - lumber, used];
         let resources = self
             .players
             .as_ref()
             .and_then(|p| p.resources.as_ref())
             .ok_or_else(|| fail("resources not admitted"))?;
+        let next = [
+            resources.rules.money(gold),
+            resources.rules.money(lumber),
+            used,
+        ];
         let number = self.players.as_ref().expect("players").rows[at].number;
         let row = |index: usize| ResourceRow {
             number,

@@ -837,6 +837,7 @@ impl ObjectHost {
         };
         let owner = record.owner;
         let experience = self.plan_hero_kill_experience(unit, killer)?;
+        let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
         self.forget_inventory_unit(unit, false)?;
         self.forget_unit_guard(unit);
@@ -846,6 +847,9 @@ impl ObjectHost {
                 self.inner
                     .error(name, Failure::UnitPlacement(e.to_string()))
             })?;
+        }
+        if let Some(training) = training {
+            self.commit_training_death(training);
         }
         self.forget_hidden_unit_ranges(unit);
         self.forget_unit_activity(unit);

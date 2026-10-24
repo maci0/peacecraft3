@@ -11,8 +11,10 @@ constant native GetPlayerTechCount takes player p, integer kind, boolean specifi
 globals
 constant unitevent EVENT_UNIT_TRAIN_START=ConvertUnitEvent(78)
 constant unitevent EVENT_UNIT_TRAIN_FINISH=ConvertUnitEvent(79)
+constant unitevent EVENT_UNIT_TRAIN_CANCEL=ConvertUnitEvent(80)
 constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_START=ConvertPlayerUnitEvent(178)
 constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_FINISH=ConvertPlayerUnitEvent(179)
+constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_CANCEL=ConvertPlayerUnitEvent(180)
 constant playerstate PLAYER_STATE_RESOURCE_HERO_TOKENS=ConvertPlayerState(17)
 endglobals
 "#;
@@ -40,6 +42,15 @@ fn fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId
 fn fixture_with_capacity(
     overrides: &[([u8; 4], ObjectField)],
     capacity: usize,
+) -> (Vm, HandleId, HandleId) {
+    fixture_with_training(overrides, capacity, 0.37, true)
+}
+
+fn fixture_with_training(
+    overrides: &[([u8; 4], ObjectField)],
+    capacity: usize,
+    refund_rate: f32,
+    admit_numeric: bool,
 ) -> (Vm, HandleId, HandleId) {
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
@@ -76,10 +87,19 @@ fn fixture_with_capacity(
     let (mut vm, actor, other) =
         guarded_configured_with_capacity(8., 16., 1., None, (&fields, EVENTS), capacity, |h| {
             let mut resources = crate::player_resources::fixture::rules();
-            let mut training = crate::training_rules::Rules::fixture(3, 0.37);
+            let (image, binding, budget) = crate::script_numeric::tests::fixture();
+            let numeric =
+                crate::script_numeric::NumericPolicy::read(&image, binding, budget, 64).unwrap();
+            resources.image_sha256 = *numeric.image_sha256();
+            let mut training = crate::training_rules::Rules::fixture(3, refund_rate);
             training.image_sha256 = resources.image_sha256;
             resources.training = Ok(training);
             resources.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(17, b'J', b'Q', 3));
+            let h = if admit_numeric {
+                h.with_script_numeric(numeric)
+            } else {
+                h
+            };
             h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
                 max_records: 16,
             })
@@ -909,4 +929,230 @@ fn paid_pending_head_waits_for_food_without_another_money_debit() {
     assert!(h.unit_training_queue(producer).unwrap().is_empty());
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 12);
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 64);
+}
+
+#[test]
+fn cancelling_pending_and_active_entries_refunds_once_and_preserves_the_head_rules() {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[column(
+            b"T003",
+            SlkId::UnitBalance,
+            "goldcost",
+            FieldKind::Int,
+            "13",
+        )],
+        8,
+    );
+    let start = vm.global("EVENT_PLAYER_UNIT_TRAIN_START");
+    let cancel = vm.global("EVENT_PLAYER_UNIT_TRAIN_CANCEL");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    for event in [start, cancel] {
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[trigger.clone(), Value::Handle(owner), event, Value::Null],
+        )
+        .unwrap();
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            h.native(
+                "IssueImmediateOrderById",
+                &[
+                    Value::Handle(producer),
+                    Value::Int(i32::from_be_bytes(*b"u001"))
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    }
+    observe_event(h, producer, None);
+    let original_head = h.unit_training_queue(producer).unwrap()[0];
+    assert!(!h.cancel_unit_training(producer, 3).unwrap());
+    assert!(h.cancel_unit_training(producer, 2).unwrap());
+    assert_eq!(h.unit_training_queue(producer).unwrap()[0], original_head);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 55);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 64);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+    observe_event(h, producer, None);
+    step(&mut vm, 2.);
+    let h = &mut vm.host().inner;
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(h.unit_training_queue(producer).unwrap()[0].1, Some(11.));
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 59);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 66);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+    let mut events = 0;
+    while let Some(event) = h.take_fired_event() {
+        assert_eq!(event.subject.unit, Some(producer));
+        assert_eq!(
+            event.subject.trained_type,
+            Some(i32::from_be_bytes(*b"u001"))
+        );
+        events += 1;
+    }
+    assert_eq!(events, 2);
+    step(&mut vm, 11.);
+    let h = &mut vm.host().inner;
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert!(!h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 59);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+}
+
+#[test]
+fn producer_death_refunds_each_entry_and_releases_food_without_cancel_events() {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[column(
+            b"T003",
+            SlkId::UnitBalance,
+            "goldcost",
+            FieldKind::Int,
+            "13",
+        )],
+        8,
+    );
+    let cancel = vm.global("EVENT_PLAYER_UNIT_TRAIN_CANCEL");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[trigger, Value::Handle(owner), cancel, Value::Null],
+    )
+    .unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            h.native(
+                "IssueImmediateOrderById",
+                &[
+                    Value::Handle(producer),
+                    Value::Int(i32::from_be_bytes(*b"u001"))
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    }
+    h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 63);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 68);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 3);
+    assert!(h.take_fired_event().is_none());
+    h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 63);
+    step(&mut vm, 30.);
+    assert_eq!(
+        bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+        63
+    );
+}
+
+#[test]
+fn missing_refund_math_refuses_cancel_and_death_before_world_changes() {
+    let (mut vm, actor, producer) = fixture_with_training(&[], 8, 0.37, false);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    assert_eq!(
+        h.native(
+            "IssueImmediateOrderById",
+            &[
+                Value::Handle(producer),
+                Value::Int(i32::from_be_bytes(*b"u001"))
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let queue = h.unit_training_queue(producer).unwrap();
+    let life = h.executed_unit(producer).unwrap().vitals.unwrap().life;
+    assert!(
+        h.cancel_unit_training(producer, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("numeric")
+    );
+    assert!(
+        h.native("KillUnit", &[Value::Handle(producer)])
+            .unwrap_err()
+            .contains("numeric")
+    );
+    assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+    assert_eq!(
+        h.executed_unit(producer).unwrap().vitals.unwrap().life,
+        life
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+}
+
+#[test]
+fn cancelling_head_with_blocked_food_leaves_the_paid_successor_pending() {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[column(
+            b"T003",
+            SlkId::UnitBalance,
+            "goldcost",
+            FieldKind::Int,
+            "13",
+        )],
+        8,
+    );
+    let cap = vm.global("PLAYER_STATE_RESOURCE_FOOD_CAP");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    for _ in 0..2 {
+        assert_eq!(
+            h.native(
+                "IssueImmediateOrderById",
+                &[
+                    Value::Handle(producer),
+                    Value::Int(i32::from_be_bytes(*b"u001"))
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    }
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), cap, Value::Int(6)],
+    )
+    .unwrap();
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(
+        h.unit_training_queue(producer).unwrap(),
+        vec![(i32::from_be_bytes(*b"u001"), None)]
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 6);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 68);
+    step(&mut vm, 12.);
+    assert_eq!(
+        vm.host().inner.unit_training_queue(producer).unwrap()[0].1,
+        None
+    );
+}
+
+#[test]
+fn source_classified_hero_training_refuses_before_payment_or_queue_changes() {
+    let (mut vm, actor, producer) =
+        fixture_with(&[profile_field(b"T001", "Trains", "unitList", "J001")]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let error = h
+        .native(
+            "IssueImmediateOrderById",
+            &[
+                Value::Handle(producer),
+                Value::Int(i32::from_be_bytes(*b"J001")),
+            ],
+        )
+        .unwrap_err();
+    assert!(error.contains("hero training"), "{error}");
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 6);
 }
