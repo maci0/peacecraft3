@@ -451,3 +451,29 @@ and the existing session/selection/control click check). Strict affected
 all-target Clippy, core WASM and app WASM library/binary compilation, and
 touched-file formatting pass on the frozen source manifest. No new original
 client or rendered standard-command capture was made.
+
+## Training controls in progress
+
+The training command path reads the producer's metadata-bound `Trains` list,
+then resolves each unit through the existing object catalog. `Art`, `Buttonpos`,
+`Hotkey`, `Tip` and `Ubertip` come from that resolved unit, including scalar map
+overrides. Unit and item profile keys can share a name; field identity must keep
+the unit's assignment rather than choosing the first matching key. Unsupported
+metadata, malformed coordinates and colliding authored slots report errors.
+
+Training buttons and their current-selection hotkeys dispatch the unit rawcode
+through `IssueImmediateOrderById`, sharing the paid FIFO and accepted-command
+journal. Session, selection, ownership and user-control checks remain in the
+existing input path. Alphabetic hotkeys are currently supported; other bindings
+and unresolved tooltip substitutions report their unsupported state.
+
+Three synthetic parser tests and the explicit installed-profile comparison pass,
+as do 1,777 core and 657 application tests. The installed Human01 component/input gate activates a
+training button, verifies paid enqueueing, and rejects a foreign-session button.
+Strict native all-target and WASM core/application Clippy pass. The unoptimized application test needs
+an explicit 32 MiB worker stack; its default-stack run overflowed during chapter
+preparation. These are component/host results, not original-client rendering
+evidence. Private receipts are under `.scratch/player-production/`.
+
+Disabled/readiness art, resource and prerequisite presentation, queue progress,
+cancellation controls and rendered comparison remain open.

@@ -5,6 +5,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Training command icons, positions, alphabetic hotkeys and tooltip text now
+  read resolved unit metadata/profile values and scalar map overrides. Clicks
+  and current-selection hotkeys use the shared paid production order path.
+  Three parser tests, the installed-profile gate, 1,777 core tests and an
+  installed Human01 button/input gate pass; the latter verifies enqueueing and
+  stale-session rejection with an explicit test-worker stack limit. Application
+  all-target compilation passes. Readiness/cost presentation, queue progress,
+  cancellation controls and rendered comparison remain open.
+
 - [~] Shared training queues now support explicit pending/active cancellation
   with source-derived, per-entry refunds and preflighted food/event transitions.
   Producer death refunds and clears jobs without cancellation events, matching

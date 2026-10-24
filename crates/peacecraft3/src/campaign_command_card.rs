@@ -31,6 +31,7 @@ const MAX_RETAINED: usize = 32 << 20;
 pub(crate) enum Kind {
     TargetUnit,
     Immediate,
+    Train(i32),
     Standard(pcx_play::standard_command::Kind),
 }
 
@@ -51,6 +52,7 @@ struct Icon {
 struct IconData {
     art: String,
     position: [usize; 2],
+    hotkey: Option<char>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct View {
@@ -174,6 +176,22 @@ pub(crate) struct CommandCard {
 }
 
 impl CommandCard {
+    pub(crate) fn training_hotkeys(
+        &self,
+        unit: HandleId,
+    ) -> impl Iterator<Item = (i32, char)> + '_ {
+        self.view
+            .iter()
+            .filter(move |view| view.unit == unit && self.last_error.is_none())
+            .flat_map(|view| view.icons.iter())
+            .filter_map(|icon| {
+                if let Kind::Train(kind) = icon.kind {
+                    icon.data.hotkey.map(|key| (kind, key))
+                } else {
+                    None
+                }
+            })
+    }
     pub(crate) fn standard_profiles(
         &self,
     ) -> impl Iterator<Item = &pcx_play::standard_command::Command> {
@@ -265,6 +283,7 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
                 data: IconData {
                     art: art.clone(),
                     position: profile.position,
+                    hotkey: None,
                 },
                 tooltip: Ok(profile.tooltip.clone()),
             });
@@ -295,10 +314,34 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
                 data: IconData {
                     art: data.art,
                     position: data.position,
+                    hotkey: None,
                 },
                 tooltip,
             });
         }
+    }
+    for kind in pcx_play::training_command::types(&record.definition)? {
+        let definition = objects
+            .unit_catalog()
+            .map_err(|e| e.to_string())?
+            .resolve(kind)
+            .map_err(|e| format!("training unit {kind:?}: {e:?}"))?;
+        let command = pcx_play::training_command::Command::read(&definition)?;
+        if icons
+            .iter()
+            .any(|icon| icon.data.position == command.position)
+        {
+            return Err("training commands collide at the same authored Buttonpos".into());
+        }
+        icons.push(Icon {
+            kind: Kind::Train(command.kind),
+            data: IconData {
+                art: command.art,
+                position: command.position,
+                hotkey: command.hotkey,
+            },
+            tooltip: command.tooltip,
+        });
     }
     Ok(Some(View { unit, icons }))
 }
@@ -706,6 +749,7 @@ mod tests {
                 data: IconData {
                     art: art.text.to_owned(),
                     position: position.try_into().unwrap(),
+                    hotkey: None,
                 },
             });
         }
@@ -1207,6 +1251,7 @@ mod tests {
             view.icons[0].data = IconData {
                 art: data.art,
                 position: data.position,
+                hotkey: None,
             };
             view.icons[0].tooltip = Ok(tip);
             race
@@ -1334,6 +1379,7 @@ mod tests {
                 data: IconData {
                     art: "fixture".into(),
                     position: [0, 0],
+                    hotkey: None,
                 },
             }],
         };
@@ -1360,6 +1406,7 @@ mod tests {
             data: IconData {
                 art: "fixture".into(),
                 position: [source.rules.columns, 0],
+                hotkey: None,
             },
         });
         assert!(
@@ -1472,5 +1519,35 @@ mod tests {
                 .resource::<crate::campaign_hud::CampaignHud>()
                 .pointer_consumed
         );
+    }
+    #[test]
+    fn training_hotkeys_belong_to_the_current_valid_selection() {
+        let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let other = HandleId::new(std::num::NonZeroU64::new(8).unwrap());
+        let mut card = CommandCard {
+            view: Some(View {
+                unit,
+                icons: vec![Icon {
+                    kind: Kind::Train(i32::from_be_bytes(*b"uNEW")),
+                    data: IconData {
+                        art: "fixture/icon.blp".into(),
+                        position: [0, 0],
+                        hotkey: Some('Q'),
+                    },
+                    tooltip: Ok(ability_profile::Tooltip {
+                        title: "Source title".into(),
+                        description: "Source text".into(),
+                    }),
+                }],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            card.training_hotkeys(unit).collect::<Vec<_>>(),
+            vec![(i32::from_be_bytes(*b"uNEW"), 'Q')]
+        );
+        assert!(card.training_hotkeys(other).next().is_none());
+        card.last_error = Some("source mismatch".into());
+        assert!(card.training_hotkeys(unit).next().is_none());
     }
 }

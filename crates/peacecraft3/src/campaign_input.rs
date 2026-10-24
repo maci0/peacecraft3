@@ -147,6 +147,11 @@ fn command_button(
             crate::campaign_command_card::Kind::Immediate => {
                 objects.water_elemental_command(button.unit)
             }
+            crate::campaign_command_card::Kind::Train(kind) => {
+                input.command = None;
+                immediate_command(host, &mut input, button.unit, kind);
+                continue;
+            }
             crate::campaign_command_card::Kind::Standard(kind) => {
                 if let Err(error) =
                     activate_standard(host, &mut input, button.unit, kind, button.session.clone())
@@ -169,7 +174,8 @@ fn command_button(
                     input.command = None;
                     immediate_command(host, &mut input, button.unit, command.order);
                 }
-                crate::campaign_command_card::Kind::Standard(_) => unreachable!("handled above"),
+                crate::campaign_command_card::Kind::Standard(_)
+                | crate::campaign_command_card::Kind::Train(_) => unreachable!("handled above"),
             },
             Err(error) => input.last_error = Some(error.to_string()),
             Ok(None) => {}
@@ -654,6 +660,13 @@ fn command_hotkey(
             .is_some_and(|player| Some(player.number) == local)
     });
     if let Some(unit) = primary {
+        for (kind, hotkey) in card.training_hotkeys(unit) {
+            if letter_key(hotkey).is_some_and(|key| keys.just_pressed(key)) {
+                input.command = None;
+                immediate_command(host, &mut input, unit, kind);
+                return;
+            }
+        }
         for profile in card.standard_profiles() {
             if letter_key(profile.hotkey).is_some_and(|key| keys.just_pressed(key))
                 && host
@@ -1056,6 +1069,176 @@ fn click(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
+    #[test]
+    #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs"]
+    fn selected_chapter_training_button_enqueues_and_rejects_stale_session() {
+        use crate::campaign_command_card::{ButtonOrder, Kind};
+        use bevy::{
+            ecs::system::RunSystemOnce,
+            ui_widgets::{Activate, Button},
+        };
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<crate::campaign_hud::CampaignHud>()
+            .init_resource::<crate::campaign_inventory::CampaignInventory>()
+            .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>();
+        let (producer, kind, witness, before) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let states = [
+                "PLAYER_STATE_RESOURCE_GOLD",
+                "PLAYER_STATE_RESOURCE_LUMBER",
+                "PLAYER_STATE_RESOURCE_FOOD_CAP",
+            ]
+            .map(|name| session.global(name).unwrap());
+            let witness = session.session_witness().unwrap();
+            let objects = session.host().unwrap().objects_mut();
+            let local = objects.local_player_number().unwrap();
+            let (owner, position) = objects
+                .executed_units()
+                .find_map(|(_, unit)| {
+                    (objects.player_settings(unit.owner).unwrap().number == local)
+                        .then_some((unit.owner, unit.position.unwrap_or([unit.x, unit.y])))
+                })
+                .unwrap();
+            // Diagnostic producer and facing; presentation and training values remain catalog-derived.
+            let Value::Handle(producer) = objects
+                .native(
+                    "CreateUnit",
+                    &[
+                        Value::Handle(owner),
+                        Value::Int(i32::from_be_bytes(*b"hbar")),
+                        Value::Real(position[0]),
+                        Value::Real(position[1]),
+                        Value::Real(0.),
+                    ],
+                )
+                .unwrap()
+            else {
+                panic!("producer handle")
+            };
+            let kinds = pcx_play::training_command::types(
+                &objects.executed_unit(producer).unwrap().definition,
+            )
+            .unwrap();
+            let kind = i32::from_be_bytes(kinds[0]);
+            objects
+                .native(
+                    "SetPlayerTechMaxAllowed",
+                    &[Value::Handle(owner), Value::Int(kind), Value::Int(100)],
+                )
+                .unwrap();
+            for (state, amount) in states.into_iter().zip([10000, 10000, 100]) {
+                objects
+                    .native(
+                        "SetPlayerState",
+                        &[Value::Handle(owner), state, Value::Int(amount)],
+                    )
+                    .unwrap();
+            }
+            objects
+                .native("EnableUserControl", &[Value::Bool(true)])
+                .unwrap();
+            objects
+                .native("ShowInterface", &[Value::Bool(true), Value::Real(0.)])
+                .unwrap();
+            objects.native("PauseGame", &[Value::Bool(false)]).unwrap();
+            objects
+                .native("PauseUnit", &[Value::Handle(producer), Value::Bool(false)])
+                .unwrap();
+            objects.select_units(&[producer], true);
+            let before = objects
+                .player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")
+                .unwrap()
+                .unwrap();
+            (producer, kind, witness, (owner, before))
+        };
+        let start = {
+            let seed = app
+                .world()
+                .resource::<peacecraft3::campaign_startup::CampaignSeed>()
+                .prepared
+                .unwrap();
+            let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+            pcx_play::player_command_log::StartIdentity::from_context(
+                seed,
+                session.context().unwrap(),
+            )
+        };
+        app.world_mut()
+            .resource_mut::<CampaignInput>()
+            .commands
+            .begin(start);
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                ButtonOrder {
+                    unit: producer,
+                    kind: Kind::Train(kind),
+                    session: witness,
+                },
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().run_system_once(command_button).unwrap();
+        assert!(
+            app.world().resource::<CampaignInput>().last_error.is_none(),
+            "{:?}",
+            app.world().resource::<CampaignInput>().last_error
+        );
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            assert_eq!(objects.unit_training_queue(producer).unwrap().len(), 1);
+            assert_eq!(objects.unit_training_queue(producer).unwrap()[0].0, kind);
+            assert!(
+                objects
+                    .player_resource_value(before.0, "PLAYER_STATE_RESOURCE_GOLD")
+                    .unwrap()
+                    .unwrap()
+                    < before.1
+            );
+        }
+        assert_eq!(
+            app.world()
+                .resource::<CampaignInput>()
+                .commands
+                .entries()
+                .len(),
+            1
+        );
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
+        let foreign = Arc::new(());
+        app.world_mut()
+            .get_mut::<ButtonOrder>(button)
+            .unwrap()
+            .session = Arc::downgrade(&foreign);
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().run_system_once(command_button).unwrap();
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .unit_training_queue(producer)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
