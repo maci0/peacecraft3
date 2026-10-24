@@ -2,6 +2,15 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
+- [~] Gold harvesting now has a checked one-worker/zero-worker original-client
+  pair and a typed mine-rule reader. The positive arm hides the worker during
+  mining, debits the mine on exit and credits bank/gathered gold at the depot;
+  the zero arm and separate-owner control stay idle. Source-derived duration,
+  mine capacity, aliases and typed overrides pass 1,713 core tests, the explicit
+  original-table test and strict native/WASM checks. Worker assignment and the
+  mining lifecycle are still being integrated; `HarvestGold` remains the
+  Human02 blocker. See [gold harvesting](docs/re-notes/campaign-ai-gold-harvest.md).
+
 - [~] `CaptainInCombat` now reads separate attack/defensive captain target state
   through canonical membership and combat updates. A matched original-client
   pair confirms fighting outside the group leaves both queries false. Core

@@ -132,6 +132,32 @@ fn tables_with_upgrade_metadata(
                 ],
                 &[
                     vec![
+                        "Gld2",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "2",
+                        "0",
+                        "Agld",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "Gld3",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "3",
+                        "0",
+                        "Agld",
+                        "-",
+                        "int",
+                        "stats",
+                    ],
+                    vec![
                         "Har1",
                         "Data",
                         "AbilityData",
@@ -603,6 +629,186 @@ fn selected_unit(rawcode: [u8; 4], fields: &[([u8; 4], SlkId, &str, &str)]) -> D
         fields: map,
         modifications: Vec::new(),
     }
+}
+
+#[test]
+fn gold_mine_duration_and_slots_follow_selected_ability_and_overrides() {
+    let tables = tables_with(
+        &[vec![
+            "Agld", "Agld", "1", "0", "0", "4200", "2.75", "3", "-", "-", "0",
+        ]],
+        &[],
+        &[],
+        &[],
+    );
+    let definition = selected_unit(
+        *b"mine",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Agld")],
+    );
+    let rules = GoldMineRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.work_duration, 2.75);
+    assert_eq!(rules.max_workers, 3);
+    assert_eq!(rules.ability_alias, "Agld");
+    let mut overlay = edit(
+        "Agld",
+        *b"Gld2",
+        ValueType::Unreal,
+        ObjectValue::Unreal(4.5),
+    );
+    overlay.mods.get_mut("Agld").unwrap().push(Mod {
+        field: *b"Gld3",
+        value_type: ValueType::Int,
+        selectors: Some([1, 0]),
+        value: ObjectValue::Int(7),
+        end_word: 0,
+    });
+    let rules = GoldMineRules::from_definition(&tables, &overlay, &definition)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.work_duration, 4.5);
+    assert_eq!(rules.max_workers, 7);
+    for overlay in [
+        edit("Agld", *b"Gld2", ValueType::Int, ObjectValue::Int(5)),
+        edit(
+            "Agld",
+            *b"Gld2",
+            ValueType::Unreal,
+            ObjectValue::Unreal(f32::NAN),
+        ),
+        edit(
+            "Agld",
+            *b"Gld2",
+            ValueType::Unreal,
+            ObjectValue::Unreal(0.0),
+        ),
+        edit("Agld", *b"Gld3", ValueType::Int, ObjectValue::Int(0)),
+        edit("Agld", *b"Gld3", ValueType::Int, ObjectValue::Int(u32::MAX)),
+    ] {
+        assert!(GoldMineRules::from_definition(&tables, &overlay, &definition).is_err());
+    }
+}
+
+#[test]
+fn gold_mine_aliases_are_resolved_and_missing_or_ambiguous_rules_are_not_invented() {
+    let tables = tables_with(
+        &[
+            vec![
+                "Agld", "Agld", "1", "0", "0", "4200", "2", "3", "-", "-", "0",
+            ],
+            vec!["none", "none", "1", "0", "0", "-", "-", "-", "-", "-", "0"],
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let definition = |list| {
+        selected_unit(
+            *b"mine",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", list)],
+        )
+    };
+    let mut overlay = Overlay::default();
+    overlay.custom.insert(
+        "mine".into(),
+        (
+            "Agld".into(),
+            vec![
+                Mod {
+                    field: *b"Gld2",
+                    value_type: ValueType::Unreal,
+                    selectors: Some([1, 0]),
+                    value: ObjectValue::Unreal(5.0),
+                    end_word: 0,
+                },
+                Mod {
+                    field: *b"Gld3",
+                    value_type: ValueType::Int,
+                    selectors: Some([1, 0]),
+                    value: ObjectValue::Int(2),
+                    end_word: 0,
+                },
+            ],
+        ),
+    );
+    let rules = GoldMineRules::from_definition(&tables, &overlay, &definition("mine"))
+        .unwrap()
+        .unwrap();
+    assert_eq!((rules.work_duration, rules.max_workers), (5.0, 2));
+    assert_eq!(rules.ability_alias, "mine");
+    assert!(
+        GoldMineRules::from_definition(&tables, &Overlay::default(), &definition("none"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(GoldMineRules::from_definition(&tables, &overlay, &definition("Agld,mine")).is_err());
+    assert!(
+        GoldMineRules::from_definition(&tables, &Overlay::default(), &definition("lost")).is_err()
+    );
+    let mut wrong_selector = edit(
+        "Agld",
+        *b"Gld2",
+        ValueType::Unreal,
+        ObjectValue::Unreal(3.0),
+    );
+    wrong_selector.mods.get_mut("Agld").unwrap()[0].selectors = Some([1, 2]);
+    assert!(GoldMineRules::from_definition(&tables, &wrong_selector, &definition("Agld")).is_err());
+}
+
+#[test]
+#[ignore = "requires PCX_GOLD_RULE_SOURCE containing locally selected original AbilityData.slk and AbilityMetaData.slk"]
+fn selected_original_gold_mine_rules_follow_the_supplied_tables() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("PCX_GOLD_RULE_SOURCE").expect("selected source directory"),
+    );
+    let data = std::fs::read(directory.join("AbilityData.slk")).unwrap();
+    let metadata = std::fs::read(directory.join("AbilityMetaData.slk")).unwrap();
+    let tables = DefaultTables::from_bytes(
+        Identity {
+            install: directory.display().to_string(),
+            edition_version: "explicit locally selected gold-mine tables".into(),
+        },
+        &[
+            (SlkId::AbilityData.path(), &data),
+            (SlkId::AbilityMetaData.path(), &metadata),
+        ],
+        &[],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 2,
+            max_asset_bytes: 16 << 20,
+            max_aggregate_input_bytes: 32 << 20,
+        },
+    )
+    .unwrap();
+    let definition = selected_unit(
+        *b"mine",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Agld")],
+    );
+    let rules = GoldMineRules::from_definition(&tables, &Overlay::default(), &definition)
+        .unwrap()
+        .unwrap();
+    let ability = tables
+        .object(pcx_objects::editor::defaults::Family::Ability, "Agld")
+        .unwrap();
+    assert_eq!(
+        rules.work_duration,
+        ability
+            .level_cell("DataB", 1)
+            .unwrap()
+            .text
+            .parse::<f32>()
+            .unwrap()
+    );
+    assert_eq!(
+        rules.max_workers,
+        ability
+            .level_cell("DataC", 1)
+            .unwrap()
+            .text
+            .parse::<u32>()
+            .unwrap()
+    );
 }
 
 #[test]

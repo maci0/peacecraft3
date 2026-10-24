@@ -56,6 +56,70 @@ pub struct DepotReturn {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GoldMineRules {
+    pub source: String,
+    pub ability_alias: String,
+    pub work_duration: f32,
+    pub max_workers: u32,
+}
+
+impl GoldMineRules {
+    /// Read the selected mine ability and its typed map overrides. Worker cargo
+    /// remains the worker's `Ahar` gold capacity, not a mine-owned amount.
+    pub fn from_definition(
+        tables: &DefaultTables,
+        abilities: &Overlay,
+        definition: &Definition,
+    ) -> Result<Option<Self>, HarvestError> {
+        let mut result = None;
+        for alias in definition_abil_codes(definition)? {
+            if resolve_ability_code(tables, Some(abilities), &alias)?.as_deref() != Some("Agld") {
+                continue;
+            }
+            if result.is_some() {
+                return Err(HarvestError::Ambiguous {
+                    rawcode: fourcc(definition.rawcode)?,
+                    column: "abilList".into(),
+                    detail: "several gold-mine abilities".into(),
+                });
+            }
+            let duration = overlay_ability_cell(
+                tables,
+                abilities,
+                &alias,
+                AbilityValue::Data(2),
+                1,
+                FieldKind::Unreal,
+            )?;
+            let work_duration = parse_f32(&alias, &duration, "DataB1")?;
+            let maximum = overlay_ability_cell(
+                tables,
+                abilities,
+                &alias,
+                AbilityValue::Data(3),
+                1,
+                FieldKind::Int,
+            )?;
+            let max_workers = parse_nonneg_i32(&alias, &maximum, "DataC1")?;
+            if work_duration <= 0.0 || max_workers == 0 {
+                return Err(HarvestError::Malformed {
+                    rawcode: alias,
+                    column: "DataB1/DataC1".into(),
+                    detail: "positive mining duration and worker capacity required".into(),
+                });
+            }
+            result = Some(Self {
+                source: source_of(tables),
+                ability_alias: alias,
+                work_duration,
+                max_workers: max_workers as u32,
+            });
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum HarvestError {
     Missing {
         rawcode: String,

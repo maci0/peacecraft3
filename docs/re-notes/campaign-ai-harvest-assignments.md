@@ -29,7 +29,9 @@ through `0x6933c0`. For each component, its flag transform is:
 Unrelated flags are preserved. The helper's calls resolve references and units;
 the inspected body contains no unit-order, position or resource-bank operation.
 The following `HarvestGold`/`HarvestWood` handlers call a different assignment
-helper. Their selection and action behavior remains unimplemented.
+helper. The [gold harvest investigation](campaign-ai-gold-harvest.md) now
+qualifies a one-worker cycle and its zero-worker control; autonomous selection
+and resource transfer remain unimplemented.
 
 Bounded REA byte observations:
 
