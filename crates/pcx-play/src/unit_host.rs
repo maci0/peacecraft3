@@ -64,6 +64,14 @@ pub struct UnitBudget {
     pub max_modifications: usize,
 }
 
+pub(super) struct PreparedUnit {
+    pub(super) record: ExecutedUnit,
+    placement: Option<crate::unit_placement::Prepared>,
+    guard: Option<super::unit_guards::UnitGuard>,
+    inventory: Option<super::item_creation::CachedInventory>,
+    binding: Option<super::unit_training::GuardBinding>,
+}
+
 /// Caller bound on retained `(unit, unitstate handle)` pairs.
 ///
 /// Not a life, mana, population, or combat limit.
@@ -1931,6 +1939,16 @@ impl ObjectHost {
         saved: Option<&crate::game_cache::CachedUnit>,
         summoned: bool,
     ) -> Result<Value, Error> {
+        let prepared = self.prepare_unit_creation(args, saved, summoned)?;
+        self.commit_unit_creation(prepared).map(Value::Handle)
+    }
+
+    pub(super) fn prepare_unit_creation(
+        &mut self,
+        args: &[Value],
+        saved: Option<&crate::game_cache::CachedUnit>,
+        summoned: bool,
+    ) -> Result<PreparedUnit, Error> {
         let record = {
             let fail = |reason| self.inner.error(NATIVE, reason);
             let [Value::Handle(player), Value::Int(unitid), x, y, face] = args else {
@@ -2081,14 +2099,14 @@ impl ObjectHost {
                 );
             }
         }
-        let placement = self.prepare_unit_position(&record)?;
+        let mut placement = self.prepare_unit_position(&record)?;
         if record.animation.is_some() {
             record.creation_color = self.player_settings(record.owner)?.color;
         }
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);
         }
-        let guard = if !record.summoned
+        let mut guard = if !record.summoned
             && self.guard_managed_owner(record.owner)?
             && super::unit_guards::candidate(&record.definition, record.combat.as_ref())
                 .map_err(|error| self.inner.error(NATIVE, Failure::UnitActivity(error)))?
@@ -2121,6 +2139,41 @@ impl ObjectHost {
                     .error(NATIVE, Failure::UnitActivity(problem.into()))
             });
         }
+        self.inner.reserve_handles(1, NATIVE)?;
+        let binding = if guard.is_some() {
+            self.prepare_guard_binding(&record, &mut placement)?
+        } else {
+            None
+        };
+        if let Some(binding) = &binding {
+            guard.as_mut().expect("ordinary guard").home = binding.home;
+            record
+                .combat
+                .as_mut()
+                .expect("armed guard")
+                .attack_destination = Some(binding.home);
+            self.reserve_steer_commits(1, NATIVE)?;
+        }
+        Ok(PreparedUnit {
+            record,
+            placement,
+            guard,
+            inventory,
+            binding,
+        })
+    }
+
+    pub(super) fn commit_unit_creation(
+        &mut self,
+        prepared: PreparedUnit,
+    ) -> Result<HandleId, Error> {
+        let PreparedUnit {
+            record,
+            placement,
+            guard,
+            inventory,
+            binding,
+        } = prepared;
         let id = self.inner.allocate(
             Entry::Unit {
                 record: Box::new(record),
@@ -2142,7 +2195,10 @@ impl ObjectHost {
         if let Some(inventory) = inventory {
             self.commit_cached_inventory(id, inventory);
         }
-        Ok(Value::Handle(id))
+        if let Some(binding) = binding {
+            self.commit_guard_binding(id, binding)?;
+        }
+        Ok(id)
     }
 
     /// The authored `militiaoff` request on the rank-1 base form.

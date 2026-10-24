@@ -1,10 +1,9 @@
 # Guard-post replacement behavior
 
-`FillGuardPosts()` is the next unsupported native reached by the unchanged
-Human02 opening-minute test after `AddDefenders`, at 8.312500 seconds. It must
-use the same canonical units, owners, resources and production lifecycle as the
-rest of the game. A successful empty implementation would omit its replacement
-behavior.
+`FillGuardPosts()` uses the same canonical units, owners, resources and production
+lifecycle as the rest of the game. The ordinary replacement consumer is now
+implemented. The unchanged Human02 opening-minute test advances past this call
+to `ReturnGuardPosts` at 8.312500 seconds and remains incomplete there.
 
 ## Selected-code evidence
 
@@ -136,26 +135,41 @@ sources resolve, every packed member round-trips, and the four collector tests
 cover numeric, wrapper, identity, progress and truncated-data refusal. All
 artifacts remain ignored under `.scratch/fill-guard-posts/`.
 
-## Implementation work remaining
+## Runtime implementation and remaining work
 
-The current host still refuses `FillGuardPosts`. The qualified next change is
-shared guard-post state plus real pending unit production, not a second unit
-world or instant respawn. The existing canonical guard home, unit catalog,
-source-derived quantity queries, resource transaction preparation and unit
-factory can supply the relevant state. Pending food, resource changes, completion,
-guard binding, callbacks and failure atomicity need connected tests. The existing
-live-guard list alone loses the vacant post on death and cannot supply that
-replacement behavior.
+The existing per-player AI registry now retains ordinary guard posts after death.
+Fill checks the source-derived signed assignment limit and submits one pending
+job to an eligible idle producer from its authored `Trains` profile. Source
+costs, build duration and food usage drive shared player resources and pending
+food. Repeated fill calls do not duplicate the job. Training start and finish
+callbacks observe the same canonical producer and newly created unit; pending
+count queries include the job while completed queries exclude it.
+
+Completion uses the normal unit factory and prepared placement/activity path,
+binds a vacant matching post and preserves its home and attack-point behavior.
+A replacement that cannot start moving can still complete production; route-work
+or capacity errors retain pending work before unit/event publication. Resource
+shortage or an authored unit cap does not spend resources. Paused production
+preserves pending food and extends its deadline without timer-partition drift.
+Unsupported prerequisites and producer loss/transfer refuse explicitly; no
+cancellation refund is invented. These choices reuse the game's canonical state
+without reproducing native linked lists, record layout or queue wrappers.
 
 `CampaignModePolicy` now derives the initial and release counters from selected
 instructions, checks the binding increment and signed-limit branch, and binds
 the `FillGuardPosts` registration/forwarding to those fields. Nonstock synthetic
 operands and malformed/truncated relationships are tested; the actual selected
-image decodes. The full library suite passes 1,738 tests; strict native/WASM
-Clippy and formatting pass. This is source-data admission, not a completed
-runtime consumer. A shared pending-production job can preserve the observed
-counts, food, resource and callback phases without reproducing native record
-layout, linked lists or queue wrappers.
+image decodes. The full library suite passes 1,748 tests; app library/binary
+suites, published-session integration, selected startup and Continue, strict
+native/WASM Clippy, formatting and the default game build pass. Synthetic tests
+exercise nonstock costs/duration/counters, callbacks, pending counts, release,
+food and authored unit limits, malformed profiles, route refusal/retry,
+no-motion completion and partitioned clocks.
+
+The recreation currently completes work at the catalog deadline. In the stopped
+callback run the start-to-finish observation is 30.063 seconds versus the authored
+30-second duration. Exact native polling/subtick cadence remains unqualified;
+the measured offset is not copied into a constant.
 
 Structure construction, hero replacement/revival, other training event paths,
 multiple producers, cancellation and exact spawn/arrival behavior are not

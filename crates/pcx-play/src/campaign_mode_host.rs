@@ -30,6 +30,7 @@ impl ObjectHost {
             || policy.unit_mask >= 0x80
             || policy.replacement_count_field == 0
             || !policy.replacement_count_field.is_multiple_of(4)
+            || policy.guard_posts.binding_increment != 1
         {
             return Err(self.inner.error(
                 NATIVE,
@@ -139,7 +140,16 @@ impl ObjectHost {
             self.inner
                 .error(name, Failure::ConfigState("player is not admitted"))
         })?;
-        self.count_completed_units(owner, unit, name, false)
+        let completed = self.count_completed_units(owner, unit, name, false)?;
+        if done {
+            return Ok(completed);
+        }
+        completed
+            .checked_add(self.pending_training_count(owner, unit)?)
+            .ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::ConfigState("unit count overflow"))
+            })
     }
 
     pub(crate) fn ai_ignored_units(&self, player: i32, unit: i32) -> Result<i32, Error> {
@@ -159,7 +169,15 @@ impl ObjectHost {
     ) -> Result<i32, Error> {
         match owner {
             None => Ok(0),
-            Some(owner) => self.count_completed_units(owner, unit, "GetPlayerUnitTypeCount", false),
+            Some(owner) => self
+                .count_completed_units(owner, unit, "GetPlayerUnitTypeCount", false)?
+                .checked_add(self.pending_training_count(owner, unit)?)
+                .ok_or_else(|| {
+                    self.inner.error(
+                        "GetPlayerUnitTypeCount",
+                        Failure::ConfigState("unit count overflow"),
+                    )
+                }),
         }
     }
 
@@ -174,7 +192,6 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(name, e.failure))?;
         self.unit_declaration()
             .map_err(|e| self.inner.error(name, e.failure))?;
-        // shortcut: all accepted unit factories create completed units; add canonical pending work when training/construction is admitted.
         self.executed_units()
             .filter(|(_, record)| {
                 record.owner == owner && record.definition.rawcode == unit.to_be_bytes()

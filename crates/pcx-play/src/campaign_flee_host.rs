@@ -32,6 +32,7 @@ struct PlayerFlags {
     captain_members: [Vec<HandleId>; 2],
     captain_focus: [Option<HandleId>; 2],
     captain_routes: Vec<HandleId>,
+    guard_posts: Vec<super::unit_training::GuardPost>,
 }
 
 #[derive(Default)]
@@ -68,6 +69,7 @@ impl Registry {
                 captain_members: [Vec::new(), Vec::new()],
                 captain_focus: [None; 2],
                 captain_routes: Vec::new(),
+                guard_posts: Vec::new(),
             },
         );
         true
@@ -75,6 +77,21 @@ impl Registry {
 
     pub(super) fn deactivate(&mut self, player: i32) {
         self.players.remove(&player);
+    }
+
+    pub(super) fn guard_posts(&self, player: i32) -> Option<&[super::unit_training::GuardPost]> {
+        self.players
+            .get(&player)
+            .map(|row| row.guard_posts.as_slice())
+    }
+
+    pub(super) fn guard_posts_mut(
+        &mut self,
+        player: i32,
+    ) -> Option<&mut Vec<super::unit_training::GuardPost>> {
+        self.players
+            .get_mut(&player)
+            .map(|row| &mut row.guard_posts)
     }
 
     pub(super) fn is_active(&self, player: i32) -> bool {
@@ -512,7 +529,16 @@ impl ObjectHost {
         {
             return Ok(false);
         }
-        Ok(self.campaign_ai.activate(player, target_heroes, units_flee))
+        if self.campaign_ai.is_active(player) {
+            return Ok(false);
+        }
+        let posts = self.prepare_initial_guard_posts(player)?;
+        let created = self.campaign_ai.activate(player, target_heroes, units_flee);
+        *self
+            .campaign_ai
+            .guard_posts_mut(player)
+            .expect("activated player") = posts;
+        Ok(created)
     }
 
     pub(crate) fn deactivate_campaign_ai_player(&mut self, player: i32) -> Result<(), Error> {

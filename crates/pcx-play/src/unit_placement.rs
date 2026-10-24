@@ -1789,6 +1789,34 @@ impl Placement {
             self.stamps.push((unit, prepared));
         }
     }
+
+    /// A factory route needs the new unit's movement class without publishing collision cells.
+    pub(crate) fn begin_creation_probe(
+        &mut self,
+        unit: HandleId,
+        mut prepared: Prepared,
+    ) -> Result<bool, Error> {
+        if self.stamps.iter().any(|(id, _)| *id == unit) {
+            return Err(fail("creation probe identity already exists"));
+        }
+        self.stamps
+            .try_reserve(1)
+            .map_err(|_| fail("creation probe capacity"))?;
+        let active = prepared.active;
+        prepared.active = false;
+        self.stamps.push((unit, prepared));
+        Ok(active)
+    }
+
+    pub(crate) fn finish_creation_probe(&mut self, unit: HandleId, active: bool) -> Prepared {
+        let (id, mut prepared) = self.stamps.pop().expect("synchronous creation probe");
+        assert_eq!(
+            id, unit,
+            "creation preflight must not mutate the stamp list"
+        );
+        prepared.active = active;
+        prepared
+    }
 }
 
 /// Nearest approach on the existing attack-reach circle, rounded inward.

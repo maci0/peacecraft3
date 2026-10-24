@@ -22,8 +22,22 @@ fn guarded_with_flee(
         crate::script_numeric::NumericPolicy,
     )>,
 ) -> (Vm, HandleId, HandleId) {
+    guarded_configured(distance, maximum, timeout, flee, (&[], ""), |host| host)
+}
+
+fn guarded_configured(
+    distance: f32,
+    maximum: f32,
+    timeout: f32,
+    flee: Option<(
+        crate::campaign_flee_policy::FleePolicy,
+        crate::script_numeric::NumericPolicy,
+    )>,
+    source: (&[([u8; 4], ObjectField)], &str),
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         super::super::enumeration::TRIGGERS,
         super::super::activity::ORDERS,
         DECLARATIONS,
@@ -39,7 +53,8 @@ constant unittype UNIT_TYPE_PEON=ConvertUnitType(16)
 constant mapcontrol MAP_CONTROL_COMPUTER=ConvertMapControl(91)
 constant mapcontrol MAP_CONTROL_USER=ConvertMapControl(-17)
 endglobals
-"#
+"#,
+        source.1
     );
     let mut fields = armed("1", "normal");
     fields.extend(super::super::activity::gathering::source_fields(false));
@@ -60,6 +75,7 @@ endglobals
             "1",
         ));
     }
+    fields.extend_from_slice(source.0);
     let mut h = position_host_admitting(1000, 16, MAP, &extra, &fields, |h| h);
     let (registry, activity) = super::super::activity::rules();
     let mut native = crate::unit_guard_rules::tests::fixture(registry.id("beta").unwrap());
@@ -117,6 +133,7 @@ endglobals
         h.admit_campaign_targeting(&context, targeting).unwrap();
         h.admit_campaign_flee(&context, policy).unwrap();
     }
+    let h = configure(h);
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
@@ -131,6 +148,9 @@ endglobals
     let (a, b) = (id(vm.global("A")), id(vm.global("B")));
     (vm, a, b)
 }
+
+#[path = "unit_training_tests.rs"]
+mod training;
 fn attack(vm: &mut Vm, a: HandleId, b: HandleId) {
     assert_eq!(
         vm.host()
@@ -330,6 +350,11 @@ fn ignored_units_follow_guard_release_and_canonical_lifecycle() {
     h.admit_campaign_mode(
         &context,
         crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+    )
+    .unwrap();
+    h.admit_campaign_targeting(
+        &context,
+        crate::campaign_targeting_policy::TargetingPolicy::fixture(),
     )
     .unwrap();
     h.activate_campaign_ai_player(4).unwrap();

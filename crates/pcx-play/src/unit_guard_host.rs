@@ -45,6 +45,9 @@ pub struct GuardState {
     records: Vec<(HandleId, UnitGuard)>,
 }
 impl GuardState {
+    pub(super) fn capacity(&self) -> usize {
+        self.budget.max_units
+    }
     pub fn get(&self, unit: HandleId) -> Option<&UnitGuard> {
         self.records
             .iter()
@@ -569,6 +572,7 @@ impl ObjectHost {
             }
             // The native manager sends its stop order even for a repeated release.
             self.steer_unit(unit, None, name)?;
+            self.release_campaign_guard_post(unit);
             self.cancel_patrol(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);

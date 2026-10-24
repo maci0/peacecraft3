@@ -29,6 +29,8 @@ pub struct EventSubject {
     pub sale: Option<SaleContext>,
     pub summon: Option<SummonContext>,
     pub hero: Option<HeroEvent>,
+    pub trained: Option<HandleId>,
+    pub trained_type: Option<i32>,
 }
 
 /// Units captured when a summoning effect creates a unit.
@@ -81,7 +83,9 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 23] = [
+const RESPONSES: [&str; 25] = [
+    "GetTrainedUnit",
+    "GetTrainedUnitType",
     "GetSummoningUnit",
     "GetSummonedUnit",
     "GetLevelingUnit",
@@ -108,6 +112,12 @@ const RESPONSES: [&str; 23] = [
 ];
 
 impl ObjectHost {
+    pub(crate) fn has_queued_training_events(&self) -> bool {
+        self.events
+            .queue
+            .iter()
+            .any(|event| event.subject.trained_type.is_some())
+    }
     pub(super) fn reserve_event_delivery(&mut self, count: usize) -> Result<(), Error> {
         let queue = match &mut self.events.synchronous {
             Some(queue) => queue,
@@ -367,6 +377,23 @@ impl ObjectHost {
             }
         }
         let subject = self.events.subject;
+        if matches!(name, "GetTrainedUnit" | "GetTrainedUnitType") {
+            let result = if name == "GetTrainedUnit" {
+                "unit"
+            } else {
+                "integer"
+            };
+            if let Err(error) = Self::contract(&self.inner, name, &[], result, true, None) {
+                return Some(Err(error));
+            }
+            let source = self.unit_declaration().ok()?.0;
+            if native.source != source {
+                return Some(Err(self.inner.error(name, Failure::Source)));
+            }
+            if name == "GetTrainedUnitType" {
+                return Some(Ok(Value::Int(subject.trained_type.unwrap_or(0))));
+            }
+        }
         if matches!(
             name,
             "GetLevelingUnit" | "GetLearningUnit" | "GetLearnedSkill" | "GetLearnedSkillLevel"
@@ -396,6 +423,7 @@ impl ObjectHost {
             }
         }
         let value = match name {
+            "GetTrainedUnit" => subject.trained,
             "GetLevelingUnit" => matches!(subject.hero, Some(HeroEvent::Level))
                 .then_some(subject.unit)
                 .flatten(),

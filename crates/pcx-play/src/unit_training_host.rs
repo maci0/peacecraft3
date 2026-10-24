@@ -1,0 +1,609 @@
+//! Guard-post replacement through canonical pending production and unit creation.
+use super::{Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost};
+use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
+use pcx_script::{HandleId, Value, value::FunctionId};
+use pcx_sim::world::{Definition, FieldProblem, FieldValue};
+
+const NATIVE: &str = "FillGuardPosts";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GuardPost {
+    kind: i32,
+    home: [f32; 2],
+    unit: Option<HandleId>,
+    assignments: i32,
+}
+
+#[derive(Clone, Copy)]
+struct Training {
+    producer: HandleId,
+    owner: HandleId,
+    player: i32,
+    post: usize,
+    kind: i32,
+    food: i32,
+    finish: f64,
+    through: f64,
+    pause: Option<(f64, f64)>,
+}
+
+#[derive(Default)]
+pub(super) struct State {
+    jobs: Vec<Training>,
+}
+
+pub(super) struct GuardBinding {
+    player: i32,
+    post: usize,
+    count: i32,
+    pub(super) home: [f32; 2],
+    pub(super) route: super::unit_activity::PreparedSteer,
+}
+
+struct TrainingEvent {
+    trigger: HandleId,
+    filter: Option<FunctionId>,
+    event: HandleId,
+    player: Option<HandleId>,
+}
+
+fn live(record: &ExecutedUnit) -> bool {
+    record.combat.as_ref().is_none_or(|c| !c.dead)
+        && record
+            .vitals
+            .is_some_and(|v| v.life.is_finite() && v.life > 0.)
+}
+
+fn profile<'a>(definition: &'a Definition, key: &str, declared: &str) -> Result<&'a str, String> {
+    let mut matches = definition.fields.values().filter(|field| {
+        field.metadata.as_ref().is_some_and(
+        |m| matches!(&m.source, FieldSource::Profile { key: k, .. } if k.eq_ignore_ascii_case(key))
+    )
+    });
+    let field = matches
+        .next()
+        .ok_or_else(|| format!("{key} profile metadata is not admitted"))?;
+    let metadata = field.metadata.as_ref().expect("matched metadata");
+    if matches.next().is_some()
+        || metadata.kind != FieldKind::Token
+        || metadata.declared != declared
+        || metadata.from != SlkId::UnitMetaData
+        || metadata.index != -1
+        || !metadata.field.eq_ignore_ascii_case(key)
+        || !matches!(&metadata.source, FieldSource::Profile { index: -1, .. })
+    {
+        return Err(format!("{key} profile metadata is ambiguous or indexed"));
+    }
+    let text = match &field.value {
+        Ok(FieldValue::Cell(text)) => text.as_str(),
+        Ok(FieldValue::Override(pcx_objects::Value::Str(text))) => {
+            std::str::from_utf8(text).map_err(|_| format!("{key} override is not UTF-8"))?
+        }
+        Err(FieldProblem::Missing) => "",
+        _ => return Err(format!("{key} profile value is malformed")),
+    };
+    Ok(match text.trim() {
+        "_" | "-" => "",
+        text => text,
+    })
+}
+
+impl ObjectHost {
+    fn training_error(&self, detail: impl Into<String>) -> Error {
+        self.inner
+            .error(NATIVE, Failure::UnitActivity(detail.into()))
+    }
+
+    pub(super) fn prepare_initial_guard_posts(&self, player: i32) -> Result<Vec<GuardPost>, Error> {
+        let mut posts = Vec::new();
+        let (Some(policy), Some(guards)) = (&self.campaign_mode, &self.guards) else {
+            return Ok(posts);
+        };
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| self.training_error("AI owner missing"))?;
+        for &(unit, guard) in guards.records() {
+            if guard.owner != owner || guard.released {
+                continue;
+            }
+            let record = self.executed_unit(unit)?;
+            if !self.ordinary_post_candidate(record)? {
+                continue;
+            }
+            if record.vitals.is_none() {
+                return Err(self.training_error("guard-post liveness is not admitted"));
+            }
+            if !live(record) {
+                continue;
+            }
+            if self.unit_has_effect_history(unit) {
+                return Err(self.training_error("guard-post effect state is unsupported"));
+            }
+            posts
+                .try_reserve(1)
+                .map_err(|_| self.training_error("guard-post capacity"))?;
+            posts.push(GuardPost {
+                kind: i32::from_be_bytes(record.definition.rawcode),
+                home: record
+                    .position
+                    .ok_or_else(|| self.training_error("guard-post position is not admitted"))?,
+                unit: Some(unit),
+                assignments: policy
+                    .guard_posts
+                    .initial_count
+                    .wrapping_add(policy.guard_posts.binding_increment),
+            });
+        }
+        Ok(posts)
+    }
+
+    fn ordinary_post_candidate(&self, record: &ExecutedUnit) -> Result<bool, Error> {
+        let classifier = self
+            .campaign_targeting_policy()
+            .ok_or_else(|| self.training_error("hero classification is not admitted"))?;
+        if self
+            .campaign_mode
+            .as_ref()
+            .is_none_or(|mode| mode.image_sha256 != classifier.image_sha256)
+        {
+            return Err(self.training_error("guard-post classification image differs"));
+        }
+        let first = record.definition.rawcode[0];
+        if (classifier.hero_first..=classifier.hero_last).contains(&first) {
+            return Ok(false);
+        }
+        if super::unit_types::structure(&record.definition).map_err(|e| self.training_error(e))?
+            || super::unit_types::class(&record.definition, "UNIT_TYPE_PEON")
+                .map_err(|e| self.training_error(e))?
+        {
+            return Ok(false);
+        }
+        if record.cached || record.summoned {
+            return Err(self.training_error("guard-post creation state is unsupported"));
+        }
+        Ok(true)
+    }
+
+    fn post_occupied(&self, post: &GuardPost, owner: HandleId) -> bool {
+        post.unit
+            .and_then(|id| self.executed_unit(id).ok())
+            .is_some_and(|r| r.owner == owner && live(r))
+    }
+
+    pub(super) fn release_campaign_guard_post(&mut self, unit: HandleId) {
+        let Some(policy) = &self.campaign_mode else {
+            return;
+        };
+        let count = policy.guard_posts.released_count;
+        let Some(player) = self
+            .executed_unit(unit)
+            .ok()
+            .and_then(|r| self.player_settings(r.owner).ok())
+            .map(|p| p.number)
+        else {
+            return;
+        };
+        if let Some(posts) = self.campaign_ai.guard_posts_mut(player) {
+            for post in posts.iter_mut().filter(|p| p.unit == Some(unit)) {
+                post.unit = None;
+                post.assignments = count;
+            }
+        }
+    }
+
+    pub(super) fn prepare_guard_binding(
+        &mut self,
+        record: &ExecutedUnit,
+        placement: &mut Option<crate::unit_placement::Prepared>,
+    ) -> Result<Option<GuardBinding>, Error> {
+        let player = self.player_settings(record.owner)?.number;
+        let Some(posts) = self.campaign_ai.guard_posts(player) else {
+            return Ok(None);
+        };
+        let Some(policy) = &self.campaign_mode else {
+            return Ok(None);
+        };
+        let Some((index, post)) = posts
+            .iter()
+            .enumerate()
+            .find(|(_, p)| {
+                p.kind.to_be_bytes() == record.definition.rawcode
+                    && !self.post_occupied(p, record.owner)
+            })
+            .map(|(index, post)| (index, *post))
+        else {
+            return Ok(None);
+        };
+        let limit = self
+            .campaign_ai
+            .replacement_count(player)
+            .ok_or_else(|| self.training_error("replacement limit is unset"))?;
+        if post.assignments > limit {
+            return Ok(None);
+        }
+        if !self.ordinary_post_candidate(record)? {
+            return Ok(None);
+        }
+        let id = self.inner.id(self.inner.arena.len(), NATIVE)?;
+        let count = post
+            .assignments
+            .wrapping_add(policy.guard_posts.binding_increment);
+        let prepared = placement
+            .take()
+            .ok_or_else(|| self.training_error("guard-post placement is missing"))?;
+        let active = self
+            .unit_placement
+            .as_mut()
+            .expect("prepared placement")
+            .begin_creation_probe(id, prepared)
+            .map_err(|e| self.training_error(e.to_string()))?;
+        let route = self
+            .prepare_record_steer(id, record, None, Some(post.home), 0., NATIVE)
+            .and_then(|route| match route {
+                Some(route) => Ok(route),
+                None => self
+                    .prepare_record_steer(id, record, None, None, 0., NATIVE)?
+                    .ok_or_else(|| self.training_error("replacement stop preflight failed")),
+            });
+        *placement = Some(
+            self.unit_placement
+                .as_mut()
+                .expect("prepared placement")
+                .finish_creation_probe(id, active),
+        );
+        let route = route?;
+        Ok(Some(GuardBinding {
+            player,
+            post: index,
+            count,
+            home: post.home,
+            route,
+        }))
+    }
+
+    pub(super) fn commit_guard_binding(
+        &mut self,
+        unit: HandleId,
+        binding: GuardBinding,
+    ) -> Result<(), Error> {
+        self.commit_steer_unit(unit, binding.route, NATIVE)?;
+        let post = &mut self
+            .campaign_ai
+            .guard_posts_mut(binding.player)
+            .expect("active post")[binding.post];
+        post.unit = Some(unit);
+        post.assignments = binding.count;
+        Ok(())
+    }
+
+    pub(crate) fn fill_ai_guard_posts(&mut self, player: i32) -> Result<(), Error> {
+        self.require_active_campaign_ai_player(player, NATIVE)?;
+        if self.campaign_mode.is_none() || self.guards.is_none() {
+            return Err(self.training_error("guard-post rules are not admitted"));
+        }
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| self.training_error("AI owner missing"))?;
+        let count = self
+            .campaign_ai
+            .guard_posts(player)
+            .expect("active player")
+            .len();
+        for index in 0..count {
+            let post = self.campaign_ai.guard_posts(player).expect("active player")[index];
+            if self.post_occupied(&post, owner)
+                || self
+                    .training
+                    .jobs
+                    .iter()
+                    .any(|job| job.player == player && job.post == index && job.kind == post.kind)
+            {
+                continue;
+            }
+            let limit = self
+                .campaign_ai
+                .replacement_count(player)
+                .ok_or_else(|| self.training_error("replacement limit is unset"))?;
+            if post.assignments > limit {
+                continue;
+            }
+            self.start_guard_training(player, owner, index, post.kind)?;
+        }
+        Ok(())
+    }
+
+    fn start_guard_training(
+        &mut self,
+        player: i32,
+        owner: HandleId,
+        post: usize,
+        kind: i32,
+    ) -> Result<(), Error> {
+        let requested = kind.to_be_bytes();
+        let definition = self.unit_catalog()?.resolve(requested).map_err(|problem| {
+            self.inner.error(
+                NATIVE,
+                Failure::UnitCatalog {
+                    requested,
+                    problem: Box::new(problem),
+                },
+            )
+        })?;
+        if definition.rawcode != requested
+            || definition.kind != pcx_objects::editor::ObjectKind::Unit
+        {
+            return Err(self.training_error("training catalog identity differs"));
+        }
+        if super::unit_types::structure(&definition).map_err(|e| self.training_error(e))? {
+            return Err(self.training_error("guard-post construction is not admitted"));
+        }
+        // Scan source train lists without interpreting a unit's reported current-order ID as its queue.
+        let mut selected = None;
+        for (id, record) in self.executed_units() {
+            if record.owner != owner
+                || !live(record)
+                || record.paused_since.is_some()
+                || self.training.jobs.iter().any(|j| j.producer == id)
+            {
+                continue;
+            }
+            let list = profile(&record.definition, "Trains", "unitList")
+                .map_err(|e| self.training_error(e))?;
+            let mut trains = false;
+            for token in list.split(',').filter(|s| !s.trim().is_empty()) {
+                let token = token.trim();
+                if token.len() != 4 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+                    return Err(self.training_error("malformed Trains rawcode"));
+                }
+                trains |= token.as_bytes() == requested;
+            }
+            if trains {
+                if record.cached
+                    || record.summoned
+                    || record.admitted_order.is_some()
+                    || self.unit_has_effect_history(id)
+                {
+                    return Err(self.training_error("producer state is unsupported"));
+                }
+                selected = Some(id);
+                break;
+            }
+        }
+        let Some(producer) = selected else {
+            return Ok(());
+        };
+        // shortcut: ordinary unmodified production only; add prerequisite/revival and cancellation behavior before widening this seam.
+        if !profile(&definition, "Requires", "techList")
+            .map_err(|e| self.training_error(e))?
+            .is_empty()
+        {
+            return Err(self.training_error("training prerequisites are not admitted"));
+        }
+        if !self.training_limit_allows(owner, kind)? {
+            return Ok(());
+        }
+        let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
+        let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
+        let duration = self.ai_unit_amount(owner, kind, "bldtm")?;
+        let food = self
+            .unit_food_amount(&definition, "fused")
+            .map_err(|e| self.training_error(e))?;
+        if duration <= 0 {
+            return Err(self.training_error("training duration must be positive"));
+        }
+        let now = self
+            .timer_game_time()
+            .filter(|n| n.is_finite() && *n >= 0.)
+            .ok_or_else(|| self.training_error("training clock is not admitted"))?;
+        let completion = now + f64::from(duration);
+        if !completion.is_finite() || completion <= now {
+            return Err(self.training_error("training deadline cannot advance"));
+        }
+        if self.training.jobs.len() >= self.guards.as_ref().expect("guards").capacity() {
+            return Err(self.training_error("training job budget exhausted"));
+        }
+        self.training
+            .jobs
+            .try_reserve(1)
+            .map_err(|_| self.training_error("training job capacity"))?;
+        let events = self.prepare_training_events(producer, false)?;
+        let Some(debit) = self.prepare_training_debit(owner, gold, lumber, food, events.len())?
+        else {
+            return Ok(());
+        };
+        // shortcut: catalog duration uses the session clock; qualify native production polling before sub-tick parity claims.
+        self.training.jobs.push(Training {
+            producer,
+            owner,
+            player,
+            post,
+            kind,
+            food,
+            finish: completion,
+            through: now,
+            pause: None,
+        });
+        self.commit_training_debit(debit);
+        self.commit_training_events(events, producer, kind, None);
+        Ok(())
+    }
+
+    pub(super) fn pending_training_food(&self, owner: HandleId) -> Result<i32, Error> {
+        self.training
+            .jobs
+            .iter()
+            .filter(|j| j.owner == owner)
+            .try_fold(0i32, |total, job| {
+                total
+                    .checked_add(job.food)
+                    .ok_or_else(|| self.training_error("pending food overflow"))
+            })
+    }
+
+    pub(super) fn pending_training_count(&self, owner: HandleId, kind: i32) -> Result<i32, Error> {
+        i32::try_from(
+            self.training
+                .jobs
+                .iter()
+                .filter(|j| j.owner == owner && j.kind == kind)
+                .count(),
+        )
+        .map_err(|_| self.training_error("pending count overflow"))
+    }
+
+    pub(super) fn advance_training(&mut self, now: f64, work: &mut usize) -> Result<(), Error> {
+        let mut index = 0;
+        while index < self.training.jobs.len() {
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| self.training_error("training work budget"))?;
+            let mut job = self.training.jobs[index];
+            if !now.is_finite() || now < job.through {
+                return Err(self.training_error("training clock moved backwards"));
+            }
+            let producer = self
+                .executed_unit(job.producer)
+                .map_err(|e| self.inner.error(NATIVE, e.failure))?;
+            if producer.owner != job.owner || !live(producer) {
+                return Err(self.training_error(
+                    "producer removal or transfer during training is unsupported",
+                ));
+            }
+            if let Some(since) = producer.paused_since {
+                let (at, base) = *job
+                    .pause
+                    .get_or_insert((since.max(job.through), job.finish));
+                job.finish = base + (now - at);
+                if !job.finish.is_finite() {
+                    return Err(self.training_error("paused training deadline overflow"));
+                }
+            } else {
+                job.pause = None;
+            }
+            job.through = now;
+            if producer.paused_since.is_some() || job.finish > now {
+                self.training.jobs[index] = job;
+                index += 1;
+                continue;
+            }
+            let [x, y] = producer
+                .position
+                .ok_or_else(|| self.training_error("producer position is not admitted"))?;
+            let face = producer.face;
+            let events = self.prepare_training_events(job.producer, true)?;
+            let prepared = self.prepare_unit_creation(
+                &[
+                    Value::Handle(job.owner),
+                    Value::Int(job.kind),
+                    Value::Real(x),
+                    Value::Real(y),
+                    Value::Real(face),
+                ],
+                None,
+                false,
+            )?;
+            let unit = self.commit_unit_creation(prepared)?;
+            self.training.jobs.remove(index);
+            self.commit_training_events(events, job.producer, job.kind, Some(unit));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn next_training_completion(&self, until: f64) -> Option<f64> {
+        self.training
+            .jobs
+            .iter()
+            .filter_map(|job| {
+                let producer = self.executed_unit(job.producer).ok()?;
+                if producer.paused_since.is_some() {
+                    return None;
+                }
+                let at = job.finish.max(self.timer_game_time()?);
+                (at.is_finite() && at <= until).then_some(at)
+            })
+            .min_by(f64::total_cmp)
+    }
+
+    fn prepare_training_events(
+        &mut self,
+        producer: HandleId,
+        finish: bool,
+    ) -> Result<Vec<TrainingEvent>, Error> {
+        let source = self.unit_declaration()?.0;
+        for (name, result) in [
+            ("GetTrainedUnit", "unit"),
+            ("GetTrainedUnitType", "integer"),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, &[], result, true, None)?;
+                if native.source != source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
+        let (unit_name, player_name) = if finish {
+            ("EVENT_UNIT_TRAIN_FINISH", "EVENT_PLAYER_UNIT_TRAIN_FINISH")
+        } else {
+            ("EVENT_UNIT_TRAIN_START", "EVENT_PLAYER_UNIT_TRAIN_START")
+        };
+        let unit_event = self.source_constant_enumerand(unit_name, "unitevent")?;
+        let player_event = self.source_constant_enumerand(player_name, "playerunitevent")?;
+        let owner = self.executed_unit(producer)?.owner;
+        let mut events = Vec::new();
+        for entry in &self.inner.arena {
+            let row = match entry {
+                Entry::RegisteredUnitEvent {
+                    trigger,
+                    unit,
+                    unitevent,
+                    enumerand,
+                } if *unit == producer && *enumerand == unit_event => {
+                    Some((*trigger, None, *unitevent, None))
+                }
+                Entry::RegisteredPlayerUnitEvent(r)
+                    if r.player == owner && r.enumerand == player_event =>
+                {
+                    Some((r.trigger, r.filter, r.playerunitevent, Some(owner)))
+                }
+                _ => None,
+            };
+            if let Some((trigger, filter, event, player)) = row {
+                let filter = self.resolve_event_filter(filter)?;
+                events
+                    .try_reserve(1)
+                    .map_err(|_| self.training_error("training event capacity"))?;
+                events.push(TrainingEvent {
+                    trigger,
+                    filter,
+                    event,
+                    player,
+                });
+            }
+        }
+        self.reserve_event_delivery(events.len())?;
+        Ok(events)
+    }
+
+    fn commit_training_events(
+        &mut self,
+        events: Vec<TrainingEvent>,
+        producer: HandleId,
+        kind: i32,
+        unit: Option<HandleId>,
+    ) {
+        for event in events {
+            self.push_reserved_event(
+                event.trigger,
+                event.filter,
+                EventSubject {
+                    unit: Some(producer),
+                    player: event.player,
+                    trained: unit,
+                    trained_type: Some(kind),
+                    ..Default::default()
+                },
+                Some(event.event),
+            );
+        }
+    }
+}

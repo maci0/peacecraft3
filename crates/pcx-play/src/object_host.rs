@@ -18,6 +18,7 @@ pub struct ObjectHost {
     holy_light: Option<holy_light::Rules>,
     summoning: Option<unit_summon::State>,
     unit_expirations: std::collections::BTreeMap<HandleId, f64>,
+    training: unit_training::State,
     events: event_delivery::Delivery,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
@@ -187,6 +188,7 @@ impl ObjectHost {
             Self::contract(&inner, name, parameters, result, false, Some("timer"))?;
         }
         Ok(Self {
+            training: unit_training::State::default(),
             cheat_queries: None,
             inner,
             group_limit: None,
@@ -1152,6 +1154,8 @@ pub use destructables::{
 
 #[path = "unit_host.rs"]
 mod unit_creation;
+#[path = "unit_training_host.rs"]
+mod unit_training;
 pub use unit_creation::{
     ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, UnitAbilities, UnitBudget,
     UnitStateBudget,

@@ -2,16 +2,16 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [~] `FillGuardPosts` replacement behavior is now qualified in three matched,
-  stopped original-client runs: a dead ordinary guard triggers resource debit,
-  pending food and a completed replacement; no-fill and released-guard controls
-  do not. The selected code joins persistent posts, assignment counters and the
-  signed replacement limit. The game-runtime consumer and shared unit production
-  remain unfinished, so Human02 still refuses this native at 8.312500 seconds.
-  The source policy now derives post counters and validates their relationships;
-  1,738 core tests and strict native/WASM checks pass. A fourth stopped run
-  qualifies pending count queries and training start/finish payloads. Native
-  record layout is not an implementation requirement.
+- [~] `FillGuardPosts` now retains vacant canonical guard posts and requests real
+  pending ordinary-unit production. Source costs, food, duration and train lists
+  drive resource debit, pending counts, callbacks, normal unit creation and post
+  binding. Four stopped original-client runs qualify replacement versus no-fill
+  and released controls, pending counts, and training callback payloads.
+  Core 1,748, app-library 55, app-binary 638, published session, startup/Continue,
+  strict native/WASM checks and the default game build pass. Unchanged Human02
+  now reaches `ReturnGuardPosts` at 8.312500 seconds; its opening-minute gate
+  remains red. Native production polling, cancellation, prerequisite/hero/
+  construction cases and exact spawn/arrival behavior remain fidelity work.
   See [guard-post replacement](docs/re-notes/campaign-ai-guard-posts.md).
 
 - [~] `AddDefenders` now recruits canonical units into the defensive captain,

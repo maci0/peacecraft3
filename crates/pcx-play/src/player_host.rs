@@ -837,15 +837,22 @@ impl ObjectHost {
                     && u.combat.as_ref().is_none_or(|c| !c.dead)
                     && u.vitals.is_none_or(|v| v.life > 0.0)
             })
-            .try_fold(0i32, |total, (_, u)| {
-                let value = self
-                    .unit_food_amount(&u.definition, column)
-                    .map_err(|s| self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s)))?;
-                total.checked_add(value).ok_or_else(|| {
-                    self.inner
-                        .error(GET_PLAYER_STATE, Failure::PlayerState("unit food overflow"))
-                })
-            })
+            .try_fold(
+                if column == "fused" {
+                    self.pending_training_food(owner)?
+                } else {
+                    0
+                },
+                |total, (_, u)| {
+                    let value = self.unit_food_amount(&u.definition, column).map_err(|s| {
+                        self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s))
+                    })?;
+                    total.checked_add(value).ok_or_else(|| {
+                        self.inner
+                            .error(GET_PLAYER_STATE, Failure::PlayerState("unit food overflow"))
+                    })
+                },
+            )
     }
     /// Returns the stored assignment and the effective value that `GetPlayerState` observes.
     fn resource_assignment(
@@ -1999,4 +2006,122 @@ pub(crate) struct GoldDebit {
     index: Option<usize>,
     next: i32,
     change: Option<PlayerStateChange>,
+}
+
+pub(super) struct TrainingDebit {
+    resources: ResourceCredit,
+    food: Option<PlayerStateChange>,
+}
+
+impl ObjectHost {
+    pub(super) fn training_limit_allows(&self, owner: HandleId, kind: i32) -> Result<bool, Error> {
+        let at = self.player_index(&Value::Handle(owner), "FillGuardPosts")?;
+        let maximum = self.players.as_ref().expect("admitted player").rows[at]
+            .tech_max
+            .iter()
+            .find(|(id, _)| *id == kind)
+            .map(|(_, maximum)| *maximum);
+        let Some(maximum) = maximum else {
+            return Ok(true);
+        };
+        if maximum < 0 {
+            return Err(self.inner.error(
+                "FillGuardPosts",
+                Failure::PlayerState("negative production limit is not admitted"),
+            ));
+        }
+        Ok(self.ai_player_unit_type_count(Some(owner), kind)? < maximum)
+    }
+
+    pub(super) fn prepare_training_debit(
+        &mut self,
+        owner: HandleId,
+        gold: i32,
+        lumber: i32,
+        food: i32,
+        pending: usize,
+    ) -> Result<Option<TrainingDebit>, Error> {
+        let fail = |why| {
+            self.inner
+                .error("FillGuardPosts", Failure::PlayerState(why))
+        };
+        if gold < 0 || lumber < 0 || food < 0 {
+            return Err(fail("negative training cost"));
+        }
+        let at = self.player_index(&Value::Handle(owner), "FillGuardPosts")?;
+        let states = [
+            "PLAYER_STATE_RESOURCE_GOLD",
+            "PLAYER_STATE_RESOURCE_LUMBER",
+            "PLAYER_STATE_RESOURCE_FOOD_USED",
+        ]
+        .map(|name| self.source_constant_enumerand(name, "playerstate"));
+        let [gold_state, lumber_state, food_state] = states;
+        let states = [gold_state?, lumber_state?, food_state?];
+        let mut current = [0; 3];
+        for (value, state) in current.iter_mut().zip(states) {
+            *value = self
+                .resource_value(at, state)?
+                .ok_or_else(|| fail("training resources not admitted"))?;
+        }
+        let cap = self
+            .player_resource_value(owner, "PLAYER_STATE_RESOURCE_FOOD_CAP")?
+            .ok_or_else(|| fail("food capacity not admitted"))?;
+        let used = current[2]
+            .checked_add(food)
+            .ok_or_else(|| fail("training food overflow"))?;
+        if current[0] < gold || current[1] < lumber || used > cap {
+            return Ok(None);
+        }
+        let next = [current[0] - gold, current[1] - lumber, used];
+        let resources = self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("resources not admitted"))?;
+        let number = self.players.as_ref().expect("players").rows[at].number;
+        let row = |index: usize| ResourceRow {
+            number,
+            state: states[index],
+            next: next[index],
+            index: resources
+                .values
+                .iter()
+                .position(|(p, s, _)| *p == number && *s == states[index]),
+        };
+        let rows = [row(0), row(1)];
+        let missing = rows.iter().filter(|r| r.index.is_none()).count();
+        self.players
+            .as_mut()
+            .expect("players")
+            .resources
+            .as_mut()
+            .expect("resources")
+            .values
+            .try_reserve(missing)
+            .map_err(|_| fail("training resource capacity"))?;
+        let [gold_change, lumber_change, food_change] = self
+            .prepare_player_state_changes_reserving(
+                owner,
+                [
+                    (states[0], next[0]),
+                    (states[1], next[1]),
+                    (states[2], next[2]),
+                ],
+                pending,
+            )?;
+        Ok(Some(TrainingDebit {
+            resources: ResourceCredit {
+                rows,
+                changes: [gold_change, lumber_change],
+            },
+            food: food_change,
+        }))
+    }
+
+    pub(super) fn commit_training_debit(&mut self, debit: TrainingDebit) {
+        self.apply_resource_credit(debit.resources);
+        if let Some(change) = debit.food {
+            self.commit_player_state_change(change);
+        }
+    }
 }

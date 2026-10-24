@@ -281,6 +281,18 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects()
+                .has_queued_training_events()
+            {
+                let events = self.advance_queued_events(budget)?;
+                budget = budget
+                    .checked_sub(events.max(1))
+                    .ok_or(TimerSessionError::WakeBudget)?;
+                delivered += events;
+            }
+            if self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
                 .game_paused()
                 == Some(true)
             {
@@ -291,6 +303,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .ok_or(ScriptSessionError::NoSession)?
                 .next_ai_wake(until);
             let step_until = ai_wake.map_or(until, |(at, _, _)| at);
+            let training_wake = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .next_training_completion(step_until);
+            let step_until = training_wake.unwrap_or(step_until);
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -331,6 +349,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Err(error.into());
             }
             let Some(expiry) = expiry else {
+                if training_wake == Some(step_until) {
+                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    continue;
+                }
                 if let Some((_, player, ticket)) = ai_wake {
                     budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     self.host()

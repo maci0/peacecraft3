@@ -887,6 +887,7 @@ impl ObjectHost {
         if now == state.projected_through {
             return Ok(0);
         }
+        self.advance_training(now, work)?;
         let starts: Vec<_> = if self.initial_blight.is_some() {
             self.executed_units()
                 .filter(|(_, record)| {
@@ -1100,6 +1101,25 @@ impl ObjectHost {
         reach: f32,
         name: &str,
     ) -> Result<Option<PreparedSteer>, Error> {
+        self.prepare_record_steer(
+            unit,
+            self.executed_unit(unit)?,
+            start,
+            destination,
+            reach,
+            name,
+        )
+    }
+
+    pub(super) fn prepare_record_steer(
+        &self,
+        unit: HandleId,
+        record: &super::ExecutedUnit,
+        start: Option<[f32; 2]>,
+        destination: Option<[f32; 2]>,
+        reach: f32,
+        name: &str,
+    ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
         let route_work = self
             .unit_activity
@@ -1109,7 +1129,6 @@ impl ObjectHost {
         let now = self
             .timer_game_time()
             .ok_or_else(|| fail("clock not admitted"))?;
-        let record = self.executed_unit(unit)?;
         let activity = record
             .activity
             .as_ref()
@@ -1123,7 +1142,7 @@ impl ObjectHost {
                 let start = start
                     .or(record.position)
                     .ok_or_else(|| fail("accepted position required"))?;
-                let radius = self.unit_collision_radius(unit, name)?;
+                let radius = record.collision_radius.map_err(fail)?;
                 let mut work = route_work;
                 let path = if activity.pathing_off {
                     vec![crate::unit_placement::approach_point(start, target, reach)]

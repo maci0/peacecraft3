@@ -68,6 +68,11 @@ impl Host for AiResearchWorld {
 }
 
 impl AiWorld for AiResearchWorld {
+    fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .fill_ai_guard_posts(player)
+            .map_err(|e| e.to_string())
+    }
     fn ai_debug_text(&mut self) -> Result<(), String> {
         self.object.ai_debug_text().map_err(|e| e.to_string())
     }
