@@ -30,8 +30,10 @@ Unrelated flags are preserved. The helper's calls resolve references and units;
 the inspected body contains no unit-order, position or resource-bank operation.
 The following `HarvestGold`/`HarvestWood` handlers call a different assignment
 helper. The [gold harvest investigation](campaign-ai-gold-harvest.md) now
-qualifies a one-worker cycle and its zero-worker control; autonomous selection
-and resource transfer remain unimplemented.
+qualifies a one-worker cycle, its zero-worker control and a partial final load.
+`HarvestGold` now assigns canonical workers and uses the shared harvest runtime
+for mine entry, cargo, depot credit and repeated work. `HarvestWood` remains a
+separate pending assignment consumer.
 
 Bounded REA byte observations:
 
@@ -67,9 +69,9 @@ An explicit-order synthetic harvest cycle checks that clearing assignments prese
 explicit worker's order and motion and still credits its carried load.
 The published two-program fixture calls the native before and after sleep.
 
-This slice does not allocate workers, mine gold, choose AI towns or implement
-`HarvestGold`/`HarvestWood`. Those calls continue to refuse until connected to
-the canonical resource and order runtimes. A successful empty rollover is not
+Rollover itself does not allocate workers or transfer resources. The later
+`HarvestGold` consumer now performs that work through the same canonical unit
+records; `HarvestWood` is still pending. A successful empty rollover alone is not
 evidence for autonomous harvesting or a complete campaign strategy.
 
 Combined verification passes 1,707 core tests, 55 app-library and 638 app-binary

@@ -108,7 +108,7 @@ fn campaign_unit_counts_follow_the_shared_unit_lifecycle_without_mutating_it() {
     assert!(h.ai_player_unit_type_count(Some(a), rawcode).is_err());
 }
 
-const DECLARATIONS: &str = r#"
+pub(super) const DECLARATIONS: &str = r#"
 constant native GetLocalPlayer takes nothing returns player
 native SetPlayerAlliance takes player a, player b, alliancetype s, boolean v returns nothing
 type unitstate extends handle
@@ -207,7 +207,7 @@ fn column(
     (*id, field)
 }
 
-fn armed(range: &str, weapon: &str) -> Vec<([u8; 4], ObjectField)> {
+pub(super) fn armed(range: &str, weapon: &str) -> Vec<([u8; 4], ObjectField)> {
     use FieldKind::{Int, Real, Token};
     use SlkId::{UnitBalance as B, UnitWeapons as W};
     vec![
@@ -232,7 +232,7 @@ fn armed(range: &str, weapon: &str) -> Vec<([u8; 4], ObjectField)> {
     ]
 }
 
-fn rules() -> CombatRules {
+pub(super) fn rules() -> CombatRules {
     let mut damage_bonus = [[1.0; 8]; 7];
     damage_bonus[1][1] = 0.75;
     CombatRules {

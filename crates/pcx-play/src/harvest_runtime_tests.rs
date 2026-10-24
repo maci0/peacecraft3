@@ -55,6 +55,25 @@ call TriggerAddAction(t,function observe_deposit)
 endfunction
 "#;
 
+const GOLD_DEPOSIT_OBSERVER: &str = r#"
+globals
+integer GoldEvents=0
+integer ObservedGold=0
+integer ObservedGoldGathered=0
+endglobals
+function observe_gold takes nothing returns nothing
+set GoldEvents=GoldEvents+1
+set ObservedGold=GetPlayerState(Player(0),PLAYER_STATE_RESOURCE_GOLD)
+set ObservedGoldGathered=GetPlayerState(Player(0),PLAYER_STATE_GOLD_GATHERED)
+endfunction
+function watch_gold takes nothing returns nothing
+local trigger t=CreateTrigger()
+call TriggerRegisterPlayerStateEvent(t,Player(0),PLAYER_STATE_RESOURCE_GOLD,GREATER_THAN,0.0)
+call TriggerRegisterPlayerStateEvent(t,Player(0),PLAYER_STATE_GOLD_GATHERED,GREATER_THAN,0.0)
+call TriggerAddAction(t,function observe_gold)
+endfunction
+"#;
+
 const ABILITY_HEADERS: &[&str] = &[
     "alias",
     "code",
@@ -129,11 +148,40 @@ fn harvest_tables_for_range(
 ) -> Arc<DefaultTables> {
     let ability_rows: &[&[&str]] = &[
         &[
+            "Agld", "Agld", "1", "0", "0", "500", "2.25", "1", "-", "-", "-",
+        ],
+        &[
             "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, "600", duration,
         ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
     ];
     let metadata_rows: &[&[&str]] = &[
+        &[
+            "Gld2",
+            "Data",
+            "AbilityData",
+            "-1",
+            "4",
+            "2",
+            "0",
+            "Agld",
+            "-",
+            "unreal",
+            "stats",
+        ],
+        &[
+            "Gld3",
+            "Data",
+            "AbilityData",
+            "-1",
+            "4",
+            "3",
+            "0",
+            "Agld",
+            "-",
+            "int",
+            "stats",
+        ],
         &[
             "Har1",
             "Data",
@@ -518,13 +566,43 @@ fn open_harvest_with(
     tree: crate::playercolor_host::PlacedDestructable,
     fields: Vec<([u8; 4], ObjectField)>,
 ) -> (Vm, HandleId) {
+    open_harvest_with_budget(
+        tables,
+        catalog,
+        tree,
+        fields,
+        crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
+    )
+}
+
+fn open_harvest_with_budget(
+    tables: Arc<DefaultTables>,
+    catalog: DestructableCatalog,
+    tree: crate::playercolor_host::PlacedDestructable,
+    fields: Vec<([u8; 4], ObjectField)>,
+    budget: crate::playercolor_host::harvest_runtime::Budget,
+) -> (Vm, HandleId) {
+    open_harvest_configured(tables, catalog, tree, fields, budget, ("", MAP), |host| {
+        host
+    })
+}
+
+fn open_harvest_configured(
+    tables: Arc<DefaultTables>,
+    catalog: DestructableCatalog,
+    tree: crate::playercolor_host::PlacedDestructable,
+    fields: Vec<([u8; 4], ObjectField)>,
+    budget: crate::playercolor_host::harvest_runtime::Budget,
+    sources: (&str, &str),
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId) {
     let mut h = host_fields_with_placed_source(
         65536,
         &fields,
         &[tree],
         harvest_rules(),
-        &format!("{MAP}\n{DEPOSIT_OBSERVER}"),
-        STATE_EVENTS,
+        &format!("{}\n{DEPOSIT_OBSERVER}\n{GOLD_DEPOSIT_OBSERVER}", sources.1),
+        &format!("{STATE_EVENTS}\n{}", sources.0),
     );
     h = h
         .with_player_state_requests(PlayerStateRequestBudget { max_records: 8 })
@@ -537,12 +615,7 @@ fn open_harvest_with(
         .unwrap();
     h.admit_destructable_catalog(catalog).unwrap();
     let mut h = h
-        .with_harvest(
-            tables,
-            Overlay::default(),
-            Overlay::default(),
-            crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
-        )
+        .with_harvest(tables, Overlay::default(), Overlay::default(), budget)
         .unwrap();
     let model = crate::unit_model::tests::model();
     let mut bytes = model.bytes.to_vec();
@@ -563,6 +636,7 @@ fn open_harvest_with(
     );
     h.admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
         .unwrap();
+    let h = configure(h);
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
@@ -1143,6 +1217,425 @@ fn player_bank(vm: &mut Vm, state: &str) -> i32 {
         .player_resource_value(player, state)
         .unwrap()
         .unwrap()
+}
+
+fn gold_role(vm: &mut Vm, unit: HandleId, abilities: &str, building: bool, amount: Option<i32>) {
+    let mut definition = vm
+        .host()
+        .inner
+        .executed_unit(unit)
+        .unwrap()
+        .definition
+        .clone();
+    let (key, value) = field(*b"uabi", SlkId::UnitAbilities, "abilList", abilities);
+    definition.fields.insert(key, value);
+    let (key, mut value) = field(
+        *b"ubdg",
+        SlkId::UnitBalance,
+        "isbldg",
+        if building { "1" } else { "0" },
+    );
+    value.metadata.as_mut().unwrap().kind = pcx_objects::editor::FieldKind::Bool;
+    value.metadata.as_mut().unwrap().from = SlkId::UnitMetaData;
+    value.metadata.as_mut().unwrap().declared = "boolean".into();
+    definition.fields.insert(key, value);
+    vm.host()
+        .inner
+        .fixture_harvest_definition(unit, definition, amount);
+}
+
+fn gold_fixture() -> (Vm, HandleId, HandleId, HandleId) {
+    gold_fixture_budget(4)
+}
+
+fn gold_fixture_budget(max_workers: usize) -> (Vm, HandleId, HandleId, HandleId) {
+    let (mut vm, _) = open_harvest_with_budget(
+        harvest_tables_for_range("9", "20", "4", "20"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+        crate::playercolor_host::harvest_runtime::Budget::new(max_workers, 64),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let depot = create_unit(&mut vm, *b"htow", 32.0, 96.0);
+    let mine = create_unit(&mut vm, *b"ngol", 96.0, 32.0);
+    gold_role(&mut vm, worker, "Ahar", false, None);
+    gold_role(&mut vm, depot, "Argl", true, None);
+    gold_role(&mut vm, mine, "Agld", true, Some(500));
+    (vm, worker, depot, mine)
+}
+
+fn gold_amount(vm: &mut Vm, mine: HandleId) -> i32 {
+    vm.host()
+        .inner
+        .executed_unit(mine)
+        .unwrap()
+        .resource_amount
+        .unwrap()
+}
+
+fn hidden(vm: &mut Vm, unit: HandleId) -> bool {
+    vm.host()
+        .inner
+        .native("IsUnitHidden", &[Value::Handle(unit)])
+        .unwrap()
+        == Value::Bool(true)
+}
+
+fn start_gold(vm: &mut Vm, worker: HandleId, mine: HandleId) {
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(worker),
+                    Value::Str("harvest".into()),
+                    Value::Handle(mine)
+                ]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn gold_orders_on_units_without_harvest_capability_return_false_without_changes() {
+    let (mut vm, worker, depot, mine) = gold_fixture();
+    gold_role(&mut vm, worker, "_", false, None);
+    for unit in [worker, depot] {
+        let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+        assert_eq!(
+            vm.host()
+                .inner
+                .native(
+                    "IssueTargetOrder",
+                    &[
+                        Value::Handle(unit),
+                        Value::Str("harvest".into()),
+                        Value::Handle(mine)
+                    ]
+                )
+                .unwrap(),
+            Value::Bool(false)
+        );
+        let after = vm.host().inner.executed_unit(unit).unwrap();
+        assert_eq!(after.activity, before.activity);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.shown, before.shown);
+        assert_eq!(vm.host().inner.harvest_worker_count(unit), 0);
+    }
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+}
+
+#[test]
+fn gold_harvest_enters_the_mine_then_returns_source_cargo_and_repeats() {
+    let (mut vm, worker, _depot, mine) = gold_fixture();
+    let gold = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_GOLD_GATHERED");
+    vm.call("watch_gold", &[]).unwrap();
+    start_gold(&mut vm, worker, mine);
+    let mut entered = None;
+    let mut exited = None;
+    for n in 1..=240 {
+        let now = n as f64 / 10.0;
+        tick(&mut vm, now);
+        if entered.is_none() && hidden(&mut vm, worker) {
+            entered = Some(now);
+        }
+        if entered.is_some() && exited.is_none() && !hidden(&mut vm, worker) {
+            exited = Some(now);
+            assert_eq!(gold_amount(&mut vm, mine), 470);
+            assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+        }
+        if player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD") > gold {
+            assert!(entered.is_some() && exited.is_some());
+            assert!(exited.unwrap() - entered.unwrap() >= 2.25);
+            assert_eq!(
+                player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+                gold + 30
+            );
+            assert_eq!(
+                player_bank(&mut vm, "PLAYER_STATE_GOLD_GATHERED"),
+                gathered + 30
+            );
+            assert_eq!(gold_amount(&mut vm, mine), 470);
+            assert_eq!(current_order(&mut vm, worker), 902);
+            while let Some(event) = vm.host().inner.take_fired_event() {
+                let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+                vm.run_thread(&delivery.actions).unwrap();
+                vm.host().inner.finish_fired_event();
+            }
+            assert_eq!(vm.global("GoldEvents"), Value::Int(2));
+            assert_eq!(vm.global("ObservedGold"), Value::Int(gold + 30));
+            assert_eq!(vm.global("ObservedGoldGathered"), Value::Int(gathered + 30));
+            return;
+        }
+    }
+    panic!("worker did not return its first gold load");
+}
+
+#[test]
+fn gold_mine_capacity_serializes_workers_and_rejects_orders_while_inside() {
+    let (mut vm, worker, _depot, mine) = gold_fixture();
+    let other = create_unit(&mut vm, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, other, "Ahar", false, None);
+    start_gold(&mut vm, worker, mine);
+    start_gold(&mut vm, other, mine);
+    let mut observed = false;
+    for n in 1..=60 {
+        tick(&mut vm, n as f64 / 10.0);
+        assert!(!(hidden(&mut vm, worker) && hidden(&mut vm, other)));
+        if hidden(&mut vm, worker) {
+            observed = true;
+            assert_eq!(
+                vm.host()
+                    .inner
+                    .native(
+                        "IssueImmediateOrder",
+                        &[Value::Handle(worker), Value::Str("beta".into())]
+                    )
+                    .unwrap(),
+                Value::Bool(false)
+            );
+        }
+    }
+    assert!(observed);
+}
+
+#[test]
+fn carried_gold_survives_stop_and_manual_return_credits_once() {
+    let (mut vm, worker, _depot, mine) = gold_fixture();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    start_gold(&mut vm, worker, mine);
+    let mut stopped_at = None;
+    for n in 1..=100 {
+        let now = n as f64 / 10.0;
+        tick(&mut vm, now);
+        if gold_amount(&mut vm, mine) < 500 {
+            assert!(!hidden(&mut vm, worker));
+            vm.host()
+                .inner
+                .native(
+                    "IssueImmediateOrder",
+                    &[Value::Handle(worker), Value::Str("beta".into())],
+                )
+                .unwrap();
+            assert_eq!(
+                vm.host()
+                    .inner
+                    .native(
+                        "IssueImmediateOrder",
+                        &[Value::Handle(worker), Value::Str("returnresources".into())]
+                    )
+                    .unwrap(),
+                Value::Bool(true)
+            );
+            stopped_at = Some(now);
+            break;
+        }
+    }
+    let stopped_at = stopped_at.expect("first gold cargo");
+    for n in 1..=160 {
+        tick(&mut vm, stopped_at + n as f64 / 10.0);
+    }
+    assert_eq!(gold_amount(&mut vm, mine), 470);
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank + 30
+    );
+    assert_eq!(current_order(&mut vm, worker), 0);
+}
+
+#[test]
+fn campaign_gold_assignments_reuse_rolled_workers_and_preserve_other_owners() {
+    let (mut vm, worker, _depot, mine) = gold_fixture();
+    let other = create_unit_for(&mut vm, 1, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, other, "Ahar", false, None);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    host.harvest_ai_gold(0, 0, 0).unwrap();
+    assert_eq!(host.harvest_worker_count(worker), 0);
+    host.harvest_ai_gold(0, -1, 1).unwrap();
+    host.harvest_ai_gold(0, 6, 1).unwrap();
+    assert_eq!(host.harvest_worker_count(worker), 0);
+    host.harvest_ai_gold(0, 0, 1).unwrap();
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(host.harvest_worker_count(other), 0);
+    assert!(host.harvest_ai_gold(1, 0, 1).is_err());
+    let expected = host.executed_unit(worker).unwrap().clone();
+    host.clear_ai_harvest(0).unwrap();
+    host.harvest_ai_gold(0, 0, 1).unwrap();
+    assert_eq!(
+        host.executed_unit(worker).unwrap().activity,
+        expected.activity
+    );
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+}
+
+#[test]
+fn campaign_gold_budget_refuses_the_whole_assignment_before_routes_or_flags() {
+    let (mut vm, worker, _, mine) = gold_fixture_budget(1);
+    let other = create_unit(&mut vm, *b"hpea", 64.0, 32.0);
+    gold_role(&mut vm, other, "Ahar", false, None);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    host.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    host.activate_campaign_ai_player(0).unwrap();
+    let before = [
+        host.executed_unit(worker).unwrap().clone(),
+        host.executed_unit(other).unwrap().clone(),
+    ];
+    assert!(host.harvest_ai_gold(0, 0, 2).is_err());
+    assert_eq!(host.executed_unit(worker).unwrap(), &before[0]);
+    assert_eq!(host.executed_unit(other).unwrap(), &before[1]);
+    assert_eq!(host.harvest_worker_count(worker), 0);
+    assert_eq!(host.harvest_worker_count(other), 0);
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+}
+
+#[test]
+fn accepted_flee_preserves_gold_cargo_without_harvest_overwriting_the_route() {
+    let (mut vm, worker, _, mine) = gold_fixture();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    start_gold(&mut vm, worker, mine);
+    let mut exit_time = None;
+    for n in 1..=100 {
+        let now = n as f64 / 10.0;
+        tick(&mut vm, now);
+        if gold_amount(&mut vm, mine) < 500 {
+            exit_time = Some(now);
+            break;
+        }
+    }
+    let now = exit_time.expect("gold cargo");
+    vm.host()
+        .inner
+        .initiate_campaign_flee(worker, [96.0, 96.0])
+        .unwrap();
+    assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+    tick(&mut vm, now + 1.0);
+    assert_eq!(gold_amount(&mut vm, mine), 470);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+    assert_eq!(issue_id(&mut vm, worker, 901), Value::Bool(true));
+    for n in 1..=100 {
+        tick(&mut vm, now + 1.0 + n as f64 / 10.0);
+    }
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank + 30
+    );
+}
+
+#[test]
+fn depleted_gold_mine_delivers_one_death_and_a_partial_final_load() {
+    use super::super::combat;
+    let mut fields = combat::armed("80", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W001")
+        .unwrap()
+        .1
+        .value = Ok(pcx_sim::world::FieldValue::Cell("0".into()));
+    fields.extend(harvest_fields().into_iter().filter(|(_, value)| {
+        value.metadata.as_ref().is_some_and(|meta| {
+            !matches!(
+                meta.source,
+                pcx_objects::editor::FieldSource::Column {
+                    slk: SlkId::UnitWeapons,
+                    ..
+                }
+            )
+        })
+    }));
+    let declarations = combat::DECLARATIONS.replace(
+        "native IssueTargetOrder takes unit u, string o, widget t returns boolean\n",
+        "",
+    );
+    let map = "globals\ninteger MineDeaths=0\nunit ObservedMine=null\nendglobals\nfunction mine_death takes nothing returns nothing\nset MineDeaths=MineDeaths+1\nset ObservedMine=GetDyingUnit()\nendfunction\n";
+    let map = format!("{}\n{map}", MAP.replace("'U001'", "'u001'"));
+    let (mut vm, _) = open_harvest_configured(
+        harvest_tables_for_range("9", "20", "4", "20"),
+        tree_catalog(),
+        placed_tree(),
+        fields,
+        crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
+        (&declarations, &map),
+        |host| {
+            let mut host = host
+                .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
+                .unwrap()
+                .with_player_unit_events(8)
+                .unwrap();
+            host.admit_unit_vitals(pcx_objects::editor::misc::HeroVitals {
+                life_per_strength: 25.0,
+                mana_per_intelligence: 15.0,
+                life_regen_per_strength: 0.0,
+                mana_regen_per_intelligence: 0.0,
+            })
+            .unwrap();
+            host.admit_combat(combat::rules(), "alpha").unwrap();
+            host
+        },
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let depot = create_unit(&mut vm, *b"htow", 32.0, 96.0);
+    let mine = create_unit(&mut vm, *b"ngol", 96.0, 32.0);
+    gold_role(&mut vm, worker, "Ahar", false, None);
+    gold_role(&mut vm, depot, "Argl", true, None);
+    gold_role(&mut vm, mine, "Agld", true, Some(7));
+    let host = &mut vm.host().inner;
+    let trigger = host.native("CreateTrigger", &[]).unwrap();
+    let event = vm.global("EVENT_UNIT_DEATH");
+    vm.host()
+        .inner
+        .native(
+            "TriggerRegisterUnitEvent",
+            &[trigger.clone(), Value::Handle(mine), event],
+        )
+        .unwrap();
+    let code = vm.program().function_id("mine_death").unwrap();
+    vm.host()
+        .inner
+        .native("TriggerAddAction", &[trigger, Value::Code(code)])
+        .unwrap();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    start_gold(&mut vm, worker, mine);
+    for n in 1..=240 {
+        tick(&mut vm, n as f64 / 10.0);
+    }
+    while let Some(event) = vm.host().inner.take_fired_event() {
+        let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+        vm.run_thread(&delivery.actions).unwrap();
+        vm.host().inner.finish_fired_event();
+    }
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank + 7);
+    assert_eq!(gold_amount(&mut vm, mine), 0);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(mine)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .dead
+    );
+    assert!(!hidden(&mut vm, worker));
+    assert_eq!(current_order(&mut vm, worker), 0);
+    assert_eq!(vm.global("MineDeaths"), Value::Int(1));
+    assert_eq!(vm.global("ObservedMine"), Value::Handle(mine));
 }
 
 #[test]

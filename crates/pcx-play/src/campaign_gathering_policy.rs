@@ -21,6 +21,7 @@ pub struct GatheringPolicy {
     pub conditional_excluded_kind: u32,
     pub harvest_current_masks: [u8; 2],
     pub harvest_previous_masks: [u8; 2],
+    pub harvest_town_slots: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -29,7 +30,7 @@ pub struct Error(&'static str);
 
 // VAs and lengths identify instruction windows in the reviewed PE. Every value
 // returned below is decoded from an operand within those windows.
-const WINDOWS: [(u32, usize, bool); 12] = [
+const WINDOWS: [(u32, usize, bool); 17] = [
     (0xac3f5b, 7, true),   // context clear (andl $-2, ctx+0x2d0)
     (0xabb4e9, 7, true),   // context reader (testb $1, ctx+0x2d0)
     (0xabf9e2, 10, true),  // constructor zero-initialize
@@ -42,6 +43,11 @@ const WINDOWS: [(u32, usize, bool); 12] = [
     (0xf15cb8, 15, false), // ClearHarvestAI
     (0xabc550, 176, true), // assignment rollover, without unit orders
     (0x6933c0, 27, true),  // canonical unit's AI-component accessor
+    (0xab63cd, 20, true),  // HarvestGold registration
+    (0xab57b0, 84, true),  // positive-count/owned-context forwarding
+    (0xabf11a, 9, true),   // unsigned town bound
+    (0xe6f5ec, 6, false),  // (II)V
+    (0xf15cc8, 12, false), // HarvestGold
 ];
 
 fn at(bytes: &[u8], offset: usize, expected: &[u8]) -> Result<(), Error> {
@@ -271,7 +277,8 @@ impl GatheringPolicy {
         let [clear, reader, init_zero, init_cond, candidate, immediate] = &w[..6] else {
             return Err(Error("incomplete gathering-policy windows"));
         };
-        let (harvest_current_masks, harvest_previous_masks) = harvest_windows(&w[6..])?;
+        let (harvest_current_masks, harvest_previous_masks) = harvest_windows(&w[6..12])?;
+        let harvest_town_slots = gold_windows(&w[12..])?;
 
         at(clear, 0, &[0x83, 0xa0])?;
         let ctx_offset = word(clear, 2)?;
@@ -398,6 +405,7 @@ impl GatheringPolicy {
             conditional_excluded_kind,
             harvest_current_masks,
             harvest_previous_masks,
+            harvest_town_slots,
         })
     }
 
@@ -410,6 +418,56 @@ impl GatheringPolicy {
         )
         .expect("synthetic gathering-policy instructions")
     }
+}
+
+fn gold_windows(w: &[&[u8]]) -> Result<u32, Error> {
+    let [registration, handler, bound, signature, name] = w else {
+        return Err(Error("incomplete gold-harvest windows"));
+    };
+    for (offset, target) in [(0, WINDOWS[15].0), (5, WINDOWS[16].0), (10, WINDOWS[13].0)] {
+        at(registration, offset, &[0x68])?;
+        if word(registration, offset + 1)? != target {
+            return Err(Error("HarvestGold registration changed"));
+        }
+    }
+    relative(registration, WINDOWS[12].0, 15, 0xe8, 0x8ccc80)?;
+    at(signature, 0, b"(II)V\0")?;
+    at(name, 0, b"HarvestGold\0")?;
+    at(
+        handler,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0c, 0x6a, 0x57,
+        ],
+    )?;
+    relative(handler, WINDOWS[13].0, 14, 0xe8, 0x43eca0)?;
+    at(
+        handler,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x5d, 0xc3, 0x83, 0x7d, 0x0c, 0, 0x7e, 0x34, 0x8d, 0x48, 0x2c, 0x8b,
+            0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x13, 0x6a, 1, 0xff, 0x75, 0x0c, 0x33,
+            0xc0, 0xff, 0x75, 0x08, 0x8b, 0xc8,
+        ],
+    )?;
+    relative(handler, WINDOWS[13].0, 55, 0xe8, 0xabf110)?;
+    at(handler, 60, &[0x5d, 0xc3])?;
+    relative(handler, WINDOWS[13].0, 62, 0xe8, 0x7fc7e0)?;
+    at(
+        handler,
+        67,
+        &[0x6a, 1, 0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08],
+    )?;
+    relative(handler, WINDOWS[13].0, 77, 0xe8, 0xabf110)?;
+    at(handler, 82, &[0x5d, 0xc3])?;
+    at(bound, 0, &[0x83, 0xfe])?;
+    at(bound, 3, &[0x0f, 0x87])?;
+    if bound[2] & 0x80 != 0
+        || WINDOWS[14].0.wrapping_add(9).wrapping_add(word(bound, 5)?) != 0xabf1e1
+    {
+        return Err(Error("gold-harvest town bound changed"));
+    }
+    Ok(u32::from(bound[2]) + 1)
 }
 
 // Non-stock synthetic operands prove decode reads operands, not constants.
@@ -444,6 +502,46 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
         .iter()
         .map(|(_, len, _)| vec![0; *len])
         .collect::<Vec<_>>();
+
+    for (offset, target) in [(0, WINDOWS[15].0), (5, WINDOWS[16].0), (10, WINDOWS[13].0)] {
+        put(&mut w, 12, offset, &[0x68]);
+        dword(&mut w, 12, offset + 1, target);
+    }
+    relative(&mut w, 12, 15, 0xe8, 0x8ccc80);
+    put(&mut w, 15, 0, b"(II)V\0");
+    put(&mut w, 16, 0, b"HarvestGold\0");
+    put(
+        &mut w,
+        13,
+        0,
+        &[
+            0x55, 0x8b, 0xec, 0xa1, 0x10, 0x4a, 0x1b, 0x01, 0x85, 0xc0, 0x75, 0x0c, 0x6a, 0x57,
+        ],
+    );
+    relative(&mut w, 13, 14, 0xe8, 0x43eca0);
+    put(
+        &mut w,
+        13,
+        19,
+        &[
+            0x83, 0xc4, 0x04, 0x5d, 0xc3, 0x83, 0x7d, 0x0c, 0, 0x7e, 0x34, 0x8d, 0x48, 0x2c, 0x8b,
+            0x41, 0x04, 0x23, 0x01, 0x83, 0xf8, 0xff, 0x75, 0x13, 0x6a, 1, 0xff, 0x75, 0x0c, 0x33,
+            0xc0, 0xff, 0x75, 0x08, 0x8b, 0xc8,
+        ],
+    );
+    relative(&mut w, 13, 55, 0xe8, 0xabf110);
+    put(&mut w, 13, 60, &[0x5d, 0xc3]);
+    relative(&mut w, 13, 62, 0xe8, 0x7fc7e0);
+    put(
+        &mut w,
+        13,
+        67,
+        &[0x6a, 1, 0xff, 0x75, 0x0c, 0x8b, 0xc8, 0xff, 0x75, 0x08],
+    );
+    relative(&mut w, 13, 77, 0xe8, 0xabf110);
+    put(&mut w, 13, 82, &[0x5d, 0xc3]);
+    put(&mut w, 14, 0, &[0x83, 0xfe, 5, 0x0f, 0x87]);
+    dword(&mut w, 14, 5, 0xabf1e1u32.wrapping_sub(WINDOWS[14].0 + 9));
 
     put(&mut w, 0, 0, &[0x83, 0xa0]);
     dword(&mut w, 0, 2, CTX_OFF);
@@ -600,6 +698,55 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gold_town_bound_and_owned_handler_are_source_bound() {
+        let mut source = synthetic_windows();
+        assert_eq!(GatheringPolicy::fixture().harvest_town_slots, 6);
+        source[14][2] = 12;
+        let decoded = GatheringPolicy::decode(
+            &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            [0x42; 32],
+        )
+        .unwrap();
+        assert_eq!(decoded.harvest_town_slots, 13);
+        for (window, offset) in [
+            (12, 1),
+            (12, 16),
+            (13, 10),
+            (13, 26),
+            (13, 29),
+            (13, 40),
+            (13, 44),
+            (13, 56),
+            (13, 61),
+            (13, 78),
+            (13, 83),
+            (14, 3),
+            (14, 5),
+            (15, 5),
+            (16, 11),
+        ] {
+            let mut altered = source.clone();
+            altered[window][offset] ^= 1;
+            assert!(
+                GatheringPolicy::decode(
+                    &altered.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    [0x42; 32]
+                )
+                .is_err(),
+                "window={window} offset={offset}"
+            );
+        }
+        source[14][2] = 0x80;
+        assert!(
+            GatheringPolicy::decode(
+                &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                [0x42; 32]
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn harvest_rollover_uses_decoded_nonstock_masks_and_preserves_other_flags() {
@@ -813,6 +960,7 @@ mod tests {
         assert_eq!(policy.immediate_candidate_mask, 0x10);
         assert_eq!(policy.harvest_current_masks, [0x01, 0x02]);
         assert_eq!(policy.harvest_previous_masks, [0x04, 0x08]);
+        assert_eq!(policy.harvest_town_slots, 4);
         assert_eq!(policy.initial_flags, 0);
         assert_eq!(policy.conditional_initial_mask, 0x0008_0181);
         assert_eq!(policy.conditional_excluded_kind, 0x18);

@@ -7,7 +7,7 @@
 //! admission must resolve or explicitly refuse relevant map overrides.
 //!
 //! Identities and class codes are case-sensitive, matching the shipped
-//! fourcc/code cells; the `-` sentinel means absence, never a lookup.
+//! fourcc/code cells; `-` and `_` ability-list markers mean absence, never a lookup.
 //! Missing harvest capability is reported as `None`, not as numbers from an
 //! absent `Ahar` record.
 use pcx_objects::editor::defaults::{DefaultTables, Family};
@@ -905,7 +905,7 @@ fn resolve_ability_code(
     abilities: Option<&Overlay>,
     alias: &str,
 ) -> Result<Option<String>, HarvestError> {
-    if alias == SENTINEL {
+    if matches!(alias, SENTINEL | "_") {
         return Ok(None);
     }
     let base = match abilities {

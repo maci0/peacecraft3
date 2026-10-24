@@ -1,4 +1,4 @@
-//! Auto-harvest lumber runtime: tree selection, travel, source-timed chops,
+//! Shared harvest runtime: tree/mine selection, travel, source-timed work,
 //! carry accrual, depot return and player credit.
 //!
 //! Reads `Ahar`, the worker's tree weapon, `Artn` and destructable tree
@@ -13,7 +13,9 @@ use pcx_objects::editor::defaults::DefaultTables;
 use pcx_script::{HandleId, Value};
 
 use super::destructables::DestructableStats;
-use crate::harvest_rules::{DepotReturn, HarvestError, HarvestRules, definition_upgrade_codes};
+use crate::harvest_rules::{
+    DepotReturn, GoldMineRules, HarvestError, HarvestRules, definition_upgrade_codes,
+};
 use crate::order_registry::Registry;
 
 use super::{Entry, Error, Failure, ObjectHost};
@@ -44,6 +46,7 @@ enum Phase {
     Seek,
     ToTree,
     Work,
+    InMine,
     ToDepot,
 }
 
@@ -57,12 +60,26 @@ struct Worker {
     tree: Option<HandleId>,
     depot: Option<HandleId>,
     carrying: f32,
+    gold: Option<Gold>,
     phase: Phase,
     phase_since: f64,
     next_hit: f64,
     paused_at: Option<f64>,
     reroute: bool,
     manual_return: bool,
+}
+
+#[derive(Debug, Clone)]
+struct Gold {
+    mine: HandleId,
+    rules: GoldMineRules,
+    carrying: i32,
+}
+
+#[derive(Debug, Clone)]
+struct Cargo {
+    lumber: f32,
+    gold: Option<Gold>,
 }
 
 struct HarvestSetup {
@@ -81,8 +98,17 @@ pub(super) struct State {
     return_order: i32,
     budget: Budget,
     workers: Vec<Worker>,
-    cargo: BTreeMap<HandleId, f32>,
+    cargo: BTreeMap<HandleId, Cargo>,
     depot_cache: BTreeMap<[u8; 4], DepotReturn>,
+}
+
+#[path = "gold_harvest_runtime.rs"]
+mod gold;
+
+impl Worker {
+    fn carrying_any(&self) -> bool {
+        self.carrying >= 1.0 || self.gold.as_ref().is_some_and(|gold| gold.carrying > 0)
+    }
 }
 
 impl ObjectHost {
@@ -136,7 +162,7 @@ impl ObjectHost {
         Ok(self)
     }
 
-    /// Order dispatch for auto-harvest lumber. Other orders cancel a running
+    /// Order dispatch for lumber and gold harvesting. Other orders cancel a running
     /// worker and fall through to the activity native.
     pub(super) fn harvest_native(
         &mut self,
@@ -186,6 +212,41 @@ impl ObjectHost {
             Some(Value::Int(id)) if by_id => Some(*id),
             _ => return None,
         };
+        if self
+            .harvest
+            .as_ref()?
+            .workers
+            .iter()
+            .any(|worker| worker.unit == unit && worker.phase == Phase::InMine)
+        {
+            let valid = if immediate {
+                args.len() == 2
+            } else if target {
+                args.len() == 3 && matches!(args[2], Value::Handle(_) | Value::Null)
+            } else if name.contains("Loc") {
+                args.len() == 3 && matches!(args[2], Value::Handle(_) | Value::Null)
+            } else {
+                args.len() == 4
+                    && args[2].as_real().is_some_and(f32::is_finite)
+                    && args[3].as_real().is_some_and(f32::is_finite)
+            };
+            return Some(if valid {
+                Ok(Value::Bool(false))
+            } else {
+                Err(self.inner.error(name, Failure::Signature))
+            });
+        }
+        if target && order == Some(self.harvest.as_ref()?.harvest_order) {
+            let [_, _, Value::Handle(mine)] = args else {
+                return None;
+            };
+            if self
+                .executed_unit(*mine)
+                .is_ok_and(|record| record.resource_amount.is_some())
+            {
+                return Some(self.start_gold_harvest(unit, *mine));
+            }
+        }
         if !immediate || args.len() != 2 {
             return None;
         }
@@ -199,7 +260,7 @@ impl ObjectHost {
         None
     }
 
-    /// `returnresources` accepted for a worker that already carries lumber,
+    /// `returnresources` accepted for a worker that already carries resources,
     /// including a worker stopped or moved away from its prior harvest.
     /// Explicit return reports `returnresources` and ends idle after credit;
     /// automatic capacity return reports `resumeharvesting` and resumes.
@@ -226,37 +287,42 @@ impl ObjectHost {
                 .workers
                 .iter()
                 .position(|worker| worker.unit == unit)
-                .filter(|index| state.workers[*index].carrying >= 1.0)
+                .filter(|index| state.workers[*index].carrying_any())
         };
         if let Some(index) = existing {
-            self.slow_chopping_for(unit)?;
             let mut worker = self.harvest.as_ref().expect("admitted").workers[index].clone();
+            if worker.gold.is_none() {
+                self.slow_chopping_for(unit)?;
+            }
             worker.owner = owner;
             worker.manual_return = true;
             self.route_depot(&mut worker, position)?;
             self.harvest.as_mut().expect("admitted").workers[index] = worker;
             return Ok(Value::Bool(true));
         }
-        let carrying = {
+        let cargo = {
             let Some(state) = &self.harvest else {
                 return Ok(Value::Bool(false));
             };
-            let Some(carrying) = state
-                .cargo
-                .get(&unit)
-                .copied()
-                .filter(|carrying| *carrying >= 1.0)
-            else {
+            let Some(carrying) = state.cargo.get(&unit).cloned().filter(|cargo| {
+                cargo.lumber >= 1.0 || cargo.gold.as_ref().is_some_and(|gold| gold.carrying > 0)
+            }) else {
                 return Ok(Value::Bool(false));
             };
             carrying
         };
-        self.slow_chopping_for(unit)?;
+        if cargo.gold.is_none() {
+            self.slow_chopping_for(unit)?;
+        }
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
-        let setup = self.harvest_setup(&record.definition, owner)?;
-        validate_rules(&setup.rules).map_err(|detail| self.harvest_error(detail))?;
+        let setup = self
+            .harvest_setup(&record.definition, owner)?
+            .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
+        if cargo.gold.is_none() {
+            validate_rules(&setup.rules).map_err(|detail| self.harvest_error(detail))?;
+        }
         if let Some(state) = &mut self.harvest {
             if state.workers.len() >= state.budget.max_workers {
                 return Err(self.harvest_error("harvest worker budget exhausted"));
@@ -273,7 +339,8 @@ impl ObjectHost {
             upgrade_codes: setup.upgrade_codes,
             tree: None,
             depot: None,
-            carrying,
+            carrying: cargo.lumber,
+            gold: cargo.gold,
             phase: Phase::ToDepot,
             phase_since: now,
             next_hit: 0.0,
@@ -297,19 +364,31 @@ impl ObjectHost {
                 return;
             };
             let worker = state.workers.remove(index);
-            if worker.carrying > 0.0 {
+            if worker.carrying > 0.0 || worker.gold.as_ref().is_some_and(|gold| gold.carrying > 0) {
                 state
                     .cargo
                     .entry(unit)
-                    .and_modify(|carrying| *carrying = carrying.max(worker.carrying))
-                    .or_insert(worker.carrying);
+                    .and_modify(|cargo| {
+                        cargo.lumber = cargo.lumber.max(worker.carrying);
+                        if worker.gold.is_some() {
+                            cargo.gold = worker.gold.clone();
+                        }
+                    })
+                    .or_insert(Cargo {
+                        lumber: worker.carrying,
+                        gold: worker.gold,
+                    });
             }
         }
     }
 
     #[cfg(test)]
     pub(crate) fn harvest_cargo(&self, unit: HandleId) -> Option<f32> {
-        self.harvest.as_ref()?.cargo.get(&unit).copied()
+        self.harvest
+            .as_ref()?
+            .cargo
+            .get(&unit)
+            .map(|cargo| cargo.lumber)
     }
 
     #[cfg(test)]
@@ -321,6 +400,26 @@ impl ObjectHost {
                 .filter(|worker| worker.unit == unit)
                 .count()
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_harvest_definition(
+        &mut self,
+        unit: HandleId,
+        definition: pcx_sim::world::Definition,
+        amount: Option<i32>,
+    ) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).expect("fixture unit") else {
+            panic!("unit fixture");
+        };
+        record.definition = definition;
+        record.resource_amount = amount;
+    }
+
+    pub(super) fn harvest_owns_unit(&self, unit: HandleId) -> bool {
+        self.harvest
+            .as_ref()
+            .is_some_and(|state| state.workers.iter().any(|worker| worker.unit == unit))
     }
 
     pub(super) fn purge_harvest_cargo(&mut self, unit: HandleId) {
@@ -347,9 +446,21 @@ impl ObjectHost {
         };
         let definition = record.definition.clone();
         let owner = record.owner;
+        if self.harvest.as_ref().is_some_and(|state| {
+            state.workers.iter().any(|worker| {
+                worker.unit == unit && worker.gold.as_ref().is_some_and(|gold| gold.carrying > 0)
+            }) || state
+                .cargo
+                .get(&unit)
+                .is_some_and(|cargo| cargo.gold.as_ref().is_some_and(|gold| gold.carrying > 0))
+        }) {
+            return Err(self.harvest_error("return carried gold before changing harvest resource"));
+        }
         self.slow_chopping_for(unit)?;
         self.require_work_animation(unit)?;
-        let setup = self.harvest_setup(&definition, owner)?;
+        let setup = self
+            .harvest_setup(&definition, owner)?
+            .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
         let rules = setup.rules;
         validate_rules(&rules).map_err(|detail| self.harvest_error(detail))?;
         let reach = tree_reach(&rules);
@@ -358,7 +469,7 @@ impl ObjectHost {
             .ok_or_else(|| self.harvest_error("no harvestable tree within Ahar Area"))?;
         let tree_position = self.tree_position(tree)?;
         let depot = self
-            .select_depot(unit, owner, position, &rules)?
+            .select_depot(unit, owner, position, &rules, false)?
             .ok_or_else(|| self.harvest_error("no lumber-accepting depot within Ahar Area"))?;
         let carrying = {
             let state = self.harvest.as_ref().expect("admitted");
@@ -367,7 +478,7 @@ impl ObjectHost {
                 .iter()
                 .find(|worker| worker.unit == unit)
                 .map_or_else(
-                    || state.cargo.get(&unit).copied().unwrap_or(0.0),
+                    || state.cargo.get(&unit).map_or(0.0, |cargo| cargo.lumber),
                     |worker| worker.carrying,
                 )
         };
@@ -405,6 +516,7 @@ impl ObjectHost {
             tree: Some(tree),
             depot: Some(depot),
             carrying,
+            gold: None,
             phase,
             phase_since: now,
             next_hit: now + delay,
@@ -465,7 +577,7 @@ impl ObjectHost {
                 return Ok(());
             }
         };
-        if !record.shown {
+        if !record.shown && worker.phase != Phase::InMine {
             self.cancel_harvest(unit);
             return Ok(());
         }
@@ -489,7 +601,8 @@ impl ObjectHost {
         let position = record
             .position
             .ok_or_else(|| self.harvest_error("accepted unit position required"))?;
-        if !worker.upgrade_codes.is_empty() {
+        worker.owner = record.owner;
+        if worker.gold.is_none() && !worker.upgrade_codes.is_empty() {
             let (tables, upgrades) = {
                 let state = self.harvest.as_ref().expect("admitted");
                 (Arc::clone(&state.tables), state.upgrades.clone())
@@ -506,17 +619,26 @@ impl ObjectHost {
                 worker.rules = rules;
             }
         }
-        let result = match worker.phase {
-            Phase::Seek => self.seek_tree(&mut worker, position),
-            Phase::ToTree => self.advance_to_tree(&mut worker, position, now),
-            Phase::Work => self.advance_work(&mut worker, position, now, work),
-            Phase::ToDepot => self.advance_to_depot(&mut worker, position, now),
+        let result = if worker.gold.is_some() && worker.phase != Phase::ToDepot {
+            self.advance_gold_worker(&mut worker, position, now)
+        } else {
+            match worker.phase {
+                Phase::Seek => self.seek_tree(&mut worker, position),
+                Phase::ToTree => self.advance_to_tree(&mut worker, position, now),
+                Phase::Work => self.advance_work(&mut worker, position, now, work),
+                Phase::ToDepot => self.advance_to_depot(&mut worker, position, now),
+                Phase::InMine => unreachable!("gold mine phase has gold state"),
+            }
         };
         if result.is_err() {
             self.store_worker(worker);
             return result;
         }
-        if worker.phase == Phase::Seek && worker.tree.is_none() && worker.carrying < 1.0 {
+        if worker.phase == Phase::Seek
+            && worker.tree.is_none()
+            && worker.carrying < 1.0
+            && worker.gold.as_ref().is_none_or(|gold| gold.carrying == 0)
+        {
             let state = self.harvest.as_mut().expect("admitted");
             if let Some(index) = state
                 .workers
@@ -706,7 +828,7 @@ impl ObjectHost {
         let usable = self
             .executed_unit(depot)
             .is_ok_and(|record| record.shown && !record.combat.as_ref().is_some_and(|c| c.dead))
-            && self.depot_accepts(depot, owner)?;
+            && self.depot_accepts(depot, owner, worker.gold.is_some())?;
         if !usable {
             worker.depot = None;
             return self.route_depot(worker, position);
@@ -726,20 +848,29 @@ impl ObjectHost {
             }
             return Ok(());
         }
-        let amount = if worker.carrying >= 1.0 {
+        let amount = if let Some(gold) = &worker.gold {
+            gold.carrying
+        } else if worker.carrying >= 1.0 {
             self.slow_chopping_for(worker.unit)?
                 .map_or(worker.carrying.floor() as i32, |(_, deposit)| deposit)
         } else {
             0
         };
         if amount > 0 {
-            let credit = self.prepare_lumber_credit_reserving(owner, amount, 0)?;
+            let credit = if worker.gold.is_some() {
+                self.prepare_gold_credit_reserving(owner, amount, 0)?
+            } else {
+                self.prepare_lumber_credit_reserving(owner, amount, 0)?
+            };
             self.stop_unit(worker.unit)?;
-            self.apply_lumber_credit(credit);
+            self.apply_resource_credit(credit);
         } else {
             self.stop_unit(worker.unit)?;
         }
         worker.carrying = 0.0;
+        if let Some(gold) = &mut worker.gold {
+            gold.carrying = 0;
+        }
         if worker.manual_return {
             let state = self.harvest.as_mut().expect("admitted");
             state
@@ -750,6 +881,9 @@ impl ObjectHost {
         }
         worker.phase = Phase::Seek;
         worker.tree = None;
+        if worker.gold.is_some() {
+            return self.seek_gold(worker, position);
+        }
         self.seek_tree(worker, position)?;
         Ok(())
     }
@@ -789,8 +923,15 @@ impl ObjectHost {
 
     fn route_depot(&mut self, worker: &mut Worker, position: [f32; 2]) -> Result<(), Error> {
         let owner = self.executed_unit(worker.unit)?.owner;
-        let Some(depot) = self.select_depot(worker.unit, owner, position, &worker.rules)? else {
-            return Err(self.harvest_error("no lumber-accepting depot within Ahar Area"));
+        let Some(depot) = self.select_depot(
+            worker.unit,
+            owner,
+            position,
+            &worker.rules,
+            worker.gold.is_some(),
+        )?
+        else {
+            return Err(self.harvest_error("no resource-accepting depot within Ahar Area"));
         };
         let depot_position = self.unit_position(depot)?;
         let reach = self.depot_reach(depot, &worker.rules)?;
@@ -876,6 +1017,7 @@ impl ObjectHost {
         owner: HandleId,
         from: [f32; 2],
         rules: &HarvestRules,
+        gold: bool,
     ) -> Result<Option<HandleId>, Error> {
         let budget = self.harvest.as_ref().expect("admitted").budget.scan_work;
         let mut work = budget;
@@ -924,7 +1066,11 @@ impl ObjectHost {
             let Some(depot) = self.depot_return(rawcode)? else {
                 continue;
             };
-            if !depot.accepts_lumber {
+            if if gold {
+                !depot.accepts_gold
+            } else {
+                !depot.accepts_lumber
+            } {
                 continue;
             }
             if best.is_none_or(|(distance, best_handle)| {
@@ -977,7 +1123,7 @@ impl ObjectHost {
         &self,
         definition: &pcx_sim::world::Definition,
         owner: HandleId,
-    ) -> Result<HarvestSetup, Error> {
+    ) -> Result<Option<HarvestSetup>, Error> {
         let (tables, abilities, upgrades) = {
             let state = self.harvest.as_ref().expect("admitted");
             (
@@ -986,17 +1132,19 @@ impl ObjectHost {
                 state.upgrades.clone(),
             )
         };
-        let base_rules = HarvestRules::from_definition(&tables, &abilities, definition)
+        let Some(base_rules) = HarvestRules::from_definition(&tables, &abilities, definition)
             .map_err(|error| self.harvest_read_error("Ahar", error))?
-            .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
+        else {
+            return Ok(None);
+        };
         let upgrade_codes = definition_upgrade_codes(definition)
             .map_err(|error| self.harvest_read_error("upgradeList", error))?;
         let rules = self.apply_upgrades(&tables, &upgrades, definition, owner, &base_rules)?;
-        Ok(HarvestSetup {
+        Ok(Some(HarvestSetup {
             base_rules,
             rules,
             upgrade_codes,
-        })
+        }))
     }
 
     fn apply_upgrades(
@@ -1069,7 +1217,12 @@ impl ObjectHost {
         Ok(self.unit_collision_radius(depot, ORDER)? + rules.range)
     }
 
-    fn depot_accepts(&mut self, depot: HandleId, owner: HandleId) -> Result<bool, Error> {
+    fn depot_accepts(
+        &mut self,
+        depot: HandleId,
+        owner: HandleId,
+        gold: bool,
+    ) -> Result<bool, Error> {
         let Ok(record) = self.executed_unit(depot) else {
             return Ok(false);
         };
@@ -1077,9 +1230,13 @@ impl ObjectHost {
             return Ok(false);
         }
         let rawcode = record.definition.rawcode;
-        Ok(self
-            .depot_return(rawcode)?
-            .is_some_and(|depot| depot.accepts_lumber))
+        Ok(self.depot_return(rawcode)?.is_some_and(|depot| {
+            if gold {
+                depot.accepts_gold
+            } else {
+                depot.accepts_lumber
+            }
+        }))
     }
 
     fn stop_unit(&mut self, unit: HandleId) -> Result<(), Error> {

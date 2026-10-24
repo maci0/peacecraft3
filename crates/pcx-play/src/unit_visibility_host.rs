@@ -1,6 +1,15 @@
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::Value;
 
+pub(super) struct PreparedVisibility {
+    pub position: Option<[f32; 2]>,
+    shown: bool,
+    changed: bool,
+    placement: Option<crate::unit_placement::Prepared>,
+    relocated: bool,
+    restart: Option<f64>,
+}
+
 impl ObjectHost {
     pub(super) fn unit_visibility_declarations(&self, source: &str) -> Result<(), Error> {
         for (name, args, result, constant) in [
@@ -51,78 +60,119 @@ impl ObjectHost {
             let Some(shown) = shown else {
                 return Ok(Value::Bool(!record.shown));
             };
-            if record.shown == shown {
-                return Ok(Value::Null);
-            }
-            let geometry = if shown && self.unit_placement.is_some() {
-                let geometry = super::unit_positions::geometry(&record.definition)
-                    .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
-                Some((geometry.radius, geometry.path.to_owned(), geometry.air))
-            } else {
-                None
-            };
-            let (position, face, moving) = (
-                record.position,
-                record.face,
-                record.activity.as_ref().is_some_and(|a| a.moving()),
-            );
-            let mut relocated = None;
-            let prepared = if let Some((radius, path, air)) = geometry {
-                let position = position.ok_or_else(|| {
-                    self.inner
-                        .error(name, Failure::UnitState("accepted reveal position missing"))
-                })?;
-                let prepared = self
-                    .unit_placement
-                    .as_mut()
-                    .expect("placement")
-                    .prepare_show_class(unit, position, radius, &path, face, air)
-                    .map_err(|e| {
-                        self.inner
-                            .error(name, Failure::UnitPlacement(e.to_string()))
-                    })?;
-                if prepared.position != position {
-                    relocated = Some(prepared.position);
-                }
-                Some(prepared)
-            } else {
-                None
-            };
-            let restart = if moving && relocated.is_some() {
-                Some(self.timer_game_time().ok_or_else(|| {
-                    self.inner
-                        .error(name, Failure::UnitState("moving unit clock missing"))
-                })?)
-            } else {
-                None
-            };
-            if relocated.is_some() {
-                self.require_blight_projection(unit, name)?;
-            }
-            if let Some(prepared) = prepared {
-                self.unit_placement
-                    .as_mut()
-                    .expect("placement")
-                    .commit(unit, prepared);
-            } else if !shown && let Some(placement) = &mut self.unit_placement {
-                placement.hide(unit).map_err(|e| {
+            let prepared = self.prepare_unit_visibility(unit, shown, name)?;
+            self.commit_unit_visibility(unit, prepared, name)?;
+            Ok(Value::Null)
+        })())
+    }
+
+    pub(super) fn prepare_unit_visibility(
+        &mut self,
+        unit: pcx_script::HandleId,
+        shown: bool,
+        name: &str,
+    ) -> Result<PreparedVisibility, Error> {
+        let record = self.executed_unit(unit)?;
+        if record.shown == shown {
+            return Ok(PreparedVisibility {
+                position: record.position,
+                shown,
+                changed: false,
+                placement: None,
+                relocated: false,
+                restart: None,
+            });
+        }
+        let geometry = if shown && self.unit_placement.is_some() {
+            let geometry = super::unit_positions::geometry(&record.definition)
+                .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
+            Some((geometry.radius, geometry.path.to_owned(), geometry.air))
+        } else {
+            None
+        };
+        let (position, face, moving) = (
+            record.position,
+            record.face,
+            record.activity.as_ref().is_some_and(|a| a.moving()),
+        );
+        let mut relocated = None;
+        let prepared = if let Some((radius, path, air)) = geometry {
+            let position = position.ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::UnitState("accepted reveal position missing"))
+            })?;
+            let prepared = self
+                .unit_placement
+                .as_mut()
+                .expect("placement")
+                .prepare_show_class(unit, position, radius, &path, face, air)
+                .map_err(|e| {
                     self.inner
                         .error(name, Failure::UnitPlacement(e.to_string()))
                 })?;
+            if prepared.position != position {
+                relocated = Some(prepared.position);
             }
-            if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                record.shown = shown;
-                if let Some(position) = relocated {
-                    record.position = Some(position);
-                    if let (Some(activity), Some(now)) = (&mut record.activity, restart) {
-                        activity.relocated(position, now);
-                    }
+            Some(prepared)
+        } else {
+            None
+        };
+        let restart = if moving && relocated.is_some() {
+            Some(self.timer_game_time().ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::UnitState("moving unit clock missing"))
+            })?)
+        } else {
+            None
+        };
+        if relocated.is_some() {
+            self.require_blight_projection(unit, name)?;
+        }
+        Ok(PreparedVisibility {
+            position: relocated.or(position),
+            shown,
+            changed: true,
+            placement: prepared,
+            relocated: relocated.is_some(),
+            restart,
+        })
+    }
+
+    pub(super) fn commit_unit_visibility(
+        &mut self,
+        unit: pcx_script::HandleId,
+        prepared: PreparedVisibility,
+        name: &str,
+    ) -> Result<(), Error> {
+        if !prepared.changed {
+            return Ok(());
+        }
+        let shown = prepared.shown;
+        if let Some(placement) = prepared.placement {
+            self.unit_placement
+                .as_mut()
+                .expect("placement")
+                .commit(unit, placement);
+        } else if !shown && let Some(placement) = &mut self.unit_placement {
+            placement.hide(unit).map_err(|e| {
+                self.inner
+                    .error(name, Failure::UnitPlacement(e.to_string()))
+            })?;
+        }
+        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+            record.shown = shown;
+            if prepared.relocated
+                && let Some(position) = prepared.position
+            {
+                record.position = Some(position);
+                if let (Some(activity), Some(now)) = (&mut record.activity, prepared.restart) {
+                    activity.relocated(position, now);
                 }
             }
-            if !shown {
-                self.forget_hidden_unit_ranges(unit);
-            }
-            Ok(Value::Null)
-        })())
+        }
+        if !shown {
+            self.forget_hidden_unit_ranges(unit);
+        }
+        Ok(())
     }
 }

@@ -138,6 +138,7 @@ pub(crate) trait AiWorld: Host {
     fn ai_set_slow_chopping(&mut self, player: i32, enabled: bool) -> Result<(), String>;
     fn ai_stop_gathering(&mut self, player: i32) -> Result<(), String>;
     fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String>;
+    fn ai_harvest_gold(&mut self, player: i32, town: i32, count: i32) -> Result<(), String>;
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String>;
     fn ai_set_captain_home(
         &mut self,
@@ -382,6 +383,17 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .clear_ai_harvest(player)
             .map_err(|e| e.to_string())
+    }
+
+    fn ai_harvest_gold(&mut self, player: i32, town: i32, count: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .harvest_ai_gold(player, town, count)
+            .map_err(|error| error.to_string())
     }
     fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
         self.inner_mut()
@@ -756,6 +768,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     for (name, params) in [
         ("CreateCaptains", &[][..]),
         ("ClearHarvestAI", &[][..]),
+        ("HarvestGold", &["integer", "integer"][..]),
         ("SetCampaignAI", &[][..]),
         ("SetReplacementCount", &["integer"][..]),
         ("SetCaptainHome", &["integer", "real", "real"][..]),
@@ -771,6 +784,11 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
+            if scripts.program().natives().ambiguous(name).is_some() {
+                return Err(format!(
+                    "StartCampaignAI: {name} AI common declaration is ambiguous"
+                ));
+            }
             continue;
         };
         if native.source != *source
@@ -1094,6 +1112,14 @@ impl<W: AiWorld> Host for AiHost<W> {
                 self.world_mut()?.ai_clear_harvest(player)?;
                 Ok(Value::Null)
             }
+            "HarvestGold" => {
+                let [Value::Int(town), Value::Int(count)] = args else {
+                    return Err("HarvestGold: expected town and worker count integers".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_harvest_gold(player, *town, *count)?;
+                Ok(Value::Null)
+            }
             "CreateCaptains" => {
                 if !args.is_empty() {
                     return Err("CreateCaptains: expected no arguments".into());
@@ -1198,6 +1224,7 @@ mod tests {
         slow_chopping: BTreeMap<i32, bool>,
         gathering: BTreeMap<i32, bool>,
         harvest_clears: BTreeMap<i32, usize>,
+        gold_requests: Vec<(i32, i32, i32)>,
         captain_creates: BTreeMap<i32, usize>,
         captain_homes: Vec<(i32, i32, [f32; 2])>,
         captain_combat: BTreeMap<(i32, bool), bool>,
@@ -1377,6 +1404,15 @@ mod tests {
                 return Err("AI player is not active".into());
             }
             *state.harvest_clears.entry(player).or_default() += 1;
+            Ok(())
+        }
+
+        fn ai_harvest_gold(&mut self, player: i32, town: i32, count: i32) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            if !state.active.contains_key(&player) {
+                return Err("AI player is not active".into());
+            }
+            state.gold_requests.push((player, town, count));
             Ok(())
         }
         fn ai_create_captains(&mut self, player: i32) -> Result<(), String> {
@@ -2001,6 +2037,84 @@ mod tests {
             assert!(host.native("CaptainInCombat", &args).is_err());
         }
         assert_eq!(state.lock().unwrap().gold, [(2, 29), (3, 17)].into());
+    }
+
+    #[test]
+    fn harvest_gold_requires_owned_integer_abi_and_forwards_player_across_sleep() {
+        let declaration = "native HarvestGold takes integer town, integer count returns nothing\n";
+        for (common, ai_common) in [
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("returns nothing", "returns integer")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!(
+                    "{AI_COMMON}{}",
+                    declaration.replace("integer count", "boolean count")
+                ),
+            ),
+            (
+                COMMON.to_string(),
+                format!("{AI_COMMON}constant {declaration}"),
+            ),
+            (format!("{COMMON}{declaration}"), AI_COMMON.to_string()),
+            (
+                format!("{COMMON}{declaration}"),
+                format!("{AI_COMMON}{declaration}"),
+            ),
+        ] {
+            let script = program_with_sources(
+                "synthetic:gold.ai",
+                "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+                &common,
+                &ai_common,
+            );
+            let mut runtime = Runtime::<World>::default();
+            runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+            let state = Arc::new(Mutex::new(State::default()));
+            let mut world = Some(World(Arc::clone(&state)));
+            assert!(
+                runtime
+                    .start(&mut world, 1, "gold.ai")
+                    .unwrap_err()
+                    .contains("HarvestGold")
+            );
+            assert!(state.lock().unwrap().active.is_empty());
+            assert!(state.lock().unwrap().gold.is_empty());
+        }
+        let script = program_with_ai_common(
+            "synthetic:gold.ai",
+            "function main takes nothing returns nothing\ncall HarvestGold(7,-13)\ncall Sleep(0.25)\ncall HarvestGold(9,17)\nendfunction\n",
+            &format!("{AI_COMMON}{declaration}"),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let state = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&state)));
+        runtime.start(&mut world, 1, "gold.ai").unwrap();
+        runtime.start(&mut world, 2, "gold.ai").unwrap();
+        state.lock().unwrap().clock = 0.25;
+        while let Some((_, player, ticket)) = runtime.next_wake(0.25) {
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(
+            state.lock().unwrap().gold_requests,
+            [(1, 7, -13), (2, 7, -13), (1, 9, 17), (2, 9, 17)]
+        );
+        let mut host = AiHost::new(1, world.take().unwrap());
+        for args in [
+            vec![],
+            vec![Value::Int(1)],
+            vec![Value::Int(1), Value::Bool(false)],
+            vec![Value::Real(1.0), Value::Int(1)],
+        ] {
+            assert!(host.native("HarvestGold", &args).is_err());
+        }
+        assert_eq!(state.lock().unwrap().gold_requests.len(), 4);
     }
 
     #[test]

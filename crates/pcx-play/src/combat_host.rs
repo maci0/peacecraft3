@@ -1163,7 +1163,7 @@ impl ObjectHost {
             if !attacks {
                 continue;
             }
-            if self.captain_route_owned(unit) {
+            if self.captain_route_owned(unit) || self.harvest_owns_unit(unit) {
                 continue;
             }
             let has_valid_target = self

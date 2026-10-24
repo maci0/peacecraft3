@@ -2,14 +2,17 @@
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
-- [~] Gold harvesting now has a checked one-worker/zero-worker original-client
-  pair and a typed mine-rule reader. The positive arm hides the worker during
-  mining, debits the mine on exit and credits bank/gathered gold at the depot;
-  the zero arm and separate-owner control stay idle. Source-derived duration,
-  mine capacity, aliases and typed overrides pass 1,713 core tests, the explicit
-  original-table test and strict native/WASM checks. Worker assignment and the
-  mining lifecycle are still being integrated; `HarvestGold` remains the
-  Human02 blocker. See [gold harvesting](docs/re-notes/campaign-ai-gold-harvest.md).
+- [~] `HarvestGold` now assigns canonical workers and runs source-derived mine
+  entry, capacity, duration, integer cargo, depot credit and repeated work through
+  the shared harvest runtime. Original-client one/zero-worker and final-load
+  runs qualify hidden mining, debit on exit, depot credit and one mine death.
+  Nonstock runtime, callback, queue, retreat, manual-return and atomic assignment
+  regressions pass with 1,724 core tests, app-library 55 and app-binary 638 tests,
+  published two-program, actual-image, startup/Continue and strict native/WASM
+  checks. Unchanged Human02 now reaches `HarvestWood` at 8.312500 seconds;
+  the opening-minute test remains red. Other race-specific harvesting and
+  occupied-mine destruction remain unqualified. See
+  [gold harvesting](docs/re-notes/campaign-ai-gold-harvest.md).
 
 - [~] `CaptainInCombat` now reads separate attack/defensive captain target state
   through canonical membership and combat updates. A matched original-client

@@ -3,8 +3,8 @@
 `HarvestGold(integer town, integer peons)` must assign real workers to a real
 mine, preserve its resource amount, and credit gold when workers return to a
 depot. Accepting the call or crediting a bank immediately would omit observable
-behavior. The campaign call remains unsupported while that lifecycle is being
-connected to the existing harvesting runtime.
+behavior. The campaign call now uses the existing harvesting runtime and
+canonical units, mines, depots, movement, resource counters and death events.
 
 ## Source evidence
 
@@ -37,7 +37,7 @@ are distinct values.
 through the existing metadata/typed-override path. Custom ability aliases
 resolve through their base records. Missing, ambiguous, malformed, nonpositive
 or incorrectly typed inputs refuse. It supplies no fallback timing or capacity
-and does not yet start a mining task. Synthetic tests discriminate nonstock
+and supplies the accepted mining task. Synthetic tests discriminate nonstock
 values and overrides; an explicit original-table test reads the locally
 selected source files.
 
@@ -77,12 +77,59 @@ The stopped result SHA-256 values are
 All source files, probes, raw records and receipts remain local under ignored
 `.scratch/harvest-gold/`.
 
-Town/worker selection with several candidates, queues, edited mining fields,
-interruptions, depleted mines and other race-specific harvest abilities still
-need implementation or qualification. This does not establish unchanged
-Human02 execution, native Windows presentation, or a complete campaign economy.
+## Final-load observation
 
-Reader verification passes 1,713 core tests, the explicit locally selected
-original-table test, strict native/WASM Clippy, formatting, and the default
-desktop build. These checks validate the source reader; they do not qualify
-the pending assignment or work-loop consumer.
+A separate stopped RoC run retained the same AI and started the mine with seven
+gold. At 7.813 seconds the worker emerged, mine resources and life became zero,
+and one registered death event fired. At 10.813 seconds the depot credited seven
+gold and gathered gold; the worker remained visible and idle through 30.063
+seconds. The separate-owner control stayed unchanged. This qualifies a partial
+final load and the mine death event, without turning these sample times into
+game rules. `VersionGet` reported RoC in this run.
+
+The map SHA-256 is
+`956e6bbc43f284b1cfd845cfeb0129548a03ffc05b83e7288c87e108dbfa03e9`;
+the stopped result SHA-256 is
+`cd722f5366e252dbeb9ce5055548a15e1910fbe966cdb17d2b873992e4ce89d9`.
+The AI bytes match the earlier positive arm. Raw records and receipts remain
+local under ignored `.scratch/harvest-gold/exhaustion/`.
+
+## Runtime behavior and limits
+
+The source-bound AI handler checks owned declarations and canonical active
+players before assignment. Nonpositive counts and out-of-range town indices
+preserve the selected handler's no-op behavior. Positive assignments reuse
+current/prior canonical worker tasks, preflight new routes and capacity, and
+preserve other players' assignments. Creation order supplies town slots and
+nearest compatible mine selection is a recreation choice; native internal
+lists are not copied.
+
+An `Ahar` worker travels to an `Agld` mine, waits for its source-derived capacity,
+hides during its source-derived mining duration, withdraws integer cargo on
+exit, and credits both bank and gathered gold at an `Artn` gold depot. Mine
+exhaustion uses the existing unit death/event path. Normal combat steering does
+not overwrite mining; accepted retreat cancels the task while preserving cargo.
+Units without harvest capability reject a gold order without mutation.
+Stop and manual return preserve a visible worker's cargo, and orders during
+mining return false after validating their arguments. Gold credits reuse the
+existing prepared resource-counter/event commit.
+
+Synthetic regressions cover nonstock mining duration/capacity and cargo,
+capacity queues, partial depletion and one death callback, committed bank-event
+readback, manual return without duplicate credit, retreat, two-player assignment
+isolation, rollover reuse and whole-assignment budget refusal. These tests
+exercise the existing runtime rather than only the source reader.
+
+Other race-specific harvest abilities, external destruction of an occupied
+mine, cross-resource carried loads and several mid-mining effect/ownership
+transitions remain unsupported or unqualified. This does not establish native
+Windows presentation or a complete campaign economy.
+
+Combined verification passes 1,724 core tests, 55 app-library and 638 app-binary
+tests, the published two-program session, selected-image policy decoding,
+Human01 activation and victory Continue, strict native/WASM Clippy, formatting
+and the default desktop build.
+The unchanged Human02 opening-minute test now passes `HarvestGold` and refuses
+`HarvestWood` at 8.312500 seconds. Its complete failure is retained in
+`.scratch/harvest-gold/consumer-final-gates-r3/frontier.log`; no chapter-completion
+claim follows from this advance.

@@ -1089,6 +1089,17 @@ impl ObjectHost {
         reach: f32,
         name: &str,
     ) -> Result<Option<PreparedSteer>, Error> {
+        self.prepare_steer_unit_from(unit, None, destination, reach, name)
+    }
+
+    pub(super) fn prepare_steer_unit_from(
+        &self,
+        unit: HandleId,
+        start: Option<[f32; 2]>,
+        destination: Option<[f32; 2]>,
+        reach: f32,
+        name: &str,
+    ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
         let route_work = self
             .unit_activity
@@ -1109,8 +1120,8 @@ impl ObjectHost {
                 if !activity.can_start_motion() {
                     return Ok(None);
                 }
-                let start = record
-                    .position
+                let start = start
+                    .or(record.position)
                     .ok_or_else(|| fail("accepted position required"))?;
                 let radius = self.unit_collision_radius(unit, name)?;
                 let mut work = route_work;

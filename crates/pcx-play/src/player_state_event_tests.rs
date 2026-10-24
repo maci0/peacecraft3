@@ -1076,7 +1076,7 @@ fn prepared_lumber_credit_writes_both_rows_before_ordered_events() {
     let credit = h
         .prepare_lumber_credit_reserving(id(&player), 10, 0)
         .unwrap();
-    h.apply_lumber_credit(credit);
+    h.apply_resource_credit(credit);
 
     assert_eq!(
         h.native("GetPlayerState", &[player.clone(), bank.clone()])
@@ -1168,7 +1168,7 @@ fn lumber_credit_reserves_pending_and_both_state_events_together() {
             None,
         );
     }
-    h.apply_lumber_credit(credit);
+    h.apply_resource_credit(credit);
     assert_eq!(
         h.event_queue_capacity(),
         reserved,

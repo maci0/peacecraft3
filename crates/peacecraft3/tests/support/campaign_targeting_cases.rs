@@ -250,6 +250,9 @@ endfunction
     let ai_common =
         format!("{ai_common}native IgnoredUnits takes integer unitid returns integer\n");
     let ai_common = format!("{ai_common}native ClearHarvestAI takes nothing returns nothing\n");
+    let ai_common = format!(
+        "{ai_common}native HarvestGold takes integer town, integer count returns nothing\n"
+    );
     let ai_common =
         format!("{ai_common}native CaptainInCombat takes boolean attack returns boolean\n");
     let ai_common = format!(
@@ -271,6 +274,8 @@ call DisplayTextIII(GetAiPlayer(),"",1,2,3)
 endfunction
 function VerifyUnitCounts takes nothing returns nothing
 call ClearHarvestAI()
+call HarvestGold(0,0)
+call HarvestGold(-1,17)
 call VerifySilentDebug()
 if GetFoodMade('a001') != 17 or GetFoodUsed('a001') != 3 or GetFoodMade('t001') != 31 or GetFoodUsed(0) != 0 or GetFoodMade(0) != 0 then
 call CountAssertionFailed()

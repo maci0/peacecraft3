@@ -1826,37 +1826,62 @@ impl ObjectHost {
         player: HandleId,
         amount: i32,
         pending: usize,
-    ) -> Result<LumberCredit, Error> {
+    ) -> Result<ResourceCredit, Error> {
+        self.prepare_harvest_credit_reserving(player, amount, pending, false)
+    }
+
+    pub(crate) fn prepare_gold_credit_reserving(
+        &mut self,
+        player: HandleId,
+        amount: i32,
+        pending: usize,
+    ) -> Result<ResourceCredit, Error> {
+        self.prepare_harvest_credit_reserving(player, amount, pending, true)
+    }
+
+    fn prepare_harvest_credit_reserving(
+        &mut self,
+        player: HandleId,
+        amount: i32,
+        pending: usize,
+        gold: bool,
+    ) -> Result<ResourceCredit, Error> {
         let fail = |reason| {
             self.inner
                 .error(GET_PLAYER_STATE_FOR_CREDIT, Failure::PlayerState(reason))
         };
         if amount <= 0 {
-            return Err(fail("lumber credit must be positive"));
+            return Err(fail("harvest credit must be positive"));
         }
         let at = self.player_index(&Value::Handle(player), GET_PLAYER_STATE_FOR_CREDIT)?;
-        let bank_state =
-            self.source_constant_enumerand("PLAYER_STATE_RESOURCE_LUMBER", "playerstate")?;
-        let gathered_state =
-            self.source_constant_enumerand("PLAYER_STATE_LUMBER_GATHERED", "playerstate")?;
+        let (bank_name, gathered_name) = if gold {
+            ("PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_GOLD_GATHERED")
+        } else {
+            (
+                "PLAYER_STATE_RESOURCE_LUMBER",
+                "PLAYER_STATE_LUMBER_GATHERED",
+            )
+        };
+        let bank_state = self.source_constant_enumerand(bank_name, "playerstate")?;
+        let gathered_state = self.source_constant_enumerand(gathered_name, "playerstate")?;
         let bank_current = self
             .resource_value(at, bank_state)?
-            .ok_or_else(|| fail("lumber not admitted"))?;
+            .ok_or_else(|| fail("harvest bank not admitted"))?;
         let gathered_current = self
             .resource_value(at, gathered_state)?
-            .ok_or_else(|| fail("gathered lumber not admitted"))?;
+            .ok_or_else(|| fail("gathered harvest counter not admitted"))?;
         let bank_visible = bank_current
             .checked_add(amount)
-            .ok_or_else(|| fail("lumber credit overflow"))?;
+            .ok_or_else(|| fail("harvest credit overflow"))?;
         let gathered_visible = gathered_current
             .checked_add(amount)
-            .ok_or_else(|| fail("gathered lumber credit overflow"))?;
+            .ok_or_else(|| fail("gathered harvest counter overflow"))?;
         let (bank_next, bank_visible) = self
             .resource_assignment(at, bank_state, bank_visible)?
-            .ok_or_else(|| fail("lumber not admitted"))?;
+            .ok_or_else(|| fail("harvest bank not admitted"))?;
         let (gathered_next, gathered_visible) = self
             .resource_assignment(at, gathered_state, gathered_visible)?
-            .ok_or_else(|| fail("gathered lumber not admitted"))?;
+            .ok_or_else(|| fail("gathered harvest counter not admitted"))?;
         let players = self.players.as_ref().ok_or_else(|| fail("not admitted"))?;
         let resources = players
             .resources
@@ -1910,15 +1935,15 @@ impl ObjectHost {
         };
         let (bank_number, bank_state, bank_index) = row(bank_state);
         let (gathered_number, gathered_state, gathered_index) = row(gathered_state);
-        Ok(LumberCredit {
+        Ok(ResourceCredit {
             rows: [
-                LumberRow {
+                ResourceRow {
                     number: bank_number,
                     state: bank_state,
                     index: bank_index,
                     next: bank_next,
                 },
-                LumberRow {
+                ResourceRow {
                     number: gathered_number,
                     state: gathered_state,
                     index: gathered_index,
@@ -1929,8 +1954,8 @@ impl ObjectHost {
         })
     }
 
-    /// Writes a prepared lumber credit and commits the reserved events.
-    pub(crate) fn apply_lumber_credit(&mut self, credit: LumberCredit) {
+    /// Writes a prepared harvest credit and commits the reserved events.
+    pub(crate) fn apply_resource_credit(&mut self, credit: ResourceCredit) {
         let players = self
             .players
             .as_mut()
@@ -1951,15 +1976,15 @@ impl ObjectHost {
     }
 }
 
-/// A lumber bank and gathered-counter credit with prepared rows and events.
+/// A harvest bank and gathered-counter credit with prepared rows and events.
 #[derive(Debug)]
-pub(crate) struct LumberCredit {
-    rows: [LumberRow; 2],
+pub(crate) struct ResourceCredit {
+    rows: [ResourceRow; 2],
     changes: [Option<PlayerStateChange>; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LumberRow {
+struct ResourceRow {
     number: i32,
     state: i32,
     index: Option<usize>,

@@ -515,6 +515,38 @@ fn depot_return_uses_exact_artn_bools() {
 }
 
 #[test]
+fn absent_ability_markers_are_not_depots_workers_or_mines() {
+    for marker in ["", "-", "_", " _, - "] {
+        let tables = tables_with(&[], &[vec!["u001", "empty", marker, "-"]], &[], &[]);
+        let depot = DepotReturn::from_tables(&tables, *b"u001").unwrap();
+        assert!(!depot.accepts_gold && !depot.accepts_lumber);
+        assert!(
+            HarvestRules::from_tables(&tables, *b"u001")
+                .unwrap()
+                .is_none()
+        );
+        let definition = selected_unit(
+            *b"u001",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", marker)],
+        );
+        let depot =
+            DepotReturn::from_definition(&tables, &Overlay::default(), &definition).unwrap();
+        assert!(!depot.accepts_gold && !depot.accepts_lumber);
+        assert!(
+            GoldMineRules::from_definition(&tables, &Overlay::default(), &definition)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let tables = tables_with(&[], &[], &[], &[]);
+    let definition = selected_unit(
+        *b"u001",
+        &[(*b"uabi", SlkId::UnitAbilities, "abilList", "bad")],
+    );
+    assert!(DepotReturn::from_definition(&tables, &Overlay::default(), &definition).is_err());
+}
+
+#[test]
 fn depot_return_refuses_bool_2() {
     let ability_rows = vec![vec![
         "Argl", "Artn", "1", "0", "0", "2", "1", "-", "-", "-", "-",

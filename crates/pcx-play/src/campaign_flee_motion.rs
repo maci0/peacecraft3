@@ -394,6 +394,7 @@ impl ObjectHost {
         prepared: super::unit_activity::PreparedSteer,
     ) -> Result<(), Error> {
         self.commit_steer_unit(unit, prepared, NATIVE)?;
+        self.cancel_harvest(unit);
         self.campaign_flee_motion.active.insert(unit);
         Ok(())
     }
