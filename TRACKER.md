@@ -5,6 +5,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Menu switching now hides controls during the authored panel travel and
+  plays the logo's source Birth/Death alpha curves on the panel clock. Fresh TFT
+  desktop captures confirm the floating buttons are gone on Main ↔ Options;
+  Single Player and the campaign selector remain reachable. App library 55,
+  app binary 640, three explicit original-input gates, strict native/WASM Clippy
+  and the desktop build pass. The desktop link required a fresh-object build
+  after an incremental-symbol failure. Exact control fades, category/profile
+  alternates, full-screen opening and campaign composition/transition remain
+  unfinished; the selector still retains the Single Player housing/background.
+  See [transition review](docs/re-notes/menu-panel-navigation.md).
+
 - [~] `ReturnGuardPosts` now routes ordinary idle guards through the canonical
   posts and prepared activity path. Nine stopped RoC runs distinguish idle,
   released, move, hold-call and attack-point behavior. Shared guard state now

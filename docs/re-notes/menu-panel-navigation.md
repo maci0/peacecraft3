@@ -1,5 +1,95 @@
 # Source-selected menu panel navigation
 
+## Transition review, 2026-10-24
+
+Fresh 1280×960 TFT captures compare the original 1.29.2.9231 executable
+(`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+under isolated Wine/OpenGL with the current desktop application. Main → Options
+and Options → Main expose two confirmed presentation defects:
+
+- **P1: controls are detached from transition presentation.** Original outgoing
+  buttons disappear before the hanging housing travels away; incoming buttons
+  appear near the end of its entrance. Current outgoing buttons remain stationary
+  over the exposed background, and incoming buttons are already visible while
+  their housing is still entering. `menu_sprites::advance` commits the next
+  control owner at Death → Birth; `build_control_layer` replaces the tree then,
+  without a transition visibility/opacity envelope. `position_screen_nodes`
+  continues assigning the settled FDF coordinates. Correct source clip selection
+  alone therefore does not reproduce menu switching.
+- **P1: logo visibility cuts instead of fading.** The original logo fades out
+  on entry to Options and fades in on return. `show_logo_for_screen` only selects
+  Hidden/Inherited from the currently admitted FDF; the captures show the logo
+  retained through the outgoing panel motion and then abruptly removed.
+
+A third **P1 source-wiring gap** remains: `Navigation::open` schedules only
+Main ↔ Single Player and Main ↔ Options. Campaign, load, replay, skirmish and
+multiplayer navigation still replaces the screen immediately. This is established
+by the caller, not a newly captured original transition for every listed route.
+Campaign has a distinct authored composition; do not invent a Campaign panel
+triplet or reuse MainMenu clips for it.
+
+Local evidence is retained in `.scratch/menu-motion-review/`: original and native
+`options-forward-fast`/`forward-fast` and `options-back-fast`/`back-fast` frame
+series, contact sheets and monotonic input/capture intervals. Early PNG sampling
+was too slow for timing comparison; the later PPM series supplies the motion
+review. Sampling intervals differ and software rendering affects throughput, so
+this review establishes ordering/visibility defects, not an exact duration or
+easing measurement. A first default-renderer original attempt produced a black
+capture and exited; it is retained separately and is not comparison evidence.
+
+No runtime behavior changed in this review. The next correction must synchronize
+control and logo presentation with outgoing/incoming phases, derive any timing
+from original inputs, and validate fresh rendered transitions. Browser/audio,
+the full-screen opening, profile alternates and campaign transition choreography
+were not requalified here.
+
+### First presentation correction
+
+The shared control root now hides through the source Birth/Death phases and
+reveals on Stand. The next FDF can still be admitted and mounted during Birth,
+but its buttons no longer float over the background while the housing travels.
+Category morphs retain their right-hand controls. Empty/unavailable panel plans
+and screens outside this scheduler keep their previous navigation capability.
+This is a coarse phase-boundary correction: native control opacity ramps and
+the precise early reveal within the final entrance frames remain open.
+
+Logo playback now selects the model's named Death alpha keys during Main's exit,
+and replays Birth on return. Both directions use the existing panel clock;
+independent entrance playback uses real presentation time. Sequence timestamps,
+duration and Bézier values remain model-derived. Reversed sequence intervals
+refuse sampling, and unavailable exit curves are reported rather than replaced.
+
+Synthetic checks discriminate nonstock sequence start/duration, exit versus
+entrance keys, missing/non-finite/reversed input and the control visibility
+boundary. The actual selected logo's Birth/Death endpoints pass the explicit
+local-input gate. The final app suite passes 55 library and 640 binary tests;
+strict native and WASM Clippy pass. These checks establish implementation and
+source handling, not full transition parity. Evidence is retained in
+`.scratch/menu-motion-review/checks-final/`. The earlier desktop build was
+intentionally interrupted to add the malformed-duration guard; its receipt is
+preserved separately in `checks/`.
+
+One scoped REA callback-decompilation attempt hit the provider's Ghidra startup
+deadline before producing a function result; the session was closed. No native
+fade timing was inferred from it. Full-screen opening, other screen routes,
+profile alternates, category body fades and audible parity remain unfinished.
+
+The final desktop binary builds successfully with incremental compilation off.
+The first link attempt failed with undefined hidden LLVM symbols in incremental
+objects; its log is retained, and the fresh-object build passes without source
+changes. The original edition-switch and destination-control gates each pass
+one explicitly selected test; preliminary zero-match invocations are retained
+and are not counted as verification.
+
+A fresh 1280×960 TFT desktop run confirms Main → Options → Main no longer leaves
+buttons floating while the housings travel, and the logo fades out and back in.
+The same run reaches Single Player and the campaign selector. This is selector
+reachability, not chapter activation. The campaign capture still shows the
+Single Player housing/background retained behind campaign controls: campaign
+composition and its transition remain a visible frontier. Raw frames, input
+times, contact sheets and build/source hashes stay local under
+`.scratch/menu-motion-review/native-final/` and `checks-final/build.json`.
+
 MainMenu and SinglePlayer now share a checked panel controller. Each panel keeps
 its own mesh/material handles, global clock and source-selected Birth, Stand and
 Death plans. The outgoing group waits for its longest source clip; shorter clips

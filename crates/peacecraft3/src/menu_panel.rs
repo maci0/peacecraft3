@@ -258,9 +258,28 @@ impl LogoData {
     /// the segment's end value, which is the `Stand` the entrance holds.
     #[must_use]
     pub fn alpha_at_ms(&self, ms: f64) -> Option<f32> {
-        let birth = self.birth()?;
+        self.sequence_alpha("Birth", ms)
+    }
+
+    pub fn sequence_alpha(&self, name: &str, elapsed_ms: f64) -> Option<f32> {
+        if !elapsed_ms.is_finite() {
+            return None;
+        }
+        let sequence = self
+            .sequences
+            .iter()
+            .find(|sequence| sequence.name == name)?;
+        sequence.end.checked_sub(sequence.start)?;
         match &self.alpha {
-            AlphaCurve::Bezier(keys) => sampled_alpha(keys, birth.start, birth.end, ms),
+            AlphaCurve::Bezier(keys) => {
+                let first = keys.iter().position(|key| key.frame == sequence.start)?;
+                sampled_alpha(
+                    keys.get(first..)?,
+                    sequence.start,
+                    sequence.end,
+                    f64::from(sequence.start) + elapsed_ms,
+                )
+            }
             AlphaCurve::Unsupported(_) => None,
         }
     }
@@ -536,8 +555,9 @@ pub struct LogoEntrance {
 /// Placement is not this system's business: the caller positions the sprite. Any
 /// `MenuLogo` entity present gets the tint.
 pub fn advance_logo(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut entrance: ResMut<LogoEntrance>,
+    panels: Option<Res<crate::menu_sprites::MenuPanels>>,
     mut sprites: Query<&mut ImageNode, With<MenuLogo>>,
 ) {
     // Read what the clock needs before touching it: holding a borrow of
@@ -547,18 +567,21 @@ pub fn advance_logo(
         .data
         .as_ref()
         .and_then(|d| d.birth())
-        .map(|s| f64::from(s.end))
+        .and_then(|s| s.end.checked_sub(s.start).map(f64::from))
     else {
         return;
     };
     if entrance.elapsed_ms < birth {
         entrance.elapsed_ms += time.delta().as_secs_f64() * 1000.0;
     }
-    let Some(alpha) = entrance
-        .data
-        .as_ref()
-        .and_then(|d| d.alpha_at_ms(entrance.elapsed_ms))
-    else {
+    let Some(alpha) = entrance.data.as_ref().and_then(|data| {
+        match panels.as_ref().and_then(|panels| panels.logo_animation()) {
+            Some((sequence, elapsed)) => {
+                data.sequence_alpha(sequence, elapsed.as_secs_f64() * 1000.0)
+            }
+            None => data.alpha_at_ms(entrance.elapsed_ms),
+        }
+    }) else {
         return;
     };
     for mut node in &mut sprites {
@@ -569,6 +592,50 @@ pub fn advance_logo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_alpha_uses_named_exit_keys_and_elapsed_time() {
+        let key = |frame, value| BezierKey {
+            frame,
+            value,
+            in_tan: value,
+            out_tan: value,
+        };
+        let data = LogoData {
+            sequences: vec![
+                LogoSequence {
+                    name: "Birth".into(),
+                    start: 10,
+                    end: 110,
+                },
+                LogoSequence {
+                    name: "Death".into(),
+                    start: 500,
+                    end: 800,
+                },
+            ],
+            quad: (0.0, 0.0, 1.0, 1.0),
+            planar: true,
+            texture: "synthetic.blp".into(),
+            alpha: AlphaCurve::Bezier(vec![
+                key(10, 0.0),
+                key(110, 1.0),
+                key(500, 1.0),
+                key(800, 0.0),
+            ]),
+        };
+        assert_eq!(data.alpha_at_ms(50.0), Some(0.5));
+        assert_eq!(data.alpha_at_ms(500.0), Some(1.0));
+        assert_eq!(data.sequence_alpha("Death", 0.0), Some(1.0));
+        assert_eq!(data.sequence_alpha("Death", 150.0), Some(0.5));
+        assert_eq!(data.sequence_alpha("Death", 400.0), Some(0.0));
+        assert_eq!(data.sequence_alpha("Absent", 0.0), None);
+        assert_eq!(data.sequence_alpha("Death", f64::NAN), None);
+        assert_eq!(data.sequence_alpha("Death", f64::INFINITY), None);
+        let mut malformed = data;
+        malformed.sequences[1].end = 499;
+        assert_eq!(malformed.sequence_alpha("Death", 0.0), None);
+    }
 
     /// The two entry keys exactly as the shipped model stores them.
     fn shipped_entry_keys() -> Vec<BezierKey> {
@@ -842,5 +909,15 @@ mod tests {
         assert!((data.alpha_at_ms(250.0).expect("midpoint") - 0.65).abs() < 0.005);
         // Past Birth the entrance holds rather than following the raw track.
         assert_eq!(data.alpha_at_ms(1333.0), Some(1.0));
+        assert_eq!(data.sequence_alpha("Death", 0.0), Some(1.0));
+        let death = data
+            .sequences
+            .iter()
+            .find(|sequence| sequence.name == "Death")
+            .unwrap();
+        assert_eq!(
+            data.sequence_alpha("Death", f64::from(death.duration())),
+            Some(0.0)
+        );
     }
 }

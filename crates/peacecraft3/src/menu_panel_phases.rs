@@ -51,6 +51,18 @@ pub enum Phase {
 }
 
 impl Phase {
+    pub fn controls_visible(self) -> bool {
+        !matches!(
+            self,
+            Self::MainBirth
+                | Self::MainDeath
+                | Self::SingleBirth
+                | Self::SingleDeath
+                | Self::OptionsBirth
+                | Self::OptionsDeath
+        )
+    }
+
     /// Legacy Main/Single admission set. Optional owners must not enlarge it.
     pub const ALL: [Self; 6] = [
         Self::MainBirth,
@@ -634,6 +646,34 @@ mod tests {
             (c.phase, c.local, c.global, c.target),
             (Phase::MainStand, ms(4), ms(48), None)
         );
+    }
+
+    #[test]
+    fn controls_wait_for_source_entrance_and_hide_on_exit_but_not_category_morph() {
+        for owner in [Owner::Main, Owner::Single, Owner::Options] {
+            let [birth, stand, death] = owner.phases();
+            assert!(!birth.controls_visible());
+            assert!(stand.controls_visible());
+            assert!(!death.controls_visible());
+        }
+        for phase in [
+            Phase::OptionsMorph,
+            Phase::OptionsStandAlternate,
+            Phase::OptionsMorphAlternate,
+        ] {
+            assert!(phase.controls_visible());
+        }
+        let mut clock = Clock::default();
+        assert!(!clock.phase.controls_visible());
+        clock.advance(ms(3), |_| ms(3)).unwrap();
+        assert!(clock.phase.controls_visible());
+        clock.begin(Owner::Main, Owner::Options).unwrap();
+        assert!(!clock.phase.controls_visible());
+        clock.advance(ms(3), |_| ms(3)).unwrap();
+        assert_eq!(clock.phase, Phase::OptionsBirth);
+        assert!(!clock.phase.controls_visible());
+        clock.advance(ms(3), |_| ms(3)).unwrap();
+        assert!(clock.phase.controls_visible());
     }
 
     #[test]

@@ -1051,6 +1051,26 @@ pub enum Transition {
 }
 
 impl MenuPanels {
+    pub fn controls_visible(&self, screen: crate::menu_screens::Screen) -> bool {
+        let owner = match screen {
+            crate::menu_screens::Screen::Main => Owner::Main,
+            crate::menu_screens::Screen::SinglePlayer => Owner::Single,
+            crate::menu_screens::Screen::Options(_) => Owner::Options,
+            _ => return true,
+        };
+        self.panels.is_empty()
+            || self.clock.phase.owner() != owner
+            || self.clock.phase.controls_visible()
+    }
+
+    pub fn logo_animation(&self) -> Option<(&'static str, std::time::Duration)> {
+        match self.clock.phase {
+            Phase::MainBirth => Some(("Birth", self.clock.local)),
+            Phase::MainDeath => Some(("Death", self.clock.local)),
+            _ => None,
+        }
+    }
+
     #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
     pub(crate) fn navigation_settled(&self) -> bool {
         self.clock.target.is_none()

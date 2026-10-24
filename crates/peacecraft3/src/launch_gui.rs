@@ -336,6 +336,7 @@ pub(crate) fn app_with_plugins(
                     process_panel_navigation,
                     build_control_layer,
                     build_setting_controls,
+                    sync_control_transition,
                     sync_settings_cog,
                     update_menu_notice,
                     apply_menu_text,
@@ -385,7 +386,7 @@ pub(crate) fn app_with_plugins(
     app.add_systems(
         Update,
         crate::menu_panel::advance_logo
-            .after(initialize_menu_logo)
+            .after(show_logo_for_screen)
             .run_if(menu_is_visible),
     );
     // Application read/texture limits, independent of source terrain dimensions.
@@ -1525,6 +1526,12 @@ fn initialize_menu_logo(
         }
     };
     let data = assets.data;
+    if data.sequence_alpha("Death", 0.0).is_none() {
+        warn!(
+            "Original menu logo {:?}: authored exit alpha is unavailable",
+            assets.model_path
+        );
+    }
     if !data.planar {
         warn!(
             "Original menu logo {:?}: unsupported nonplanar geometry",
@@ -1577,6 +1584,7 @@ struct SceneAssets<'w> {
 
 fn show_logo_for_screen(
     cache: Res<MenuArtCache>,
+    mut entrance: ResMut<crate::menu_panel::LogoEntrance>,
     mut layers: Query<&mut Visibility, With<LogoLayer>>,
 ) {
     let defined = cache.fdf.as_ref().is_some_and(|fdf| {
@@ -1590,8 +1598,27 @@ fn show_logo_for_screen(
     };
     for mut visibility in &mut layers {
         if *visibility != desired {
+            if desired == Visibility::Inherited {
+                entrance.elapsed_ms = 0.0;
+            }
             *visibility = desired;
         }
+    }
+}
+
+fn sync_control_transition(
+    navigation: Res<crate::menu_screens::Navigation>,
+    panels: Option<Res<crate::menu_sprites::MenuPanels>>,
+    mut roots: Query<&mut Visibility, With<ControlRoot>>,
+) {
+    // shortcut: source phase boundaries hide detached controls; native control fade timing remains open.
+    let visible = panels.is_none_or(|panels| panels.controls_visible(navigation.screen));
+    for mut visibility in &mut roots {
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -4065,6 +4092,7 @@ mod menu_tests {
             ..default()
         });
         let layer = world.spawn((LogoLayer, Visibility::Hidden)).id();
+        world.insert_resource(crate::menu_panel::LogoEntrance::default());
         world.run_system_once(show_logo_for_screen).unwrap();
         assert_eq!(
             *world.get::<Visibility>(layer).unwrap(),
@@ -4074,6 +4102,18 @@ mod menu_tests {
             Some(crate::fdf::Fdf::parse("Frame \"FRAME\" \"OptionsMenu\" {\n}\n").unwrap());
         world.run_system_once(show_logo_for_screen).unwrap();
         assert_eq!(*world.get::<Visibility>(layer).unwrap(), Visibility::Hidden);
+        world
+            .resource_mut::<crate::menu_panel::LogoEntrance>()
+            .elapsed_ms = 999.0;
+        world.resource_mut::<MenuArtCache>().fdf =
+            Some(crate::fdf::Fdf::parse("Frame \"SPRITE\" \"WarCraftIIILogo\" {\n}\n").unwrap());
+        world.run_system_once(show_logo_for_screen).unwrap();
+        assert_eq!(
+            world
+                .resource::<crate::menu_panel::LogoEntrance>()
+                .elapsed_ms,
+            0.0
+        );
     }
     // The click tests spawn `Pressed` buttons; nothing else in the crate needs
     // the marker, so it is imported here rather than at module scope.
