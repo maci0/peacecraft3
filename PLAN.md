@@ -1148,6 +1148,9 @@ collisions, 0 unknown fourccs. The single record that resolves to nothing is
 both builds — reported by name, in `Refusal`, rather than dropped.
 
 ### M5 — Simulation core
+The current execution order, implementation inventory and behavioral gates are
+in [Core mechanics implementation and acceptance](docs/core-mechanics-plan.md).
+
 `pcx-sim`: entities, stats/attack/armour/resist model, damage types, orders, pathing,
 cooldowns, mana/regen, exp/levels, upkeep, projectiles, death/ragdoll.
 **Done when:** scripted 1v1 duels produce identical HP curves and identical RNG draws
