@@ -50,6 +50,9 @@ reused rather than duplicated for scripts, AI or UI.
    command-card buttons; implement cancellation/refunds, completion placement,
    producer destruction/transfer and correct food reservation. Then add timed
    research and construction/repair/upgrades, including race-specific behavior.
+   The [player queue contract](re-notes/player-production-queues.md) records
+   original enqueue, active-food and UI-cancellation behavior and the source
+   bindings needed before changing the shared jobs.
 3. Run a combined gather → build → train → research → fight scenario. Fill
    combat/ability/visibility gaps exposed by that scenario before adding more
    unsupported content. Carry every failure into a reproducible regression.

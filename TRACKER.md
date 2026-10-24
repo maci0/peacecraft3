@@ -5,6 +5,16 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
 
+- [~] Player-production preparation now has original-runtime queue and UI
+  cancellation observations, plus source queue-loop/refund bindings. Queued
+  entries spend money immediately, while only the active entry reserves food
+  and fires train-start. Pending cancellation preserves the head; active
+  cancellation starts the next entry. Public `"cancel"` conversion is zero in
+  the selected client and is not a working cancellation API. The
+  [connected implementation contract](docs/re-notes/player-production-queues.md)
+  replaces those assumptions before the shared production-state refactor.
+  Player queues and their command-card/animation presentation remain unimplemented.
+
 - [~] Replacement training now checks source unit requirements and
   `Upgrade`/`DependencyOr` providers against canonical owner/life state before
   spending or start events. Public technology queries share that count;
