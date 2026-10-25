@@ -19,6 +19,19 @@ Bevy engine, reading the **original game assets directly from the shipped MPQ ar
 No Blizzard assets are committed. The game reads them from your own install at runtime
 (`PEACECRAFT3_INSTALL`, default `wc3/game/app`).
 
+## Screenshots
+
+Captured from PeaceCraft III's Bevy renderer on 25 October 2026 using locally
+supplied game assets. Rendering and gameplay remain in progress.
+
+**Main menu**
+
+![PeaceCraft III rendering the Reign of Chaos main menu](docs/screenshots/main-menu.png)
+
+**Campaign scene and selected-unit HUD**
+
+![PeaceCraft III rendering a campaign scene with Thrall selected](docs/screenshots/campaign.png)
+
 ## Status
 
 Reverse-engineering harness is live. See [TRACKER.md](TRACKER.md) for current state.
