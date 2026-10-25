@@ -7,9 +7,8 @@
 //! - Geometry is bound only to bone 0, which has no tracks. The helper `Dummy01` with its
 //!   `KGRT` track is evaluated by the joint plan but no vertex references it, so the dome
 //!   is drawn at rest.
-//! - The authored layer is lit (shading bit 0 clear). Its illumination source is not
-//!   established, so no light is applied and the material keeps its authored lit flags.
-//!   The dome therefore renders under ambient light only, and a diagnostic says so.
+//! - The authored lit layer uses the sky model's own directional-light tracks, sampled
+//!   at the executed day fraction. Terrain and unit lighting are separate inputs.
 //! - Placement at the scene camera eye and unit scale are unverified against native
 //!   observation.
 use super::{Actor, ActorQueries, ActorSource, DrawAssets, UnitActors, Visual, item_model};
@@ -29,13 +28,10 @@ const CAMERA_ORDER: isize = -1;
 pub(super) const MODEL_SCALE: f32 = 1.0;
 /// Source byte budget for one sky model member.
 const MODEL_BYTES: usize = 16 << 20;
-/// Reported once the lit dome is spawned without a qualified light source.
-const ILLUMINATION_DIAGNOSTIC: &str =
-    "sky lit layer drawn without a qualified illumination source (docs/re-notes/campaign-sky.md)";
-
 pub(super) struct SkyState {
     script: String,
     animation: pcx_play::unit_model::Animation,
+    lighting: Result<pcx_play::day_night::Assets, String>,
     actor: Option<Actor>,
 }
 
@@ -59,7 +55,7 @@ impl Sky {
 
 /// Marks the one camera that draws the sky.
 #[derive(Component)]
-pub(super) struct SkyCamera;
+pub(crate) struct SkyCamera;
 
 pub(super) struct Input<'a> {
     /// Executed `SetSkyModel` path. `None` (null or never set) shows no sky.
@@ -71,6 +67,8 @@ pub(super) struct Input<'a> {
     pub(super) now: f64,
     pub(super) channel_scale: f32,
     pub(super) cutout: f32,
+    pub(super) day_fraction: Option<f32>,
+    pub(super) parameters: &'a pcx_play::menu_lighting::Parameters,
 }
 
 pub(super) type SceneCameras<'w, 's> = Query<
@@ -86,15 +84,48 @@ pub(super) type SceneCameras<'w, 's> = Query<
     With<CampaignSceneCamera>,
 >;
 
-fn load(
-    reader: &Resolver,
-    edition: &str,
-    script: &str,
-    now: f64,
-) -> Result<pcx_play::unit_model::Animation, String> {
+fn load(reader: &Resolver, edition: &str, script: &str, now: f64) -> Result<SkyState, String> {
     let member = item_model::model_member(script)?;
     let model = item_model::read_model(reader, edition, member, MODEL_BYTES)?;
-    pcx_play::unit_model::Animation::new(model, now)
+    let lighting = own_lighting(&model, script);
+    Ok(SkyState {
+        script: script.into(),
+        animation: pcx_play::unit_model::Animation::new(model, now)?,
+        lighting,
+        actor: None,
+    })
+}
+
+fn own_lighting(
+    model: &pcx_play::unit_model::Model,
+    script: &str,
+) -> Result<pcx_play::day_night::Assets, String> {
+    use pcx_play::{
+        day_night::{Assets, Budget, ModelInput},
+        scripts::ScriptAsset,
+    };
+    Assets::read(
+        &[ModelInput {
+            script_path: script,
+            asset: ScriptAsset {
+                label: &model.member,
+                bytes: &model.bytes,
+            },
+            origin: model.origin.clone(),
+        }],
+        Budget {
+            models: 1,
+            model_bytes: MODEL_BYTES,
+            total_bytes: MODEL_BYTES,
+            path_bytes: 64 << 10,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn sun(sky: &SkyState, fraction: Option<f32>) -> Result<pcx_play::day_night::Sun, String> {
+    let lighting = sky.lighting.as_ref().map_err(Clone::clone)?;
+    lighting.models()[0].sun(fraction.ok_or("sky day fraction is unavailable")?)
 }
 
 /// Despawns the dome and its camera. The scene clear colour is restored by the next sync.
@@ -223,13 +254,7 @@ fn show(
     }
     if state.sky.state.is_none() {
         match load(input.reader, input.edition, script, input.now) {
-            Ok(animation) => {
-                state.sky.state = Some(SkyState {
-                    script: script.to_owned(),
-                    animation,
-                    actor: None,
-                });
-            }
+            Ok(sky) => state.sky.state = Some(sky),
             Err(error) => {
                 fail(commands, state, script, error);
                 return;
@@ -238,6 +263,16 @@ fn show(
     }
     let Some(animation) = state.sky.state.as_ref().map(|sky| sky.animation.clone()) else {
         return;
+    };
+    let sun = match sun(
+        state.sky.state.as_ref().expect("loaded sky"),
+        input.day_fraction,
+    ) {
+        Ok(sun) => Some(sun),
+        Err(error) => {
+            state.last_error = Some(format!("sky {script}: {error}"));
+            None
+        }
     };
     let visual = Visual::Sky(&animation, eye);
     if state
@@ -254,11 +289,11 @@ fn show(
                 palette: input.palette,
                 visual,
                 terrain: input.terrain,
-                id: None,
                 color: 0,
                 now: input.now,
                 channel_scale: input.channel_scale,
                 cutout: input.cutout,
+                particle_parameters: None,
                 available_images: (512usize << 20).saturating_sub(state.image_bytes),
                 available_vertices: 2_000_000usize.saturating_sub(state.vertices),
             },
@@ -267,7 +302,6 @@ fn show(
             Ok((actor, bytes, vertices)) => {
                 state.image_bytes += bytes;
                 state.vertices += vertices;
-                state.last_error = Some(ILLUMINATION_DIAGNOSTIC.to_owned());
                 if let Some(sky) = state.sky.state.as_mut() {
                     sky.actor = Some(actor);
                 }
@@ -285,7 +319,7 @@ fn show(
             assets,
             (&mut queries.visibility, &mut queries.transforms),
             input.terrain,
-            None,
+            sun.as_ref().map(|sun| (sun, input.parameters)),
         )
     {
         state.last_error = Some(format!("sky: {error}"));
@@ -350,11 +384,15 @@ mod tests {
             member: String::new(),
             bytes: std::sync::Arc::from(Vec::new()),
             sequences: Vec::new(),
+            blend_time_ms: 0,
+            joints: Vec::new(),
+            global_sequences: Vec::new(),
         };
         SkyState {
             script: "Environment\\Sky\\Test\\Test.mdl".into(),
             animation: pcx_play::unit_model::Animation::new(std::sync::Arc::new(model), 0.0)
                 .unwrap(),
+            lighting: Err("synthetic camera-only fixture has no light".into()),
             actor: None,
         }
     }
@@ -565,6 +603,93 @@ mod tests {
         assert!(item_model::model_member("Environment\\Sky\\Sky.blp").is_err());
     }
 
+    fn lighting_model() -> pcx_play::unit_model::Model {
+        fn chunk(bytes: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
+            bytes.extend(tag);
+            bytes.extend((data.len() as u32).to_le_bytes());
+            bytes.extend(data);
+        }
+        let mut bytes = b"MDLX".to_vec();
+        chunk(&mut bytes, b"VERS", &800u32.to_le_bytes());
+        chunk(&mut bytes, b"MODL", &[0; 372]);
+        let mut sequence = [0; 132];
+        sequence[..5].copy_from_slice(b"Stand");
+        sequence[80..84].copy_from_slice(&17u32.to_le_bytes());
+        sequence[84..88].copy_from_slice(&117u32.to_le_bytes());
+        chunk(&mut bytes, b"SEQS", &sequence);
+        chunk(&mut bytes, b"GLBS", &0u32.to_le_bytes());
+        let mut node = vec![0; 96];
+        node[..4].copy_from_slice(&132u32.to_le_bytes());
+        node[88..92].copy_from_slice(&(-1i32).to_le_bytes());
+        node.extend(b"KGRT");
+        for v in [1u32, 0, 0, 17] {
+            node.extend(v.to_le_bytes());
+        }
+        for v in [0.0f32, 0., 0., 1.] {
+            node.extend(v.to_le_bytes());
+        }
+        let mut light = vec![0; 4];
+        light.extend(node);
+        light.extend(1u32.to_le_bytes());
+        for v in [0.0f32, 0., 0.15, 0.25, 0.35, 2.25, 0.05, 0.1, 0.15, 1.75] {
+            light.extend(v.to_le_bytes());
+        }
+        for (tag, first, last) in [
+            (b"KLAC", [0.15f32, 0.25, 0.35], [0.85, 0.75, 0.65]),
+            (b"KLBC", [0.05, 0.1, 0.15], [0.4, 0.3, 0.2]),
+        ] {
+            light.extend(tag);
+            for v in [2u32, 1, u32::MAX] {
+                light.extend(v.to_le_bytes());
+            }
+            for (frame, values) in [(17u32, first), (117, last)] {
+                light.extend(frame.to_le_bytes());
+                for v in values {
+                    light.extend(v.to_le_bytes());
+                }
+            }
+        }
+        let length = light.len() as u32;
+        light[..4].copy_from_slice(&length.to_le_bytes());
+        chunk(&mut bytes, b"LITE", &light);
+        pcx_play::unit_model::Model::read(
+            pcx_play::scripts::AssetIdentity {
+                edition: "synthetic".into(),
+                version: "nonstock".into(),
+                source: "owned-sky-light".into(),
+            },
+            "synthetic-sky.mdx".into(),
+            bytes.into(),
+            MODEL_BYTES,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn own_sky_light_uses_source_tracks_and_live_day_fraction() {
+        let model = std::sync::Arc::new(lighting_model());
+        let lighting = own_lighting(&model, "synthetic-sky.mdl").unwrap();
+        assert_eq!(lighting.models()[0].origin(), &model.origin);
+        let sky = SkyState {
+            script: "synthetic-sky.mdl".into(),
+            lighting: Ok(lighting),
+            animation: pcx_play::unit_model::Animation::new(model, 0.).unwrap(),
+            actor: None,
+        };
+        let first = sun(&sky, Some(0.)).unwrap();
+        let last = sun(&sky, Some(1.)).unwrap();
+        let middle = sun(&sky, Some(0.5)).unwrap();
+        assert_eq!(first.intensity, 2.25);
+        assert_eq!(first.ambient_intensity, 1.75);
+        assert_eq!(first.direction, [0., 0., -1.]);
+        assert_ne!(first.colour, last.colour);
+        for i in 0..3 {
+            assert!((middle.colour[i] - (first.colour[i] + last.colour[i]) * 0.5).abs() < 0.00001);
+        }
+        assert!(sun(&sky, None).is_err());
+        assert!(sun(&sky, Some(f32::NAN)).is_err());
+    }
+
     #[test]
     #[ignore = "requires PCX_SKY_ORIGINAL_MDX pointing at a local LordaeronSummerSky.mdx"]
     fn original_sky_model_has_a_stand_sequence() {
@@ -582,6 +707,12 @@ mod tests {
             MODEL_BYTES,
         )
         .unwrap();
+        let lighting = own_lighting(&model, "selected sky").unwrap();
+        let first = lighting.models()[0].sun(0.).unwrap();
+        let noon = lighting.models()[0].sun(0.5).unwrap();
+        assert_ne!(first.colour, noon.colour);
+        assert_ne!(first.ambient_colour, noon.ambient_colour);
+        assert_eq!(noon.intensity, lighting.models()[0].lights()[0].intensity);
         let animation =
             pcx_play::unit_model::Animation::new(std::sync::Arc::new(model), 0.0).unwrap();
         assert!(animation.has_sequence("stand"));
@@ -594,7 +725,7 @@ mod tests {
     reason = "shared synthetic fixture; the production tests use the model and texture"
 )]
 #[path = "../tests/support/synthetic_sky.rs"]
-mod synthetic_sky;
+pub(super) mod synthetic_sky;
 
 /// Production `project` through a published session. Publication, reader and session come
 /// from the shared startup fixture (`test-fixtures`). Lighting parameters and the palette
@@ -693,14 +824,17 @@ mod production {
     }
 
     fn app() -> App {
+        crate::campaign_workers::initialize();
         let mut app = App::new();
         peacecraft3::map_requests::install(&mut app);
         peacecraft3::campaign_startup::install(&mut app);
         crate::campaign_actors::install(&mut app);
         app.init_resource::<crate::launch_gui::Launcher>()
             .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
             .init_resource::<Assets<Image>>()
-            .init_resource::<Assets<crate::menu_material::MenuMaterial>>();
+            .init_resource::<Assets<crate::menu_material::MenuMaterial>>()
+            .init_resource::<Assets<crate::mainmenu_scene::ParticleMaterial>>();
         app
     }
 

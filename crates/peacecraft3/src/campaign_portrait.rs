@@ -599,6 +599,7 @@ fn advance(
     .map_err(str::to_owned)?;
     let skeleton = model_scene::skin_geosets(
         model_scene::Rig {
+            blend: None,
             interval: scene.plan.interval,
             model: &scene.plan.model,
             bones: scene.plan.runtime.joints.joints(),

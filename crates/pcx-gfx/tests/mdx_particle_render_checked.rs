@@ -601,3 +601,84 @@ fn model_space_draws_move_head_and_tail_with_the_current_emitter_pose() {
         }
     }
 }
+
+#[test]
+fn model_space_quads_follow_the_current_parent_joint_pose() {
+    use pcx_mdl::{Bone, BoneTrack, Interpolation, TrackKind};
+    let mut raw = Vec::new();
+    for (time, value) in [(0u32, [0f32, 0., 0.]), (1000, [8., 0., 0.])] {
+        raw.extend(time.to_le_bytes());
+        for component in value {
+            raw.extend(component.to_le_bytes());
+        }
+    }
+    let bone = Bone {
+        offset: 0,
+        span: 104,
+        name: "parent".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![BoneTrack {
+            kind: TrackKind::Translation,
+            count: 2,
+            interpolation: Interpolation::Linear,
+            global_sequence_id: -1,
+            offset: 0,
+            stride: 16,
+            raw,
+        }],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    let joints =
+        pcx_gfx::mdx_runtime::JointPlan::checked(&[bone], &[], &Pivots(vec![[0.; 3], [0.; 3]]))
+            .unwrap();
+    let mut emitter = Particle2 {
+        offset: 0,
+        total_size: 0,
+        node_size: 96,
+        name: "parented-model-space".into(),
+        object_id: 0,
+        parent_id: 1,
+        flags: mdx_particles::MODEL_SPACE,
+        state: props().to_bytes(),
+        node_tracks: vec![],
+        tracks: vec![],
+    };
+    emitter.node_size = emitter.measured_node_size() as u32;
+    emitter.total_size = emitter.measured_size() as u32;
+    let plan = Plan::checked_with_joints(
+        &[emitter],
+        &[tex("marker.blp", 0)],
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        SOURCE,
+        Limits {
+            max_emitters: 4,
+            max_keys: 100,
+            particle_capacity: 16,
+            max_ticks: 10,
+            max_updates: 100,
+            tick: Duration::from_millis(10),
+        },
+        &joints,
+    )
+    .unwrap();
+    let local = Particle {
+        position: [0.; 3],
+        ..particle()
+    };
+    let before = quads(&plan, &local, camera()).unwrap();
+    let after = pcx_gfx::mdx_particle_render::quads_at(&plan, &local, camera(), 500).unwrap();
+    for (before, after) in before.into_iter().zip(after) {
+        let before = before.unwrap();
+        let after = after.unwrap();
+        for (a, b) in before.positions.into_iter().zip(after.positions) {
+            assert_eq!(b, [a[0] + 4., a[1], a[2]]);
+        }
+    }
+}

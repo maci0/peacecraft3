@@ -1,0 +1,73 @@
+{
+  "clispec": "0.3",
+  "name": "campaign-agent",
+  "version": "0.1.0",
+  "description": "Choose Warcraft III campaign actions from a vision decision model and apply them to a running original-game reference.",
+  "output": {
+    "tty": "json",
+    "piped": "json"
+  },
+  "global_args": [
+    {
+      "name": "--format",
+      "type": "string",
+      "enum": ["json", "text"],
+      "default": "json"
+    }
+  ],
+  "commands": [
+    {
+      "name": "schema",
+      "description": "Describe the offline CLI contract.",
+      "effects": "read_only",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [],
+      "stdout_schema": {"type": "object"}
+    },
+    {
+      "name": "decide",
+      "description": "Score one local frame and print the gated action. Does not touch a game window. Each call bills the selected model.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {"name": "--image", "type": "path", "required": true},
+        {"name": "--provider", "type": "string", "enum": ["jev", "openrouter"], "default": "jev"},
+        {"name": "--model", "type": "string"},
+        {"name": "--campaign", "type": "string", "default": "roc-human"}
+      ],
+      "stdout_schema": {"type": "object"}
+    },
+    {
+      "name": "play",
+      "description": "Capture a running original-game reference, decide, and send the gated pointer or hotkey. Repeating sends more input.",
+      "effects": "non_idempotent",
+      "output_kind": "data",
+      "cardinality": "single",
+      "args": [
+        {"name": "--run-dir", "type": "path", "required": true},
+        {"name": "--steps", "type": "integer", "required": true},
+        {"name": "--pause", "type": "number", "default": 1},
+        {"name": "--provider", "type": "string", "enum": ["jev", "openrouter"], "default": "jev"},
+        {"name": "--model", "type": "string"},
+        {"name": "--campaign", "type": "string", "default": "roc-human"}
+      ],
+      "stdout_schema": {"type": "object"}
+    }
+  ],
+  "errors": [
+    {
+      "kind": "campaign_failed",
+      "exit_code": 2,
+      "retryable": false,
+      "description": "Invalid input, missing key, or a refused decision or reference operation. Inspect the run directory before retrying."
+    },
+    {
+      "kind": "campaign_interrupted",
+      "exit_code": 130,
+      "retryable": false,
+      "description": "Interrupted. Already sent input stays sent. Inspect the campaign journal before another run."
+    }
+  ]
+}

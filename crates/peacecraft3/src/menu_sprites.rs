@@ -1455,6 +1455,7 @@ pub fn spawn(
         )?;
         scene::skin_geosets(
             scene::Rig {
+                blend: None,
                 interval: plan.clip.interval,
                 model: &p.model,
                 bones: p.runtime.joints.joints(),
@@ -1840,6 +1841,7 @@ pub fn advance(
         );
         if let Err(error) = scene::skin_geosets(
             scene::Rig {
+                blend: None,
                 interval: plan.clip.interval,
                 model: &panel.model,
                 bones: &panel.bones,

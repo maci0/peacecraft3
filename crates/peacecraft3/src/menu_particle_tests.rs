@@ -40,7 +40,7 @@ fn properties(
         replaceable_id: 0,
     }
 }
-pub(super) fn synthetic(
+pub(crate) fn synthetic(
     change: impl FnOnce(&mut pcx_mdl::Particle2Properties, &mut u32),
 ) -> (Vec<u8>, Vec<pcx_gfx::LoadedTexture>) {
     let mut bytes = super::fog_camera_tests::empty_scene_with_camera();

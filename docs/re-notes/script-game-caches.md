@@ -262,7 +262,9 @@ open. This extension does not claim to fill those gaps.
 Profiles with units use private PC3CACHE version 2; primitive-only writes retain
 version 1. Both versions read, and old primitive profiles preserve their values.
 Unit payloads have their own PC3UNIT version, checked counts, finite pools,
-unique ordered ranks/slots and bounded allocations. Unit bytes count against
+unique ordered ranks/slots and bounded allocations. Version 4 appends one
+optional finite rally point. Versions 1 through 3 still decode, with that point
+absent. The outer PC3CACHE version is unchanged. Unit bytes count against
 the existing storage policy, with no new resource knob. An older build cannot
 read a version-2 profile; no original W3V file is modified.
 

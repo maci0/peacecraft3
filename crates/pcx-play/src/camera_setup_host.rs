@@ -85,6 +85,11 @@ impl ObjectHost {
             ("CameraSetupGetDestPositionX", &[SETUP_KIND][..], "real"),
             ("CameraSetupGetDestPositionY", &[SETUP_KIND][..], "real"),
             (
+                "CameraSetupGetDestPositionLoc",
+                &[SETUP_KIND][..],
+                "location",
+            ),
+            (
                 "CameraSetupApplyForceDuration",
                 &[SETUP_KIND, "boolean", "real"][..],
                 "nothing",
@@ -201,6 +206,7 @@ impl ObjectHost {
                     | "CameraSetupSetDestPosition"
                     | "CameraSetupGetDestPositionX"
                     | "CameraSetupGetDestPositionY"
+                    | "CameraSetupGetDestPositionLoc"
                     | "CameraSetupApplyForceDuration"
             )
         {
@@ -291,7 +297,9 @@ impl ObjectHost {
                     .map(|record| Value::Real(record.value))
                     .ok_or_else(|| fail("field is unset"))
             }
-            "CameraSetupGetDestPositionX" | "CameraSetupGetDestPositionY" => {
+            "CameraSetupGetDestPositionX"
+            | "CameraSetupGetDestPositionY"
+            | "CameraSetupGetDestPositionLoc" => {
                 if !rest.is_empty() {
                     return Err(fail("arguments do not match the camera setup declaration"));
                 }
@@ -301,6 +309,16 @@ impl ObjectHost {
                 let Some(destination) = destination else {
                     return Err(fail("destination is unset"));
                 };
+                if name == "CameraSetupGetDestPositionLoc" {
+                    if !self.locations {
+                        return Err(fail("locations are not admitted"));
+                    }
+                    let point = [destination.x, destination.y];
+                    return self
+                        .inner
+                        .allocate(Entry::Location { point: Some(point) }, name)
+                        .map(Value::Handle);
+                }
                 Ok(Value::Real(if name.ends_with('X') {
                     destination.x
                 } else {

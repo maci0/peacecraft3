@@ -109,6 +109,46 @@ impl ContentSource for MemorySource {
             .find(|(name, _)| name == member)
             .and_then(|(_, content)| content.clone()))
     }
+    fn read_bounded(&self, member: &str, limit: u64) -> Result<Option<SourceContent>, SourceError> {
+        if let Some((_, Some(content))) = self.entries.iter().find(|(name, _)| name == member)
+            && content.declared_length > limit
+        {
+            return Err(SourceError::Limit {
+                requested: content.declared_length,
+                limit,
+            });
+        }
+        self.read(member)
+    }
+}
+
+#[test]
+fn preload_reuses_the_same_archive_winner_and_preserves_read_budgets_and_live_overrides() {
+    let low = MemorySource::new("low", &[("Art/Model.mdx", b"wrong")]);
+    let high = MemorySource::new("high", &[("Art/Model.mdx", b"selected")]);
+    let reads = Arc::clone(&high.reads);
+    let mode = "1.29b-tft-vanilla-vanilla".parse().unwrap();
+    let reader = Resolver::new(mode, None, vec![low.layer(1), high.layer(2)]).unwrap();
+    assert_eq!(reader.preload_bounded("art/model.MDX", 8).unwrap(), 8);
+    assert_eq!(reader.preload_cache_usage().unwrap(), (1, 8));
+    let loaded = reader.resolve_bounded("Art\\Model.mdx", 8).unwrap();
+    assert_eq!(loaded.bytes, b"selected");
+    assert_eq!(loaded.provenance.source.id, "high");
+    assert_eq!(reader.preload_bounded("art/model.mdx", 8).unwrap(), 8);
+    assert_eq!(reads.lock().unwrap().len(), 1);
+    assert!(reader.resolve_bounded("art/model.mdx", 7).is_err());
+    assert!(reader.preload_bounded("../model.mdx", 8).is_err());
+    assert!(reader.preload_bounded("absent.mdx", 8).is_err());
+    assert_eq!(reads.lock().unwrap().len(), 1);
+    let directory = Directory::new();
+    directory.put("live.blp", b"first");
+    let reader = Resolver::new(mode, Some(directory.mount()), Vec::new()).unwrap();
+    reader.preload_bounded("live.blp", 8).unwrap();
+    directory.put("live.blp", b"later");
+    assert_eq!(
+        reader.resolve_bounded("live.blp", 8).unwrap().bytes,
+        b"later"
+    );
 }
 
 #[test]

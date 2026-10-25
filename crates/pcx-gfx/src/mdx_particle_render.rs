@@ -392,6 +392,26 @@ pub fn quads_at(
     camera: CameraBasis,
     elapsed_ms: u64,
 ) -> Result<[Option<Quad>; 2], Error> {
+    let sample = plan
+        .sample_emitter(particle.emitter, elapsed_ms)
+        .map_err(|e| {
+            error(
+                &e.source_name,
+                e.emitter,
+                None,
+                Failure::Appearance(e.failure),
+            )
+        })?;
+    quads_with_sample(plan, particle, camera, &sample)
+}
+
+/// Draws one particle from an emitter pose already sampled for this batch.
+pub fn quads_with_sample(
+    plan: &Plan,
+    particle: &Particle,
+    camera: CameraBasis,
+    sample: &mdx_particles::EmitterSample,
+) -> Result<[Option<Quad>; 2], Error> {
     let mut appearance = plan.appearance(particle).map_err(|e| {
         error(
             &e.source_name,
@@ -401,7 +421,7 @@ pub fn quads_at(
         )
     })?;
     let pose = |particle: &Particle| {
-        plan.world_particle(particle, elapsed_ms).map_err(|e| {
+        plan.place_particle(particle, sample).map_err(|e| {
             error(
                 &e.source_name,
                 e.emitter,

@@ -33,6 +33,19 @@ pub(crate) enum Kind {
     Immediate,
     Train(i32),
     Standard(pcx_play::standard_command::Kind),
+    /// Opens the research submenu on this same grid.
+    SkillMenu,
+    /// Returns from the research submenu to the cast grid.
+    SkillCancel,
+    /// `SelectHeroSkill` for one admitted learnable alias.
+    Learn(i32),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SkillPage {
+    #[default]
+    Main,
+    Skills,
 }
 
 #[derive(Component, Clone)]
@@ -40,6 +53,8 @@ pub(crate) struct ButtonOrder {
     pub unit: HandleId,
     pub kind: Kind,
     pub session: Weak<()>,
+    /// Order id from the learned cast command. Cast clicks issue this id.
+    pub order: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +62,7 @@ struct Icon {
     kind: Kind,
     data: IconData,
     tooltip: Result<ability_profile::Tooltip, String>,
+    order: Option<i32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IconData {
@@ -156,6 +172,8 @@ struct Source {
     rules: Rules,
     console: String,
     standard: Vec<(pcx_play::standard_command::Command, String)>,
+    skill: (pcx_play::standard_command::MenuButton, String),
+    cancel: (pcx_play::standard_command::MenuButton, String),
     images: HashMap<String, Handle<Image>>,
     failed: HashMap<String, String>,
     retained: usize,
@@ -170,6 +188,8 @@ pub(crate) struct CommandCard {
     root: Option<Entity>,
     parent: Option<Entity>,
     view: Option<View>,
+    page: SkillPage,
+    shown: SkillPage,
     signature: Option<Signature>,
     pending_pointer: bool,
     pub last_error: Option<String>,
@@ -204,6 +224,14 @@ impl CommandCard {
             .as_ref()
             .map_or(0, |source| source.receipts.len())
     }
+
+    pub(crate) fn open_skills(&mut self) {
+        self.page = SkillPage::Skills;
+    }
+
+    pub(crate) fn close_skills(&mut self) {
+        self.page = SkillPage::Main;
+    }
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -227,6 +255,7 @@ pub(crate) fn install(app: &mut App) {
             (capture, project)
                 .chain()
                 .in_set(CommandCardSet)
+                .after(crate::hud_render::HudRenderSet)
                 .after(CampaignCameraSet)
                 .after(crate::campaign_hud::CampaignHudSet)
                 .before(CampaignPresentationSet),
@@ -248,7 +277,7 @@ fn capture(mut card: ResMut<CommandCard>, mut hud: ResMut<crate::campaign_hud::C
     hud.pointer_consumed |= std::mem::take(&mut card.pending_pointer);
 }
 
-fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String> {
+fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Option<View>, String> {
     let Some(&unit) = objects.selection().first() else {
         return Ok(None);
     };
@@ -264,6 +293,9 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
             .ok_or("command card has no local player")?
     {
         return Ok(None);
+    }
+    if page == SkillPage::Skills {
+        return research_page(objects, unit, source);
     }
     let mut icons = Vec::new();
     for (profile, art) in &source.standard {
@@ -286,11 +318,13 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
                     hotkey: None,
                 },
                 tooltip: Ok(profile.tooltip.clone()),
+                order: None,
             });
         }
     }
     for (kind, command) in [
         (Kind::TargetUnit, objects.holy_light_command(unit)),
+        (Kind::TargetUnit, objects.chain_lightning_command(unit)),
         (Kind::Immediate, objects.water_elemental_command(unit)),
     ] {
         if let Some(command) = command.map_err(|error| error.to_string())? {
@@ -317,6 +351,7 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
                     hotkey: None,
                 },
                 tooltip,
+                order: Some(command.order),
             });
         }
     }
@@ -341,15 +376,108 @@ fn wanted(objects: &ObjectHost, source: &Source) -> Result<Option<View>, String>
                 hotkey: command.hotkey,
             },
             tooltip: command.tooltip,
+            order: None,
+        });
+    }
+    let listed = objects
+        .learnable_skills(unit)
+        .map_err(|error| error.to_string())?;
+    if !listed.is_empty() {
+        let (button, art) = &source.skill;
+        if icons
+            .iter()
+            .any(|icon: &Icon| icon.data.position == button.position)
+        {
+            return Err("hero abilities collide at the same authored Buttonpos".into());
+        }
+        icons.push(Icon {
+            kind: Kind::SkillMenu,
+            data: IconData {
+                art: art.clone(),
+                position: button.position,
+                hotkey: menu_letter(button.hotkey),
+            },
+            tooltip: Ok(button.tooltip.clone()),
+            order: None,
         });
     }
     Ok(Some(View { unit, icons }))
 }
 
+fn research_page(
+    objects: &ObjectHost,
+    unit: HandleId,
+    source: &Source,
+) -> Result<Option<View>, String> {
+    let mut icons = Vec::new();
+    for skill in objects
+        .learnable_skills(unit)
+        .map_err(|error| error.to_string())?
+    {
+        let Some(icon) = objects
+            .research_icon(unit, skill.alias)
+            .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        if icons
+            .iter()
+            .any(|existing: &Icon| existing.data.position == icon.position)
+        {
+            return Err("research icons collide at the same authored Researchbuttonpos".into());
+        }
+        icons.push(Icon {
+            kind: Kind::Learn(i32::from_be_bytes(icon.ability)),
+            data: IconData {
+                art: icon.art,
+                position: icon.position,
+                hotkey: Some(icon.hotkey),
+            },
+            tooltip: Ok(pcx_play::ability_profile::Tooltip {
+                title: icon.title,
+                description: icon.description,
+            }),
+            order: None,
+        });
+    }
+    let (button, art) = &source.cancel;
+    if icons
+        .iter()
+        .any(|icon| icon.data.position == button.position)
+    {
+        return Err("research cancel collides with a research icon".into());
+    }
+    icons.push(Icon {
+        kind: Kind::SkillCancel,
+        data: IconData {
+            art: art.clone(),
+            position: button.position,
+            hotkey: menu_letter(button.hotkey),
+        },
+        tooltip: Ok(button.tooltip.clone()),
+        order: None,
+    });
+    Ok(Some(View { unit, icons }))
+}
+
+fn menu_letter(hotkey: pcx_play::standard_command::MenuHotkey) -> Option<char> {
+    match hotkey {
+        pcx_play::standard_command::MenuHotkey::Letter(letter) => Some(letter),
+        pcx_play::standard_command::MenuHotkey::Code(_) => None,
+    }
+}
+
 fn read_standard_profiles(
     reader: &pcx_assets::Resolver,
     receipts: &mut Vec<AssetReceipt>,
-) -> Result<Vec<pcx_play::standard_command::Command>, String> {
+) -> Result<
+    (
+        Vec<pcx_play::standard_command::Command>,
+        pcx_play::standard_command::MenuButton,
+        pcx_play::standard_command::MenuButton,
+    ),
+    String,
+> {
     use pcx_objects::editor::{Editor, EditorReadLimits, TxtRole};
     let listed: Vec<String> = [TxtRole::CommandFunc, TxtRole::CommandStrings]
         .into_iter()
@@ -374,10 +502,13 @@ fn read_standard_profiles(
         },
     )
     .map_err(|e| e.to_string())?;
-    pcx_play::standard_command::Kind::ALL
+    let standard = pcx_play::standard_command::Kind::ALL
         .into_iter()
         .map(|kind| pcx_play::standard_command::Command::read(&editor, kind))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let skill = pcx_play::standard_command::MenuButton::read(&editor, "CmdSelectSkill")?;
+    let cancel = pcx_play::standard_command::MenuButton::read(&editor, "CmdCancel")?;
+    Ok((standard, skill, cancel))
 }
 
 fn reset(
@@ -471,12 +602,13 @@ fn paint(
             },
             image,
             icon.kind,
+            icon.order,
             rect,
             &icon.tooltip,
         ));
     }
     commands.entity(root).despawn_children();
-    for (node, image, kind, rect, tooltip) in nodes {
+    for (node, image, kind, order, rect, tooltip) in nodes {
         commands.entity(root).with_children(|parent| {
             let mut button = parent.spawn((
                 node,
@@ -491,6 +623,7 @@ fn paint(
                     unit: view.unit,
                     kind,
                     session: witness.clone(),
+                    order,
                 },
             ));
             match tooltip {
@@ -579,20 +712,35 @@ fn project(
                     .map_err(|error| error.to_string())?,
             )?;
             let console = skin_file(&skin, &sections, &rules.console_key)?;
-            let standard = read_standard_profiles(&reader, &mut receipts)?
+            let (commands, skill, cancel) = read_standard_profiles(&reader, &mut receipts)?;
+            let resolve = |art_key: &str, position: [usize; 2]| -> Result<String, String> {
+                let art = skin_file(&skin, &sections, art_key)?;
+                pcx_assets::AssetPath::new(&art).map_err(|e| e.to_string())?;
+                rules.slot(position[0], position[1])?;
+                Ok(art)
+            };
+            let standard = commands
                 .into_iter()
                 .map(|profile| {
-                    let art = skin_file(&skin, &sections, &profile.art_key)?;
-                    pcx_assets::AssetPath::new(&art).map_err(|e| e.to_string())?;
-                    rules.slot(profile.position[0], profile.position[1])?;
+                    let art = resolve(&profile.art_key, profile.position)?;
                     Ok((profile, art))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let skill = {
+                let art = resolve(&skill.art_key, skill.position)?;
+                (skill, art)
+            };
+            let cancel = {
+                let art = resolve(&cancel.art_key, cancel.position)?;
+                (cancel, art)
+            };
             text(&reader, CONSOLE, &mut receipts)?;
             Ok::<_, String>(Source {
                 rules,
                 console,
                 standard,
+                skill,
+                cancel,
                 receipts,
                 images: HashMap::new(),
                 failed: HashMap::new(),
@@ -651,9 +799,18 @@ fn project(
         }
         // Tables are immutable in a published session; avoid rebuilding metadata every frame.
         let changed = !unchanged(host.objects(), card.signature.as_ref())?;
-        if changed {
-            card.view = wanted(host.objects(), &source)?;
-            card.signature = snapshot(host.objects())?;
+        if changed
+            && let (Some(next), Some(previous)) = (header(host.objects())?, card.signature.as_ref())
+            && next.unit != previous.header.unit
+        {
+            card.page = SkillPage::Main;
+        }
+        if changed || card.shown != card.page {
+            card.view = wanted(host.objects(), &source, card.page)?;
+            card.shown = card.page;
+            if changed {
+                card.signature = snapshot(host.objects())?;
+            }
         }
         let root = card.root.expect("command root");
         let visible = inputs.camera.active()
@@ -715,6 +872,21 @@ mod tests {
     };
     use pcx_play::scripts::AssetIdentity;
 
+    fn fixture_menu() -> (pcx_play::standard_command::MenuButton, String) {
+        (
+            pcx_play::standard_command::MenuButton {
+                art_key: "fixture".into(),
+                position: [0, 0],
+                hotkey: pcx_play::standard_command::MenuHotkey::Letter('o'),
+                tooltip: pcx_play::ability_profile::Tooltip {
+                    title: "fixture".into(),
+                    description: "fixture".into(),
+                },
+            },
+            "fixture".into(),
+        )
+    }
+
     fn selected_icons() -> (Source, View, pcx_assets::Resolver) {
         use pcx_assets::{Addon, ArchiveLayer, AssetMode, Behaviour, Build, GameMode, Resolver};
         use pcx_objects::editor::defaults::{DefaultTables, Family};
@@ -751,6 +923,7 @@ mod tests {
                     position: position.try_into().unwrap(),
                     hotkey: None,
                 },
+                order: None,
             });
         }
         let reader = Resolver::new(
@@ -772,6 +945,8 @@ mod tests {
                 rules,
                 console: "synthetic component parent".into(),
                 standard: Vec::new(),
+                skill: fixture_menu(),
+                cancel: fixture_menu(),
                 images: HashMap::new(),
                 failed: HashMap::new(),
                 retained: 0,
@@ -1362,6 +1537,8 @@ mod tests {
             rules,
             console: "synthetic parent".into(),
             standard: Vec::new(),
+            skill: fixture_menu(),
+            cancel: fixture_menu(),
             images: HashMap::from([("fixture".into(), owned.clone())]),
             failed: HashMap::new(),
             retained: 0,
@@ -1381,6 +1558,7 @@ mod tests {
                     position: [0, 0],
                     hotkey: None,
                 },
+                order: None,
             }],
         };
         let mut queue = bevy::ecs::world::CommandQueue::default();
@@ -1408,6 +1586,7 @@ mod tests {
                 position: [source.rules.columns, 0],
                 hotkey: None,
             },
+            order: None,
         });
         assert!(
             paint(
@@ -1477,6 +1656,7 @@ mod tests {
                 unit: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
                 kind: Kind::TargetUnit,
                 session: Arc::downgrade(&session),
+                order: None,
             })
             .id();
         let unrelated = app.world_mut().spawn_empty().id();
@@ -1538,6 +1718,7 @@ mod tests {
                         title: "Source title".into(),
                         description: "Source text".into(),
                     }),
+                    order: None,
                 }],
             }),
             ..Default::default()

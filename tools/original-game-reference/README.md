@@ -407,7 +407,58 @@ truncation flags. These tails keep the caught failure response within the
 metadata ceiling.
 This diagnostic limit does not change input delivery, readiness or click timeouts.
 
-The offline schema declares the v0.3 candidate, pinned to published schema bytes
+## Campaign play
+
+`campaign_agent.py` drives a reference that is already running. It captures the
+window, asks a vision decision model for one action, and sends that action with
+the existing click and key path. Jev 1.14 (`jev-1.14.0`) is the default because
+it returns a box: the click is the center of that box, mapped back onto the
+capture. A box below 0.08 confidence, a box covering more than about a third of the frame, or a cell below the same point gate becomes a wait, and a
+victory or defeat screen ends the session without another click.
+
+OpenRouter is the other provider. Vision decision models there, default
+`perplexity/pplx-decider-v1.2`, return a label rather than a box, so the same
+loop asks which cell of a 6 by 8 grid holds the pointer target. Keys come from
+`TYPESAFE_API_KEY` or `~/.secrets/typesafe.ai`, and `OPENROUTER_API_KEY` or
+`~/.secrets/openrouter`. They are not written into the journal.
+
+```sh
+python tools/original-game-reference/campaign_agent.py schema
+python tools/original-game-reference/campaign_agent.py decide \
+  --image .scratch/original-reference-1/captures/startup.png --campaign roc-human
+python tools/original-game-reference/campaign_agent.py play \
+  --run-dir .scratch/original-reference-1 --campaign roc-human --steps 50
+python tools/original-game-reference/campaign_agent.py play \
+  --run-dir .scratch/original-reference-1 --provider openrouter --steps 50
+```
+
+Reign of Chaos Human chapter one is `Maps\Campaign\Human01.w3m` inside
+`War3Local.mpq`. Stage it under the prepared game tree and launch it with the
+reference, using `-classic` so the executable reports Reign of Chaos:
+
+```sh
+python tools/original-game-reference/reference.py launch \
+  --run-dir .scratch/campaign-agent-human01 \
+  --width 1024 --height 768 --dpi 96 \
+  --game-arg=-classic --game-arg=-loadfile \
+  --game-arg='Z:\run\reference\game\Maps\PCX-Reference\Human01.w3m'
+```
+
+`decide` does not touch the game. `play` requires the reference container from
+`launch` and appends `campaign/steps.ndjson` plus `captures/campaign-NNNN.png`.
+A `victory` status records the controller's assessment of the visible mission
+outcome. Inspect its capture before counting that chapter as complete; it does
+not establish completion of the entire campaign. A wait decision sends no world
+order. Following a gameplay decision, the next frame centers on the hero before
+capture. World orders add nearby soldiers to the selection. The advance action
+uses the selected compass direction as a relative navigation target; these are
+controller waypoints, not source game layout data. Step count, pause,
+and the model call budget are the caller's. This is a Wine input session, not
+a claim that the mission script or the rendered campaign matches the original
+client tick for tick. Image and box questions on Jev are the vendor's opt-in
+danger-zone surface.
+
+`reference.py schema` declares the v0.3 candidate, pinned to published schema bytes
 whose SHA-256 is checked against the accompanying published CHECKSUMS.txt. The
 candidate can change upstream. Schema validation and subprocess tests are distinct
 from full CLI Spec conformance; full conformance is not claimed.

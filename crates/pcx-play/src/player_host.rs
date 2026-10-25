@@ -103,6 +103,7 @@ pub(super) struct Players {
     upgrade_research: Option<current_research::UpgradeResearch>,
     local_player: Option<i32>,
     rows: Vec<PlayerSettings>,
+    default_colors: Option<Vec<HandleId>>,
 }
 struct Resources {
     rules: crate::player_resources::Rules,
@@ -187,6 +188,93 @@ const CONTRACTS: &[(&str, &[&str], &str, bool)] = &[
     ),
 ];
 impl ObjectHost {
+    pub(crate) fn player_client_sha256(&self) -> Option<[u8; 32]> {
+        self.players.as_ref().map(|p| p.source.client_sha256())
+    }
+
+    /// Fresh roster only: preserve config assignments and supply defaults to later lazy players.
+    pub fn admit_default_player_colors(
+        &mut self,
+        rules: &crate::player_default_colors::Rules,
+    ) -> Result<(), Error> {
+        let name = "GetPlayerColor";
+        let fail = |why| self.inner.error(name, Failure::PlayerState(why));
+        let players = self
+            .players
+            .as_ref()
+            .ok_or_else(|| fail("players are not admitted"))?;
+        if players.default_colors.is_some() || players.source.client_sha256() != rules.image_sha256
+        {
+            return Err(fail(
+                "fresh player-color source differs or was already admitted",
+            ));
+        }
+        let slots = i32::try_from(players.slots).map_err(|_| fail("player slot domain"))?;
+        let map_word = players.source.map_header_word();
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .ok_or_else(|| fail("color getter is not admitted"))?
+            .source;
+        if self
+            .inner
+            .conversions
+            .get("ConvertPlayerColor")
+            .is_none_or(|c| c.kind != "playercolor" || &c.source != source)
+        {
+            return Err(fail("color conversion source differs"));
+        }
+        let mut missing = Vec::new();
+        let mut colors = Vec::new();
+        missing
+            .try_reserve_exact(players.slots)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        colors
+            .try_reserve_exact(players.slots)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        for number in 0..slots {
+            let enumerand = rules
+                .color(map_word, number)
+                .ok_or_else(|| fail("player color overflow"))?;
+            let at = self.inner.arena.iter().position(|entry| matches!(entry, Entry::Symbolic { kind, enumerand: value } if kind == "playercolor" && *value == enumerand));
+            let index = at.unwrap_or_else(|| {
+                let index = self.inner.arena.len() + missing.len();
+                missing.push(enumerand);
+                index
+            });
+            colors.push(self.inner.id(index, name)?);
+        }
+        self.inner.reserve_handles(missing.len(), name)?;
+        for enumerand in missing {
+            self.inner
+                .allocate(
+                    Entry::Symbolic {
+                        kind: "playercolor".into(),
+                        enumerand,
+                    },
+                    name,
+                )
+                .expect("reserved color identity");
+        }
+        // Neutral slots have native color identities beyond the named common.j palette.
+        self.inner
+            .conversions
+            .get_mut("ConvertPlayerColor")
+            .expect("checked")
+            .domain
+            .extend(
+                (0..slots).map(|number| rules.color(map_word, number).expect("preflighted color")),
+            );
+        let players = self.players.as_mut().expect("checked");
+        for row in &mut players.rows {
+            row.color.get_or_insert(colors[row.number as usize]);
+        }
+        players.default_colors = Some(colors);
+        Ok(())
+    }
+
     pub fn with_players(
         mut self,
         context: Arc<ParsedMapContext>,
@@ -253,6 +341,7 @@ impl ObjectHost {
             upgrade_research: None,
             local_player: None,
             rows: Vec::new(),
+            default_colors: None,
         });
         Ok(self)
     }
@@ -1135,6 +1224,13 @@ impl ObjectHost {
         self.players.as_ref().map(|p| p.slots)
     }
     /// Existing `Player` identity for a source slot, if that call has already run.
+    pub(super) fn materialized_player_ids(&self) -> Vec<HandleId> {
+        self.players
+            .as_ref()
+            .map(|players| players.rows.iter().map(|row| row.identity).collect())
+            .unwrap_or_default()
+    }
+
     pub fn player_identity(&self, number: i32) -> Option<HandleId> {
         self.players.as_ref().and_then(|players| {
             players
@@ -1441,7 +1537,10 @@ impl ObjectHost {
                 team: None,
                 start_location: None,
                 start_is_forced: false,
-                color: None,
+                color: players
+                    .default_colors
+                    .as_ref()
+                    .map(|colors| colors[*number as usize]),
                 race_preference: None,
                 race_selectable: None,
                 controller: None,

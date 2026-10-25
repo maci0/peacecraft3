@@ -92,6 +92,7 @@ mod cached_tests {
             permanent_strength: 0,
             pools: [5f32, 10., 1., 2.].map(f32::to_bits),
             items: vec![],
+            rally: None,
         };
         let mut restored = original.clone();
         restored.restore_cached(&saved, &rules, budget).unwrap();
@@ -148,6 +149,37 @@ pub struct HeroBudget {
     pub abilities_per_unit: usize,
     pub overlay_objects: usize,
     pub modifications_per_ability: usize,
+}
+
+/// Why an authored learnable row is shown but cannot be taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LearnBlock {
+    Dependency,
+    MaxRank,
+    NoPoints,
+    HeroLevel { required: i32 },
+}
+
+/// One admitted hero ability as the skill menu lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LearnableSkill {
+    pub alias: [u8; 4],
+    pub rank: i32,
+    pub maximum: i32,
+    /// `None` means `SelectHeroSkill` would accept this alias now.
+    pub block: Option<LearnBlock>,
+}
+
+/// Learn-menu icon. Fields come from the research profiles, not the cast button.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResearchIcon {
+    pub ability: [u8; 4],
+    pub art: String,
+    pub position: [usize; 2],
+    pub hotkey: char,
+    pub title: String,
+    pub description: String,
+    pub block: Option<LearnBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -788,6 +820,59 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    /// Aliases `SelectHeroSkill` would accept right now. This is not the menu list.
+    pub fn skills_ready_to_learn(&self, unit: HandleId) -> Result<Vec<[u8; 4]>, Error> {
+        Ok(self
+            .learnable_skills(unit)?
+            .into_iter()
+            .filter(|skill| skill.block.is_none())
+            .map(|skill| skill.alias)
+            .collect())
+    }
+
+    /// Every admitted `heroAbilList` entry, including ranks that cannot be taken.
+    pub fn learnable_skills(&self, unit: HandleId) -> Result<Vec<LearnableSkill>, Error> {
+        let record = self.executed_unit(unit)?;
+        let Some(abilities) = record.abilities.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let Some(hero) = &abilities.hero else {
+            return Ok(Vec::new());
+        };
+        let mut listed = Vec::new();
+        for skill in &abilities.learnable {
+            let rank = abilities.level(skill.alias);
+            let block = if skill.dependency.is_some() {
+                Some(LearnBlock::Dependency)
+            } else if rank >= skill.maximum {
+                Some(LearnBlock::MaxRank)
+            } else if hero.skill_points <= 0 {
+                Some(LearnBlock::NoPoints)
+            } else {
+                let Some(required) = rank
+                    .checked_mul(skill.skip)
+                    .and_then(|offset| offset.checked_add(skill.required))
+                else {
+                    return Err(
+                        self.hero_error("SelectHeroSkill", "required hero level overflow".into())
+                    );
+                };
+                if hero.level < required {
+                    Some(LearnBlock::HeroLevel { required })
+                } else {
+                    None
+                }
+            };
+            listed.push(LearnableSkill {
+                alias: skill.alias,
+                rank,
+                maximum: skill.maximum,
+                block,
+            });
+        }
+        Ok(listed)
+    }
+
     fn prepare_hero_events(
         &mut self,
         unit: HandleId,
@@ -1079,6 +1164,82 @@ impl ObjectHost {
         }))
     }
 
+    /// Learn-menu presentation. Uses the research profile fields, not cast `Art`/`Buttonpos`/`Tip`.
+    pub fn research_icon(
+        &self,
+        unit: HandleId,
+        ability: [u8; 4],
+    ) -> Result<Option<ResearchIcon>, Error> {
+        let listed = self.learnable_skills(unit)?;
+        let Some(skill) = listed.into_iter().find(|skill| skill.alias == ability) else {
+            return Ok(None);
+        };
+        let input = self
+            .heroes_admission()
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let position = crate::ability_profile::profile_position(
+            &input.tables,
+            &input.overlay,
+            ability,
+            "Researchbuttonpos",
+        )
+        .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let art = self
+            .hero_ability_profile(ability, "Researchart")
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let hotkey = self
+            .hero_ability_profile(ability, "Researchhotkey")
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let mut letters = hotkey.chars();
+        let Some(hotkey) = letters.next().filter(|key| key.is_ascii_alphabetic()) else {
+            return Err(self.hero_error(
+                ABILITY,
+                format!("{ability:?}: research hotkey is not a letter"),
+            ));
+        };
+        if letters.next().is_some() {
+            return Err(self.hero_error(
+                ABILITY,
+                format!("{ability:?}: research hotkey is not a letter"),
+            ));
+        }
+        let rank = skill.rank;
+        let maximum = skill.maximum;
+        let block = skill.block;
+        let text = |key: &str| {
+            let values = self.hero_ability_profiles(ability, key)?;
+            let index = usize::try_from(rank).unwrap_or(0);
+            let raw = values
+                .get(index)
+                .or_else(|| values.first())
+                .ok_or_else(|| format!("{ability:?}: no {key} profile"))?;
+            tooltip::expand(raw, |row, field| self.tooltip_value(row, field))
+                .map_err(|error| format!("{ability:?} {key}: {error}"))
+        };
+        let expanded = text("Researchtip").map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let shown = shown_research_rank(rank, maximum)
+            .map_err(|detail| self.hero_error(ABILITY, format!("{ability:?}: {detail}")))?;
+        let title = tooltip::source_integer(&expanded, shown)
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        if title.contains('%') || title.contains('<') {
+            return Err(self.hero_error(
+                ABILITY,
+                format!("{ability:?}: research tip left a format or reference"),
+            ));
+        }
+        let description =
+            text("Researchubertip").map_err(|detail| self.hero_error(ABILITY, detail))?;
+        Ok(Some(ResearchIcon {
+            ability,
+            art,
+            position,
+            hotkey,
+            title,
+            description,
+            block,
+        }))
+    }
+
     /// Exact ranked ability cell, including the matching W3A level override.
     pub(crate) fn hero_ability_level_cell(
         &self,
@@ -1230,6 +1391,11 @@ impl ObjectHost {
     }
 }
 
+fn shown_research_rank(rank: i32, maximum: i32) -> Result<i32, &'static str> {
+    let next = rank.checked_add(1).ok_or("next research rank overflow")?;
+    Ok(if next > maximum { maximum } else { next })
+}
+
 fn ability_list(
     definition: &Definition,
     column: &str,
@@ -1310,3 +1476,16 @@ fn unit_class_level(definition: &Definition) -> Result<i32, String> {
 
 #[path = "unit_hero_attribute.rs"]
 mod attributes;
+
+#[cfg(test)]
+mod research_rank_tests {
+    use super::shown_research_rank;
+
+    #[test]
+    fn next_rank_stops_at_the_authored_maximum() {
+        assert_eq!(shown_research_rank(0, 3).unwrap(), 1);
+        assert_eq!(shown_research_rank(2, 3).unwrap(), 3);
+        assert_eq!(shown_research_rank(3, 3).unwrap(), 3);
+        assert!(shown_research_rank(i32::MAX, 3).is_err());
+    }
+}

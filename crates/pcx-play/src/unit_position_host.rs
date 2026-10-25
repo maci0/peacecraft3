@@ -12,7 +12,21 @@ pub(super) struct Enumeration {
     predicate: FunctionId,
 }
 
+impl ExecutedUnit {
+    pub fn movement(&self) -> Result<crate::unit_placement::Movement, &'static str> {
+        crate::unit_placement::Movement::from_token(text(
+            &self.definition,
+            SlkId::UnitData,
+            "movetp",
+        )?)
+    }
+}
+
 impl ObjectHost {
+    pub fn unit_placement_rules(&self) -> Option<&crate::unit_placement::Rules> {
+        self.unit_placement.as_ref().map(Placement::rules)
+    }
+
     /// Admit an initialization collision cache before any unit is created.
     /// This does not alias authored placements to executed identities.
     pub fn admit_unit_placement(&mut self, placement: Placement) -> Result<(), Error> {
@@ -130,9 +144,14 @@ impl ObjectHost {
                 geometry.radius,
                 geometry.path,
                 record.face,
-                geometry.air,
+                geometry.movement,
             )
-            .map(Some)
+            .map(|mut prepared| {
+                if record.combat.as_ref().is_some_and(|combat| combat.dead) {
+                    prepared.deactivate();
+                }
+                Some(prepared)
+            })
             .map_err(|e| {
                 self.inner
                     .error("CreateUnit", Failure::UnitPlacement(e.to_string()))
@@ -421,16 +440,16 @@ pub(super) fn text<'a>(
 pub(super) struct Geometry<'a> {
     pub radius: Option<f32>,
     pub path: &'a str,
-    pub air: bool,
+    pub movement: crate::unit_placement::Movement,
 }
 
 pub(super) fn geometry(definition: &Definition) -> Result<Geometry<'_>, &'static str> {
     let movement = text(definition, SlkId::UnitData, "movetp")?;
     let path = text(definition, SlkId::UnitData, "pathTex")?;
-    let air = movement == "fly";
+    let class = crate::unit_placement::Movement::from_token(movement)?;
     let radius = match movement {
         "_" | "none" | "" => None,
-        "foot" | "horse" | "fly" => {
+        "foot" | "horse" | "hover" | "fly" | "float" | "amph" => {
             let value = field(
                 definition,
                 SlkId::UnitBalance,
@@ -450,5 +469,9 @@ pub(super) fn geometry(definition: &Definition) -> Result<Geometry<'_>, &'static
         }
         _ => return Err("movement type is outside admitted creation placement"),
     };
-    Ok(Geometry { radius, path, air })
+    Ok(Geometry {
+        radius,
+        path,
+        movement: class,
+    })
 }

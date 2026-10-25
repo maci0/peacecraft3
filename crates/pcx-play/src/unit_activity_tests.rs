@@ -174,6 +174,69 @@ fn rules_with_patrol(
     .unwrap();
     (registry, rules)
 }
+
+pub(super) fn rules_with_setrally() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    use crate::neutral_player::sha256;
+    let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
+    let third = 0x220 + 9 + 15 + 17;
+    image[third + 1..third + 5].copy_from_slice(&0x301480u32.to_le_bytes());
+    image[third + 6..third + 10].copy_from_slice(&2122i32.to_le_bytes());
+    image[0x680..0x686].copy_from_slice(b"delta\0");
+    let start = 0x220usize;
+    let old_len = binding.initializer.len as usize;
+    let insert_at = start + old_len - 2;
+    let name_va = 0x3014c0u32;
+    let rally_id = 9001i32;
+    let mut reg = vec![0x68];
+    reg.extend_from_slice(&name_va.to_le_bytes());
+    reg.push(0x68);
+    reg.extend_from_slice(&rally_id.to_le_bytes());
+    reg.extend_from_slice(&[0x8b, 0xce, 0xe8]);
+    let va_next = 0x301020 + (insert_at + reg.len() + 4 - start) as u32;
+    reg.extend_from_slice(&(0x301100i32 - va_next as i32).to_le_bytes());
+    image.copy_within(insert_at..insert_at + 2, insert_at + reg.len());
+    image[insert_at..insert_at + reg.len()].copy_from_slice(&reg);
+    image[0x6c0..0x6c9].copy_from_slice(b"setrally\0");
+    binding.initializer.len = (old_len + reg.len()) as u32;
+    let mut put = |at: usize, prefix: &[u8], id: i32| {
+        let mut bytes = prefix.to_vec();
+        bytes.extend_from_slice(&id.to_le_bytes());
+        image[at..at + bytes.len()].copy_from_slice(&bytes);
+        crate::camera_margins::SourceWindow {
+            va: 0x301000 + at as u32 - 0x200,
+            len: bytes.len() as u32,
+            digest: sha256(&bytes),
+        }
+    };
+    let hold = put(0x320, &[0x3d], 431);
+    let stop = put(0x330, &[0x81, 0xfb], 744);
+    let movement = put(0x340, &[0x3d], 1631);
+    let patrol = put(0x350, &[0x3d], 2122);
+    binding.initializer.digest = sha256(&image[start..start + binding.initializer.len as usize]);
+    binding.image_sha256 = sha256(&image);
+    let registry = Arc::new(
+        crate::order_registry::Registry::read(&image, binding.clone(), budget, 5, 32).unwrap(),
+    );
+    let rules = crate::unit_activity::Rules::read(
+        &image,
+        crate::unit_activity::Binding {
+            origin: binding.origin,
+            image_sha256: binding.image_sha256,
+            hold,
+            stop,
+            movement,
+            patrol,
+        },
+        &registry,
+        budget,
+    )
+    .unwrap();
+    (registry, rules)
+}
+
 fn host(route_work: usize) -> ObjectHost {
     host_fields(route_work, &[])
 }
@@ -1238,6 +1301,35 @@ fn selected_speed_overrides_and_movement_class_control_real_displacement() {
 }
 
 #[test]
+fn hover_units_use_ground_collision_routes_and_authored_speed() {
+    let mut vm = open_with_fields(&profile_fields(
+        FieldValue::Cell("11".into()),
+        Some("hover"),
+        None,
+    ));
+    let a = unit(&vm, "A");
+    let blocker = position_create(&mut vm.host().inner, 40., 16.).unwrap();
+    let Value::Handle(blocker) = blocker else {
+        panic!("unit");
+    };
+    let blocked = position(&mut vm, blocker);
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    let mut detour = false;
+    for tick_number in 1..=12 {
+        tick(&mut vm, f64::from(tick_number));
+        let at = position(&mut vm, a);
+        detour |= at[1] != 16.;
+        assert!(!footprints_overlap(cell_of(at), cell_of(blocked)));
+    }
+    assert!(
+        detour,
+        "hover must route around ground occupancy rather than fly through it"
+    );
+    assert_eq!(position(&mut vm, a), [72., 16.]);
+    assert_eq!(move_speed(&mut vm, a), 11.);
+}
+
+#[test]
 fn fly_movement_class_admits_scripted_motion() {
     let mut h = profile(FieldValue::Cell("12".into()), Some("fly"));
     let a = position_create(&mut h, 16., 16.).unwrap();
@@ -1673,6 +1765,65 @@ fn removed_units_refuse_supported_orders_without_accepting_other_handle_families
     );
 }
 
+#[test]
+fn setrally_point_forms_store_the_point_and_leave_the_unit_still() {
+    let mut vm = open_admitting(&[], rules_with_setrally());
+    let unit = unit(&vm, "A");
+    let h = &mut vm.host().inner;
+    let start = h.executed_unit(unit).unwrap().position.unwrap();
+    let location = h
+        .native("Location", &[Value::Real(72.0), Value::Real(32.0)])
+        .unwrap();
+    let id = h
+        .native("OrderId", &[Value::Str("setrally".into())])
+        .unwrap();
+    for (name, tail) in [
+        (
+            "IssuePointOrderLoc",
+            vec![Value::Str("setrally".into()), location.clone()],
+        ),
+        ("IssuePointOrderByIdLoc", vec![id.clone(), location.clone()]),
+        (
+            "IssuePointOrder",
+            vec![
+                Value::Str("setrally".into()),
+                Value::Real(72.0),
+                Value::Real(32.0),
+            ],
+        ),
+        (
+            "IssuePointOrderById",
+            vec![id, Value::Real(80.0), Value::Real(24.0)],
+        ),
+    ] {
+        let args = [vec![Value::Handle(unit)], tail].concat();
+        assert_eq!(h.native(name, &args).unwrap(), Value::Bool(true), "{name}");
+    }
+    assert_eq!(
+        h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .rally,
+        Some([80.0, 24.0])
+    );
+    assert_eq!(h.executed_unit(unit).unwrap().position.unwrap(), start);
+    assert!(
+        !h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(unit)])
+            .unwrap(),
+        Value::Int(0)
+    );
+}
+
 /// Live placement cell of a point. The fixture grid has cell size 4.
 fn cell_of(point: [f32; 2]) -> [i64; 2] {
     point.map(|v| (v / 4.0).floor() as i64)
@@ -2028,15 +2179,71 @@ fn failed_span_projection_removes_its_spans_from_the_callers_buffer() {
         position_create(h, 48., 16.).unwrap();
     }
     let before = spans.clone();
-    // Budget 22: the unit tick and loop step cost 2, the 20-sample clear check fits,
-    // six samples are then spent before the blocked one, leaving 14. The replan route
-    // needs a 15-sample segment, so it refuses after the partial stop and tail were emitted.
+    // The mandatory segment probe needs 20 samples after its unit and waypoint charges.
+    // A budget of 21 cannot pay that work, independently of any optional replan.
     let h = &mut vm.host().inner;
     assert!(h.next_timer_expiry(10., &mut 1000).unwrap().is_none());
     assert!(
-        h.advance_unit_activity_spans(10., &mut 22, &mut spans)
+        h.advance_unit_activity_spans(10., &mut 21, &mut spans)
             .is_err(),
-        "the replan runs out of work after spans were emitted"
+        "mandatory movement refuses an undersized budget"
     );
     assert_eq!(spans, before, "a failed projection leaves no spans behind");
+}
+
+#[test]
+fn float_and_amphibious_orders_use_the_shared_live_activity_clock() {
+    for movement in ["float", "amph"] {
+        let mut h = profile(FieldValue::Cell("12".into()), Some(movement));
+        let a = position_create(&mut h, 16., 16.).unwrap();
+        assert_eq!(
+            h.native(
+                "IssuePointOrder",
+                &[
+                    a.clone(),
+                    Value::Str("gamma".into()),
+                    Value::Real(72.),
+                    Value::Real(16.)
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(h.next_timer_expiry(1., &mut 1000).unwrap().is_none());
+        h.advance_unit_activity(1., &mut 65536).unwrap();
+        assert_eq!(
+            h.native("GetUnitX", std::slice::from_ref(&a)).unwrap(),
+            Value::Real(28.)
+        );
+        assert!(h.next_timer_expiry(6., &mut 1000).unwrap().is_none());
+        h.advance_unit_activity(6., &mut 65536).unwrap();
+        assert_eq!(h.native("GetUnitX", &[a]).unwrap(), Value::Real(72.));
+    }
+}
+
+#[test]
+fn deferred_replan_wait_is_not_credited_when_the_obstacle_clears() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    vm.call("move", &[]).unwrap();
+    tick(&mut vm, 2.0);
+    let Value::Handle(blocker) = position_create(&mut vm.host().inner, 48.0, 16.0).unwrap() else {
+        panic!("unit");
+    };
+    let host = &mut vm.host().inner;
+    host.next_timer_expiry(10.0, &mut 1000).unwrap();
+    host.advance_unit_activity(10.0, &mut 22).unwrap();
+    assert_eq!(position(&mut vm, a), [42.0, 16.0]);
+    vm.host()
+        .inner
+        .native("ShowUnit", &[Value::Handle(blocker), Value::Bool(false)])
+        .unwrap();
+    let speed = move_speed(&mut vm, a);
+    tick(&mut vm, 12.0);
+    let after = position(&mut vm, a);
+    assert!(after[0] > 42.0);
+    assert!(
+        after[0] <= 42.0 + speed * 2.0,
+        "blocked waiting time is not catch-up distance"
+    );
 }

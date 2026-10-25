@@ -85,6 +85,12 @@ native SetPlayers takes integer n returns nothing
 native SetTeams takes integer n returns nothing
 native GetPlayers takes nothing returns integer
 native GetTeams takes nothing returns integer
+native Preloader takes string path returns nothing
+native Preload takes string path returns nothing
+native PreloadEnd takes real timeout returns nothing
+native PreloadStart takes nothing returns nothing
+native PreloadRefresh takes nothing returns nothing
+native PreloadEndEx takes nothing returns nothing
 native SetGamePlacement takes placement p returns nothing
 constant native GetGamePlacement takes nothing returns placement
 native DefineStartLocation takes integer i, real x, real y returns nothing
@@ -634,7 +640,16 @@ fn rule_with_getter(kind: RuleKind, body: Vec<u8>) -> Arc<VerifiedNeutralRule> {
 pub(crate) fn host_inputs(
     catalog: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
 ) -> MapStartupInputs {
+    let mut item_visibility = pcx_play::item_visibility::Rules::fixture();
+    item_visibility.image_sha256 = rule(RuleKind::Slots).image_sha256();
     MapStartupInputs {
+        unit_decay: None,
+        unit_blend: None,
+        item_visibility: Some(item_visibility),
+        preload: None,
+        world_bounds: None,
+        weather: None,
+        ally_colors: None,
         ai_source: None,
         targeting_policy: None,
         flee_policy: None,
@@ -801,6 +816,29 @@ fn session_slots(app: &mut App) -> Option<usize> {
         .expect("published host")
         .objects_mut()
         .player_slots()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn host_assembly_does_not_inherit_a_small_callers_stack() {
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install(&mut app);
+    app.init_resource::<SelectedMapSources>();
+    deliver(&mut app, MAP_OK, 7);
+    let requests = app.world().resource::<MapRequests>();
+    let context = requests.admission.shared_context().unwrap();
+    let inputs = host_inputs(Arc::clone(&requests.bindings.as_ref().unwrap().catalog.0));
+    let expected = Arc::clone(&context);
+    let host = std::thread::Builder::new()
+        .name("Small admission caller".into())
+        .stack_size(2 << 20)
+        .spawn(move || pcx_play::map_startup_host::assemble(context, inputs))
+        .unwrap()
+        .join()
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(host.context(), &expected));
 }
 
 #[test]
@@ -1895,5 +1933,7 @@ fn post_config_slot_input_reaches_players_created_in_main_without_minting_them_e
 
 #[path = "campaign_targeting_cases.rs"]
 mod campaign_targeting_cases;
+#[path = "script_preload_cases.rs"]
+mod script_preload_cases;
 #[path = "unit_range_cases.rs"]
 mod unit_range_cases;

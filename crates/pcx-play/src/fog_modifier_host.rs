@@ -1,26 +1,37 @@
 //! Executed fog modifiers for a fog-of-war consumer: player, fog state,
-//! circle, flags and whether started. No visibility is simulated here.
-use super::{Entry, Error, Failure, ObjectHost};
+//! geometry, flags and whether started. The vision consumer reads this same state.
+use super::{Entry, Error, Failure, ObjectHost, VisionShape};
 use pcx_script::{HandleId, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FogModifier {
     pub player: HandleId,
     pub state: HandleId,
-    pub center: [f32; 2],
-    pub radius: f32,
+    pub shape: VisionShape,
     pub shared_vision: bool,
     pub after_units: bool,
     pub started: bool,
 }
 
 const CREATE: &str = "CreateFogModifierRadiusLoc";
-const NATIVES: [(&str, &[&str], &str); 4] = [
+const NATIVES: [(&str, &[&str], &str); 6] = [
     (
         CREATE,
         &[
             "player", "fogstate", "location", "real", "boolean", "boolean",
         ],
+        "fogmodifier",
+    ),
+    (
+        "CreateFogModifierRadius",
+        &[
+            "player", "fogstate", "real", "real", "real", "boolean", "boolean",
+        ],
+        "fogmodifier",
+    ),
+    (
+        "CreateFogModifierRect",
+        &["player", "fogstate", "rect", "boolean", "boolean"],
         "fogmodifier",
     ),
     ("FogModifierStart", &["fogmodifier"], "nothing"),
@@ -30,8 +41,20 @@ const NATIVES: [(&str, &[&str], &str); 4] = [
 
 impl ObjectHost {
     pub fn with_fog_modifiers(mut self) -> Result<Self, Error> {
+        if self.fog_modifiers {
+            return Err(self
+                .inner
+                .error(CREATE, Failure::FogModifier("already admitted".into())));
+        }
+        let mut source = None;
         for (name, args, result) in NATIVES {
-            if self.inner.program.natives().get(name).is_some() {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                if source
+                    .replace(&native.source)
+                    .is_some_and(|previous| previous != &native.source)
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
                 Self::contract(&self.inner, name, args, result, false, Some("fogmodifier"))?;
             }
         }
@@ -57,35 +80,104 @@ impl ObjectHost {
         }
         self.inner.program.natives().get(name)?;
         Some((|| {
-            if name == CREATE {
-                let [
-                    Value::Handle(player),
-                    Value::Handle(state),
-                    location,
-                    radius,
-                    Value::Bool(shared_vision),
-                    Value::Bool(after_units),
-                ] = args
-                else {
-                    return Err(self.inner.error(name, Failure::Signature));
+            if matches!(
+                name,
+                CREATE | "CreateFogModifierRadius" | "CreateFogModifierRect"
+            ) {
+                let (player, state, shape, shared_vision, after_units) = match (name, args) {
+                    (
+                        CREATE,
+                        [
+                            Value::Handle(player),
+                            Value::Handle(state),
+                            location,
+                            radius,
+                            Value::Bool(shared),
+                            Value::Bool(after),
+                        ],
+                    ) => {
+                        let center = self.location_point(location, name)?;
+                        let radius = radius
+                            .as_real()
+                            .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+                        (
+                            *player,
+                            *state,
+                            VisionShape::Circle { center, radius },
+                            *shared,
+                            *after,
+                        )
+                    }
+                    (
+                        "CreateFogModifierRadius",
+                        [
+                            Value::Handle(player),
+                            Value::Handle(state),
+                            x,
+                            y,
+                            radius,
+                            Value::Bool(shared),
+                            Value::Bool(after),
+                        ],
+                    ) => {
+                        let [Some(x), Some(y), Some(radius)] = [x, y, radius].map(|v| v.as_real())
+                        else {
+                            return Err(self.inner.error(name, Failure::Signature));
+                        };
+                        (
+                            *player,
+                            *state,
+                            VisionShape::Circle {
+                                center: [x, y],
+                                radius,
+                            },
+                            *shared,
+                            *after,
+                        )
+                    }
+                    (
+                        "CreateFogModifierRect",
+                        [
+                            Value::Handle(player),
+                            Value::Handle(state),
+                            Value::Handle(rect),
+                            Value::Bool(shared),
+                            Value::Bool(after),
+                        ],
+                    ) => (
+                        *player,
+                        *state,
+                        VisionShape::Rectangle {
+                            bounds: self.rectangle_bounds(*rect)?,
+                        },
+                        *shared,
+                        *after,
+                    ),
+                    _ => return Err(self.inner.error(name, Failure::Signature)),
                 };
-                let center = self.location_point(location, name)?;
-                let radius = radius
-                    .as_real()
-                    .filter(|r| r.is_finite())
-                    .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
-                let modifier = FogModifier {
-                    player: *player,
-                    state: *state,
-                    center,
-                    radius,
-                    shared_vision: *shared_vision,
-                    after_units: *after_units,
-                    started: false,
-                };
+                self.player_settings(player)?;
+                self.inner.symbolic_value(state, "fogstate")?;
+                if shape.bounds().is_none() {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::FogModifier(
+                            "finite nonnegative radius or ordered rectangle required".into(),
+                        ),
+                    ));
+                }
                 return self
                     .inner
-                    .allocate(Entry::FogModifier(Some(modifier)), name)
+                    .allocate(
+                        Entry::FogModifier(Some(FogModifier {
+                            player,
+                            state,
+                            shape,
+                            shared_vision,
+                            after_units,
+                            started: false,
+                        })),
+                        name,
+                    )
                     .map(Value::Handle);
             }
             let id = match args {

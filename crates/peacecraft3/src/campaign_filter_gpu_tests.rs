@@ -36,8 +36,7 @@ fn render_app() -> App {
             })
             .disable::<WinitPlugin>()
             .disable::<bevy::log::LogPlugin>()
-            .disable::<bevy::audio::AudioPlugin>()
-            .disable::<bevy::gilrs::GilrsPlugin>(),
+            .disable::<bevy::audio::AudioPlugin>(),
     );
     bevy::asset::embedded_asset!(&mut app, "campaign_filter.wgsl");
     app.add_plugins(UiMaterialPlugin::<FilterMaterial>::default())

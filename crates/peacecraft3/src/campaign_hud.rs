@@ -12,7 +12,7 @@ mod resource_bar;
 pub(crate) mod upper_buttons;
 pub(crate) use upper_buttons::{CampaignHudAction, CampaignHudSet};
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use pcx_play::map_startup_host::MapStartupHost;
 use peacecraft3::{
     browser_configuration::SelectedMapSources, map_requests::MapRequests,
@@ -62,8 +62,19 @@ pub(crate) fn install(app: &mut App) {
     upper_buttons::install(app);
     resource_bar::install(app);
     crate::campaign_unit_panel::install(app);
-    app.init_resource::<CampaignHud>()
-        .add_systems(Update, produce_policy);
+    app.init_resource::<CampaignHud>().add_systems(
+        Update,
+        produce_policy
+            .after(peacecraft3::campaign_startup::CampaignStartupSet)
+            .before(crate::hud_render::HudRenderSet),
+    );
+}
+
+#[derive(SystemParam)]
+struct Mounted<'w> {
+    hud: ResMut<'w, crate::hud_render::HudMount>,
+    images: ResMut<'w, Assets<Image>>,
+    fonts: ResMut<'w, Assets<Font>>,
 }
 
 fn produce_policy(
@@ -72,6 +83,7 @@ fn produce_policy(
     requests: Res<MapRequests>,
     sources: Res<SelectedMapSources>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut mounted: Mounted,
 ) {
     let witness = session.session_witness();
     let same = match (&hud.session, &witness) {
@@ -80,6 +92,11 @@ fn produce_policy(
         _ => false,
     };
     if !same {
+        if hud.session.is_some() {
+            mounted
+                .hud
+                .retire(&mut commands, &mut mounted.images, &mut mounted.fonts);
+        }
         hud.session = witness;
         hud.attempted = false;
         hud.last_error = None;
@@ -186,6 +203,34 @@ pub(crate) fn race_sections(skin: &SkinTable, race: Option<String>) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn ending_a_campaign_retires_its_console_but_not_a_standalone_hud() {
+        for campaign in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<CampaignHud>()
+                .init_resource::<MapRequests>()
+                .init_resource::<SelectedMapSources>()
+                .init_resource::<MapScriptSession<MapStartupHost>>()
+                .init_resource::<crate::hud_render::HudMount>()
+                .init_resource::<Assets<Image>>()
+                .init_resource::<Assets<Font>>();
+            let old = Arc::new(());
+            if campaign {
+                app.world_mut().resource_mut::<CampaignHud>().session = Some(Arc::downgrade(&old));
+            }
+            let child = app.world_mut().spawn_empty().id();
+            let root = app.world_mut().spawn_empty().id();
+            app.world_mut().entity_mut(root).add_child(child);
+            app.world_mut()
+                .resource_mut::<crate::hud_render::HudMount>()
+                .root = Some(root);
+            app.world_mut().run_system_once(produce_policy).unwrap();
+            assert_eq!(app.world().get_entity(root).is_err(), campaign);
+            assert_eq!(app.world().get_entity(child).is_err(), campaign);
+        }
+    }
 
     #[test]
     fn race_constants_pick_their_skin_section_then_default() {

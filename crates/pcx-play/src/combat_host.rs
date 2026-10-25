@@ -10,7 +10,9 @@
 //! RNG; armor uses the factor in the usual reduction curve. Attack-move reuses
 //! that acquisition policy during travel and resumes its accepted endpoint after
 //! losing a target; native interrupt/resume and event nesting remain unqualified.
-use super::{Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost};
+use super::{
+    Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost, VisionCapability, VisionState,
+};
 use crate::inventory_powerup::AttributeBonus;
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
@@ -235,6 +237,43 @@ pub(crate) struct HeroBonuses {
     pub held_damage: f32,
     pub armor: f32,
     pub speed: f32,
+}
+
+/// Read-only combat numbers for the selected-unit panel.
+///
+/// Damage dice and hero bonuses are the values combat already applies. The
+/// panel formats them; it does not derive a second attack or armor total.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnitStatSnapshot {
+    pub damage: Option<DamageStat>,
+    pub armor: f32,
+    pub armor_bonus: f32,
+    pub attack: Option<&'static str>,
+    pub defense: &'static str,
+    pub attributes: Option<HeroAttributeStat>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DamageStat {
+    /// Weapon `base + dice`, clamped at zero. Natural hero damage is separate.
+    pub minimum: i32,
+    /// Weapon `base + dice * sides`, clamped at zero.
+    pub maximum: i32,
+    /// Primary-attribute damage from growth and permanent strength, not held items.
+    pub natural: f32,
+    /// Held attribute damage plus flat held damage. Natural hero damage is not included.
+    pub bonus: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeroAttributeStat {
+    pub primary: String,
+    pub strength: f32,
+    pub agility: f32,
+    pub intelligence: f32,
+    pub strength_bonus: f32,
+    pub agility_bonus: f32,
+    pub intelligence_bonus: f32,
 }
 
 impl ObjectHost {
@@ -584,6 +623,208 @@ impl ObjectHost {
             .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
     }
 
+    pub(crate) fn held_combat_bonus(
+        natural: &HeroBonuses,
+        full: &HeroBonuses,
+        held_armor: i32,
+    ) -> (f32, f32, f32) {
+        (
+            (full.damage - natural.damage) + (full.held_damage - natural.held_damage),
+            natural.armor,
+            (full.armor - natural.armor) + held_armor as f32,
+        )
+    }
+
+    /// Combat totals for one executed unit, using the same hero and held-item
+    /// readers as damage resolution.
+    pub fn unit_stat_snapshot(&self, unit: HandleId) -> Result<UnitStatSnapshot, Error> {
+        let full_bonus = self.unit_hero_bonus(unit)?;
+        let held_armor = full_bonus.armor;
+        let prepared = {
+            let record = self.executed_unit(unit)?;
+            let combat = record.combat.as_ref().ok_or_else(|| {
+                self.inner
+                    .error("combat", Failure::UnitState("combat missing"))
+            })?;
+            let defense = *DEFENSE_TYPES.get(combat.defense).ok_or_else(|| {
+                self.inner
+                    .error("combat", Failure::UnitState("defense type missing"))
+            })?;
+            let weapon = combat
+                .weapon
+                .map(|weapon| (weapon.base, weapon.dice, weapon.sides, weapon.attack));
+            let hero = record
+                .abilities
+                .as_ref()
+                .and_then(|abilities| abilities.hero.as_ref())
+                .map(|hero| {
+                    (
+                        record.definition.clone(),
+                        record.permanent_strength,
+                        hero.level,
+                    )
+                });
+            (combat.armor, defense, weapon, hero)
+        };
+        let (base_armor, defense, weapon, hero) = prepared;
+        let rules = &self
+            .combat
+            .as_ref()
+            .ok_or_else(|| {
+                self.inner
+                    .error("combat", Failure::UnitState("combat missing"))
+            })?
+            .rules;
+        let (natural, full) = match &hero {
+            Some((definition, permanent, level)) => {
+                let initial = self.hero_initial_level().ok_or_else(|| {
+                    self.inner
+                        .error("combat", Failure::UnitState("hero rules not admitted"))
+                })?;
+                let progress = Some((initial, *level));
+                let natural_bonus = AttributeBonus {
+                    strength: *permanent,
+                    ..AttributeBonus::default()
+                };
+                let derive = |bonus| {
+                    Self::derive_hero_combat(definition, progress, bonus, rules)
+                        .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))
+                };
+                (derive(natural_bonus)?, derive(full_bonus)?)
+            }
+            None => {
+                let empty = HeroBonuses {
+                    damage: 0.0,
+                    held_damage: 0.0,
+                    armor: 0.0,
+                    speed: 1.0,
+                };
+                let full = Self::derive_hero_combat(
+                    &self.executed_unit(unit)?.definition,
+                    None,
+                    full_bonus,
+                    rules,
+                )
+                .map_err(|error| self.inner.error("combat", Failure::UnitActivity(error)))?;
+                (empty, full)
+            }
+        };
+        let (damage, attack) = match weapon {
+            Some((base, dice, sides, attack)) => {
+                let dice = dice.max(0);
+                let minimum = base.checked_add(dice).ok_or_else(|| {
+                    self.inner.error(
+                        "combat",
+                        Failure::UnitActivity("damage display overflow".into()),
+                    )
+                })?;
+                let span = dice.checked_mul(sides).ok_or_else(|| {
+                    self.inner.error(
+                        "combat",
+                        Failure::UnitActivity("damage display overflow".into()),
+                    )
+                })?;
+                let maximum = base.checked_add(span).ok_or_else(|| {
+                    self.inner.error(
+                        "combat",
+                        Failure::UnitActivity("damage display overflow".into()),
+                    )
+                })?;
+                let (bonus, _, _) = Self::held_combat_bonus(&natural, &full, 0);
+                if !natural.damage.is_finite() || !bonus.is_finite() {
+                    return Err(self.inner.error(
+                        "combat",
+                        Failure::UnitActivity("damage bonus is non-finite".into()),
+                    ));
+                }
+                let attack = ATTACK_TYPES.get(attack).copied().ok_or_else(|| {
+                    self.inner
+                        .error("combat", Failure::UnitState("attack type missing"))
+                })?;
+                (
+                    Some(DamageStat {
+                        minimum: minimum.max(0),
+                        maximum: maximum.max(0),
+                        natural: natural.damage,
+                        bonus,
+                    }),
+                    Some(attack),
+                )
+            }
+            None => (None, None),
+        };
+        let (_, hero_armor, armor_bonus) = Self::held_combat_bonus(&natural, &full, held_armor);
+        let armor = base_armor + hero_armor;
+        if !armor.is_finite() || !armor_bonus.is_finite() {
+            return Err(self.inner.error(
+                "combat",
+                Failure::UnitActivity("armor display is non-finite".into()),
+            ));
+        }
+        Ok(UnitStatSnapshot {
+            damage,
+            armor,
+            armor_bonus,
+            attack,
+            defense,
+            attributes: hero
+                .map(|(definition, permanent, level)| {
+                    self.hero_attribute_stat(unit, &definition, permanent, level)
+                })
+                .transpose()?,
+        })
+    }
+
+    fn hero_attribute_stat(
+        &self,
+        unit: HandleId,
+        definition: &pcx_sim::world::Definition,
+        permanent: i32,
+        level: i32,
+    ) -> Result<HeroAttributeStat, Error> {
+        let fail = |reason: String| self.inner.error("combat", Failure::UnitActivity(reason));
+        let initial = self.hero_initial_level().ok_or_else(|| {
+            self.inner
+                .error("combat", Failure::UnitState("hero rules not admitted"))
+        })?;
+        let progress = Some((initial, level));
+        let full = self.unit_hero_bonus(unit)?;
+        let base_bonus = AttributeBonus {
+            strength: permanent,
+            ..AttributeBonus::default()
+        };
+        let split = |name: &str| -> Result<(f32, f32), Error> {
+            let base = Self::derive_hero_attribute(definition, progress, base_bonus, name)
+                .map_err(fail)?;
+            let total =
+                Self::derive_hero_attribute(definition, progress, full, name).map_err(fail)?;
+            let bonus = total - base;
+            if !bonus.is_finite() {
+                return Err(fail(format!("hero {name} bonus is non-finite")));
+            }
+            Ok((base, bonus))
+        };
+        let primary = column(definition, SlkId::UnitBalance, "Primary")
+            .map_err(fail)?
+            .ok_or_else(|| fail("hero Primary is empty".into()))?;
+        let primary = text(primary, "Primary").map_err(fail)?;
+        if !matches!(primary, "STR" | "AGI" | "INT") {
+            return Err(fail(format!("unsupported hero Primary {primary:?}")));
+        }
+        let (strength, strength_bonus) = split("STR")?;
+        let (agility, agility_bonus) = split("AGI")?;
+        let (intelligence, intelligence_bonus) = split("INT")?;
+        Ok(HeroAttributeStat {
+            primary: primary.to_string(),
+            strength,
+            agility,
+            intelligence,
+            strength_bonus,
+            agility_bonus,
+            intelligence_bonus,
+        })
+    }
+
     pub(super) fn combat_attack_order(&self, unit: HandleId) -> Option<i32> {
         let rules = self.combat.as_ref()?;
         let record = self.executed_unit(unit).ok()?;
@@ -607,6 +848,7 @@ impl ObjectHost {
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
         self.cancel_summon_cast(unit);
         self.forget_holy_cast(unit);
+        self.forget_chain_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(combat) = &mut record.combat
         {
@@ -649,13 +891,28 @@ impl ObjectHost {
         position: [f32; 2],
         acquire: f32,
         id: HandleId,
-    ) -> Option<(HandleId, f32)> {
+        vision_gate: Option<(bool, bool)>,
+    ) -> Result<Option<(HandleId, f32)>, Error> {
         if id == unit {
-            return None;
+            return Ok(None);
         }
-        let other = self.weapon_target(id)?;
-        let gap = distance(other.position?, position);
-        (gap <= acquire && self.hostile_owners(owner, other.owner)).then_some((id, gap))
+        let Some(other) = self.weapon_target(id) else {
+            return Ok(None);
+        };
+        let Some(other_position) = other.position else {
+            return Ok(None);
+        };
+        let gap = distance(other_position, position);
+        if gap > acquire || !self.hostile_owners(owner, other.owner) {
+            return Ok(None);
+        }
+        if let Some((fog, mask)) = vision_gate
+            && self.vision_presented(owner, other_position, fog, mask)?
+                != Some(VisionState::Visible)
+        {
+            return Ok(None);
+        }
+        Ok(Some((id, gap)))
     }
 
     pub(super) fn hostile_owners(&self, attacker: HandleId, target: HandleId) -> bool {
@@ -698,6 +955,7 @@ impl ObjectHost {
         range: f32,
         name: &str,
         units: &[(HandleId, bool)],
+        vision_gate: Option<(bool, bool)>,
     ) -> Result<Option<HandleId>, Error> {
         let Some(attacker) = self.live(unit) else {
             return Ok(None);
@@ -718,6 +976,12 @@ impl ObjectHost {
                 continue;
             };
             if !self.hostile(attacker, other) {
+                continue;
+            }
+            if let Some((fog, mask)) = vision_gate
+                && self.vision_presented(attacker.owner, other_position, fog, mask)?
+                    != Some(VisionState::Visible)
+            {
                 continue;
             }
             let gap = distance(position, other_position);
@@ -778,6 +1042,14 @@ impl ObjectHost {
                 };
                 return Ok(Value::Bool(self.order_holy_light(*unit, *target)?));
             }
+            if let Some(id) = order
+                && self.chain_order_claimed(id)
+            {
+                let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {
+                    return Ok(Value::Bool(false));
+                };
+                return Ok(Value::Bool(self.order_chain_lightning(*unit, *target, id)?));
+            }
             if order != Some(attack_order) {
                 return Err(self.inner.error(
                     name,
@@ -835,6 +1107,12 @@ impl ObjectHost {
         else {
             return Ok(());
         };
+        let mut decay = record.decay.clone();
+        if let Some(state) = &mut decay {
+            state
+                .begin(self.timer_game_time().unwrap_or(0.))
+                .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+        }
         let owner = record.owner;
         let experience = self.plan_hero_kill_experience(unit, killer)?;
         let training = self.prepare_training_death(unit)?;
@@ -860,6 +1138,7 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             let combat = record.combat.as_mut().expect("live combat");
             combat.dead = true;
+            record.decay = decay;
             combat.attack_destination = None;
             combat.target = None;
             combat.swing = None;
@@ -873,9 +1152,12 @@ impl ObjectHost {
                 } else {
                     "death"
                 };
-                animation
-                    .select(sequence, now, None)
-                    .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+                let selected = if !exploded_presented && let Some(decay) = &record.decay {
+                    animation.select_for_duration(sequence, now, decay.death)
+                } else {
+                    animation.select(sequence, now, None)
+                };
+                selected.map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
         }
         if exploded && !exploded_presented {
@@ -1160,6 +1442,7 @@ impl ObjectHost {
             }
         }
         self.advance_holy_light(now)?;
+        self.advance_chain_lightning(now)?;
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
@@ -1167,6 +1450,9 @@ impl ObjectHost {
             .executed_units()
             .map(|(id, unit)| (id, self.combat_step_eligible(id, unit)))
             .collect();
+        // A missing ledger refuses only a new acquisition. Missiles, expirations,
+        // casts, and units that keep an existing target still advance this tick.
+        let mut acquisition_refusal: Option<&'static str> = None;
         for &(unit, attacks) in &units {
             if !attacks {
                 continue;
@@ -1225,17 +1511,43 @@ impl ObjectHost {
                     .and_then(|a| a.destination())
                     .is_some_and(|p| Some(p) != destination);
             let mut target = previous_target.filter(|t| self.weapon_target(*t).is_some());
+            let searching = target.is_none()
+                && (idle || destination.is_some())
+                && (held || weapon.acquire > 0.0);
+            let vision_gate = if searching {
+                match self.vision_capability() {
+                    VisionCapability::Unadmitted => None,
+                    VisionCapability::Unavailable(reason) => {
+                        acquisition_refusal = Some(reason);
+                        continue;
+                    }
+                    VisionCapability::Ready { fog, mask } => Some((fog, mask)),
+                }
+            } else {
+                None
+            };
             if target.is_none() && (idle || destination.is_some()) {
                 #[cfg(feature = "profile-cpu")]
                 let _acquisition =
                     tracing::info_span!(target: "pcx_cpu", "combat.acquisition").entered();
                 if held {
-                    target = self.hold_position_target(unit, weapon.range, name, &units)?;
+                    target =
+                        self.hold_position_target(unit, weapon.range, name, &units, vision_gate)?;
                 } else if weapon.acquire > 0.0 {
+                    let mut candidates = Vec::new();
+                    for &(id, _) in &units {
+                        if let Some(candidate) = self.acquisition_candidate(
+                            unit,
+                            owner,
+                            position,
+                            weapon.acquire,
+                            id,
+                            vision_gate,
+                        )? {
+                            candidates.push(candidate);
+                        }
+                    }
                     if let Some(target_heroes) = self.campaign_target_heroes(unit) {
-                        let candidates = units.iter().filter_map(|&(id, _)| {
-                            self.acquisition_candidate(unit, owner, position, weapon.acquire, id)
-                        });
                         target = self
                             .campaign_acquisition(target_heroes, candidates)
                             .map_err(|reason| {
@@ -1247,17 +1559,8 @@ impl ObjectHost {
                                 )
                             })?;
                     } else {
-                        target = units
-                            .iter()
-                            .filter_map(|&(id, _)| {
-                                self.acquisition_candidate(
-                                    unit,
-                                    owner,
-                                    position,
-                                    weapon.acquire,
-                                    id,
-                                )
-                            })
+                        target = candidates
+                            .into_iter()
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .map(|(id, _)| id);
                     }
@@ -1462,6 +1765,9 @@ impl ObjectHost {
             }
         }
         self.refresh_captain_combat();
+        if let Some(reason) = acquisition_refusal {
+            return Err(self.inner.error(name, Failure::UnitActivity(reason.into())));
+        }
         Ok(())
     }
 }

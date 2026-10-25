@@ -1,7 +1,7 @@
 //! Checked MDX runtime data. Drawing and native animation clocks are separate.
 use pcx_mdl::{
-    Bone, BoneTrack, GeosetAnim, Material, MaterialLayer, Mdlx, NO_ID, Node, Pivots, Texture,
-    TextureAnim, TrackKind,
+    Bone, GeosetAnim, Material, MaterialLayer, Mdlx, NO_ID, Node, Pivots, Texture, TextureAnim,
+    TrackKind,
 };
 use std::collections::BTreeMap;
 
@@ -75,78 +75,17 @@ impl JointPlan {
         let mut joints = bones.to_vec();
         let mut kinds = vec![JointKind::Bone; bones.len()];
         for helper in helpers {
-            let encoded_len = helper
-                .tracks
-                .iter()
-                .try_fold(0usize, |size, track| {
-                    size.checked_add(16)?.checked_add(track.raw.len())
-                })
-                .ok_or(PlanError::TrackShape {
+            let bone = helper.transform_bone().map_err(|error| match error {
+                pcx_mdl::NodeTransformError::Unsupported(magic) => PlanError::HelperTrack {
                     joint: helper.object_id,
-                    track: 0,
-                })?;
-            let header_len =
-                (helper.size as usize)
-                    .checked_sub(encoded_len)
-                    .ok_or(PlanError::TrackShape {
-                        joint: helper.object_id,
-                        track: 0,
-                    })?;
-            let mut offset =
-                helper
-                    .offset
-                    .checked_add(header_len)
-                    .ok_or(PlanError::TrackShape {
-                        joint: helper.object_id,
-                        track: 0,
-                    })?;
-            let mut tracks = Vec::new();
-            for track in &helper.tracks {
-                let (kind, width) = match &track.magic {
-                    b"KGTR" => (TrackKind::Translation, 3),
-                    b"KGRT" => (TrackKind::Rotation, 4),
-                    b"KGSC" => (TrackKind::Scaling, 3),
-                    _ => {
-                        return Err(PlanError::HelperTrack {
-                            joint: helper.object_id,
-                            magic: track.magic,
-                        });
-                    }
-                };
-                if track.width != width {
-                    return Err(PlanError::TrackShape {
-                        joint: helper.object_id,
-                        track: tracks.len(),
-                    });
-                }
-                tracks.push(BoneTrack {
-                    kind,
-                    count: track.count,
-                    interpolation: track.interpolation,
-                    global_sequence_id: i32::from_le_bytes(track.global_seq_id.to_le_bytes()),
-                    offset,
-                    stride: track.stride,
-                    raw: track.raw.clone(),
-                });
-                offset = offset
-                    .checked_add(16)
-                    .and_then(|offset| offset.checked_add(track.raw.len()))
-                    .ok_or(PlanError::TrackShape {
-                        joint: helper.object_id,
-                        track: tracks.len() - 1,
-                    })?;
-            }
-            joints.push(Bone {
-                offset: helper.offset,
-                span: helper.size as usize,
-                name: helper.name.clone(),
-                object_id: helper.object_id,
-                parent_id: helper.parent_id,
-                flags: helper.flags,
-                tracks,
-                geoset_id: -1,
-                geoset_anim_id: -1,
-            });
+                    magic,
+                },
+                pcx_mdl::NodeTransformError::Track(track) => PlanError::TrackShape {
+                    joint: helper.object_id,
+                    track,
+                },
+            })?;
+            joints.push(bone);
             kinds.push(JointKind::Helper);
         }
         let mut by_id = BTreeMap::new();

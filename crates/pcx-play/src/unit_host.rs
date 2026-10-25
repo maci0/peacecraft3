@@ -30,9 +30,10 @@ use std::sync::Arc;
 
 #[path = "unit_hero_host.rs"]
 mod hero;
-pub use hero::{HeroBudget, HeroProgress, UnitAbilities};
+pub use hero::{HeroBudget, HeroProgress, LearnBlock, LearnableSkill, ResearchIcon, UnitAbilities};
 
 const NATIVE: &str = "CreateUnit";
+const CORPSE: &str = "CreateCorpse";
 const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
 const SET_OWNER: &str = "SetUnitOwner";
@@ -62,6 +63,13 @@ pub struct UnitBudget {
     pub max_retained_fields: usize,
     /// Maximum authored modifications retained from one successful resolve.
     pub max_modifications: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Birth {
+    Ordinary,
+    Summoned,
+    Corpse,
 }
 
 pub(super) struct PreparedUnit {
@@ -104,6 +112,8 @@ pub struct ExecutedUnitState {
 /// eye-candy effects.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutedUnit {
+    /// Source-qualified death/decay lifecycle, sharing this unit and logical clock.
+    pub decay: Option<crate::unit_decay::State>,
     pub definition: Definition,
     /// Derived once from the retained definition; invalid geometry refuses only when queried.
     /// Runtime collision setters must update this value if they are admitted later.
@@ -111,6 +121,8 @@ pub struct ExecutedUnit {
     pub executed_owner: i32,
     /// Current player handle, initially the executed `CreateUnit` argument.
     pub owner: HandleId,
+    /// Explicit UnitShareVision grants, independent of owner alliances.
+    pub vision_viewers: Vec<HandleId>,
     /// Known team-color identity assigned by a color-changing transfer. Initial
     /// unit color stays unknown until its class/creation color rules are supplied.
     pub team_color: Option<HandleId>,
@@ -241,6 +253,7 @@ pub(super) struct Admission {
     militia: Option<MilitiaAbility>,
     heroes: Option<hero::Admission>,
     models: Option<ModelLoader>,
+    blend: Option<crate::unit_blend::Rules>,
 }
 
 impl Admission {
@@ -317,6 +330,28 @@ impl ObjectHost {
         let invulnerable_span = self.invulnerability_declaration(&declaration_source)?;
         let invulnerable_query_span =
             self.optional_unit_getter(&declaration_source, GET_INVULNERABLE, "boolean")?;
+        if self.inner.program.natives().get(CORPSE).is_some()
+            || self.inner.program.natives().ambiguous(CORPSE).is_some()
+        {
+            Self::contract(
+                &self.inner,
+                CORPSE,
+                &["player", "integer", "real", "real", "real"],
+                KIND,
+                false,
+                Some(KIND),
+            )?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get(CORPSE)
+                .is_none_or(|n| n.source != declaration_source)
+            {
+                return Err(self.inner.error(CORPSE, Failure::Source));
+            }
+        }
+        self.unit_vision_declaration(&declaration_source)?;
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
@@ -368,6 +403,7 @@ impl ObjectHost {
             militia: None,
             heroes: None,
             models: None,
+            blend: None,
         });
         Ok(self)
     }
@@ -810,12 +846,16 @@ impl ObjectHost {
                 ),
             ));
         }
-        for name in ["SetUnitAnimation", "QueueUnitAnimation"] {
+        for (name, parameter) in [
+            ("SetUnitAnimation", "string"),
+            ("QueueUnitAnimation", "string"),
+            ("SetUnitTimeScale", "real"),
+        ] {
             if let Some(native) = self.inner.program.natives().get(name) {
                 Self::contract(
                     &self.inner,
                     name,
-                    &["unit", "string"],
+                    &["unit", parameter],
                     "nothing",
                     false,
                     Some(KIND),
@@ -827,6 +867,84 @@ impl ObjectHost {
         }
         self.units.as_mut().expect("admitted").models = Some(Box::new(loader));
         Ok(())
+    }
+
+    pub fn admit_unit_blend(&mut self, rules: crate::unit_blend::Rules) -> Result<(), Error> {
+        let name = "SetUnitBlendTime";
+        let units = self.admitted_units()?;
+        if units.records != 0
+            || units.blend.is_some()
+            || self
+                .player_client_sha256()
+                .is_some_and(|sha| sha != rules.image_sha256)
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitAnimation("blend admission or client identity differs".into()),
+            ));
+        }
+        if let Some(native) = self.inner.program.natives().get(name) {
+            Self::contract(
+                &self.inner,
+                name,
+                &["unit", "real"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            if native.source != units.declaration_source {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        self.units.as_mut().expect("unit admission").blend = Some(rules);
+        Ok(())
+    }
+
+    fn set_unit_animation_control(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [unit, value] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        let mut value = finite_real(value).map_err(|e| self.inner.error(name, e))?;
+        if name == "SetUnitBlendTime" {
+            value = self
+                .units
+                .as_ref()
+                .and_then(|u| u.blend.as_ref())
+                .expect("blend admission")
+                .bound(value)
+                .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+        }
+        let unit = match unit {
+            Value::Null => return Ok(Value::Null),
+            Value::Handle(id) => *id,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        let mut animation = match self
+            .inner
+            .entry(unit)
+            .map_err(|e| self.inner.error(name, e.failure))?
+        {
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            Entry::Unit { record } => record.animation.clone(),
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        if let Some(animation) = &mut animation {
+            let result = if name == "SetUnitBlendTime" {
+                animation.set_blend_time(value)
+            } else {
+                let now = self.timer_game_time().ok_or_else(|| {
+                    self.inner
+                        .error(name, Failure::UnitAnimation("missing game clock".into()))
+                })?;
+                animation.set_time_scale(value, now)
+            };
+            result.map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
+        }
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!()
+        };
+        record.animation = animation;
+        Ok(Value::Null)
     }
 
     fn set_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
@@ -855,11 +973,19 @@ impl ObjectHost {
         let Value::Handle(unit) = unit else {
             return Err(self.inner.error(name, Failure::WrongFamily));
         };
+        let mut animation = match self
+            .inner
+            .entry(*unit)
+            .map_err(|e| self.inner.error(name, e.failure))?
+        {
+            Entry::Unit { record } => record.animation.clone(),
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
         let now = self.timer_game_time().ok_or_else(|| {
             self.inner
                 .error(name, Failure::UnitAnimation("missing game clock".into()))
         })?;
-        let mut animation = self.executed_unit(*unit)?.animation.clone();
         let mut queued = false;
         if let Some(state) = &mut animation {
             if queue {
@@ -949,6 +1075,12 @@ impl ObjectHost {
         if name == "UnitResetCooldown" && self.inner.program.natives().get(name).is_some() {
             return Some(self.unit_reset_cooldown(args));
         }
+        if name == "UnitShareVision" && self.inner.program.natives().get(name).is_some() {
+            return Some(self.unit_share_vision(args));
+        }
+        if let Some(result) = self.unit_decay_native(name, args) {
+            return Some(result);
+        }
         if let Some(result) = self.unit_visibility_native(name, args) {
             return Some(result);
         }
@@ -967,6 +1099,18 @@ impl ObjectHost {
         if let Some(result) = self.divine_shield_native(name, args) {
             return Some(result);
         }
+        if name == "SetUnitBlendTime"
+            && self.units.as_ref()?.blend.is_some()
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.set_unit_animation_control(name, args));
+        }
+        if name == "SetUnitTimeScale"
+            && self.units.as_ref()?.models.is_some()
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.set_unit_animation_control(name, args));
+        }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));
         }
@@ -978,6 +1122,9 @@ impl ObjectHost {
         }
         if name == NATIVE {
             return Some(self.create_unit(args));
+        }
+        if name == CORPSE && self.inner.program.natives().get(CORPSE).is_some() {
+            return Some(self.create_corpse(args));
         }
         if name == GET_TYPE && self.admitted_units().ok()?.type_span.is_some() {
             return Some(self.unit_type_id(args));
@@ -1900,11 +2047,27 @@ impl ObjectHost {
     }
 
     fn create_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
-        self.create_unit_with_cache(args, None, false)
+        self.create_unit_with_cache(args, None, Birth::Ordinary)
+    }
+
+    fn create_corpse(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [owner, Value::Int(_), x, y, face] = args else {
+            return Err(self.inner.error(CORPSE, Failure::Signature));
+        };
+        if matches!(owner, Value::Null) {
+            for value in [x, y, face] {
+                finite_real(value).map_err(|reason| self.inner.error(CORPSE, reason))?;
+            }
+            return Ok(Value::Null);
+        }
+        // Corpses publish already dead: a synthetic KillUnit would fire death/reward callbacks.
+        // shortcut: resurrection and exceptional effect transitions remain unqualified; preserve this canonical identity when adding them.
+        self.create_unit_with_cache(args, None, Birth::Corpse)
+            .map_err(|e| self.inner.error(CORPSE, e.failure))
     }
 
     pub(super) fn create_summoned_unit(&mut self, args: &[Value]) -> Result<Value, Error> {
-        self.create_unit_with_cache(args, None, true)
+        self.create_unit_with_cache(args, None, Birth::Summoned)
     }
 
     pub(super) fn create_cached_unit(
@@ -1932,16 +2095,16 @@ impl ObjectHost {
                 Failure::GameCache("cached unit belongs to a different install/edition".into()),
             ));
         }
-        self.create_unit_with_cache(args, Some(saved), false)
+        self.create_unit_with_cache(args, Some(saved), Birth::Ordinary)
     }
 
     fn create_unit_with_cache(
         &mut self,
         args: &[Value],
         saved: Option<&crate::game_cache::CachedUnit>,
-        summoned: bool,
+        birth: Birth,
     ) -> Result<Value, Error> {
-        let prepared = self.prepare_unit_creation(args, saved, summoned)?;
+        let prepared = self.prepare_unit_creation(args, saved, birth)?;
         self.commit_unit_creation(prepared).map(Value::Handle)
     }
 
@@ -1949,7 +2112,7 @@ impl ObjectHost {
         &mut self,
         args: &[Value],
         saved: Option<&crate::game_cache::CachedUnit>,
-        summoned: bool,
+        birth: Birth,
     ) -> Result<PreparedUnit, Error> {
         let record = {
             let fail = |reason| self.inner.error(NATIVE, reason);
@@ -2037,10 +2200,12 @@ impl ObjectHost {
                 None
             };
             ExecutedUnit {
+                decay: None,
                 collision_radius: Self::catalog_collision_radius(&definition),
                 definition,
                 executed_owner: owner_number,
                 owner,
+                vision_viewers: Vec::new(),
                 team_color: None,
                 creation_color: None,
                 source,
@@ -2058,7 +2223,7 @@ impl ObjectHost {
                 abilities: None,
                 animation: None,
                 look_at: None,
-                summoned,
+                summoned: birth == Birth::Summoned,
                 cached: saved.is_some(),
                 ai_harvest_flags: None,
                 activity: None,
@@ -2072,7 +2237,9 @@ impl ObjectHost {
             }
         };
         let mut record = record;
-        record.sleep = self.prepare_unit_sleep(&record.definition)?;
+        if birth != Birth::Corpse {
+            record.sleep = self.prepare_unit_sleep(&record.definition)?;
+        }
         record.abilities = self.prepare_unit_abilities(&record.definition)?;
         if let Some(saved) = saved {
             let abilities = record.abilities.as_mut().ok_or_else(|| {
@@ -2085,9 +2252,42 @@ impl ObjectHost {
             record.permanent_strength = saved.permanent_strength;
         }
         record.activity = self.prepare_unit_activity(&record.definition)?;
+        if let Some(saved) = saved
+            && let Some(point) = saved.rally
+        {
+            let Some(activity) = record.activity.as_mut() else {
+                return Err(self.inner.error(
+                    "RestoreUnit",
+                    Failure::GameCache("cached rally point requires prepared activity".into()),
+                ));
+            };
+            activity.rally = Some(point);
+        }
         record.health_handicap = self.owner_health_handicap(record.owner)?;
         record.vitals = self.prepare_unit_vitals(&record.definition, record.health_handicap)?;
         record.combat = self.prepare_unit_combat(&record.definition)?;
+        if birth == Birth::Corpse {
+            record
+                .vitals
+                .as_mut()
+                .ok_or_else(|| {
+                    self.inner.error(
+                        CORPSE,
+                        Failure::UnitState("corpse creation requires vitals"),
+                    )
+                })?
+                .life = 0.;
+            record
+                .combat
+                .as_mut()
+                .ok_or_else(|| {
+                    self.inner.error(
+                        CORPSE,
+                        Failure::UnitState("corpse creation requires combat liveness"),
+                    )
+                })?
+                .dead = true;
+        }
         if let Some(loader) = self.units.as_mut().and_then(|u| u.models.as_mut()) {
             let model = loader(&record.definition)
                 .map_err(|e| self.inner.error(NATIVE, Failure::UnitAnimation(e)))?;
@@ -2101,6 +2301,31 @@ impl ObjectHost {
                 );
             }
         }
+        record.decay = self.prepare_unit_decay(&record)?;
+        if birth == Birth::Corpse
+            && let Some(decay) = &mut record.decay
+        {
+            decay
+                .begin(self.timer_game_time().expect("corpse clock"))
+                .map_err(|e| self.inner.error(CORPSE, Failure::UnitAnimation(e)))?;
+        }
+        if birth == Birth::Corpse
+            && let Some(animation) = &mut record.animation
+        {
+            if !animation.has_sequence("death") {
+                return Err(self.inner.error(
+                    CORPSE,
+                    Failure::UnitAnimation("corpse model has no death sequence".into()),
+                ));
+            }
+            let now = self.timer_game_time().expect("model clock");
+            let selected = if let Some(decay) = &record.decay {
+                animation.select_for_duration("death", now, decay.death)
+            } else {
+                animation.select("death", now, None)
+            };
+            selected.map_err(|e| self.inner.error(CORPSE, Failure::UnitAnimation(e)))?;
+        }
         let mut placement = self.prepare_unit_position(&record)?;
         if record.animation.is_some() {
             record.creation_color = self.player_settings(record.owner)?.color;
@@ -2108,7 +2333,7 @@ impl ObjectHost {
         if let Some(prepared) = &placement {
             record.position = Some(prepared.position);
         }
-        let mut guard = if !record.summoned
+        let mut guard = if birth == Birth::Ordinary
             && self.guard_managed_owner(record.owner)?
             && super::unit_guards::candidate(&record.definition, record.combat.as_ref())
                 .map_err(|error| self.inner.error(NATIVE, Failure::UnitActivity(error)))?
@@ -2123,9 +2348,19 @@ impl ObjectHost {
         } else {
             None
         };
-        let inventory = saved
-            .map(|saved| self.prepare_cached_inventory(&record, &saved.items))
-            .transpose()?;
+        let inventory = match saved {
+            Some(saved)
+                if saved.items.is_empty()
+                    && self.inventory_policy_for(&record).is_err_and(|error| {
+                        error.to_string().contains("inventory not admitted")
+                    }) =>
+            {
+                None
+            }
+            saved => saved
+                .map(|saved| self.prepare_cached_inventory(&record, &saved.items))
+                .transpose()?,
+        };
         if let Some(prepared) = &inventory {
             record.vitals =
                 Some(self.prepare_cached_restored_vitals(&record, prepared.definitions())?);

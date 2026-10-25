@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -47,12 +47,25 @@ pcx-sim = { path = "crates/pcx-sim" }
 pcx-play = { path = "crates/pcx-play" }
 pcx-gfx = { path = "crates/pcx-gfx" }
 
-anyhow = "1"
+bevy = { version = "0.20", default-features = false, features = [
+    "default_app",
+    "bevy_animation",
+    "bevy_curve",
+    "bevy_pbr",
+    "bevy_ui_render",
+    "bevy_winit",
+    "default_font",
+    "multi_threaded",
+    "png",
+    "tonemapping_luts",
+    "zstd_rust",
+    "webgl2",
+    "x11",
+    "wayland",
+] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bytemuck = { version = "1", features = ["derive"] }
-rayon = "1"
 flate2 = "1"
 implode = "0.1"
 sha2 = { version = "0.11.1", default-features = false }
@@ -64,12 +77,18 @@ bevy_ui = { path = "vendor/bevy_ui" }
 bevy_sprite = { path = "vendor/bevy_sprite" }
 
 [profile.release]
+incremental = true
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 
 [profile.dev]
+incremental = true
+opt-level = 0
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
 opt-level = 1
 
 [profile.profiling]

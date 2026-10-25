@@ -48,6 +48,7 @@ pub fn create_host(
     let edition = ctx.sources.map.edition.clone();
     let tables = Arc::clone(&inputs.defend.tables);
     let ai_source = inputs.ai_source.clone();
+    let preload = inputs.preload.clone();
     let mut host = map_startup_host::assemble(ctx, inputs)?;
     crate::campaign_cache::attach(&mut host, cache)?;
     if no_occlusion {
@@ -61,6 +62,10 @@ pub fn create_host(
         })?;
     Ok::<_, MapStartupError>(match reader {
         Some(reader) => {
+            if let Some(rules) = preload {
+                host.admit_preloader(rules, Arc::clone(&reader))
+                    .map_err(MapStartupError::Observation)?;
+            }
             if let Some(names) = ai_source {
                 let ai_reader = Arc::clone(&reader);
                 let ai_context = Arc::clone(host.context());
@@ -113,6 +118,12 @@ pub fn create_host(
                 tables,
             )
             .map_err(MapStartupError::Placement)?;
+            if let Some(now) = host.objects().timer_game_time() {
+                let doodads = catalog
+                    .decorative_models(&reader, &edition, now)
+                    .map_err(MapStartupError::Placement)?;
+                host.objects_mut().admit_placed_doodads(doodads)?;
+            }
             host.objects_mut()
                 .admit_destructable_catalog(catalog.objects().clone())?;
             let placed = catalog.placed().map_err(MapStartupError::Placement)?;
@@ -291,8 +302,11 @@ pub fn advance_tick(
         .host()
         .is_some_and(|host| host.objects().game_paused() == Some(true))
     {
+        session.sample_admitted_vision()?;
         Ok(count)
     } else {
-        session.advance_unit_ranges(65536).map(|_| count)
+        session.advance_unit_ranges(65536)?;
+        session.sample_admitted_vision()?;
+        Ok(count)
     }
 }

@@ -148,6 +148,15 @@ pub(crate) fn button_position(
     overlay: &Overlay,
     alias: [u8; 4],
 ) -> Result<[usize; 2], String> {
+    profile_position(tables, overlay, alias, "Buttonpos")
+}
+
+pub(crate) fn profile_position(
+    tables: &DefaultTables,
+    overlay: &Overlay,
+    alias: [u8; 4],
+    profile_key: &str,
+) -> Result<[usize; 2], String> {
     let (base, mods) = base(tables, overlay, alias)?;
     let object = tables
         .object(Family::Ability, base)
@@ -158,19 +167,19 @@ pub(crate) fn button_position(
             field.from == SlkId::AbilityMetaData
                 && matches!(&field.source,
                 FieldSource::Profile { key, index: slot, slots: 2 }
-                if key.eq_ignore_ascii_case("Buttonpos") && *slot == index as i32)
+                if key.eq_ignore_ascii_case(profile_key) && *slot == index as i32)
         });
         let field = fields
             .next()
-            .ok_or_else(|| format!("{alias:?}: missing Buttonpos/{index} metadata"))?;
+            .ok_or_else(|| format!("{alias:?}: missing {profile_key}/{index} metadata"))?;
         if fields.next().is_some() || field.kind != FieldKind::Int {
             return Err(format!(
-                "{alias:?}: ambiguous or noninteger Buttonpos/{index} metadata"
+                "{alias:?}: ambiguous or noninteger {profile_key}/{index} metadata"
             ));
         }
         let metadata = tables
             .metadata(field.fourcc)
-            .ok_or_else(|| format!("{alias:?}: missing Buttonpos/{index} metadata record"))?;
+            .ok_or_else(|| format!("{alias:?}: missing {profile_key}/{index} metadata record"))?;
         for selector in [
             "repeat",
             "data",
@@ -183,7 +192,7 @@ pub(crate) fn button_position(
                 .is_some_and(|value| !matches!(value.text.trim(), "" | "0" | "_" | "-"))
             {
                 return Err(format!(
-                    "{alias:?}: unsupported Buttonpos/{index} {selector}"
+                    "{alias:?}: unsupported {profile_key}/{index} {selector}"
                 ));
             }
         }
@@ -195,10 +204,14 @@ pub(crate) fn button_position(
                     .selectors
                     .is_some_and(|selectors| selectors != [0, 0])
             {
-                return Err(format!("{alias:?}: unsupported Buttonpos/{index} override"));
+                return Err(format!(
+                    "{alias:?}: unsupported {profile_key}/{index} override"
+                ));
             }
             let pcx_objects::Value::Int(value) = modification.value else {
-                return Err(format!("{alias:?}: noninteger Buttonpos/{index} override"));
+                return Err(format!(
+                    "{alias:?}: noninteger {profile_key}/{index} override"
+                ));
             };
             i64::from(value as i32)
         } else {
@@ -206,12 +219,12 @@ pub(crate) fn button_position(
                 .field(field.fourcc)
                 .map_err(|error| error.to_string())?;
             let pcx_objects::editor::defaults::Value::Integer(value) = stock.value else {
-                return Err(format!("{alias:?}: noninteger Buttonpos/{index}"));
+                return Err(format!("{alias:?}: noninteger {profile_key}/{index}"));
             };
             value
         };
         *coordinate = usize::try_from(value)
-            .map_err(|_| format!("{alias:?}: negative or oversized Buttonpos/{index}"))?;
+            .map_err(|_| format!("{alias:?}: negative or oversized {profile_key}/{index}"))?;
     }
     Ok(result)
 }

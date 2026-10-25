@@ -15,6 +15,28 @@ Patrol follow-up (2026-10-21): source-bound point patrols now retain two endpoin
 reverse on arrival and resume after automatic combat. See [unit patrol](unit-patrol.md)
 for the implementation contract, original-map startup gate and fidelity limits.
 
+Point `setrally` is the registry order of that name, on the producer's existing
+activity. `IssuePointOrder`, `IssuePointOrderById`, `IssuePointOrderLoc`, and
+`IssuePointOrderByIdLoc` store the point and return true without moving the
+producer. Training completion then moves the new unit with the existing steer,
+admitted as an explicit move so a guard post does not replace it with an idle
+return. The rally stays on the producer. Target rally (`IssueTargetOrder` of the same
+name) stays unsupported. The source placement model is not drawn. `PC3UNIT`
+version 4 stores an optional finite point and restores it after activity is
+prepared, without starting a route or an order. Versions 1 through 3 restore
+with no point. A point with no prepared activity is refused before the unit is
+published.
+
+Root's existing binary `peacecraft3-becac95980727bee` passed
+`selected_install_opening_skip_reaches_player_control` on unchanged RoC
+`Maps\Campaign\Prologue02.w3m` in 26.42s: seed 1, 77 executed units, published,
+control restored at time 1 with 6 items and 0 visible, then a 30s post-control
+horizon and an empty canonical corpse snapshot. That is the startup, opening,
+and timer horizon. It is not mission victory or render parity. The earlier
+opening, 21.51s exit 101, had already cleared `UnitAddItemToSlotById` and
+stopped on unsupported `IssuePointOrderLoc` at `Scripts\Blizzard.j:7800`. The
+receipt is `.scratch/rally-prologue02-opening-20261025/root-run.txt`.
+
 ## Selected client lookup and activity-order frontier (2026-10-20)
 
 Fresh-game preparation now binds `OrderId` and `OrderId2String` to the selected

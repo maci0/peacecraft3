@@ -223,3 +223,49 @@ underlying cause. Removed-unit handling and the triggering callback need
 investigation. HUD clipping, scene/material fidelity, audio refusals, mission
 completion and original-client parity remain unqualified. Software-renderer
 timing is not a performance gate. Both owned app/display processes were stopped.
+
+## Launcher versus game main menu (2026-10-25)
+
+The PeaceCraft launcher selects setup inputs. Its `Main menu` action starts the
+intro; only the screen after that intro is the game main menu. The offscreen
+entry test activates that setup action, skips the intro with a synthetic Escape,
+waits for the mounted source Main menu, then activates Single Player → Campaign
+and the source chapter buttons. Its `main-menu.png` is that post-intro game menu,
+not the launcher. Captures and subsystem reports remain local diagnostic evidence;
+reaching a mission does not establish full mission playability or rendered parity.
+
+## Session-owned console retirement (2026-10-25)
+
+The baseline offscreen test executes `EndGame(false)` on the running map, waits
+for session/camera retirement, then activates the real mounted chapter button.
+It publishes a second session and mounts a replacement console; the previously
+recorded stale-entity panic was not reproduced on that baseline. This is a script
+exit test, not an in-game quit-widget test.
+
+A focused regression did reproduce a separate lifetime gap: the old console tree
+remained mounted after its session ended and only disappeared at the next
+successful HUD replacement. `HudMount::retire` now removes its tree and owned
+images/fonts. The campaign policy producer calls it on session identity changes;
+standalone HUDs are not cleared merely because no campaign exists. The existing
+accepted-replacement path shares that cleanup after candidate validation, so a
+refused candidate still preserves the live session's last valid HUD. Generation
+and surface measurements retain their existing meanings.
+
+Policy production runs after startup and before the HUD mounting set. Unit panel,
+inventory and command card run after that mounting set, so they observe the
+current receipt-bound parent rather than waiting for an arbitrary schedule order.
+Synthetic tests cover recursive tree cleanup, owned-asset release, foreign-asset
+preservation and repeat retirement. App 677 and strict native/WASM checks pass.
+The strengthened offscreen replay passes the assertion that the old console is
+already gone before the next launch and publishes a replacement session/camera/
+console. It also no longer reports the initial console-parent warning. Its final
+observation is retained separately from the baseline. The overall renderer gate
+still fails explicitly for sky illumination and terrain/tree sight occlusion;
+these lifecycle assertions do not turn it green.
+
+The current HUD Menu action and camera menu key still reveal the chapter screen.
+That does not implement Warcraft's in-game pause menu. Selected source members
+`EscMenuMainPanel.fdf` and `EscMenuTemplates.fdf` provide its main, end-game and
+confirmation panels; their source relationships must drive the eventual surface.
+No copied geometry, assumed save-game behavior or placeholder success is justified
+by the lifecycle fix.

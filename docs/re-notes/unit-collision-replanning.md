@@ -10,13 +10,9 @@ point visible while the unit moves, and reports no destination once it stops.
 Movement samples the segment to this tick's target every half cell. When a sample
 is blocked, the unit walks to the last clear sample and commits its footprint
 there. It is credited only the distance up to that sample, so distance beyond it
-is not credited. The unit then replans once from that point to `goal`. The replan
-draws from the tick's work budget, capped by the admitted `route_work` per route,
-and subtracts the work it spends. The replan starts with zero distance at the
-tick's time, so the unit never spends travel already credited on the blocked
-route. A second block in the same tick pauses the unit until the next tick. A
-route that makes no progress stops the unit, which then stands. A stopped unit
-spends no route work on later ticks.
+is not credited. The blocked motion keeps its goal and is rebased at the tick's time, so waiting does not become catch-up distance. Its route search is deferred until all active units and the harvest, motion-aware regeneration, combat and inventory projections have run. Only their actual remaining work is divided among queued searches, in active-unit order, capped by the admitted `route_work` per route. No guessed per-unit reserve or larger tick budget is used.
+
+The queued motion is compared with the current motion after those consumers; removal, death, pause or replacement cancels the stale search. Exhausted search work keeps the accepted motion for the next tick. A completed search that makes no progress still stops the unit. This scheduling is a recreation work policy, not evidence of native pathfinder scheduling. Mandatory movement or tail work can still refuse a genuinely undersized budget.
 
 Footprints use the selected collision extents. The collision value is normalised
 by the cell size before the radius bands are compared. With the synthetic fixture
@@ -252,3 +248,7 @@ Strict all-target Clippy, the play WASM library check and the native application
 all-target check pass. The three selected-map diagnostic gates pass; the longer
 route remains a failed boss fight. No wall-time/FPS threshold or native-lockstep
 claim is used for this increment.
+
+## Shared tick work regression (2026-10-25)
+
+A synthetic blocked mover followed by a multi-sample mover with motion-aware blight regeneration now completes at a budget that cannot pay the original eager route search. The test derives that mandatory threshold by executing bounded synthetic projections, compares later movement and regeneration with a large-budget run, and repeats the same budget to check deterministic work. A one-token budget still refuses. A separate obstacle-clear test verifies that exhausted optional searching does not credit stationary waiting as movement. Existing collision, patrol, follow and span-refusal regressions remain in the core suite. This does not establish mission victory or original path choice.

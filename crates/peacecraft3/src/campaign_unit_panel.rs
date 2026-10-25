@@ -1,6 +1,6 @@
 //! Selected-unit text projected from the canonical world onto the source console.
 use crate::{
-    campaign_hud::upper_buttons::{read, skin_file, text},
+    campaign_hud::upper_buttons::{image_sampler, read, skin_file, text},
     fdf::Fdf,
     menu_skin::SkinTable,
     menu_text,
@@ -24,7 +24,14 @@ use peacecraft3::{
 use std::sync::{Arc, Weak};
 
 const MEMBER: &str = r"UI\FrameDef\UI\SimpleInfoPanel.fdf";
+const STRINGS: &str = r"UI\FrameDef\InfoPanelStrings.fdf";
 const CONSOLE: &str = r"UI\FrameDef\UI\ConsoleUI.fdf";
+/// Skin keys for the one hero-attribute icon. Order is the primary token, not a native table index.
+const HERO_ICON_KEYS: [&str; 3] = [
+    "InfoPanelIconHeroIconSTR",
+    "InfoPanelIconHeroIconAGI",
+    "InfoPanelIconHeroIconINT",
+];
 #[derive(Resource, Default)]
 pub(crate) struct UnitPanel {
     witness: Option<Weak<()>>,
@@ -55,7 +62,29 @@ struct Source {
     title_offset: [f32; 2],
     fonts: [Handle<Font>; 2],
     stat_height: f32,
+    stat_font: Handle<Font>,
+    label_style: menu_text::TextStyle,
+    value_style: menu_text::TextStyle,
+    rows: StatRows,
+    hero_icons: [Handle<Image>; 3],
     receipts: Vec<AssetReceipt>,
+}
+struct StatRows {
+    icon: [f32; 4],
+    label_at: [f32; 2],
+    value_at: [f32; 2],
+    damage: String,
+    armor: String,
+    hero_icon: [f32; 2],
+    hero_height: f32,
+    hero_text_x: f32,
+    hero_top_y: f32,
+    strength_at: [f32; 2],
+    hero_value_at: [f32; 2],
+    hero_step_at: [f32; 2],
+    strength: String,
+    agility: String,
+    intellect: String,
 }
 #[derive(Clone, Debug, PartialEq)]
 struct View {
@@ -64,6 +93,12 @@ struct View {
     health: String,
     mana: String,
     colour: u32,
+    damage: String,
+    armor: String,
+    strength: String,
+    agility: String,
+    intelligence: String,
+    hero_icon: Option<u8>,
 }
 #[derive(Component)]
 struct PanelRoot;
@@ -82,6 +117,7 @@ pub(crate) fn install(app: &mut App) {
         Update,
         project
             .in_set(UnitPanelSet)
+            .after(crate::hud_render::HudRenderSet)
             .after(crate::campaign_input::CampaignInputSet)
             .before(CampaignPresentationSet),
     );
@@ -92,6 +128,7 @@ fn project(
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     inputs: Inputs,
     mut fonts: ResMut<Assets<Font>>,
+    mut images: ResMut<Assets<Image>>,
     nodes: Query<(), With<PanelRoot>>,
 ) {
     let witness = session.session_witness();
@@ -105,8 +142,16 @@ fn project(
             commands.entity(root).try_despawn();
         }
         if let Some(source) = state.source.take() {
+            let stat = source.stat_font.id();
+            let shared = source.fonts.iter().any(|font| font.id() == stat);
             for font in source.fonts {
                 fonts.remove(font.id());
+            }
+            if !shared {
+                fonts.remove(stat);
+            }
+            for image in source.hero_icons {
+                images.remove(image.id());
             }
         }
         *state = UnitPanel {
@@ -168,6 +213,7 @@ fn project(
                     .local_race_preference_constant()
                     .map_err(|e| e.to_string())?,
                 &mut fonts,
+                &mut images,
             )
         });
         match result {
@@ -315,17 +361,32 @@ fn load(
     inventory: InventoryRules,
     race: Option<String>,
     fonts: &mut Assets<Font>,
+    images: &mut Assets<Image>,
 ) -> Result<Source, String> {
     let mut receipts = Vec::new();
     let skin = SkinTable::parse(&text(reader, r"UI\war3skins.txt", &mut receipts)?)
         .map_err(|e| e.to_string())?;
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let console = skin_file(&skin, &sections, &inventory.console_key)?;
-    let (title_style, title_offset) = title_style(
-        &text(reader, MEMBER, &mut receipts)?,
-        &rules.frame,
-        &rules.title,
-    )?;
+    let member = text(reader, MEMBER, &mut receipts)?;
+    let (title_style, title_offset) = title_style(&member, &rules.frame, &rules.title)?;
+    let fdf = Fdf::parse(&normalize(&member)?).map_err(|e| e.to_string())?;
+    let strings = text(reader, STRINGS, &mut receipts)?;
+    let label_style = menu_text::render_style(&fdf, "SimpleInfoPanelLabelTextTemplate")?;
+    let value_style = menu_text::render_style(&fdf, "SimpleInfoPanelValueTextTemplate")?;
+    if !value_style.font.eq_ignore_ascii_case(&label_style.font) {
+        return Err("unit panel: stat value font".into());
+    }
+    let rows = stat_rows(&fdf, &strings)?;
+    let info = inventory.info_panel();
+    if info.width <= rows.icon[0] + rows.icon[2] {
+        return Err("unit panel: stat row wider than the information frame".into());
+    }
+    let damage_width = rules.damage_row_width();
+    let icon_right = rows.icon[0] + rows.icon[2];
+    if damage_width.partial_cmp(&icon_right) != Some(std::cmp::Ordering::Greater) {
+        return Err("unit panel: stat row narrower than its icon".into());
+    }
     let profile = SkinTable::parse(&text(reader, r"UI\MiscUI.txt", &mut receipts)?)
         .map_err(|e| e.to_string())?;
     let heights = profile
@@ -353,23 +414,280 @@ fn load(
         }
         decoded.push(Font::from_bytes(bytes));
     }
-    let fonts = decoded
+    let loaded: [Handle<Font>; 2] = decoded
         .into_iter()
         .map(|font| fonts.add(font))
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
+    let stat_font = if label_style.font.eq_ignore_ascii_case(&rules.font) {
+        loaded[1].clone()
+    } else if label_style.font.eq_ignore_ascii_case(&title_style.font) {
+        loaded[0].clone()
+    } else {
+        let path = skin_file(&skin, &sections, &label_style.font)?;
+        let bytes = read(reader, &path, 16 << 20, &mut receipts)?;
+        if !crate::hud_render::font_registers(&bytes) {
+            return Err(format!("unit panel: unreadable font {path}"));
+        }
+        fonts.add(Font::from_bytes(bytes))
+    };
+    let mut hero_icons = Vec::new();
+    for key in HERO_ICON_KEYS {
+        let path = skin_file(&skin, &sections, key)?;
+        hero_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+    }
+    let hero_icons = <[Handle<Image>; 3]>::try_from(hero_icons)
+        .map_err(|_| "unit panel: hero icon count".to_string())?;
     Ok(Source {
         rules,
         viewport: inventory.viewport,
-        info: inventory.info_panel(),
+        info,
         console,
         title_style,
         title_offset,
-        fonts,
+        fonts: loaded,
         stat_height,
+        stat_font,
+        label_style,
+        value_style,
+        rows,
+        hero_icons,
         receipts,
     })
+}
+fn ui_image(
+    reader: &pcx_assets::Resolver,
+    path: &str,
+    receipts: &mut Vec<AssetReceipt>,
+    images: &mut Assets<Image>,
+) -> Result<Handle<Image>, String> {
+    let bytes = read(reader, path, 4 << 20, receipts)?;
+    let texture = pcx_gfx::load_image_bounded(&bytes, path, 16 << 20).map_err(|e| e.to_string())?;
+    let mut image = pcx_gfx::viewer::rgba_image(&texture);
+    image.sampler = bevy::image::ImageSampler::Descriptor(image_sampler(false));
+    Ok(images.add(image))
+}
+fn hero_icon_index(primary: &str) -> Result<u8, String> {
+    match primary {
+        "STR" => Ok(0),
+        "AGI" => Ok(1),
+        "INT" => Ok(2),
+        other => Err(format!("unit panel: hero icon {other}")),
+    }
+}
+fn child<'a>(fdf: &'a Fdf, parent: &str, name: &str) -> Result<&'a crate::fdf::Frame, String> {
+    let found = fdf
+        .frames()
+        .iter()
+        .filter(|frame| frame.name == name && frame.parent.as_deref() == Some(parent))
+        .collect::<Vec<_>>();
+    let [frame] = found.as_slice() else {
+        return Err(format!("unit panel: {parent}/{name}"));
+    };
+    Ok(frame)
+}
+fn anchor(props: &crate::fdf::Props, point: &str) -> Result<[f32; 2], String> {
+    let value = props
+        .records
+        .iter()
+        .find(|(key, _)| key == "Anchor")
+        .map(|(_, value)| value.as_str())
+        .ok_or("unit panel: missing anchor")?;
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    let [kind, x, y] = parts.as_slice() else {
+        return Err("unit panel: anchor".into());
+    };
+    if *kind != point {
+        return Err(format!("unit panel: anchor {kind}"));
+    }
+    let number = |text: &str| {
+        text.trim_end_matches(',')
+            .parse::<f32>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .ok_or_else(|| format!("unit panel: anchor {text}"))
+    };
+    Ok([number(x)?, number(y)?])
+}
+fn stat_rows(fdf: &Fdf, strings: &str) -> Result<StatRows, String> {
+    let text = |key: &str| {
+        menu_text::global_string(strings, key).ok_or_else(|| format!("unit panel: missing {key}"))
+    };
+    let icon = fdf
+        .frame("InfoPanelIconTemplate")
+        .ok_or("unit panel: icon template")?;
+    let at = anchor(&icon.props, "TOPLEFT")?;
+    let (Some(width), Some(height)) = (icon.props.width, icon.props.height) else {
+        return Err("unit panel: icon size".into());
+    };
+    if width <= 0. || height <= 0. {
+        return Err("unit panel: icon size".into());
+    }
+    let (label_at, value_at) = icon_text_anchors(fdf, "SimpleInfoPanelIconDamage")?;
+    let armor_anchors = icon_text_anchors(fdf, "SimpleInfoPanelIconArmor")?;
+    if armor_anchors != (label_at, value_at) {
+        return Err("unit panel: armor text anchors".into());
+    }
+    let hero_icon = fdf
+        .frame("InfoPanelIconHeroIcon")
+        .ok_or("unit panel: hero icon")?;
+    let hero_at = anchor(&hero_icon.props, "LEFT")?;
+    let hero_width = fdf
+        .width("InfoPanelIconHeroIcon")
+        .map_err(|e| e.to_string())?;
+    let hero_icon_height = fdf
+        .height("InfoPanelIconHeroIcon")
+        .map_err(|e| e.to_string())?;
+    let hero_height = fdf
+        .height("SimpleInfoPanelIconHero")
+        .map_err(|e| e.to_string())?;
+    if hero_width != width
+        || hero_icon_height != height
+        || hero_height <= 0.
+        || !hero_at[1].is_finite()
+    {
+        return Err("unit panel: hero icon size".into());
+    }
+    let hero_text = child(
+        fdf,
+        "SimpleInfoPanelIconHero",
+        "SimpleInfoPanelIconHeroText",
+    )?;
+    let hero_text_x = point_offset(
+        hero_text,
+        crate::fdf::Point::Left,
+        "InfoPanelIconHeroIcon",
+        crate::fdf::Point::Right,
+    )?;
+    let hero_top_y = point_offset(
+        hero_text,
+        crate::fdf::Point::Top,
+        "SimpleInfoPanelIconHero",
+        crate::fdf::Point::Top,
+    )?;
+    let strength = child(
+        fdf,
+        "SimpleInfoPanelIconHeroText",
+        "InfoPanelIconHeroStrengthLabel",
+    )?;
+    let strength_at = anchor(&strength.props, "TOPLEFT")?;
+    let hero_value_at = same_value_offset(
+        fdf,
+        &[
+            (
+                "InfoPanelIconHeroStrengthValue",
+                "InfoPanelIconHeroStrengthLabel",
+            ),
+            (
+                "InfoPanelIconHeroAgilityValue",
+                "InfoPanelIconHeroAgilityLabel",
+            ),
+            (
+                "InfoPanelIconHeroIntellectValue",
+                "InfoPanelIconHeroIntellectLabel",
+            ),
+        ],
+    )?;
+    let agility_step = point_offset(
+        child(
+            fdf,
+            "SimpleInfoPanelIconHeroText",
+            "InfoPanelIconHeroAgilityLabel",
+        )?,
+        crate::fdf::Point::TopLeft,
+        "InfoPanelIconHeroStrengthValue",
+        crate::fdf::Point::BottomLeft,
+    )?;
+    let intellect_step = point_offset(
+        child(
+            fdf,
+            "SimpleInfoPanelIconHeroText",
+            "InfoPanelIconHeroIntellectLabel",
+        )?,
+        crate::fdf::Point::TopLeft,
+        "InfoPanelIconHeroAgilityValue",
+        crate::fdf::Point::BottomLeft,
+    )?;
+    if agility_step != intellect_step {
+        return Err("unit panel: hero line step".into());
+    }
+    Ok(StatRows {
+        icon: [at[0], at[1], width, height],
+        label_at,
+        value_at,
+        damage: text("COLON_DAMAGE")?,
+        armor: text("COLON_ARMOR")?,
+        hero_icon: hero_at,
+        hero_height,
+        hero_text_x: hero_text_x[0],
+        hero_top_y: hero_top_y[1],
+        strength_at,
+        hero_value_at,
+        hero_step_at: agility_step,
+        strength: text("COLON_STRENGTH")?,
+        agility: text("COLON_AGILITY")?,
+        intellect: text("COLON_INTELLECT")?,
+    })
+}
+fn icon_text_anchors(fdf: &Fdf, frame: &str) -> Result<([f32; 2], [f32; 2]), String> {
+    let label = child(fdf, frame, "InfoPanelIconLabel")?;
+    let value = child(fdf, frame, "InfoPanelIconValue")?;
+    let [label_point] = label.props.set_points.as_slice() else {
+        return Err(format!("unit panel: {frame} label anchor"));
+    };
+    let [value_point] = value.props.set_points.as_slice() else {
+        return Err(format!("unit panel: {frame} value anchor"));
+    };
+    if label_point.point != crate::fdf::Point::TopLeft
+        || label_point.relative_point != crate::fdf::Point::TopRight
+        || label_point.relative != "InfoPanelIconBackdrop"
+        || value_point.point != crate::fdf::Point::TopLeft
+        || value_point.relative_point != crate::fdf::Point::BottomLeft
+        || value_point.relative != "InfoPanelIconLabel"
+    {
+        return Err(format!("unit panel: {frame} text anchors"));
+    }
+    Ok((
+        [label_point.x, label_point.y],
+        [value_point.x, value_point.y],
+    ))
+}
+fn point_offset(
+    frame: &crate::fdf::Frame,
+    point: crate::fdf::Point,
+    relative: &str,
+    relative_point: crate::fdf::Point,
+) -> Result<[f32; 2], String> {
+    let found = frame
+        .props
+        .set_points
+        .iter()
+        .filter(|anchor| {
+            anchor.point == point
+                && anchor.relative == relative
+                && anchor.relative_point == relative_point
+        })
+        .collect::<Vec<_>>();
+    let [anchor] = found.as_slice() else {
+        return Err(format!("unit panel: {} anchor", frame.name));
+    };
+    Ok([anchor.x, anchor.y])
+}
+fn same_value_offset(fdf: &Fdf, pairs: &[(&str, &str)]) -> Result<[f32; 2], String> {
+    let mut offset = None;
+    for (value, label) in pairs {
+        let point = point_offset(
+            child(fdf, "SimpleInfoPanelIconHeroText", value)?,
+            crate::fdf::Point::TopLeft,
+            label,
+            crate::fdf::Point::BottomLeft,
+        )?;
+        if offset.get_or_insert(point) != &point {
+            return Err("unit panel: hero value anchor".into());
+        }
+    }
+    offset.ok_or_else(|| "unit panel: hero value anchor".into())
 }
 fn profile_name(
     definition: &pcx_sim::world::Definition,
@@ -446,6 +764,29 @@ fn wanted(
     if vitals.max_life <= 0. || !vitals.max_mana.is_finite() || vitals.max_mana < 0. {
         return Err("unit panel: invalid live maximum".into());
     }
+    let stats = objects
+        .unit_stat_snapshot(*id)
+        .map_err(|error| error.to_string())?;
+    let damage = match stats.damage {
+        Some(damage) => {
+            rules.damage_text(damage.minimum, damage.maximum, damage.natural, damage.bonus)?
+        }
+        None => String::new(),
+    };
+    let armor = rules.armor_text(stats.armor, stats.armor_bonus)?;
+    let hero_icon = match stats.attributes.as_ref() {
+        Some(attributes) => Some(hero_icon_index(&attributes.primary)?),
+        None => None,
+    };
+    let (strength, agility, intelligence) = if let Some(attributes) = stats.attributes {
+        (
+            rules.attribute_text(attributes.strength, attributes.strength_bonus)?,
+            rules.attribute_text(attributes.agility, attributes.agility_bonus)?,
+            rules.attribute_text(attributes.intelligence, attributes.intelligence_bonus)?,
+        )
+    } else {
+        (String::new(), String::new(), String::new())
+    };
     let view = View {
         unit: *id,
         name,
@@ -456,8 +797,23 @@ fn wanted(
             String::new()
         },
         colour: rules.health_colour(vitals.life / vitals.max_life)?,
+        damage,
+        armor,
+        strength,
+        agility,
+        intelligence,
+        hero_icon,
     };
-    for value in [&view.name, &view.health, &view.mana] {
+    for value in [
+        &view.name,
+        &view.health,
+        &view.mana,
+        &view.damage,
+        &view.armor,
+        &view.strength,
+        &view.agility,
+        &view.intelligence,
+    ] {
         crate::rich_text::parse(value).map_err(|e| e.to_string())?;
     }
     Ok(Some(view))
@@ -601,6 +957,200 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
             source.rules.shadow_offset,
         );
     }
+    paint_stats(commands, root, source, view);
+}
+fn paint_stats(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
+    // Damage is TopLeft on the detail frame. Armor and the hero block are
+    // TopLeft on that row's TopRight, one constructor width across.
+    // Damage and armor textures stay unmounted. `GetUnitTypeId` (`0x497d30`)
+    // returns the resolved unit's `+0x34`; that integer is the unit-type key
+    // hashed by `0x95c860` and looked up in `0x113e8d8` by `0x6993a0`, the same
+    // registry as `GetFoodMade`. `0x694230` then tests three fields of that type
+    // record against its `+0x234` vector. `GetOwningPlayer` does not read `+0x34`.
+    // The Neutral-suffix keys stay unused until those type fields are named.
+    let top = source.info.y + source.info.height + source.rules.damage_row_dy();
+    let left = source.info.x;
+    let beside = left + source.rules.damage_row_width();
+    if !view.damage.is_empty() {
+        paint_pair(
+            commands,
+            root,
+            source,
+            left,
+            top,
+            &source.rows.damage,
+            &view.damage,
+        );
+    }
+    if !view.armor.is_empty() {
+        paint_pair(
+            commands,
+            root,
+            source,
+            beside,
+            top,
+            &source.rows.armor,
+            &view.armor,
+        );
+    }
+    if view.hero_icon.is_some()
+        || !view.strength.is_empty()
+        || !view.agility.is_empty()
+        || !view.intelligence.is_empty()
+    {
+        paint_hero(commands, root, source, beside, top, view);
+    }
+}
+fn paint_hero(
+    commands: &mut Commands,
+    root: Entity,
+    source: &Source,
+    left: f32,
+    top: f32,
+    view: &View,
+) {
+    let rows = &source.rows;
+    if let Some(index) = view.hero_icon {
+        let center = top - rows.hero_height / 2. + rows.hero_icon[1];
+        paint_image(
+            commands,
+            root,
+            source,
+            Rect {
+                x: left + rows.hero_icon[0],
+                y: center - rows.icon[3] / 2.,
+                width: rows.icon[2],
+                height: rows.icon[3],
+            },
+            &source.hero_icons[usize::from(index)],
+        );
+    }
+    let text_left = left + rows.hero_icon[0] + rows.icon[2] + rows.hero_text_x;
+    let text_top = top + rows.hero_top_y;
+    let mut label_left = text_left + rows.strength_at[0];
+    let mut label_top = text_top + rows.strength_at[1];
+    for (label, value) in [
+        (&rows.strength, &view.strength),
+        (&rows.agility, &view.agility),
+        (&rows.intellect, &view.intelligence),
+    ] {
+        paint_styled(
+            commands,
+            root,
+            source,
+            label_left,
+            label_top,
+            label,
+            &source.label_style,
+        );
+        let value_left = label_left + rows.hero_value_at[0];
+        let value_top = label_top - source.label_style.height + rows.hero_value_at[1];
+        paint_styled(
+            commands,
+            root,
+            source,
+            value_left,
+            value_top,
+            value,
+            &source.value_style,
+        );
+        label_left = value_left + rows.hero_step_at[0];
+        label_top = value_top - source.value_style.height + rows.hero_step_at[1];
+    }
+}
+fn paint_image(
+    commands: &mut Commands,
+    root: Entity,
+    source: &Source,
+    rect: Rect,
+    image: &Handle<Image>,
+) {
+    let frame = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(rect.x / source.viewport[0] * 100.),
+                bottom: percent(rect.y / source.viewport[1] * 100.),
+                width: percent(rect.width / source.viewport[0] * 100.),
+                height: percent(rect.height / source.viewport[1] * 100.),
+                ..default()
+            },
+            ImageNode::new(image.clone()),
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(root).add_child(frame);
+}
+fn paint_pair(
+    commands: &mut Commands,
+    root: Entity,
+    source: &Source,
+    left: f32,
+    top: f32,
+    label: &str,
+    value: &str,
+) {
+    let icon_left = left + source.rows.icon[0];
+    let icon_top = top + source.rows.icon[1];
+    let label_left = icon_left + source.rows.icon[2] + source.rows.label_at[0];
+    let label_top = icon_top + source.rows.label_at[1];
+    paint_styled(
+        commands,
+        root,
+        source,
+        label_left,
+        label_top,
+        label,
+        &source.label_style,
+    );
+    let value_top = label_top - source.label_style.height + source.rows.value_at[1];
+    paint_styled(
+        commands,
+        root,
+        source,
+        label_left + source.rows.value_at[0],
+        value_top,
+        value,
+        &source.value_style,
+    );
+}
+fn paint_styled(
+    commands: &mut Commands,
+    root: Entity,
+    source: &Source,
+    left: f32,
+    top: f32,
+    text: &str,
+    style: &menu_text::TextStyle,
+) {
+    let width = source.info.x + source.info.width - left;
+    if text.is_empty() || width <= 0. {
+        return;
+    }
+    let [r, g, b, a] = style.colour;
+    let [sr, sg, sb, sa] = style.shadow_colour;
+    text_node(
+        commands,
+        root,
+        Rect {
+            x: left,
+            y: top - style.height,
+            width,
+            height: style.height,
+        },
+        source.viewport,
+        text,
+        &source.stat_font,
+        style.height,
+        match style.justify_h {
+            menu_text::JustifyH::Left => bevy::text::Justify::Left,
+            menu_text::JustifyH::Center => bevy::text::Justify::Center,
+            menu_text::JustifyH::Right => bevy::text::Justify::Right,
+        },
+        Color::srgba(r, g, b, a),
+        Color::srgba(sr, sg, sb, sa),
+        style.shadow_offset,
+    );
 }
 
 #[cfg(test)]
@@ -711,6 +1261,99 @@ mod tests {
         };
         assert!(profile_name(&definition, "Name", |_| Ok(None)).is_err());
     }
+    #[test]
+    fn stat_rows_place_armor_with_damage_and_chain_hero_text_from_the_icon() {
+        let source = r#"
+Texture "InfoPanelIconTemplate" {
+    Width 0.032,
+    Height 0.032,
+    Anchor TOPLEFT, 0.004, -0.001,
+}
+Frame "SIMPLEFRAME" "SimpleInfoPanelIconDamage" {
+    Height 0.03125,
+    Texture "InfoPanelIconBackdrop" INHERITS "InfoPanelIconTemplate" {
+    }
+    String "InfoPanelIconLabel" {
+        SetPoint TOPLEFT, "InfoPanelIconBackdrop", TOPRIGHT, 0.0, -0.003,
+    }
+    String "InfoPanelIconValue" {
+        SetPoint TOPLEFT, "InfoPanelIconLabel", BOTTOMLEFT, 0.005, -0.003,
+    }
+}
+Frame "SIMPLEFRAME" "SimpleInfoPanelIconArmor" {
+    Height 0.03125,
+    Texture "InfoPanelIconBackdrop" INHERITS "InfoPanelIconTemplate" {
+    }
+    String "InfoPanelIconLabel" {
+        SetPoint TOPLEFT, "InfoPanelIconBackdrop", TOPRIGHT, 0.0, -0.003,
+    }
+    String "InfoPanelIconValue" {
+        SetPoint TOPLEFT, "InfoPanelIconLabel", BOTTOMLEFT, 0.005, -0.003,
+    }
+}
+Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
+    Height 0.0625,
+    Texture "InfoPanelIconHeroIcon" INHERITS "InfoPanelIconTemplate" {
+        Anchor LEFT, 0.004, 0.0,
+    }
+    Frame "SIMPLEFRAME" "SimpleInfoPanelIconHeroText" {
+        SetPoint LEFT, "InfoPanelIconHeroIcon", RIGHT, 0.0, 0.0,
+        SetPoint TOP, "SimpleInfoPanelIconHero", TOP, 0.0, 0.0,
+        String "InfoPanelIconHeroStrengthLabel" {
+            Anchor TOPLEFT, 0.0, -0.003,
+        }
+        String "InfoPanelIconHeroStrengthValue" {
+            SetPoint TOPLEFT, "InfoPanelIconHeroStrengthLabel", BOTTOMLEFT, 0.005, 0.0,
+        }
+        String "InfoPanelIconHeroAgilityLabel" {
+            SetPoint TOPLEFT, "InfoPanelIconHeroStrengthValue", BOTTOMLEFT, -0.005, -0.004,
+        }
+        String "InfoPanelIconHeroAgilityValue" {
+            SetPoint TOPLEFT, "InfoPanelIconHeroAgilityLabel", BOTTOMLEFT, 0.005, 0.0,
+        }
+        String "InfoPanelIconHeroIntellectLabel" {
+            SetPoint TOPLEFT, "InfoPanelIconHeroAgilityValue", BOTTOMLEFT, -0.005, -0.004,
+        }
+        String "InfoPanelIconHeroIntellectValue" {
+            SetPoint TOPLEFT, "InfoPanelIconHeroIntellectLabel", BOTTOMLEFT, 0.005, 0.0,
+        }
+    }
+}
+"#;
+        let strings = "COLON_DAMAGE \"Damage:\",\nCOLON_ARMOR \"Armor:\",\nCOLON_STRENGTH \"Strength:\",\nCOLON_AGILITY \"Agility:\",\nCOLON_INTELLECT \"Intelligence:\",\n";
+        let rows = stat_rows(&Fdf::parse(&normalize(source).unwrap()).unwrap(), strings).unwrap();
+        assert_eq!(
+            HERO_ICON_KEYS[usize::from(hero_icon_index("STR").unwrap())],
+            "InfoPanelIconHeroIconSTR"
+        );
+        assert_eq!(
+            (
+                rows.damage.as_str(),
+                rows.armor.as_str(),
+                rows.strength.as_str(),
+                rows.agility.as_str(),
+                rows.intellect.as_str()
+            ),
+            (
+                "Damage:",
+                "Armor:",
+                "Strength:",
+                "Agility:",
+                "Intelligence:"
+            )
+        );
+        assert_eq!(rows.hero_icon, [0.004, 0.0]);
+        assert_eq!(rows.hero_height, 0.0625);
+        assert_eq!(hero_icon_index("STR").unwrap(), 0);
+        assert_eq!(hero_icon_index("AGI").unwrap(), 1);
+        assert_eq!(hero_icon_index("INT").unwrap(), 2);
+        assert!(hero_icon_index("Neutral").is_err());
+        assert_eq!(rows.hero_text_x, 0.0);
+        assert_eq!(rows.hero_top_y, 0.0);
+        assert_eq!(rows.strength_at, [0.0, -0.003]);
+        assert_eq!(rows.hero_value_at, [0.005, 0.0]);
+        assert_eq!(rows.hero_step_at, [-0.005, -0.004]);
+    }
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires selected PCX_NATIVE_CHAPTER_* inputs"]
@@ -815,6 +1458,9 @@ mod tests {
         let state = app.world().resource::<UnitPanel>();
         assert!(state.last_error.is_none(), "{:?}", state.last_error);
         assert_eq!(state.view.as_ref().unwrap().name, "Arthas");
+        assert!(state.view.as_ref().unwrap().damage.contains(" - "));
+        assert!(!state.view.as_ref().unwrap().strength.is_empty());
+        assert!(!state.view.as_ref().unwrap().armor.is_empty());
         assert_eq!(state.parent, Some(parent));
         assert!(state.receipt_count() > 0);
         assert!(Weak::ptr_eq(state.witness.as_ref().unwrap(), &witness));

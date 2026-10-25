@@ -61,6 +61,25 @@ pub fn prepare_new_game(
     let mut inputs = prepare(context, map_sources, reader, image, client.clone())?;
     let settings = crate::campaign_client::fresh_settings(image, client.clone())?;
     let placement_rules = crate::campaign_client::placement_rules(image, client.clone())?;
+    let weather = reader
+        .resolve_bounded("TerrainArt/Weather.slk", 4 << 20)
+        .map_err(|e| e.to_string())?;
+    let (_, weather_origin) =
+        campaign_assets::identity(&weather, &context.sources.map.edition, 16 << 10)?;
+    let (x, y) = context.terrain.origin();
+    let cell = placement_rules.cell_size();
+    let world_bounds = [
+        x,
+        y,
+        x + context.world.pathing.width as f32 * cell,
+        y + context.world.pathing.height as f32 * cell,
+    ];
+    inputs.world_bounds = Some(world_bounds);
+    inputs.weather = Some(crate::weather::Input {
+        catalog: crate::weather::Catalog::read(&weather.bytes, weather_origin, 4 << 20, 10000)?,
+        initial_enabled: crate::weather::initial_enabled(image)?,
+        world_bounds,
+    });
     let triggers = crate::campaign_client::fresh_triggers(image, client.clone())?;
     let orders = Arc::new(crate::campaign_client::order_registry(
         image,
@@ -113,6 +132,15 @@ pub fn prepare_new_game(
     if let Some(bytes) = &map_misc {
         day_profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
+    inputs.unit_decay = Some(crate::unit_decay::Rules::read(
+        image,
+        &day_profiles,
+        inputs
+            .targeting_policy
+            .as_ref()
+            .ok_or("decay classifier absent")?,
+        8 << 20,
+    )?);
     let activity = activity.with_follow_profiles(&day_profiles, 8 << 20)?;
     inputs.resources = Some(crate::player_resources::Rules::discover(
         image,
@@ -239,6 +267,7 @@ pub fn prepare_new_game(
             .map_err(|e| format!("GetDefaultDifficulty fallback: {e}"))?;
     inputs.post_config = PostConfigObservations {
         new_game: Some(NewGameInput {
+            player_colors: Some(crate::player_default_colors::Rules::read(image)?),
             seed,
             initial_alliances: Some(initial_alliances),
             orders: Some(orders),
@@ -363,7 +392,8 @@ pub fn prepare(
     let camera_config = reader
         .resolve_bounded("UI/MiscData.txt", 2 << 20)
         .map_err(|e| e.to_string())?;
-    let (_, camera_origin) = campaign_assets::identity(&camera_config, edition, 16 << 10)?;
+    let (camera_label, camera_origin) =
+        campaign_assets::identity(&camera_config, edition, 16 << 10)?;
     let source = crate::campaign_client::read(
         image,
         client.clone(),
@@ -423,6 +453,26 @@ pub fn prepare(
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        unit_decay: None,
+        unit_blend: Some(crate::unit_blend::Rules::read(image)?),
+        item_visibility: Some(crate::item_visibility::Rules::read(image)?),
+        preload: Some(crate::preload::Rules::read(image)?),
+        world_bounds: None,
+        weather: None,
+        ally_colors: Some(crate::ally_color::Input {
+            rules: crate::ally_color::Rules::read(image)?,
+            palette: crate::ally_color::Palette::read(
+                &{
+                    let mut profiles =
+                        vec![(camera_label.as_str(), camera_config.bytes.as_slice())];
+                    if let Some(bytes) = &map_misc {
+                        profiles.push((map_sources.map_label.as_str(), bytes.as_slice()));
+                    }
+                    profiles
+                },
+                8 << 20,
+            )?,
+        }),
         ai_source: Some(crate::campaign_ai::SourceNames::selected(image)?),
         targeting_policy: Some(
             crate::campaign_targeting_policy::TargetingPolicy::read(

@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct ObjectHost {
     cheat_queries: Option<crate::cheat_rules::Rules>,
     fog_modifiers: bool,
+    shared_vision: Option<vision::VisionSlot>,
     selection: Option<Vec<HandleId>>,
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
@@ -16,16 +17,20 @@ pub struct ObjectHost {
     combat: Option<combat::Rules>,
     combat_trace: Option<combat::CombatTrace>,
     holy_light: Option<holy_light::Rules>,
+    chain_lightning: Option<chain_lightning::Rules>,
     summoning: Option<unit_summon::State>,
     unit_expirations: std::collections::BTreeMap<HandleId, f64>,
     training: unit_training::State,
     events: event_delivery::Delivery,
+    unit_decay: Option<crate::unit_decay::Rules>,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
     divine_shield: divine_shield::State,
     volume_groups: Option<volume_groups::State>,
     camera_view: Option<camera_view::CameraView>,
     scene: Option<scene::Environment>,
+    weather: Option<weather::State>,
+    doodads: Option<Vec<crate::campaign_placement::PlacedDoodad>>,
     threads: thread::Threads,
     time_of_day: Option<time_of_day::TimeOfDay>,
     locations: bool,
@@ -76,6 +81,7 @@ pub struct ObjectHost {
     occlusion_enabled: Option<bool>,
     messages: Option<messages::MessageState>,
     rectangles: bool,
+    world_bounds: Option<[f32; 4]>,
     regions: Option<regions::Admission>,
     camera_setups: Option<camera_setup::Admission>,
     destructables: Option<destructables::Admission>,
@@ -112,6 +118,8 @@ pub struct ObjectHost {
     campaign_flee_motion: campaign_flee_motion::State,
     default_difficulty: Option<HandleId>,
     campaign_menu_race: Option<Option<HandleId>>,
+    campaign_menu_index: Option<i32>,
+    ally_colors: Option<ally_colors::State>,
     stock: Option<stock::State>,
     timers: Option<timers::State>,
     random: Option<random::Random>,
@@ -134,6 +142,7 @@ pub(super) struct SynchronousDelivery {
     pub(super) next: usize,
 }
 enum NativeCallback {
+    Widget(widget_enumeration::Enumeration),
     Trigger(trigger_runtime::DirectCall),
     Rectangle(unit_positions::Enumeration),
     Group(group_iteration::Iteration),
@@ -231,6 +240,7 @@ impl ObjectHost {
             occlusion_enabled: None,
             messages: None,
             rectangles: false,
+            world_bounds: None,
             regions: None,
             camera_setups: None,
             destructables: None,
@@ -242,8 +252,11 @@ impl ObjectHost {
             time_of_day: None,
             threads: thread::Threads::default(),
             scene: None,
+            weather: None,
+            doodads: None,
             camera_view: None,
             volume_groups: None,
+            unit_decay: None,
             unit_vitals: None,
             unit_buffs: unit_buff::State::default(),
             divine_shield: divine_shield::State::default(),
@@ -251,6 +264,7 @@ impl ObjectHost {
             combat: None,
             combat_trace: None,
             holy_light: None,
+            chain_lightning: None,
             summoning: None,
             unit_expirations: std::collections::BTreeMap::new(),
             indicators: None,
@@ -259,6 +273,7 @@ impl ObjectHost {
             pings: Vec::new(),
             selection: None,
             fog_modifiers: false,
+            shared_vision: None,
             effects: false,
             items: None,
             unit_explosions: None,
@@ -291,6 +306,8 @@ impl ObjectHost {
             campaign_flee_motion: campaign_flee_motion::State::default(),
             default_difficulty: None,
             campaign_menu_race: None,
+            campaign_menu_index: None,
+            ally_colors: None,
             stock: None,
             timers: None,
             random: None,
@@ -619,12 +636,12 @@ impl ObjectHost {
         let at = usize::try_from(id.token() - 1)
             .map_err(|_| self.inner.error("DestroyTimer", Failure::Identity))?;
         let failure = match self.inner.arena.get_mut(at) {
-            Some(Entry::Timer { live, run }) if *live => {
+            Some(Entry::Timer { live, run }) => {
                 *run = None;
                 *live = false;
                 return Ok(Value::Null);
             }
-            Some(Entry::Timer { live: false, .. }) | None => Failure::Identity,
+            None => Failure::Identity,
             _ => Failure::WrongFamily,
         };
         Err(self.inner.error("DestroyTimer", failure))
@@ -735,6 +752,12 @@ impl Host for ObjectHost {
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
         if let Some(call) = self
+            .begin_widget_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_rectangle_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -776,6 +799,7 @@ impl Host for ObjectHost {
                 .map_err(|e| e.to_string());
         }
         match self.callbacks.last() {
+            Some(NativeCallback::Widget(_)) => self.continue_widget_call(value),
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
             Some(NativeCallback::Group(_)) => self.continue_group_call(),
@@ -809,6 +833,12 @@ impl Host for ObjectHost {
 
     #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.doodad_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.weather_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.summoning_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -824,6 +854,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.presentation_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.ally_color_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.game_cache_native(name, args) {
@@ -1027,6 +1060,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.item_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.widget_enumeration_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.stock_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1162,8 +1198,8 @@ mod unit_technology;
 #[path = "unit_training_host.rs"]
 mod unit_training;
 pub use unit_creation::{
-    ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, UnitAbilities, UnitBudget,
-    UnitStateBudget,
+    ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, LearnBlock, LearnableSkill,
+    ResearchIcon, UnitAbilities, UnitBudget, UnitStateBudget,
 };
 
 #[path = "unit_position_host.rs"]
@@ -1171,6 +1207,8 @@ mod unit_positions;
 
 #[path = "item_host.rs"]
 mod item_creation;
+#[path = "widget_enumeration_host.rs"]
+mod widget_enumeration;
 pub use item_creation::{ExecutedItem, ItemBudget};
 
 #[path = "unit_explosion_host.rs"]
@@ -1307,7 +1345,10 @@ mod state_host_tests;
 
 #[path = "environment_host.rs"]
 mod scene;
+#[path = "weather_host.rs"]
+mod weather;
 pub use scene::{Environment, TerrainFog};
+pub use weather::WeatherEffect;
 
 #[path = "unit_type_host.rs"]
 mod unit_types;
@@ -1318,7 +1359,10 @@ pub use fog_modifiers::FogModifier;
 
 #[path = "vision_host.rs"]
 mod vision;
-pub use vision::{VisionCircle, VisionState};
+pub use vision::{
+    VisionCapability, VisionCell, VisionOrigin, VisionSampleStats, VisionShape, VisionSource,
+    VisionState, present_vision,
+};
 
 #[path = "selection_host.rs"]
 mod selection;
@@ -1421,3 +1465,15 @@ mod unit_summon;
 
 #[path = "holy_light_host.rs"]
 mod holy_light;
+
+#[path = "chain_lightning_host.rs"]
+mod chain_lightning;
+
+#[path = "doodad_host.rs"]
+mod doodads;
+
+#[path = "ally_color_host.rs"]
+mod ally_colors;
+
+#[path = "unit_decay_host.rs"]
+mod decay;

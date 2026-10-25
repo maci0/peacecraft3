@@ -142,6 +142,7 @@ pub(crate) fn install(app: &mut App) {
             (capture, project, refresh_tooltip)
                 .chain()
                 .in_set(CampaignInventorySet)
+                .after(crate::hud_render::HudRenderSet)
                 .after(CampaignCameraSet)
                 .before(CampaignPresentationSet),
         )

@@ -73,6 +73,33 @@ pub struct HudMount {
     fonts: Vec<Handle<Font>>,
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct HudRenderSet;
+
+impl HudMount {
+    pub(crate) fn retire(
+        &mut self,
+        commands: &mut Commands,
+        images: &mut Assets<Image>,
+        fonts: &mut Assets<Font>,
+    ) {
+        if let Some(root) = self.root.take() {
+            commands.entity(root).try_despawn();
+        }
+        for image in self.images.drain(..) {
+            images.remove(image.id());
+        }
+        for font in self.fonts.drain(..) {
+            fonts.remove(font.id());
+        }
+        self.source = None;
+        self.race_sections.clear();
+        self.roots.clear();
+        self.viewport = None;
+        self.error = None;
+    }
+}
+
 /// Latest input wins. A later refusal in the same frame does not apply an
 /// earlier success from that frame, and it does not remove a HUD mounted
 /// on a previous frame.
@@ -259,6 +286,7 @@ pub fn install(app: &mut App) {
                 track_hud_surface,
             )
                 .chain()
+                .in_set(HudRenderSet)
                 .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
         );
 }
@@ -616,11 +644,7 @@ fn mount_resolved(
         discard_fonts(fonts, font_handles);
         return Err(error);
     }
-    if let Some(root) = mount.root.take() {
-        commands.entity(root).try_despawn();
-    }
-    let old_images = std::mem::take(&mut mount.images);
-    let old_fonts = std::mem::take(&mut mount.fonts);
+    mount.retire(commands, images, fonts);
     let generation = mount.generation.saturating_add(1);
     let root = commands
         .spawn((
@@ -694,12 +718,6 @@ fn mount_resolved(
     mount.generation = generation;
     mount.images = image_handles.into_values().collect();
     mount.fonts = font_handles.into_values().collect();
-    for handle in old_images {
-        images.remove(handle.id());
-    }
-    for handle in old_fonts {
-        fonts.remove(handle.id());
-    }
     info!(
         "mounted HUD {:?} generation {generation}",
         mount.source.as_deref().unwrap_or("")
@@ -1018,6 +1036,7 @@ mod tests {
     use super::*;
     use crate::hud_assets::{HudInput, sample_hud};
     use bevy::ecs::hierarchy::ChildOf;
+    use bevy::ecs::system::RunSystemOnce;
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -1045,6 +1064,57 @@ mod tests {
 
     fn image_handle(app: &App, entity: Entity) -> Handle<Image> {
         app.world().get::<ImageNode>(entity).unwrap().image.clone()
+    }
+
+    #[test]
+    fn retirement_releases_only_owned_assets_and_can_repeat() {
+        let mut app = test_app();
+        submit(&mut app, sample_hud(&["Human", "Default"]));
+        app.update();
+        let root = app.world().resource::<HudMount>().root.unwrap();
+        let owned = {
+            let mount = app.world().resource::<HudMount>();
+            (mount.images.clone(), mount.fonts.clone())
+        };
+        assert!(!owned.0.is_empty() && !owned.1.is_empty());
+        let foreign = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        for _ in 0..2 {
+            app.world_mut()
+                .run_system_once(
+                    |mut commands: Commands,
+                     mut mount: ResMut<HudMount>,
+                     mut images: ResMut<Assets<Image>>,
+                     mut fonts: ResMut<Assets<Font>>| {
+                        mount.retire(&mut commands, &mut images, &mut fonts)
+                    },
+                )
+                .unwrap();
+            assert!(app.world().get_entity(root).is_err());
+            let mount = app.world().resource::<HudMount>();
+            assert!(mount.root.is_none() && mount.source.is_none() && mount.roots.is_empty());
+            assert_eq!(mount.generation, 1);
+            assert!(owned.0.iter().all(|image| {
+                app.world()
+                    .resource::<Assets<Image>>()
+                    .get(image.id())
+                    .is_none()
+            }));
+            assert!(owned.1.iter().all(|font| {
+                app.world()
+                    .resource::<Assets<Font>>()
+                    .get(font.id())
+                    .is_none()
+            }));
+            assert!(
+                app.world()
+                    .resource::<Assets<Image>>()
+                    .get(foreign.id())
+                    .is_some()
+            );
+        }
     }
 
     #[test]

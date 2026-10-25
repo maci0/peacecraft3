@@ -71,6 +71,9 @@ pub use material::{MaterialLayer, TextureFrameTrack};
 pub use material1800::{MaterialLayer1800, MaterialTrack1800, SubTexture1800};
 pub use particle2::Particle2Properties;
 
+mod pose;
+pub use pose::{NodeTransformError, blend_joint_pose, sample_joint_pose};
+
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -284,6 +287,8 @@ impl Chunk {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     pub name: String,
+    /// Authored MODL transition duration in milliseconds.
+    pub blend_time_ms: u32,
     pub minimum_extent: [f32; 3],
     pub maximum_extent: [f32; 3],
 }
@@ -2876,17 +2881,18 @@ impl Mdlx {
     pub fn model(&self, data: &[u8]) -> Result<Model, Error> {
         let c = self.chunk(tag::MODL).ok_or(Error::NoModel)?;
         let p = c.payload(data);
-        if p.len() < MODL_EXTENTS + 24 {
+        if p.len() < MODL_SIZE {
             return Err(Error::Truncated {
-                what: "MODL extents",
+                what: "MODL extents and blend time",
                 at: c.payload_offset,
-                need: MODL_EXTENTS + 24,
+                need: MODL_SIZE,
                 have: p.len(),
             });
         }
         let f = |i: usize| f32::from_le_bytes(p[MODL_EXTENTS + i * 4..][..4].try_into().unwrap());
         Ok(Model {
             name: read_cstr(p, 0)?,
+            blend_time_ms: read_u32(p, MODL_EXTENTS + 24)?,
             minimum_extent: [f(0), f(1), f(2)],
             maximum_extent: [f(3), f(4), f(5)],
         })

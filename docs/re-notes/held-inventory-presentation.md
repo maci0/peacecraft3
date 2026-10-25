@@ -298,3 +298,23 @@ overlap are composition choices. Original-client pixel parity, portrait-mask mod
 composition, dialogue portraits, speech synchronization and other viewport/DPI
 combinations remain unverified. Native rendering internals are not a compatibility
 requirement; the remaining target is the same visible behaviour.
+
+## Mounted opening-chapter console (2026-10-25)
+
+The production offscreen menu-entry diagnostic now selects a live local unit
+from the unchanged RoC opening after its separate campaign-control capture. The
+selection uses the canonical host; the test does not inject a ConsoleUI entity.
+The attachment report identifies the actual `ConsoleUI` from the admitted FDF,
+map receipt and binding revision. The resulting capture shows Thrall's portrait,
+name, life/mana, inventory and standard commands. Unit-panel, portrait, inventory
+and command-card error states are all clear after mounting. The earlier
+`awaits receipt-bound ConsoleUI parent` warning is transient startup ordering;
+it is not evidence of a missing persistent parent.
+
+The test now retains those four subsystem error states in its overall result,
+so future panel failures cannot hide behind a successful HUD mount. This verifies
+production mounting and a selected-unit frame, not native pixel parity or complete
+hero abilities. The complete offscreen gate remains red for sky illumination and
+terrain/tree sight occlusion. It uses an image target with Winit/Audio plugins
+disabled, no DISPLAY/WAYLAND and null/private audio configuration. The launcher
+is setup; the tested game main menu is the screen reached after the intro skip.

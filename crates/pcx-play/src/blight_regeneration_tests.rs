@@ -167,3 +167,77 @@ fn crossing_budget_failure_preserves_pools_and_discards_span_output() {
     }
     panic!("the fixture must exercise a refusal after motion and before regeneration commit");
 }
+
+#[test]
+fn blocked_replan_cannot_starve_later_motion_or_blight_regeneration() {
+    fn run(budget: usize) -> Result<([f32; 2], f64, usize), String> {
+        let (mut vm, a) = fixture();
+        let owner = vm
+            .host()
+            .inner
+            .native("GetOwningPlayer", &[Value::Handle(a)])
+            .unwrap();
+        let create = |vm: &mut Vm, x, y| {
+            let Value::Handle(id) = vm
+                .host()
+                .inner
+                .native(
+                    "CreateUnit",
+                    &[
+                        owner.clone(),
+                        Value::Int(i32::from_be_bytes(*b"u001")),
+                        Value::Real(x),
+                        Value::Real(y),
+                        Value::Real(0.0),
+                    ],
+                )
+                .unwrap()
+            else {
+                panic!("unit");
+            };
+            id
+        };
+        let later = create(&mut vm, 16.0, 40.0);
+        move_to(&mut vm, a, [74.0, 16.0]);
+        move_to(&mut vm, later, [74.0, 40.0]);
+        create(&mut vm, 40.0, 16.0);
+        let host = &mut vm.host().inner;
+        host.next_timer_expiry(4.0, &mut 1000).unwrap();
+        let mut work = budget;
+        host.advance_unit_activity(4.0, &mut work)
+            .map_err(|e| e.to_string())?;
+        let record = host.executed_unit(later).unwrap();
+        let position = record.position.unwrap();
+        assert!(position[0] > 20.0, "later motion crosses multiple samples");
+        assert_eq!(record.vitals.unwrap().regen.through, 4.0);
+        assert_eq!(
+            host.executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .destination(),
+            Some([74.0, 16.0])
+        );
+        Ok((
+            position,
+            record.vitals.unwrap().regen.through,
+            budget - work,
+        ))
+    }
+    let full = run(65536).unwrap();
+    // Find the actual mandatory cost, including samples and blight spans, rather than guessing a reserve.
+    let bounded = (1..full.2)
+        .find_map(|budget| run(budget).ok().map(|state| (budget, state)))
+        .expect("optional search can be deferred");
+    assert_eq!((bounded.1.0, bounded.1.1), (full.0, full.1));
+    assert_eq!(
+        run(bounded.0).unwrap(),
+        bounded.1,
+        "same inputs spend identical work"
+    );
+    assert!(
+        run(1).is_err(),
+        "a genuinely undersized mandatory budget still refuses"
+    );
+}

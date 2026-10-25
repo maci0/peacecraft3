@@ -32,6 +32,15 @@ pub struct Rules {
     scale: f32,
     low_divisor: f32,
     full_channel: u8,
+    damage_range: String,
+    bonus_positive: String,
+    bonus_negative: String,
+    bonus_number: String,
+    whole_number: String,
+    tenth: String,
+    half: f32,
+    damage_dy: f32,
+    damage_width: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -125,8 +134,30 @@ impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
         Err("unit panel: string budget".into())
     }
     fn string(&mut self, va: u32) -> Result<String, String> {
-        let pointer = self.word(va, &[0x68])?;
+        self.prefixed_string(va, &[0x68])
+    }
+    fn prefixed_string(&mut self, va: u32, prefix: &[u8]) -> Result<String, String> {
+        let pointer = self.word(va, prefix)?;
         self.string_at(pointer)
+    }
+    fn call_target(&mut self, va: u32) -> Result<u32, String> {
+        let bytes = self.bytes(va, 5, true)?;
+        if bytes[0] != 0xe8 {
+            return Err(format!("unit panel: call {va:#x}"));
+        }
+        let rel = i32::from_le_bytes(bytes[1..5].try_into().unwrap());
+        Ok(va
+            .checked_add(5)
+            .ok_or_else(|| format!("unit panel: call {va:#x}"))?
+            .wrapping_add(rel as u32))
+    }
+    fn f32_at(&mut self, va: u32) -> Result<f32, String> {
+        let bytes = self.bytes(va, 4, false)?;
+        let value = f32::from_le_bytes(bytes.try_into().unwrap());
+        if !value.is_finite() {
+            return Err(format!("unit panel: nonfinite number {va:#x}"));
+        }
+        Ok(value)
     }
     fn rect(&mut self, xywh: [u32; 4], anchor: u32) -> Result<Rect, String> {
         if self.bytes(anchor, 5, true)? != [0x6a, 6, 0x56, 0x6a, 0] {
@@ -305,6 +336,46 @@ impl Rules {
         {
             return Err("unit panel: health colour channels".into());
         }
+        // Damage value text is sprintf("%d - %d") plus, when the bonus integer
+        // is nonzero, a sign-coloured suffix. cmovle keeps the green prefix for
+        // a positive bonus. The first icon row is TopLeft on the detail frame.
+        if r.bytes(0x6553f5, 2, true)? != [0x0f, 0x4e]
+            || r.bytes(0x632eb0, 6, true)? != [0x8b, 0x8f, 0x50, 0x01, 0x00, 0x00]
+            || r.bytes(0x632eca, 2, true)? != [0x6a, 0x00]
+            || r.bytes(0x632ecd, 2, true)? != [0x6a, 0x00]
+            || r.bytes(0x632f17, 2, true)? != [0x6a, 0x02]
+            || r.bytes(0x632f19, 6, true)? != [0xff, 0xb7, 0x50, 0x01, 0x00, 0x00]
+            || r.bytes(0x632fb6, 2, true)? != [0x6a, 0x02]
+            || r.bytes(0x632fb8, 6, true)? != [0xff, 0xb7, 0x50, 0x01, 0x00, 0x00]
+        {
+            return Err("unit panel: stat text or row anchor".into());
+        }
+        let damage_range = r.string(0x6553c7)?;
+        let bonus_positive = r.prefixed_string(0x6553f0, &[0xb8])?;
+        let bonus_negative = r.prefixed_string(0x6553eb, &[0xba])?;
+        let bonus_number = r.string(0x655413)?;
+        let whole_number = r.string(0x655b43)?;
+        let tenth = r.string(0x628c51)?;
+        let half = r.f32_at(0xe6957c)?;
+        let damage_dy = r.number(0x632ebb, &[0xc7, 0x44, 0x24, 0x04])?;
+        // The constructor stores one width on the damage, armor, and hero frames
+        // before it anchors armor and the hero block to the damage frame's top-right.
+        let damage_width = r.number(0x632e1f, &[0xc7, 0x04, 0x24])?;
+        let armor_width = r.number(0x632e45, &[0xc7, 0x04, 0x24])?;
+        let hero_width = r.number(0x632e91, &[0xc7, 0x04, 0x24])?;
+        if r.bytes(0x632da0, 6, true)? != [0x8b, 0x8f, 0x50, 0x01, 0x00, 0x00]
+            || r.bytes(0x632e3f, 6, true)? != [0x8b, 0x8f, 0x58, 0x01, 0x00, 0x00]
+            || r.bytes(0x632e8b, 6, true)? != [0x8b, 0x8f, 0x68, 0x01, 0x00, 0x00]
+            || r.call_target(0x632e26)? != 0x873b40
+            || r.call_target(0x632e4c)? != 0x873b40
+            || r.call_target(0x632e98)? != 0x873b40
+            || !(damage_width > 0. && damage_width == armor_width && damage_width == hero_width)
+        {
+            return Err("unit panel: stat row width".into());
+        }
+        if half <= 0. || !tenth.contains("%0.1f") || tenth.matches('%').count() != 1 {
+            return Err("unit panel: stat number format".into());
+        }
         Ok(Self {
             portrait,
             origin,
@@ -328,7 +399,146 @@ impl Rules {
             scale,
             low_divisor,
             full_channel: channel[6],
+            damage_range,
+            bonus_positive,
+            bonus_negative,
+            bonus_number,
+            whole_number,
+            tenth,
+            half,
+            damage_dy,
+            damage_width,
         })
+    }
+    /// Top of the first stat row, relative to the detail frame's top. Negative
+    /// moves down. Armor and the hero block are TopLeft on this row's top-right.
+    pub fn damage_row_dy(&self) -> f32 {
+        self.damage_dy
+    }
+    /// Width of the damage, armor, and hero icon frames. Their top-right anchors use it.
+    pub fn damage_row_width(&self) -> f32 {
+        self.damage_width
+    }
+    pub fn damage_text(
+        &self,
+        minimum: i32,
+        maximum: i32,
+        natural: f32,
+        bonus: f32,
+    ) -> Result<String, String> {
+        if minimum < 0 || maximum < 0 {
+            return Err("unit panel: negative damage".into());
+        }
+        let natural = self.whole(natural)?;
+        let minimum = minimum
+            .checked_add(natural)
+            .ok_or("unit panel: damage display overflow")?;
+        let maximum = maximum
+            .checked_add(natural)
+            .ok_or("unit panel: damage display overflow")?;
+        let mut text = self.integers(&self.damage_range, &[minimum.max(0), maximum.max(0)])?;
+        text.push_str(&self.bonus_suffix(self.whole(bonus)?)?);
+        Ok(text)
+    }
+    pub fn armor_text(&self, base: f32, bonus: f32) -> Result<String, String> {
+        let mut text = self.plain(base)?;
+        text.push_str(&self.bonus_suffix_float(bonus)?);
+        Ok(text)
+    }
+    pub fn attribute_text(&self, base: f32, bonus: f32) -> Result<String, String> {
+        let mut text = self.integers(&self.whole_number, &[self.integral(base)?])?;
+        text.push_str(&self.bonus_suffix(self.integral(bonus)?)?);
+        Ok(text)
+    }
+    fn whole(&self, value: f32) -> Result<i32, String> {
+        if !value.is_finite() {
+            return Err("unit panel: non-finite stat".into());
+        }
+        let shifted = if value > 0. {
+            value + self.half
+        } else {
+            self.half - value
+        };
+        let truncated = shifted.trunc();
+        let signed = if value > 0. { truncated } else { -truncated };
+        i32::try_from(signed as i64).map_err(|_| "unit panel: stat exceeds integer".into())
+    }
+    fn integral(&self, value: f32) -> Result<i32, String> {
+        if !value.is_finite() || value.trunc() != value {
+            return Err("unit panel: non-integral stat".into());
+        }
+        i32::try_from(value as i64).map_err(|_| "unit panel: stat exceeds integer".into())
+    }
+    fn plain(&self, value: f32) -> Result<String, String> {
+        if value.trunc() == value {
+            return self.integers(&self.whole_number, &[self.integral(value)?]);
+        }
+        let token = "%0.1f";
+        let Some((head, tail)) = self.tenth.split_once(token) else {
+            return Err("unit panel: tenth format".into());
+        };
+        if head.contains('%') || tail.contains('%') {
+            return Err("unit panel: tenth format".into());
+        }
+        Ok(format!("{head}{}{tail}", self.tenth_text(value)?))
+    }
+    fn integers(&self, template: &str, values: &[i32]) -> Result<String, String> {
+        let parts = template.split("%d").collect::<Vec<_>>();
+        if parts.len() != values.len() + 1 || parts.iter().any(|part| part.contains('%')) {
+            return Err("unit panel: stat template".into());
+        }
+        let mut text = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            text.push_str(part);
+            if let Some(value) = values.get(index) {
+                text.push_str(&value.to_string());
+            }
+        }
+        Ok(text)
+    }
+    fn bonus_suffix(&self, bonus: i32) -> Result<String, String> {
+        self.bonus_suffix_float(bonus as f32)
+    }
+    fn bonus_suffix_float(&self, bonus: f32) -> Result<String, String> {
+        if !bonus.is_finite() {
+            return Err("unit panel: non-finite stat".into());
+        }
+        if bonus == 0. {
+            return Ok(String::new());
+        }
+        let prefix = if bonus > 0. {
+            &self.bonus_positive
+        } else {
+            &self.bonus_negative
+        };
+        let body = if bonus.trunc() == bonus {
+            self.integers(&self.bonus_number, &[self.integral(bonus)?])?
+        } else {
+            let token = "%0.1f";
+            let Some((head, tail)) = self.tenth.split_once(token) else {
+                return Err("unit panel: tenth format".into());
+            };
+            if head.contains('%') || tail.contains('%') {
+                return Err("unit panel: tenth format".into());
+            }
+            format!("{head}{}{tail}", self.tenth_text(bonus)?)
+        };
+        Ok(format!("{prefix}{body}"))
+    }
+    fn tenth_text(&self, value: f32) -> Result<String, String> {
+        let scaled = value * 10.;
+        if !scaled.is_finite() {
+            return Err("unit panel: non-finite stat".into());
+        }
+        let rounded = self.whole(scaled)?;
+        let negative = rounded < 0;
+        let abs = rounded.unsigned_abs();
+        Ok(format!(
+            "{}{}.{}",
+            if negative { "-" } else { "" },
+            abs / 10,
+            abs % 10
+        ))
     }
     /// Positive health rounds upward; mana truncates, as in the portrait updater.
     pub fn readout(&self, current: f32, maximum: f32, health: bool) -> Result<String, String> {
@@ -401,6 +611,10 @@ mod tests {
             (&[0x659e04, 0x659f47][..], "TextFont"),
             (&[0x659dd9, 0x659f1c][..], "PortraitHeight"),
             (&[0x65a081, 0x65a277][..], "[%u of %u]"),
+            (&[0x6553c7][..], "%d - %d"),
+            (&[0x655413][..], "%d|R"),
+            (&[0x655b43][..], "%d"),
+            (&[0x628c51][..], "%0.1f|R"),
         ] {
             for va in sites {
                 op(&mut map, *va, &[0x68], pointer);
@@ -408,6 +622,47 @@ mod tests {
             put(&mut map, pointer, value.as_bytes());
             put(&mut map, pointer + value.len() as u32, &[0]);
             pointer += 64;
+        }
+        for (va, prefix, value) in [
+            (0x6553f0u32, &[0xb8u8][..], " |+"),
+            (0x6553eb, &[0xba], " |"),
+        ] {
+            op(&mut map, va, prefix, pointer);
+            put(&mut map, pointer, value.as_bytes());
+            put(&mut map, pointer + value.len() as u32, &[0]);
+            pointer += 64;
+        }
+        put(&mut map, 0xe6957c, &0.5f32.to_le_bytes());
+        op(
+            &mut map,
+            0x632ebb,
+            &[0xc7, 0x44, 0x24, 0x04],
+            (-0.03125f32).to_bits(),
+        );
+        for (va, bytes) in [
+            (0x6553f5u32, &[0x0fu8, 0x4e][..]),
+            (0x632eb0, &[0x8b, 0x8f, 0x50, 0x01, 0x00, 0x00]),
+            (0x632eca, &[0x6a, 0x00]),
+            (0x632ecd, &[0x6a, 0x00]),
+            (0x632f17, &[0x6a, 0x02]),
+            (0x632f19, &[0xff, 0xb7, 0x50, 0x01, 0x00, 0x00]),
+            (0x632fb6, &[0x6a, 0x02]),
+            (0x632fb8, &[0xff, 0xb7, 0x50, 0x01, 0x00, 0x00]),
+            (0x632da0, &[0x8b, 0x8f, 0x50, 0x01, 0x00, 0x00]),
+            (0x632e3f, &[0x8b, 0x8f, 0x58, 0x01, 0x00, 0x00]),
+            (0x632e8b, &[0x8b, 0x8f, 0x68, 0x01, 0x00, 0x00]),
+        ] {
+            put(&mut map, va, bytes);
+        }
+        let width = 0.11f32;
+        for va in [0x632e1fu32, 0x632e45, 0x632e91] {
+            op(&mut map, va, &[0xc7, 0x04, 0x24], width.to_bits());
+        }
+        for site in [0x632e26u32, 0x632e4c, 0x632e98] {
+            let rel = 0x873b40u32.wrapping_sub(site.wrapping_add(5)) as i32;
+            let mut call = [0xe8, 0, 0, 0, 0];
+            call[1..].copy_from_slice(&rel.to_le_bytes());
+            put(&mut map, site, &call);
         }
         op(&mut map, 0x659dde, &[0xff, 0x35], 0x2000);
         put(&mut map, 0x2000, &0x2100u32.to_le_bytes());
@@ -571,6 +826,19 @@ mod tests {
         assert!(r.portrait.member("bad.blp").is_err());
         assert_eq!(r.readout(4.2, 10.1, true).unwrap(), "[5 of 11]");
         assert_eq!(r.readout(4.9, 10.9, false).unwrap(), "[4 of 10]");
+        assert!((r.damage_row_dy() - -0.03125).abs() < 1e-6);
+        assert!((r.damage_row_width() - 0.11).abs() < 1e-6);
+        assert_eq!(r.damage_text(3, 5, 0., 2.2).unwrap(), "3 - 5 |+2|R");
+        assert_eq!(r.damage_text(3, 5, 10.2, 0.).unwrap(), "13 - 15");
+        assert_eq!(r.damage_text(3, 5, 10.2, 2.).unwrap(), "13 - 15 |+2|R");
+        assert_eq!(r.damage_text(3, 5, 0., -1.2).unwrap(), "3 - 5 |-1|R");
+        assert_eq!(r.armor_text(2., 1.25).unwrap(), "2 |+1.3|R");
+        assert_eq!(r.armor_text(4.2, 0.).unwrap(), "4.2|R");
+        assert_eq!(r.armor_text(2., 0.).unwrap(), "2");
+        assert_eq!(r.attribute_text(18., 2.).unwrap(), "18 |+2|R");
+        assert_eq!(r.armor_text(1.5, 0.).unwrap(), "1.5|R");
+        assert!(r.attribute_text(1.5, 0.).is_err());
+        assert!(r.damage_text(-1, 2, 0., 0.).is_err());
         assert_eq!(r.health_colour(1.).unwrap(), 0xaa00e612);
         assert_eq!(r.health_colour(0.35).unwrap(), 0xaae66412);
         assert_eq!(r.health_colour(0.09).unwrap(), 0xaae61412);
@@ -610,5 +878,12 @@ mod tests {
         assert_eq!(r.title, "SimpleNameValue");
         assert_eq!(r.readout(7.5, 20., true).unwrap(), "8 / 20");
         assert_eq!(r.readout(7.5, 20., false).unwrap(), "7 / 20");
+        assert_eq!(
+            r.damage_text(12, 18, 0., 3.).unwrap(),
+            "12 - 18 |CFF00FF00+3|R"
+        );
+        assert_eq!(r.attribute_text(21., -2.).unwrap(), "21 |CFFFF0000-2|R");
+        assert!((r.damage_row_dy() - -0.03125).abs() < 1e-6);
+        assert!((r.damage_row_width() - f32::from_bits(0x3dc0a3d7)).abs() < 1e-6);
     }
 }

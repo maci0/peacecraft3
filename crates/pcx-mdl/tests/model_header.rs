@@ -25,7 +25,7 @@ fn a_present_short_header_retains_the_truncation_diagnostic() {
     assert!(matches!(
         Mdlx::parse(&bytes).unwrap().model(&bytes),
         Err(Error::Truncated {
-            what: "MODL extents",
+            what: "MODL extents and blend time",
             ..
         })
     ));

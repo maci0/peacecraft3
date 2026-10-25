@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 #[path = "map_new_game.rs"]
 mod new_game;
+#[path = "preload_host.rs"]
+mod preloading;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MapStartupError {
@@ -197,6 +199,7 @@ pub struct ControllerObservation {
 /// Explicit recreation new-game input, not the original engine's seed mixer.
 #[derive(Clone, Debug)]
 pub struct NewGameInput {
+    pub player_colors: Option<crate::player_default_colors::Rules>,
     pub seed: i32,
     /// Selected client's initial passive alliances, applied after config and before main.
     pub initial_alliances: Option<crate::player_alliance_rules::Rules>,
@@ -223,6 +226,7 @@ pub struct NewGameInput {
 }
 
 pub struct ResolvedNewGame {
+    player_colors: Option<crate::player_default_colors::Rules>,
     initial_alliances: Option<crate::player_alliance_rules::Rules>,
     empty: HandleId,
     playing: HandleId,
@@ -282,6 +286,13 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    pub unit_decay: Option<crate::unit_decay::Rules>,
+    pub unit_blend: Option<crate::unit_blend::Rules>,
+    pub item_visibility: Option<crate::item_visibility::Rules>,
+    pub preload: Option<crate::preload::Rules>,
+    pub world_bounds: Option<[f32; 4]>,
+    pub weather: Option<crate::weather::Input>,
+    pub ally_colors: Option<crate::ally_color::Input>,
     pub ai_source: Option<crate::campaign_ai::SourceNames>,
     /// Checked client operands used by campaign automatic target selection.
     pub targeting_policy: Option<crate::campaign_targeting_policy::TargetingPolicy>,
@@ -357,6 +368,7 @@ pub(crate) type NeutralStack = SelectedMapNeutralHost<
 >;
 
 pub struct MapStartupHost {
+    preload: Option<crate::preload::State>,
     sound_playback: Option<sound_playback::Rules>,
     inner: Option<NeutralStack>,
     ai: crate::campaign_ai::Runtime<NeutralStack>,
@@ -524,6 +536,7 @@ pub fn resolve_observations(
         .as_ref()
         .map(|input| -> Result<_, MapStartupError> {
             Ok(ResolvedNewGame {
+                player_colors: input.player_colors.clone(),
                 initial_alliances: input.initial_alliances.clone(),
                 empty: handle("PLAYER_SLOT_STATE_EMPTY")?,
                 playing: handle("PLAYER_SLOT_STATE_PLAYING")?,
@@ -590,7 +603,35 @@ pub fn assemble(
     context: Arc<ParsedMapContext>,
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Bevy can lend small render-thread stacks to compute work; admission must not inherit one.
+        std::thread::Builder::new()
+            .name("Campaign host admission".into())
+            .stack_size(32 << 20)
+            .spawn(move || assemble_inner(context, inputs))
+            .map_err(|error| {
+                MapStartupError::Observation(format!("host admission thread: {error}"))
+            })?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+    #[cfg(target_arch = "wasm32")]
+    assemble_inner(context, inputs)
+}
+
+fn assemble_inner(
+    context: Arc<ParsedMapContext>,
+    inputs: MapStartupInputs,
+) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        unit_decay,
+        unit_blend,
+        item_visibility,
+        preload: _,
+        world_bounds,
+        weather,
+        ally_colors,
         ai_source: _,
         targeting_policy,
         flee_policy,
@@ -703,6 +744,9 @@ pub fn assemble(
         .with_resource_amounts(Arc::clone(&defend.tables))?
         .with_defend_ability(&defend.tables, &defend.alias)?
         .with_militia_ability(&defend.tables, abilities)?;
+    if let Some(rules) = unit_blend {
+        object.admit_unit_blend(rules)?;
+    }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
     if let Some(rules) = resources {
@@ -730,6 +774,12 @@ pub fn assemble(
         object = object.with_unit_effects()?;
     }
     object = object.with_environment()?.with_volume_groups()?;
+    if let Some(bounds) = world_bounds {
+        object = object.with_world_bounds(bounds)?;
+    }
+    if let Some(input) = weather {
+        object = object.with_weather(input)?;
+    }
     if let Some(input) = sound_environments {
         object = object.with_sound_environments(input)?;
     }
@@ -785,6 +835,15 @@ pub fn assemble(
     }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;
+    }
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("TriggerRegisterGameEvent")
+        .is_some()
+    {
+        object = object.with_game_events()?;
     }
     match (player_removal_rules, budgets.player_removal) {
         (Some(rules), Some(budget)) => object = object.with_player_removal(rules, budget)?,
@@ -848,6 +907,9 @@ pub fn assemble(
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
     }
+    if let Some(input) = ally_colors {
+        object.admit_ally_colors(input)?;
+    }
     let mut placement_rules = None;
     if let Some(input) = post_config.new_game {
         let had_orders = input.orders.is_some();
@@ -887,6 +949,7 @@ pub fn assemble(
         }
         if let Some(cycle) = &input.day_cycle {
             object.admit_time_of_day(cycle)?;
+            object.admit_shared_vision()?;
         }
         if let Some(camera) = &input.game_camera {
             object.admit_camera_view(camera)?;
@@ -901,6 +964,9 @@ pub fn assemble(
             }
             if let (true, Some(art)) = (object.has_hero_skills(), holy_light_art.as_deref()) {
                 object.admit_holy_light(art)?;
+            }
+            if object.has_hero_skills() {
+                object.admit_chain_lightning()?;
             }
             if object.has_hero_skills() && had_orders {
                 object.admit_divine_shield()?;
@@ -921,6 +987,9 @@ pub fn assemble(
                 max_units: budgets.units.max_records,
             },
         )?;
+    }
+    if let Some(rules) = unit_decay {
+        object.admit_unit_decay(rules)?;
     }
     if let Some(policy) = targeting_policy {
         object.admit_campaign_targeting(&context, policy)?;
@@ -957,6 +1026,9 @@ pub fn assemble(
     }
     if let Some(items) = budgets.items {
         object = object.with_item_catalog(catalog, context.world.source.clone(), items)?;
+        if let Some(rules) = item_visibility {
+            object = object.with_item_visibility(rules)?;
+        }
         object = object.with_item_drops(items.max_records)?;
         let item_use = item_use.ok_or_else(|| {
             MapStartupError::Observation("item use requires charge and cooldown rules".into())
@@ -994,6 +1066,7 @@ pub fn assemble(
     let neutral_passive = inner.selected_result();
     let neutral_aggressive = inner.inner().selected_result();
     let mut host = MapStartupHost {
+        preload: None,
         sound_playback,
         inner: Some(inner),
         ai: crate::campaign_ai::Runtime::default(),
@@ -1043,6 +1116,9 @@ impl Host for MapStartupHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        if let Some(result) = self.preload_native(name, args) {
+            return result;
+        }
         if name == "StartCampaignAI" {
             let scripts = &self.context().scripts;
             let declaration = scripts
@@ -1092,6 +1168,9 @@ impl Host for MapStartupHost {
             self.placement_loader = Some(loader);
             self.objects_mut()
                 .admit_unit_placement(result?)
+                .map_err(|e| e.to_string())?;
+            self.objects_mut()
+                .admit_shared_vision()
                 .map_err(|e| e.to_string())?;
             self.placement_rules = None;
             self.placement_tables = None;

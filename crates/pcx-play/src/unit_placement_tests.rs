@@ -678,7 +678,30 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
     let two_initializer = put(0x360, &initializer(2, address(0x514)));
     let ground_mask = put(0x380, &[0xb9, 8, 0, 0, 0]);
     let fly_mask = put(0x3a0, &[0xb9, 4, 0, 0, 0]);
-    for (offset, value) in [(0x500, initial), (0x504, 0.5_f32), (0x508, 1.5)] {
+    let float_mask = put(0x3b0, &[0xb9, 16, 0, 0, 0]);
+    let amphibious_mask = put(0x3c0, &[0xb9, 32, 0, 0, 0]);
+    let terrain_xy = put(
+        0x3d0,
+        &[&[0xf3, 0x0f, 0x59, 0x05][..], &address(0x520).to_le_bytes()].concat(),
+    );
+    let terrain_height = put(
+        0x3e0,
+        &[
+            &[0xf3, 0x0f, 0x58, 0x05][..],
+            &address(0x524).to_le_bytes(),
+            &[0xc1, 0xe6, 0x0e, 0xf3, 0x0f, 0x59, 0x05],
+            &address(0x528).to_le_bytes(),
+        ]
+        .concat(),
+    );
+    for (offset, value) in [
+        (0x520, 20_f32),
+        (0x524, 123_f32),
+        (0x528, 8_f32),
+        (0x500, initial),
+        (0x504, 0.5_f32),
+        (0x508, 1.5),
+    ] {
         bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     budget.profile_bytes = 1024;
@@ -693,6 +716,10 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
         two_initializer,
         ground_mask,
         fly_mask,
+        float_mask,
+        amphibious_mask,
+        terrain_xy,
+        terrain_height,
     };
     (bytes, binding, budget)
 }
@@ -1031,7 +1058,7 @@ fn fly_placement_ignores_ground_state_but_respects_the_fly_mask() {
         10000,
     );
     let air = p
-        .prepare_class([32., 32.], Some(2.), "_", 0., true)
+        .prepare_class([32., 32.], Some(2.), "_", 0., Movement::Air)
         .unwrap();
     p.commit(id(1), air);
     let cell = 8 * 32 + 8;
@@ -1067,9 +1094,110 @@ fn fly_creation_refuses_a_map_with_no_unmasked_cell() {
         *cell |= fly;
     }
     assert!(
-        p.prepare_class([32., 32.], Some(2.), "_", 0., true)
+        p.prepare_class([32., 32.], Some(2.), "_", 0., Movement::Air)
             .unwrap_err()
             .0
             .contains("no qualified placement")
     );
+}
+
+#[test]
+fn water_classes_retain_shoreline_masks_and_separate_collision_layers() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "shore".into(),
+        },
+        10000,
+    );
+    let ground = p.rules.ground_mask();
+    let water = p.rules.float_mask();
+    let amphibious = p.rules.amphibious_mask();
+    for y in 0..32 {
+        for x in 0..32 {
+            p.grid.pathing.cells[y * 32 + x] = if x < 16 { water } else { ground };
+        }
+    }
+    let boat = p
+        .prepare_class([80., 32.], Some(2.), "_", 0., Movement::Float)
+        .unwrap();
+    p.commit(id(1), boat);
+    assert!(p.prepare_motion(id(1), [24., 32.], 2.).unwrap().is_none());
+    assert!(p.prepare_motion(id(1), [88., 32.], 2.).unwrap().is_some());
+    let amphibian = p
+        .prepare_class([24., 32.], Some(2.), "_", 0., Movement::Amphibious)
+        .unwrap();
+    p.commit(id(2), amphibian);
+    let route = p
+        .route_within(id(2), [24., 32.], [100., 32.], 2., 0., &mut 10000)
+        .unwrap();
+    assert_eq!(route.last(), Some(&[100., 32.]));
+    assert!(
+        route
+            .iter()
+            .all(|at| p.prepare_motion(id(2), *at, 2.).unwrap().is_some())
+    );
+    assert!(
+        p.prepare_motion(id(2), [80., 32.], 2.).unwrap().is_none(),
+        "amphibian collides with boat"
+    );
+    let cell = 8 * 32 + 25;
+    p.grid.pathing.cells[cell] = ground | water;
+    assert!(p.prepare_motion(id(2), [100., 32.], 2.).unwrap().is_none());
+    p.grid.pathing.cells[cell] = amphibious;
+    assert!(p.prepare_motion(id(2), [100., 32.], 2.).unwrap().is_none());
+    p.grid.pathing.cells[cell] = 0;
+    p.hide(id(1)).unwrap();
+    assert!(p.prepare_motion(id(2), [80., 32.], 2.).unwrap().is_some());
+    let shown = p
+        .prepare_show_class(id(1), [80., 32.], Some(2.), "_", 0., Movement::Float)
+        .unwrap();
+    p.commit(id(1), shown);
+    assert!(p.prepare_motion(id(2), [80., 32.], 2.).unwrap().is_none());
+    // A bridge may host a land and water mover at the same XY without cross-layer collision.
+    for y in 7..=9 {
+        for x in 19..=21 {
+            p.grid.pathing.cells[y * 32 + x] = 0;
+        }
+    }
+    let walker = p.prepare([80., 32.], Some(2.), "_", 0.).unwrap();
+    assert_eq!(walker.position, [80., 32.]);
+    p.commit(id(3), walker);
+    assert_eq!(p.occupied[8 * 32 + 20], 1);
+    assert_eq!(p.water_occupied[8 * 32 + 20], 1);
+    let moved = p
+        .prepare_relocation_class(id(1), [92., 32.], Some(2.), "_", 0., Movement::Float)
+        .unwrap();
+    p.commit(id(1), moved);
+    assert_eq!(p.water_occupied[8 * 32 + 20], 0);
+    assert_eq!(p.occupied[8 * 32 + 20], 1);
+}
+
+#[test]
+fn movement_and_surface_operands_are_nonstock_and_malformed_inputs_refuse() {
+    let (mut bytes, mut binding, budget) = fixture(2, -8192.25);
+    let decoded = Rules::read(&bytes, binding.clone(), budget).unwrap();
+    assert_eq!(
+        [
+            decoded.ground_mask(),
+            decoded.fly_mask(),
+            decoded.float_mask(),
+            decoded.amphibious_mask()
+        ],
+        [8, 4, 16, 32]
+    );
+    assert_eq!(decoded.terrain_encoding(), [20., 123., 8.]);
+    for value in [0, 3, 4, 8, 32] {
+        bytes[0x3b1..0x3b5].copy_from_slice(&u32::to_le_bytes(value));
+        binding.float_mask.digest = sha256(&bytes[0x3b0..0x3b5]);
+        binding.image_sha256 = sha256(&bytes);
+        assert!(Rules::read(&bytes, binding.clone(), budget).is_err());
+    }
+    for value in [0., -1., f32::NAN, f32::INFINITY] {
+        let (mut bytes, mut binding, budget) = fixture(2, -8192.25);
+        bytes[0x528..0x52c].copy_from_slice(&f32::to_le_bytes(value));
+        binding.image_sha256 = sha256(&bytes);
+        assert!(Rules::read(&bytes, binding, budget).is_err());
+    }
 }

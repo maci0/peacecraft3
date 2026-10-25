@@ -140,7 +140,7 @@ fn local_water_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let profile = pcx_tera::WaterProfile::open(
         &water_table,
         "TerrainArt\\Water.slk",
-        WaterSelection::TilesetSha,
+        WaterSelection::Tileset,
         &terrain,
     )?;
     let mut level_min = f32::MAX;

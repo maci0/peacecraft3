@@ -169,7 +169,7 @@ pub(super) fn candidate(definition: &Definition, combat: Option<&Combat>) -> Res
         super::unit_positions::text(definition, pcx_objects::editor::SlkId::UnitData, "movetp")
             .map_err(str::to_owned)?;
     match movement {
-        "foot" | "horse" | "fly" => Ok(true),
+        "foot" | "horse" | "hover" | "fly" | "float" | "amph" => Ok(true),
         "" | "_" | "none" => Ok(false),
         _ => Err("guard movement class is not admitted".into()),
     }
@@ -486,31 +486,24 @@ impl ObjectHost {
         }
         Ok(())
     }
-    /// A skipped acquisition may be a wait that leaves the accepted retreat
-    /// route in place, so callers only clear flee ownership when motion was
-    /// actually replaced by the guard return.
-    #[cfg_attr(
-        feature = "profile-cpu",
-        tracing::instrument(skip_all, target = "pcx_cpu", name = "combat.guard")
-    )]
-    pub(super) fn guard_combat_step(
-        &mut self,
+    fn guard_acquisition_plan(
+        &self,
         unit: HandleId,
         now: f64,
         chasing: bool,
-    ) -> Result<GuardCombatStep, Error> {
+    ) -> Result<Option<(UnitGuard, Decision)>, Error> {
         let Some(state) = &self.guards else {
-            return Ok(GuardCombatStep::default());
+            return Ok(None);
         };
         let Some(mut guard) = state.get(unit).copied() else {
-            return Ok(GuardCombatStep::default());
+            return Ok(None);
         };
         if self.captain_route_owned(unit) {
-            return Ok(GuardCombatStep::default());
+            return Ok(None);
         }
         let record = self.executed_unit(unit)?;
         if !record.shown || record.combat.as_ref().is_none_or(|c| c.dead) {
-            return Ok(GuardCombatStep::default());
+            return Ok(None);
         }
         let position = record.position.ok_or_else(|| {
             self.inner.error(
@@ -523,7 +516,7 @@ impl ObjectHost {
             .as_ref()
             .is_some_and(|a| a.moving() || (a.patrolling() || a.following()) && !guard.returning);
         if record.activity.as_ref().is_some_and(|a| a.held()) {
-            return Ok(GuardCombatStep::default());
+            return Ok(None);
         }
         // An explicit move settles at its accepted endpoint; an attack-point leg can return to its post.
         if guard.explicit_move && !moving && !chasing {
@@ -550,6 +543,25 @@ impl ObjectHost {
                 },
             )
             .map_err(|e| self.inner.error(REMOVE, Failure::UnitActivity(e.into())))?;
+        Ok(Some((guard, decision)))
+    }
+
+    /// A skipped acquisition may be a wait that leaves the accepted retreat
+    /// route in place, so callers only clear flee ownership when motion was
+    /// actually replaced by the guard return.
+    #[cfg_attr(
+        feature = "profile-cpu",
+        tracing::instrument(skip_all, target = "pcx_cpu", name = "combat.guard")
+    )]
+    pub(super) fn guard_combat_step(
+        &mut self,
+        unit: HandleId,
+        now: f64,
+        chasing: bool,
+    ) -> Result<GuardCombatStep, Error> {
+        let Some((guard, decision)) = self.guard_acquisition_plan(unit, now, chasing)? else {
+            return Ok(GuardCombatStep::default());
+        };
         let mut motion_replaced = false;
         if decision == Decision::Return {
             if !self.steer_unit(unit, Some(guard.home), REMOVE)? {

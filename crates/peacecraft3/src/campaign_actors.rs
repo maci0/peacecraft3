@@ -5,10 +5,14 @@ use pcx_assets::Resolver;
 use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::ExecutedUnit};
 use pcx_script::HandleId;
 
+#[path = "campaign_chain_lightning.rs"]
+mod chain_lightning;
+#[path = "campaign_doodads.rs"]
+mod doodads;
 #[path = "campaign_item_model.rs"]
 mod item_model;
 #[path = "campaign_sky.rs"]
-mod sky;
+pub(crate) mod sky;
 use pcx_sim::world::{Definition, FieldValue};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
@@ -22,7 +26,7 @@ use std::{
 };
 
 #[derive(Component)]
-struct UnitActor(HandleId);
+struct CampaignActor;
 
 struct Actor {
     root: Entity,
@@ -42,6 +46,10 @@ struct Actor {
     /// Geosets whose authored material is lit, captured before sun lighting.
     lit: Vec<bool>,
     world_transform: Transform,
+    particles: Option<model_scene::particles::ParticleScene>,
+    particle_orders: Option<crate::menu_particle_order::SourceOrderView>,
+    particle_clock: std::time::Duration,
+    particle_started: f64,
 }
 
 #[derive(Resource, Default)]
@@ -52,18 +60,60 @@ pub(crate) struct UnitActors {
     item_animations: BTreeMap<HandleId, pcx_play::unit_model::Animation>,
     item_models: BTreeMap<String, Arc<pcx_play::unit_model::Model>>,
     item_source_bytes: usize,
-    failed: BTreeMap<HandleId, Option<HandleId>>,
+    failed: BTreeMap<HandleId, Option<i32>>,
     image_bytes: usize,
     vertices: usize,
     parameters: Option<pcx_play::menu_lighting::Parameters>,
     parameters_attempted: bool,
     palette: Option<TeamPalette>,
+    water: Option<Result<WaterSurface, String>>,
     sky: sky::Sky,
+    doodads: doodads::Doodads,
     pub last_error: Option<String>,
 }
 
 impl UnitActors {
-    pub(crate) fn item_hit(&self, ray: Ray3d, far: f32, session: &Weak<()>) -> Option<HandleId> {
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    pub(crate) fn rendered_colors(&self) -> BTreeMap<HandleId, i32> {
+        self.actors
+            .iter()
+            .map(|(&id, actor)| (id, actor.color))
+            .collect()
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    pub(crate) fn item_probe(&self, id: HandleId) -> Option<(Entity, Ray3d, f32)> {
+        let actor = self.actors.get(&id)?;
+        let min = Vec3::from_array(actor.model.minimum_extent);
+        let max = Vec3::from_array(actor.model.maximum_extent);
+        let width = max.x - min.x;
+        if !width.is_finite() || width <= 0. {
+            return None;
+        }
+        let centre = (min + max) * 0.5;
+        let origin =
+            actor
+                .world_transform
+                .transform_point(Vec3::new(min.x - width, centre.y, centre.z));
+        let end =
+            actor
+                .world_transform
+                .transform_point(Vec3::new(max.x + width, centre.y, centre.z));
+        let delta = end - origin;
+        Some((
+            actor.root,
+            Ray3d::new(origin, Dir3::new(delta).ok()?),
+            delta.length(),
+        ))
+    }
+
+    pub(crate) fn item_hit(
+        &self,
+        ray: Ray3d,
+        far: f32,
+        session: &Weak<()>,
+        objects: &pcx_play::playercolor_host::ObjectHost,
+    ) -> Option<HandleId> {
         if !self
             .session
             .as_ref()
@@ -74,6 +124,9 @@ impl UnitActors {
         self.item_animations
             .keys()
             .filter_map(|id| {
+                if objects.executed_item(*id).ok()?.visible() != Some(true) {
+                    return None;
+                }
                 let actor = self.actors.get(id)?;
                 let inverse = actor.world_transform.to_matrix().inverse();
                 let distance = bounds_hit(
@@ -131,15 +184,110 @@ struct DrawAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<MenuMaterial>>,
     images: ResMut<'w, Assets<Image>>,
+    particle_materials: ResMut<'w, Assets<model_scene::ParticleMaterial>>,
 }
 
 #[derive(SystemParam)]
 struct ActorQueries<'w, 's> {
     visibility: Query<'w, 's, &'static mut Visibility>,
     transforms: Query<'w, 's, &'static mut Transform, Without<CampaignSceneCamera>>,
-    actors: Query<'w, 's, (Entity, &'static UnitActor)>,
+    actors: Query<'w, 's, Entity, With<CampaignActor>>,
     cameras: Query<'w, 's, Entity, With<CampaignSceneCamera>>,
     scene: sky::SceneCameras<'w, 's>,
+}
+
+#[derive(Clone, Copy)]
+struct WaterSurface {
+    mapping: pcx_tera::world::Mapping,
+    offset: f32,
+}
+
+impl WaterSurface {
+    fn read(
+        reader: &Resolver,
+        rules: &pcx_play::unit_placement::Rules,
+        terrain: &pcx_map::Terrain,
+    ) -> Result<Self, String> {
+        let [tile, bias, factor] = rules.terrain_encoding();
+        let mapping = pcx_tera::world::Mapping::new(tile, bias, factor)
+            .ok_or("invalid admitted terrain encoding")?;
+        let asset = reader
+            .resolve_bounded("TerrainArt/Water.slk", 4 << 20)
+            .map_err(|e| e.to_string())?;
+        let table = pcx_slq::Table::parse(&asset.bytes)
+            .map_err(|e| format!("TerrainArt/Water.slk: {e}"))?;
+        let profile = pcx_tera::WaterProfile::open_scaled(
+            &table,
+            "TerrainArt/Water.slk",
+            pcx_tera::WaterSelection::Tileset,
+            terrain,
+            tile,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
+            mapping,
+            offset: profile.height_offset(),
+        })
+    }
+
+    fn height(
+        self,
+        unit: &ExecutedUnit,
+        terrain: &pcx_map::Terrain,
+        edition: &str,
+        source: &str,
+    ) -> Result<f32, String> {
+        let [x, y] = unit.position.ok_or("unit has no accepted world position")?;
+        let ground = self
+            .mapping
+            .sample_ground(terrain, x, y)
+            .ok_or("unit outside admitted terrain")?;
+        let water = pcx_tera::WaterData::new(terrain, edition, source)
+            .map_err(|e| e.to_string())?
+            .sample_surface(x, y, self.mapping, self.offset)
+            .map_err(|e| e.to_string())?;
+        match unit.movement()? {
+            pcx_play::unit_placement::Movement::Float => {
+                water.ok_or_else(|| "floating unit has no authored water surface".into())
+            }
+            pcx_play::unit_placement::Movement::Amphibious => {
+                Ok(water.map_or(ground, |z| ground.max(z)))
+            }
+            _ => Err("water surface requested for a non-water mover".into()),
+        }
+    }
+}
+
+fn unit_water_height(
+    unit: &ExecutedUnit,
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    reader: &Resolver,
+    context: &pcx_play::map_admission::ParsedMapContext,
+    cached: &mut Option<Result<WaterSurface, String>>,
+) -> Result<Option<f32>, String> {
+    if !matches!(
+        unit.movement()?,
+        pcx_play::unit_placement::Movement::Float | pcx_play::unit_placement::Movement::Amphibious
+    ) {
+        return Ok(None);
+    }
+    let surface = cached
+        .get_or_insert_with(|| {
+            let rules = objects
+                .unit_placement_rules()
+                .ok_or("water mover terrain encoding is absent")?;
+            WaterSurface::read(reader, rules, &context.terrain)
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    surface
+        .height(
+            unit,
+            &context.terrain,
+            &context.sources.map.edition,
+            &context.sources.map.source,
+        )
+        .map(Some)
 }
 
 fn transform_for(
@@ -147,9 +295,11 @@ fn transform_for(
     terrain: &pcx_map::Terrain,
     scale: f32,
     height: f32,
+    water: Option<f32>,
 ) -> Result<Transform, String> {
     let [x, y] = unit.position.ok_or("unit has no accepted world position")?;
-    let z = pcx_tera::world::sample_world_z(terrain, x, y)
+    let z = water
+        .or_else(|| pcx_tera::world::sample_world_z(terrain, x, y))
         .ok_or("unit position is outside admitted terrain")?
         + height;
     let transform = Transform::from_translation(Vec3::new(x, z, -y))
@@ -167,7 +317,9 @@ fn transform_for(
 fn look_at_target<'a>(
     unit: &'a ExecutedUnit,
     objects: &pcx_play::playercolor_host::ObjectHost,
-    terrain: &pcx_map::Terrain,
+    reader: &Resolver,
+    context: &pcx_play::map_admission::ParsedMapContext,
+    water: &mut Option<Result<WaterSurface, String>>,
 ) -> Result<Option<(&'a str, Vec3)>, String> {
     let Some(look) = &unit.look_at else {
         return Ok(None);
@@ -177,9 +329,10 @@ fn look_at_target<'a>(
         .map_err(|e| e.to_string())?;
     let transform = transform_for(
         target,
-        terrain,
+        &context.terrain,
         1.0,
         scalar(&target.definition, "moveHeight")?,
+        unit_water_height(target, objects, reader, context, water)?,
     )?;
     let [x, y, z] = look.offset;
     Ok(Some((
@@ -189,6 +342,13 @@ fn look_at_target<'a>(
 }
 
 pub(crate) fn team_color(
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    unit: &ExecutedUnit,
+) -> Result<i32, String> {
+    objects.display_team_color(unit, original_team_color(objects, unit)?)
+}
+
+pub(crate) fn original_team_color(
     objects: &pcx_play::playercolor_host::ObjectHost,
     unit: &ExecutedUnit,
 ) -> Result<i32, String> {
@@ -217,7 +377,13 @@ pub(crate) fn team_color(
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<UnitActors>()
-        .add_systems(Update, project.after(CampaignCameraSet));
+        .init_resource::<chain_lightning::Bolts>()
+        .add_systems(
+            Update,
+            (project, chain_lightning::draw, advance_doodad_particles)
+                .chain()
+                .after(CampaignCameraSet),
+        );
 }
 
 pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
@@ -239,12 +405,21 @@ pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
         || metadata.index != -1
         || !(matches!(
             metadata.kind,
-            FieldKind::Real | FieldKind::Unreal | FieldKind::Int
+            FieldKind::Real | FieldKind::Unreal | FieldKind::Int | FieldKind::Bool
         ) || (column == "teamColor"
             && metadata.kind == FieldKind::Token
             && metadata.declared == "teamColor"))
     {
         return Err(format!("unsupported unit field {column}"));
+    }
+    if metadata.kind == FieldKind::Bool {
+        return match &field.value {
+            Ok(FieldValue::Cell(value)) if value.trim() == "0" => Ok(0.),
+            Ok(FieldValue::Cell(value)) if value.trim() == "1" => Ok(1.),
+            Ok(FieldValue::Override(pcx_objects::Value::Int(0))) => Ok(0.),
+            Ok(FieldValue::Override(pcx_objects::Value::Int(1))) => Ok(1.),
+            _ => Err(format!("invalid unit boolean {column}")),
+        };
     }
     let number = match &field.value {
         Ok(FieldValue::Cell(s)) => s.parse::<f32>().map_err(|e| e.to_string())?,
@@ -452,10 +627,14 @@ pub(crate) fn expand_layers(
 
 #[derive(Clone, Copy)]
 enum Visual<'a> {
-    Unit(&'a ExecutedUnit, Option<(&'a str, Vec3)>),
+    Unit(&'a ExecutedUnit, Option<(&'a str, Vec3)>, Option<f32>),
     Item(
         &'a pcx_play::playercolor_host::ExecutedItem,
         &'a pcx_play::unit_model::Animation,
+    ),
+    Doodad(
+        &'a pcx_play::campaign_placement::PlacedDoodad,
+        &'a pcx_play::campaign_placement::DoodadAppearance,
     ),
     /// The sky dome centred on the scene camera eye.
     Sky(&'a pcx_play::unit_model::Animation, Vec3),
@@ -463,23 +642,27 @@ enum Visual<'a> {
 impl<'a> Visual<'a> {
     fn animation(self) -> Result<&'a pcx_play::unit_model::Animation, String> {
         match self {
-            Self::Unit(unit, _) => unit
+            Self::Unit(unit, ..) => unit
                 .animation
                 .as_ref()
                 .ok_or_else(|| "unit model is unavailable".into()),
             Self::Item(_, animation) | Self::Sky(animation, _) => Ok(animation),
+            Self::Doodad(_, appearance) => Ok(&appearance.animation),
         }
     }
     fn face(self) -> f32 {
         match self {
-            Self::Unit(unit, _) => unit.face,
+            Self::Unit(unit, ..) => unit.face,
             Self::Item(..) | Self::Sky(..) => 0.0,
+            Self::Doodad(row, _) => row.source.angle.to_degrees(),
         }
     }
     fn layer(self) -> usize {
         match self {
             Self::Sky(..) => sky::RENDER_LAYER,
-            Self::Unit(..) | Self::Item(..) => peacecraft3::campaign_camera::RENDER_LAYER,
+            Self::Unit(..) | Self::Item(..) | Self::Doodad(..) => {
+                peacecraft3::campaign_camera::RENDER_LAYER
+            }
         }
     }
     fn transform(
@@ -492,7 +675,8 @@ impl<'a> Visual<'a> {
             Self::Sky(_, eye) => {
                 Ok(Transform::from_translation(eye).with_scale(Vec3::splat(scale)))
             }
-            Self::Unit(unit, _) => transform_for(unit, terrain, scale, height),
+            Self::Unit(unit, _, water) => transform_for(unit, terrain, scale, height, water),
+            Self::Doodad(row, _) => doodads::transform(row),
             Self::Item(item, _) => {
                 let z = pcx_tera::world::sample_world_z(terrain, item.x, item.y)
                     .ok_or("item outside admitted terrain")?;
@@ -505,7 +689,7 @@ impl<'a> Visual<'a> {
     }
     fn properties(self, channel_scale: f32) -> Result<(f32, f32, [f32; 3]), String> {
         match self {
-            Self::Unit(unit, _) => Ok((
+            Self::Unit(unit, ..) => Ok((
                 scalar(&unit.definition, "modelScale")?,
                 scalar(&unit.definition, "moveHeight")?,
                 [
@@ -517,6 +701,7 @@ impl<'a> Visual<'a> {
             )),
             Self::Item(item, _) => item_model::properties(&item.definition, channel_scale)
                 .map(|(scale, tint)| (scale, 0.0, tint)),
+            Self::Doodad(_, appearance) => Ok((1., 0., appearance.tint.map(|c| c * channel_scale))),
             // The dome is authored in world units and carries no script tint, so no channel scale applies.
             Self::Sky(..) => Ok((sky::MODEL_SCALE, 0.0, [1.0; 3])),
         }
@@ -528,11 +713,11 @@ struct ActorSource<'a> {
     palette: &'a TeamPalette,
     visual: Visual<'a>,
     terrain: &'a pcx_map::Terrain,
-    id: Option<HandleId>,
     color: i32,
     now: f64,
     channel_scale: f32,
     cutout: f32,
+    particle_parameters: Option<&'a pcx_play::menu_lighting::Parameters>,
     available_images: usize,
     available_vertices: usize,
 }
@@ -554,11 +739,11 @@ impl Actor {
             palette,
             visual,
             terrain,
-            id,
             color,
             now,
             channel_scale,
             cutout,
+            particle_parameters,
             available_images,
             available_vertices,
         } = input;
@@ -581,7 +766,7 @@ impl Actor {
             expand_layers(&mut model, &mut runtime, available_vertices)?;
         let mut textures = Vec::new();
         let mut remaining = available_images;
-        let required: BTreeSet<_> = runtime
+        let mut required: BTreeSet<_> = runtime
             .geosets
             .iter()
             .filter_map(|geoset| {
@@ -599,12 +784,17 @@ impl Actor {
                 )
             })
             .collect();
+        if particle_parameters.is_some() {
+            for emitter in mdl.particles2(bytes).map_err(|e| e.to_string())? {
+                required.insert(emitter.properties().texture_id);
+            }
+        }
         for (index, texture) in runtime.textures.iter_mut().enumerate() {
             if !required.contains(&(index as u32)) {
                 continue;
             }
             if texture.path.is_empty() {
-                if matches!(visual, Visual::Item(..)) {
+                if matches!(visual, Visual::Item(..) | Visual::Doodad(..)) {
                     return Err(format!(
                         "item has unsupported replaceable texture slot {}",
                         texture.slot
@@ -645,6 +835,37 @@ impl Actor {
             &source.member,
         )
         .map_err(|e| e.to_string())?;
+        let particle_prepared = if let Some(parameters) = particle_parameters {
+            let clip = animation.sequence.map(|i| {
+                let sequence = &animation.model.sequences[i];
+                (
+                    pcx_gfx::mdx_particles::Clip {
+                        interval: [sequence.interval_start, sequence.interval_end],
+                        looping: !sequence.non_looping,
+                    },
+                    None,
+                )
+            });
+            match model_scene::particles::prepare(
+                &source.member,
+                &mdl,
+                bytes,
+                &runtime,
+                &textures,
+                clip,
+                Some(parameters),
+            )
+            .map_err(|e| e.to_string())?
+            {
+                model_scene::particles::Admission::Absent => None,
+                model_scene::particles::Admission::Ready(prepared) => Some(prepared),
+                model_scene::particles::Admission::Unsupported(error) => {
+                    return Err(format!("{}: PRE2: {error}", source.member));
+                }
+            }
+        } else {
+            None
+        };
         let (scale, height, tint) = visual.properties(channel_scale)?;
         if !scale.is_finite() || scale <= 0.0 {
             return Err("nonpositive actor model scale".into());
@@ -672,13 +893,17 @@ impl Actor {
         };
         model_scene::preflight_geosets(&source_input, &opacity, sample.frame)
             .map_err(|e| e.to_string())?;
-        let mut root = commands.spawn((initial_transform, Visibility::default()));
-        if let Some(id) = id {
-            root.insert(UnitActor(id));
+        let visibility = match visual {
+            Visual::Doodad(row, _) if !row.shown => Visibility::Hidden,
+            _ => Visibility::default(),
+        };
+        let mut root = commands.spawn((initial_transform, visibility));
+        if !matches!(visual, Visual::Sky(..)) {
+            root.insert(CampaignActor);
         }
         let root = root.id();
         let mut info = model_scene::SceneInfo::default();
-        let geosets = model_scene::spawn_geosets(
+        let mut geosets = model_scene::spawn_geosets(
             commands,
             model_scene::GeosetAssets {
                 meshes: &mut assets.meshes,
@@ -696,6 +921,30 @@ impl Actor {
             ),
         )
         .map_err(|e| e.to_string())?;
+        let particle_clock =
+            std::time::Duration::try_from_secs_f64(animation.started - animation.created)
+                .map_err(|e| e.to_string())?;
+        let (particles, particle_orders) = if let Some(prepared) = particle_prepared {
+            let (mut particles, orders) = prepared.spawn(
+                commands,
+                model_scene::particles::ParticleAssets {
+                    meshes: &mut assets.meshes,
+                    materials: &mut assets.particle_materials,
+                    images: &mut assets.images,
+                },
+                &mut geosets.textures,
+                root,
+                &geosets.bound,
+                &runtime,
+            );
+            particles
+                .start_at(particle_clock)
+                .map_err(|e| e.to_string())?;
+            particles.attach_to(commands, root, visual.layer());
+            (Some(particles), Some(orders))
+        } else {
+            (None, None)
+        };
         let lit = geosets
             .bound
             .iter()
@@ -719,6 +968,10 @@ impl Actor {
                 vertices,
                 lit,
                 world_transform: initial_transform,
+                particles,
+                particle_orders,
+                particle_clock,
+                particle_started: animation.started,
             },
             available_images - remaining,
             vertices,
@@ -774,6 +1027,7 @@ impl Actor {
         }
         let skeleton = model_scene::skin_geosets(
             model_scene::Rig {
+                blend: animation.blend_sample(now)?,
                 interval: self.interval,
                 model: &self.model,
                 bones: self.runtime.joints.joints(),
@@ -781,7 +1035,7 @@ impl Actor {
                 global_durations: &self.runtime.global_sequences,
                 camera_pose: None,
                 look_at: match visual {
-                    Visual::Unit(_, Some((bone, target))) => Some((
+                    Visual::Unit(_, Some((bone, target)), _) => Some((
                         bone,
                         self.world_transform
                             .compute_affine()
@@ -858,27 +1112,204 @@ impl Actor {
     }
 }
 
+impl Actor {
+    fn particle_step(
+        &mut self,
+        target: std::time::Duration,
+        camera: &Transform,
+        assets: &mut DrawAssets,
+        visibility: &mut Query<&mut Visibility>,
+    ) -> Result<(), String> {
+        let Some(particles) = self.particles.as_mut() else {
+            return Ok(());
+        };
+        let delta = target
+            .checked_sub(self.particle_clock)
+            .ok_or("doodad particle clock moved backward")?;
+        for (entity, shown) in particles
+            .advance(
+                delta,
+                target,
+                (
+                    camera,
+                    self.world_transform.scale * (camera.rotation * Vec3::Z),
+                ),
+                &mut assets.meshes,
+                &assets.particle_materials,
+                |entity| visibility.contains(entity),
+            )
+            .map_err(|e| e.to_string())?
+        {
+            if let Ok(mut value) = visibility.get_mut(entity) {
+                *value = if shown {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+        self.particle_clock = target;
+        Ok(())
+    }
+
+    fn advance_particles(
+        &mut self,
+        animation: &pcx_play::unit_model::Animation,
+        now: f64,
+        camera: &Transform,
+        assets: &mut DrawAssets,
+        visibility: &mut Query<&mut Visibility>,
+        parameters: &pcx_play::menu_lighting::Parameters,
+    ) -> Result<(), String> {
+        if self.particles.is_none() {
+            return Ok(());
+        }
+        if self.particle_started != animation.started {
+            let at = std::time::Duration::try_from_secs_f64(animation.started - animation.created)
+                .map_err(|e| e.to_string())?;
+            self.particle_step(at, camera, assets, visibility)?;
+            let sequence = animation
+                .sequence
+                .and_then(|i| animation.model.sequences.get(i))
+                .ok_or("doodad particles need a selected clip")?;
+            let model = pcx_mdl::Mdlx::parse(&animation.model.bytes).map_err(|e| e.to_string())?;
+            let changed = self
+                .particles
+                .as_mut()
+                .expect("present")
+                .select_clip(
+                    &model,
+                    &animation.model.bytes,
+                    &self.runtime,
+                    pcx_gfx::mdx_particles::Clip {
+                        interval: [sequence.interval_start, sequence.interval_end],
+                        looping: !sequence.non_looping,
+                    },
+                    at,
+                    parameters,
+                )
+                .map_err(|e| e.to_string())?;
+            if !changed {
+                return Ok(());
+            }
+            self.particle_started = animation.started;
+        }
+        let target = std::time::Duration::try_from_secs_f64(now - animation.created)
+            .map_err(|e| e.to_string())?;
+        self.particle_step(target, camera, assets, visibility)
+    }
+}
+
+fn advance_doodad_particles(
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut state: ResMut<UnitActors>,
+    mut assets: DrawAssets,
+    mut queries: ActorQueries,
+) {
+    if !matches!((&state.session, session.session_witness()), (Some(old), Some(new)) if Weak::ptr_eq(old, &new))
+    {
+        return;
+    }
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects();
+    let (Some(now), Some(parameters)) = (objects.timer_game_time(), state.parameters.clone())
+    else {
+        return;
+    };
+    doodads::advance_particles(
+        &mut state,
+        &mut assets,
+        &mut queries,
+        objects.placed_doodads(),
+        now,
+        &parameters,
+    );
+}
+
+#[derive(Clone, Copy)]
+struct LocalViewer {
+    identity: HandleId,
+    fog: bool,
+    mask: bool,
+}
+
+fn unit_publication_sight_gate(
+    readiness: Result<(), &'static str>,
+    admitted: bool,
+) -> Result<bool, &'static str> {
+    match readiness {
+        Err("shared vision is not admitted") if !admitted => Ok(false),
+        Err(reason) => Err(reason),
+        Ok(()) => Ok(true),
+    }
+}
+
+fn unit_publication_sight(
+    objects: &pcx_play::playercolor_host::ObjectHost,
+) -> Result<Option<LocalViewer>, String> {
+    if !unit_publication_sight_gate(objects.vision_readiness(), objects.shared_vision_admitted())? {
+        return Ok(None);
+    }
+    let Some(settings) = objects.startup_settings() else {
+        return Err("startup settings are missing".into());
+    };
+    let Some(local) = objects.local_player_settings() else {
+        return Err("local viewer is not admitted".into());
+    };
+    Ok(Some(LocalViewer {
+        identity: local.identity,
+        fog: settings.fog_enabled,
+        mask: settings.fog_mask_enabled,
+    }))
+}
+
+fn shown_unit_is_published(
+    shown: bool,
+    position: Option<[f32; 2]>,
+    filter: bool,
+    presented: impl FnOnce([f32; 2]) -> Result<Option<pcx_play::playercolor_host::VisionState>, String>,
+) -> Result<bool, String> {
+    if !shown || !filter {
+        return Ok(shown);
+    }
+    let Some(position) = position else {
+        return Ok(true);
+    };
+    match presented(position)? {
+        Some(pcx_play::playercolor_host::VisionState::Visible) => Ok(true),
+        Some(
+            pcx_play::playercolor_host::VisionState::Fogged
+            | pcx_play::playercolor_host::VisionState::Masked,
+        )
+        | None => Ok(false),
+    }
+}
+
 fn project(
     mut commands: Commands,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     sources: ActorSources,
     mut state: ResMut<UnitActors>,
+    mut bolts: ResMut<chain_lightning::Bolts>,
     mut assets: DrawAssets,
     mut queries: ActorQueries,
 ) {
     let witness = session.session_witness();
     if !matches!((&state.session,&witness),(Some(a),Some(b)) if Weak::ptr_eq(a,b)) {
-        for (entity, actor) in &queries.actors {
-            trace!(unit=?actor.0,"retire campaign unit actor");
-            commands.entity(entity).despawn();
+        for entity in &queries.actors {
+            commands.entity(entity).try_despawn();
         }
         sky::release(&mut commands, &mut state, &mut queries.scene);
         *state = UnitActors {
             session: witness,
             ..default()
         };
+        chain_lightning::release(&mut bolts);
     }
     let Some(context) = session.context().cloned() else {
+        chain_lightning::release(&mut bolts);
         return;
     };
     if state.reader.is_none()
@@ -897,7 +1328,7 @@ fn project(
     let Some(host) = session.host() else {
         return;
     };
-    let objects = host.objects();
+    let objects = host.objects_mut();
     let Some(now) = objects.timer_game_time() else {
         return;
     };
@@ -946,6 +1377,33 @@ fn project(
         }
     };
     let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
+    let sight = if objects.executed_units().next().is_none() {
+        None
+    } else {
+        match unit_publication_sight(objects) {
+            Ok(sight) => sight,
+            Err(reason) => {
+                state.last_error = Some(reason);
+                return;
+            }
+        }
+    };
+    if let Some(viewer) = sight {
+        for (_, unit) in objects.executed_units() {
+            if !unit.shown {
+                continue;
+            }
+            let Some(position) = unit.position else {
+                continue;
+            };
+            if let Err(error) =
+                objects.vision_presented(viewer.identity, position, viewer.fog, viewer.mask)
+            {
+                state.last_error = Some(error.to_string());
+                return;
+            }
+        }
+    }
     let live: BTreeSet<_> = objects
         .executed_units()
         .map(|(id, _)| id)
@@ -966,22 +1424,44 @@ fn project(
         retire(&mut commands, &mut state, id);
     }
     for (id, unit) in objects.executed_units() {
+        let decision = match sight {
+            Some(viewer) => shown_unit_is_published(unit.shown, unit.position, true, |position| {
+                objects
+                    .vision_presented(viewer.identity, position, viewer.fog, viewer.mask)
+                    .map_err(|error| error.to_string())
+            }),
+            None => shown_unit_is_published(unit.shown, unit.position, false, |_| Ok(None)),
+        };
+        let publish = match decision {
+            Ok(publish) => publish,
+            Err(error) => {
+                state.last_error = Some(error);
+                return;
+            }
+        };
         if let Some(actor) = state.actors.get(&id)
             && let Ok(mut visibility) = queries.visibility.get_mut(actor.root)
         {
-            *visibility = if unit.shown {
+            *visibility = if publish {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             };
         }
-        if !unit.shown {
+        if !publish {
             continue;
         }
-        if unit.animation.is_none() || state.failed.get(&id) == Some(&unit.team_color) {
+        if unit.animation.is_none() {
             continue;
         }
-        let look_at = match look_at_target(unit, objects, &context.terrain) {
+        let water = match unit_water_height(unit, objects, &reader, &context, &mut state.water) {
+            Ok(height) => height,
+            Err(error) => {
+                state.last_error = Some(format!("unit {id:?}: {error}"));
+                continue;
+            }
+        };
+        let look_at = match look_at_target(unit, objects, &reader, &context, &mut state.water) {
             Ok(target) => target,
             Err(error) => {
                 state.last_error = Some(format!("unit {id:?}: {error}"));
@@ -991,11 +1471,14 @@ fn project(
         let color = match team_color(objects, unit) {
             Ok(v) => v,
             Err(e) => {
-                state.failed.insert(id, unit.team_color);
+                state.failed.insert(id, None);
                 state.last_error = Some(e);
                 continue;
             }
         };
+        if state.failed.get(&id) == Some(&Some(color)) {
+            continue;
+        }
         if state
             .actors
             .get(&id)
@@ -1010,13 +1493,13 @@ fn project(
                 ActorSource {
                     reader: &reader,
                     palette: &palette,
-                    visual: Visual::Unit(unit, look_at),
+                    visual: Visual::Unit(unit, look_at, water),
                     terrain: &context.terrain,
-                    id: Some(id),
                     color,
                     now,
                     channel_scale,
                     cutout,
+                    particle_parameters: None,
                     available_images: (512usize << 20).saturating_sub(state.image_bytes),
                     available_vertices: 2_000_000usize.saturating_sub(state.vertices),
                 },
@@ -1028,7 +1511,7 @@ fn project(
                     state.actors.insert(id, actor);
                 }
                 Err(e) => {
-                    state.failed.insert(id, unit.team_color);
+                    state.failed.insert(id, Some(color));
                     state.last_error = Some(format!("unit {id:?}: {e}"));
                     continue;
                 }
@@ -1036,7 +1519,7 @@ fn project(
         }
         if let Some(actor) = state.actors.get_mut(&id)
             && let Err(e) = actor.update(
-                Visual::Unit(unit, look_at),
+                Visual::Unit(unit, look_at, water),
                 now,
                 &mut assets,
                 (&mut queries.visibility, &mut queries.transforms),
@@ -1047,84 +1530,33 @@ fn project(
             state.last_error = Some(format!("unit {id:?}: {e}"));
         }
     }
-    for (id, item) in objects
-        .executed_items()
-        .filter(|(_, item)| item.held_by.is_none())
-    {
-        if state.failed.contains_key(&id) {
-            continue;
-        }
-        if !state.item_animations.contains_key(&id) {
-            let UnitActors {
-                item_models,
-                item_source_bytes,
-                ..
-            } = &mut *state;
-            match item_model::load(
-                &reader,
-                &item.definition,
-                &context.sources.map.edition,
-                now,
-                item_models,
-                item_source_bytes,
-            ) {
-                Ok(animation) => {
-                    state.item_animations.insert(id, animation);
-                }
-                Err(error) => {
-                    state.failed.insert(id, None);
-                    state.last_error = Some(format!("item {id:?}: {error}"));
-                    continue;
-                }
-            }
-        }
-        let animation = state.item_animations[&id].clone();
-        let visual = Visual::Item(item, &animation);
-        if !state.actors.contains_key(&id) {
-            let result = Actor::spawn(
-                &mut commands,
-                &mut assets,
-                ActorSource {
-                    reader: &reader,
-                    palette: &palette,
-                    visual,
-                    terrain: &context.terrain,
-                    id: Some(id),
-                    // Items do not carry a team-color override; reject replaceable team slots below.
-                    color: 0,
-                    now,
-                    channel_scale,
-                    cutout,
-                    available_images: (512usize << 20).saturating_sub(state.image_bytes),
-                    available_vertices: 2_000_000usize.saturating_sub(state.vertices),
-                },
-            );
-            match result {
-                Ok((actor, bytes, vertices)) => {
-                    state.image_bytes += bytes;
-                    state.vertices += vertices;
-                    state.actors.insert(id, actor);
-                }
-                Err(error) => {
-                    state.failed.insert(id, None);
-                    state.last_error = Some(format!("item {id:?}: {error}"));
-                    continue;
-                }
-            }
-        }
-        if let Some(actor) = state.actors.get_mut(&id)
-            && let Err(error) = actor.update(
-                visual,
-                now,
-                &mut assets,
-                (&mut queries.visibility, &mut queries.transforms),
-                &context.terrain,
-                sun.as_ref().map(|s| (s, &parameters)),
-            )
-        {
-            state.last_error = Some(format!("item {id:?}: {error}"));
-        }
-    }
+    let draw = doodads::Input {
+        reader: &reader,
+        terrain: &context.terrain,
+        palette: &palette,
+        parameters: &parameters,
+        now,
+        sun: sun.as_ref(),
+    };
+    project_ground_items(
+        &mut commands,
+        &mut state,
+        &mut assets,
+        &mut queries,
+        &draw,
+        &context.sources.map.edition,
+        objects
+            .executed_items()
+            .filter(|(_, item)| item.held_by.is_none()),
+    );
+    doodads::project(
+        &mut commands,
+        &mut state,
+        &mut assets,
+        &mut queries,
+        draw,
+        objects.placed_doodads(),
+    );
     sky::project(
         &mut commands,
         &mut state,
@@ -1142,13 +1574,23 @@ fn project(
             now,
             channel_scale,
             cutout,
+            day_fraction: objects.day_fraction(),
+            parameters: &parameters,
         },
     );
     let mut owners = Vec::new();
     let mut orders = bevy::render::sync_world::MainEntityHashMap::default();
-    for actor in state.actors.values() {
+    for actor in state.actors.values().chain(state.doodads.actors.values()) {
         let owner = actor.root.into();
         owners.push(owner);
+        if let Some(particles) = &actor.particle_orders {
+            orders.extend(
+                particles
+                    .orders
+                    .iter()
+                    .map(|(entity, order)| (*entity, *order)),
+            );
+        }
         for (ordinal, entity, _) in &actor.geosets.bound {
             let binding = &actor.runtime.geosets[*ordinal];
             orders.insert(
@@ -1175,12 +1617,123 @@ fn project(
                 max_phase_items: 65536,
             });
     }
+    if let Err(error) = chain_lightning::queue(objects, &reader, &context.terrain, now, &mut bolts)
+    {
+        state.last_error = Some(format!("chain lightning: {error}"));
+    }
+}
+
+fn project_ground_items<'a>(
+    commands: &mut Commands,
+    state: &mut UnitActors,
+    assets: &mut DrawAssets,
+    queries: &mut ActorQueries,
+    draw: &doodads::Input<'_>,
+    edition: &str,
+    items: impl Iterator<Item = (HandleId, &'a pcx_play::playercolor_host::ExecutedItem)>,
+) {
+    let (channel_scale, cutout) = (
+        draw.parameters.channel_scale,
+        draw.parameters.cutout_reference,
+    );
+    for (id, item) in items {
+        if let Some(actor) = state.actors.get(&id)
+            && let Ok(mut visibility) = queries.visibility.get_mut(actor.root)
+        {
+            *visibility = if item.visible() == Some(true) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+        if item.visible().is_none() {
+            state.last_error = Some("item visibility rules missing".into());
+            continue;
+        }
+        if state.failed.contains_key(&id) {
+            continue;
+        }
+        if !state.item_animations.contains_key(&id) {
+            let UnitActors {
+                item_models,
+                item_source_bytes,
+                ..
+            } = &mut *state;
+            match item_model::load(
+                draw.reader,
+                &item.definition,
+                edition,
+                draw.now,
+                item_models,
+                item_source_bytes,
+            ) {
+                Ok(animation) => {
+                    state.item_animations.insert(id, animation);
+                }
+                Err(error) => {
+                    state.failed.insert(id, None);
+                    state.last_error = Some(format!("item {id:?}: {error}"));
+                    continue;
+                }
+            }
+        }
+        // Admit the animation before culling so hiding a newborn item does not delay its clock.
+        if item.visible() != Some(true) {
+            continue;
+        }
+        let animation = state.item_animations[&id].clone();
+        let visual = Visual::Item(item, &animation);
+        if !state.actors.contains_key(&id) {
+            let result = Actor::spawn(
+                commands,
+                assets,
+                ActorSource {
+                    reader: draw.reader,
+                    palette: draw.palette,
+                    visual,
+                    terrain: draw.terrain,
+                    // Items do not carry a team-color override; reject replaceable team slots below.
+                    color: 0,
+                    now: draw.now,
+                    channel_scale,
+                    cutout,
+                    particle_parameters: None,
+                    available_images: (512usize << 20).saturating_sub(state.image_bytes),
+                    available_vertices: 2_000_000usize.saturating_sub(state.vertices),
+                },
+            );
+            match result {
+                Ok((actor, bytes, vertices)) => {
+                    state.image_bytes += bytes;
+                    state.vertices += vertices;
+                    state.actors.insert(id, actor);
+                }
+                Err(error) => {
+                    state.failed.insert(id, None);
+                    state.last_error = Some(format!("item {id:?}: {error}"));
+                    continue;
+                }
+            }
+        }
+        if let Some(actor) = state.actors.get_mut(&id)
+            && let Err(error) = actor.update(
+                visual,
+                draw.now,
+                assets,
+                (&mut queries.visibility, &mut queries.transforms),
+                draw.terrain,
+                draw.sun.map(|sun| (sun, draw.parameters)),
+            )
+        {
+            state.last_error = Some(format!("item {id:?}: {error}"));
+        }
+    }
 }
 
 fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
     state.item_animations.remove(&id);
     if let Some(actor) = state.actors.remove(&id) {
-        commands.entity(actor.root).despawn();
+        commands.entity(actor.root).try_despawn();
         state.image_bytes -= actor.image_bytes;
         state.vertices -= actor.vertices;
     }
@@ -1208,6 +1761,7 @@ mod tests {
         };
         let id = HandleId::new(std::num::NonZeroU64::new(1).unwrap());
         ExecutedUnit {
+            decay: None,
             collision_radius: Err("missing UnitBalance collision field"),
             definition: Definition {
                 rawcode: *b"U001",
@@ -1224,6 +1778,7 @@ mod tests {
             },
             executed_owner: 0,
             owner: id,
+            vision_viewers: Vec::new(),
             team_color: None,
             creation_color: None,
             source: pcx_sim::world::Source {
@@ -1303,15 +1858,6 @@ mod tests {
             assert_eq!(bounds_hit(Vec3::ZERO, Vec3::X, min, max, far), None);
         }
         assert_eq!(bounds_hit(Vec3::ZERO, Vec3::X, min, min, 100.0), None);
-        let state = UnitActors::default();
-        assert_eq!(
-            state.item_hit(
-                Ray3d::new(Vec3::ZERO, Dir3::X),
-                100.0,
-                &Arc::downgrade(&Arc::new(()))
-            ),
-            None
-        );
     }
 
     #[test]
@@ -1421,13 +1967,49 @@ mod tests {
     fn actor_uses_accepted_position_terrain_height_and_source_axis_rotation() {
         let mut unit = unit();
         let terrain = terrain();
-        let transform = transform_for(&unit, &terrain, 2., 7.).unwrap();
+        let transform = transform_for(&unit, &terrain, 2., 7., None).unwrap();
         assert_eq!(transform.translation, Vec3::new(32., 17., -64.));
         assert_eq!(transform.scale, Vec3::splat(2.));
         assert!((transform.rotation * Vec3::X - Vec3::NEG_Z).length() < 0.00001);
         unit.position = None;
-        assert!(transform_for(&unit, &terrain, 2., 7.).is_err());
+        assert!(transform_for(&unit, &terrain, 2., 7., None).is_err());
     }
+    #[test]
+    fn water_mover_actor_uses_surface_and_authored_model_height() {
+        let mut unit = unit();
+        let mut field = unit.definition.fields[b"S001"].clone();
+        let metadata = field.metadata.as_mut().unwrap();
+        metadata.fourcc = *b"M001";
+        metadata.kind = FieldKind::Token;
+        metadata.source = FieldSource::Column {
+            slk: SlkId::UnitData,
+            column: "movetp".into(),
+        };
+        field.value = Ok(FieldValue::Cell("float".into()));
+        unit.definition.fields.insert(*b"M001", field);
+        let terrain = terrain();
+        let surface = WaterSurface {
+            mapping: pcx_tera::world::Mapping::new(128., 2048., 4.).unwrap(),
+            offset: 25.,
+        };
+        // This fixture is dry: a floating model must refuse, rather than use the floor.
+        assert!(
+            surface
+                .height(&unit, &terrain, "test", "synthetic")
+                .is_err()
+        );
+        unit.definition.fields.get_mut(b"M001").unwrap().value =
+            Ok(FieldValue::Cell("amph".into()));
+        assert_eq!(
+            surface
+                .height(&unit, &terrain, "test", "synthetic")
+                .unwrap(),
+            10.
+        );
+        let transform = transform_for(&unit, &terrain, 2., 7., Some(25.)).unwrap();
+        assert_eq!(transform.translation, Vec3::new(32., 32., -64.));
+    }
+
     #[test]
     fn actor_scalar_retains_map_overrides_and_rejects_bad_metadata_or_values() {
         let mut unit = unit();
@@ -1472,6 +2054,30 @@ mod tests {
         assert!(scalar(&unit.definition, "teamColor").is_err());
     }
     #[test]
+    fn boolean_visual_fields_keep_source_cells_and_integer_wire_overrides() {
+        let mut unit = unit();
+        let field = unit.definition.fields.get_mut(b"S001").unwrap();
+        let metadata = field.metadata.as_mut().unwrap();
+        metadata.kind = FieldKind::Bool;
+        metadata.declared = "bool".into();
+        metadata.source = FieldSource::Column {
+            slk: SlkId::UnitUi,
+            column: "hideOnMinimap".into(),
+        };
+        for (value, expected) in [
+            (FieldValue::Cell("0".into()), Some(0.)),
+            (FieldValue::Cell("1".into()), Some(1.)),
+            (FieldValue::Override(pcx_objects::Value::Int(1)), Some(1.)),
+            (FieldValue::Override(pcx_objects::Value::Int(0)), Some(0.)),
+            (FieldValue::Cell("1.0".into()), None),
+            (FieldValue::Override(pcx_objects::Value::Int(2)), None),
+            (FieldValue::Override(pcx_objects::Value::Real(1.)), None),
+        ] {
+            unit.definition.fields.get_mut(b"S001").unwrap().value = Ok(value);
+            assert_eq!(scalar(&unit.definition, "hideOnMinimap").ok(), expected);
+        }
+    }
+    #[test]
     fn palette_prefix_and_count_come_from_the_selected_skin() {
         let source =
             b"[Default]\nTeamColors=4\nTeamColor=Selected/TeamColor\nTeamGlow=Selected/TeamGlow\n";
@@ -1503,6 +2109,112 @@ mod tests {
         assert!(
             TeamPalette::read(b"[Default]\nTeamColors=1\nTeamColor=A\nTeamColor=B\nTeamGlow=C\n")
                 .is_err()
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "campaign_item_birth_tests.rs"]
+mod item_birth_tests;
+
+#[cfg(test)]
+mod unit_sight {
+    use super::shown_unit_is_published;
+    use pcx_play::playercolor_host::VisionState;
+
+    #[test]
+    fn a_unit_without_a_position_is_not_an_extent_or_ledger_result() {
+        let mut queried = false;
+        let publish = shown_unit_is_published(true, None, true, |_| {
+            queried = true;
+            Ok(None)
+        })
+        .unwrap();
+        assert!(publish);
+        assert!(!queried);
+    }
+
+    #[test]
+    fn fogged_masked_and_outside_points_hide_only_that_unit() {
+        let position = Some([3.0, 4.0]);
+        assert!(
+            !shown_unit_is_published(true, position, true, |_| { Ok(Some(VisionState::Fogged)) })
+                .unwrap()
+        );
+        assert!(
+            !shown_unit_is_published(true, position, true, |_| { Ok(Some(VisionState::Masked)) })
+                .unwrap()
+        );
+        assert!(!shown_unit_is_published(true, position, true, |_| Ok(None)).unwrap());
+        assert!(
+            shown_unit_is_published(true, position, true, |_| Ok(Some(VisionState::Visible)))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unadmitted_ledger_and_a_hidden_unit_do_not_query() {
+        let mut queried = false;
+        assert!(
+            shown_unit_is_published(true, Some([0.0, 0.0]), false, |_| {
+                queried = true;
+                Ok(None)
+            })
+            .unwrap()
+        );
+        assert!(
+            !shown_unit_is_published(false, Some([0.0, 0.0]), true, |_| {
+                queried = true;
+                Ok(Some(VisionState::Visible))
+            })
+            .unwrap()
+        );
+        assert!(!queried);
+    }
+
+    #[test]
+    fn a_presentation_error_is_preserved() {
+        let error = shown_unit_is_published(true, Some([0.0, 0.0]), true, |_| {
+            Err("viewer has no shared vision sample".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "viewer has no shared vision sample");
+    }
+
+    #[test]
+    fn a_script_hidden_unit_stays_hidden_when_fog_would_show_it() {
+        let mut queried = false;
+        let publish = shown_unit_is_published(false, Some([8.0, 9.0]), true, |_| {
+            queried = true;
+            Ok(Some(VisionState::Visible))
+        })
+        .unwrap();
+        assert!(!publish);
+        assert!(!queried);
+    }
+
+    #[test]
+    fn a_ledger_error_does_not_remove_an_existing_actor_root() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        let root = app.world_mut().spawn(Visibility::Inherited).id();
+        let reason =
+            super::unit_publication_sight_gate(Err("shared vision has not been sampled"), true)
+                .unwrap_err();
+        assert_eq!(reason, "shared vision has not been sampled");
+        assert_eq!(
+            *app.world().get::<Visibility>(root).unwrap(),
+            Visibility::Inherited
+        );
+        let blocked = super::unit_publication_sight_gate(
+            Err("shared vision needs admitted placement"),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(blocked, "shared vision needs admitted placement");
+        assert!(app.world().get::<Visibility>(root).is_some());
+        assert!(
+            super::unit_publication_sight_gate(Err("shared vision is not admitted"), false).is_ok()
         );
     }
 }

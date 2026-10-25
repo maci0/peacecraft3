@@ -1327,3 +1327,639 @@ fn negative_and_duplicate_rate_channels_and_nonstep_bursts_refuse() {
         assert_eq!(error.emitter, Some(0));
     }
 }
+
+#[test]
+fn executed_clip_changes_preserve_live_particles_rng_remainders_and_global_time() {
+    let mut e = emitter(properties());
+    e.tracks.push(track(
+        *b"KP2V",
+        Interpolation::None,
+        0,
+        &[(0, &[1.], &[], &[]), (500, &[0.], &[], &[])],
+    ));
+    finish(&mut e);
+    let mut changed =
+        Simulation::new(plan(&[e.clone()], &[1000], [101, 401], true), 37, limits()).unwrap();
+    let mut control =
+        Simulation::new(plan(&[e.clone()], &[1000], [101, 401], true), 37, limits()).unwrap();
+    for simulation in [&mut changed, &mut control] {
+        simulation
+            .advance(Duration::from_millis(375), limits())
+            .unwrap();
+    }
+    let before = changed.particles().to_vec();
+    changed
+        .select_plan(
+            Arc::try_unwrap(plan(&[e.clone()], &[1000], [1703, 1853], false)).unwrap(),
+            Duration::from_millis(375),
+        )
+        .unwrap();
+    assert_eq!(changed.particles(), before);
+    assert_eq!(changed.elapsed(), Duration::from_millis(375));
+    assert_eq!(changed.plan().frame(375), 1703);
+    assert_eq!(changed.plan().frame(500), 1828);
+    assert_eq!(changed.plan().frame(625), 1853);
+    assert!(!changed.plan().sample_emitter(0, 625).unwrap().visible);
+    for simulation in [&mut changed, &mut control] {
+        simulation
+            .advance(Duration::from_millis(750), limits())
+            .unwrap();
+    }
+    assert_eq!(changed.particles(), control.particles());
+    let before = changed.particles().to_vec();
+    let mut different = e;
+    let mut different_properties = different.properties();
+    different_properties.speed = 17.;
+    different.state = different_properties.to_bytes();
+    assert!(
+        changed
+            .select_plan(
+                Arc::try_unwrap(plan(&[different], &[1000], [1703, 1853], false)).unwrap(),
+                Duration::from_millis(1125)
+            )
+            .is_err()
+    );
+    assert_eq!(changed.particles(), before);
+    assert_eq!(changed.plan().frame(1125), 1853);
+}
+
+#[test]
+fn a_clip_change_waits_for_old_queued_work_without_relabeling_that_history() {
+    let e = emitter(properties());
+    let mut small = limits();
+    small.max_ticks = 1;
+    let mut simulation = Simulation::new(
+        plan(std::slice::from_ref(&e), &[], [101, 401], true),
+        37,
+        small,
+    )
+    .unwrap();
+    let end = Duration::from_millis(500);
+    simulation.advance_queued(end, small).unwrap();
+    assert_eq!(simulation.elapsed(), Duration::from_millis(125));
+    assert!(
+        !simulation
+            .select_plan(
+                Arc::try_unwrap(plan(std::slice::from_ref(&e), &[], [1703, 1853], false)).unwrap(),
+                end
+            )
+            .unwrap()
+    );
+    assert_eq!(simulation.plan().interval(), [101, 401]);
+    for _ in 0..3 {
+        simulation.advance_queued(Duration::ZERO, small).unwrap();
+    }
+    let before = simulation.particles().to_vec();
+    assert!(
+        simulation
+            .select_plan(
+                Arc::try_unwrap(plan(&[e], &[], [1703, 1853], false)).unwrap(),
+                end
+            )
+            .unwrap()
+    );
+    assert_eq!(simulation.particles(), before);
+    assert_eq!(simulation.plan().frame(500), 1703);
+}
+
+fn moving_parent(global: i32, keys: &[(u32, [f32; 3])]) -> pcx_gfx::mdx_runtime::JointPlan {
+    let mut raw = Vec::new();
+    for (time, value) in keys {
+        raw.extend(time.to_le_bytes());
+        for component in value {
+            raw.extend(component.to_le_bytes());
+        }
+    }
+    let bone = pcx_mdl::Bone {
+        offset: 0,
+        span: 104,
+        name: "parent".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![pcx_mdl::BoneTrack {
+            kind: pcx_mdl::TrackKind::Translation,
+            count: keys.len() as u32,
+            interpolation: Interpolation::Linear,
+            global_sequence_id: global,
+            offset: 0,
+            stride: 16,
+            raw,
+        }],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    pcx_gfx::mdx_runtime::JointPlan::checked(&[bone], &[], &Pivots(vec![[0.; 3], [0.; 3]])).unwrap()
+}
+
+fn parented(flags: u32, joints: &pcx_gfx::mdx_runtime::JointPlan, globals: &[u32]) -> Arc<Plan> {
+    let mut emitter = emitter(properties());
+    emitter.parent_id = 1;
+    emitter.flags = flags;
+    finish(&mut emitter);
+    Arc::new(
+        Plan::checked_with_joints(
+            &[emitter],
+            &texture(),
+            globals,
+            Clip {
+                interval: [0, 1000],
+                looping: false,
+            },
+            "synthetic:parented",
+            limits(),
+            joints,
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn parented_emitters_follow_an_animated_joint_without_reintegrating_world_births() {
+    let joints = moving_parent(-1, &[(0, [0.; 3]), (1000, [10., 0., 0.])]);
+    let model_space = parented(mdx_particles::MODEL_SPACE, &joints, &[]);
+    let local = Particle {
+        emitter: 0,
+        age: 0.1,
+        position: [1., 0., 0.],
+        velocity: [0.; 3],
+        gravity: 0.,
+    };
+    let at = |elapsed| {
+        model_space
+            .world_particle(&local, elapsed)
+            .unwrap()
+            .position
+    };
+    assert_eq!(at(0), [1., 0., 0.]);
+    assert_eq!(at(500), [6., 0., 0.]);
+    assert_eq!(local.position, [1., 0., 0.]);
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    let mut raw = Vec::new();
+    for (time, value) in [(0u32, [0., 0., 0., 1.]), (1000, [0., 0., half, half])] {
+        raw.extend(time.to_le_bytes());
+        for component in value {
+            raw.extend(component.to_le_bytes());
+        }
+    }
+    let bone = pcx_mdl::Bone {
+        offset: 0,
+        span: 104,
+        name: "spin".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![pcx_mdl::BoneTrack {
+            kind: pcx_mdl::TrackKind::Rotation,
+            count: 2,
+            interpolation: Interpolation::Linear,
+            global_sequence_id: -1,
+            offset: 0,
+            stride: 20,
+            raw,
+        }],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    let spun =
+        pcx_gfx::mdx_runtime::JointPlan::checked(&[bone], &[], &Pivots(vec![[0.; 3], [0.; 3]]))
+            .unwrap();
+    let turned = parented(mdx_particles::MODEL_SPACE, &spun, &[])
+        .world_particle(&local, 1000)
+        .unwrap();
+    assert!((turned.position[0]).abs() < 1e-5, "{:?}", turned.position);
+    assert!(
+        (turned.position[1] - 1.).abs() < 1e-5,
+        "{:?}",
+        turned.position
+    );
+    assert!((turned.position[2]).abs() < 1e-5, "{:?}", turned.position);
+
+    let mut rate = properties();
+    // Four per second stays under one particle on a 125ms tick. Eight emits one.
+    rate.emission_rate = 8.;
+    let mut world_emitter = emitter(rate);
+    world_emitter.parent_id = 1;
+    world_emitter.flags = mdx_particles::UNSHADED;
+    finish(&mut world_emitter);
+    let world = Arc::new(
+        Plan::checked_with_joints(
+            std::slice::from_ref(&world_emitter),
+            &texture(),
+            &[],
+            Clip {
+                interval: [0, 1000],
+                looping: false,
+            },
+            "synthetic:parented",
+            limits(),
+            &joints,
+        )
+        .unwrap(),
+    );
+    let mut simulation = Simulation::new(world, 7, limits()).unwrap();
+    simulation
+        .advance(Duration::from_millis(125), limits())
+        .unwrap();
+    let born = simulation.particles()[0].position;
+    assert!((born[0] - 1.25).abs() < 1e-4, "{born:?}");
+    simulation
+        .advance(Duration::from_millis(125), limits())
+        .unwrap();
+    assert_eq!(simulation.particles()[0].position, born);
+    assert!((simulation.particles()[1].position[0] - 2.5).abs() < 1e-4);
+
+    let global = moving_parent(0, &[(0, [0.; 3]), (1000, [10., 0., 0.])]);
+    let clocked = parented(mdx_particles::MODEL_SPACE, &global, &[1000]);
+    assert_eq!(
+        clocked.world_particle(&local, 500).unwrap().position,
+        [6., 0., 0.]
+    );
+}
+
+#[test]
+fn hierarchy_admission_refuses_missing_scaled_and_flagged_parents() {
+    let joints = moving_parent(-1, &[(0, [0.; 3])]);
+    let mut missing_parent = emitter(properties());
+    missing_parent.parent_id = 9;
+    finish(&mut missing_parent);
+    let missing = Plan::checked_with_joints(
+        &[missing_parent],
+        &texture(),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:missing-parent",
+        limits(),
+        &joints,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        missing.failure,
+        Failure::Unsupported("missing emitter parent")
+    ));
+    let mut scaled = pcx_mdl::Bone {
+        offset: 0,
+        span: 104,
+        name: "scaled".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![pcx_mdl::BoneTrack {
+            kind: pcx_mdl::TrackKind::Scaling,
+            count: 1,
+            interpolation: Interpolation::None,
+            global_sequence_id: -1,
+            offset: 0,
+            stride: 16,
+            raw: {
+                let mut raw = 0u32.to_le_bytes().to_vec();
+                raw.extend(2f32.to_le_bytes());
+                raw.extend(2f32.to_le_bytes());
+                raw.extend(2f32.to_le_bytes());
+                raw
+            },
+        }],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    let scaled_joints = pcx_gfx::mdx_runtime::JointPlan::checked(
+        &[scaled.clone()],
+        &[],
+        &Pivots(vec![[0.; 3], [0.; 3]]),
+    )
+    .unwrap();
+    let mut node = emitter(properties());
+    node.parent_id = 1;
+    finish(&mut node);
+    let refused = Plan::checked_with_joints(
+        &[node.clone()],
+        &texture(),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:scaled-parent",
+        limits(),
+        &scaled_joints,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        refused.failure,
+        Failure::Unsupported("scaled emitter parent")
+    ));
+    scaled.tracks.clear();
+    scaled.flags |= 0x8;
+    let flagged =
+        pcx_gfx::mdx_runtime::JointPlan::checked(&[scaled], &[], &Pivots(vec![[0.; 3], [0.; 3]]))
+            .unwrap();
+    let refused = Plan::checked_with_joints(
+        &[node],
+        &texture(),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:flagged-parent",
+        limits(),
+        &flagged,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        refused.failure,
+        Failure::Unsupported("emitter parent transform flags")
+    ));
+}
+
+#[test]
+fn shared_parent_pose_is_one_update_and_clip_changes_keep_the_hierarchy() {
+    let mut props = properties();
+    props.emission_rate = 80.;
+    let joints = moving_parent(-1, &[(0, [0.; 3]), (1000, [10., 0., 0.])]);
+    let mut node = emitter(props);
+    node.parent_id = 1;
+    finish(&mut node);
+    let build = |interval: [u32; 2], joints: &pcx_gfx::mdx_runtime::JointPlan| {
+        Plan::checked_with_joints(
+            &[node.clone()],
+            &texture(),
+            &[],
+            Clip {
+                interval,
+                looping: false,
+            },
+            "synthetic:shared-parent",
+            limits(),
+            joints,
+        )
+        .unwrap()
+    };
+    let parented = Arc::new(build([0, 1000], &joints));
+    let plain = plan(&[emitter(props)], &[], [0, 1000], false);
+    let mut parented_sim = Simulation::new(Arc::clone(&parented), 11, limits()).unwrap();
+    let mut plain_sim = Simulation::new(plain, 11, limits()).unwrap();
+    let parented_work = parented_sim
+        .advance(Duration::from_millis(125), limits())
+        .unwrap();
+    let plain_work = plain_sim
+        .advance(Duration::from_millis(125), limits())
+        .unwrap();
+    assert!(parented_sim.particles().len() > 1);
+    assert_eq!(parented_sim.particles().len(), plain_sim.particles().len());
+    assert_eq!(parented_work.updates, plain_work.updates + 1);
+    let moved = build([0, 400], &joints);
+    assert!(
+        parented_sim
+            .select_plan(moved, parented_sim.elapsed())
+            .unwrap()
+    );
+    let shifted = moving_parent(-1, &[(0, [0.; 3]), (1000, [12., 0., 0.])]);
+    let changed = build([0, 1000], &shifted);
+    assert!(
+        parented_sim
+            .select_plan(changed, parented_sim.elapsed())
+            .is_err()
+    );
+
+    let mut limits = limits();
+    limits.max_keys = 1;
+    let error = Plan::checked_with_joints(
+        &[node],
+        &texture(),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:ancestor-keys",
+        limits,
+        &joints,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.failure,
+        Failure::Budget { kind: "keys", .. }
+    ));
+}
+
+#[test]
+fn identity_scale_and_large_global_elapsed_keep_the_parent_pose() {
+    let mut raw = Vec::new();
+    raw.extend(0u32.to_le_bytes());
+    for component in [1f32, 1., 1.] {
+        raw.extend(component.to_le_bytes());
+    }
+    let mut translation = Vec::new();
+    for (time, value) in [(0u32, [0f32, 0., 0.]), (1000, [10., 0., 0.])] {
+        translation.extend(time.to_le_bytes());
+        for component in value {
+            translation.extend(component.to_le_bytes());
+        }
+    }
+    let bone = pcx_mdl::Bone {
+        offset: 0,
+        span: 104,
+        name: "identity-scale".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![
+            pcx_mdl::BoneTrack {
+                kind: pcx_mdl::TrackKind::Translation,
+                count: 2,
+                interpolation: Interpolation::Linear,
+                global_sequence_id: 0,
+                offset: 0,
+                stride: 16,
+                raw: translation,
+            },
+            pcx_mdl::BoneTrack {
+                kind: pcx_mdl::TrackKind::Scaling,
+                count: 1,
+                interpolation: Interpolation::None,
+                global_sequence_id: -1,
+                offset: 0,
+                stride: 16,
+                raw,
+            },
+        ],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    let joints = pcx_gfx::mdx_runtime::JointPlan::checked(
+        std::slice::from_ref(&bone),
+        &[],
+        &Pivots(vec![[0.; 3], [0.; 3]]),
+    )
+    .unwrap();
+    let plan = parented(mdx_particles::MODEL_SPACE, &joints, &[1000]);
+    let local = Particle {
+        emitter: 0,
+        age: 0.1,
+        position: [1., 0., 0.],
+        velocity: [0.; 3],
+        gravity: 0.,
+    };
+    let elapsed = u64::from(u32::MAX) + 10;
+    let frame = (elapsed % 1000) as f32 / 1000. * 10.;
+    let position = plan.world_particle(&local, elapsed).unwrap().position;
+    assert!(
+        (position[0] - (1. + frame)).abs() < 1e-3,
+        "{position:?} {frame}"
+    );
+    assert_eq!(position[1], 0.);
+    let mut missing = bone.clone();
+    missing.tracks[0].global_sequence_id = 4;
+    let missing =
+        pcx_gfx::mdx_runtime::JointPlan::checked(&[missing], &[], &Pivots(vec![[0.; 3], [0.; 3]]))
+            .unwrap();
+    let mut emitter = emitter(properties());
+    emitter.parent_id = 1;
+    finish(&mut emitter);
+    let error = Plan::checked_with_joints(
+        &[emitter.clone()],
+        &texture(),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:missing-global",
+        limits(),
+        &missing,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.failure,
+        Failure::Malformed("global reference")
+    ));
+    let mut zero_raw = Vec::new();
+    for (time, value) in [(0u32, [0f32, 0., 0.]), (1, [1., 0., 0.])] {
+        zero_raw.extend(time.to_le_bytes());
+        for component in value {
+            zero_raw.extend(component.to_le_bytes());
+        }
+    }
+    let zero = pcx_mdl::Bone {
+        offset: 0,
+        span: 104,
+        name: "zero-global".into(),
+        object_id: 1,
+        parent_id: -1,
+        flags: 0x100,
+        tracks: vec![pcx_mdl::BoneTrack {
+            kind: pcx_mdl::TrackKind::Translation,
+            count: 2,
+            interpolation: Interpolation::Linear,
+            global_sequence_id: 0,
+            offset: 0,
+            stride: 16,
+            raw: zero_raw,
+        }],
+        geoset_id: -1,
+        geoset_anim_id: -1,
+    };
+    let zero =
+        pcx_gfx::mdx_runtime::JointPlan::checked(&[zero], &[], &Pivots(vec![[0.; 3], [0.; 3]]))
+            .unwrap();
+    let error = Plan::checked_with_joints(
+        &[emitter],
+        &texture(),
+        &[0],
+        Clip {
+            interval: [0, 1000],
+            looping: false,
+        },
+        "synthetic:zero-global",
+        limits(),
+        &zero,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.failure,
+        Failure::Unsupported("nonconstant zero-duration global track")
+    ));
+}
+
+#[test]
+#[ignore = "requires PCX_SELECTED_PARENTED_PRE2; reads one selected model in place and writes nothing"]
+fn selected_parented_emitter_uses_its_joint_hierarchy() {
+    let path = std::env::var("PCX_SELECTED_PARENTED_PRE2").expect("explicit selected model path");
+    let bytes = std::fs::read(&path).unwrap();
+    let mdl = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+    let emitters = mdl.particles2(&bytes).unwrap();
+    assert!(
+        emitters.iter().any(|emitter| emitter.parent_id >= 0),
+        "selected model has no parented PRE2 emitter"
+    );
+    let textures = mdl.textures(&bytes).unwrap();
+    let pivots = mdl.pivots(&bytes).unwrap();
+    let bones = mdl.bones(&bytes).unwrap();
+    let helpers = mdl.nodes(&bytes, pcx_mdl::tag::HELP).unwrap();
+    let globals = mdl
+        .payload(&bytes, b"GLBS")
+        .map(|bytes| {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let joints = pcx_gfx::mdx_runtime::JointPlan::checked(&bones, &helpers, &pivots).unwrap();
+    let clip = mdl
+        .sequences(&bytes)
+        .unwrap()
+        .into_iter()
+        .next()
+        .map(|sequence| Clip {
+            interval: [sequence.interval_start, sequence.interval_end],
+            looping: !sequence.non_looping,
+        })
+        .unwrap_or(Clip {
+            interval: [0, 0],
+            looping: false,
+        });
+    let refused = Plan::checked(
+        &emitters,
+        &textures,
+        &pivots,
+        &globals,
+        clip,
+        &path,
+        limits(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        refused.failure,
+        Failure::Unsupported("parented emitter")
+    ));
+    let admitted = Plan::checked_with_joints(
+        &emitters,
+        &textures,
+        &globals,
+        clip,
+        &path,
+        limits(),
+        &joints,
+    )
+    .unwrap();
+    let samples = admitted.sample_emitters(0).unwrap();
+    assert_eq!(samples.len(), emitters.len());
+    assert!(samples.iter().any(|sample| sample.basis.is_some()));
+    for sample in &samples {
+        if let Some(basis) = sample.basis {
+            assert!(basis.iter().all(|value| value.is_finite()), "{path}");
+        }
+    }
+    let index = emitters
+        .iter()
+        .position(|emitter| emitter.parent_id >= 0)
+        .unwrap();
+    assert!(samples[index].basis.is_some());
+}

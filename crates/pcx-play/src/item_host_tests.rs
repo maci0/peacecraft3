@@ -1,4 +1,6 @@
 use super::*;
+#[path = "widget_enumeration_tests.rs"]
+mod widget_enumeration;
 use crate::playercolor_host::{EnumHost, Limits};
 use pcx_script::{Host, Prelude};
 use pcx_sim::world::{FieldValue, ObjectField};
@@ -300,5 +302,63 @@ fn modification_retention_is_bounded_without_spending_a_creation_record() {
     assert_eq!(
         admitted.executed_item(item).unwrap().definition,
         catalog.resolve(*b"MODS").unwrap()
+    );
+}
+
+#[test]
+fn visibility_contracts_and_precreation_admission_are_checked() {
+    let good = "native SetItemVisible takes item i, boolean show returns nothing\nnative IsItemVisible takes item i returns boolean\n";
+    for declarations in [
+        good.replace("boolean show", "integer show"),
+        good.replace("native IsItemVisible", "constant native IsItemVisible"),
+        good.replace("returns boolean", "returns integer"),
+    ] {
+        let h = host(&format!("{COMMON}{declarations}"), 8)
+            .with_item_catalog(
+                Arc::new(Catalog(Arc::new(AtomicUsize::new(0)))),
+                source(),
+                budget(),
+            )
+            .unwrap();
+        assert!(
+            h.with_item_visibility(crate::item_visibility::Rules::fixture())
+                .is_err()
+        );
+    }
+    let mut h = host(&format!("{COMMON}{good}"), 8)
+        .with_item_catalog(
+            Arc::new(Catalog(Arc::new(AtomicUsize::new(0)))),
+            source(),
+            budget(),
+        )
+        .unwrap();
+    let item = h.native(CREATE, &args(b"ITEM")).unwrap();
+    assert_eq!(h.executed_item(handle(item)).unwrap().visible(), None);
+    assert!(
+        h.with_item_visibility(crate::item_visibility::Rules::fixture())
+            .is_err()
+    );
+    let mut h = host(&format!("{COMMON}{good}"), 8)
+        .with_item_catalog(
+            Arc::new(Catalog(Arc::new(AtomicUsize::new(0)))),
+            source(),
+            budget(),
+        )
+        .unwrap()
+        .with_item_visibility(crate::item_visibility::Rules::fixture())
+        .unwrap();
+    let item = h.native(CREATE, &args(b"ITEM")).unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    assert!(
+        h.native("SetItemVisible", &[timer, Value::Bool(false)])
+            .is_err()
+    );
+    assert!(
+        h.native("SetItemVisible", &[item.clone(), Value::Int(0)])
+            .is_err()
+    );
+    assert_eq!(
+        h.native("IsItemVisible", &[item]).unwrap(),
+        Value::Bool(true)
     );
 }

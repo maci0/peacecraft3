@@ -5,7 +5,19 @@ use crate::ability_profile::{self, Tooltip};
 const MAX_TEXT: usize = 64 << 10;
 const MAX_TOKENS: usize = 256;
 
-fn expand(
+/// One `%d` in a source format, same shape as the upkeep integer format.
+/// No other conversion is accepted. A string with no `%d` is unchanged.
+pub(super) fn source_integer(format: &str, value: i32) -> Result<String, String> {
+    let Some((prefix, suffix)) = format.split_once("%d") else {
+        return Ok(format.to_owned());
+    };
+    if prefix.contains('%') || suffix.contains('%') {
+        return Err("unsupported research tip conversion".into());
+    }
+    Ok(format!("{prefix}{value}{suffix}"))
+}
+
+pub(super) fn expand(
     raw: &str,
     mut read: impl FnMut([u8; 4], &str) -> Result<String, String>,
 ) -> Result<String, String> {
@@ -109,7 +121,7 @@ impl ObjectHost {
         Ok(Some(tooltip))
     }
 
-    fn tooltip_value(&self, row: [u8; 4], field: &str) -> Result<String, String> {
+    pub(super) fn tooltip_value(&self, row: [u8; 4], field: &str) -> Result<String, String> {
         let input = self.heroes_admission()?;
         if input.base(row).is_ok() {
             let stem = field.trim_end_matches(|c: char| c.is_ascii_digit());
@@ -187,5 +199,76 @@ mod tests {
         assert!(expand(&"x".repeat(MAX_TEXT + 1), |_, _| unreachable!()).is_err());
         assert!(expand(&"<TEST,A1>".repeat(MAX_TOKENS + 1), |_, _| Ok("1".into())).is_err());
         assert!(expand("<TEST,A1>", |_, _| Ok("x".repeat(MAX_TEXT + 1))).is_err());
+    }
+
+    #[test]
+    fn research_tip_fills_one_integer_and_leaves_other_text() {
+        let template = "|cff11aa44Q|ruest [|cff11aa44Tier %d|r]";
+        let first = source_integer(template, 4).unwrap();
+        assert_eq!(first, "|cff11aa44Q|ruest [|cff11aa44Tier 4|r]");
+        assert!(!first.contains('%') && !first.contains('<'));
+        let later = source_integer(template, 9).unwrap();
+        assert_eq!(later, "|cff11aa44Q|ruest [|cff11aa44Tier 9|r]");
+        assert!(source_integer("Tier %d and %d", 1).is_err());
+        assert_eq!(
+            source_integer("The full account stays written.", 2).unwrap(),
+            "The full account stays written."
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL and PCX_WAR3_EXE from the selected local install"]
+    fn bound_research_tip_expands_without_a_copied_record() {
+        use pcx_objects::editor::Overlay;
+        use pcx_objects::editor::defaults::{DefaultTables, Family, Location};
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL"),
+        );
+        let client_path =
+            std::path::PathBuf::from(std::env::var_os("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE"));
+        let image = std::fs::read(&client_path).expect("selected executable");
+        let identity =
+            crate::campaign_inputs::client_identity(&image, &client_path.display().to_string());
+        let tables =
+            DefaultTables::open(&install, identity.version).expect("selected object tables");
+        let row = *b"AOcl";
+        let tips =
+            crate::ability_profile::profiles(&tables, &Overlay::default(), row, "Researchtip")
+                .expect("bound Researchtip");
+        let [raw] = tips.as_slice() else {
+            panic!(
+                "Researchtip should be one profile value, found {}",
+                tips.len()
+            );
+        };
+        let object = tables
+            .object(Family::Ability, std::str::from_utf8(&row).unwrap())
+            .expect("bound ability row");
+        let maximum = object
+            .cells()
+            .into_iter()
+            .find(|cell| {
+                matches!(&cell.provenance.location, Location::Slk { column, .. } if column == "levels")
+            })
+            .and_then(|cell| cell.text.trim().parse::<i32>().ok())
+            .expect("bound levels");
+        let expanded = expand(raw, |alias, field| {
+            let stem = field.trim_end_matches(|c: char| c.is_ascii_digit());
+            let rank: i32 = field[stem.len()..]
+                .parse()
+                .map_err(|_| "ability reference has no rank")?;
+            let count =
+                crate::ability_profile::profiles(&tables, &Overlay::default(), alias, "levels")?;
+            let levels = count
+                .first()
+                .and_then(|text| text.parse().ok())
+                .unwrap_or(rank);
+            crate::ability_profile::ranked(&tables, &Overlay::default(), alias, stem, rank, levels)
+        })
+        .expect("bound Researchtip references");
+        let shown = super::super::shown_research_rank(0, maximum).expect("next rank");
+        let title = source_integer(&expanded, shown).expect("bound Researchtip integer");
+        assert!(!title.contains('%') && !title.contains('<'));
     }
 }

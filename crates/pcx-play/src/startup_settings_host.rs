@@ -416,6 +416,39 @@ impl ObjectHost {
         )))
     }
 
+    fn extended_campaign_menu_native(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "SetCampaignMenuRaceEx";
+        Self::contract(&self.inner, name, &["integer"], "nothing", false, None)?;
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(name)
+            .expect("checked declaration")
+            .source;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("VersionGet")
+            .is_none_or(|n| &n.source != source)
+        {
+            return Err(self.inner.error(name, Failure::Source));
+        }
+        let [Value::Int(index)] = args else {
+            return Err(self
+                .inner
+                .error(name, Failure::SettingsState("expected campaign index")));
+        };
+        self.campaign_menu_index = Some(*index);
+        Ok(Value::Null)
+    }
+
+    /// Pending source-indexed glue selection. The menu retains its resolved selection.
+    pub fn take_campaign_menu_index(&mut self) -> Option<i32> {
+        self.startup_version.and(self.campaign_menu_index.take())
+    }
+
     /// Executed Reign of Chaos `SetCampaignMenuRace`; `Some(None)` is a null race.
     pub fn campaign_menu_race(&self) -> Option<Option<HandleId>> {
         self.campaign_menu_race
@@ -425,8 +458,12 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name == "SetCampaignMenuRace" && self.startup_version.is_some() {
-            return Some(self.legacy_campaign_menu_native(args));
+        if self.startup_version.is_some() {
+            match name {
+                "SetCampaignMenuRace" => return Some(self.legacy_campaign_menu_native(args)),
+                "SetCampaignMenuRaceEx" => return Some(self.extended_campaign_menu_native(args)),
+                _ => {}
+            }
         }
         if matches!(name, "GetGameDifficulty" | "SetGameDifficulty") {
             self.game_difficulty?;

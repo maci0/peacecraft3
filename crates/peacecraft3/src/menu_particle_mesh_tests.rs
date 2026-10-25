@@ -94,3 +94,53 @@ fn actual_bevy_mesh_extraction_skips_empty_then_reextracts_same_handle_when_popu
         assert_eq!(main.resource::<Assets<Mesh>>().len(), 1);
     }
 }
+
+#[test]
+fn source_depth_flag_sorts_only_its_emitter_and_preserves_other_source_order() {
+    let (bytes, _) = super::super::particle_tests::synthetic(|_, flags| *flags |= cpu::SORT_FAR_Z);
+    let model = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+    let plan = cpu::Plan::checked(
+        &model.particles2(&bytes).unwrap(),
+        &model.textures(&bytes).unwrap(),
+        &model.pivots(&bytes).unwrap(),
+        &[],
+        cpu::Clip {
+            interval: [13, 213],
+            looping: true,
+        },
+        "synthetic:depth-sort",
+        Policy::default().cpu,
+    )
+    .unwrap();
+    let piece = |z: f32| {
+        let mut q = quad();
+        for p in &mut q.positions {
+            p[2] = z;
+        }
+        q
+    };
+    let mut pieces = vec![
+        (0, piece(17.)),
+        (1, piece(5.)),
+        (0, piece(-13.)),
+        (1, piece(-8.)),
+        (0, piece(3.)),
+    ];
+    sort_pieces(&mut pieces, plan.profiles(), Vec3::Z);
+    assert_eq!(
+        pieces
+            .iter()
+            .map(|(i, q)| (*i, q.positions[0][2]))
+            .collect::<Vec<_>>(),
+        vec![(0, -13.), (0, 3.), (0, 17.), (1, 5.), (1, -8.)]
+    );
+    sort_pieces(&mut pieces, plan.profiles(), -Vec3::Z);
+    assert_eq!(
+        pieces
+            .iter()
+            .take(3)
+            .map(|(_, q)| q.positions[0][2])
+            .collect::<Vec<_>>(),
+        vec![17., 3., -13.]
+    );
+}

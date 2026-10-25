@@ -327,6 +327,7 @@ pub fn animate_backgrounds(
         let joints = &state.runtime.joints;
         if let Err(e) = crate::mainmenu_scene::skin_geosets(
             crate::mainmenu_scene::Rig {
+                blend: None,
                 interval: state.interval,
                 model: &state.model,
                 bones: joints.joints(),

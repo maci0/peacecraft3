@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 const EXTRA: &str = "\
 type item extends widget
+native SetItemVisible takes item i, boolean show returns nothing
+native IsItemVisible takes item i returns boolean
 native CreateItem takes integer typeId, real x, real y returns item
 native SetItemDropID takes item whichItem, integer unitId returns nothing
 native GetItemLevel takes item whichItem returns integer
@@ -306,4 +308,40 @@ pub fn browser_item_factory_gate() -> u32 {
     published_item_retains_the_parsed_catalog_source_and_executed_coordinates();
     item_refusals_preserve_the_published_session_and_valid_replacement_retires_it();
     2
+}
+
+#[test]
+fn published_item_visibility_reaches_the_shared_world_and_survives_show_hide() {
+    let mut app = app();
+    let script = MAP.replace(
+        "set after = CreateTimer()",
+        "call SetItemVisible(made,false)\nset after = CreateTimer()",
+    );
+    deliver(&mut app, 1, Some(budget()), &script, EXTRA);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let item = handle(&session, "made");
+    let host = session.host().unwrap();
+    assert_eq!(
+        host.objects().executed_item(item).unwrap().visible(),
+        Some(false)
+    );
+    assert_eq!(
+        host.native("IsItemVisible", &[Value::Handle(item)])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    host.native("SetItemVisible", &[Value::Handle(item), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(
+        host.objects().executed_item(item).unwrap().visible(),
+        Some(true)
+    );
 }

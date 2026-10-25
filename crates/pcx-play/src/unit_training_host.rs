@@ -62,6 +62,14 @@ fn live(record: &ExecutedUnit) -> bool {
             .is_some_and(|v| v.life.is_finite() && v.life > 0.)
 }
 
+fn cached_without_rally(record: &ExecutedUnit) -> bool {
+    record.cached
+        && record
+            .activity
+            .as_ref()
+            .is_none_or(|activity| activity.rally.is_none())
+}
+
 pub(super) fn profile<'a>(
     definition: &'a Definition,
     key: &str,
@@ -675,7 +683,7 @@ impl ObjectHost {
                 if !allowed {
                     return Ok(Value::Bool(false));
                 }
-                if record.cached
+                if cached_without_rally(record)
                     || record.summoned
                     || record.admitted_order.is_some()
                     || self.unit_has_effect_history(*producer)
@@ -753,7 +761,7 @@ impl ObjectHost {
                 trains |= token.as_bytes() == requested;
             }
             if trains {
-                if record.cached
+                if cached_without_rally(record)
                     || record.summoned
                     || record.admitted_order.is_some()
                     || self.unit_has_effect_history(id)
@@ -955,9 +963,25 @@ impl ObjectHost {
                     Value::Real(face),
                 ],
                 None,
-                false,
+                super::unit_creation::Birth::Ordinary,
             )?;
+            let rally = self
+                .executed_unit(job.producer)?
+                .activity
+                .as_ref()
+                .and_then(|activity| activity.rally);
             let unit = self.commit_unit_creation(prepared)?;
+            if let Some(goal) = rally
+                && let Some(route) =
+                    self.prepare_steer_unit_in_range(unit, Some(goal), 0.0, "training")?
+            {
+                // Same admission as a movement point order: the guard post must not
+                // treat this route as an idle return to its own home.
+                self.commit_steer_unit(unit, route, "training")?;
+                self.unit_ordered(unit);
+                self.set_explicit_guard_move(unit, true);
+                self.clear_combat_target(unit);
+            }
             self.training.jobs.remove(index);
             self.commit_training_events(events, job.producer, job.kind, Some(unit));
         }

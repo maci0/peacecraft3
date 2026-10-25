@@ -86,11 +86,14 @@ fn frozen_throne_ignores_legacy_campaign_race_without_allocating_or_selecting_a_
             Value::Handle(high)
         );
     }
-    assert!(
+    assert_eq!(
         vm.host()
             .native("SetCampaignMenuRaceEx", &[Value::Int(63)])
-            .is_err()
+            .unwrap(),
+        Value::Null
     );
+    assert_eq!(vm.host().inner.take_campaign_menu_index(), Some(63));
+    assert_eq!(vm.host().inner.take_campaign_menu_index(), None);
     vm.host().inner.invalidate_startup_version();
     assert!(vm.call("initialize", &[]).is_err());
     assert_eq!(vm.global("Reached"), Value::Int(3));
@@ -299,4 +302,58 @@ fn version_get_requires_loaded_contract_and_source_ancestry() {
     let (mut h, ctx) = object(&c, "// map", true);
     let low = version(&mut h, -17);
     h.admit_startup_version(&ctx, low).unwrap();
+}
+
+#[test]
+fn extended_campaign_selection_is_checked_and_keeps_the_source_index_verbatim() {
+    let c = format!("{}\n{CAMPAIGN}", common());
+    let (mut h, ctx) = object(&c, "// map", true);
+    assert!(
+        h.native("SetCampaignMenuRaceEx", &[Value::Int(27)])
+            .is_err()
+    );
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    let before = h.inner().handles();
+    for index in [27, -19, i32::MIN, i32::MAX] {
+        assert_eq!(
+            h.native("SetCampaignMenuRaceEx", &[Value::Int(index)])
+                .unwrap(),
+            Value::Null
+        );
+        for args in [
+            vec![],
+            vec![Value::Null],
+            vec![Value::Real(27.)],
+            vec![Value::Int(27), Value::Int(28)],
+        ] {
+            assert!(h.native("SetCampaignMenuRaceEx", &args).is_err());
+        }
+        assert_eq!(h.take_campaign_menu_index(), Some(index));
+        assert_eq!(h.inner().handles(), before);
+    }
+    let declaration = "native SetCampaignMenuRaceEx takes integer index returns nothing";
+    for bad in [
+        "",
+        "constant native SetCampaignMenuRaceEx takes integer index returns nothing",
+        "native SetCampaignMenuRaceEx takes real index returns nothing",
+    ] {
+        let c = c.replace(declaration, bad);
+        let (mut h, ctx) = object(&c, "// map", true);
+        let high = version(&mut h, 63);
+        h.admit_startup_version(&ctx, high).unwrap();
+        assert!(
+            h.native("SetCampaignMenuRaceEx", &[Value::Int(27)])
+                .is_err()
+        );
+        assert_eq!(h.take_campaign_menu_index(), None);
+    }
+    let (mut h, ctx) = object(&c.replace(declaration, ""), declaration, true);
+    let high = version(&mut h, 63);
+    h.admit_startup_version(&ctx, high).unwrap();
+    assert!(
+        h.native("SetCampaignMenuRaceEx", &[Value::Int(27)])
+            .is_err()
+    );
+    assert_eq!(h.take_campaign_menu_index(), None);
 }

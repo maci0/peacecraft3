@@ -29,6 +29,8 @@ pub use player_unit_events::PlayerUnitEventRegistration;
 #[path = "player_event_host.rs"]
 mod player_events;
 pub use player_events::PlayerEventRegistration;
+#[path = "game_event_host.rs"]
+mod game_events;
 
 #[path = "trigger_condition_host.rs"]
 mod trigger_conditions;
@@ -100,6 +102,7 @@ pub(super) struct Admission {
     retained_unit_in_range: usize,
     player_event_limit: Option<usize>,
     retained_player_events: usize,
+    game_events: bool,
     timer_event_limit: Option<usize>,
     retained_timer_events: usize,
     game_state_event_limit: Option<usize>,
@@ -242,6 +245,7 @@ impl ObjectHost {
             retained_unit_in_range: 0,
             player_event_limit: None,
             retained_player_events: 0,
+            game_events: false,
             timer_event_limit: None,
             retained_timer_events: 0,
             game_state_event_limit: None,
@@ -297,6 +301,9 @@ impl ObjectHost {
         match name {
             CREATE => Some(self.create_trigger(args)),
             REGISTER => Some(self.register_unit_event(args)),
+            game_events::REGISTER if self.triggers.as_ref()?.game_events => {
+                Some(self.register_game_event(args))
+            }
             death_events::REGISTER if self.triggers.as_ref()?.death_event_limit.is_some() => {
                 Some(self.register_death_event(args))
             }

@@ -147,7 +147,7 @@ fn dry_water_mesh_is_empty_and_out_of_range_is_none() {
     let profile = crate::WaterProfile::open(
         &table,
         "synthetic Water.slk",
-        crate::WaterSelection::TilesetSha,
+        crate::WaterSelection::Tileset,
         &terrain,
     )
     .unwrap();
@@ -236,7 +236,7 @@ fn malformed_water_profile_and_short_budget_are_errors() {
         crate::WaterProfile::open(
             &table,
             "synthetic Water.slk",
-            crate::WaterSelection::TilesetSha,
+            crate::WaterSelection::Tileset,
             &terrain,
         ),
         Err(crate::WaterError::MissingField {
@@ -249,7 +249,7 @@ fn malformed_water_profile_and_short_budget_are_errors() {
     let profile = crate::WaterProfile::open(
         &table,
         "synthetic Water.slk",
-        crate::WaterSelection::TilesetSha,
+        crate::WaterSelection::Tileset,
         &terrain,
     )
     .unwrap();
@@ -286,7 +286,7 @@ fn malformed_water_profile_and_short_budget_are_errors() {
         crate::WaterProfile::open(
             &table,
             "synthetic Water.slk",
-            crate::WaterSelection::TilesetSha,
+            crate::WaterSelection::Tileset,
             &unnamed,
         ),
         Err(crate::WaterError::TilesetByte { byte: 0 })
@@ -303,7 +303,7 @@ fn water_profiles_refuse_duplicate_rows_and_nonfinite_height() {
     );
     let table = pcx_slq::Table::parse(duplicate.as_bytes()).unwrap();
     assert!(matches!(
-        crate::WaterProfile::open(&table, "duplicate.slk", crate::WaterSelection::TilesetSha, &terrain),
+        crate::WaterProfile::open(&table, "duplicate.slk", crate::WaterSelection::Tileset, &terrain),
         Err(crate::WaterError::Ambiguous { table, .. }) if table == "duplicate.slk"
     ));
     for height in ["NaN", "inf", "3.4028235e38"] {
@@ -313,7 +313,7 @@ fn water_profiles_refuse_duplicate_rows_and_nonfinite_height() {
             crate::WaterProfile::open(
                 &table,
                 "invalid.slk",
-                crate::WaterSelection::TilesetSha,
+                crate::WaterSelection::Tileset,
                 &terrain
             ),
             Err(crate::WaterError::MissingField {
@@ -1008,4 +1008,74 @@ fn a_nibble_outside_the_slot_list_is_not_clamped() {
         crate::GroundTiles::of(&terrain).blend(&terrain, 0, 0),
         Err(crate::Unsupported::BlendWeights)
     );
+}
+
+#[test]
+fn water_surface_uses_nonstock_mapping_profile_and_authored_corner_levels() {
+    let terrain = water_tile(
+        b'L',
+        &[
+            (1000, 1200, 4),
+            (1000, 1280, 4),
+            (1000, 1360, 4),
+            (1000, 1440, 4),
+        ],
+    );
+    let mapping = crate::world::Mapping::new(20., 123., 8.).unwrap();
+    let water = crate::WaterData::new(&terrain, "synthetic", "surface.w3m").unwrap();
+    let bytes = water_slk("LTest", "0.5");
+    let table = pcx_slq::Table::parse(bytes.as_bytes()).unwrap();
+    let profile = crate::WaterProfile::open_scaled(
+        &table,
+        "synthetic.slk",
+        crate::WaterSelection::Tileset,
+        &terrain,
+        mapping.tile_size(),
+    )
+    .unwrap();
+    assert_eq!(
+        profile.water_id(),
+        "LTest",
+        "selection derives the unique row, not a copied Sha suffix"
+    );
+    assert_eq!(profile.height_offset(), 10.);
+    let (x, y) = terrain.origin();
+    assert_eq!(
+        water
+            .sample_surface(x + 10., y + 10., mapping, profile.height_offset())
+            .unwrap(),
+        Some(52.)
+    );
+    assert_eq!(mapping.sample_ground(&terrain, x + 10., y + 10.), Some(2.));
+    assert_eq!(
+        water
+            .sample_surface(x - 1., y, mapping, profile.height_offset())
+            .unwrap(),
+        None
+    );
+    assert!(water.sample_surface(f32::NAN, y, mapping, 0.).is_err());
+    for values in [[0., 1., 1.], [1., f32::NAN, 1.], [1., 1., -1.]] {
+        assert!(crate::world::Mapping::new(values[0], values[1], values[2]).is_none());
+    }
+    let dry = water_tile(b'L', &[(1000, 1200, 0); 4]);
+    let dry = crate::WaterData::new(&dry, "synthetic", "dry.w3m").unwrap();
+    assert_eq!(
+        dry.sample_surface(x + 10., y + 10., mapping, 10.).unwrap(),
+        None
+    );
+    let duplicate = format!(
+        "{}C;Y3;X1;K\"LOther\"\r\nC;X2;K0\r\nE\r\n",
+        bytes.strip_suffix("E\r\n").unwrap()
+    );
+    let table = pcx_slq::Table::parse(duplicate.as_bytes()).unwrap();
+    assert!(matches!(
+        crate::WaterProfile::open_scaled(
+            &table,
+            "ambiguous.slk",
+            crate::WaterSelection::Tileset,
+            &terrain,
+            20.
+        ),
+        Err(crate::WaterError::Ambiguous { .. })
+    ));
 }

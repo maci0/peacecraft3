@@ -1,5 +1,36 @@
 # PeaceCraft3 — Faithful Warcraft III Reimplementation
 
+The PeaceCraft configuration panel also offers gameplay-only 1×–4× internal
+resolution. Original menu/HUD targets stay at display resolution; this setting
+is not added to original options. See [internal resolution](docs/re-notes/internal-resolution.md).
+
+Sky follow-up (2026-10-25): own-model directional lighting is now connected to
+live time of day. The earlier no-light source inventory was incorrect. The new
+replay reaches mission control. Particle ownership and parented PRE2 admission
+are now in source; that recorded replay remains exit 101 and still shows the
+old parented refusal plus sight occlusion. Rendered sky parity still needs a
+controlled comparison. See the
+[sky correction](docs/re-notes/campaign-sky.md#correction-and-own-light-connection-2026-10-25).
+
+Current campaign-entry slice (2026-10-25): the post-intro game main menu opens
+unchanged RoC and TFT chapters. Both restore control and pass a five-minute idle
+script replay. Source-derived death/decay phases and UnitSuspendDecay now let the
+TFT permanent-corpse helpers finish; the canonical corpses remain suspended in
+their authored bone animation. This is not a complete mission playthrough.
+The offscreen menu-to-campaign test reaches gameplay, but remains red for sky
+illumination and terrain/tree sight occlusion. Selected-unit HUD mounting is
+verified offscreen. Script exit now retires its owned console and assets before
+a second chapter launch; the isolated replay replaces the session, camera and
+console without a stale-entity panic. The in-game Menu now opens its source
+panels over the paused mission, with return, end/back, restart and quit handlers.
+Save/load and other unavailable controls remain disabled; native menu parity and
+full mission completion are not established. The launcher is setup, not the game
+main menu. See [campaign menu](docs/re-notes/campaign-escape-menu.md).
+Resurrection, full scripting and rendered fidelity remain open; see
+[corpse lifecycle](docs/re-notes/script-unit-corpses.md),
+[unit animation](docs/re-notes/script-unit-animation.md) and the
+[scripting plan](docs/scripting-host-plan.md).
+
 Target: **Warcraft III: The Frozen Throne 1.29b** — the last stable legacy release —
 reimplemented in Rust on the Bevy engine using the *original* game assets read directly
 from the shipped MPQ archives.
@@ -71,6 +102,12 @@ Archive opening and parser checks in §5.1 do not prove end-to-end game fidelity
 ---
 
 ## 1. Current state (verified)
+
+The latest campaign-entry slice adds source-derived floating/amphibious routing
+and actor surface height, plus authored-index extended menu selection. The
+unchanged RoC opening reaches control; TFT now advances to an explicit
+`SetAllyColorFilterState` refusal. Water rendering and complete mission behavior
+remain open; see the current entries in [TRACKER.md](TRACKER.md).
 
 | Item | Status |
 |---|---|
@@ -837,6 +874,11 @@ absence is a census over every map's embedded archive on both builds, not a gues
 the extension list.
 
 #### Scripting surface required
+
+The [complete scripting-host plan](docs/scripting-host-plan.md) separates the
+source-derived API inventory from tested behavior and presentation, and orders
+the remaining implementation gates. No declaration or successful stub counts as
+full support.
 
 - Raw JASS execution: lexer, parser, and the VM's value/handle model.
 - **Trigger desugaring:** `WTG` → JASS with the original's exact semantics, not an

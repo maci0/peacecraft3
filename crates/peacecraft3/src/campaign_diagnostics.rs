@@ -112,6 +112,7 @@ struct Stages<'w> {
     portrait: Option<Res<'w, crate::campaign_portrait::CampaignPortrait>>,
     command_card: Option<Res<'w, crate::campaign_command_card::CommandCard>>,
     minimap: Option<Res<'w, crate::campaign_minimap::CampaignMinimap>>,
+    escape_menu: Option<Res<'w, crate::campaign_escape_menu::EscapeMenu>>,
 }
 
 fn report(stages: Stages, mut reported: ResMut<Reported>) {
@@ -133,8 +134,17 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         portrait,
         command_card,
         minimap,
+        escape_menu,
     } = stages;
     let current = [
+        (
+            "escape menu",
+            escape_menu.and_then(|menu| {
+                menu.last_error
+                    .as_ref()
+                    .map(|error| format!("{error} ({} source receipts)", menu.receipt_count()))
+            }),
+        ),
         (
             "unit portrait",
             portrait.and_then(|p| {

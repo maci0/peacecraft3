@@ -54,6 +54,20 @@ at map span `376367..376419`, declared in the selected `common.j` at
 This is script-state evidence, not an applied camera, native pan comparison or
 playable campaign acceptance.
 
+## Destination locations
+
+`CameraSetupGetDestPositionLoc` now allocates an ordinary location snapshot from
+the same executed destination used by the X/Y getters. It requires location
+admission and uses the shared identity capacity. Moving or removing the returned
+location cannot change the camera setup; a later query returns a fresh identity.
+An unset destination or failed allocation leaves the setup unchanged. Nonstock
+tests exercise both directions of this independence and a full-arena refusal.
+
+The unchanged RoC prologue calls this query when skipping its opening cinematic.
+It does not require a second camera store or copied mission coordinates. This
+supersedes the earlier location-query omission; other camera application modes
+and complete original interpolation remain open.
+
 ## Application camera consumer
 
 The launcher installs `campaign_camera`. It reads an instant application from the

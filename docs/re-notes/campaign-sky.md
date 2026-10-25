@@ -1,5 +1,52 @@
 # Campaign sky dome
 
+## Correction and own-light connection (2026-10-25)
+
+The older inventory below incorrectly said this same hashed model had no global
+sequence or light records. A fresh PE/archive-backed extraction and chunk walk
+finds `GLBS` and `LITE`: one directional `FDirectSun`, a fixed rotation key, and
+animated diffuse/ambient colour tracks. The older illumination conclusion is
+superseded. These values are read from the model; none are copied into rendering
+constants.
+
+The selected executable's SetSkyModel path creates its own sprite/context. Its
+sky pass disables the terrain/unit DNC contexts and enables the sky model's
+lights. The registered clock callback maps the world time of day into the model
+sequence; it is not a colour callback. Local REA evidence and exact window reads
+are retained in `.scratch/campaign-sky-20261025/rea-snapshot.json` (38 records).
+The selected image identity is
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+
+A headless/muted original-client control pair retains the same source map, sky
+texture, camera and frozen diagnostic noon. Its only model change sets the
+material's unlit bit. The source-lit sky is darker than that unlit control. A
+third null-sky control is black in the same sky patches while a sampled terrain
+patch is unchanged. Thus forcing the material unlit is contradicted by the
+observation; this is not a screenshot-derived brightness constant or a full pixel
+parity claim. Raw maps, scripts, model/member identities and captures remain
+ignored under the same local directory.
+
+`campaign_sky.rs` now binds the selected sky's own model through the existing
+bounded `day_night::Assets` reader, preserving source identity, bytes and tracks.
+It samples that model's light at the canonical executed day fraction and sends
+it through the existing source-derived Gouraud/colour-packing path used by model
+actors. Terrain/unit sun selection is not substituted. Missing or unsupported
+own-light records and unavailable clocks remain explicit diagnostics. The model
+and light binding retire with the same sky/session state. Other sky animation
+clock behavior and camera-relative placement still need broader qualification.
+
+Focused source-clock, identity and lifecycle checks pass (12 tests), as does the
+explicit original-model reader gate (1), full app suite (686), strict native/WASM
+Clippy and both builds. The fresh production offscreen replay reaches restored
+campaign control. Its retained diagnostics now identify doodad-particle ownership
+and terrain/tree sight occlusion rather than the old sky-lighting refusal. The replay passed its restart, quit, console retirement and relaunch assertions,
+then failed its final renderer assertion on those two remaining diagnostics
+(exit 101). The full gate is not green. This camera capture does not itself
+establish visible-sky pixel parity, and synthetic
+or parser checks do not establish original-client rendered parity.
+
+## Historical inventory (superseded where corrected above)
+
 ## Source evidence
 
 - Human01 `Trig_Map_Initialization_Actions` calls
@@ -10,7 +57,7 @@
   4,062 bytes, SHA-256 `60fcd135b70240019b21b2da34e97448417e62289def6b26e982b8d4314fdf2c`
   (Warcraft III Legacy 1.29.2.9231 tree; local copy in `.scratch/sky-root/`, uncommitted).
 - Checked with a private, Bevy-free probe on `pcx-mdl`/`pcx-play` (not committed):
-  - `VERS` 800. `SEQS`: one sequence `Stand`, 333 to 60333. `GLBS`: none.
+  - `VERS` 800. `SEQS`: one sequence `Stand`, 333 to 60333. `GLBS`: present (the earlier “none” inventory was incorrect; see correction).
   - `BONE`: `SkyInnerClods`, object 0, parent -1, flags 0x100, no tracks.
   - `HELP`: `Dummy01`, object 2, parent -1, flags 0, one `KGRT` track: 8 linear keys,
     frames 333 to 60333, rotations as authored (no global sequence).
@@ -52,8 +99,8 @@
   teardown all take this path. A camera that started as `None` stays `None`.
 - Failure: a load or spawn error retires the dome and camera, records the script in
   `failed`, and reports once. The next frame restores the scene clear.
-- Lighting: the material keeps its authored shading flags (lit, bit 0 clear), and no
-  light is applied. Illumination source is unqualified, so spawn sets the diagnostic
+- Historical lighting gap (superseded by the own-light connection above): the material
+  kept its authored shading flags (lit, bit 0 clear), and no light was applied. Illumination source is unqualified, so spawn sets the diagnostic
   `sky lit layer drawn without a qualified illumination source`. Under the campaign's
   ambient light alone the dome renders dark. That is a known gap, not a chosen look.
   Qualifying it needs source or native evidence (see below).
@@ -156,3 +203,13 @@ lighting stay unverified.
 - Next: a worktree-private app target, `.scratch/target-p06-app`, for the
   `cargo check`, bin `sky::tests`, `campaign_item_model`, `campaign_actors::` and the
   `map_loading campaign_sky` filters, each run sequentially.
+
+## Empty-unit publication regression (0.5.0)
+
+The production sky lifecycle tests exposed an unconditional unit-sight readiness
+query blocking the independent sky pass in sessions with no executed units. The
+actor projection now omits that query only for an empty unit universe. Every
+nonempty unit universe retains the existing readiness/refusal path, including
+hidden units; vision-grid admission and its placement requirement are unchanged.
+This is a recreation scheduling correction, not proof of native internals or
+rendered parity. The four synthetic production sky tests cover this path.

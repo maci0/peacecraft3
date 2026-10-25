@@ -132,6 +132,46 @@ fn campaign_host() -> (ObjectHost, Arc<ParsedMapContext>) {
 }
 
 #[test]
+fn fresh_colors_cover_lazy_neutral_slots_preserve_explicit_assignments_and_refuse_atomically() {
+    let mut h = host();
+    let last = i32::try_from(h.player_slots().unwrap()).unwrap() - 1;
+    let first = player(&mut h, 0);
+    let explicit = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
+    h.native("SetPlayerColor", &[first.clone(), explicit.clone()])
+        .unwrap();
+    let rule = crate::player_default_colors::Rules::fixture(slots_rule(301, -3, 9).image_sha256());
+    let mut wrong = rule.clone();
+    wrong.image_sha256[0] ^= 1;
+    let before = h.inner().handles();
+    assert!(h.admit_default_player_colors(&wrong).is_err());
+    assert_eq!(h.inner().handles(), before);
+    h.admit_default_player_colors(&rule).unwrap();
+    assert_eq!(h.native("GetPlayerColor", &[first]).unwrap(), explicit);
+    let neutral = player(&mut h, last);
+    let color = h.native("GetPlayerColor", &[neutral]).unwrap();
+    let mapped = last + 9;
+    assert_eq!(h.inner().player_color(id(&color)).unwrap(), mapped);
+    assert_eq!(
+        h.native("ConvertPlayerColor", &[Value::Int(mapped)])
+            .unwrap(),
+        color
+    );
+    assert!(h.admit_default_player_colors(&rule).is_err());
+    let ctx = context(300, COMMON, "// no globals", "synthetic:colors-capacity");
+    let mut small = object(&ctx, 4)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap();
+    let before = small.inner().handles();
+    assert!(small.admit_default_player_colors(&rule).is_err());
+    assert_eq!(small.inner().handles(), before);
+    assert!(
+        small
+            .native("ConvertPlayerColor", &[Value::Int(mapped)])
+            .is_err()
+    );
+}
+
+#[test]
 fn campaign_flee_admission_requires_matching_context_and_refuses_duplicates() {
     let (mut h, ctx) = campaign_host();
     let owner = player(&mut h, 0);

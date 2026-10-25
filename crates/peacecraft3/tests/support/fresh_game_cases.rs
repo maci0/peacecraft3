@@ -45,6 +45,7 @@ fn fresh_roster_keeps_executed_controllers_and_only_occupies_selected_slots() {
     vm.call("config", &[]).unwrap();
     let post = PostConfigObservations {
         new_game: Some(NewGameInput {
+            player_colors: None,
             initial_alliances: None,
             orders: None,
             activity: None,

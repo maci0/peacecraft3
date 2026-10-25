@@ -12,6 +12,7 @@ mod button_actions;
 mod campaign_actors;
 mod campaign_command_card;
 mod campaign_diagnostics;
+mod campaign_escape_menu;
 mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;
@@ -25,7 +26,13 @@ mod campaign_script_dialogs;
 mod campaign_selection;
 mod campaign_unit_panel;
 mod campaign_visibility;
+mod internal_resolution;
 use peacecraft3::fdf;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod campaign_human_route;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod campaign_mission_objectives;
+mod campaign_workers;
 mod glue_menu;
 pub mod hud;
 pub mod hud_assets;

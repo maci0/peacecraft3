@@ -49,6 +49,8 @@ pub(crate) struct Mission {
 pub(crate) struct Campaign {
     /// The section key (`CampaignList` id), not a display string.
     pub key: String,
+    /// Position in the authored CampaignList, including its blank slots.
+    pub source_index: usize,
     /// The section's `Header` value.
     pub header: String,
     /// The section's `Name` value, the campaign's display title.
@@ -136,6 +138,13 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<CampaignMenuState>()
         .add_systems(
             Update,
+            sync_script_campaign
+                .after(peacecraft3::campaign_runtime::CampaignExitSet)
+                .before(peacecraft3::campaign_score::consume)
+                .before(render_campaign_panel),
+        )
+        .add_systems(
+            Update,
             (
                 refresh,
                 populate,
@@ -214,7 +223,7 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
         crate::menu_skin::SkinTable::parse(text).map_err(|error| format!("{member}: {error}"))?;
     let mut campaigns = Vec::new();
     let mut chapters = Vec::new();
-    for slot in index.slots {
+    for (source_index, slot) in index.slots.into_iter().enumerate() {
         let CampaignSlot::Entry(entry) = slot else {
             continue;
         };
@@ -248,6 +257,7 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
         }
         campaigns.push(Campaign {
             key: entry.id.clone(),
+            source_index,
             header: entry.header.clone().unwrap_or_default(),
             title,
             default_open,
@@ -532,6 +542,40 @@ fn launch(
             continue;
         };
         enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+    }
+}
+
+fn script_campaign_selection(campaigns: &[Campaign], index: i32) -> Option<usize> {
+    let index = usize::try_from(index).ok()?;
+    campaigns
+        .iter()
+        .position(|campaign| campaign.source_index == index)
+}
+
+fn sync_script_campaign(
+    mut session: Option<
+        ResMut<
+            peacecraft3::map_script_session::MapScriptSession<
+                pcx_play::map_startup_host::MapStartupHost,
+            >,
+        >,
+    >,
+    mut exit: Option<ResMut<peacecraft3::campaign_runtime::CampaignExitResult>>,
+    chapters: Res<Chapters>,
+    mut state: ResMut<CampaignMenuState>,
+) {
+    let pending = exit
+        .as_deref_mut()
+        .and_then(|e| e.take_campaign_menu_index())
+        .or_else(|| {
+            session
+                .as_deref_mut()?
+                .host()?
+                .objects_mut()
+                .take_campaign_menu_index()
+        });
+    if let Some(index) = pending {
+        state.selected_campaign = script_campaign_selection(&chapters.campaigns, index);
     }
 }
 
@@ -1372,6 +1416,120 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an unchanged chapter with a skippable opening"]
+    fn selected_install_opening_skip_reaches_player_control() {
+        opening_skip_replay(120);
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_*; five-minute idle script horizon, not mission completion"]
+    fn selected_install_five_minute_post_control_script_horizon() {
+        opening_skip_replay(1200);
+    }
+
+    fn opening_skip_replay(gameplay_ticks: u32) {
+        let mut app = started_app();
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let start = session.host().unwrap().objects().timer_game_time().unwrap();
+        let mut cinematic = false;
+        let mut controlled = false;
+        // Diagnostic input schedule and work bound, not an authored cinematic duration.
+        for tick in 1..=120 {
+            session
+                .advance_timers(start + f64::from(tick) * 0.25, 4096)
+                .unwrap();
+            session.advance_queued_events(4096).unwrap();
+            let state = session.host().unwrap().objects().presentation().unwrap();
+            cinematic |= state.control_enabled == Some(false);
+            controlled = cinematic
+                && state.control_enabled == Some(true)
+                && state.interface_visible == Some(true);
+            if controlled {
+                break;
+            }
+            if cinematic {
+                session
+                    .host()
+                    .unwrap()
+                    .objects_mut()
+                    .fire_local_player_event("EVENT_PLAYER_END_CINEMATIC")
+                    .unwrap();
+                session.advance_queued_events(4096).unwrap();
+            }
+        }
+        assert!(
+            cinematic,
+            "the unchanged mission must enter its opening cinematic"
+        );
+        assert!(
+            controlled,
+            "ordinary Escape events must return the mission to player control"
+        );
+        let objects = session.host().unwrap().objects();
+        let control_time = objects.timer_game_time().unwrap();
+        println!(
+            "campaign control restored: time={control_time} items={} visible={}",
+            objects.executed_items().count(),
+            objects
+                .executed_items()
+                .filter(|(_, item)| item.visible() == Some(true))
+                .count()
+        );
+        // Diagnostic horizon: include delayed gameplay setup after control is restored.
+        for tick in 1..=gameplay_ticks {
+            if let Err(error) = session.advance_timers(control_time + f64::from(tick) * 0.25, 4096)
+            {
+                let dead = session
+                    .host()
+                    .unwrap()
+                    .objects()
+                    .executed_units()
+                    .filter(|(_, unit)| unit.combat.as_ref().is_some_and(|combat| combat.dead))
+                    .take(16)
+                    .map(|(_, unit)| {
+                        (
+                            unit.definition.rawcode,
+                            unit.vitals.map(|v| v.life),
+                            unit.animation.as_ref().and_then(|animation| {
+                                animation
+                                    .sequence
+                                    .map(|index| animation.model.sequences[index].name.clone())
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                println!("canonical dead-unit snapshot (at most16): {dead:?}");
+                panic!("post-control campaign advance: {error:?}");
+            }
+            session.advance_queued_events(4096).unwrap();
+        }
+        let objects = session.host().unwrap().objects();
+        let corpses = objects
+            .executed_units()
+            .filter_map(|(_, unit)| {
+                let decay = unit.decay.as_ref()?;
+                (decay.phase() != pcx_play::unit_decay::Phase::Alive).then(|| {
+                    (
+                        unit.definition.rawcode,
+                        decay.phase(),
+                        decay.suspended(),
+                        unit.animation
+                            .as_ref()
+                            .and_then(|a| a.sequence.map(|i| a.model.sequences[i].name.clone())),
+                    )
+                })
+            })
+            .take(8)
+            .collect::<Vec<_>>();
+        println!(
+            "campaign post-control horizon={}s; canonical corpse snapshot (at most8): {corpses:?}",
+            f64::from(gameplay_ticks) * 0.25
+        );
+    }
+
+    #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL with original RoC and TFT campaign assets"]
     fn selected_install_all_indexed_entries_resolve_their_authored_target_types() {
         let install =
@@ -1422,6 +1580,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn started_app() -> App {
+        crate::campaign_workers::initialize();
         let install_dir = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
             .expect("set PCX_NATIVE_CHAPTER_INSTALL to the selected local install");
         let map = std::env::var("PCX_NATIVE_CHAPTER_MAP")
@@ -1496,6 +1655,18 @@ pub(crate) mod tests {
             "configuration did not complete within six updates"
         );
         let startup = app.world().resource::<CampaignStartup>();
+        let preload_cache = app
+            .world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .and_then(|bindings| {
+                app.world()
+                    .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+                    .for_receipts(&bindings.receipts)
+            })
+            .map(|reader| reader.preload_cache_usage());
+        println!("campaign preload cache: {preload_cache:?}");
         assert!(
             startup.last_error.is_none(),
             "production startup: {:?}",
@@ -1686,6 +1857,21 @@ pub(crate) mod tests {
         assert!(chapters.campaigns.is_empty());
         assert!(chapters.entries.is_empty());
         assert_eq!(chapters.pending, Some((1, 2)));
+    }
+
+    #[test]
+    fn script_campaign_selection_preserves_blank_slots_and_does_not_invent_a_campaign() {
+        let text = FIXTURE.replace(
+            "CampaignList=\"Tutorial\",\"Human\"",
+            "CampaignList=\"\",\"Tutorial\",\"\",\"Human\"",
+        );
+        assert_ne!(text, FIXTURE);
+        let (campaigns, _) = parse_campaigns("synthetic-index", &text).unwrap();
+        assert_eq!(script_campaign_selection(&campaigns, 1), Some(0));
+        assert_eq!(script_campaign_selection(&campaigns, 3), Some(1));
+        for index in [-1, 0, 2, 4, i32::MAX] {
+            assert_eq!(script_campaign_selection(&campaigns, index), None);
+        }
     }
 
     #[test]

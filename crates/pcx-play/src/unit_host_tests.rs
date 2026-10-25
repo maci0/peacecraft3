@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex};
 
 const PLACEMENT_OWNER: i16 = 7;
 
+#[path = "unit_corpse_tests.rs"]
+mod corpses;
+
 #[test]
 fn food_query_contracts_are_common_source_constant_integer_queries() {
     for name in ["GetFoodMade", "GetFoodUsed"] {
@@ -137,6 +140,8 @@ native TimerGetRemaining takes timer t returns real
 native TimerGetTimeout takes timer t returns real
 native GetExpiredTimer takes nothing returns timer
 native SetUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
+native SetUnitBlendTime takes unit u, real seconds returns nothing
+native SetUnitTimeScale takes unit u, real speed returns nothing
 native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns nothing
 native SetUnitLookAt takes unit u, string bone, unit target, real x, real y, real z returns nothing
 native ResetUnitLookAt takes unit u returns nothing
@@ -153,6 +158,9 @@ native RemoveUnit takes unit u returns nothing
         .unwrap()
         .with_timer_runtime(0.)
         .unwrap();
+    let mut blend = crate::unit_blend::Rules::fixture();
+    blend.image_sha256 = host.player_client_sha256().unwrap();
+    host.admit_unit_blend(blend).unwrap();
     let original = crate::unit_model::tests::model();
     let mut bytes = original.bytes.to_vec();
     let mut bone = vec![0u8; 104];
@@ -234,34 +242,183 @@ fn unit_animation_selects_the_retained_model_without_new_unit_or_handle() {
 }
 
 #[test]
-fn model_admission_checks_the_queue_animation_signature() {
-    let common = script_common_with(
-        "widget",
-        true,
-        "native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\n\
+fn blend_setter_clamps_before_transition_and_rejects_bad_calls_atomically() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let unit = h.vm.global("U");
+    let Value::Handle(id) = unit else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    let handles = host.inner().handles();
+    for (value, until) in [
+        (9., 1.75),
+        (0.3, f64::from(0.3f32)),
+        (-1., 0.),
+        (0.00001, 0.),
+    ] {
+        host.native("SetUnitBlendTime", &[unit.clone(), Value::Real(value)])
+            .unwrap();
+        host.native(
+            "SetUnitAnimation",
+            &[unit.clone(), Value::Str("Death".into())],
+        )
+        .unwrap();
+        let state = host.executed_unit(id).unwrap().animation.as_ref().unwrap();
+        if until == 0. {
+            assert!(state.blend_sample(0.).unwrap().is_none());
+        } else {
+            assert_eq!(state.blend_sample(0.).unwrap().unwrap().weight, 0.);
+            assert!((state.blend_sample(until / 2.).unwrap().unwrap().weight - 0.5).abs() < 1e-6);
+            assert!(state.blend_sample(until).unwrap().is_none());
+        }
+    }
+    let before = host.executed_unit(id).unwrap().animation.clone();
+    for args in [
+        vec![],
+        vec![unit.clone(), Value::Real(f32::NAN)],
+        vec![Value::Int(3), Value::Real(0.2)],
+    ] {
+        assert!(host.native("SetUnitBlendTime", &args).is_err());
+        assert_eq!(host.executed_unit(id).unwrap().animation, before);
+    }
+    host.native("SetUnitBlendTime", &[Value::Null, Value::Real(0.2)])
+        .unwrap();
+    host.native("RemoveUnit", std::slice::from_ref(&unit))
+        .unwrap();
+    host.native("SetUnitBlendTime", &[unit, Value::Real(0.2)])
+        .unwrap();
+    assert_eq!(host.inner().handles(), handles);
+}
+
+#[test]
+fn time_scale_native_changes_the_canonical_playback_without_touching_clock_or_other_units() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let unit = h.vm.global("U");
+    let Value::Handle(id) = unit else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    let handles = host.inner().handles();
+    host.native("SetUnitTimeScale", &[unit.clone(), Value::Real(0.)])
+        .unwrap();
+    assert_eq!(
+        host.executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .sample(4.)
+            .unwrap()
+            .unwrap()
+            .frame,
+        100
+    );
+    host.native("SetUnitTimeScale", &[unit.clone(), Value::Real(2.)])
+        .unwrap();
+    assert_eq!(
+        host.executed_unit(id)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .sample(0.1)
+            .unwrap()
+            .unwrap()
+            .frame,
+        300
+    );
+    let before = host.executed_unit(id).unwrap().animation.clone();
+    for args in [
+        vec![],
+        vec![unit.clone(), Value::Real(f32::INFINITY)],
+        vec![Value::Int(1), Value::Real(1.)],
+    ] {
+        assert!(host.native("SetUnitTimeScale", &args).is_err());
+        assert_eq!(host.executed_unit(id).unwrap().animation, before);
+    }
+    host.native("SetUnitTimeScale", &[Value::Null, Value::Real(0.)])
+        .unwrap();
+    host.native("RemoveUnit", std::slice::from_ref(&unit))
+        .unwrap();
+    host.native("SetUnitTimeScale", &[unit, Value::Real(0.)])
+        .unwrap();
+    assert_eq!(host.timer_game_time(), Some(0.));
+    assert_eq!(host.inner().handles(), handles);
+}
+
+#[test]
+fn blend_admission_checks_abi_source_identity_and_creation_boundary() {
+    for extra in [
+        "native SetUnitBlendTime takes unit u, integer duration returns nothing\n",
+        "constant native SetUnitBlendTime takes unit u, real duration returns nothing\n",
+    ] {
+        let common = script_common_with("widget", true, extra);
+        let ctx = context(300, &common, MAP, "unit-catalog");
+        let (catalog, _, _) = counting();
+        let mut host = object(&ctx, 64)
+            .with_unit_catalog(catalog, source(), limits(2))
+            .unwrap();
+        assert!(
+            host.admit_unit_blend(crate::unit_blend::Rules::fixture())
+                .is_err()
+        );
+    }
+    let (mut h, _) = animation_vm(false);
+    assert!(
+        h.vm.host()
+            .inner
+            .admit_unit_blend(crate::unit_blend::Rules::fixture())
+            .is_err()
+    );
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    assert!(
+        h.vm.host()
+            .inner
+            .admit_unit_blend(crate::unit_blend::Rules::fixture())
+            .is_err()
+    );
+}
+
+#[test]
+fn model_admission_checks_queue_and_playback_signatures() {
+    for bad in ["QueueUnitAnimation", "SetUnitTimeScale"] {
+        let common = script_common_with(
+            "widget",
+            true,
+            "native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\n\
          native TimerGetElapsed takes timer t returns real\n\
          native TimerGetRemaining takes timer t returns real\n\
          native TimerGetTimeout takes timer t returns real\n\
          native GetExpiredTimer takes nothing returns timer\n\
          native SetUnitAnimation takes unit u, string s returns nothing\n\
          native QueueUnitAnimation takes unit u, integer s returns nothing\n",
-    );
-    let ctx = context(300, &common, MAP, "unit-catalog");
-    let (catalog, _, _) = counting();
-    let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
-    let mut host = object(&ctx, 64)
-        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
-        .unwrap()
-        .with_unit_catalog(Arc::clone(&shared), source(), limits(2))
-        .unwrap()
-        .with_timer_runtime(0.)
-        .unwrap();
-    let model = crate::unit_model::tests::model();
-    let error = host
-        .admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
-        .unwrap_err();
-    assert_eq!(error.failure, Failure::Signature);
-    assert_eq!(error.native, "QueueUnitAnimation");
+        );
+        let common = common.replace(
+            "native QueueUnitAnimation takes unit u, integer s returns nothing",
+            &format!("native {bad} takes unit u, integer s returns nothing"),
+        );
+        let ctx = context(300, &common, MAP, "unit-catalog");
+        let (catalog, _, _) = counting();
+        let shared: Arc<dyn ObjectCatalog + Send + Sync> = catalog;
+        let mut host = object(&ctx, 64)
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap()
+            .with_unit_catalog(Arc::clone(&shared), source(), limits(2))
+            .unwrap()
+            .with_timer_runtime(0.)
+            .unwrap();
+        let model = crate::unit_model::tests::model();
+        let error = host
+            .admit_unit_models(move |_| Ok(Some(Arc::clone(&model))))
+            .unwrap_err();
+        assert_eq!(error.failure, Failure::Signature);
+        assert_eq!(error.native, bad);
+    }
 }
 
 #[test]
@@ -337,12 +494,13 @@ fn queue_unit_animation_dispatches_and_refuses_bad_inputs_without_mutation() {
     );
     assert_eq!(host.inner().handles(), before);
     host.native("RemoveUnit", &[Value::Handle(id)]).unwrap();
-    assert!(
+    assert_eq!(
         host.native(
             "QueueUnitAnimation",
             &[Value::Handle(id), Value::Str("Walk".into())]
         )
-        .is_err()
+        .unwrap(),
+        Value::Null
     );
 }
 
@@ -3726,4 +3884,30 @@ fn ownership_transfer_keeps_current_maxima_and_new_owner_changes_apply_to_it() {
     .unwrap();
     assert_eq!(life(&mut h, hero), (375.0, 375.0));
     assert_eq!(life(&mut h, fresh), (375.0, 375.0));
+}
+
+#[test]
+fn animation_of_removed_units_is_a_noop_but_other_handle_families_refuse() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let unit = h.vm.global("U");
+    let host = &mut h.vm.host().inner;
+    host.native("RemoveUnit", std::slice::from_ref(&unit))
+        .unwrap();
+    let before = host.inner().handles();
+    for name in ["SetUnitAnimation", "QueueUnitAnimation"] {
+        assert_eq!(
+            host.native(name, &[unit.clone(), Value::Str("stand".into())])
+                .unwrap(),
+            Value::Null
+        );
+        let timer = host.native("CreateTimer", &[]).unwrap();
+        assert!(
+            host.native(name, &[timer, Value::Str("stand".into())])
+                .is_err()
+        );
+    }
+    assert_eq!(host.executed_units().count(), 0);
+    assert_eq!(host.inner().handles(), before + 2);
 }

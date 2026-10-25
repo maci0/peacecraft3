@@ -1,9 +1,198 @@
 # PeaceCraft3 — Tracker
 
+- [x] Release 0.5.0: integrated the pending campaign/runtime, HUD, renderer and
+  reference-tooling work and removed the repository OpenCode configuration.
+  Final isolated/muted workspace run: 4,343 passed, 0 failed, 246 explicitly
+  ignored. Strict native all-target and WASM checks, both application builds,
+  formatting, performance-tool lockfile check, 17 campaign-tool tests and the
+  desktop packaging self-test pass. Test fixture corrections cover parser
+  diagnostics, renderer resources and synthetic model/FDF inputs; local-original
+  drop gates are explicitly ignored. Empty-unit scenes no longer query unit
+  sight readiness before their independent sky pass; nonempty scenes retain the
+  existing refusal. This is a source release; no original assets or desktop
+  binaries are included. Full mission completion and rendered parity remain open.
+
+- [x] Launcher-only 1×–4× internal game resolution: scene/sky supersampling and
+  complete-block downsampling preserve display-sized original UI and cursor
+  coordinates. Headless GPU and responsive launcher checks pass, along with
+  685 application tests, strict native/WASM Clippy and both builds. The choice
+  lasts for the current session. See [internal resolution](docs/re-notes/internal-resolution.md).
+
+- [~] Sky illumination follow-up: the selected sky model's own directional light
+  and colour tracks now feed its rendered actor at the live day fraction. The
+  earlier no-LITE inventory was wrong and is corrected in the evidence note.
+  Focused 12, actual-source 1 and app 686 checks pass, as do strict native/WASM
+  checks and builds. The fresh offscreen replay passes restored campaign control,
+  restart, quit and relaunch; its final renderer assertion fails on doodad-particle
+  ownership and sight occlusion (exit 101).
+  Exact original-client sky pixel parity remains unverified. See
+  [sky correction](docs/re-notes/campaign-sky.md#correction-and-own-light-connection-2026-10-25).
+
+- [~] Parented PRE2 emitters are admitted from the MDX joint plan and that
+  plan's pivots. Ordinary births stay in the world pose sampled at birth.
+  Model-space particles follow the current ancestor pose. Hidden ground items
+  publish no root; unknown item visibility still refuses. Graphics tests: 62
+  passed, 0 failed, 3 ignored. The selected FireRockSmall gate passed 1.
+  Item birth passed 1 and doodad publication passed 2. `pcx-gfx` Clippy passed.
+  App Clippy is blocked in `pcx-play` ability-tooltip code, so WASM Clippy has
+  not run. The earlier offscreen replay remains exit 101. This is not full
+  renderer fidelity. See [particle publication](docs/re-notes/script-doodads.md#deferred-particle-publication-2026-10-25).
+
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
 
 Frontiers in older entries retain the result at that slice; the newest entry
 reports current progress.
+
+- [~] The source menu key and HUD Menu button now open the selected escape-menu
+  panels over the retained campaign scene. The clock pauses without replacing the
+  VM or erasing an explicit pause; world input and underlying Escape handlers are
+  blocked. Return/end/back, restart requests, mission quit and confirmed program
+  exit are connected. Fonts, text, dimensions, focus and art remain source-derived.
+  App 683, map-loading 194, strict native checks and explicit RoC/TFT source gates
+  pass. The first offscreen pass captures all three panels and passes clock hold/
+  resume, return, cancellation, quit and relaunch. The final pass verifies the live
+  Restart widget replaces the session, then quit/relaunch retires its scene and
+  console. A blank-click focus regression now passes using the shared modal
+  boundary. Save/load/options/help/tips remain disabled, and the complete
+  renderer gate remains red for sky/sight. Native menu parity and full mission
+  completion remain open. See [campaign escape menu](docs/re-notes/campaign-escape-menu.md).
+
+- [~] Campaign HUD lifetime: a regression reproduced the console surviving its
+  ended session until the next launch. Session replacement/exit now retires that
+  tree and its owned images/fonts through the same cleanup used by accepted HUD
+  replacement. Standalone HUDs and foreign assets survive; repeated retirement is
+  harmless. Source-policy production follows startup, and console-dependent
+  panels follow mounting. App 677, HUD tests and strict native/WASM checks pass.
+  The baseline script-exit/second-chapter replay completes without the recorded
+  stale-entity panic; final replay passes console retirement before
+  relaunch and publication of a replacement session/camera/console. No initial
+  parent-warning remains in that replay; the overall renderer gate is still red
+  for sky illumination and sight occlusion. The in-game Menu action still reveals the chapter screen instead of
+  its authored pause/quit panels; this is not a faithful completed menu flow.
+
+- [~] Source-derived corpse lifecycle and `UnitSuspendDecay`: admitted `UnitData`
+  death/deathType, ordered MiscData/map overrides and selected-image mask operands
+  drive canonical Death, Flesh, Bone, Dissipate and removal/hiding. Suspension
+  retains a phase's remaining lifetime without freezing its authored animation;
+  resume timing is a labeled recreation choice. Core 1,837, app 675, integration,
+  selected-source, strict native/WASM, app builds and graphics checks pass.
+  Unchanged RoC/TFT both restore control and pass a 300-second idle script replay;
+  TFT's permanent corpses remain suspended in Bone with their actual Decay Bone
+  clip. Offscreen post-intro main-menu entry reaches the mission, but its rendered
+  gate remains red for sky lighting and sight occlusion. No full objective
+  playthrough, resurrection or original corpse-timing parity is claimed. See
+  [corpse lifecycle](docs/re-notes/script-unit-corpses.md#decay-lifecycle-and-suspension-2026-10-25).
+
+- [~] Animation blend/playback controls: MODL supplies each model's default
+  transition duration, and the selected executable supplies the explicit setter's
+  clamp/disable operands. SetUnitBlendTime now drives actual local-pose blending
+  before hierarchy/pivot/billboard/look-at skinning. Interrupted transitions retain
+  one flat pose snapshot. SetUnitTimeScale preserves phase, supports local
+  freeze/resume/reverse and scales active transitions and queued boundaries.
+  Summon presentation follows actual animation progress while gameplay cast
+  timing remains unchanged. Nonstock/source/atomicity and actual CPU skinned-mesh
+  tests pass. Core 1,830, app 675, integration, selected-image decode, strict
+  native/WASM checks, both app builds and standalone graphics pass.
+  Unchanged TFT now passes both calls and next refuses
+  UnitSuspendDecay at Blizzard.j:3133; RoC passes its retained whole entry/control
+  horizon. Automatic corpse decay/suspension, original transition comparisons,
+  global-speed and paused-animation parity remain open. No new original-client
+  run or GPU/pixel comparison was made. See
+  [animation controls](docs/re-notes/script-unit-animation.md#clip-transitions-and-playback-controls-2026-10-25).
+
+- [~] `CreateCorpse` reuses canonical unit preparation and publishes dead
+  life/combat state with the selected model's Death clip. It does not issue a
+  synthetic kill or acquire a guard route, food use or active occupancy;
+  show/hide preserves dead-unit occupancy. Public API tests include a real kill
+  notification positive control, food totals, model/placement and failure
+  atomicity. Core 1,819, application 674 and integration suites pass, along with
+  strict native/WASM checks, builds and standalone graphics. Unchanged TFT now
+  creates its first corpse after returning control, then refuses
+  `SetUnitBlendTime` at Blizzard.j:3193. RoC still passes the whole diagnostic
+  horizon. Automatic decay/resurrection and the complete permanent-corpse helper
+  remain unfinished. No new original-client or corpse GPU comparison was run;
+  the reference Docker socket is unavailable to this process. See
+  [canonical corpse creation](docs/re-notes/script-unit-corpses.md).
+
+- [~] `SetItemVisible`/`IsItemVisible` now share source-derived creation state,
+  canonical inventory ownership and live renderer/picking eligibility. Hidden
+  items remain enumerable; carried setters are ignored. Cached held items and
+  ground drops use the same state. Animation Set/Queue now ignore removed-unit
+  references, matching the selected native resolver branch. The unchanged TFT
+  opening publishes 136 units and returns player control, then its 30-second
+  post-control horizon refuses `CreateCorpse` in Blizzard.j:3192. RoC passes the
+  whole entry/control/horizon gate. Core 1,817 and application 674 tests,
+  integration, strict native/WASM Clippy, native/WASM builds and standalone
+  graphics check pass. Offscreen source-item actor/picking hide/show passes;
+  the overall render gate still fails on sky/sight gaps. No original-client
+  comparison was run; item transfer edges remain fidelity work.
+  See [item visibility](docs/re-notes/script-items.md#item-visibility-2026-10-25).
+
+- [~] Source-bound `Preloader` now executes the selected file and common script
+  in an isolated VM with shared world natives. Actual preload paths warm a bounded
+  archive cache reused by normal asset reads; loose overrides remain live.
+  The unchanged TFT run retains 67 assets / 7,442,655 bytes before advancing to
+  its item-hiding callback. Item/destructable rectangle enumeration now uses the
+  same VM callback stack with filters, nested response contexts and canonical
+  records. TFT next refuses `SetItemVisible`; RoC still reaches control.
+  Nonstock/source/refusal tests, 1,812 core tests, 673 application tests, the asset
+  suites, strict native/WASM Clippy and both application builds pass. Native
+  asynchronous preload progress/cancellation, generated preload output,
+  enumeration edge/order parity and complete campaign execution remain open.
+  See [preloading](docs/re-notes/script-preloading.md) and
+  [rectangle callbacks](docs/re-notes/script-items.md#rectangle-item-and-destructable-callbacks-2026-10-25).
+
+- [~] Ally-color filter/getter now retain the selected client's raw UI state and
+  connect source-derived role palettes to live unit models, portraits and ordinary
+  minimap markers. Marker geometry/alpha comes from the shipped skin model;
+  owner colors, directional alliances, visibility and typed map overrides use the
+  existing canonical world. The unchanged TFT entry passes the former filter
+  refusal and next stops at `Preloader` on line 3545. Nonstock host/profile tests,
+  explicit original rules/sprite gates, 1,807 core and 669 application tests pass.
+  A native admission-stack fix covers Bevy borrowing smaller render-thread stacks;
+  its two-MiB caller regression passes without a stack environment override.
+  Offscreen model/minimap color changes and exact round-trip restoration pass;
+  the overall render gate still fails on known sky illumination and terrain/tree
+  sight occlusion. Strict native/WASM Clippy, standalone graphics and both
+  application builds pass. RoC still reaches player control.
+  Observer/special minimap layers, preference persistence, original pixel parity
+  and complete mission execution remain open. See
+  [ally-color display](docs/re-notes/campaign-runtime.md#ally-color-display-2026-10-25).
+
+- [~] Floating and amphibious units now retain separate source-derived pathing
+  classes through creation, collision, routing, visibility and relocation.
+  Their actor/look-at height uses checked terrain encoding plus the selected
+  Water.slk row and stored water levels. Extended campaign-menu selection now
+  resolves authored CampaignList indices, including blank slots, and survives
+  same-update exit. Core 1,803, application 665 and terrain 24 tests pass;
+  strict native/WASM Clippy, standalone graphics and native/WASM builds pass.
+  The unchanged TFT first chapter passes its former float and extended-menu
+  refusals and next stops at SetAllyColorFilterState. RoC still reaches player
+  control. Water texture/shore rendering, original trajectories/bridge elevation
+  and full mission playthrough remain open. See
+  [water movement](docs/re-notes/script-unit-world.md#floating-and-amphibious-movement-2026-10-25)
+  and [extended menu selection](docs/re-notes/campaign-runtime.md#extended-campaign-menu-selection-2026-10-25).
+
+- [~] The [complete scripting-host plan](docs/scripting-host-plan.md) now tracks
+  the entire selected API separately from host, runtime and presentation gates.
+  A source-parser inventory observes 1,383 native declarations and 1,044 library
+  functions; these are not support counts. Weather areas now read the selected
+  table and retain canonical add/enable/remove state, generic game-event
+  subscriptions reach the existing callback runtime, and camera destination
+  locations use ordinary snapshot handles. Placed doodad animation reaches the
+  model/particle consumer; world-bound snapshots and rectangular fog share the
+  existing rect/vision state. Hover creation, collision routes and guards are
+  admitted, and repeated fade-timer cleanup no longer aborts the library helper.
+  Core 1,799, application 662 and checked particles 40 tests pass. The
+  unchanged RoC prologue now publishes through chapter activation and returns its
+  opening to player control through Escape events, then advances another 30
+  diagnostic seconds through delayed gameplay setup without a stack environment
+  override. The offscreen mounted-menu run captures the restored control frame;
+  its strict render gate still refuses sky illumination and terrain/tree sight
+  occlusion. This is not a complete mission playthrough or visual-parity claim. Weather
+  rendering/ambience, full 3D fog, UI game-event producers and full API coverage
+  remain open. Strict workspace native all-target/all-feature Clippy, production
+  WASM Clippy, standalone graphics checks, native/WASM builds and formatting pass.
 
 - [~] Training command icons, positions, alphabetic hotkeys and tooltip text now
   read resolved unit metadata/profile values and scalar map overrides. Clicks

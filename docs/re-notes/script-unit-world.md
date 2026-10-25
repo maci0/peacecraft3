@@ -992,6 +992,25 @@ Synthetic tests cover flight admission, ground-mask/occupancy/domain bypass,
 fly-mask refusal, air stamps leaving ground occupancy unchanged and scripted fly
 movement. Focused library tests, strict Clippy and formatting pass locally.
 
+### Hover creation and movement (2026-10-25)
+
+The unchanged RoC prologue reaches its authored `ushd` creation after rectangle
+fog initialization. The selected `Units\\UnitData.slk` assigns that type
+`movetp=hover`; the extracted member SHA-256 is
+`34a0c8083f146b5d3e25d92a19a8822151d4b26dfe9c1c325a6229466d1b04d6`.
+No unit-specific compatibility exception is added. Activity admission, collision
+geometry and guard eligibility now accept the movement token together, retaining
+the authored speed, radius, model height and pathing footprint.
+
+The current reconstruction uses the existing ground-mask, ground-occupancy and
+terrain-domain route for hover. This agrees with the primary
+[Warsmash movement implementation](https://github.com/Retera/WarsmashModEngine/blob/main/core/src/com/etheller/warsmash/viewer5/handlers/w3x/environment/PathingGrid.java),
+where hover and foot test the same terrain channel. It is not a newly measured
+original-client collision/altitude comparison. Synthetic coverage creates a
+hover unit, routes it around an occupied cell at a nonstock speed, and checks
+computer guard admission. The later floating/amphibious entry below adds their
+separate water-pathing and surface path.
+
 ## Placed destructable life and stationary death (2026-10-22)
 
 Selected `.doo` records in the reference census expose life bytes `0..=100` and
@@ -1061,3 +1080,44 @@ rather than being assigned an invented palette index. The retained-field impleme
 is a recreation choice supported by the native setter path and existing
 renderer consumer, not a fresh native tint comparison. Exact visual refresh
 phase, null-color behavior and rendered parity remain unqualified.
+
+## Floating and amphibious movement (2026-10-25)
+
+The selected Legacy image `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
+resolves movement tokens through the string/enumerand records at `0x10dccc0`.
+The constructor uses **byte selectors** at `0x67d90c` followed by a jump table
+at `0x67d8f4`; treating the byte table as a direct array of addresses is wrong.
+Its ground, flight, float and amphibious branches load separate masks at
+`0x67cebc`, `0x67cec3`, `0x67cece` and `0x67ced5`. The existing checked placement
+reader now derives all four operands and refuses empty, non-single or overlapping
+masks. No selected mask value is copied into the runtime.
+
+Creation, show, relocation, pathing changes, live movement and guard eligibility
+retain the source movement class. Floating units use the swim channel; amphibious
+units may use walkable **or** swimmable cells, while respecting the separate
+amphibious exclusion channel. This shoreline rule is a reconstruction consistent
+with the primary Warsmash implementation linked above, not a new original-client
+trajectory observation. Ground and water dynamic occupancy are separate;
+amphibious units participate in both. Non-air unit footprints and stationary red
+footprint cells block both media. Flight keeps its existing separate behavior.
+
+The terrain reader's coordinate conversion supplies the new water-mover height
+path too: `0x735a87` multiplies a corner coordinate by a selected data float;
+`0x7361b4`/`0x7361bf` encode height with an additive bias and multiplicative factor
+in the older-format corner reader. The same packed low height field is retained
+by the current-format branch. Those data operands are read at runtime and their
+inverse maps raw corner indices to world height. The application selects the
+unique `Water.slk` row matching the map tileset, derives its height offset using
+the checked tile scale, and interpolates the map's stored water levels. Floating
+models require a water surface; amphibious models use the higher of floor and
+water, then add the authored model `moveHeight`. Look-at targets use the same
+surface. Legacy ground/water mesh helpers still carry their older measured-default
+API; the new surface path does not copy those defaults.
+
+Synthetic checks use different masks, tile scale, height bias/factor and water
+row names. They cover shoreline routes, collision release/show/relocation,
+stationary layers, real scripted movement and surface/model height. The unchanged
+TFT first chapter now passes its floating-unit creation and reaches later startup
+calls. Original boat trajectories, bank/pitch, bridge elevation and rendered water
+textures/shorelines remain unverified or unfinished. Water surface sampling is
+not a claim that the missing water renderer has been implemented.

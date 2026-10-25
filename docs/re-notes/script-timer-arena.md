@@ -10,8 +10,9 @@ selected-map scalar adapters and localization can wrap it without recompilation.
 Creation allocates a live timer entry in the existing bounded arena. A timer is
 an object identity, not a constant, null result or symbolic integer conversion.
 Multiple creations return distinct identities and cannot collide with enum
-values. Destruction marks that exact timer entry dead; arena type lookup and
-further destruction reject the dead identity. Aliases do not revive it. Ordinary
+values. Destruction marks that exact timer entry dead; arena type lookup rejects
+the dead identity. Repeated destruction of that retained timer entry returns
+normally and never revives it. Ordinary
 reserved objects merely named `timer` do not acquire timer lifecycle state.
 
 The arena's existing `max_handles` policy bounds total identities ever issued,
@@ -24,7 +25,7 @@ session; a raw `HandleId` is not cross-session authentication.
 This slice implements only creation and destruction. It does not assign timeout,
 clock, period, elapsed values or callbacks. Scheduling and time-query natives
 remain unsupported, and no timer can expire through this wrapper yet. Invalid,
-null, wrong-family and already-destroyed timer arguments refuse contextually;
+null and wrong-family timer arguments refuse contextually;
 that refusal policy is not native exceptional-input parity. The native scheduler
 findings in [legacy-simulation-clock.md](legacy-simulation-clock.md) are unchanged;
 `TICK_MS` is untouched.
@@ -77,3 +78,16 @@ adds one optional run to these same timer entries. Caller-supplied game time and
 an explicit published-session advance enable bounded non-yielding callbacks;
 the timer-only constructor above still admits creation/destruction only.
 Expiry-trigger execution and an automatic application clock remain open.
+
+## Repeated cinematic fade cleanup (2026-10-25)
+
+The unchanged selected `Blizzard.j` `AbortCinematicFadeBJ` destroys non-null
+global timer references without clearing those globals. Consecutive fade calls
+can therefore destroy the same timer again. Refusing that second call stopped
+the published RoC prologue during its opening. Cleanup now succeeds for an
+already-destroyed entry of the correct timer family, while elapsed/start queries
+still reject it and new timers retain distinct identities. Invalid or reserved
+non-timer identities retain their previous contextual errors. Synthetic VM and
+running-timer tests cover repeated cleanup without resurrection or a later tick.
+This follows the shipped library's lifecycle contract; arbitrary invalid-handle
+parity with the original client is not established.

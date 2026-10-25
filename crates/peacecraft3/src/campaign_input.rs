@@ -13,6 +13,7 @@ use pcx_objects::editor::selection::SelectionCircles;
 use pcx_play::{
     map_startup_host::MapStartupHost,
     player_command_log::{PlayerCommand, PlayerCommandLog},
+    playercolor_host::{VisionCapability, VisionState},
 };
 use pcx_script::{HandleId, Host, Value};
 use peacecraft3::{
@@ -107,6 +108,7 @@ fn command_button(
     actions: Res<crate::button_actions::ButtonActions>,
     buttons: Query<&crate::campaign_command_card::ButtonOrder>,
     mut input: ResMut<CampaignInput>,
+    mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
     let witness = session.session_witness();
@@ -142,7 +144,25 @@ fn command_button(
         }
         let result = match button.kind {
             crate::campaign_command_card::Kind::TargetUnit => {
-                objects.holy_light_command(button.unit)
+                match (
+                    objects.holy_light_command(button.unit),
+                    objects.chain_lightning_command(button.unit),
+                ) {
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                    (Ok(holy), Ok(chain)) => {
+                        let mut found = Vec::new();
+                        if let Some(command) = holy {
+                            found.push(command);
+                        }
+                        if let Some(command) = chain {
+                            found.push(command);
+                        }
+                        Ok(match button.order {
+                            Some(order) => found.into_iter().find(|command| command.order == order),
+                            None => found.into_iter().next(),
+                        })
+                    }
+                }
             }
             crate::campaign_command_card::Kind::Immediate => {
                 objects.water_elemental_command(button.unit)
@@ -160,6 +180,21 @@ fn command_button(
                 }
                 continue;
             }
+            crate::campaign_command_card::Kind::SkillMenu => {
+                card.open_skills();
+                if let Err(error) = host.objects_mut().fire_game_event("EVENT_GAME_SHOW_SKILL") {
+                    input.last_error = Some(error.to_string());
+                }
+                continue;
+            }
+            crate::campaign_command_card::Kind::SkillCancel => {
+                card.close_skills();
+                continue;
+            }
+            crate::campaign_command_card::Kind::Learn(ability) => {
+                learn_skill(host, &mut input, button.unit, ability);
+                continue;
+            }
         };
         match result {
             Ok(Some(command)) => match button.kind {
@@ -175,7 +210,10 @@ fn command_button(
                     immediate_command(host, &mut input, button.unit, command.order);
                 }
                 crate::campaign_command_card::Kind::Standard(_)
-                | crate::campaign_command_card::Kind::Train(_) => unreachable!("handled above"),
+                | crate::campaign_command_card::Kind::Train(_)
+                | crate::campaign_command_card::Kind::SkillMenu
+                | crate::campaign_command_card::Kind::SkillCancel
+                | crate::campaign_command_card::Kind::Learn(_) => unreachable!("handled above"),
             },
             Err(error) => input.last_error = Some(error.to_string()),
             Ok(None) => {}
@@ -258,6 +296,35 @@ pub(crate) fn activate_standard(
         });
     }
     Ok(())
+}
+
+fn learn_skill(host: &mut MapStartupHost, input: &mut CampaignInput, unit: HandleId, ability: i32) {
+    let alias = ability.to_be_bytes();
+    let ready = match host.objects().skills_ready_to_learn(unit) {
+        Ok(ready) => ready,
+        Err(error) => {
+            input.last_error = Some(error.to_string());
+            return;
+        }
+    };
+    if !ready.contains(&alias) {
+        input.last_error = Some("shown skill is not ready to learn".into());
+        return;
+    }
+    let clock = host.objects().timer_game_time();
+    match host.objects_mut().native(
+        "SelectHeroSkill",
+        &[Value::Handle(unit), Value::Int(ability)],
+    ) {
+        Ok(Value::Null) => {
+            let command = PlayerCommand::Learn { unit, ability };
+            if let Err(error) = input.commands.record(clock, command) {
+                input.last_error = Some(error.to_string());
+            }
+        }
+        Ok(other) => input.last_error = Some(format!("SelectHeroSkill returned {other:?}")),
+        Err(error) => input.last_error = Some(error.to_string()),
+    }
 }
 
 fn record_order_result(
@@ -344,7 +411,7 @@ fn use_inventory_slot(
     let Some((unit, slot)) = inventory.use_request.take() else {
         return;
     };
-    if !view.active() || hud.quest_log_open || dialogs.input_blocked() {
+    if !view.active() || view.menu_open() || hud.quest_log_open || dialogs.input_blocked() {
         return;
     }
     let Some(host) = session.host() else {
@@ -397,7 +464,8 @@ fn hud_menu(
         .read()
         .any(|action| matches!(action, crate::campaign_hud::CampaignHudAction::Menu))
     {
-        view.suspend();
+        let open = !view.menu_open();
+        view.set_menu_open(open);
     }
 }
 
@@ -466,6 +534,7 @@ fn end_cinematic(
 ) {
     if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape))
         || !view.active()
+        || view.menu_open()
         || hud.quest_log_open
         || hud.quest_escape_consumed
         || dialogs.input_blocked()
@@ -485,6 +554,28 @@ fn end_cinematic(
             record_command(&mut input, clock, command);
         }
         Err(error) => input.last_error = Some(error.to_string()),
+    }
+}
+
+/// `Err` means the click must stop before a selection or order write.
+/// `Ok(None)` is an unadmitted world and keeps the previous pick.
+fn pick_sight(
+    objects: &pcx_play::playercolor_host::ObjectHost,
+    input: &mut CampaignInput,
+) -> Result<Option<(HandleId, bool, bool)>, ()> {
+    match objects.vision_capability() {
+        VisionCapability::Unadmitted => Ok(None),
+        VisionCapability::Unavailable(reason) => {
+            input.last_error = Some(reason.to_string());
+            Err(())
+        }
+        VisionCapability::Ready { fog, mask } => match objects.local_player_settings() {
+            Some(local) => Ok(Some((local.identity, fog, mask))),
+            None => {
+                input.last_error = Some("shared vision needs a local player".into());
+                Err(())
+            }
+        },
     }
 }
 
@@ -611,6 +702,7 @@ fn commands_available(
 ) -> bool {
     let objects = host.objects();
     view.active()
+        && !view.menu_open()
         && !hud.quest_log_open
         && !dialogs.input_blocked()
         && !objects
@@ -806,6 +898,7 @@ fn click(
     let order = mouse.just_pressed(MouseButton::Right);
     if !(select || order)
         || !view.active()
+        || view.menu_open()
         || hud.quest_log_open
         || hud.pointer_consumed
         || inventory.pointer_consumed
@@ -835,14 +928,14 @@ fn click(
     };
     let additive =
         keys.is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight));
-    let item_hit = session
-        .session_witness()
-        .and_then(|witness| actors.item_hit(ray, far, &witness));
     let witness = session.session_witness();
     let Some(host) = session.host() else {
         return;
     };
     let objects = host.objects_mut();
+    let item_hit = witness
+        .as_ref()
+        .and_then(|witness| actors.item_hit(ray, far, witness, objects));
     if objects
         .presentation()
         .is_some_and(|p| p.control_enabled == Some(false))
@@ -857,17 +950,36 @@ fn click(
     }) {
         return;
     }
+    let visibility = match pick_sight(objects, &mut input) {
+        Ok(gate) => gate,
+        Err(()) => return,
+    };
+    let mut vision_error = None;
     let picked = objects
         .executed_units()
         .filter(|(_, unit)| unit.shown && unit.combat.as_ref().is_none_or(|c| !c.dead))
         .filter_map(|(id, unit)| {
             let [x, y] = unit.position?;
+            if let Some((viewer, fog, mask)) = visibility {
+                match objects.vision_presented(viewer, [x, y], fog, mask) {
+                    Ok(Some(VisionState::Visible)) => {}
+                    Ok(_) => return None,
+                    Err(error) => {
+                        vision_error = Some(error.to_string());
+                        return None;
+                    }
+                }
+            }
             let scale = crate::campaign_actors::scalar(&unit.definition, "scale").ok()?;
             let distance = ((x - point[0]).powi(2) + (y - point[1]).powi(2)).sqrt();
             (distance <= scale * circles.scale_factor * 0.5).then_some((id, distance))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
+    if let Some(error) = vision_error {
+        input.last_error = Some(error);
+        return;
+    }
     debug!(?point, ?picked, select, "campaign pointer hit");
     let standard = input
         .command
@@ -983,7 +1095,7 @@ fn click(
         let (result, command) = if let Some(item) = item_hit.filter(|&id| {
             objects
                 .executed_item(id)
-                .is_ok_and(|item| item.held_by.is_none())
+                .is_ok_and(|item| item.visible() == Some(true))
         }) {
             let result = objects.native(
                 "IssueTargetOrder",
@@ -1181,6 +1293,7 @@ mod tests {
                     unit: producer,
                     kind: Kind::Train(kind),
                     session: witness,
+                    order: None,
                 },
             ))
             .id();
@@ -1314,6 +1427,7 @@ mod tests {
                     unit: units[0],
                     kind: Kind::Standard(Standard::Hold),
                     session: witness.clone(),
+                    order: None,
                 },
             ))
             .id();
@@ -1551,6 +1665,7 @@ mod tests {
                     unit,
                     kind: Kind::TargetUnit,
                     session: Arc::downgrade(&other_session),
+                    order: None,
                 },
             ))
             .id();
@@ -1569,6 +1684,7 @@ mod tests {
                     unit,
                     kind: Kind::TargetUnit,
                     session: witness.clone(),
+                    order: None,
                 },
             ))
             .id();
@@ -1796,5 +1912,111 @@ mod tests {
         assert_eq!(letter_key('Z'), Some(KeyCode::KeyZ));
         assert_eq!(letter_key('1'), None);
         assert_eq!(letter_key('t'), None);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    #[test]
+    fn unavailable_ledger_refuses_a_pick_before_an_order() {
+        use pcx_play::map_startup_host::SettingsObservation;
+        const EXTRA: &str = "type mapflag extends handle
+constant native ConvertMapFlag takes integer i returns mapflag
+native SetMapFlag takes mapflag flag, boolean value returns nothing
+native IsMapFlagSet takes mapflag flag returns boolean
+type gamespeed extends handle
+constant native ConvertGameSpeed takes integer i returns gamespeed
+constant native GetGameSpeed takes nothing returns gamespeed
+native SetGameSpeed takes gamespeed speed returns nothing
+native IsFogEnabled takes nothing returns boolean
+native IsFogMaskEnabled takes nothing returns boolean
+native FogEnable takes boolean enabled returns nothing
+native FogMaskEnable takes boolean enabled returns nothing
+globals
+constant mapflag MAP_LOCK_SPEED = ConvertMapFlag(17*19)
+constant gamespeed CURRENT_SPEED = ConvertGameSpeed(-17)
+endglobals
+";
+        let mut app = App::new();
+        peacecraft3::map_requests::install(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
+        let mut fixture = crate::campaign_startup_cases::fixture(
+            "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+        );
+        fixture.common.extend_from_slice(EXTRA.as_bytes());
+        fixture.rebuild();
+        let resolver = fixture.resolver();
+        let bound =
+            peacecraft3::map_binding::bind_map(&resolver, fixture.input(1), fixture.limits())
+                .unwrap();
+        let mut inputs =
+            crate::campaign_startup_cases::host_inputs(std::sync::Arc::clone(&bound.catalog.0));
+        inputs
+            .enumeration
+            .names
+            .extend(["ConvertGameSpeed".into(), "ConvertMapFlag".into()]);
+        inputs.post_config.settings = Some(SettingsObservation {
+            speed_global: "CURRENT_SPEED".into(),
+            fog_enabled: true,
+            fog_mask_enabled: true,
+        });
+        let bytes = std::sync::Arc::clone(&bound.catalog_map_bytes);
+        app.insert_resource(peacecraft3::map_requests::MapRequests {
+            bindings: Some(bound),
+            ..default()
+        })
+        .insert_resource(peacecraft3::campaign_startup::CampaignHostSupply {
+            revision: 1,
+            inputs: Some(inputs),
+        });
+        app.world_mut()
+            .write_message(peacecraft3::map_requests::MapRequest {
+                label: "synthetic pick refusal".into(),
+                map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+                identity: fixture.map_id.clone(),
+                binding_revision: 1,
+                payload: peacecraft3::map_requests::MapPayload::Shared(bytes),
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<peacecraft3::campaign_startup::CampaignStartup>()
+                .last_error
+                .is_none(),
+            "{:?}",
+            app.world()
+                .resource::<peacecraft3::campaign_startup::CampaignStartup>()
+                .last_error
+        );
+        let witness = Arc::new(());
+        let mut input = CampaignInput {
+            command: Some(ArmedCommand {
+                order: 7,
+                kind: crate::campaign_command_card::Kind::TargetUnit,
+                session: Arc::downgrade(&witness),
+            }),
+            ..default()
+        };
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            let selected = objects.selection().to_vec();
+            assert!(matches!(
+                objects.vision_capability(),
+                VisionCapability::Unavailable(_)
+            ));
+            assert!(pick_sight(objects, &mut input).is_err());
+            assert_eq!(objects.selection(), selected.as_slice());
+        }
+        assert!(
+            input
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("shared vision")),
+            "{:?}",
+            input.last_error
+        );
+        assert!(input.command.is_some());
+        assert!(input.commands.entries().is_empty());
     }
 }

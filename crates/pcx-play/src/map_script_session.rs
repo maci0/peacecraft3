@@ -258,6 +258,32 @@ pub enum TimerSessionError {
 }
 
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    /// Sample admitted shared vision after script delivery. A blocked admission
+    /// is retried, so placement or day/night that arrives later can still admit.
+    /// An already live ledger is left in place. Sessions that stay blocked are
+    /// unchanged. The work limit is the vision grid budget, not `max_expiries`.
+    pub fn sample_admitted_vision(&mut self) -> Result<(), TimerSessionError> {
+        if let Some(host) = self.host() {
+            host.objects_mut().admit_shared_vision()?;
+        }
+        let admitted = self
+            .host()
+            .is_some_and(|host| host.objects().shared_vision_admitted());
+        if !admitted {
+            return Ok(());
+        }
+        let limit = self
+            .host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects()
+            .shared_vision_work_limit()?;
+        self.host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects_mut()
+            .sample_shared_vision(limit)?;
+        Ok(())
+    }
+
     /// Deliver positive-timeout callbacks in this published VM using explicit game time.
     /// Errors retain prior effects; the host clock records how far delivery reached.
     /// An executed game pause freezes future timer/wake delivery after the current event.

@@ -80,6 +80,54 @@ selected source copy and `PCX_PLAYER_RESOURCE_IMAGE` identifying the selected
 executable. It derives Hart's policy from original tables and the same registry;
 full unchanged Human01 pickup/return execution remains a separate runtime gate.
 
+## UnitAddItemToSlotById
+
+Selected image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The native is `(Hunit;II)B`. Aligned windows, half-open, from that image:
+
+| Window | VA | SHA-256 |
+| --- | --- | --- |
+| Registration | `0x49d93f..0x49d953` | `704faf32061316ccf859b0c2e66a7768904bef7a564d1d1993a559f1e47037c2` |
+| Handler | `0x4aeba0..0x4aec44` | `d1e6361ac973803cf3efd7c6b7143c226aa4e5b90ca621d6a8c1ff21cebff51f` |
+| Slot dispatch | `0x67a310..0x67a3b9` | `64f11e54d7722d0d818988c7f64741c1927ecb02ade9fa0c22125cd4f2d35b61` |
+| Ordinary add | `0x67a2a0..0x67a2ff` | `068fb66c1bf3f0f98bcb70cfa8e015b39e923d8090360cf7301c8d0bcc9e5cb7` |
+| Slot writer | `0xb45660..0xb458c2` | `36e92acf8623b43983fd7826bd5189ecfacc277c2359fdd288c3bc33d1179b9c` |
+| Powerup writer | `0xb47a80..0xb47ad5` | `700a71845a84a8247789e439203cde6bce9bcb2847dc890cb83ad28f063546b4` |
+
+The raw windows and objdump listings stay in
+`.scratch/unit-add-item-slot-20261025/`. The original executable was not run.
+
+The handler resolves the unit and returns false for a null pointer. It copies
+the unit's current position, then calls the item constructor before the
+inventory checks. A null constructor result returns false. A later false return
+does not delete the item. Eligibility uses the inventory component and the same
+permission call as `UnitAddItem`. The host treats a dead unit, or a source
+policy that cannot get items, as that refusal: the new item stays unheld at the
+accepted unit position. Other native flag bits in that permission call are not
+mapped.
+
+An admitted automatic powerup takes the same grant path as `UnitAddItem` and
+ignores the requested slot. The powerup writer passes slot `-1`. A grant the
+host cannot prepare returns an error before the record exists. A prepared grant
+creates the item unheld, applies the strength pools, queues the pickup, and
+returns true.
+
+An ordinary item compares the slot as an unsigned index with the source
+inventory capacity. The writer also rejects a slot at or above the minimum of
+that capacity and an unclassified converted value. The host uses the source
+capacity only. An out-of-range or occupied slot returns false and leaves the
+new item unheld at the unit position. There is no search for another slot.
+A free in-range slot is attached directly. Passive checks, pickup callback
+resolution, and event capacity run before that record is published. A condition
+and a filter are both legal pickup boolexprs. Catalog, budget, passive, and
+callback failures leave the arena unchanged.
+
+The same Prologue02 opening that used to stop inside this native now passes the
+startup and timer horizon on `peacecraft3-becac95980727bee` (26.42s, 6 items, 0
+visible). The visible count is the gate's report, not a ground-render result.
+The following order frontier is the point `setrally` note in
+[immediate orders](script-immediate-orders.md).
 
 ## Ground item consumer and current runtime gate
 

@@ -179,6 +179,15 @@ fn start_admitted_map(
             pcx_play::campaign_host::apply_after_config(vm, &admitted, completed, &post)
         },
     );
+    let result = match result {
+        Ok(()) => session.sample_admitted_vision().map_err(|error| {
+            pcx_play::map_script_session::ScriptSessionError::Factory {
+                identity: context.sources.map.clone(),
+                source: Box::new(error),
+            }
+        }),
+        Err(error) => Err(error),
+    };
     key.retryable = result.is_err();
     startup.attempted = Some(key);
     startup.last_error = result.err().map(StartupError::Session);

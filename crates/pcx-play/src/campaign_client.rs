@@ -150,6 +150,10 @@ pub fn placement_rules(
             two_initializer: window(0x401560, 16)?,
             ground_mask: window(0x67cebc, 5)?,
             fly_mask: window(0x67cec3, 5)?,
+            float_mask: window(0x67cece, 5)?,
+            amphibious_mask: window(0x67ced5, 5)?,
+            terrain_xy: window(0x735a87, 8)?,
+            terrain_height: window(0x7361b4, 19)?,
         },
         BUDGET,
     )

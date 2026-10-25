@@ -27,8 +27,7 @@ fn animation(vm: &mut Vm, unit: HandleId) -> String {
         .clone()
 }
 
-#[test]
-fn summoning_presents_source_spell_and_birth_then_returns_to_stand() {
+fn presentation_model() -> Arc<crate::unit_model::Model> {
     let mut sequences = Vec::new();
     for (name, end) in [("Stand", 1000_u32), ("Spell", 750), ("Birth", 500)] {
         let mut sequence = vec![0; pcx_mdl::SEQUENCE_SIZE];
@@ -39,10 +38,13 @@ fn summoning_presents_source_spell_and_birth_then_returns_to_stand() {
     let mut bytes = b"MDLXVERS".to_vec();
     bytes.extend(4_u32.to_le_bytes());
     bytes.extend(800_u32.to_le_bytes());
+    bytes.extend(b"MODL");
+    bytes.extend((pcx_mdl::MODL_SIZE as u32).to_le_bytes());
+    bytes.extend(vec![0; pcx_mdl::MODL_SIZE]);
     bytes.extend(b"SEQS");
     bytes.extend((sequences.len() as u32).to_le_bytes());
     bytes.extend(sequences);
-    let model = Arc::new(
+    Arc::new(
         crate::unit_model::Model::read(
             crate::scripts::AssetIdentity {
                 source: "synthetic".into(),
@@ -54,7 +56,12 @@ fn summoning_presents_source_spell_and_birth_then_returns_to_stand() {
             4096,
         )
         .unwrap(),
-    );
+    )
+}
+
+#[test]
+fn summoning_presents_source_spell_and_birth_then_returns_to_stand() {
+    let model = presentation_model();
     let (mut vm, [caster, _, _, _]) =
         holy_open_with_model("", "", "AHwe", HOLY_ART_END_MS, Some(model));
     prepare(&mut vm);
@@ -65,6 +72,49 @@ fn summoning_presents_source_spell_and_birth_then_returns_to_stand() {
     assert_eq!(animation(&mut vm, summoned), "Birth");
     step(&mut vm, 0.75);
     assert_eq!(animation(&mut vm, caster), "Stand");
+    assert_eq!(animation(&mut vm, summoned), "Stand");
+}
+
+#[test]
+fn scaled_spell_and_frozen_birth_keep_visual_lifetimes_separate_from_gameplay_windup() {
+    let (mut vm, [caster, _, _, _]) =
+        holy_open_with_model("", "", "AHwe", HOLY_ART_END_MS, Some(presentation_model()));
+    prepare(&mut vm);
+    vm.host()
+        .inner
+        .native(
+            "SetUnitTimeScale",
+            &[Value::Handle(caster), Value::Real(0.5)],
+        )
+        .unwrap();
+    assert!(cast(&mut vm, caster));
+    step(&mut vm, 0.25);
+    let summoned = vm.host().inner.executed_units().last().unwrap().0;
+    assert_ne!(
+        summoned, caster,
+        "visual playback must not delay the gameplay cast point"
+    );
+    vm.host()
+        .inner
+        .native(
+            "SetUnitTimeScale",
+            &[Value::Handle(summoned), Value::Real(0.)],
+        )
+        .unwrap();
+    step(&mut vm, 1.);
+    assert_eq!(animation(&mut vm, caster), "Spell");
+    assert_eq!(animation(&mut vm, summoned), "Birth");
+    step(&mut vm, 1.5);
+    assert_eq!(animation(&mut vm, caster), "Stand");
+    assert_eq!(animation(&mut vm, summoned), "Birth");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitTimeScale",
+            &[Value::Handle(summoned), Value::Real(2.)],
+        )
+        .unwrap();
+    step(&mut vm, 1.75);
     assert_eq!(animation(&mut vm, summoned), "Stand");
 }
 

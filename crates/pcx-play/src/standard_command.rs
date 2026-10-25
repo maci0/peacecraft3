@@ -92,6 +92,78 @@ impl Command {
     }
 }
 
+/// A command-grid button that opens or closes a submenu. Hotkey text is taken
+/// from the profile: one letter, or a decimal code such as the cancel binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuButton {
+    pub art_key: String,
+    pub position: [usize; 2],
+    pub hotkey: MenuHotkey,
+    pub tooltip: Tooltip,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuHotkey {
+    Letter(char),
+    Code(i32),
+}
+
+impl MenuButton {
+    pub fn read(editor: &Editor, name: &str) -> Result<Self, String> {
+        let row = editor
+            .command(name)
+            .ok_or_else(|| format!("missing command profile {name}"))?;
+        let value = |key| -> Result<&str, String> {
+            match row.values(key) {
+                [value] if !value.trim().is_empty() && value.len() <= 64 << 10 => Ok(value.trim()),
+                _ => Err(format!(
+                    "{name}.{key}: missing, ambiguous or oversized value"
+                )),
+            }
+        };
+        let position = value("Buttonpos")?
+            .split(',')
+            .map(|part| part.trim().parse::<usize>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("{name}.Buttonpos: {error}"))?
+            .try_into()
+            .map_err(|_| format!("{name}.Buttonpos requires two coordinates"))?;
+        let raw_hotkey = value("Hotkey")?;
+        let hotkey = if raw_hotkey.chars().count() == 1
+            && raw_hotkey
+                .chars()
+                .next()
+                .is_some_and(|key| key.is_ascii_alphabetic())
+        {
+            MenuHotkey::Letter(raw_hotkey.chars().next().expect("one char"))
+        } else if let Ok(code) = raw_hotkey.parse::<i32>() {
+            if code < 0 {
+                return Err(format!("{name}.Hotkey: negative code"));
+            }
+            MenuHotkey::Code(code)
+        } else {
+            return Err(format!("{name}.Hotkey: unsupported binding"));
+        };
+        let title = value("Tip")?;
+        let description = value("Ubertip")?;
+        if [title, description]
+            .iter()
+            .any(|text| text.starts_with("TRIGSTR_") || text.contains(['<', '>']))
+        {
+            return Err(format!("{name}: unresolved tooltip reference"));
+        }
+        Ok(Self {
+            art_key: value("Art")?.into(),
+            position,
+            hotkey,
+            tooltip: Tooltip {
+                title: title.into(),
+                description: description.into(),
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

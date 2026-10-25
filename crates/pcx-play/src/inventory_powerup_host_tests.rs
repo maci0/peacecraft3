@@ -29,6 +29,7 @@ native GetStoredInteger takes gamecache cache, string mission, string key return
 type item extends widget
 native CreateItem takes integer i, real x, real y returns item
 native UnitAddItem takes unit u, item i returns boolean
+native UnitAddItemToSlotById takes unit whichUnit, integer itemId, integer itemSlot returns boolean
 native UnitRemoveItem takes unit u, item i returns nothing
 native UnitUseItem takes unit whichUnit, item whichItem returns boolean
 native UnitUseItemTarget takes unit whichUnit, item whichItem, widget target returns boolean
@@ -865,6 +866,152 @@ fn queued_pickup_reads_the_live_item_then_consumes_it_after_delivery() {
     assert!(h.executed_items().all(|(id, _)| id != tome));
     assert!(h.take_fired_event().is_none());
     assert_eq!(add(&mut h, hero, tome), Ok(Value::Bool(false)));
+}
+
+fn slot_tome(h: &mut ObjectHost, unit: HandleId, slot: i32) -> Result<Value, String> {
+    h.native(
+        "UnitAddItemToSlotById",
+        &[
+            Value::Handle(unit),
+            Value::Int(i32::from_be_bytes(*b"tstr")),
+            Value::Int(slot),
+        ],
+    )
+}
+
+/// The granted tome is live for the pickup callback, then gone once delivery finishes.
+fn finish_powerup_pickup(h: &mut ObjectHost, unit: HandleId, tome: HandleId) {
+    let fired = h.take_fired_event().expect("powerup pickup");
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(h.native("GetManipulatedItem", &[]), Ok(Value::Handle(tome)));
+    assert_eq!(
+        h.native("GetItemTypeId", &[Value::Handle(tome)]),
+        Ok(Value::Int(i32::from_be_bytes(*b"tstr")))
+    );
+    h.finish_fired_event();
+    assert_eq!(
+        h.native("GetItemTypeId", &[Value::Handle(tome)]),
+        Ok(Value::Int(0))
+    );
+    assert!(h.executed_items().all(|(id, _)| id != tome));
+    assert!(h.take_fired_event().is_none());
+    assert!(h.held_slot(unit, 0).is_none() || h.held_slot(unit, 0) != Some(tome));
+}
+
+#[test]
+fn slot_by_id_grants_a_powerup_for_any_slot_and_a_dead_hero_keeps_a_ground_item() {
+    let Fixture { mut h, hero, .. } = open();
+    let occupant = item(&mut h, b"tsrd", 8.0);
+    assert_eq!(add(&mut h, hero, occupant), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(occupant));
+    register_pickup(&mut h, hero);
+    let before = h.unit_vitals(hero).unwrap().unwrap();
+    let position = h.executed_unit(hero).unwrap().position.unwrap();
+    assert_eq!(slot_tome(&mut h, hero, 0), Ok(Value::Bool(true)));
+    assert_eq!(h.held_slot(hero, 0), Some(occupant));
+    assert_eq!(
+        h.unit_vitals(hero).unwrap().unwrap().max_life,
+        before.max_life + TOME_STRENGTH * LIFE_PER_STRENGTH
+    );
+    let (tome, at, claimed) = h
+        .executed_items()
+        .find(|(_, record)| record.definition.rawcode == *b"tstr")
+        .map(|(id, record)| {
+            (
+                id,
+                [record.x, record.y],
+                record.claimed && record.held_by.is_none(),
+            )
+        })
+        .expect("created tome");
+    assert_eq!(at, position);
+    assert!(claimed);
+    finish_powerup_pickup(&mut h, hero, tome);
+    assert_eq!(h.held_slot(hero, 0), Some(occupant));
+    assert_eq!(
+        h.unit_vitals(hero).unwrap().unwrap().max_life,
+        before.max_life + TOME_STRENGTH * LIFE_PER_STRENGTH
+    );
+
+    let placed = create_unit(&mut h, b"H001", 40.0);
+    let open_life = h.unit_vitals(placed).unwrap().unwrap();
+    let placed_at = h.executed_unit(placed).unwrap().position.unwrap();
+    assert_eq!(slot_tome(&mut h, placed, -1), Ok(Value::Bool(true)));
+    assert!(
+        (0..h.inventory_policy(placed).unwrap().slots)
+            .all(|slot| h.held_slot(placed, slot).is_none())
+    );
+    assert_eq!(
+        h.unit_vitals(placed).unwrap().unwrap().max_life,
+        open_life.max_life + TOME_STRENGTH * LIFE_PER_STRENGTH
+    );
+    let (tome, at) = h
+        .executed_items()
+        .find(|(_, record)| record.definition.rawcode == *b"tstr" && record.held_by.is_none())
+        .map(|(id, record)| (id, [record.x, record.y]))
+        .expect("invalid-slot tome");
+    assert_eq!(at, placed_at);
+    finish_powerup_pickup(&mut h, placed, tome);
+
+    h.kill_unit(hero, None).unwrap();
+    let dead_life = h.unit_vitals(hero).unwrap().unwrap().max_life;
+    let before_items = h.executed_items().count();
+    assert_eq!(slot_tome(&mut h, hero, 0), Ok(Value::Bool(false)));
+    assert_eq!(h.unit_vitals(hero).unwrap().unwrap().max_life, dead_life);
+    assert_eq!(h.executed_items().count(), before_items + 1);
+    assert!(
+        h.executed_items()
+            .filter(|(_, record)| record.definition.rawcode == *b"tstr")
+            .any(|(_, record)| record.held_by.is_none() && !record.claimed)
+    );
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn slot_by_id_applies_passive_strength_only_after_the_holder_can_take_it() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let before_items = h.executed_items().count();
+    let before_handles = h.inner().handles();
+    let err = h
+        .native(
+            "UnitAddItemToSlotById",
+            &[
+                Value::Handle(ordinary),
+                Value::Int(i32::from_be_bytes(*b"pstr")),
+                Value::Int(0),
+            ],
+        )
+        .unwrap_err();
+    assert!(err.contains("non-hero"), "{err}");
+    assert_eq!(h.executed_items().count(), before_items);
+    assert_eq!(h.inner().handles(), before_handles);
+    let before = strength_and_agility(&mut h, hero);
+    assert_eq!(
+        h.native(
+            "UnitAddItemToSlotById",
+            &[
+                Value::Handle(hero),
+                Value::Int(i32::from_be_bytes(*b"pstr")),
+                Value::Int(1),
+            ],
+        ),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(h.held_slot(hero, 0), None);
+    assert!(h.held_slot(hero, 1).is_some());
+    let delta = PASSIVE_STRENGTH * LIFE_PER_STRENGTH;
+    assert_eq!(
+        strength_and_agility(&mut h, hero),
+        (before.0 + delta, before.1 + delta)
+    );
+    assert_eq!(
+        damage(&h, hero),
+        (HERO_STR + PASSIVE_STRENGTH) * PRIMARY_DAMAGE
+    );
 }
 
 #[test]

@@ -110,6 +110,8 @@ fn periodic_callback_queries_and_restart_destroy_use_the_same_timer_entry() {
     assert_eq!(h.timer_game_time(), Some(20.625));
     h.native("DestroyTimer", std::slice::from_ref(&timer))
         .unwrap();
+    h.native("DestroyTimer", std::slice::from_ref(&timer))
+        .unwrap();
     assert!(h.native("GetExpiredTimer", &[]).is_err());
     h.finish_timer_expiry(expiry).unwrap();
     assert!(h.next_timer_expiry(30.0, &mut 0).unwrap().is_none());

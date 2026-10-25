@@ -108,7 +108,13 @@ fn activate(
     mut state: ResMut<UpperControls>,
     mut actions: MessageWriter<CampaignHudAction>,
     keys: Res<ButtonInput<KeyCode>>,
+    camera: Option<Res<CampaignCamera>>,
 ) {
+    if camera.is_some_and(|camera| camera.menu_open()) {
+        state.escape_consumed = false;
+        state.pointer_consumed = std::mem::take(&mut state.pointer_pending);
+        return;
+    }
     state.escape_consumed = state.open && keys.just_pressed(KeyCode::Escape);
     state.pointer_consumed = std::mem::take(&mut state.pointer_pending);
     for entity in &activations.entities {
@@ -613,6 +619,7 @@ fn upper(commands: &mut Commands, source: &Source) -> Result<Entity, String> {
             .spawn((
                 UiButton,
                 action,
+                Name::new(name),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Percent(rect.left / width * 100.),
@@ -811,6 +818,31 @@ fn quest_log(
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn escape_in_the_game_menu_does_not_close_the_underlying_quest_log() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<UpperControls>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .add_message::<CampaignHudAction>();
+        let mut camera = CampaignCamera::active_for_test(Entity::PLACEHOLDER);
+        camera.set_menu_open(true);
+        app.insert_resource(camera);
+        app.world_mut().resource_mut::<UpperControls>().open = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.world_mut().run_system_once(activate).unwrap();
+        assert!(app.world().resource::<UpperControls>().open);
+        assert!(!app.world().resource::<UpperControls>().escape_consumed);
+        app.world_mut()
+            .resource_mut::<CampaignCamera>()
+            .set_menu_open(false);
+        app.world_mut().run_system_once(activate).unwrap();
+        assert!(!app.world().resource::<UpperControls>().open);
+    }
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 

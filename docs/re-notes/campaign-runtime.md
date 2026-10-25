@@ -1,5 +1,63 @@
 # Campaign clock and initialization callbacks
 
+## Ally-color display (2026-10-25)
+
+The selected client binds `SetAllyColorFilterState(integer)` and
+`GetAllyColorFilterState()` to the UI-option store, rather than unit ownership.
+Read-only static windows from image
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
+join the setter/getter (`4a6e70` / `490fd0`), option fallback table (`42b630`),
+notification branch (`5ea740`) and unit palette (`5bd900`). The default, two
+filter modes and neutral-owner classes are decoded from those inputs. Arbitrary
+integer states round-trip; states outside the two filtered modes select
+individual colors. These are static code findings, not a new original-client
+runtime or rendered comparison. REA calls were unavailable under the session's
+approval policy; the retained windows were mapped and hashed with local static
+tools.
+
+The host admits matching source identities and exact native declarations, keeps
+the current raw state without allocating handles, and derives role colors from
+ordered `UI/MiscData.txt` and map `war3mapMisc.txt` profiles. Model color indices
+come from `TeamColorFilter`; minimap ARGB values come separately from `FogOfWar`.
+The local player's own minimap color remains the player role in individual mode.
+Passive alliances are directional and read from the canonical world. The
+selected source's exempt neutral owner keeps its original model color.
+
+Actors and portraits share the effective team-color query. A live filter or
+alliance change rebuilds affected model instances using the existing skin's
+TeamColor/TeamGlow paths, including retry after a previously unavailable palette.
+Ordinary minimap markers use the skin's `MinimapSprite` model: dimensions,
+authored offsets and alpha are parsed from its supported static quad, not copied
+from the selected model. Individual player RGB comes from the first decoded
+TeamColor texel, matching the selected palette initializer at `5d32e0` /
+`5d36d1`. Markers honor canonical position, live owner color, shown/dead state,
+typed `hideOnMinimap` cells/map overrides and the existing visibility raster.
+Background RGBA is restored before every fog/marker update, preventing trails.
+Count, allocation and pixel-work limits are application resource policies.
+
+Nonstock profile, decoder and real-host tests cover separate palettes, map
+overrides, raw-state round-trip, directional alliances, neutral roles and atomic
+source/argument refusal. The explicit local-original rules and sprite gates pass.
+The unchanged TFT entry passes this native and next refuses `Preloader` at
+`Rise of the Naga:war3map.j:3545`; its preload behavior is not replaced with a no-op.
+
+The mounted-menu offscreen RoC diagnostic reaches player control, freezes its
+clock and toggles individual / filtered / individual through the actual native.
+Rendered model instances match the host's effective indices; both their palette
+map and the minimap RGBA buffer restore exactly on the final toggle. Captured
+frames visibly change Thrall's team material and the minimap unit markers.
+The strict overall render assertion still fails on the previously reported sky
+illumination and terrain/tree sight occlusion. The color checks passing do not
+convert that failure into an overall renderer pass. No original-client pixel
+comparison or audio test was performed.
+
+Remaining fidelity boundaries are observer team projection, hero/resource/camp
+and remembered-building minimap layers, native subpixel coverage, and saving the
+UI preference across map/application replacement. The current state belongs to
+the admitted map host. Existing sky illumination, terrain/tree sight occlusion,
+3D fog and water rendering gaps remain separate; a running script does not prove
+rendered parity or a completed mission.
+
 The launcher installs `campaign_runtime` beside campaign startup. It drives an
 already published `MapScriptSession<MapStartupHost>`; it does not manufacture
 missing startup inputs or turn successful map parsing into a running chapter.
@@ -115,3 +173,28 @@ reader attached to its binding receipts. Executed day/night model arguments now
 load their own source assets. The rest of automatic Host-input preparation and
 the remaining Human01 mission natives still block playability. See
 [day/night source preparation](script-day-night-models.md#application-source-preparation).
+
+## Extended campaign menu selection (2026-10-25)
+
+The unchanged TFT first chapter reaches `SetCampaignMenuRaceEx` through
+`SetCampaignMenuRaceBJ` in the selected Blizzard.j. In the reviewed Legacy image,
+registration `0x49ea38` binds the extended call to `0x4a7440`, which forwards its
+integer to `0x47e490`. The selector calls `0x5901d0`, retains the integer unchanged,
+and updates pending glue state. The latter stores signed values before its
+negative-index branch; this is not a race-enumerand conversion or a copied TFT
+campaign offset.
+
+The host checks the owned common declaration and exact integer-to-nothing ABI,
+then publishes the pending index. The application resolves it against the
+original `CampaignList` positions, retaining blank slots rather than confusing
+source indices with the compact displayed campaign list. Invalid or blank
+positions select no manufactured campaign. Exit capture preserves a request
+before dropping the VM, and the menu consumes it before the score consumer takes
+the snapshot. The menu's existing selection/background path owns the result;
+this does not launch a chapter or unlock one.
+
+Synthetic checks cover nonstock signed indices, malformed/foreign declarations,
+arguments, blank source slots and single consumption. The unchanged TFT startup
+now passes this call and next refuses `SetAllyColorFilterState`. The RoC prologue
+still reaches player control and advances through delayed setup. No new original
+client menu-return comparison was performed.

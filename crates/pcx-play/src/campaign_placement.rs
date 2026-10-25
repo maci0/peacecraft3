@@ -16,6 +16,10 @@ use pcx_objects::editor::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
+#[path = "placed_doodads.rs"]
+mod decorative;
+pub use decorative::{DoodadAppearance, PlacedDoodad};
+
 const CELLS: usize = 4 << 20;
 const FOOTPRINT_CELLS: usize = 1 << 16;
 /// Existing source-count operating limit, reused as the non-refundable
@@ -311,7 +315,7 @@ pub fn assemble(
             key,
             live,
             dead,
-            mask: rules.ground_mask(),
+            mask: rules.solid_mask(),
             active: !state.dead,
         });
     }
@@ -695,7 +699,7 @@ fn stamp(
 ) -> Result<(), String> {
     let cells = footprint_cells(grid, rules, textures, path, point, turns, work)?;
     for i in cells {
-        grid.pathing.cells[i] |= rules.ground_mask();
+        grid.pathing.cells[i] |= rules.solid_mask();
     }
     Ok(())
 }

@@ -26,6 +26,8 @@ pub struct UnitActivity {
     turn: Option<Turn>,
     /// `SetUnitPathing(false)`: no occupancy, straight motion, no collision checks.
     pathing_off: bool,
+    /// Point rally from `setrally`. Target rally and the placement marker are separate.
+    pub(crate) rally: Option<[f32; 2]>,
 }
 
 /// Script facing change: linear over the requested duration along the shorter
@@ -500,9 +502,9 @@ impl ObjectHost {
         let movement = super::unit_positions::text(definition, SlkId::UnitData, "movetp")
             .map_err(|e| fail(e.into()))?;
         let movable = match movement {
-            "foot" | "horse" | "fly" => true,
+            "foot" | "horse" | "hover" | "fly" | "float" | "amph" => true,
             "" | "_" | "none" => false,
-            _ => return Err(fail("movement class is not admitted".into())),
+            _ => return Err(fail(format!("movement class `{movement}` is not admitted"))),
         };
         let mut speed = movable
             .then(|| speed(definition))
@@ -526,6 +528,7 @@ impl ObjectHost {
             follow: None,
             turn: None,
             pathing_off: false,
+            rally: None,
         }))
     }
 
@@ -597,7 +600,14 @@ impl ObjectHost {
                 }
             }
         };
+        let rally = point
+            && self
+                .order_registry
+                .as_ref()
+                .and_then(|registry| registry.id("setrally"))
+                == Some(order);
         if !getter
+            && !rally
             && (if point {
                 order != movement && order != patrol && !self.is_attack_order(order)
             } else {
@@ -633,24 +643,73 @@ impl ObjectHost {
             {
                 return Ok(Value::Bool(false));
             }
+            {
+                let record = self.executed_unit(unit).map_err(|e| {
+                    self.inner.error(
+                        name,
+                        Failure::UnitActivity(format!("unit argument {unit:?}: {}", e.failure)),
+                    )
+                })?;
+                if record.activity.is_none() {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::UnitActivity("activity not initialized".into()),
+                    ));
+                }
+                if getter {
+                    return Ok(Value::Int(self.current_unit_order(unit)?));
+                }
+                if record.paused_since.is_some() || record.combat.as_ref().is_some_and(|c| c.dead) {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            if rally {
+                let [x, y] = if location {
+                    self.location_point(&args[2], name).map_err(|e| {
+                        self.inner.error(
+                            name,
+                            Failure::UnitActivity(format!(
+                                "location argument {:?}: {}",
+                                args[2], e.failure
+                            )),
+                        )
+                    })?
+                } else {
+                    let [_, _, Value::Real(x), Value::Real(y)] = args else {
+                        return Err(self.inner.error(name, Failure::Signature));
+                    };
+                    [*x, *y]
+                };
+                if !x.is_finite() || !y.is_finite() {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::UnitActivity("finite destination required".into()),
+                    ));
+                }
+                // Activity presence was required above. The write is one
+                // assignment. Any refusal is reported after the entry borrow ends.
+                let failure = match self.inner.entry_mut(unit)? {
+                    Entry::Unit { record } => match record.activity.as_mut() {
+                        Some(activity) => {
+                            activity.rally = Some([x, y]);
+                            None
+                        }
+                        None => Some(Failure::UnitActivity("activity not initialized".into())),
+                    },
+                    _ => Some(Failure::WrongFamily),
+                };
+                return match failure {
+                    None => Ok(Value::Bool(true)),
+                    Some(failure) => Err(self.inner.error(name, failure)),
+                };
+            }
             let record = self.executed_unit(unit).map_err(|e| {
                 self.inner.error(
                     name,
                     Failure::UnitActivity(format!("unit argument {unit:?}: {}", e.failure)),
                 )
             })?;
-            let activity = record.activity.as_ref().ok_or_else(|| {
-                self.inner.error(
-                    name,
-                    Failure::UnitActivity("activity not initialized".into()),
-                )
-            })?;
-            if getter {
-                return Ok(Value::Int(self.current_unit_order(unit)?));
-            }
-            if record.paused_since.is_some() || record.combat.as_ref().is_some_and(|c| c.dead) {
-                return Ok(Value::Bool(false));
-            }
+            let activity = record.activity.as_ref().expect("checked above");
             let now = self.timer_game_time().ok_or_else(|| {
                 self.inner
                     .error(name, Failure::UnitActivity("clock not admitted".into()))
@@ -904,6 +963,7 @@ impl ObjectHost {
         if now == state.projected_through {
             return Ok(0);
         }
+        self.advance_unit_decay(now, work)?;
         self.advance_training(now, work)?;
         let starts: Vec<_> = if self.initial_blight.is_some() {
             self.executed_units()
@@ -932,6 +992,7 @@ impl ObjectHost {
             let follow = self.executed_unit(unit).ok()?.activity.as_ref()?.follow?;
             Some((unit, self.follow_position(follow.target)))
         }));
+        let mut blocked = Vec::new();
         let result = (|| {
             let mut moved = 0;
             for &unit in &active {
@@ -1016,10 +1077,21 @@ impl ObjectHost {
                         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                             record.activity.as_mut().expect("activity").motion = Some(motion);
                         }
-                        moved += result?;
+                        let (count, deferred) = result?;
+                        moved += count;
+                        if deferred {
+                            let witness = self
+                                .executed_unit(unit)?
+                                .activity
+                                .as_ref()
+                                .expect("activity")
+                                .motion
+                                .clone();
+                            blocked.push((unit, witness));
+                        }
                         break;
                     }
-                    moved += result?;
+                    moved += result?.0;
                     let arrival = credited_time(&motion, speed, motion.last_distance);
                     let Some(next) =
                         self.next_patrol_motion(unit, arrival, Some(motion.goal), work)?
@@ -1059,6 +1131,68 @@ impl ObjectHost {
             self.advance_combat()?;
             self.advance_inventory(work)?;
             self.advance_sound_environments();
+            // Optional searches spend only work left after every unit and mandatory consumer.
+            let queued = blocked.len();
+            for (index, (unit, witness)) in blocked.into_iter().enumerate() {
+                let Ok(record) = self.executed_unit(unit) else {
+                    continue;
+                };
+                if record.paused_since.is_some()
+                    || record.position.is_none()
+                    || record.combat.as_ref().is_some_and(|combat| combat.dead)
+                    || record
+                        .activity
+                        .as_ref()
+                        .is_none_or(|activity| activity.motion != witness)
+                {
+                    continue;
+                }
+                let Some(mut motion) = (match self.inner.entry_mut(unit)? {
+                    Entry::Unit { record } => {
+                        record.activity.as_mut().and_then(|a| a.motion.take())
+                    }
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                let from = self.executed_unit(unit)?.position.expect("moving position");
+                let allowance = *work / (queued - index);
+                let mut search_work = allowance;
+                let result =
+                    self.replan_blocked(unit, from, &mut motion, now, &mut search_work, true);
+                *work -= allowance - search_work;
+                let mut animation_error = None;
+                if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                    if matches!(result, Ok(false)) {
+                        record.activity.as_mut().expect("activity").motion = None;
+                        if let Some(animation) = &mut record.animation {
+                            animation_error = animation.select("stand", now, None).err();
+                        }
+                        let still_active = record
+                            .animation
+                            .as_ref()
+                            .is_some_and(crate::unit_model::Animation::needs_advance)
+                            || record.activity.as_ref().is_some_and(|a| {
+                                a.turn.is_some() || a.patrol.is_some() || a.follow.is_some()
+                            });
+                        if !still_active {
+                            self.unit_activity
+                                .as_mut()
+                                .expect("activity")
+                                .active
+                                .retain(|id| *id != unit);
+                        }
+                    } else {
+                        record.activity.as_mut().expect("activity").motion = Some(motion);
+                    }
+                }
+                if let Some(error) = animation_error {
+                    return Err(self
+                        .inner
+                        .error("unit activity", Failure::UnitAnimation(error)));
+                }
+                result?;
+            }
             Ok(moved)
         });
         if result.is_ok() {
@@ -1307,6 +1441,7 @@ impl ObjectHost {
         self.cancel_summon_cast(unit);
         self.cancel_patrol(unit);
         self.forget_holy_cast(unit);
+        self.forget_chain_cast(unit);
         if let Some(state) = &mut self.unit_activity {
             state.active.retain(|&u| u != unit);
         }
@@ -1384,7 +1519,7 @@ impl ObjectHost {
             motion.path.push(motion.goal);
             true
         } else {
-            self.replan_blocked(unit, position, &mut motion, at, work)?
+            self.replan_blocked(unit, position, &mut motion, at, work, false)?
         };
         if progress && let Some(animation) = &mut animation {
             animation
@@ -1545,7 +1680,7 @@ impl ObjectHost {
                         geometry.radius,
                         geometry.path,
                         face,
-                        geometry.air,
+                        geometry.movement,
                     )
                     .map_err(|e| {
                         self.inner
@@ -1598,10 +1733,11 @@ impl ObjectHost {
         if occupies {
             let geometry = super::unit_positions::geometry(&record.definition)
                 .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
-            let (radius, path, air) = (geometry.radius, geometry.path.to_owned(), geometry.air);
+            let (radius, path, movement) =
+                (geometry.radius, geometry.path.to_owned(), geometry.movement);
             let placement = self.unit_placement.as_mut().expect("placement");
             let prepared = placement
-                .prepare_relocation_class(unit, target, radius, &path, face, air)
+                .prepare_relocation_class(unit, target, radius, &path, face, movement)
                 .map_err(|e| {
                     self.inner
                         .error(name, Failure::UnitPlacement(e.to_string()))
@@ -1720,6 +1856,7 @@ impl ObjectHost {
         motion: &mut Motion,
         now: f64,
         work: &mut usize,
+        defer_exhaustion: bool,
     ) -> Result<bool, Error> {
         let route_work = self.unit_activity.as_ref().expect("activity").route_work;
         let radius = self.unit_collision_radius(unit, "unit activity")?;
@@ -1729,12 +1866,17 @@ impl ObjectHost {
             .unit_placement
             .as_ref()
             .expect("admitted placement")
-            .route_within(unit, from, motion.goal, radius, motion.reach, &mut budget)
-            .map_err(|e| {
-                self.inner
-                    .error("unit activity", Failure::UnitActivity(e.to_string()))
-            })?;
+            .route_within(unit, from, motion.goal, radius, motion.reach, &mut budget);
         *work -= allowance - budget;
+        let path = match path {
+            Ok(path) => path,
+            Err(error) if defer_exhaustion && error.work_exhausted() => return Ok(true),
+            Err(error) => {
+                return Err(self
+                    .inner
+                    .error("unit activity", Failure::UnitActivity(error.to_string())));
+            }
+        };
         if path.as_slice() == [from] {
             return Ok(false);
         }
@@ -1759,7 +1901,7 @@ impl ObjectHost {
         motion: &mut Motion,
         work: &mut usize,
         sink: &mut Option<SpanSink<'_>>,
-    ) -> Result<usize, Error> {
+    ) -> Result<(usize, bool), Error> {
         let fail = |detail: &str| {
             self.inner
                 .error("unit activity", Failure::UnitActivity(detail.into()))
@@ -1768,7 +1910,7 @@ impl ObjectHost {
             return Err(fail("game time precedes the movement order"));
         }
         if speed <= 0.0 {
-            return Ok(0);
+            return Ok((0, false));
         }
         // Distance is measured from `motion.started`; a replan restarts it at `now`.
         let distance = (now - motion.started) * f64::from(speed);
@@ -1937,19 +2079,8 @@ impl ObjectHost {
                     self.inner
                         .error("unit activity", Failure::UnitActivity(detail.into()))
                 })?;
-                if self.replan_blocked(unit, origin, motion, now, work)? {
-                    // The new route starts at this tick's time with no distance credited yet.
-                    break;
-                }
-                motion.next = motion.path.len();
-                if let Entry::Unit { record } = self.inner.entry_mut(unit)?
-                    && let Some(animation) = &mut record.animation
-                {
-                    animation.select("stand", now, None).map_err(|e| {
-                        self.inner.error("unit activity", Failure::UnitAnimation(e))
-                    })?;
-                }
-                break;
+                motion.started = now - motion.last_distance / f64::from(speed);
+                return Ok((moved, true));
             }
             let prepared = self
                 .unit_placement
@@ -2030,6 +2161,6 @@ impl ObjectHost {
             motion.base = target;
             motion.next += 1;
         }
-        Ok(moved)
+        Ok((moved, false))
     }
 }

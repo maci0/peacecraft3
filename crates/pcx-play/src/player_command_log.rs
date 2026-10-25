@@ -36,6 +36,8 @@ pub enum PlayerCommand {
     },
     /// A local-player event fired by the application, such as end-of-cinematic.
     LocalEvent { name: String },
+    /// `SelectHeroSkill` for one admitted ability rawcode.
+    Learn { unit: HandleId, ability: i32 },
 }
 
 /// What a session started from. The map is identified by its SHA-256 and by the

@@ -112,6 +112,24 @@ const RESPONSES: [&str; 25] = [
 ];
 
 impl ObjectHost {
+    pub(super) fn reserve_game_event_delivery(&mut self, count: usize) -> Result<(), Error> {
+        let pending = self
+            .events
+            .queue
+            .len()
+            .checked_add(self.events.synchronous.as_ref().map_or(0, |q| q.len()));
+        if pending
+            .and_then(|n| n.checked_add(count))
+            .is_none_or(|n| n > self.inner.max_handles)
+        {
+            return Err(self.inner.error(
+                "game event delivery",
+                Failure::Budget("pending game events"),
+            ));
+        }
+        self.reserve_event_delivery(count)
+    }
+
     pub(crate) fn has_queued_training_events(&self) -> bool {
         self.events
             .queue

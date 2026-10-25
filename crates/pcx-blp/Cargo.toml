@@ -18,7 +18,6 @@ required-features = ["local-fixtures"]
 tracing = { workspace = true, optional = true }
 pcx-mpq.workspace = true
 thiserror.workspace = true
-bytemuck.workspace = true
 jpeg-decoder = "0.3"
 
 [dev-dependencies]

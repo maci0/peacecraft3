@@ -1,6 +1,6 @@
 //! Complete background PRE2 binding; source inputs share the geometry transaction.
 use super::{MainMenuSceneEntity, TextureBindings};
-use crate::menu_particle_order::{OrderFailure, SourceKind, SourceOrder, SourceOrderView};
+use crate::menu_particle_order::{SourceKind, SourceOrder, SourceOrderView};
 use bevy::{
     asset::RenderAssetUsages,
     camera::visibility::NoFrustumCulling,
@@ -74,8 +74,6 @@ pub enum Error {
     Draw(#[from] draw::Error),
     #[error("source decode: {0}")]
     Decode(String),
-    #[error("submission profile: {0:?}")]
-    Order(OrderFailure),
     #[error("{0}")]
     Invalid(&'static str),
 }
@@ -144,20 +142,17 @@ pub fn prepare<'a>(
     let source_textures = model
         .textures(bytes)
         .map_err(|e| Error::Decode(e.to_string()))?;
-    let pivots = model
-        .pivots(bytes)
-        .map_err(|e| Error::Decode(e.to_string()))?;
     let (clip, following) =
         clips.ok_or(Error::Invalid("PRE2 requires an authored selected clip"))?;
     let build_plan = |clip| {
-        Plan::checked(
+        Plan::checked_with_joints(
             &emitters,
             &source_textures,
-            &pivots,
             &runtime.global_sequences,
             clip,
             source,
             policy.cpu,
+            &runtime.joints,
         )
     };
     let plan = match build_plan(clip).and_then(|plan| match following {
@@ -226,11 +221,6 @@ pub fn prepare<'a>(
         .map_err(|_| Error::Invalid("draw allocation failed"))?;
     for index in 0..plan.profiles().len() {
         let requirement = draw::draw_requirements(&plan, index)?;
-        if requirement.sort_far_z {
-            return Ok(Admission::Unsupported(Error::Order(
-                OrderFailure::SortFarZNeedsParticleSort,
-            )));
-        }
         requirements.push(requirement);
     }
     // Opaque geometry precedes the translucent priority sort (pinned setupgroups.ts).
@@ -380,7 +370,8 @@ impl Prepared<'_> {
                     priority_plane: requirement.priority_plane,
                     kind: SourceKind::Particle,
                     ordinal: ordinal as u32,
-                    sort_far_z: requirement.sort_far_z,
+                    // Depth sorting within the emitter is fulfilled in the CPU mesh below.
+                    sort_far_z: false,
                 },
             );
             self.emitters.push(Emitter {
@@ -513,6 +504,63 @@ impl Buffer {
 }
 
 impl ParticleScene {
+    pub(crate) fn start_at(&mut self, at: Duration) -> Result<(), Error> {
+        self.simulation.start_at(at)?;
+        Ok(())
+    }
+
+    pub(crate) fn attach_to(&self, commands: &mut Commands, parent: Entity, layer: usize) {
+        for emitter in &self.emitters {
+            commands
+                .entity(emitter.entity)
+                .remove::<MainMenuSceneEntity>()
+                .insert((
+                    ChildOf(parent),
+                    bevy::camera::visibility::RenderLayers::layer(layer),
+                ));
+        }
+    }
+
+    pub(crate) fn select_clip(
+        &mut self,
+        model: &pcx_mdl::Mdlx,
+        bytes: &[u8],
+        runtime: &RuntimePlan,
+        clip: Clip,
+        at: Duration,
+        parameters: &pcx_play::menu_lighting::Parameters,
+    ) -> Result<bool, Error> {
+        let emitters = model
+            .particles2(bytes)
+            .map_err(|e| Error::Decode(e.to_string()))?;
+        let textures = model
+            .textures(bytes)
+            .map_err(|e| Error::Decode(e.to_string()))?;
+        let appearance = parameters.particle_appearance;
+        let plan = Plan::checked_with_joints(
+            &emitters,
+            &textures,
+            &runtime.global_sequences,
+            clip,
+            self.source(),
+            self.policy.cpu,
+            &runtime.joints,
+        )?
+        .with_native_appearance(
+            &format!(
+                "{} {} {} {:?}",
+                parameters.origin.source,
+                parameters.origin.edition,
+                parameters.origin.version,
+                parameters.image_sha256
+            ),
+            [appearance.phase_scale, appearance.phase_bias],
+            [appearance.colour_scale, appearance.packing_bias],
+            appearance.packing_shift,
+        )?;
+        self.simulation.select_plan(plan, at).map_err(Error::Cpu)
+    }
+
     pub fn camera(&self) -> Entity {
         self.camera
     }
@@ -523,7 +571,7 @@ impl ParticleScene {
         &mut self,
         delta: Duration,
         elapsed: Duration,
-        camera: &Transform,
+        (camera, depth_axis): (&Transform, Vec3),
         meshes: &mut Assets<Mesh>,
         materials: &Assets<ParticleMaterial>,
         mut entity_exists: impl FnMut(Entity) -> bool,
@@ -569,8 +617,16 @@ impl ParticleScene {
             .map_err(|_| Error::Invalid("piece allocation failed"))?;
         let pose_ms = u64::try_from(elapsed.as_millis())
             .map_err(|_| Error::Invalid("particle clock overflow"))?;
+        let samples = self
+            .simulation
+            .plan()
+            .sample_emitters(pose_ms)
+            .map_err(Error::Cpu)?;
         for particle in self.simulation.particles() {
-            for quad in draw::quads_at(self.simulation.plan(), particle, basis, pose_ms)?
+            let sample = samples
+                .get(particle.emitter)
+                .ok_or(Error::Invalid("particle emitter ordinal"))?;
+            for quad in draw::quads_with_sample(self.simulation.plan(), particle, basis, sample)?
                 .into_iter()
                 .flatten()
             {
@@ -578,6 +634,7 @@ impl ParticleScene {
                 pieces.push((particle.emitter, quad));
             }
         }
+        sort_pieces(&mut pieces, self.simulation.plan().profiles(), depth_axis);
         // Vertex position/normal/UV/RGBA and six u32 indices per quad.
         let bytes = pieces
             .len()
@@ -618,6 +675,25 @@ impl ParticleScene {
     pub fn source(&self) -> &str {
         self.simulation.plan().source()
     }
+}
+
+// Each emitter keeps its own material/submission slot; its flagged quads sort back to front.
+fn sort_pieces(pieces: &mut [(usize, draw::Quad)], profiles: &[cpu::Profile], toward_eye: Vec3) {
+    let depth = |q: &draw::Quad| {
+        q.positions
+            .iter()
+            .map(|p| Vec3::from_array(*p).dot(toward_eye))
+            .sum::<f32>()
+    };
+    pieces.sort_by(|(a, qa), (b, qb)| {
+        a.cmp(b).then_with(|| {
+            if profiles[*a].flags & cpu::SORT_FAR_Z != 0 {
+                depth(qa).total_cmp(&depth(qb))
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+    });
 }
 
 #[cfg(test)]

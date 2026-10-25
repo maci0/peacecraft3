@@ -33,6 +33,18 @@ pub enum CampaignRuntimeError {
     Timer(#[from] TimerSessionError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CampaignStepError {
+    #[error("no published campaign session to step")]
+    MissingSession,
+    #[error("requested {requested} ticks exceeds the per-update budget {limit}")]
+    TickBudget { requested: usize, limit: usize },
+    #[error("explicit ticks require the existing frame-time debt to be drained first")]
+    PendingFrameTime,
+    #[error("campaign stopped after {advanced} committed ticks: {reason}")]
+    RuntimeStopped { advanced: u64, reason: String },
+}
+
 /// Application scheduling policy, independent of original asset values.
 #[derive(Resource)]
 pub struct CampaignRuntime {
@@ -111,10 +123,84 @@ impl CampaignRuntime {
 
     /// An error stops this session; repeating an update cannot replay partial effects.
     pub fn advance(&mut self, session: &mut MapScriptSession<MapStartupHost>, elapsed: Duration) {
+        if !self.prepare(session, elapsed) {
+            return;
+        }
+        let Some(pending) = elapsed
+            .checked_mul(self.speed.get())
+            .and_then(|scaled| self.pending.checked_add(scaled))
+        else {
+            self.last_error = Some(CampaignRuntimeError::ClockOverflow);
+            return;
+        };
+        self.pending = pending;
+        for _ in 0..self.max_ticks_per_update {
+            if self.pending < self.step || !self.advance_one_tick(session) {
+                break;
+            }
+            self.pending -= self.step;
+            if self.synchronize_script_pause(session) {
+                break;
+            }
+        }
+    }
+
+    /// Advance bounded simulation ticks without wall time or speed scaling.
+    /// First bind samples vision and returns zero. Pauses retain their ordinary
+    /// event delivery. Presentation clocks are not advanced. Refused pacing
+    /// inputs leave the runtime usable; execution faults remain sticky.
+    /// A failed batch reports fully completed ticks. Its failing tick may have
+    /// partial effects; the sticky fault forbids retrying even with zero progress.
+    pub fn advance_ticks(
+        &mut self,
+        session: &mut MapScriptSession<MapStartupHost>,
+        ticks: usize,
+    ) -> Result<u64, CampaignStepError> {
+        if ticks > self.max_ticks_per_update {
+            return Err(CampaignStepError::TickBudget {
+                requested: ticks,
+                limit: self.max_ticks_per_update,
+            });
+        }
+        let witness = session
+            .session_witness()
+            .ok_or(CampaignStepError::MissingSession)?;
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|old| Weak::ptr_eq(old, &witness))
+            && !self.pending.is_zero()
+        {
+            return Err(CampaignStepError::PendingFrameTime);
+        }
+        let ready = self.prepare(session, Duration::ZERO);
+        let start = self.tick;
+        if ready {
+            for _ in 0..ticks {
+                if !self.advance_one_tick(session) || self.synchronize_script_pause(session) {
+                    break;
+                }
+            }
+        }
+        let advanced = self.tick - start;
+        match &self.last_error {
+            Some(error) => Err(CampaignStepError::RuntimeStopped {
+                advanced,
+                reason: error.to_string(),
+            }),
+            None => Ok(advanced),
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        session: &mut MapScriptSession<MapStartupHost>,
+        elapsed: Duration,
+    ) -> bool {
         let Some(witness) = session.session_witness() else {
             self.session = None;
             self.pending = Duration::ZERO;
-            return;
+            return false;
         };
         if !self
             .session
@@ -133,7 +219,12 @@ impl CampaignRuntime {
                 None => self.last_error = Some(CampaignRuntimeError::MissingClock),
             }
             // Loading and the previous session's frame debt do not advance this session.
-            return;
+            if self.last_error.is_none()
+                && let Err(error) = session.sample_admitted_vision()
+            {
+                self.last_error = Some(error.into());
+            }
+            return false;
         }
         if let Some(host) = session.host() {
             host.objects_mut().advance_volume_group_clock(elapsed);
@@ -144,43 +235,34 @@ impl CampaignRuntime {
             {
                 self.last_error = Some(error.into());
             }
+            if self.last_error.is_none()
+                && let Err(error) = session.sample_admitted_vision()
+            {
+                self.last_error = Some(error.into());
+            }
             // This frame's wall interval belongs to the paused state even if a UI callback resumes it.
-            return;
+            return false;
         }
         if self.paused || self.view_paused || self.last_error.is_some() {
-            return;
+            return false;
         }
-        let Some(pending) = elapsed
-            .checked_mul(self.speed.get())
-            .and_then(|scaled| self.pending.checked_add(scaled))
-        else {
-            self.last_error = Some(CampaignRuntimeError::ClockOverflow);
-            return;
+        true
+    }
+
+    fn advance_one_tick(&mut self, session: &mut MapScriptSession<MapStartupHost>) -> bool {
+        let Some(tick) = self.tick.checked_add(1) else {
+            self.last_error = Some(CampaignRuntimeError::TickOverflow);
+            return false;
         };
-        self.pending = pending;
-        for _ in 0..self.max_ticks_per_update {
-            if self.pending < self.step {
-                break;
+        let until = self.origin + self.step.as_secs_f64() * tick as f64;
+        match pcx_play::campaign_host::advance_tick(session, until, self.max_expiries_per_tick) {
+            Ok(_) => {
+                self.tick = tick;
+                true
             }
-            let Some(tick) = self.tick.checked_add(1) else {
-                self.last_error = Some(CampaignRuntimeError::TickOverflow);
-                break;
-            };
-            let until = self.origin + self.step.as_secs_f64() * tick as f64;
-            let result =
-                pcx_play::campaign_host::advance_tick(session, until, self.max_expiries_per_tick);
-            match result {
-                Ok(_) => {
-                    self.tick = tick;
-                    self.pending -= self.step;
-                    if self.synchronize_script_pause(session) {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    self.last_error = Some(error.into());
-                    break;
-                }
+            Err(error) => {
+                self.last_error = Some(error.into());
+                false
             }
         }
     }
@@ -195,7 +277,9 @@ pub fn install(app: &mut App, runtime: CampaignRuntime) {
         .add_systems(
             Update,
             (
-                advance_campaign.before(CampaignStartupSet),
+                advance_campaign
+                    .in_set(CampaignAdvanceSet)
+                    .before(CampaignStartupSet),
                 take_game_exit
                     .in_set(CampaignExitSet)
                     .after(advance_campaign),
@@ -212,6 +296,10 @@ pub fn install(app: &mut App, runtime: CampaignRuntime) {
 /// observe the session's `CampaignExitResult` snapshot in the same update.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CampaignExitSet;
+
+/// Orders the simulation step ahead of presentation that reads shared vision.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CampaignAdvanceSet;
 
 fn advance_campaign(
     time: Res<Time<Real>>,
@@ -260,6 +348,8 @@ pub struct CampaignExitSnapshot {
     /// Any executed exit requesting scores. Choosing any-true over other
     /// combinations is host policy; the native's multi-call behavior is not verified.
     pub score_screen: bool,
+    /// Pending script selection, captured before dropping the VM.
+    pub campaign_menu_index: Option<i32>,
     /// Verbatim destination of the executed `ChangeLevel` request, if any.
     pub next_level: Option<String>,
     /// Simulation clock; `None` when the timer is not admitted.
@@ -279,6 +369,10 @@ pub struct CampaignExitSnapshot {
 pub struct CampaignExitResult(Option<CampaignExitSnapshot>);
 
 impl CampaignExitResult {
+    pub fn take_campaign_menu_index(&mut self) -> Option<i32> {
+        self.0.as_mut()?.campaign_menu_index.take()
+    }
+
     pub fn take(&mut self) -> Option<CampaignExitSnapshot> {
         self.0.take()
     }
@@ -313,6 +407,7 @@ fn take_game_exit(
         runtime.last_error = Some(CampaignRuntimeError::ConflictingDestinations);
         return;
     }
+    let campaign_menu_index = host.objects_mut().take_campaign_menu_index();
     let objects = host.objects();
     let local_result = objects
         .local_player_number()
@@ -327,6 +422,7 @@ fn take_game_exit(
     let local_number = objects.local_player_number();
     exit.0 = Some(CampaignExitSnapshot {
         score_screen: requests.iter().any(|request| request.score_screen),
+        campaign_menu_index,
         next_level,
         game_time: objects.timer_game_time(),
         local_result,

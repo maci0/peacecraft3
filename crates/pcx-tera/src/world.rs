@@ -112,3 +112,56 @@ pub fn sample_world_z(terrain: &Terrain, world_x: f32, world_y: f32) -> Option<f
     let index = bottom * (1.0 - dy) + top * dy;
     Some((index - Z_REFERENCE_INDEX) * Z_PER_INDEX)
 }
+
+/// Coordinate encoding supplied by a checked source reader, rather than measured defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct Mapping {
+    tile: f32,
+    bias: f32,
+    factor: f32,
+}
+
+impl Mapping {
+    pub fn new(tile: f32, bias: f32, factor: f32) -> Option<Self> {
+        [tile, bias, factor]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+            .then_some(Self { tile, bias, factor })
+    }
+
+    pub fn tile_size(self) -> f32 {
+        self.tile
+    }
+
+    pub fn height(self, index: f32) -> f32 {
+        index / self.factor - self.bias
+    }
+
+    pub fn corner_at(self, terrain: &Terrain, x: f32, y: f32) -> Option<[f32; 2]> {
+        let (ox, oy) = terrain.origin();
+        let point = [(x - ox) / self.tile, (y - oy) / self.tile];
+        (point.iter().all(|v| v.is_finite() && *v >= 0.0)
+            && point[0] < terrain.width() as f32
+            && point[1] < terrain.height() as f32)
+            .then_some(point)
+    }
+
+    pub fn sample_ground(self, terrain: &Terrain, x: f32, y: f32) -> Option<f32> {
+        let point = self.corner_at(terrain, x, y)?;
+        let index = sample_corners(terrain, point, |c| c.height_index as f32)?;
+        Some(self.height(index))
+    }
+}
+
+pub(crate) fn sample_corners(
+    terrain: &Terrain,
+    point: [f32; 2],
+    height: impl Fn(&pcx_map::Corner) -> f32,
+) -> Option<f32> {
+    let [x, y] = point.map(|v| v.floor() as u32);
+    let [dx, dy] = [point[0] - x as f32, point[1] - y as f32];
+    let h = |x, y| terrain.corner(x, y).map(&height);
+    let bottom = h(x, y)? * (1.0 - dx) + h(x + 1, y)? * dx;
+    let top = h(x, y + 1)? * (1.0 - dx) + h(x + 1, y + 1)? * dx;
+    Some(bottom * (1.0 - dy) + top * dy)
+}

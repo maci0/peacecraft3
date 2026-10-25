@@ -15,6 +15,8 @@ pub(crate) struct CachedUnit {
     /// Life, maximum life, mana, maximum mana as exact f32 bits.
     pub pools: [u32; 4],
     pub items: Vec<CachedItem>,
+    /// Point rally. Versions 1 through 3 have none.
+    pub rally: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +63,9 @@ impl CachedUnit {
                 .any(|a| (a[0].0, a[0].1) >= (a[1].0, a[1].1))
             || self.items.iter().any(|item| item.charges < 0)
             || self.items.windows(2).any(|a| a[0].slot >= a[1].slot)
+            || self
+                .rally
+                .is_some_and(|point| !point[0].is_finite() || !point[1].is_finite())
         {
             return Err("invalid cached unit identity, pools, progress or inventory".into());
         }
@@ -73,7 +78,7 @@ impl CachedUnit {
             bytes: Vec::new(),
             limit,
         };
-        out.bytes(b"PC3UNIT\x03")?;
+        out.bytes(b"PC3UNIT\x04")?;
         out.bytes(&self.rawcode)?;
         out.bytes(&self.client_sha256)?;
         out.text(&self.install)?;
@@ -113,6 +118,12 @@ impl CachedUnit {
             out.bytes(&state.xp.to_le_bytes())?;
             out.bytes(&[u8::from(state.suspended)])?;
         }
+        out.bytes(&[u8::from(self.rally.is_some())])?;
+        if let Some(point) = self.rally {
+            for axis in point {
+                out.bytes(&axis.to_bits().to_le_bytes())?;
+            }
+        }
         Ok(out.bytes)
     }
 
@@ -125,6 +136,7 @@ impl CachedUnit {
             b"PC3UNIT\x01" => 1,
             b"PC3UNIT\x02" => 2,
             b"PC3UNIT\x03" => 3,
+            b"PC3UNIT\x04" => 4,
             _ => return Err("unsupported cached unit format/version".into()),
         };
         let rawcode = input.take(4)?.try_into().expect("four bytes");
@@ -217,6 +229,26 @@ impl CachedUnit {
         } else {
             None
         };
+        let rally = if version >= 4 {
+            match input.take(1)?[0] {
+                0 => None,
+                1 => {
+                    let mut point = [0f32; 2];
+                    for axis in &mut point {
+                        *axis = f32::from_bits(u32::from_le_bytes(
+                            input.take(4)?.try_into().expect("four bytes"),
+                        ));
+                    }
+                    if point.iter().any(|axis| !axis.is_finite()) {
+                        return Err("cached rally point is not finite".into());
+                    }
+                    Some(point)
+                }
+                _ => return Err("invalid cached rally tag".into()),
+            }
+        } else {
+            None
+        };
         if input.cursor != bytes.len() {
             return Err("trailing cached unit bytes".into());
         }
@@ -232,6 +264,7 @@ impl CachedUnit {
             permanent_strength,
             pools,
             items,
+            rally,
         };
         result.validate()?;
         Ok(result)
@@ -259,6 +292,7 @@ pub(super) mod tests {
             cooldowns: vec![(*b"A001", 2, 1.25f32.to_bits())],
             permanent_strength: 7,
             pools: [123.5f32, 750., 0., 50.].map(f32::to_bits),
+            rally: None,
             items: vec![CachedItem {
                 slot: 2,
                 rawcode: *b"I001",
@@ -273,7 +307,8 @@ pub(super) mod tests {
         saved.cooldowns.clear();
         let mut old = saved.encode(1024).unwrap();
         old[7] = 1;
-        old.truncate(old.len() - 5); // Version one ended before cooldowns and the XP tag.
+        // Version one ended before cooldowns, the XP tag, and the rally tag.
+        old.truncate(old.len() - 6);
         assert_eq!(CachedUnit::decode(&old, 1024).unwrap(), saved);
         for cooldowns in [
             vec![(*b"A001", 0, 1f32.to_bits())],
@@ -323,11 +358,42 @@ pub(super) mod tests {
         assert_eq!(CachedUnit::decode(&bytes, 1024).unwrap(), saved);
         let mut old = fixture().encode(1024).unwrap();
         old[7] = 2;
-        old.pop();
+        old.truncate(old.len() - 2);
         let decoded = CachedUnit::decode(&old, 1024).unwrap();
         assert_eq!(decoded.experience, None);
         assert_eq!(decoded, fixture());
         saved.experience.as_mut().unwrap().xp = -1;
         assert!(saved.encode(1024).is_err());
+    }
+
+    #[test]
+    fn rally_point_roundtrip_and_older_versions_keep_absence() {
+        let mut saved = fixture();
+        let absent = saved.encode(1024).unwrap();
+        assert_eq!(CachedUnit::decode(&absent, 1024).unwrap().rally, None);
+        saved.rally = Some([48., 16.]);
+        let bytes = saved.encode(1024).unwrap();
+        assert_eq!(CachedUnit::decode(&bytes, 1024).unwrap(), saved);
+        for n in 0..bytes.len() {
+            assert!(CachedUnit::decode(&bytes[..n], 1024).is_err(), "prefix {n}");
+        }
+        let mut legacy = bytes.clone();
+        legacy[7] = 3;
+        legacy.truncate(legacy.len() - 9);
+        assert_eq!(CachedUnit::decode(&legacy, 1024).unwrap().rally, None);
+        saved.rally = Some([f32::NAN, 16.]);
+        assert!(saved.encode(1024).is_err());
+        let mut tag = absent.clone();
+        *tag.last_mut().unwrap() = 3;
+        assert!(CachedUnit::decode(&tag, 1024).is_err());
+        let mut truncated = absent;
+        *truncated.last_mut().unwrap() = 1;
+        assert!(CachedUnit::decode(&truncated, 1024).is_err());
+        let mut nonfinite = bytes;
+        let bits = f32::NAN.to_bits().to_le_bytes();
+        let end = nonfinite.len() - 4;
+        let start = end - 4;
+        nonfinite[start..end].copy_from_slice(&bits);
+        assert!(CachedUnit::decode(&nonfinite, 1024).is_err());
     }
 }

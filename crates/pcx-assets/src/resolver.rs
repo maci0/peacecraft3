@@ -3,6 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
+    sync::Mutex,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -13,6 +14,8 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("preload cache: {0}")]
+    PreloadCache(&'static str),
     #[error(transparent)]
     Path(#[from] PathError),
     #[error("layer {layer:?} has an invalid path: {source}")]
@@ -148,6 +151,7 @@ pub struct Resolver {
     overrides: Option<OverrideDirectory>,
     archives: Vec<MountedArchive>,
     paths: BTreeSet<AssetPath>,
+    preloaded: Mutex<BTreeMap<AssetPath, ResolvedAsset>>,
 }
 
 impl Resolver {
@@ -224,6 +228,7 @@ impl Resolver {
             overrides,
             archives: mounted,
             paths,
+            preloaded: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -272,6 +277,46 @@ impl Resolver {
     pub fn resolve_bounded(&self, value: &str, limit: u64) -> Result<ResolvedAsset, Error> {
         self.resolve_with_budget(value, Some(limit))
     }
+    /// Warm an immutable archive winner for subsequent ordinary reads. Loose overrides stay live.
+    pub fn preload_bounded(&self, value: &str, limit: u64) -> Result<usize, Error> {
+        let asset = self.resolve_bounded(value, limit)?;
+        let bytes = asset.bytes.len();
+        if asset.provenance.archive_priority.is_none() {
+            return Ok(bytes);
+        }
+        let mut cache = self
+            .preloaded
+            .lock()
+            .map_err(|_| Error::PreloadCache("poisoned"))?;
+        if !cache.contains_key(&asset.path) {
+            // Application memory ceilings, unrelated to authored preload timeouts.
+            if cache.len() >= 4096
+                || cache
+                    .values()
+                    .map(|a| a.bytes.len())
+                    .sum::<usize>()
+                    .checked_add(bytes)
+                    .is_none_or(|n| n > 128 << 20)
+            {
+                return Err(Error::PreloadCache(
+                    "asset count or retained byte budget exceeded",
+                ));
+            }
+            cache.insert(asset.path.clone(), asset);
+        }
+        Ok(bytes)
+    }
+    /// Retained archive asset count and bytes, for loading diagnostics.
+    pub fn preload_cache_usage(&self) -> Result<(usize, usize), Error> {
+        let cache = self
+            .preloaded
+            .lock()
+            .map_err(|_| Error::PreloadCache("poisoned"))?;
+        Ok((
+            cache.len(),
+            cache.values().map(|asset| asset.bytes.len()).sum(),
+        ))
+    }
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.resolve")
@@ -286,6 +331,26 @@ impl Resolver {
                 None => overrides.read(&path)?,
             };
             return resolved(path, content, &overrides.info, None, limit);
+        }
+        if let Some(asset) = self
+            .preloaded
+            .lock()
+            .map_err(|_| Error::PreloadCache("poisoned"))?
+            .get(&path)
+        {
+            if let Some(limit) = limit
+                && asset.provenance.byte_length > limit
+            {
+                return Err(Error::Source {
+                    layer: asset.provenance.source.id.clone(),
+                    path: Some(path),
+                    source: SourceError::Limit {
+                        requested: asset.provenance.byte_length,
+                        limit,
+                    },
+                });
+            }
+            return Ok(asset.clone());
         }
         for archive in &self.archives {
             if let Some(member) = archive.members.get(&path) {

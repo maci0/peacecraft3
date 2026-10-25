@@ -1,6 +1,8 @@
 use super::{EnumHost, Failure, Limits, ObjectHost, TriggerBudget, TriggerRuntimeInput};
 use pcx_script::{Host, Prelude, Value};
 use std::sync::Arc;
+#[path = "game_event_tests.rs"]
+mod game_events;
 
 const COMMON: &str = "\
 type agent extends handle

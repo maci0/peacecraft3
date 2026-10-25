@@ -292,12 +292,14 @@ fn assert_single_visible_drop(function: &str, creation: u32, item: &[u8; 4]) {
 
 /// Creation 79, a named unit (`gg_unit_nban_0079`), whose set is one `pman` at chance 100.
 #[test]
+#[ignore = "requires PEACECRAFT3_CAMPAIGN_COMMON, BLIZZARD, SCRIPT and UNITS local original inputs"]
 fn named_unit_drop_draws_one_set_and_creates_the_rolled_item() {
     assert_single_visible_drop("Unit000025_DropItems", 79, b"pman");
 }
 
 /// Creation 94, a named unit (`gg_unit_nban_0094`), whose set is one `shea` at chance 100.
 #[test]
+#[ignore = "requires PEACECRAFT3_CAMPAIGN_COMMON, BLIZZARD, SCRIPT and UNITS local original inputs"]
 fn second_named_unit_drops_its_own_set() {
     assert_single_visible_drop("Unit000037_DropItems", 94, b"shea");
 }
@@ -306,11 +308,13 @@ fn second_named_unit_drops_its_own_set() {
 /// death trigger registers on the local `u`, and the binary creation sits at the same
 /// position and type as that `CreateUnit` call.
 #[test]
+#[ignore = "requires PEACECRAFT3_CAMPAIGN_COMMON, BLIZZARD, SCRIPT and UNITS local original inputs"]
 fn unnamed_unit_drop_links_through_the_local_creation_site() {
     assert_single_visible_drop("Unit000057_DropItems", 37, b"phea");
 }
 
 #[test]
+#[ignore = "requires PEACECRAFT3_CAMPAIGN_COMMON, BLIZZARD, SCRIPT and UNITS local original inputs"]
 fn hidden_unit_draws_nothing_and_still_destroys_its_trigger() {
     let recorder = run_drop("Unit000025_DropItems", true, 79);
     assert!(recorder.int_draws.is_empty());

@@ -7,10 +7,10 @@ license.workspace = true
 description = "TGA decoder for terrain tilesets and world-editor output"
 
 [dependencies]
-# Declared in the root `[workspace.dependencies]` already, so pinning it here
-# adds no new external requirement and needs no root-crate edit.
-pcx-mpq.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+pcx-mpq.workspace = true
 
 [lints]
 workspace = true

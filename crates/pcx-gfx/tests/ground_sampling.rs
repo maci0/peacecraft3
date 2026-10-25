@@ -430,9 +430,7 @@ fn ground_edge_and_minification_stay_inside_the_variation_cell() {
                 })),
                 ..default()
             })
-            .disable::<WinitPlugin>()
-            .disable::<bevy::audio::AudioPlugin>()
-            .disable::<bevy::gilrs::GilrsPlugin>(),
+            .disable::<WinitPlugin>(),
     )
     .add_plugins(pcx_gfx::GroundMaterialPlugin)
     .init_resource::<Capture>();

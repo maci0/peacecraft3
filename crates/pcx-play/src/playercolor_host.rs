@@ -98,6 +98,12 @@ pub enum Failure {
     QuestState(&'static str),
     #[error("rectangle state: {0}")]
     RectState(&'static str),
+    #[error("weather: {0}")]
+    Weather(&'static str),
+    #[error("fog modifier: {0}")]
+    FogModifier(String),
+    #[error("placed doodad: {0}")]
+    Doodad(String),
     #[error("region requests: {0}")]
     RegionState(&'static str),
     #[error("destructable creation: {0}")]
@@ -184,6 +190,12 @@ pub struct Conversion {
 }
 #[derive(Debug)]
 enum Entry {
+    Weather {
+        id: [u8; 4],
+        bounds: [f32; 4],
+        enabled: bool,
+        live: bool,
+    },
     Location {
         point: Option<[f32; 2]>,
     },
@@ -312,6 +324,11 @@ enum Entry {
     },
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
     RegisteredPlayerEvent(objects::PlayerEventRegistration),
+    RegisteredGameEvent {
+        trigger: HandleId,
+        gameevent: HandleId,
+        enumerand: i32,
+    },
     RegisteredDeathEvent(objects::DeathEventRegistration),
     RegisteredUnitInRange(objects::UnitInRangeRegistration),
     TriggerCondition(objects::TriggerConditionRegistration),
@@ -678,6 +695,10 @@ impl EnumHost {
             Entry::Destructable { .. } => "destructable",
             Entry::Item { .. } | Entry::RemovedItem => "item",
             Entry::Effect { live: true, .. } => "effect",
+            Entry::Weather { live: true, .. } => "weathereffect",
+            Entry::Weather { live: false, .. } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
             Entry::Effect { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -690,6 +711,7 @@ impl EnumHost {
             | Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
+            | Entry::RegisteredGameEvent { .. }
             | Entry::RegisteredDeathEvent(_)
             | Entry::RegisteredUnitInRange(_)
             | Entry::RegisteredRegionEvent(_)
@@ -807,26 +829,27 @@ pub use objects::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
     DestructableStats, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
     FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, MapConfig,
-    MapConfigBudget, MapMusicSelection, MessageBudget, MessageState, ObjectHost,
-    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
+    GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, LearnBlock,
+    LearnableSkill, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
+    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
     PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerScoreCounter,
     PlayerScoreSnapshot, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
     PresentationState, QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind,
-    RegionEventRegistration, RegionRectRequest, ResearchObservation, RestoreLifeBinding,
-    RestoreLifePolicy, ShopCapacity, SoundProperties, SoundState, StackedSoundAction,
-    StackedSoundRequest, StartLocation, StartPriorities, StartPriority, StartupClockState,
-    StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
+    RegionEventRegistration, RegionRectRequest, ResearchIcon, ResearchObservation,
+    RestoreLifeBinding, RestoreLifePolicy, ShopCapacity, SoundProperties, SoundState,
+    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
+    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
     TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
     TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
     UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
-    UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget,
+    UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget, WeatherEffect,
 };
 pub use objects::{
     CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState,
     DialogBudget, DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent,
     FogModifier, GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing,
     PlacedDestructable, PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog,
-    SummonContext, VisionCircle, VisionState, Vitals, Weapon,
+    SummonContext, VisionCapability, VisionCell, VisionOrigin, VisionSampleStats, VisionShape,
+    VisionSource, VisionState, Vitals, Weapon, present_vision,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};

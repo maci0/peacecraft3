@@ -54,6 +54,96 @@ fn host() -> ObjectHost {
         .unwrap()
 }
 
+#[test]
+fn destination_locations_are_independent_snapshots_and_capacity_failure_preserves_the_setup() {
+    let declarations = format!(
+        "{DECLARATIONS}type location extends agent
+native Location takes real x, real y returns location
+native RemoveLocation takes location p returns nothing
+native MoveLocation takes location p, real x, real y returns nothing
+native GetLocationX takes location p returns real
+native GetLocationY takes location p returns real
+native CameraSetupGetDestPositionLoc takes camerasetup s returns location
+"
+    );
+    let mut h = host_from(&declarations, "", 3)
+        .with_locations()
+        .unwrap()
+        .with_camera_setups(2)
+        .unwrap();
+    let setup = create(&mut h);
+    assert!(
+        h.native(
+            "CameraSetupGetDestPositionLoc",
+            std::slice::from_ref(&setup)
+        )
+        .is_err()
+    );
+    h.native(
+        "CameraSetupSetDestPosition",
+        &[
+            setup.clone(),
+            Value::Real(17.25),
+            Value::Real(-43.5),
+            Value::Real(0.),
+        ],
+    )
+    .unwrap();
+    let first = h
+        .native(
+            "CameraSetupGetDestPositionLoc",
+            std::slice::from_ref(&setup),
+        )
+        .unwrap();
+    let second = h
+        .native(
+            "CameraSetupGetDestPositionLoc",
+            std::slice::from_ref(&setup),
+        )
+        .unwrap();
+    assert_ne!(first, second);
+    assert!(
+        h.native(
+            "CameraSetupGetDestPositionLoc",
+            std::slice::from_ref(&setup)
+        )
+        .is_err()
+    );
+    h.native(
+        "MoveLocation",
+        &[first.clone(), Value::Real(100.), Value::Real(200.)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("CameraSetupGetDestPositionX", std::slice::from_ref(&setup))
+            .unwrap(),
+        Value::Real(17.25)
+    );
+    assert_eq!(
+        h.native("GetLocationY", std::slice::from_ref(&second))
+            .unwrap(),
+        Value::Real(-43.5)
+    );
+    h.native("RemoveLocation", &[first]).unwrap();
+    assert_eq!(
+        h.native("CameraSetupGetDestPositionY", &[setup]).unwrap(),
+        Value::Real(-43.5)
+    );
+    assert_eq!(
+        h.native("GetLocationX", &[second]).unwrap(),
+        Value::Real(17.25)
+    );
+    assert!(
+        host_from(
+            &declarations.replace("s returns location", "s returns integer"),
+            "",
+            8
+        )
+        .with_camera_setups(2)
+        .is_err()
+    );
+}
+
 fn field(host: &mut ObjectHost, value: i32) -> Value {
     host.native("ConvertCameraField", &[Value::Int(value)])
         .unwrap()

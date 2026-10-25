@@ -106,6 +106,177 @@ endfunction
 }
 
 #[test]
+fn campaign_explicit_ticks_ignore_pacing_and_respect_work_bounds() {
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::{num::NonZeroU32, time::Duration};
+    let run = |speed, batch: usize| {
+        let mut app = timer_app();
+        deliver_timer(&mut app, RESTART, 1);
+        let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 2, 8);
+        runtime.set_speed(NonZeroU32::new(speed).unwrap());
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(runtime.advance_ticks(&mut session, 2).unwrap(), 0);
+        assert_eq!(runtime.tick(), 0, "binding does not advance the campaign");
+        assert_eq!(runtime.advance_ticks(&mut session, 0).unwrap(), 0);
+        while runtime.tick() < 8 {
+            let remaining = usize::try_from(8 - runtime.tick()).unwrap();
+            let requested = batch.min(remaining);
+            let advanced = runtime.advance_ticks(&mut session, requested).unwrap();
+            assert_eq!(advanced, requested as u64);
+            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+            assert!(runtime.pending().is_zero());
+        }
+        assert_eq!(runtime.advance_ticks(&mut session, 0).unwrap(), 0);
+        assert_eq!(runtime.tick(), 8);
+        (
+            runtime.tick(),
+            ["marker", "same", "elapsed", "remaining"].map(|name| session.global(name)),
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+        )
+    };
+    let expected = run(1, 1_usize);
+    assert_eq!(expected.1[0], Some(Value::Int(2)));
+    for _ in 0..100 {
+        assert_eq!(run(8, 2), expected);
+    }
+}
+
+#[test]
+fn campaign_explicit_tick_failure_reports_only_committed_progress() {
+    use peacecraft3::campaign_runtime::{CampaignRuntime, CampaignStepError};
+    use std::time::Duration;
+    let mut app = timer_app();
+    let failing = RESTART.replace(
+        "set marker = marker + 1",
+        "set marker = marker + 1\ncall SetSoundPitch(null, 1.0)",
+    );
+    deliver_timer(&mut app, &failing, 1);
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 8, 8);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance_ticks(&mut session, 0).unwrap();
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 8),
+        Err(CampaignStepError::RuntimeStopped { advanced: 3, .. })
+    ));
+    assert_eq!(runtime.tick(), 3);
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 8),
+        Err(CampaignStepError::RuntimeStopped { advanced: 0, .. })
+    ));
+    assert_eq!(session.global("marker"), Some(Value::Int(1)));
+    session.clear();
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 1),
+        Err(CampaignStepError::MissingSession)
+    ));
+}
+
+#[test]
+fn campaign_explicit_ticks_keep_same_tick_callback_order() {
+    use peacecraft3::campaign_runtime::CampaignRuntime;
+    use std::time::Duration;
+    let script = "\
+globals
+timer first = CreateTimer()
+timer second = CreateTimer()
+string sequence = \"\"
+endglobals
+function a takes nothing returns nothing
+set sequence = sequence + \"a\"
+endfunction
+function b takes nothing returns nothing
+set sequence = sequence + \"b\"
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TimerStart(first, 0.25, true, function a)
+call TimerStart(second, 0.25, true, function b)
+endfunction
+";
+    let run = |batch| {
+        let mut app = timer_app();
+        deliver_timer(&mut app, script, 1);
+        let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 8, 8);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance_ticks(&mut session, 0).unwrap();
+        for _ in 0..8 / batch {
+            assert_eq!(
+                runtime.advance_ticks(&mut session, batch).unwrap(),
+                batch as u64
+            );
+        }
+        session.global("sequence")
+    };
+    let expected = run(1);
+    assert_eq!(expected, Some(Value::Str("abababab".into())));
+    assert_eq!(run(8), expected);
+}
+
+#[test]
+fn campaign_explicit_ticks_preserve_pause_and_refuse_frame_debt() {
+    use peacecraft3::campaign_runtime::{CampaignRuntime, CampaignStepError};
+    use std::time::Duration;
+    let mut app = timer_app();
+    deliver_timer(&mut app, RESTART, 1);
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(125), 1, 8);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 2),
+        Err(CampaignStepError::TickBudget {
+            requested: 2,
+            limit: 1
+        })
+    ));
+    assert_eq!(runtime.tick(), 0);
+    assert!(runtime.last_error.is_none());
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 0);
+    assert_eq!(
+        runtime.tick(),
+        0,
+        "an oversized request did not bind or advance"
+    );
+    runtime.paused = true;
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 0);
+    runtime.paused = false;
+    runtime.view_paused = true;
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 0);
+    runtime.view_paused = false;
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    runtime.advance(&mut session, Duration::from_millis(250));
+    assert_eq!(runtime.tick(), 2);
+    assert_eq!(runtime.pending(), Duration::from_millis(125));
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 1),
+        Err(CampaignStepError::PendingFrameTime)
+    ));
+    assert!(runtime.last_error.is_none());
+    assert_eq!(runtime.tick(), 2);
+    assert_eq!(runtime.pending(), Duration::from_millis(125));
+    runtime.advance(&mut session, Duration::ZERO);
+    assert_eq!(
+        runtime.tick(),
+        3,
+        "a pacing refusal leaves ordinary catch-up usable"
+    );
+}
+
+#[test]
 fn campaign_runtime_acceleration_preserves_timer_order_and_debt() {
     use peacecraft3::campaign_runtime::CampaignRuntime;
     use std::{num::NonZeroU32, time::Duration};
@@ -232,7 +403,7 @@ fn accelerated_campaign_clock_keeps_the_source_bound_random_stream() {
     use std::{num::NonZeroU32, time::Duration};
     let policy = Arc::new(super::random_factory_cases::local::local_policy());
     let script = "globals\ntimer t = CreateTimer()\ntimer u = CreateTimer()\ninteger a = 0\ninteger b = 0\ninteger total = 0\nreal last = 0.0\nendglobals\nfunction first takes nothing returns nothing\nset a = a + 1\nset total = total + GetRandomInt(0, 1000)\nendfunction\nfunction second takes nothing returns nothing\nset b = b + 1\nset total = total + GetRandomInt(-10000, -1)\nset last = GetRandomReal(-1.0, 1.0)\nendfunction\nfunction config takes nothing returns nothing\ncall SetRandomSeed(-29)\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(t, 0.125, true, function first)\ncall TimerStart(u, 0.25, true, function second)\nendfunction\n";
-    let run = |speed, chunks: &[u64]| {
+    let run = |speed, chunks: &[u64], explicit| {
         let mut app = timer_app();
         deliver_timer_with(
             &mut app,
@@ -252,12 +423,18 @@ fn accelerated_campaign_clock_keeps_the_source_bound_random_stream() {
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>();
         runtime.advance(&mut session, Duration::from_secs(999));
-        for chunk in chunks {
-            runtime.advance(&mut session, Duration::from_millis(*chunk));
-        }
-        while runtime.pending() >= Duration::from_millis(125) {
-            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
-            runtime.advance(&mut session, Duration::ZERO);
+        if explicit {
+            for _ in 0..32 {
+                assert_eq!(runtime.advance_ticks(&mut session, 2).unwrap(), 2);
+            }
+        } else {
+            for chunk in chunks {
+                runtime.advance(&mut session, Duration::from_millis(*chunk));
+            }
+            while runtime.pending() >= Duration::from_millis(125) {
+                assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+                runtime.advance(&mut session, Duration::ZERO);
+            }
         }
         assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
         let globals = ["a", "b", "total", "last"].map(|name| session.global(name));
@@ -273,10 +450,11 @@ fn accelerated_campaign_clock_keeps_the_source_bound_random_stream() {
             .collect();
         (runtime.tick(), runtime.pending(), globals, state, next)
     };
-    let baseline = run(1, &[125; 64]);
-    assert_eq!(run(2, &[4000]), baseline);
-    assert_eq!(run(4, &[1, 499, 0, 1500]), baseline);
-    assert_eq!(run(8, &[1000]), baseline);
+    let baseline = run(1, &[125; 64], false);
+    assert_eq!(run(2, &[4000], false), baseline);
+    assert_eq!(run(4, &[1, 499, 0, 1500], false), baseline);
+    assert_eq!(run(8, &[1000], false), baseline);
+    assert_eq!(run(8, &[], true), baseline);
 }
 
 #[test]

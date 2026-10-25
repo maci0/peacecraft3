@@ -41,6 +41,7 @@ pub struct CampaignCamera {
     pub menu_key: Option<Result<KeyCode, String>>,
     pub menu_key_receipt: Option<AssetReceipt>,
     visible: bool,
+    menu_open: bool,
     ready: bool,
     pub entity: Option<Entity>,
     pub clip_receipt: Option<AssetReceipt>,
@@ -48,9 +49,18 @@ pub struct CampaignCamera {
 }
 
 impl CampaignCamera {
-    /// Suspend gameplay through the same view policy as the selected menu key.
+    /// Hide a retired or explicitly suspended campaign view.
     pub fn suspend(&mut self) {
         self.visible = false;
+        self.menu_open = false;
+    }
+
+    pub fn menu_open(&self) -> bool {
+        self.menu_open
+    }
+
+    pub fn set_menu_open(&mut self, open: bool) {
+        self.menu_open = open && self.active();
     }
 
     pub fn active(&self) -> bool {
@@ -70,6 +80,7 @@ impl CampaignCamera {
             menu_key: None,
             menu_key_receipt: None,
             visible: true,
+            menu_open: false,
             ready: true,
             entity: Some(entity),
             clip_receipt: None,
@@ -91,6 +102,7 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
         menu_key: None,
         menu_key_receipt: None,
         visible: true,
+        menu_open: false,
         ready: false,
         entity: None,
         clip_receipt: None,
@@ -98,7 +110,7 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
     })
     .add_systems(
         Update,
-        (scroll_camera, apply_camera, pause_view)
+        (menu_keys, scroll_camera, apply_camera, pause_view)
             .chain()
             .in_set(CampaignCameraSet)
             .after(CampaignStartupSet),
@@ -122,7 +134,7 @@ fn scroll_camera(
         axis(KeyCode::ArrowUp, KeyCode::ArrowDown),
         axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
     );
-    if !view.active() || (forward == 0.0 && strafe == 0.0) {
+    if !view.active() || view.menu_open() || (forward == 0.0 && strafe == 0.0) {
         return;
     }
     let rotation = session.global("CAMERA_FIELD_ROTATION");
@@ -195,6 +207,7 @@ fn clear(commands: &mut Commands, camera: &mut CampaignCamera) {
     camera.clip_receipt = None;
     camera.last_error = None;
     camera.visible = true;
+    camera.menu_open = false;
     camera.ready = false;
 }
 
@@ -257,22 +270,25 @@ pub fn authored_function_key(text: &str, label_key: &str) -> Result<KeyCode, Str
         .ok_or_else(|| format!("{GLOBAL_STRINGS}: unsupported {label_key} {value:?}"))
 }
 
-fn pause_view(
-    keys: Option<ResMut<ButtonInput<KeyCode>>>,
-    mut view: ResMut<CampaignCamera>,
-    runtime: Option<ResMut<crate::campaign_runtime::CampaignRuntime>>,
-    mut cameras: Query<&mut Camera, With<CampaignSceneCamera>>,
-) {
+fn menu_keys(keys: Option<ResMut<ButtonInput<KeyCode>>>, mut view: ResMut<CampaignCamera>) {
     if view.entity.is_some()
         && let Some(mut keys) = keys
         && let Some(Ok(key)) = view.menu_key
         && keys.just_pressed(key)
     {
         keys.clear_just_pressed(key);
-        view.visible = !view.visible;
+        let open = !view.menu_open();
+        view.set_menu_open(open);
     }
+}
+
+fn pause_view(
+    view: Res<CampaignCamera>,
+    runtime: Option<ResMut<crate::campaign_runtime::CampaignRuntime>>,
+    mut cameras: Query<&mut Camera, With<CampaignSceneCamera>>,
+) {
     if let Some(mut runtime) = runtime {
-        runtime.view_paused = view.entity.is_some() && !view.visible;
+        runtime.view_paused = view.entity.is_some() && (!view.visible || view.menu_open());
     }
     for mut camera in &mut cameras {
         camera.is_active = view.active();
@@ -508,6 +524,48 @@ fn pose(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn menu_pauses_the_view_clock_without_hiding_the_scene_or_erasing_script_pause() {
+        use super::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        install(&mut app, 0, 1024);
+        let scene = app
+            .world_mut()
+            .spawn((Camera3d::default(), CampaignSceneCamera))
+            .id();
+        {
+            let mut view = app.world_mut().resource_mut::<CampaignCamera>();
+            view.entity = Some(scene);
+            view.ready = true;
+            view.menu_key = Some(Ok(KeyCode::F7));
+        }
+        let mut runtime = crate::campaign_runtime::CampaignRuntime::new(
+            std::time::Duration::from_millis(23),
+            8,
+            8,
+        );
+        runtime.paused = true;
+        app.insert_resource(runtime);
+        for open in [true, false] {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::F7);
+            app.world_mut().run_system_once(menu_keys).unwrap();
+            app.world_mut().run_system_once(pause_view).unwrap();
+            let view = app.world().resource::<CampaignCamera>();
+            assert!(view.active());
+            assert_eq!(view.menu_open(), open);
+            assert!(app.world().get::<Camera>(scene).unwrap().is_active);
+            let runtime = app
+                .world()
+                .resource::<crate::campaign_runtime::CampaignRuntime>();
+            assert_eq!(runtime.view_paused, open);
+            assert!(runtime.paused);
+        }
+    }
+
     #[test]
     fn authored_function_keys_share_mapping_for_localized_labels() {
         use super::*;

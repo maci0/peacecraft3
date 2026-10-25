@@ -83,10 +83,13 @@ impl ObjectHost {
                 restart: None,
             });
         }
-        let geometry = if shown && self.unit_placement.is_some() {
+        let geometry = if shown
+            && self.unit_placement.is_some()
+            && record.combat.as_ref().is_none_or(|combat| !combat.dead)
+        {
             let geometry = super::unit_positions::geometry(&record.definition)
                 .map_err(|s| self.inner.error(name, Failure::UnitState(s)))?;
-            Some((geometry.radius, geometry.path.to_owned(), geometry.air))
+            Some((geometry.radius, geometry.path.to_owned(), geometry.movement))
         } else {
             None
         };
@@ -96,7 +99,7 @@ impl ObjectHost {
             record.activity.as_ref().is_some_and(|a| a.moving()),
         );
         let mut relocated = None;
-        let prepared = if let Some((radius, path, air)) = geometry {
+        let prepared = if let Some((radius, path, movement)) = geometry {
             let position = position.ok_or_else(|| {
                 self.inner
                     .error(name, Failure::UnitState("accepted reveal position missing"))
@@ -105,7 +108,7 @@ impl ObjectHost {
                 .unit_placement
                 .as_mut()
                 .expect("placement")
-                .prepare_show_class(unit, position, radius, &path, face, air)
+                .prepare_show_class(unit, position, radius, &path, face, movement)
                 .map_err(|e| {
                     self.inner
                         .error(name, Failure::UnitPlacement(e.to_string()))

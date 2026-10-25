@@ -1,6 +1,7 @@
-//! A bounded presentation raster over canonical world-space vision sources.
+//! Presentation fit of the shared vision ledger onto the minimap image.
+//! Exploration lives on the ledger. This raster only maps pixels.
 use pcx_objects::editor::minimap_fog::MinimapFogAlpha;
-use pcx_play::playercolor_host::{VisionCircle, VisionState};
+use pcx_play::playercolor_host::VisionState;
 
 struct Mapping {
     left: f64,
@@ -37,8 +38,6 @@ impl Mapping {
 pub(crate) struct Raster {
     width: usize,
     height: usize,
-    explored: Vec<bool>,
-    current: Vec<VisionState>,
     alpha: Vec<u8>,
 }
 
@@ -79,20 +78,36 @@ impl Raster {
         Ok(Self {
             width,
             height,
-            explored: filled(count, false)?,
-            current: filled(count, VisionState::Masked)?,
             alpha: filled(count, 0)?,
         })
     }
 
-    pub(crate) fn update(
+    pub(crate) fn point_at(
+        &self,
+        bounds: [[f32; 2]; 2],
+        point: [f32; 2],
+    ) -> Result<Option<[f64; 2]>, String> {
+        if point.iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite minimap point".into());
+        }
+        let m = Mapping::new(self.width, self.height, bounds)?;
+        let pixel = [
+            (f64::from(point[0]) - m.left) * m.scale + m.pad[0],
+            (m.top - f64::from(point[1])) * m.scale + m.pad[1],
+        ];
+        Ok((pixel[0] >= 0.
+            && pixel[1] >= 0.
+            && pixel[0] < self.width as f64
+            && pixel[1] < self.height as f64)
+            .then_some(pixel))
+    }
+    /// Project an already sampled ledger. The callback owns fog, mask, and exploration.
+    pub(crate) fn project(
         &mut self,
         bounds: [[f32; 2]; 2],
-        sources: &[VisionCircle],
-        fog: bool,
-        mask: bool,
         opacity: MinimapFogAlpha,
         work_limit: usize,
+        mut classify: impl FnMut([f64; 2]) -> Result<VisionState, String>,
     ) -> Result<&[u8], String> {
         let Mapping {
             left,
@@ -102,76 +117,30 @@ impl Raster {
             scale,
             pad,
         } = Mapping::new(self.width, self.height, bounds)?;
-        let mut ranges = Vec::new();
-        ranges
-            .try_reserve_exact(sources.len())
-            .map_err(|_| "minimap visibility allocation")?;
-        let mut work = self.alpha.len();
-        for circle in sources {
-            if !circle.center.iter().all(|n| n.is_finite())
-                || !circle.radius.is_finite()
-                || circle.radius < 0.
-            {
-                return Err("invalid minimap vision circle".into());
-            }
-            let [cx, cy] = circle.center.map(f64::from);
-            let radius = f64::from(circle.radius);
-            let x = |v: f64| (v - left) * scale + pad[0];
-            let y = |v: f64| (top - v) * scale + pad[1];
-            let x0 = x(cx - radius).floor().clamp(0., self.width as f64) as usize;
-            let x1 = x(cx + radius).ceil().clamp(0., self.width as f64) as usize;
-            let y0 = y(cy + radius).floor().clamp(0., self.height as f64) as usize;
-            let y1 = y(cy - radius).ceil().clamp(0., self.height as f64) as usize;
-            work = work
-                .checked_add(
-                    (x1 - x0)
-                        .checked_mul(y1 - y0)
-                        .ok_or("minimap visibility work overflow")?,
-                )
-                .filter(|n| *n <= work_limit)
-                .ok_or("minimap visibility work budget")?;
-            ranges.push((x0..x1, y0..y1));
-        }
-        if work > work_limit {
+        if self.alpha.len() > work_limit {
             return Err("minimap visibility work budget".into());
         }
-        for (cell, explored) in self.current.iter_mut().zip(&self.explored) {
-            *cell = if *explored {
-                VisionState::Fogged
-            } else {
-                VisionState::Masked
-            };
-        }
-        // shortcut: circular sight has no terrain/tree occlusion yet; add the shared occluder pass before claiming visibility parity.
-        for (source, (xs, ys)) in sources.iter().zip(ranges) {
-            let [cx, cy] = source.center.map(f64::from);
-            let radius2 = f64::from(source.radius).powi(2);
-            for y in ys {
-                let wy = top - (y as f64 + 0.5 - pad[1]) / scale;
-                if wy < bottom || wy > top {
-                    continue;
-                }
-                for x in xs.clone() {
-                    let wx = left + (x as f64 + 0.5 - pad[0]) / scale;
-                    if wx < left || wx > right || (wx - cx).powi(2) + (wy - cy).powi(2) > radius2 {
-                        continue;
-                    }
-                    let at = y * self.width + x;
-                    self.current[at] = source.state;
-                    self.explored[at] = source.state != VisionState::Masked;
-                }
+        let mut alpha = Vec::new();
+        alpha
+            .try_reserve_exact(self.alpha.len())
+            .map_err(|_| "minimap visibility allocation")?;
+        for y in 0..self.height {
+            let wy = top - (y as f64 + 0.5 - pad[1]) / scale;
+            for x in 0..self.width {
+                let wx = left + (x as f64 + 0.5 - pad[0]) / scale;
+                let state = if wx < left || wx > right || wy < bottom || wy > top {
+                    VisionState::Masked
+                } else {
+                    classify([wx, wy])?
+                };
+                alpha.push(match state {
+                    VisionState::Visible => opacity.visible,
+                    VisionState::Masked => opacity.masked,
+                    VisionState::Fogged => opacity.fogged,
+                });
             }
         }
-        for ((out, state), explored) in self.alpha.iter_mut().zip(&self.current).zip(&self.explored)
-        {
-            *out = if *state == VisionState::Visible || (!fog && (!mask || *explored)) {
-                opacity.visible
-            } else if mask && !*explored {
-                opacity.masked
-            } else {
-                opacity.fogged
-            };
-        }
+        self.alpha = alpha;
         Ok(&self.alpha)
     }
 }
@@ -184,14 +153,44 @@ mod tests {
         fogged: 71,
         visible: 241,
     };
-    fn circle(center: [f32; 2]) -> VisionCircle {
-        VisionCircle {
-            center,
-            radius: 0.6,
-            state: VisionState::Visible,
-            after_units: false,
-        }
+    #[test]
+    fn projection_copies_presented_states_and_a_refused_budget_keeps_pixels() {
+        let mut raster = Raster::new(2, 2, 4).unwrap();
+        let bounds = [[0., 0.], [2., 2.]];
+        let alpha = raster
+            .project(bounds, OPACITY, 4, |[x, y]| {
+                Ok(if x < 1. && y > 1. {
+                    VisionState::Visible
+                } else if y > 1. {
+                    VisionState::Fogged
+                } else {
+                    VisionState::Masked
+                })
+            })
+            .unwrap();
+        assert_eq!(alpha, &[241, 71, 3, 3]);
+        assert!(
+            raster
+                .project(bounds, OPACITY, 0, |_| Ok(VisionState::Visible))
+                .is_err()
+        );
+        assert_eq!(
+            raster
+                .project(bounds, OPACITY, 4, |[x, y]| {
+                    Ok(if x < 1. && y > 1. {
+                        VisionState::Visible
+                    } else if y > 1. {
+                        VisionState::Fogged
+                    } else {
+                        VisionState::Masked
+                    })
+                })
+                .unwrap(),
+            &[241, 71, 3, 3]
+        );
+        assert!(Raster::new(u32::MAX, u32::MAX, 16).is_err());
     }
+
     #[test]
     fn pointer_inverse_matches_pixels_and_clamps_padding_and_drag() {
         let bounds = [[-100., -40.], [300., 160.]];
@@ -202,88 +201,31 @@ mod tests {
             assert_eq!(raster.world_at(bounds, [2., 2.]).unwrap(), [300., -40.]);
             let fraction = [0.5 + 0.5 / width as f32, 0.5 + 0.5 / height as f32];
             let center = raster.world_at(bounds, fraction).unwrap();
-            let visible = VisionCircle {
-                center,
-                radius: 1.,
-                state: VisionState::Visible,
-                after_units: false,
-            };
             let alpha = raster
-                .update(bounds, &[visible], true, true, OPACITY, 1000)
+                .project(bounds, OPACITY, 1000, |point| {
+                    Ok(
+                        if (point[0] - f64::from(center[0])).hypot(point[1] - f64::from(center[1]))
+                            <= 1.
+                        {
+                            VisionState::Visible
+                        } else {
+                            VisionState::Masked
+                        },
+                    )
+                })
                 .unwrap();
             assert_eq!(alpha[(height / 2 * width + width / 2) as usize], 241);
             assert!(raster.world_at(bounds, [f32::NAN, 0.]).is_err());
             assert!(raster.world_at([[0.; 2]; 2], [0.5; 2]).is_err());
         }
     }
+
     #[test]
-    fn movement_retains_exploration_and_switches_are_independent() {
-        let mut raster = Raster::new(4, 4, 16).unwrap();
-        let bounds = [[0., 0.], [4., 4.]];
-        assert_eq!(
-            raster
-                .update(bounds, &[circle([0.5, 3.5])], true, true, OPACITY, 64)
-                .unwrap()[0],
-            241
-        );
-        let moved = raster
-            .update(bounds, &[circle([3.5, 0.5])], true, true, OPACITY, 64)
-            .unwrap();
-        assert_eq!([moved[0], moved[1], moved[15]], [71, 3, 241]);
-        let no_fog = raster
-            .update(bounds, &[], false, true, OPACITY, 64)
-            .unwrap();
-        assert_eq!([no_fog[0], no_fog[1]], [241, 3]);
-        assert!(
-            raster
-                .update(bounds, &[], true, false, OPACITY, 64)
-                .unwrap()
-                .iter()
-                .all(|v| *v == 71)
-        );
-        assert!(
-            raster
-                .update(bounds, &[], false, false, OPACITY, 64)
-                .unwrap()
-                .iter()
-                .all(|v| *v == 241)
-        );
-    }
-    #[test]
-    fn masking_order_budget_and_nonfinite_refusal_preserve_history() {
-        let mut raster = Raster::new(4, 4, 16).unwrap();
-        let bounds = [[0., 0.], [4., 4.]];
-        let visible = circle([0.5, 3.5]);
-        let masked = VisionCircle {
-            state: VisionState::Masked,
-            ..visible
-        };
-        assert_eq!(
-            raster
-                .update(bounds, &[masked, visible], true, true, OPACITY, 64)
-                .unwrap()[0],
-            241
-        );
-        assert!(
-            raster
-                .update(bounds, &[masked], true, true, OPACITY, 0)
-                .is_err()
-        );
-        assert_eq!(
-            raster.update(bounds, &[], true, true, OPACITY, 64).unwrap()[0],
-            71
-        );
-        assert_eq!(
-            raster
-                .update(bounds, &[visible, masked], true, true, OPACITY, 64)
-                .unwrap()[0],
-            3
-        );
-        assert!(
-            raster
-                .update(bounds, &[circle([f32::NAN, 0.])], true, true, OPACITY, 64)
-                .is_err()
-        );
-        assert!(Raster::new(u32::MAX, u32::MAX, 16).is_err());
+    fn marker_points_use_the_image_fit_and_refuse_nonfinite_input() {
+        let bounds = [[0., 0.], [8., 4.]];
+        let raster = Raster::new(8, 8, 64).unwrap();
+        assert_eq!(raster.point_at(bounds, [4., 2.]).unwrap(), Some([4., 4.]));
+        assert_eq!(raster.point_at(bounds, [-1., 2.]).unwrap(), None);
+        assert!(raster.point_at(bounds, [f32::NAN, 0.]).is_err());
     }
 }

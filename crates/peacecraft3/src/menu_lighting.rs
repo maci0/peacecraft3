@@ -51,6 +51,7 @@ fn read_parameters(source: &str, bytes: &[u8]) -> Result<Parameters, String> {
 
 struct Light {
     position: Vec3,
+    node: Option<pcx_gfx::mdx_runtime::JointPlan>,
     colour: [f32; 3],
     intensity: f32,
     ambient_colour: [f32; 3],
@@ -100,13 +101,8 @@ impl Lighting {
             if !ids.insert(l.object_id) || runtime.joints.index_of(l.object_id).is_some() {
                 return Err(fail("duplicate light node identity"));
             }
-            if l.kind != pcx_mdl::LightKind::Omnidirectional
-                || l.parent_id != -1
-                || !l.node_tracks.is_empty()
-            {
-                return Err(fail(
-                    "only unparented point lights without node animation are supported",
-                ));
+            if l.kind != pcx_mdl::LightKind::Omnidirectional || l.parent_id != -1 {
+                return Err(fail("only unparented point lights are supported"));
             }
             let position = runtime
                 .joints
@@ -130,6 +126,38 @@ impl Lighting {
             {
                 return Err(fail("unusable source light value"));
             }
+            let node = if l.node_tracks.is_empty() {
+                None
+            } else {
+                let node = pcx_mdl::Node {
+                    offset: l
+                        .offset
+                        .checked_add(4)
+                        .ok_or_else(|| fail("light node offset"))?,
+                    size: l.node_size,
+                    name: l.name,
+                    object_id: l.object_id,
+                    parent_id: l.parent_id,
+                    flags: l.flags,
+                    tracks: l.node_tracks,
+                };
+                let plan =
+                    pcx_gfx::mdx_runtime::JointPlan::checked(&[], &[node], runtime.joints.pivots())
+                        .map_err(|e| fail(&e.to_string()))?;
+                let mut kinds = std::collections::BTreeSet::new();
+                for track in &plan.joints()[0].tracks {
+                    if !kinds.insert(track.kind as u8)
+                        || (track.global_sequence_id >= 0
+                            && runtime
+                                .global_sequences
+                                .get(track.global_sequence_id as usize)
+                                .is_none_or(|n| *n == 0))
+                    {
+                        return Err(fail("duplicate node transform or invalid global clock"));
+                    }
+                }
+                Some(plan)
+            };
             let mut tracks = Vec::new();
             for track in l.tracks {
                 let width = match &track.magic {
@@ -217,6 +245,7 @@ impl Lighting {
             }
             lights.push(Light {
                 position: position.into(),
+                node,
                 colour: l.colour,
                 intensity: l.intensity,
                 ambient_colour: l.ambient_colour,
@@ -347,6 +376,27 @@ impl Lighting {
         self.lights
             .iter()
             .map(|l| {
+                let position = if let Some(node) = &l.node {
+                    let pose = crate::mainmenu_scene::tracked_pose(
+                        &node.joints()[0],
+                        frame,
+                        elapsed_ms as u32,
+                        &self.durations,
+                        self.interval,
+                    );
+                    let matrices = pcx_mdl::bone_matrices_from_poses(
+                        node.joints(),
+                        &|_| None,
+                        node.pivots(),
+                        &[pose],
+                    );
+                    Mat4::from_cols_array(&matrices[0]).transform_point3(l.position)
+                } else {
+                    l.position
+                };
+                if !position.is_finite() {
+                    return Err(format!("{}: nonfinite sampled light position", self.source));
+                }
                 let mut colour = l.colour;
                 let mut ambient_colour = l.ambient_colour;
                 let mut intensity = l.intensity;
@@ -379,7 +429,7 @@ impl Lighting {
                 }
                 let enabled = if visibility > 0.0 { 1.0 } else { 0.0 };
                 Ok(Sample {
-                    position: l.position,
+                    position,
                     diffuse: channels(colour)
                         * (intensity * self.parameters.channel_scale)
                         * enabled,
@@ -537,6 +587,7 @@ pub(crate) mod tests {
             parameters: parameters(),
             lights: vec![Light {
                 position: Vec3::Z * 2.0,
+                node: None,
                 colour: [1.0, 0.5, 0.25],
                 intensity: 8.0,
                 ambient_colour: [1.0; 3],
@@ -664,6 +715,42 @@ pub(crate) mod tests {
             assert!(checked_fixture(&bad, vec![[0.0; 3]], [0, 100]).is_err());
         }
     }
+    #[test]
+    fn animated_light_nodes_move_the_authored_pivot_through_the_shared_clip_sampler() {
+        let mut track = b"KGTR".to_vec();
+        for word in [2u32, 1, pcx_mdl::NO_ID] {
+            track.extend(word.to_le_bytes());
+        }
+        for (frame, point) in [(0u32, [5f32, 7., 11.]), (100, [9., 13., 23.])] {
+            track.extend(frame.to_le_bytes());
+            for value in point {
+                track.extend(value.to_le_bytes());
+            }
+        }
+        let mut record = fixture_record(&[]);
+        record.splice(100..100, track.iter().copied());
+        record[..4].copy_from_slice(&(144u32 + track.len() as u32).to_le_bytes());
+        record[4..8].copy_from_slice(&(96u32 + track.len() as u32).to_le_bytes());
+        let plan = checked_fixture(&record, vec![[37., 91., 153.]], [0, 100]).unwrap();
+        assert_eq!(
+            plan.sample(0, 0).unwrap()[0].position,
+            Vec3::new(42., 98., 164.)
+        );
+        assert_eq!(
+            plan.sample(50, 50).unwrap()[0].position,
+            Vec3::new(44., 101., 170.)
+        );
+        assert_eq!(
+            plan.sample(100, 100).unwrap()[0].position,
+            Vec3::new(46., 104., 176.)
+        );
+        record[112..116].copy_from_slice(&0u32.to_le_bytes());
+        assert!(
+            checked_fixture(&record, vec![[37., 91., 153.]], [0, 100]).is_err(),
+            "a missing global clock cannot be replaced with local time"
+        );
+    }
+
     #[test]
     fn visibility_admission_preserves_discrete_keys_and_refuses_guessed_thresholds() {
         let record = fixture_record(&visibility_track(0.0, pcx_mdl::NO_ID));
@@ -896,6 +983,7 @@ pub(crate) mod tests {
             }
             let skeleton = crate::mainmenu_scene::skin_geosets(
                 crate::mainmenu_scene::Rig {
+                    blend: None,
                     interval: [clip.interval_start, clip.interval_end],
                     model: &loaded,
                     bones: runtime.joints.joints(),

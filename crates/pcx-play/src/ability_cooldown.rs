@@ -21,6 +21,8 @@ pub(super) const NATIVES: [(&str, &[&str], &str); 5] = [
     ("BlzGetAbilityCooldown", &["integer", "integer"], "real"),
 ];
 
+type CustomAbilityAlias = ([u8; 4], [u8; 4]);
+
 impl ObjectHost {
     pub(crate) fn unit_cooldown_reset_declaration(&self, source: &str) -> Result<(), Error> {
         let name = "UnitResetCooldown";
@@ -37,6 +39,7 @@ impl ObjectHost {
         if let Some(holy) = &mut self.holy_light {
             holy.ready_at.remove(&unit);
         }
+        self.clear_chain_cooldown(unit);
         if let Some(summoning) = &mut self.summoning {
             summoning.ready.remove(&unit);
         }
@@ -95,6 +98,9 @@ impl ObjectHost {
         {
             return Ok(absent);
         }
+        if let Some(answer) = self.chain_bound_cooldown(unit, ability, end)? {
+            return Ok(answer);
+        }
         // Visibility, death and player availability do not replace the wrapper's unit/ability gate.
         let admitted = match &ability {
             b"AHhb" => self.holy_light.is_some(),
@@ -103,9 +109,10 @@ impl ObjectHost {
             _ => false,
         };
         if !admitted {
-            return Err(fail(&format!(
-                "cooldown behavior for present ability {ability:?} is not admitted"
-            )));
+            return Err(self.hero_error(
+                name,
+                format!("cooldown behavior for present ability {ability:?} is not admitted"),
+            ));
         }
         let deadline = match &ability {
             b"AHhb" => {
@@ -144,6 +151,49 @@ impl ObjectHost {
             .timer_game_time()
             .ok_or_else(|| self.inner.error(name, Failure::UnitState("clock missing")))?;
         Ok(Value::Real((deadline - now).max(0.0) as f32))
+    }
+
+    pub(crate) fn ability_parent_code(&self, alias: [u8; 4]) -> Result<[u8; 4], String> {
+        let input = self.heroes_admission()?;
+        let (base, _) = crate::ability_profile::base(&input.tables, &input.overlay, alias)?;
+        fourcc_text(base)
+    }
+
+    pub(crate) fn ability_metadata_text(
+        &self,
+        id: [u8; 4],
+        column: &str,
+    ) -> Result<Option<String>, String> {
+        let input = self.heroes_admission()?;
+        let Some(metadata) = input.tables.metadata(id) else {
+            return Ok(None);
+        };
+        Ok(metadata
+            .attribute(column)
+            .map(|cell| cell.text.trim().to_owned()))
+    }
+
+    pub(crate) fn ability_data_text(&self, alias: [u8; 4], column: &str) -> Result<String, String> {
+        let input = self.heroes_admission()?;
+        let (base, _) = crate::ability_profile::base(&input.tables, &input.overlay, alias)?;
+        Ok(input
+            .tables
+            .object(pcx_objects::editor::defaults::Family::Ability, base)
+            .map_err(|e| e.to_string())?
+            .cell(pcx_objects::editor::SlkId::AbilityData, column)
+            .map_err(|e| e.to_string())?
+            .text
+            .trim()
+            .to_owned())
+    }
+
+    pub(crate) fn custom_ability_aliases(&self) -> Result<Vec<CustomAbilityAlias>, String> {
+        let input = self.heroes_admission()?;
+        let mut pairs = Vec::new();
+        for (alias, (parent, _)) in &input.overlay.custom {
+            pairs.push((fourcc_text(alias)?, fourcc_text(parent)?));
+        }
+        Ok(pairs)
     }
 
     pub(crate) fn ability_cooldown_duration(
@@ -261,7 +311,8 @@ impl ObjectHost {
             b"AHwe" => self.summoning.is_some(),
             b"AHds" => self.divine_shield.rules.is_some(),
             _ => false,
-        } {
+        } && !self.chain_alias_is_bound(ability)
+        {
             return Err(fail(
                 "duration behavior for this present ability is not admitted",
             ));
@@ -298,4 +349,14 @@ impl ObjectHost {
         }
         Ok(Value::Null)
     }
+}
+
+fn fourcc_text(text: &str) -> Result<[u8; 4], String> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 4 {
+        return Err(format!("ability id {text:?} is not four bytes"));
+    }
+    let mut code = [0; 4];
+    code.copy_from_slice(bytes);
+    Ok(code)
 }

@@ -11,6 +11,9 @@ pub struct Model {
     pub member: String,
     pub bytes: Arc<[u8]>,
     pub sequences: Vec<pcx_mdl::Sequence>,
+    pub blend_time_ms: u32,
+    pub joints: Vec<pcx_mdl::Bone>,
+    pub global_sequences: Vec<u32>,
 }
 
 impl Model {
@@ -31,6 +34,33 @@ impl Model {
             ));
         }
         let model = pcx_mdl::Mdlx::parse(&bytes).map_err(|e| format!("{member}: {e}"))?;
+        let blend_time_ms = model
+            .model(&bytes)
+            .map_err(|e| format!("{member}: MODL: {e}"))?
+            .blend_time_ms;
+        let mut joints = model
+            .bones(&bytes)
+            .map_err(|e| format!("{member}: BONE: {e}"))?;
+        for helper in model
+            .nodes(&bytes, pcx_mdl::tag::HELP)
+            .map_err(|e| format!("{member}: HELP: {e}"))?
+        {
+            joints.push(
+                helper
+                    .transform_bone()
+                    .map_err(|e| format!("{member}: HELP {}: {e}", helper.object_id))?,
+            );
+        }
+        let globals = model.payload(&bytes, pcx_mdl::tag::GLBS).unwrap_or(&[]);
+        if !globals.len().is_multiple_of(4) {
+            return Err(format!("{member}: malformed GLBS"));
+        }
+        let global_sequences = globals
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u32::from_le_bytes(*v))
+            .collect();
         let sequences = model
             .sequences(&bytes)
             .map_err(|e| format!("{member}: SEQS: {e}"))?;
@@ -45,7 +75,29 @@ impl Model {
             member,
             bytes,
             sequences,
+            blend_time_ms,
+            joints,
+            global_sequences,
         })
+    }
+
+    fn poses(&self, sample: Sample) -> Result<Vec<pcx_mdl::Pose>, String> {
+        let elapsed =
+            u32::try_from(sample.elapsed_ms).map_err(|_| "unit global pose clock overflow")?;
+        let mut poses = Vec::new();
+        poses
+            .try_reserve_exact(self.joints.len())
+            .map_err(|_| "unit transition pose allocation")?;
+        poses.extend(self.joints.iter().map(|bone| {
+            pcx_mdl::sample_joint_pose(
+                bone,
+                sample.frame,
+                elapsed,
+                &self.global_sequences,
+                sample.interval,
+            )
+        }));
+        Ok(poses)
     }
 
     fn select(&self, name: &str) -> Option<usize> {
@@ -135,11 +187,30 @@ pub struct Animation {
     pub started: f64,
     /// Sequence seconds per game second, fixed when the sequence is selected.
     rate: f64,
+    phase_at: f64,
+    phase_seconds: f64,
+    time_scale: f64,
+    blend_time: f64,
+    blend: Option<Blend>,
     /// Authored clips waiting behind the current sequence, in call order, with
     /// the game time at which each was requested.
     queued: VecDeque<QueuedClip>,
     /// The current sequence came from the queue and still owes a Stand fallback.
     queue_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Blend {
+    from: Arc<[pcx_mdl::Pose]>,
+    started: f64,
+    duration: f64,
+    elapsed: f64,
+}
+
+#[derive(Clone, Copy)]
+pub struct BlendSample<'a> {
+    pub from: &'a [pcx_mdl::Pose],
+    pub weight: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,12 +229,18 @@ impl Animation {
         let sequence = model
             .select("stand")
             .or_else(|| (!model.sequences.is_empty()).then_some(0));
+        let blend_time = f64::from(model.blend_time_ms) / 1000.;
         Ok(Self {
             model,
             sequence,
             created: now,
             started: now,
             rate: 1.,
+            phase_at: now,
+            phase_seconds: 0.,
+            time_scale: 1.,
+            blend_time,
+            blend: None,
             queued: VecDeque::new(),
             queue_active: false,
         })
@@ -178,7 +255,7 @@ impl Animation {
     /// `None`, or a zero `move_speed`, keeps the authored clock. A missing
     /// selection leaves the state unchanged.
     pub fn select(&mut self, name: &str, now: f64, unit_speed: Option<f32>) -> Result<(), String> {
-        if !now.is_finite() || now < self.started {
+        if !now.is_finite() || now < self.started || now < self.phase_at {
             return Err("invalid unit animation game time".into());
         }
         if let Some(index) = self.model.select(name) {
@@ -201,11 +278,35 @@ impl Animation {
                     }
                 }
             };
+            let blend = self.prepare_blend(now)?;
             self.sequence = Some(index);
             self.started = now;
             self.rate = rate;
+            self.phase_at = now;
+            self.phase_seconds = 0.;
+            self.blend = blend;
             self.queued.clear();
             self.queue_active = false;
+        }
+        Ok(())
+    }
+    /// Engine phase duration is gameplay data; fit its authored clip without changing explicit time scale.
+    pub(crate) fn select_for_duration(
+        &mut self,
+        name: &str,
+        now: f64,
+        duration: f64,
+    ) -> Result<(), String> {
+        if !duration.is_finite() || duration < 0. {
+            return Err("invalid unit phase duration".into());
+        }
+        let Some(index) = self.model.select(name) else {
+            return Ok(());
+        };
+        let span = f64::from(self.model.sequences[index].duration()) / 1000.;
+        self.select(name, now, None)?;
+        if duration > 0. && span > 0. {
+            self.rate = span / duration;
         }
         Ok(())
     }
@@ -215,7 +316,7 @@ impl Animation {
     /// Stand. That one-shot queue policy is a recreation choice pending native
     /// runtime comparison.
     pub fn queue(&mut self, name: &str, now: f64) -> Result<bool, String> {
-        if !now.is_finite() || now < self.started {
+        if !now.is_finite() || now < self.started || now < self.phase_at {
             return Err("invalid unit animation game time".into());
         }
         let Some(index) = self.model.select(name) else {
@@ -249,26 +350,30 @@ impl Animation {
         }
         while self.queue_active || !self.queued.is_empty() {
             let Some(index) = self.sequence else {
-                let Some(next) = self.queued.pop_front() else {
+                let Some(next) = self.queued.front().copied() else {
                     self.queue_active = false;
                     break;
                 };
-                self.start(next.sequence, self.started.max(next.requested), 1.);
+                self.start(next.sequence, self.started.max(next.requested), 1.)?;
+                self.queued.pop_front();
                 self.queue_active = true;
                 continue;
             };
-            let at = match self.queued.front() {
+            let Some(at) = (match self.queued.front() {
                 Some(next) => self.next_boundary(index, next.requested)?,
                 None => self.next_boundary(index, self.started)?,
+            }) else {
+                break;
             };
             if now < at {
                 break;
             }
-            if let Some(next) = self.queued.pop_front() {
-                self.start(next.sequence, at, 1.);
+            if let Some(next) = self.queued.front().copied() {
+                self.start(next.sequence, at, 1.)?;
+                self.queued.pop_front();
                 self.queue_active = true;
             } else if let Some(stand) = self.model.select("stand") {
-                self.start(stand, at, 1.);
+                self.start(stand, at, 1.)?;
                 self.queue_active = false;
             } else {
                 self.queue_active = false;
@@ -280,30 +385,77 @@ impl Animation {
     /// The first completion boundary of the current clip at or after `requested`.
     /// A late request waits for the next authored boundary instead of consuming a
     /// clip at a boundary that already elapsed.
-    fn next_boundary(&self, index: usize, requested: f64) -> Result<f64, String> {
+    fn next_boundary(&self, index: usize, requested: f64) -> Result<Option<f64>, String> {
         let sequence = self
             .model
             .sequences
             .get(index)
             .ok_or("unit animation sequence missing")?;
-        let duration = u64::from(sequence.duration());
-        if duration == 0 {
-            return Ok(self.started.max(requested));
+        let speed = self.rate * self.time_scale;
+        if speed == 0. {
+            return Ok(None);
         }
-        let period = duration as f64 / (1000. * self.rate);
-        let first = self.started + period;
-        if !period.is_finite() || !first.is_finite() {
-            return Err("unit animation clock overflow".into());
+        let requested = requested.max(self.phase_at);
+        let duration = f64::from(sequence.duration()) / 1000.;
+        if duration == 0. {
+            return Ok(Some(requested));
         }
-        if sequence.non_looping {
-            return Ok(first.max(requested));
-        }
-        let cycles = ((requested - self.started) / period).ceil().max(1.);
-        let at = self.started + cycles * period;
+        let phase = self.local_seconds(requested)?;
+        let target = if sequence.non_looping {
+            if speed > 0. { duration } else { 0. }
+        } else if speed > 0. {
+            (phase / duration).ceil().max(1.) * duration
+        } else {
+            (phase / duration).floor().min(-1.) * duration
+        };
+        let at = (self.phase_at + (target - self.phase_seconds) / speed).max(requested);
         if !at.is_finite() {
             return Err("unit animation clock overflow".into());
         }
-        Ok(at)
+        Ok(Some(at))
+    }
+    fn local_seconds(&self, now: f64) -> Result<f64, String> {
+        if !now.is_finite() || now < self.phase_at {
+            return Err("invalid unit animation game time".into());
+        }
+        let phase = self.phase_seconds + (now - self.phase_at) * self.rate * self.time_scale;
+        if !phase.is_finite() {
+            return Err("unit animation clock overflow".into());
+        }
+        Ok(phase)
+    }
+    /// Preserve the visible phase when changing speed; zero freezes local playback.
+    pub fn set_time_scale(&mut self, scale: f32, now: f64) -> Result<(), String> {
+        if !scale.is_finite() {
+            return Err("finite unit time scale required".into());
+        }
+        self.local_seconds(now)?;
+        let mut next = self.clone();
+        next.advance(now)?;
+        if let Some(blend) = &mut next.blend {
+            blend.elapsed = (blend.elapsed + (now - blend.started) * next.time_scale).max(0.);
+            blend.started = now;
+            if blend.elapsed >= blend.duration {
+                next.blend = None;
+            }
+        }
+        next.phase_seconds = next.local_seconds(now)?;
+        next.phase_at = now;
+        next.time_scale = f64::from(scale);
+        *self = next;
+        Ok(())
+    }
+    pub(crate) fn interval_finished(&self, now: f64) -> Result<bool, String> {
+        let Some(index) = self.sequence else {
+            return Ok(true);
+        };
+        let duration = f64::from(self.model.sequences[index].duration()) / 1000.;
+        let phase = self.local_seconds(now)?;
+        Ok(if self.time_scale < 0. {
+            phase <= 0.
+        } else {
+            phase >= duration
+        })
     }
     /// Shift every animation timestamp that the pause covered forward by the
     /// paused interval. Requests made during the pause take effect at resume.
@@ -317,16 +469,69 @@ impl Animation {
                 at
             }
         };
+        if let Some(blend) = &mut self.blend {
+            blend.started = resume(blend.started);
+        }
+        self.phase_at = resume(self.phase_at);
         self.created = resume(self.created);
         self.started = resume(self.started);
         for entry in &mut self.queued {
             entry.requested = resume(entry.requested);
         }
     }
-    fn start(&mut self, index: usize, at: f64, rate: f64) {
+    fn start(&mut self, index: usize, at: f64, rate: f64) -> Result<(), String> {
+        let blend = self.prepare_blend(at)?;
+        self.blend = blend;
         self.sequence = Some(index);
         self.started = at;
         self.rate = rate;
+        self.phase_at = at;
+        self.phase_seconds = 0.;
+        Ok(())
+    }
+    pub fn set_blend_time(&mut self, seconds: f32) -> Result<(), String> {
+        if !seconds.is_finite() || seconds < 0. {
+            return Err("invalid unit blend time".into());
+        }
+        // shortcut: positive changes affect future transitions; qualify native retiming before changing an active blend.
+        self.blend_time = f64::from(seconds);
+        if seconds == 0. {
+            self.blend = None;
+        }
+        Ok(())
+    }
+    pub fn blend_sample(&self, now: f64) -> Result<Option<BlendSample<'_>>, String> {
+        if !now.is_finite() || now < self.started || now < self.phase_at {
+            return Err("invalid blend clock".into());
+        }
+        Ok(self.blend.as_ref().and_then(|blend| {
+            let elapsed = blend.elapsed + (now - blend.started) * self.time_scale;
+            (elapsed < blend.duration).then_some(BlendSample {
+                from: &blend.from,
+                weight: (elapsed / blend.duration).clamp(0., 1.) as f32,
+            })
+        }))
+    }
+    fn prepare_blend(&self, now: f64) -> Result<Option<Blend>, String> {
+        if self.blend_time == 0. || self.model.joints.is_empty() {
+            return Ok(None);
+        }
+        let Some(sample) = self.sample(now)? else {
+            return Ok(None);
+        };
+        let mut poses = self.model.poses(sample)?;
+        if let Some(blend) = self.blend_sample(now)? {
+            for ((pose, from), bone) in poses.iter_mut().zip(blend.from).zip(&self.model.joints) {
+                *pose = pcx_mdl::blend_joint_pose(bone, *from, *pose, blend.weight)
+                    .map_err(str::to_owned)?;
+            }
+        }
+        Ok(Some(Blend {
+            from: poses.into(),
+            started: now,
+            duration: self.blend_time,
+            elapsed: 0.,
+        }))
     }
     pub fn sample(&self, now: f64) -> Result<Option<Sample>, String> {
         if !now.is_finite() || now < self.started || now < self.created {
@@ -341,14 +546,17 @@ impl Animation {
             .get(index)
             .ok_or("unit animation sequence missing")?;
         let elapsed_ms = millis(now - self.created)?;
-        let local = millis((now - self.started) * self.rate)?;
+        let local = (self.local_seconds(now)? * 1000. + SCHEDULE_EPSILON * 1000.).floor();
+        if local.abs() >= u64::MAX as f64 {
+            return Err("unit animation clock overflow".into());
+        }
         let duration = u64::from(sequence.duration());
         let offset = if duration == 0 {
             0
         } else if sequence.non_looping {
-            local.min(duration)
+            local.clamp(0., duration as f64) as u64
         } else {
-            local % duration
+            local.rem_euclid(duration as f64) as u64
         };
         Ok(Some(Sample {
             interval: [sequence.interval_start, sequence.interval_end],
@@ -374,6 +582,9 @@ pub(crate) mod tests {
         bytes.extend(b"VERS");
         bytes.extend(4u32.to_le_bytes());
         bytes.extend(800u32.to_le_bytes());
+        bytes.extend(b"MODL");
+        bytes.extend((pcx_mdl::MODL_SIZE as u32).to_le_bytes());
+        bytes.extend(vec![0; pcx_mdl::MODL_SIZE]);
         let mut records = Vec::new();
         for (name, start, end, once, move_speed) in [
             ("Stand - 1", 100u32, 900u32, false, 0f32),
@@ -406,6 +617,175 @@ pub(crate) mod tests {
             .unwrap(),
         )
     }
+    pub(crate) fn blended_model() -> Arc<Model> {
+        let original = model();
+        let mut bytes = original.bytes.to_vec();
+        let parsed = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+        let header = parsed.chunk(pcx_mdl::tag::MODL).unwrap();
+        let end = header.offset + 8 + pcx_mdl::MODL_SIZE;
+        bytes[end - 4..end].copy_from_slice(&400u32.to_le_bytes());
+        let mut bone = vec![0; 96];
+        bone[..4].copy_from_slice(&176u32.to_le_bytes());
+        bone[4..8].copy_from_slice(b"head");
+        bone[88..92].copy_from_slice(&(-1i32).to_le_bytes());
+        bone.extend(b"KGTR");
+        bone.extend(4u32.to_le_bytes());
+        bone.extend(1u32.to_le_bytes());
+        bone.extend((-1i32).to_le_bytes());
+        for (t, x) in [(100u32, 10f32), (900, 10.), (2000, 30.), (2400, 30.)] {
+            bone.extend(t.to_le_bytes());
+            bone.extend([x, 0., 0.].into_iter().flat_map(f32::to_le_bytes));
+        }
+        bone.extend([0; 8]);
+        bytes.extend(b"BONE");
+        bytes.extend((bone.len() as u32).to_le_bytes());
+        bytes.extend(bone);
+        Arc::new(
+            Model::read(
+                original.origin.clone(),
+                original.member.clone(),
+                bytes.into(),
+                4096,
+            )
+            .unwrap(),
+        )
+    }
+    fn posed(animation: &Animation, now: f64) -> pcx_mdl::Pose {
+        let sample = animation.sample(now).unwrap().unwrap();
+        let to = animation.model.poses(sample).unwrap()[0];
+        match animation.blend_sample(now).unwrap() {
+            None => to,
+            Some(blend) => pcx_mdl::blend_joint_pose(
+                &animation.model.joints[0],
+                blend.from[0],
+                to,
+                blend.weight,
+            )
+            .unwrap(),
+        }
+    }
+    #[test]
+    fn authored_blend_and_interrupted_transitions_snapshot_the_visible_logical_pose() {
+        let model = blended_model();
+        assert_eq!(model.blend_time_ms, 400);
+        let mut a = Animation::new(model, 0.).unwrap();
+        assert_eq!(posed(&a, 0.).translation[0], 10.);
+        a.select("Death", 0., None).unwrap();
+        assert_eq!(posed(&a, 0.).translation[0], 10.);
+        assert_eq!(posed(&a, 0.2).translation[0], 20.);
+        a.select("Stand Defend", 0.2, None).unwrap();
+        assert_eq!(posed(&a, 0.2).translation[0], 20.);
+        assert!((posed(&a, 0.4).translation[0] - 10.).abs() < 1e-5);
+        assert_eq!(posed(&a, 0.61).translation[0], 0.);
+        a.select("Death", 0.7, None).unwrap();
+        a.set_blend_time(0.).unwrap();
+        assert_eq!(posed(&a, 0.7).translation[0], 30.);
+        let before = a.clone();
+        assert!(a.set_blend_time(f32::NAN).is_err());
+        assert_eq!(a, before);
+    }
+    #[test]
+    fn queue_blends_are_partition_independent_and_pause_shifts_the_transition() {
+        let mut a = Animation::new(blended_model(), 0.).unwrap();
+        a.select("Death", 0., None).unwrap();
+        a.queue("Stand Defend", 0.).unwrap();
+        let mut b = a.clone();
+        for t in [0.1, 0.3, 0.4, 0.5] {
+            a.advance(t).unwrap();
+        }
+        b.advance(0.5).unwrap();
+        assert_eq!(a, b);
+        assert!((posed(&a, 0.5).translation[0] - 22.5).abs() < 1e-5);
+        let pose = posed(&a, 0.5);
+        a.resume_after_pause(0.5, 4.5);
+        assert_eq!(posed(&a, 4.5), pose);
+    }
+    #[test]
+    fn truncated_model_header_does_not_invent_a_default_blend() {
+        let original = model();
+        let parsed = pcx_mdl::Mdlx::parse(&original.bytes).unwrap();
+        let header = parsed.chunk(pcx_mdl::tag::MODL).unwrap();
+        let mut bytes = original.bytes.to_vec();
+        let end = header.offset + 8 + pcx_mdl::MODL_SIZE;
+        bytes.drain(end - 4..end);
+        bytes[header.offset + 4..header.offset + 8]
+            .copy_from_slice(&((pcx_mdl::MODL_SIZE - 4) as u32).to_le_bytes());
+        assert!(
+            Model::read(
+                original.origin.clone(),
+                original.member.clone(),
+                bytes.into(),
+                4096
+            )
+            .unwrap_err()
+            .contains("MODL")
+        );
+    }
+    #[test]
+    fn freezing_during_a_transition_freezes_its_local_pose_and_resumes_from_that_pose() {
+        let mut a = Animation::new(blended_model(), 0.).unwrap();
+        a.select("Death", 0., None).unwrap();
+        a.set_time_scale(0., 0.1).unwrap();
+        let pose = posed(&a, 0.1);
+        assert_eq!(pose.translation[0], 15.);
+        assert_eq!(posed(&a, 10.), pose);
+        a.set_time_scale(2., 10.).unwrap();
+        assert_eq!(posed(&a, 10.), pose);
+        assert!((posed(&a, 10.1).translation[0] - 25.).abs() < 1e-5);
+        assert_eq!(posed(&a, 10.2).translation[0], 30.);
+        a.set_time_scale(-1., 10.2).unwrap();
+        assert!(
+            a.blend_sample(10.3).unwrap().is_none(),
+            "reversing playback cannot resurrect an old completed blend"
+        );
+    }
+
+    #[test]
+    fn speed_changes_preserve_phase_freeze_resume_reverse_and_independent_global_clock() {
+        let mut a = Animation::new(model(), 0.).unwrap();
+        a.select("Walk", 1., Some(400.)).unwrap();
+        assert_eq!(a.sample(1.1).unwrap().unwrap().frame, 3200);
+        a.set_time_scale(0., 1.1).unwrap();
+        let phase = a.sample(4.).unwrap().unwrap();
+        assert_eq!(phase.frame, 3200);
+        assert_eq!(phase.elapsed_ms, 4000);
+        a.set_time_scale(0.5, 4.).unwrap();
+        assert_eq!(a.sample(4.1).unwrap().unwrap().frame, 3300);
+        a.set_time_scale(-1., 4.1).unwrap();
+        assert_eq!(a.sample(4.2).unwrap().unwrap().frame, 3100);
+        assert_eq!(a.sample(4.4).unwrap().unwrap().frame, 3500);
+        a.select("Death", 5., None).unwrap();
+        assert_eq!(a.sample(5.2).unwrap().unwrap().frame, 2000);
+        assert!(a.interval_finished(5.2).unwrap());
+        a.set_time_scale(2., 6.).unwrap();
+        a.select("Death", 6., None).unwrap();
+        assert_eq!(a.sample(6.1).unwrap().unwrap().frame, 2200);
+        let before = a.clone();
+        assert!(a.set_time_scale(f32::NAN, 6.1).is_err());
+        assert!(a.set_time_scale(1., 5.9).is_err());
+        assert_eq!(a, before);
+    }
+    #[test]
+    fn queued_boundaries_follow_playback_speed_and_do_not_advance_while_frozen() {
+        let mut a = Animation::new(model(), 0.).unwrap();
+        a.select("Death", 0., None).unwrap();
+        a.queue("Stand Defend", 0.).unwrap();
+        a.set_time_scale(0., 0.1).unwrap();
+        a.advance(10.).unwrap();
+        assert_eq!(a.sequence, Some(2));
+        a.set_time_scale(2., 10.).unwrap();
+        a.advance(10.14).unwrap();
+        assert_eq!(a.sequence, Some(2));
+        a.advance(10.15).unwrap();
+        assert_eq!(a.sequence, Some(1));
+        assert_eq!(a.sample(10.2).unwrap().unwrap().frame, 1300);
+        let finish = a.next_boundary(1, a.started).unwrap().unwrap();
+        a.advance(finish - 1e-9).unwrap();
+        assert_eq!(a.sequence, Some(1));
+        a.advance(finish).unwrap();
+        assert_eq!(a.sequence, Some(0));
+    }
+
     #[test]
     fn model_paths_follow_declared_metadata_and_scalar_map_overrides() {
         use pcx_objects::editor::{FieldDef, ObjectKind};

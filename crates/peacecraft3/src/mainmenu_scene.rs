@@ -73,9 +73,9 @@
 
 #[cfg(test)]
 #[path = "menu_particle_tests.rs"]
-mod particle_tests;
+pub(crate) mod particle_tests;
 #[path = "menu_particles.rs"]
-mod particles;
+pub(crate) mod particles;
 pub use particles::{ParticleMaterial, ParticleMaterialPlugin};
 
 use crate::menu_material::MenuMaterial;
@@ -1134,6 +1134,7 @@ pub fn spawn(
     }
     let skeleton = skin_geosets(
         Rig {
+            blend: None,
             interval,
             model: &model,
             bones: &bones,
@@ -1526,6 +1527,7 @@ pub struct Rig<'a> {
     pub camera_pose: Option<&'a pcx_gfx::mdx_billboard::CameraPosePlan>,
     /// Script-selected bone and target in source model space.
     pub look_at: Option<(&'a str, Vec3)>,
+    pub blend: Option<pcx_play::unit_model::BlendSample<'a>>,
 }
 
 /// Poses the skeleton at `frame` and rewrites every geoset's positions.
@@ -1540,11 +1542,20 @@ pub fn skin_geosets(
     elapsed_ms: u32,
     meshes: &mut Assets<Mesh>,
 ) -> Result<pcx_gfx::Skeleton, SceneError> {
-    let poses: Vec<pcx_mdl::Pose> = rig
+    let mut poses: Vec<pcx_mdl::Pose> = rig
         .bones
         .iter()
         .map(|b| tracked_pose(b, frame, elapsed_ms, rig.global_durations, rig.interval))
         .collect();
+    if let Some(blend) = rig.blend {
+        if blend.from.len() != poses.len() {
+            return Err(SceneError::Decode("unit blend joint shape differs".into()));
+        }
+        for ((pose, from), bone) in poses.iter_mut().zip(blend.from).zip(rig.bones) {
+            *pose = pcx_mdl::blend_joint_pose(bone, *from, *pose, blend.weight)
+                .map_err(|e| SceneError::Decode(e.into()))?;
+        }
+    }
     let mut skeleton = match rig.camera_pose {
         Some(plan) => plan
             .pose(&poses)
@@ -1903,42 +1914,7 @@ pub fn tracked_pose(
     durations: &[u32],
     interval: [u32; 2],
 ) -> pcx_mdl::Pose {
-    if bone.tracks.iter().all(|t| t.global_sequence_id < 0) {
-        let sample =
-            |track| pcx_mdl::sample_bone_track_in_interval(track, sequence_frame, interval);
-        return pcx_mdl::Pose {
-            translation: bone
-                .translation()
-                .map_or([0.0; 3], |t| sample(t).translation),
-            rotation: bone
-                .rotation()
-                .map_or([0.0, 0.0, 0.0, 1.0], |t| sample(t).rotation),
-            scale: bone.scaling().map_or([1.0; 3], |t| sample(t).scale),
-        };
-    }
-    let mut out = pcx_mdl::Pose::default();
-    for track in &bone.tracks {
-        let frame = match u32::try_from(track.global_sequence_id) {
-            Ok(id) => match durations.get(id as usize).copied().unwrap_or(0) {
-                // A global sequence of length zero cannot be sampled; the clip
-                // clock is the only sane fallback and is recorded as such.
-                0 => sequence_frame,
-                d => elapsed_ms % d,
-            },
-            Err(_) => sequence_frame,
-        };
-        let pose = if track.global_sequence_id < 0 {
-            pcx_mdl::sample_bone_track_in_interval(track, frame, interval)
-        } else {
-            pcx_mdl::sample_bone_track(track, frame)
-        };
-        match track.kind {
-            pcx_mdl::TrackKind::Translation => out.translation = pose.translation,
-            pcx_mdl::TrackKind::Rotation => out.rotation = pose.rotation,
-            pcx_mdl::TrackKind::Scaling => out.scale = pose.scale,
-        }
-    }
-    out
+    pcx_mdl::sample_joint_pose(bone, sequence_frame, elapsed_ms, durations, interval)
 }
 
 /// Advances the background's clip and re-skins every geoset.
@@ -2048,7 +2024,7 @@ pub fn advance(
                 particles.advance(
                     delta,
                     elapsed,
-                    camera,
+                    (camera, camera.rotation * Vec3::Z),
                     &mut meshes,
                     &particle_materials,
                     |entity| visibility.contains(entity),
@@ -2132,6 +2108,7 @@ pub fn advance(
     };
     let skeleton = skin_geosets(
         Rig {
+            blend: None,
             interval: scene.clip.map_or([0, 0], |clip| clip.interval),
             model,
             bones: &scene.bones,
@@ -2168,6 +2145,86 @@ pub fn advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_blending_reaches_the_actual_skinned_mesh_before_hierarchy_composition() {
+        let bone = pcx_mdl::Bone {
+            offset: 0,
+            span: 104,
+            name: "joint".into(),
+            object_id: 0,
+            parent_id: -1,
+            flags: 0x100,
+            tracks: vec![],
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        let rest = pcx_gfx::LoadedMesh {
+            positions: vec![[2., 0., 0.]],
+            normals: vec![[0., 0., 1.]],
+            tex_coords: vec![[0.; 2]],
+            indices: vec![],
+            vertex_groups: vec![0],
+            bone_indices: vec![0],
+            group_counts: vec![1],
+            geoset: 0,
+            material_id: 0,
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        let handle = meshes.add(pcx_gfx::to_bevy_mesh(&rest));
+        let model = pcx_gfx::LoadedModel {
+            name: "synthetic".into(),
+            minimum_extent: [0.; 3],
+            maximum_extent: [0.; 3],
+            meshes: vec![rest],
+            bone_names: vec![bone.name.clone()],
+            bone_parents: vec![-1],
+            sequences: vec![],
+        };
+        let from = [pcx_mdl::Pose {
+            translation: [8., 0., 0.],
+            scale: [3.; 3],
+            rotation: [0., 0., 1., 0.],
+        }];
+        let pivots = pcx_mdl::Pivots(vec![[1., 0., 0.]]);
+        let bones = [bone];
+        let rig = |weight| Rig {
+            interval: [0, 100],
+            model: &model,
+            bones: &bones,
+            pivots: &pivots,
+            global_durations: &[],
+            camera_pose: None,
+            look_at: None,
+            blend: Some(pcx_play::unit_model::BlendSample {
+                from: &from,
+                weight,
+            }),
+        };
+        skin_geosets(rig(0.5), std::slice::from_ref(&handle), 50, 50, &mut meshes).unwrap();
+        let positions = match meshes
+            .get(&handle)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+        {
+            bevy::mesh::VertexAttributeValues::Float32x3(p) => p,
+            _ => panic!("positions"),
+        };
+        // Half turn and scale occur about the pivot, then the blended translation is applied.
+        assert!(Vec3::from_array(positions[0]).abs_diff_eq(Vec3::new(5., 2., 0.), 1e-5));
+        skin_geosets(rig(1.), std::slice::from_ref(&handle), 50, 50, &mut meshes).unwrap();
+        let positions = match meshes
+            .get(&handle)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+        {
+            bevy::mesh::VertexAttributeValues::Float32x3(p) => p,
+            _ => panic!("positions"),
+        };
+        assert_eq!(positions[0], [2., 0., 0.]);
+    }
 
     #[test]
     fn presentation_clock_does_not_charge_import_time_to_the_first_pose() {
@@ -4827,6 +4884,12 @@ mod texture_selection_tests {
         });
         let (particle_bytes, _) = super::particle_tests::synthetic(|_, _| {});
         let particles = pcx_mdl::Mdlx::parse(&particle_bytes).unwrap();
+        fixture.runtime.joints = pcx_gfx::mdx_runtime::JointPlan::checked(
+            &[],
+            &[],
+            &particles.pivots(&particle_bytes).unwrap(),
+        )
+        .unwrap();
         let mut texs = Vec::new();
         for texture in &fixture.runtime.textures {
             let mut record = vec![0; pcx_mdl::TEXTURE_SIZE];

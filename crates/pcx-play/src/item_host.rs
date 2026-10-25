@@ -23,6 +23,8 @@ pub struct ExecutedItem {
     pub x: f32,
     pub y: f32,
     pub held_by: Option<(HandleId, usize)>,
+    /// Unknown until visibility rules are admitted; carried items are never world-visible.
+    pub shown: Option<bool>,
     pub invulnerable: Option<bool>,
     pub droppable: Option<bool>,
     pub drop_on_death: Option<bool>,
@@ -33,7 +35,15 @@ pub struct ExecutedItem {
     pub consumed: bool,
 }
 
+impl ExecutedItem {
+    pub fn visible(&self) -> Option<bool> {
+        self.shown
+            .map(|shown| shown && self.held_by.is_none() && !self.consumed)
+    }
+}
+
 pub(super) struct Admission {
+    visibility: Option<crate::item_visibility::Rules>,
     catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     source: Source,
     budget: ItemBudget,
@@ -104,6 +114,7 @@ impl ObjectHost {
                         x: unit.x,
                         y: unit.y,
                         held_by: None,
+                        shown: admitted.visibility.as_ref().map(|r| r.initially_visible),
                         invulnerable: item.flags[0],
                         droppable: item.flags[1],
                         drop_on_death: item.flags[2],
@@ -179,7 +190,9 @@ impl ObjectHost {
             false,
             Some("item"),
         )?;
+        self.check_widget_enumeration(CREATE)?;
         self.items = Some(Admission {
+            visibility: None,
             catalog,
             source,
             budget,
@@ -187,6 +200,86 @@ impl ObjectHost {
             inventory: None,
         });
         Ok(self)
+    }
+
+    pub fn with_item_visibility(
+        mut self,
+        rules: crate::item_visibility::Rules,
+    ) -> Result<Self, Error> {
+        let name = "SetItemVisible";
+        let state = self.items.as_ref().ok_or_else(|| {
+            self.inner
+                .error(name, Failure::ItemState("item catalog missing"))
+        })?;
+        if state.visibility.is_some() || state.records != 0 {
+            return Err(self.inner.error(
+                name,
+                Failure::ItemState("visibility must be admitted once before item creation"),
+            ));
+        }
+        if self
+            .player_client_sha256()
+            .is_some_and(|sha| sha != rules.image_sha256)
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::ItemState("visibility client identity differs"),
+            ));
+        }
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(CREATE)
+            .expect("item contract")
+            .source;
+        for (name, args, result) in [
+            ("SetItemVisible", &["item", "boolean"][..], "nothing"),
+            ("IsItemVisible", &["item"][..], "boolean"),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, args, result, false, Some("item"))?;
+                if &native.source != source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
+        self.items.as_mut().expect("item catalog").visibility = Some(rules);
+        Ok(self)
+    }
+
+    fn item_visibility_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let (item, shown) = match (name, args) {
+            ("SetItemVisible", [item, Value::Bool(shown)]) => (item, Some(*shown)),
+            ("IsItemVisible", [item]) => (item, None),
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        };
+        let item = match item {
+            Value::Null => {
+                return Ok(if shown.is_some() {
+                    Value::Null
+                } else {
+                    Value::Bool(false)
+                });
+            }
+            Value::Handle(id) => *id,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        let record = self
+            .live_item(item)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let Some(shown) = shown else {
+            return Ok(Value::Bool(
+                record.and_then(ExecutedItem::visible).unwrap_or(false),
+            ));
+        };
+        if record.is_some_and(|r| r.held_by.is_none()) {
+            let Entry::Item { record } = self.inner.entry_mut(item)? else {
+                unreachable!()
+            };
+            record.shown = Some(shown);
+        }
+        Ok(Value::Null)
     }
 
     pub fn executed_items(&self) -> impl Iterator<Item = (HandleId, &ExecutedItem)> {
@@ -228,6 +321,12 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if self.items.as_ref().is_some_and(|s| s.visibility.is_some())
+            && matches!(name, "SetItemVisible" | "IsItemVisible")
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.item_visibility_native(name, args));
+        }
         if name != CREATE || self.items.is_none() {
             return None;
         }
@@ -315,6 +414,7 @@ impl ObjectHost {
             x,
             y,
             held_by,
+            shown: admitted.visibility.as_ref().map(|r| r.initially_visible),
             invulnerable: None,
             droppable: None,
             drop_on_death: None,

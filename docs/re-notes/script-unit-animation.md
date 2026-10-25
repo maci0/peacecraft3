@@ -1,9 +1,9 @@
 # Executed unit models and animation
 
-This is first-mission work in progress. Human01 is not playable. The normal
-campaign factory now installs a session-owned model loader when its selected
-reader and logical timer clock are available. Ordinary Host input preparation
-still has no production producer, and later mission orders remain unsupported.
+Whole-mission playability remains in progress. The normal campaign factory
+prepares source inputs and installs a session-owned model loader with the selected
+reader and logical timer clock. The dated checks below retain their historical
+frontiers; the latest controls section records current progress.
 
 The model path comes from the admitted definition's UnitUI/file metadata,
 including a scalar custom-object override. Model bytes, source identity and
@@ -83,3 +83,94 @@ comparison gates. Models without SEQS are not present in this mission's audited
 model set; the current static fallback does not advance their global animations.
 Shader lighting, posed normals, source culling and billboard behavior need actual
 render acceptance before this consumer is faithful.
+
+## Removed animation targets (2026-10-25)
+
+Set/Queue animation now share the removed-unit no-op used for null targets.
+The selected `4aafc0` path resolves the target through `483940` and jumps past the
+animation work if resolution fails. Canonical removed entries follow that branch;
+other handle families still refuse, with the actual animation native as error
+context. This lets the unchanged TFT cinematic cleanup retain removed references
+without aborting its ResetUnitAnimation helper. Synthetic tests cover removed,
+null and wrong-family targets without resurrecting an identity or queue. The
+chapter then returns control and advances to its later `CreateCorpse` frontier;
+this does not qualify rarity selection or all animation lifecycle edge cases.
+
+
+## Clip transitions and playback controls (2026-10-25)
+
+`SetUnitBlendTime(unit, real)` and `SetUnitTimeScale(unit, real)` now reach the
+retained canonical animation and the campaign mesh consumer. Their optional
+nonconstant declarations must match the admitted creation source and exact ABI.
+Malformed arguments and nonfinite reals refuse without changing animation;
+null and removed units are no-ops, while other handle families refuse.
+
+The model default comes from the final MODL word, in milliseconds. The explicit
+blend setter derives its clamp maximum and near-zero disable threshold from the
+selected client image at runtime; neither operand is copied into a production
+constant. The decoder checks the clamp and disable branch destinations and binds
+the image identity to player admission. Truncated MODL data has no guessed default.
+
+A transition retains one flat snapshot of local BONE/HELP poses. An interruption
+samples the visible logical mixture before selecting the new clip, so it does not
+jump back to the prior sequence. Translation and scale interpolate linearly;
+rotation uses a normalized shortest quaternion interpolation. The renderer applies
+this mixture before its existing hierarchy, pivot, billboard and look-at work.
+Snapshots are shared immutable arrays, not recursively nested animation states.
+Globally sequenced channels continue at their existing global phase instead of
+blending a stale snapshot. HELP transforms now use the same decoder adapter in
+both the logical animation and checked graphics hierarchy.
+
+Playback speed changes preserve the local sequence phase. Zero freezes local
+playback and an active transition; positive values resume/scale them and negative
+values reverse local playback. Looping intervals wrap in either direction;
+nonlooping clips clamp to their authored bounds. Queued clips use the resulting
+completion boundaries, including after a freeze. A finished transition cannot
+reappear when playback reverses. Global sequences retain the existing independent
+elapsed clock. That global-clock policy and the signed-speed behavior are
+recreation choices pending original-runtime comparison, not native parity claims.
+Existing PauseUnit behavior is unchanged; visible sampling while paused remains
+a separate fidelity question. Changing a positive blend duration during an
+already active transition currently changes future transitions only; exact native
+retiming of an active blend remains unqualified. Particle-emitter simulation
+retains its existing scheduling; time-scale equivalence for emitters is open.
+
+Water Elemental presentation now observes actual sequence progress instead of a
+fixed unscaled deadline. A frozen Birth clip therefore remains frozen, and a
+scaled Spell clip returns to Stand at its visual completion. The ability's actual
+cast point, mana, cooldown and summoned-unit lifetime remain on their existing
+logical gameplay clock.
+
+### Evidence and remaining work
+
+Local evidence is retained under `.scratch/unit-animation-controls-20261025/`.
+The selected image is SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Local static windows join the functional SetUnitBlendTime handler through
+`4ab230` to `6c05a0`, its source-pointed bounds and the model blend bridge.
+SetUnitTimeScale forwards through `4abbd0` to `69ce00`, which stores the requested
+real and conditionally forwards it to the model. The bounded trace does not
+identify its `+3f8` condition with PauseUnit. These are local PE/disassembly
+observations; REA client approval was unavailable, and no original client was
+launched or reconfigured.
+
+Synthetic tests discriminate nonstock MODL duration, decoded bounds, malformed
+branches/truncation, interruption, quaternion direction, global channels,
+freeze/resume/reverse, queue boundaries and failed-call atomicity. A CPU consumer
+test verifies the actual posed mesh after a blended rotation/scale about a pivot.
+A real summon regression verifies that changing presentation speed leaves the
+gameplay spawn at its cast point. These are not GPU or original pixel comparisons.
+
+The unchanged TFT opening still restores control at logical time four. Its later
+corpse setup now selects actual source Decay Bone clips and passes the delayed
+SetUnitTimeScale call. The retained post-control horizon next refuses
+UnitSuspendDecay at Blizzard.j:3133. RoC passes the whole entry/control/horizon
+diagnostic. Automatic decay, decay suspension, resurrection, native transition
+qualification and full mission playthrough remain unfinished.
+
+Validation for this slice: 1,830 core tests, 675 application tests, both published
+map/audio integration suites, the explicit selected-image blend gate, strict
+workspace native and production WASM Clippy, native/WASM application builds and
+the standalone graphics all-target check pass. There was no WASM runtime, new GPU
+capture or original-client comparison. Earlier failing fixture/compile/lint logs
+and the still-failing TFT horizon are preserved separately from successful gates.

@@ -136,22 +136,6 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
         panic!("perspective")
     };
     assert_eq!((projection.near, projection.far), (9.0, 900.0));
-    app.world_mut().resource_mut::<CampaignCamera>().suspend();
-    app.update();
-    assert!(!app.world().resource::<CampaignCamera>().active());
-    assert!(
-        app.world()
-            .resource::<peacecraft3::campaign_runtime::CampaignRuntime>()
-            .view_paused
-    );
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::F7);
-    app.update();
-    assert!(app.world().resource::<CampaignCamera>().active());
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .reset(KeyCode::F7);
     let previous = *app.world().get::<Transform>(entity).unwrap();
     let function = app
         .world()
@@ -202,8 +186,9 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::F7);
     app.update();
-    assert!(!app.world().resource::<CampaignCamera>().active());
-    assert!(!app.world().get::<Camera>(entity).unwrap().is_active);
+    assert!(app.world().resource::<CampaignCamera>().active());
+    assert!(app.world().resource::<CampaignCamera>().menu_open());
+    assert!(app.world().get::<Camera>(entity).unwrap().is_active);
     assert!(
         app.world()
             .resource::<peacecraft3::campaign_runtime::CampaignRuntime>()
@@ -211,7 +196,7 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
     );
     app.update();
     assert!(
-        !app.world().resource::<CampaignCamera>().active(),
+        app.world().resource::<CampaignCamera>().menu_open(),
         "held selected menu key does not toggle again"
     );
 
@@ -256,6 +241,14 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
     app.world_mut().resource_mut::<GroundPublication>().context = context;
     app.update();
     assert!(app.world().resource::<CampaignCamera>().active());
+    app.world_mut().resource_mut::<CampaignCamera>().suspend();
+    app.update();
+    assert!(!app.world().resource::<CampaignCamera>().active());
+    assert!(
+        app.world()
+            .resource::<peacecraft3::campaign_runtime::CampaignRuntime>()
+            .view_paused
+    );
     deliver_camera(&mut app, SCRIPT, b"[Camera]\nNearZ=5,NaN", 4);
     assert!(app.world().resource::<CampaignCamera>().entity.is_none());
     assert!(app.world().get::<CampaignSceneCamera>(next).is_none());

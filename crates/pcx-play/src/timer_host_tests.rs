@@ -44,7 +44,7 @@ fn distinct_timers_and_symbolic_values_share_one_arena() {
     );
 }
 #[test]
-fn destroy_revokes_identity_and_reallocation_never_revives_aliases() {
+fn repeated_destroy_is_harmless_and_reallocation_never_revives_aliases() {
     let mut h = host(3);
     let a = h.native("CreateTimer", &[]).unwrap();
     assert_eq!(
@@ -52,10 +52,9 @@ fn destroy_revokes_identity_and_reallocation_never_revives_aliases() {
         Value::Null
     );
     assert_eq!(h.live_timers(), 0);
-    assert!(
-        h.native("DestroyTimer", std::slice::from_ref(&a))
-            .unwrap_err()
-            .contains("unknown handle")
+    assert_eq!(
+        h.native("DestroyTimer", std::slice::from_ref(&a)).unwrap(),
+        Value::Null
     );
     let Value::Handle(id) = a.clone() else {
         panic!("timer identity")
@@ -64,7 +63,7 @@ fn destroy_revokes_identity_and_reallocation_never_revives_aliases() {
     let b = h.native("CreateTimer", &[]).unwrap();
     assert_ne!(a, b);
     assert_eq!(h.live_timers(), 1);
-    assert!(h.native("DestroyTimer", &[a]).is_err());
+    assert_eq!(h.native("DestroyTimer", &[a]).unwrap(), Value::Null);
     assert_eq!(h.live_timers(), 1);
 }
 #[test]
@@ -169,14 +168,12 @@ fn actual_vm_create_alias_destroy_sequence_runs_without_minting_a_null_timer() {
     let mut vm = TimerHost::checked(enums(COMMON, map, 4)).unwrap().into_vm();
     vm.init_globals().unwrap();
     assert_eq!(vm.host().live_timers(), 1);
+    let handles = vm.host().inner().handles();
     vm.call("dispose", &[]).unwrap();
     assert_eq!(vm.host().live_timers(), 0);
-    assert!(
-        vm.call("dispose", &[])
-            .unwrap_err()
-            .to_string()
-            .contains("unknown handle")
-    );
+    vm.call("dispose", &[]).unwrap();
+    assert_eq!(vm.host().live_timers(), 0);
+    assert_eq!(vm.host().inner().handles(), handles);
 }
 
 #[test]

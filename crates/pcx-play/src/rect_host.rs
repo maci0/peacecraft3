@@ -55,6 +55,47 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admit the full map extent independently of the playable camera rectangle.
+    pub fn with_world_bounds(mut self, bounds: [f32; 4]) -> Result<Self, Error> {
+        let [x0, y0, x1, y1] = bounds;
+        if !self.rectangles
+            || self.world_bounds.is_some()
+            || !bounds.iter().all(|v| v.is_finite())
+            || x0 >= x1
+            || y0 >= y1
+        {
+            return Err(self.inner.error(
+                "GetWorldBounds",
+                Failure::RectState(
+                    "ordered finite full-map bounds and rectangle admission required",
+                ),
+            ));
+        }
+        if let Some(native) = self.inner.program.natives().get("GetWorldBounds") {
+            Self::contract(
+                &self.inner,
+                "GetWorldBounds",
+                &[],
+                "rect",
+                false,
+                Some("rect"),
+            )?;
+            if native.source
+                != self
+                    .inner
+                    .program
+                    .natives()
+                    .get("Rect")
+                    .expect("admitted")
+                    .source
+            {
+                return Err(self.inner.error("GetWorldBounds", Failure::Source));
+            }
+        }
+        self.world_bounds = Some(bounds);
+        Ok(self)
+    }
+
     /// Bounds in executed min-x, min-y, max-x, max-y order.
     pub fn rectangle_bounds(&self, id: HandleId) -> Result<[f32; 4], Error> {
         match self.inner.entry(id)? {
@@ -75,6 +116,7 @@ impl ObjectHost {
             || !matches!(
                 name,
                 "Rect"
+                    | "GetWorldBounds"
                     | "RemoveRect"
                     | "SetRect"
                     | "MoveRectTo"
@@ -95,6 +137,23 @@ impl ObjectHost {
 
     fn rectangle(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |detail| self.inner.error(name, Failure::RectState(detail));
+        if name == "GetWorldBounds" {
+            if !args.is_empty() {
+                return Err(self.inner.error(name, Failure::Signature));
+            }
+            let bounds = self
+                .world_bounds
+                .ok_or_else(|| fail("full-map extent is not admitted"))?;
+            return self
+                .inner
+                .allocate(
+                    Entry::Rect {
+                        bounds: Some(bounds),
+                    },
+                    name,
+                )
+                .map(Value::Handle);
+        }
         if name == "Rect" {
             let bounds = bounds(args).ok_or_else(|| fail("ordered finite bounds required"))?;
             return self

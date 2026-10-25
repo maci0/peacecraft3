@@ -315,6 +315,12 @@ impl<H> SelectedMapNeutralHost<H> {
     pub fn context(&self) -> &Arc<ParsedMapContext> {
         &self.context
     }
+    pub(crate) fn client_sha256(&self) -> Sha256Digest {
+        self.rule.image_sha256
+    }
+    pub(crate) fn map_header_word(&self) -> u32 {
+        self.word
+    }
     pub fn inner(&self) -> &H {
         &self.inner
     }

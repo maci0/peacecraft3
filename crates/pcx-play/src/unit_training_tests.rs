@@ -43,7 +43,15 @@ fn fixture_with_capacity(
     overrides: &[([u8; 4], ObjectField)],
     capacity: usize,
 ) -> (Vm, HandleId, HandleId) {
-    fixture_with_training(overrides, capacity, 0.37, true)
+    fixture_with_training(
+        overrides,
+        capacity,
+        0.37,
+        true,
+        super::super::super::activity::rules(),
+        false,
+        EVENTS,
+    )
 }
 
 fn fixture_with_training(
@@ -51,6 +59,12 @@ fn fixture_with_training(
     capacity: usize,
     refund_rate: f32,
     admit_numeric: bool,
+    orders: (
+        std::sync::Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+    heroes: bool,
+    script: &str,
 ) -> (Vm, HandleId, HandleId) {
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
@@ -84,8 +98,13 @@ fn fixture_with_training(
             metadata.declared = "int".into();
         }
     }
-    let (mut vm, actor, other) =
-        guarded_configured_with_capacity(8., 16., 1., None, (&fields, EVENTS), capacity, |h| {
+    let (mut vm, actor, other) = guarded_configured_with_orders(
+        (8., 16., 1.),
+        None,
+        (&fields, script),
+        capacity,
+        orders,
+        |h| {
             let mut resources = crate::player_resources::fixture::rules();
             let (image, binding, budget) = crate::script_numeric::tests::fixture();
             let numeric =
@@ -100,19 +119,24 @@ fn fixture_with_training(
             } else {
                 h
             };
-            h.with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
-                max_records: 16,
-            })
-            .unwrap()
-            .with_player_resources(resources)
-            .unwrap()
-            .with_player_tech_limits(crate::playercolor_host::TechLimitBudget { max_records: 8 })
-            .unwrap()
-            .with_player_tech_researched(crate::playercolor_host::TechLimitBudget {
-                max_records: 8,
-            })
-            .unwrap()
-        });
+            let h = h
+                .with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
+                    max_records: 16,
+                })
+                .unwrap()
+                .with_player_resources(resources)
+                .unwrap()
+                .with_player_tech_limits(crate::playercolor_host::TechLimitBudget {
+                    max_records: 8,
+                })
+                .unwrap()
+                .with_player_tech_researched(crate::playercolor_host::TechLimitBudget {
+                    max_records: 8,
+                })
+                .unwrap();
+            if heroes { admit_fixture_heroes(h) } else { h }
+        },
+    );
     let h = &mut vm.host().inner;
     h.native("RemoveUnit", &[Value::Handle(other)]).unwrap();
     let owner = h.executed_unit(actor).unwrap().owner;
@@ -1053,7 +1077,15 @@ fn producer_death_refunds_each_entry_and_releases_food_without_cancel_events() {
 
 #[test]
 fn missing_refund_math_refuses_cancel_and_death_before_world_changes() {
-    let (mut vm, actor, producer) = fixture_with_training(&[], 8, 0.37, false);
+    let (mut vm, actor, producer) = fixture_with_training(
+        &[],
+        8,
+        0.37,
+        false,
+        super::super::super::activity::rules(),
+        false,
+        EVENTS,
+    );
     let h = &mut vm.host().inner;
     let owner = h.executed_unit(actor).unwrap().owner;
     assert_eq!(
@@ -1155,4 +1187,244 @@ fn source_classified_hero_training_refuses_before_payment_or_queue_changes() {
     assert!(h.unit_training_queue(producer).unwrap().is_empty());
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 6);
+}
+
+#[test]
+fn a_trained_unit_moves_to_the_producer_rally() {
+    let (mut vm, actor, producer) = fixture_with_training(
+        &[],
+        4,
+        0.37,
+        true,
+        super::super::super::activity::rules_with_setrally(),
+        false,
+        EVENTS,
+    );
+    let rally = [48., 16.];
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(producer),
+                Value::Str("setrally".into()),
+                Value::Real(rally[0]),
+                Value::Real(rally[1]),
+            ],
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    h.fill_ai_guard_posts(4).unwrap();
+    h.set_ai_replacement_count(4, 4).unwrap();
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    h.fill_ai_guard_posts(4).unwrap();
+    // Fixture build time is 9. One second later the trainee's route is the rally.
+    step(&mut vm, 10.);
+    let h = &mut vm.host().inner;
+    let unit = h
+        .executed_units()
+        .find(|(id, record)| *id != actor && record.definition.rawcode == *b"u001")
+        .unwrap()
+        .0;
+    assert_eq!(
+        h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some(rally)
+    );
+    assert_eq!(
+        h.executed_unit(producer)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .rally,
+        Some(rally)
+    );
+    // This fixture's guard-post trip has finished by t=47. The explicit rally
+    // move settles on the rally instead of continuing to the post.
+    step(&mut vm, 47.);
+    let h = &mut vm.host().inner;
+    assert_eq!(h.executed_unit(unit).unwrap().position.unwrap(), rally);
+    assert!(
+        !h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+}
+
+const CACHE: &str = r#"
+type gamecache extends agent
+native InitGameCache takes string filename returns gamecache
+native StoreUnit takes gamecache cache, string mission, string key, unit u returns boolean
+native RestoreUnit takes gamecache cache, string mission, string key, player p, real x, real y, real facing returns unit
+"#;
+
+fn empty_ability_list() -> ([u8; 4], ObjectField) {
+    (
+        *b"uabi",
+        super::super::super::ability_field("abilList", "_"),
+    )
+}
+
+fn admit_fixture_heroes(h: ObjectHost) -> ObjectHost {
+    let (rules, _) = super::super::hero_rules();
+    let origin = crate::scripts::AssetIdentity {
+        source: super::super::super::source().install,
+        edition: "fixture".into(),
+        version: "fixture".into(),
+    };
+    let tables = pcx_objects::editor::defaults::DefaultTables::from_bytes(
+        pcx_objects::editor::defaults::Identity {
+            install: origin.source.clone(),
+            edition_version: origin.version.clone(),
+        },
+        &[],
+        &[],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 0,
+            max_asset_bytes: 1 << 10,
+            max_aggregate_input_bytes: 1 << 10,
+        },
+    )
+    .unwrap();
+    h.with_hero_skills(
+        tables,
+        origin,
+        Default::default(),
+        rules,
+        crate::playercolor_host::HeroBudget {
+            abilities_per_unit: 8,
+            overlay_objects: 0,
+            modifications_per_ability: 0,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_restored_producer_keeps_its_rally_and_trains_toward_it() {
+    let script = format!("{EVENTS}\n{CACHE}");
+    let (mut vm, actor, producer) = fixture_with_training(
+        &[empty_ability_list()],
+        4,
+        0.37,
+        true,
+        super::super::super::activity::rules_with_setrally(),
+        true,
+        &script,
+    );
+    let rally = [48., 16.];
+    let store = std::sync::Arc::new(crate::game_cache::tests::Memory::default());
+    let h = &mut vm.host().inner;
+    h.admit_game_caches(
+        store,
+        crate::game_cache::Budget {
+            caches: 4,
+            entries: 16,
+            text_bytes: 4096,
+            storage_bytes: 8192,
+            handle_bytes: 256,
+        },
+    )
+    .unwrap();
+    let owner = h.executed_unit(producer).unwrap().owner;
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(producer),
+                Value::Str("setrally".into()),
+                Value::Real(rally[0]),
+                Value::Real(rally[1]),
+            ],
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    assert_eq!(
+        h.native(
+            "StoreUnit",
+            &[
+                cache.clone(),
+                Value::Str("mission".into()),
+                Value::Str("hall".into()),
+                Value::Handle(producer),
+            ],
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    let Value::Handle(restored) = h
+        .native(
+            "RestoreUnit",
+            &[
+                cache,
+                Value::Str("mission".into()),
+                Value::Str("hall".into()),
+                Value::Handle(owner),
+                Value::Real(112.),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("restored producer");
+    };
+    let activity = h
+        .executed_unit(restored)
+        .unwrap()
+        .activity
+        .as_ref()
+        .unwrap();
+    assert_eq!(activity.rally, Some(rally));
+    assert!(!activity.moving());
+    assert_eq!(
+        h.native("GetUnitCurrentOrder", &[Value::Handle(restored)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    h.fill_ai_guard_posts(4).unwrap();
+    h.set_ai_replacement_count(4, 4).unwrap();
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    h.fill_ai_guard_posts(4).unwrap();
+    step(&mut vm, 10.);
+    let h = &mut vm.host().inner;
+    let unit = h
+        .executed_units()
+        .find(|(id, record)| {
+            *id != actor && *id != restored && record.definition.rawcode == *b"u001"
+        })
+        .unwrap()
+        .0;
+    assert_eq!(
+        h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some(rally)
+    );
+    assert_eq!(
+        h.executed_unit(restored)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .rally,
+        Some(rally)
+    );
 }

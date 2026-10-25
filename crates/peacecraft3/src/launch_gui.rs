@@ -90,6 +90,7 @@ enum Pick {
     Addon(Addon),
     Assets(AssetMode),
     Behaviour(Behaviour),
+    RenderScale(u32),
     Stage,
     /// Present but disabled: fetching a release is not wired up.
     Download,
@@ -295,6 +296,7 @@ pub(crate) fn app_with_plugins(
     plugins: bevy::app::PluginGroupBuilder,
     configure: impl FnOnce(&mut App),
 ) -> App {
+    crate::campaign_workers::initialize();
     let mut app = App::new();
     (configure)(&mut app);
     peacecraft3::map_requests::install(&mut app);
@@ -322,8 +324,10 @@ pub(crate) fn app_with_plugins(
             (
                 (
                     launcher_typeface,
+                    render_status,
                     colour_picks,
                     apply_clicks.in_set(LauncherInput),
+                    apply_render_scale.in_set(LauncherInput),
                     finish_intro,
                     poll_asset_revision,
                     invalidate_on_asset_revision,
@@ -407,9 +411,11 @@ pub(crate) fn app_with_plugins(
     // Default zoom-list selection and config-read cap are explicit application policies.
     peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
     crate::campaign_actors::install(&mut app);
+    crate::internal_resolution::install(&mut app);
     crate::campaign_input::install(&mut app);
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
+    crate::campaign_escape_menu::install(&mut app);
     crate::campaign_inventory::install(&mut app);
     crate::campaign_minimap::install(&mut app);
     crate::campaign_command_card::install(&mut app);
@@ -735,6 +741,7 @@ fn setup(
             })
             .with_children(|content| {
                 header(content, artwork);
+                render_card(content);
                 source_card(content, &l);
                 mode_card(content, l.mode);
                 action_card(content);
@@ -1121,9 +1128,14 @@ fn menu_navigation_keys(
     }
 }
 
+type MenuFocusRoot = Or<(
+    With<MenuLayer>,
+    With<crate::campaign_escape_menu::EscapeRoot>,
+)>;
+
 fn menu_acquire_focus(
     mut event: On<bevy::input_focus::AcquireFocus>,
-    menus: Query<Entity, With<MenuLayer>>,
+    menus: Query<Entity, MenuFocusRoot>,
     popups: Query<Entity, With<ResolutionPopup>>,
     parents: Query<&ChildOf>,
     enabled: Query<
@@ -2841,7 +2853,10 @@ fn build_setting_controls(
 
 fn measure_screen_text(
     mut cache: ResMut<MenuArtCache>,
-    labels: Query<(&crate::glue_menu::GlueLabel, &bevy::text::TextLayoutInfo)>,
+    labels: Query<
+        (&crate::glue_menu::GlueLabel, &bevy::text::TextLayoutInfo),
+        Without<crate::campaign_escape_menu::EscapeLabel>,
+    >,
     camera: Query<&Camera, With<bevy::ui::IsDefaultUiCamera>>,
 ) {
     let Some(size) = camera
@@ -2910,6 +2925,11 @@ type LabelData = (
     Option<&'static crate::menu_screens::SettingValue>,
     Option<&'static crate::menu_screens::LabelFontParent>,
 );
+type MenuLabelFilter = (
+    Without<MenuTextFilled>,
+    Without<crate::campaign_score_view::ScoreLabel>,
+    Without<crate::campaign_escape_menu::EscapeLabel>,
+);
 
 /// Fills each label from its text frame: the authored string, its face, size,
 /// colours, justification and shadow.
@@ -2921,13 +2941,7 @@ fn apply_menu_text(
     mut commands: Commands,
     mut cache: ResMut<MenuArtCache>,
     mut fonts: ResMut<Assets<Font>>,
-    labels: Query<
-        LabelData,
-        (
-            Without<MenuTextFilled>,
-            Without<crate::campaign_score_view::ScoreLabel>,
-        ),
-    >,
+    labels: Query<LabelData, MenuLabelFilter>,
     disabled: Query<(), With<InteractionDisabled>>,
     mut nodes: Query<&mut Node>,
 ) {
@@ -3162,6 +3176,32 @@ fn header(root: &mut ChildSpawnerCommands, artwork: Handle<Image>) {
             });
         });
     });
+}
+
+#[derive(Component)]
+struct RenderStatus;
+
+fn render_card(root: &mut ChildSpawnerCommands) {
+    root.spawn(card()).with_children(|c| {
+        section(c, "Internal game resolution", Some("Render the world at a higher resolution, then downsample to your selected display resolution. Original menus and HUD stay unchanged."));
+        row_axis(c, "Scale", "", (1..=4).map(|factor| (
+            Pick::RenderScale(factor), format!("{factor}×"),
+            if factor == 1 { "Native rendering".into() } else { format!("{}× as many pixels", factor * factor) },
+        )).collect());
+        c.spawn((tint("Higher scales use more GPU memory and processing power. Applies to gameplay only; retained for this session.", 13.0, TEXT_DIM), RenderStatus));
+    });
+}
+
+fn render_status(
+    scale: Res<crate::internal_resolution::InternalResolution>,
+    mut labels: Query<&mut Text, With<RenderStatus>>,
+) {
+    for mut label in &mut labels {
+        let text = scale.error.as_deref().unwrap_or("Higher scales use more GPU memory and processing power. Applies to gameplay only; retained for this session.");
+        if label.0 != text {
+            label.0 = text.into();
+        }
+    }
 }
 
 fn source_card(root: &mut ChildSpawnerCommands, l: &Launcher) {
@@ -3560,6 +3600,7 @@ type PickPaintData = (
 
 fn colour_picks(
     l: Res<Launcher>,
+    scale: Option<Res<crate::internal_resolution::InternalResolution>>,
     focus: Res<bevy::input_focus::InputFocus>,
     visible: Res<bevy::input_focus::InputFocusVisible>,
     mut q: Query<PickPaintData, With<LauncherControl>>,
@@ -3571,6 +3612,7 @@ fn colour_picks(
             Some(Pick::Assets(a)) => *a == l.mode.assets,
             Some(Pick::Behaviour(b)) => *b == l.mode.behaviour,
             Some(Pick::Stage) => true,
+            Some(Pick::RenderScale(factor)) => *factor == scale.as_ref().map_or(1, |s| s.factor),
             _ => false,
         };
         let disabled = disabled.is_some() || pick == Some(&Pick::Download);
@@ -3961,7 +4003,19 @@ pub(crate) fn apply_menu_clicks(
     }
 }
 
-/// Clicks on the original main menu.
+fn apply_render_scale(
+    actions: Res<crate::button_actions::ButtonActions>,
+    picks: Query<&Pick, Without<InteractionDisabled>>,
+    mut scale: ResMut<crate::internal_resolution::InternalResolution>,
+) {
+    for entity in &actions.entities {
+        if let Ok(Pick::RenderScale(factor @ 1..=4)) = picks.get(*entity) {
+            scale.factor = *factor;
+        }
+    }
+}
+
+/// PeaceCraft launcher actions; imported menu controls use `apply_menu_clicks`.
 fn apply_clicks(
     mut l: ResMut<Launcher>,
     mut intro: ResMut<crate::intro::Intro>,
@@ -3989,6 +4043,7 @@ fn apply_clicks(
             Pick::Assets(a) => l.mode.assets = *a,
             Pick::Behaviour(b) => l.mode.behaviour = *b,
             Pick::Stage => l.staging = true,
+            Pick::RenderScale(_) => {}
             Pick::Download => {}
             Pick::Menu => {
                 if let Some(panels) = panels.as_mut() {
@@ -4106,7 +4161,7 @@ mod tests {
             assert_eq!(text_font.font, bevy::text::FontSource::Handle(font.clone()));
         }
         let mut controls = world.query_filtered::<Entity, With<Button>>();
-        assert_eq!(controls.iter(&world).count(), 13);
+        assert_eq!(controls.iter(&world).count(), 17);
         for entity in controls.iter(&world) {
             assert!(world.get::<LauncherControl>(entity).is_some());
             assert!(
@@ -4518,6 +4573,45 @@ mod menu_tests {
             .trigger(bevy::ui_widgets::Activate { entity: button });
         app.update();
         assert!(app.world().resource::<Launcher>().staging);
+    }
+
+    #[test]
+    fn internal_resolution_is_a_separate_launcher_control() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(Launcher::default());
+        world.init_resource::<crate::intro::Intro>();
+        world.init_resource::<crate::internal_resolution::InternalResolution>();
+        world.init_resource::<crate::button_actions::ButtonActions>();
+        world.init_resource::<bevy::input_focus::InputFocus>();
+        world.init_resource::<bevy::input_focus::InputFocusVisible>();
+        let original_mode = world.resource::<Launcher>().mode.id();
+        for factor in 1..=4 {
+            let button = world
+                .spawn((
+                    Button,
+                    LauncherControl,
+                    Pick::RenderScale(factor),
+                    BackgroundColor(BG_PILL),
+                    BorderColor::all(BORDER),
+                ))
+                .id();
+            world
+                .resource_mut::<crate::button_actions::ButtonActions>()
+                .entities = vec![button];
+            world.run_system_once(apply_clicks).unwrap();
+            world.run_system_once(apply_render_scale).unwrap();
+            world.run_system_once(colour_picks).unwrap();
+            assert_eq!(
+                world
+                    .resource::<crate::internal_resolution::InternalResolution>()
+                    .factor,
+                factor
+            );
+            assert_eq!(world.get::<BackgroundColor>(button).unwrap().0, ACCENT_SOFT);
+            assert_eq!(world.resource::<Launcher>().mode.id(), original_mode);
+            assert!(!world.contains_resource::<crate::menu_screens::Navigation>());
+        }
     }
 
     fn press(world: &mut World, frame: &str) -> Entity {
@@ -5622,6 +5716,21 @@ mod menu_focus_tests {
     fn blank_menu_press_retains_enabled_focus_and_tab_navigation() {
         for early in [false, true] {
             let mut f = fixture(true, early);
+            let blank = f.blank;
+            press(&mut f, blank);
+            assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.other));
+            assert_eq!(next(&mut f), Ok(f.owner));
+        }
+    }
+    #[test]
+    fn blank_campaign_menu_press_retains_enabled_focus_and_tab_navigation() {
+        for early in [false, true] {
+            let mut f = fixture(true, early);
+            f.app
+                .world_mut()
+                .entity_mut(f.root)
+                .remove::<MenuLayer>()
+                .insert(crate::campaign_escape_menu::EscapeRoot);
             let blank = f.blank;
             press(&mut f, blank);
             assert_eq!(f.app.world().resource::<InputFocus>().get(), Some(f.other));

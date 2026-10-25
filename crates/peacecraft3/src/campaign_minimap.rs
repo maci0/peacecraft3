@@ -25,14 +25,17 @@ const SETTINGS_ERROR: &str = "minimap requires admitted fog settings";
 const OCCLUSION_ERROR: &str =
     "minimap circular sight is rendered; terrain/tree sight occlusion is not implemented";
 const PROFILE_BYTES: usize = 1 << 20;
-const VISION_SOURCES: usize = 4096;
 const VISION_WORK: usize = 16 << 20;
 const POINTER_PRESSES: usize = 64;
+
+#[path = "campaign_minimap_markers.rs"]
+mod markers;
 
 struct FogImage {
     raster: crate::campaign_visibility::Raster,
     alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha,
     original_alpha: Vec<u8>,
+    original_pixels: Vec<u8>,
     viewer: Option<pcx_script::HandleId>,
     width: u32,
     height: u32,
@@ -45,12 +48,19 @@ pub(crate) struct CampaignMinimap {
     image_node: Option<Entity>,
     image: Option<Handle<Image>>,
     fog: Option<FogImage>,
+    markers: Option<Result<markers::Markers, String>>,
     pending_pointer: VecDeque<MinimapPress>,
     drag: Option<Entity>,
     load_error: Option<String>,
     pub member: Option<String>,
     pub shown: bool,
     pub last_error: Option<String>,
+}
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+impl CampaignMinimap {
+    pub(crate) fn diagnostic_image(&self) -> Option<Handle<Image>> {
+        self.image.clone()
+    }
 }
 #[derive(Component)]
 enum MinimapPart {
@@ -72,6 +82,8 @@ pub(crate) fn install(app: &mut App) {
             Update,
             project
                 .after(CampaignCameraSet)
+                .after(peacecraft3::campaign_runtime::CampaignAdvanceSet)
+                .after(peacecraft3::campaign_startup::CampaignStartupSet)
                 .before(crate::campaign_hud::CampaignHudSet)
                 .before(CampaignPresentationSet),
         )
@@ -155,7 +167,9 @@ fn consume_pointer(
         return;
     }
     hud.pointer_consumed = true;
-    if !controls.camera.is_some_and(|c| c.active())
+    if !controls
+        .camera
+        .is_some_and(|c| c.active() && !c.menu_open())
         || !crate::button_actions::input_allowed(controls.presentation)
         || hud.quest_log_open
         || controls.dialogs.is_some_and(|d| d.input_blocked())
@@ -325,77 +339,98 @@ struct Inputs<'w> {
     sources: Option<Res<'w, peacecraft3::browser_configuration::SelectedMapSources>>,
 }
 
+fn publish_minimap_alpha(pixels: &mut [u8], base: &[u8], alpha: &[u8]) {
+    pixels.copy_from_slice(base);
+    for (pixel, alpha) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
+        pixel[3] = *alpha;
+    }
+}
+
 fn update_fog(
     state: &mut CampaignMinimap,
     host: &pcx_play::playercolor_host::ObjectHost,
     images: &mut Assets<Image>,
 ) -> Result<(), String> {
     let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
+    let image_id = state.image.as_ref().ok_or("minimap image missing")?;
+    let pixel_len = images
+        .get(image_id)
+        .and_then(|image| image.data.as_ref())
+        .map(|pixels| pixels.len())
+        .ok_or("minimap image asset missing")?;
     let fog = state
         .fog
         .as_mut()
         .ok_or("minimap fog image is not loaded")?;
+    if pixel_len != fog.original_pixels.len()
+        || pixel_len / 4 != fog.original_alpha.len()
+        || !pixel_len.is_multiple_of(4)
+    {
+        return Err("minimap pixel buffer changed dimensions".into());
+    }
+    // Both switches off restores the authored alpha without a ledger.
+    if !settings.fog_enabled && !settings.fog_mask_enabled {
+        let original_alpha = fog.original_alpha.clone();
+        let original_pixels = fog.original_pixels.clone();
+        let mut image = images
+            .get_mut(image_id)
+            .ok_or("minimap CPU pixels unavailable")?;
+        let pixels = image
+            .data
+            .as_mut()
+            .ok_or("minimap CPU pixels unavailable")?;
+        publish_minimap_alpha(pixels, &original_pixels, &original_alpha);
+        return Ok(());
+    }
+    // Stage the ledger projection before replacing accepted pixels. A refusal
+    // keeps the previous masked image, including markers already drawn on it.
+    host.vision_readiness()?;
+    let viewer = host
+        .local_player_settings()
+        .ok_or("minimap viewer is not admitted")?
+        .identity;
+    let bounds = host
+        .vision_world_bounds()
+        .ok_or("minimap needs the admitted world extent")?;
+    let fog_enabled = settings.fog_enabled;
+    let mask_enabled = settings.fog_mask_enabled;
+    let mut staged_raster = if fog.viewer == Some(viewer) {
+        None
+    } else {
+        Some(crate::campaign_visibility::Raster::new(
+            fog.width,
+            fog.height,
+            PIXEL_BYTES / 4,
+        )?)
+    };
+    let raster = staged_raster.as_mut().unwrap_or(&mut fog.raster);
+    let alpha = raster
+        .project(bounds, fog.alpha, VISION_WORK, |point| {
+            Ok(host
+                .vision_presented(
+                    viewer,
+                    [point[0] as f32, point[1] as f32],
+                    fog_enabled,
+                    mask_enabled,
+                )
+                .map_err(|error| error.to_string())?
+                .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
+        })?
+        .to_vec();
+    if let Some(raster) = staged_raster {
+        fog.raster = raster;
+        fog.viewer = Some(viewer);
+    }
+    let original_pixels = fog.original_pixels.clone();
     let mut image = images
-        .get_mut(state.image.as_ref().ok_or("minimap image missing")?)
-        .ok_or("minimap image asset missing")?;
+        .get_mut(image_id)
+        .ok_or("minimap CPU pixels unavailable")?;
     let pixels = image
         .data
         .as_mut()
         .ok_or("minimap CPU pixels unavailable")?;
-    if pixels.len() / 4 != fog.original_alpha.len() || !pixels.len().is_multiple_of(4) {
-        return Err("minimap pixel buffer changed dimensions".into());
-    }
-    if !settings.fog_enabled && !settings.fog_mask_enabled {
-        for (pixel, alpha) in pixels
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(&fog.original_alpha)
-        {
-            pixel[3] = *alpha;
-        }
-    }
-    let result: Result<(), String> = (|| {
-        let viewer = host
-            .local_player_settings()
-            .ok_or("minimap viewer is not admitted")?
-            .identity;
-        if fog.viewer != Some(viewer) {
-            fog.raster =
-                crate::campaign_visibility::Raster::new(fog.width, fog.height, PIXEL_BYTES / 4)?;
-            fog.viewer = Some(viewer);
-        }
-        let night = host
-            .vision_is_night()
-            .ok_or("minimap needs admitted day/night sight state")?;
-        let sources = host
-            .vision_sources(viewer, night, VISION_SOURCES)
-            .map_err(|e| e.to_string())?;
-        let bounds = host
-            .vision_world_bounds()
-            .ok_or("minimap needs the admitted world extent")?;
-        let alpha = fog.raster.update(
-            bounds,
-            &sources,
-            settings.fog_enabled,
-            settings.fog_mask_enabled,
-            fog.alpha,
-            VISION_WORK,
-        )?;
-        if !settings.fog_enabled && !settings.fog_mask_enabled {
-            return Ok(());
-        }
-        for (pixel, alpha) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
-            pixel[3] = *alpha;
-        }
-        Ok(())
-    })();
-    // Visibility admission must not gate the fully revealed authored image.
-    if !settings.fog_enabled && !settings.fog_mask_enabled {
-        Ok(())
-    } else {
-        result
-    }
+    publish_minimap_alpha(pixels, &original_pixels, &alpha);
+    Ok(())
 }
 fn project(
     mut commands: Commands,
@@ -433,6 +468,28 @@ fn project(
     } else {
         None
     };
+    let marker_error = {
+        let state = &mut *state;
+        match (&mut state.markers, &state.fog, &state.image) {
+            (Some(Err(error)), _, _) => Some(error.clone()),
+            (Some(Ok(markers)), Some(fog), Some(image)) if matches!(fog_result, Some(Ok(()))) => {
+                session.host().and_then(|host| {
+                    images
+                        .get_mut(image)
+                        .ok_or("minimap marker pixels unavailable".to_string())
+                        .and_then(|mut image| {
+                            let pixels = image
+                                .data
+                                .as_mut()
+                                .ok_or("minimap marker pixels unavailable")?;
+                            markers.draw(host.objects(), fog, pixels)
+                        })
+                        .err()
+                })
+            }
+            _ => None,
+        }
+    };
     let visible = input.camera.active()
         && (matches!(visibility, Some(Ok(()))) || matches!(fog_result, Some(Ok(()))));
     for (part, mut node) in &mut parts {
@@ -456,11 +513,11 @@ fn project(
                 .presentation()
                 .is_none_or(|p| p.interface_visible != Some(false))
         });
-    let mode_error = match fog_result {
+    let mode_error = marker_error.or_else(|| match fog_result {
         Some(Err(error)) => Some(error),
         Some(Ok(())) if matches!(visibility, Some(Err(_))) => Some(OCCLUSION_ERROR.into()),
         _ => visibility.and_then(Result::err),
-    };
+    });
     if let Some(error) = &mode_error {
         state.last_error = Some(error.clone());
     } else if matches!(
@@ -522,6 +579,14 @@ fn project(
             return;
         }
     };
+    state.markers = input
+        .sources
+        .as_deref()
+        .and_then(|sources| sources.for_receipts(&bindings.receipts))
+        .map(|reader| markers::Markers::read(reader, &rules));
+    if let Some(Err(error)) = &state.markers {
+        state.last_error = Some(error.clone());
+    }
     let root = commands
         .spawn((
             Node {
@@ -605,6 +670,7 @@ fn project(
                 Ok(FogImage {
                     raster,
                     alpha,
+                    original_pixels: pixels.clone(),
                     original_alpha,
                     viewer: None,
                     width,
@@ -738,6 +804,174 @@ mod tests {
                 fog_mask_enabled: false
             }))
             .is_ok()
+        );
+    }
+    #[cfg(all(not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    #[test]
+    fn fog_refusal_keeps_the_accepted_minimap_pixels() {
+        use bevy::{
+            asset::RenderAssetUsages,
+            render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+        };
+        use pcx_play::map_startup_host::SettingsObservation;
+        const EXTRA: &str = "type mapflag extends handle
+constant native ConvertMapFlag takes integer i returns mapflag
+native SetMapFlag takes mapflag flag, boolean value returns nothing
+native IsMapFlagSet takes mapflag flag returns boolean
+type gamespeed extends handle
+constant native ConvertGameSpeed takes integer i returns gamespeed
+constant native GetGameSpeed takes nothing returns gamespeed
+native SetGameSpeed takes gamespeed speed returns nothing
+native IsFogEnabled takes nothing returns boolean
+native IsFogMaskEnabled takes nothing returns boolean
+native FogEnable takes boolean enabled returns nothing
+native FogMaskEnable takes boolean enabled returns nothing
+globals
+constant mapflag MAP_LOCK_SPEED = ConvertMapFlag(17*19)
+constant gamespeed CURRENT_SPEED = ConvertGameSpeed(-17)
+endglobals
+";
+        let mut app = App::new();
+        peacecraft3::map_requests::install(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
+        let mut fixture = crate::campaign_startup_cases::fixture(
+            "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+        );
+        fixture.common.extend_from_slice(EXTRA.as_bytes());
+        fixture.rebuild();
+        let resolver = fixture.resolver();
+        let bound =
+            peacecraft3::map_binding::bind_map(&resolver, fixture.input(1), fixture.limits())
+                .unwrap();
+        let mut inputs =
+            crate::campaign_startup_cases::host_inputs(std::sync::Arc::clone(&bound.catalog.0));
+        inputs
+            .enumeration
+            .names
+            .extend(["ConvertGameSpeed".into(), "ConvertMapFlag".into()]);
+        inputs.post_config.settings = Some(SettingsObservation {
+            speed_global: "CURRENT_SPEED".into(),
+            fog_enabled: true,
+            fog_mask_enabled: true,
+        });
+        let bytes = std::sync::Arc::clone(&bound.catalog_map_bytes);
+        app.insert_resource(peacecraft3::map_requests::MapRequests {
+            bindings: Some(bound),
+            ..default()
+        })
+        .insert_resource(peacecraft3::campaign_startup::CampaignHostSupply {
+            revision: 1,
+            inputs: Some(inputs),
+        });
+        app.world_mut()
+            .write_message(peacecraft3::map_requests::MapRequest {
+                label: "synthetic fog publication".into(),
+                map_member: pcx_assets::AssetPath::new("selected map.w3m").unwrap(),
+                identity: fixture.map_id.clone(),
+                binding_revision: 1,
+                payload: peacecraft3::map_requests::MapPayload::Shared(bytes),
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<peacecraft3::campaign_startup::CampaignStartup>()
+                .last_error
+                .is_none(),
+            "{:?}",
+            app.world()
+                .resource::<peacecraft3::campaign_startup::CampaignStartup>()
+                .last_error
+        );
+        let accepted = [4u8, 5, 6, 9];
+        let mut images = Assets::<Image>::default();
+        let image = images.add(Image::new(
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            accepted.to_vec(),
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        ));
+        let mut state = CampaignMinimap {
+            image: Some(image),
+            fog: Some(FogImage {
+                raster: crate::campaign_visibility::Raster::new(1, 1, 16).unwrap(),
+                alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
+                    masked: 3,
+                    fogged: 71,
+                    visible: 241,
+                },
+                original_alpha: vec![255],
+                original_pixels: vec![1, 2, 3, 255],
+                viewer: None,
+                width: 1,
+                height: 1,
+            }),
+            ..default()
+        };
+        let error = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let host = session.host().expect("published host");
+            update_fog(&mut state, host.objects(), &mut images).unwrap_err()
+        };
+        state.last_error = Some(error);
+        assert_eq!(
+            images
+                .get(state.image.as_ref().unwrap())
+                .unwrap()
+                .data
+                .as_deref(),
+            Some(&accepted[..])
+        );
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("shared vision")),
+            "{:?}",
+            state.last_error
+        );
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let host = session.host().expect("published host");
+            assert!(update_fog(&mut state, host.objects(), &mut images).is_err());
+        }
+        assert_eq!(
+            images
+                .get(state.image.as_ref().unwrap())
+                .unwrap()
+                .data
+                .as_deref(),
+            Some(&accepted[..])
+        );
+        {
+            use pcx_script::{Host, Value};
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let host = session.host().expect("published host");
+            host.objects_mut()
+                .native("FogEnable", &[Value::Bool(false)])
+                .unwrap();
+            host.objects_mut()
+                .native("FogMaskEnable", &[Value::Bool(false)])
+                .unwrap();
+            update_fog(&mut state, host.objects(), &mut images).unwrap();
+        }
+        assert_eq!(
+            images
+                .get(state.image.as_ref().unwrap())
+                .unwrap()
+                .data
+                .as_deref(),
+            Some(&[1, 2, 3, 255][..])
         );
     }
     #[test]
@@ -943,6 +1177,7 @@ mod tests {
                 visible: 223,
             },
             original_alpha: Vec::new(),
+            original_pixels: Vec::new(),
             viewer: None,
             width: 80,
             height: 40,

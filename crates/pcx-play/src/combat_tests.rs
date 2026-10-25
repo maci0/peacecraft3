@@ -3,13 +3,15 @@ use super::*;
 mod ability_cooldowns;
 #[path = "campaign_group_timed_life_host_tests.rs"]
 mod campaign_timed_life;
+#[path = "chain_lightning_tests.rs"]
+mod chain_lightning;
 #[path = "hero_experience_kill_tests.rs"]
 mod experience_kills;
 #[path = "standard_command_host_tests.rs"]
 mod standard_commands;
 #[path = "unit_summon_tests.rs"]
 mod summoning;
-use crate::playercolor_host::{CombatActor, CombatTraceEvent};
+use crate::playercolor_host::{CombatActor, CombatTraceEvent, VisionCapability};
 use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
 #[path = "blight_regeneration_tests.rs"]
@@ -109,6 +111,9 @@ fn campaign_unit_counts_follow_the_shared_unit_lifecycle_without_mutating_it() {
 }
 
 pub(super) const DECLARATIONS: &str = r#"
+native SetAllyColorFilterState takes integer state returns nothing
+native GetAllyColorFilterState takes nothing returns integer
+
 constant native GetLocalPlayer takes nothing returns player
 native SetPlayerAlliance takes player a, player b, alliancetype s, boolean v returns nothing
 type unitstate extends handle
@@ -188,7 +193,7 @@ call TriggerRegisterUnitEvent(Hit,B,EVENT_UNIT_ATTACKED)
 endfunction
 "#;
 
-fn column(
+pub(super) fn column(
     id: &[u8; 4],
     slk: SlkId,
     column: &str,
@@ -1280,7 +1285,7 @@ fn unarmed_attack_move_finishes_without_acquiring_a_target() {
     );
 }
 
-fn hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
+pub(super) fn hero_fields(primary: &str) -> Vec<([u8; 4], ObjectField)> {
     let mut fields = armed("64", "normal");
     for (id, name, kind, value) in [
         (b"A001", "STR", FieldKind::Int, "10"),
@@ -1348,6 +1353,49 @@ fn hero_primary_types_fractional_growth_and_source_baseline_follow_live_levels()
             assert!((bonuses.speed - (1.0 + agility * 0.2)).abs() < 0.00001);
         }
     }
+}
+
+#[test]
+fn panel_stats_keep_growth_and_permanent_strength_out_of_the_green_bonus() {
+    use crate::inventory_powerup::AttributeBonus;
+    let (hero, combat) = hero_rules();
+    let (mut vm, hero_unit, _) = open_selected(&hero_fields("STR"), Some(hero), combat.clone());
+    let snapshot = vm.host().inner.unit_stat_snapshot(hero_unit).unwrap();
+    let damage = snapshot.damage.unwrap();
+    assert_eq!((damage.minimum, damage.maximum, damage.bonus), (5, 5, 0.0));
+    assert_eq!(damage.natural, 10.0 * 1.75);
+    assert_eq!(snapshot.armor, 2.0 + (-1.0 + 5.0 * 0.4));
+    assert_eq!(snapshot.armor_bonus, 0.0);
+    let definition = vm
+        .host()
+        .inner
+        .executed_unit(hero_unit)
+        .unwrap()
+        .definition
+        .clone();
+    let progress = Some((3, 5));
+    let permanent = AttributeBonus {
+        strength: 4,
+        ..AttributeBonus::default()
+    };
+    let held = AttributeBonus {
+        strength: 7,
+        agility: 1,
+        damage: 6,
+        armor: 2,
+        ..AttributeBonus::default()
+    };
+    let natural =
+        ObjectHost::derive_hero_combat(&definition, progress, permanent, &combat).unwrap();
+    let full = ObjectHost::derive_hero_combat(&definition, progress, held, &combat).unwrap();
+    let (damage_bonus, hero_armor, armor_bonus) =
+        ObjectHost::held_combat_bonus(&natural, &full, held.armor);
+    assert!((natural.damage - 33.25).abs() < 1e-4);
+    assert!((damage_bonus - 11.25).abs() < 1e-4);
+    assert!((hero_armor - 2.2).abs() < 1e-4);
+    assert!((armor_bonus - 2.4).abs() < 1e-4);
+    assert_eq!(natural.held_damage, 0.0);
+    assert_eq!(full.held_damage, 6.0);
 }
 
 #[test]
@@ -2852,7 +2900,7 @@ fn holy_open_with_inputs(
         heroes,
     ));
     let extra = format!(
-        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}",
+        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\nnative SetUnitTimeScale takes unit u, real scale returns nothing\n",
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
@@ -5288,3 +5336,159 @@ fn generic_damage_does_not_start_a_retreat() {
     assert!(!vm.host().inner.campaign_flee_motion_owns(b));
     assert_eq!(life(&mut vm, b), 19.0);
 }
+
+fn armed_acquire(acquire: &str) -> Vec<([u8; 4], ObjectField)> {
+    use FieldKind::Real;
+    use SlkId::UnitWeapons;
+    let mut fields = armed("64", "normal");
+    let index = fields
+        .iter()
+        .position(|(id, _)| *id == *b"W005")
+        .expect("acquire column");
+    fields[index] = column(b"W005", UnitWeapons, "acquire", Real, acquire);
+    fields
+}
+
+fn clocked_combat_units(acquire: &str) -> (Vm, HandleId, HandleId, HandleId) {
+    let (mut vm, a, b) = open_clocked(&armed_acquire(acquire), rules());
+    vm.call("spawn", &[]).unwrap();
+    let Value::Handle(c) = vm.global("C") else {
+        panic!("spawned unit");
+    };
+    (vm, a, b, c)
+}
+
+fn admit_unavailable_ledger(h: &mut ObjectHost) -> &'static str {
+    assert!(matches!(
+        h.vision_capability(),
+        VisionCapability::Unadmitted
+    ));
+    assert!(h.admit_shared_vision().is_ok());
+    match h.vision_capability() {
+        VisionCapability::Unavailable(reason) => reason,
+        other => panic!("expected an unavailable ledger, got {other:?}"),
+    }
+}
+
+fn stage_due_missile_and_expiration(
+    h: &mut ObjectHost,
+    source: HandleId,
+    target: HandleId,
+    expiring: HandleId,
+) {
+    let now = h.timer_game_time().expect("clock");
+    h.test_queue_missile(source, target, 1.0, now);
+    h.test_schedule_unit_expiration(expiring, now);
+}
+
+fn rng_words(h: &ObjectHost) -> (u32, Vec<u32>) {
+    let state = h.script_random_state().unwrap();
+    (state.primary_word(), state.secondary_words().collect())
+}
+
+fn current_order(h: &mut ObjectHost, unit: HandleId) -> Value {
+    h.native("GetUnitCurrentOrder", &[Value::Handle(unit)])
+        .unwrap()
+}
+
+#[test]
+fn unavailable_ledger_still_advances_expiry_missile_and_existing_target_without_a_new_search() {
+    let (mut vm, a, b, c) = clocked_combat_units("0");
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("alpha".into()),
+                Value::Handle(b),
+            ],
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let reason = admit_unavailable_ledger(h);
+    assert!(reason.contains("shared vision"), "{reason}");
+    stage_due_missile_and_expiration(h, a, b, c);
+    let order = current_order(h, a);
+    let activity = h.executed_unit(a).unwrap().activity.clone();
+    let vitals = h.unit_vitals(a).unwrap();
+    let rng = rng_words(h);
+    h.test_advance_combat().unwrap();
+    assert!(h.executed_unit(c).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(
+        h.executed_unit(a).unwrap().combat.as_ref().unwrap().target,
+        Some(b)
+    );
+    assert_eq!(h.executed_unit(a).unwrap().activity, activity);
+    assert_eq!(current_order(h, a), order);
+    assert_eq!(h.unit_vitals(a).unwrap(), vitals);
+    assert!(h.test_swing(a).is_some());
+    assert_eq!(h.test_missile_count(), 0);
+    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 19.0);
+    assert_eq!(rng_words(h), rng);
+}
+
+#[test]
+fn unavailable_ledger_refuses_new_acquisition_without_blocking_expiry_or_existing_target() {
+    let (mut vm, a, b, c) = clocked_combat_units("500");
+    let h = &mut vm.host().inner;
+    // A is visited first and would acquire. The error is reported after the
+    // missile, the expiration, and B's existing attack have already committed.
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(b),
+                Value::Str("alpha".into()),
+                Value::Handle(a),
+            ],
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let reason = admit_unavailable_ledger(h);
+    stage_due_missile_and_expiration(h, a, b, c);
+    let order = current_order(h, a);
+    let activity = h.executed_unit(a).unwrap().activity.clone();
+    let face = h.executed_unit(a).unwrap().face;
+    let vitals = h.unit_vitals(a).unwrap();
+    let rng = rng_words(h);
+    let error = h.test_advance_combat().unwrap_err();
+    assert!(error.to_string().contains(reason), "{error}");
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target
+            .is_none()
+    );
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination
+            .is_none()
+    );
+    assert_eq!(h.executed_unit(a).unwrap().activity, activity);
+    assert_eq!(h.executed_unit(a).unwrap().face, face);
+    assert_eq!(current_order(h, a), order);
+    assert_eq!(h.unit_vitals(a).unwrap(), vitals);
+    assert!(h.test_swing(a).is_none());
+    assert_eq!(
+        h.executed_unit(b).unwrap().combat.as_ref().unwrap().target,
+        Some(a)
+    );
+    assert!(h.test_swing(b).is_some());
+    assert!(h.executed_unit(c).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(h.test_missile_count(), 0);
+    assert_eq!(h.unit_vitals(b).unwrap().unwrap().life, 19.0);
+    assert_eq!(rng_words(h), rng);
+}
+
+#[path = "ally_color_host_tests.rs"]
+mod ally_color_tests;

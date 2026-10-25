@@ -334,3 +334,63 @@ fn location_movement_checks_admission_lifetime_contracts_and_atomic_bounds() {
             .contains("unsupported")
     );
 }
+
+#[test]
+fn world_bounds_are_fresh_rect_snapshots_and_survive_mutation_and_removal() {
+    let declarations = format!("{DECLARATIONS}native GetWorldBounds takes nothing returns rect\n");
+    let mut h = host_from(&declarations, "", 16)
+        .with_rectangles()
+        .unwrap()
+        .with_world_bounds([-1234., -987., 3456., 876.])
+        .unwrap();
+    let first = h.native("GetWorldBounds", &[]).unwrap();
+    let second = h.native("GetWorldBounds", &[]).unwrap();
+    assert_ne!(first, second);
+    for rect in [&first, &second] {
+        assert_eq!(read(&mut h, "GetRectMinX", rect), Value::Real(-1234.));
+        assert_eq!(read(&mut h, "GetRectMaxY", rect), Value::Real(876.));
+    }
+    let mut args = vec![first.clone()];
+    args.extend(values([1., 2., 3., 4.]));
+    h.native("SetRect", &args).unwrap();
+    h.native("RemoveRect", &[first]).unwrap();
+    assert_eq!(read(&mut h, "GetRectMinX", &second), Value::Real(-1234.));
+    let third = h.native("GetWorldBounds", &[]).unwrap();
+    assert_eq!(read(&mut h, "GetRectMaxX", &third), Value::Real(3456.));
+    assert!(h.native("GetWorldBounds", &[Value::Null]).is_err());
+}
+
+#[test]
+fn world_bounds_need_a_valid_source_extent_and_capacity_before_allocation() {
+    let declarations = format!("{DECLARATIONS}native GetWorldBounds takes nothing returns rect\n");
+    for invalid in [[0.; 4], [0., 0., f32::INFINITY, 2.], [0., f32::NAN, 2., 3.]] {
+        assert!(
+            host_from(&declarations, "", 2)
+                .with_rectangles()
+                .unwrap()
+                .with_world_bounds(invalid)
+                .is_err()
+        );
+    }
+    let mut h = host_from(&declarations, "", 1).with_rectangles().unwrap();
+    assert!(
+        h.native("GetWorldBounds", &[])
+            .unwrap_err()
+            .contains("extent is not admitted")
+    );
+    let mut h = h.with_world_bounds([-31., -47., 83., 109.]).unwrap();
+    let accepted = h.native("GetWorldBounds", &[]).unwrap();
+    assert!(h.native("GetWorldBounds", &[]).is_err());
+    assert_eq!(read(&mut h, "GetRectMaxY", &accepted), Value::Real(109.));
+    assert!(
+        host_from(
+            &declarations.replace("native GetWorldBounds", "constant native GetWorldBounds"),
+            "",
+            2
+        )
+        .with_rectangles()
+        .unwrap()
+        .with_world_bounds([-31., -47., 83., 109.])
+        .is_err()
+    );
+}

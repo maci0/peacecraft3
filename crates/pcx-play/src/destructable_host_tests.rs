@@ -982,18 +982,27 @@ fn late_script_creation_composes_live_and_dead_layers_over_existing_collision() 
     let Value::Handle(id) = created else {
         panic!("late destructable handle");
     };
-    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x0a));
+    assert_eq!(
+        host.test_placement_cell(cell(8, 8)),
+        Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask() | 0x02)
+    );
     assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
     host.native("KillDestructable", &[Value::Handle(id)])
         .unwrap();
     assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x02));
-    assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x08));
+    assert_eq!(
+        host.test_placement_cell(cell(9, 8)),
+        Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask())
+    );
     host.native(
         "SetDestructableLife",
         &[Value::Handle(id), Value::Real(5.0)],
     )
     .unwrap();
-    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x0a));
+    assert_eq!(
+        host.test_placement_cell(cell(8, 8)),
+        Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask() | 0x02)
+    );
     assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
     let dead = host
         .native("CreateDeadDestructable", &payload_at(tree, 64.0, 64.0))
@@ -1003,7 +1012,10 @@ fn late_script_creation_composes_live_and_dead_layers_over_existing_collision() 
     };
     assert_eq!(host.destructable_state(dead_id).unwrap().life, Some(0.0));
     assert_eq!(host.test_placement_cell(cell(16, 16)), Some(0x00));
-    assert_eq!(host.test_placement_cell(cell(17, 16)), Some(0x08));
+    assert_eq!(
+        host.test_placement_cell(cell(17, 16)),
+        Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask())
+    );
 }
 
 #[test]
@@ -1061,7 +1073,10 @@ fn late_script_creation_refuses_sources_and_work_without_publishing() {
         &payload_at(i32::from_be_bytes(*b"ONE1"), 32.0, 32.0),
     )
     .unwrap();
-    assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x08));
+    assert_eq!(
+        host.test_placement_cell(cell(8, 8)),
+        Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask())
+    );
     assert_eq!(host.inner().handles(), before + 1);
 }
 
@@ -1159,7 +1174,7 @@ fn refused_late_creation_rolls_back_source_work_before_a_distinct_retry() {
         assert_eq!(host.inner().handles(), before + 1, "{objectid:#x}");
         assert_eq!(
             host.test_placement_cell(cell(8, 8)),
-            Some(0x08),
+            Some(crate::unit_placement::tests::rules(2, -8192.25).solid_mask()),
             "{objectid:#x}"
         );
         let source = source.lock().unwrap();

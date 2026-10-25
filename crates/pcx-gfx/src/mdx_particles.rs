@@ -1,5 +1,8 @@
 //! Source-driven PRE2 CPU state; no camera, material, image or GPU side effects.
-use pcx_mdl::{Interpolation, KeyTrack, NO_ID, Particle2, Particle2Properties, Pivots, Texture};
+use crate::mdx_runtime::JointPlan;
+use pcx_mdl::{
+    Interpolation, KeyTrack, NO_ID, Particle2, Particle2Properties, Pivots, Texture, TrackKind,
+};
 use std::{sync::Arc, time::Duration};
 
 // Public primary PRE2 flag values; these are format identifiers, not asset data.
@@ -336,10 +339,37 @@ pub struct Profile {
     pub flags: u32,
     pub texture_flags: u32,
     pub pivot: [f32; 3],
+    parent_id: i32,
+    /// Root-first indices into the plan's stored joints. Empty when unparented.
+    ancestors: Vec<usize>,
     translation: Option<Channel>,
     rotation: Option<Channel>,
     visibility: Option<Channel>,
     emission: Option<Channel>,
+}
+enum Geometry<'a> {
+    Standalone(&'a Pivots),
+    Joints(&'a JointPlan),
+}
+impl<'a> Geometry<'a> {
+    fn pivots(&self) -> &'a Pivots {
+        match *self {
+            Self::Standalone(pivots) => pivots,
+            Self::Joints(joints) => joints.pivots(),
+        }
+    }
+    fn joints(&self) -> Option<&'a JointPlan> {
+        match *self {
+            Self::Standalone(_) => None,
+            Self::Joints(joints) => Some(joints),
+        }
+    }
+}
+#[derive(Debug)]
+struct StoredJoints {
+    bones: Vec<pcx_mdl::Bone>,
+    pivots: Pivots,
+    globals: Vec<u32>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Clip {
@@ -355,6 +385,8 @@ pub struct Plan {
     looping: bool,
     native_appearance: Option<NativeAppearance>,
     following: Option<Box<Plan>>,
+    origin_ms: u64,
+    joints: Option<StoredJoints>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -478,7 +510,52 @@ impl Plan {
         source: &str,
         limits: Limits,
     ) -> Result<Self, Error> {
+        Self::admit(
+            emitters,
+            textures,
+            Geometry::Standalone(pivots),
+            globals,
+            clip,
+            source,
+            limits,
+        )
+    }
+
+    /// Admits a parent when it is already a bone or helper in `joints`.
+    /// Emitter pivots come from that plan, not from a second table.
+    /// The standalone [`Plan::checked`] path still refuses every parent.
+    pub fn checked_with_joints(
+        emitters: &[Particle2],
+        textures: &[Texture],
+        globals: &[u32],
+        clip: Clip,
+        source: &str,
+        limits: Limits,
+        joints: &JointPlan,
+    ) -> Result<Self, Error> {
+        Self::admit(
+            emitters,
+            textures,
+            Geometry::Joints(joints),
+            globals,
+            clip,
+            source,
+            limits,
+        )
+    }
+
+    fn admit(
+        emitters: &[Particle2],
+        textures: &[Texture],
+        geometry: Geometry<'_>,
+        globals: &[u32],
+        clip: Clip,
+        source: &str,
+        limits: Limits,
+    ) -> Result<Self, Error> {
         let Clip { interval, looping } = clip;
+        let pivots = geometry.pivots();
+        let joints = geometry.joints();
         let fail = |emitter, failure| Error {
             source_name: source.into(),
             emitter,
@@ -521,9 +598,17 @@ impl Plan {
                 if profiles.iter().any(|p| p.object_id == emitter.object_id) {
                     return Err(Failure::Malformed("duplicate emitter ID"));
                 }
-                if emitter.parent_id != -1 {
-                    return Err(Failure::Unsupported("parented emitter"));
+                if emitter.parent_id < -1 {
+                    return Err(Failure::Malformed("emitter parent"));
                 }
+                let ancestors = if emitter.parent_id >= 0 {
+                    match joints {
+                        None => return Err(Failure::Unsupported("parented emitter")),
+                        Some(joints) => qualify_parent(joints, emitter.parent_id as u32, globals)?,
+                    }
+                } else {
+                    Vec::new()
+                };
                 if emitter.flags & 0xff != 0 {
                     return Err(Failure::Unsupported("generic node transform flags"));
                 }
@@ -669,6 +754,8 @@ impl Plan {
                     flags: emitter.flags,
                     texture_flags: texture.flags,
                     pivot,
+                    parent_id: emitter.parent_id,
+                    ancestors,
                     translation,
                     rotation,
                     visibility,
@@ -677,6 +764,41 @@ impl Plan {
             };
             profiles.push(build().map_err(|failure| fail(Some(emitter.object_id), failure))?);
         }
+        if let Some(joints) = joints {
+            let mut seen = std::collections::BTreeSet::new();
+            for profile in &profiles {
+                seen.extend(profile.ancestors.iter().copied());
+            }
+            let ancestor_keys = seen.iter().try_fold(0usize, |sum, index| {
+                joints.joints()[*index]
+                    .tracks
+                    .iter()
+                    .try_fold(sum, |sum, track| sum.checked_add(track.count as usize))
+            });
+            let total = ancestor_keys
+                .and_then(|extra| key_count.checked_add(extra))
+                .ok_or_else(|| fail(None, Failure::Arithmetic))?;
+            if total > limits.max_keys {
+                return Err(fail(
+                    None,
+                    Failure::Budget {
+                        kind: "keys",
+                        needed: total as u128,
+                        limit: limits.max_keys as u128,
+                    },
+                ));
+            }
+        }
+        let joints = match joints {
+            Some(joints) if profiles.iter().any(|profile| profile.parent_id >= 0) => {
+                Some(StoredJoints {
+                    bones: joints.joints().to_vec(),
+                    pivots: joints.pivots().clone(),
+                    globals: globals.to_vec(),
+                })
+            }
+            _ => None,
+        };
         Ok(Self {
             source: source.into(),
             profiles,
@@ -684,30 +806,15 @@ impl Plan {
             looping,
             native_appearance: None,
             following: None,
+            origin_ms: 0,
+            joints,
         })
     }
 
     /// One nonlooping entrance followed by an admitted clip of the same emitter batch.
     /// The simulation, live particles, RNG, fractional emission and global clock survive.
     pub fn then(mut self, next: Plan) -> Result<Self, Error> {
-        let global_matches = |a: &Option<Channel>, b: &Option<Channel>| {
-            a.as_ref().filter(|channel| channel.global.is_some())
-                == b.as_ref().filter(|channel| channel.global.is_some())
-        };
-        let same = self.source == next.source
-            && self.native_appearance == next.native_appearance
-            && self.profiles.len() == next.profiles.len()
-            && self.profiles.iter().zip(&next.profiles).all(|(a, b)| {
-                a.object_id == b.object_id
-                    && a.properties == b.properties
-                    && a.flags == b.flags
-                    && a.texture_flags == b.texture_flags
-                    && a.pivot == b.pivot
-                    && global_matches(&a.translation, &b.translation)
-                    && global_matches(&a.rotation, &b.rotation)
-                    && global_matches(&a.visibility, &b.visibility)
-                    && global_matches(&a.emission, &b.emission)
-            });
+        let same = self.same_emitters(&next);
         if self.looping
             || self.interval[0] == self.interval[1]
             || self.following.is_some()
@@ -720,11 +827,45 @@ impl Plan {
         Ok(self)
     }
 
+    fn same_emitters(&self, next: &Self) -> bool {
+        let global_matches = |a: &Option<Channel>, b: &Option<Channel>| {
+            a.as_ref().filter(|channel| channel.global.is_some())
+                == b.as_ref().filter(|channel| channel.global.is_some())
+        };
+        self.source == next.source
+            && self.native_appearance == next.native_appearance
+            && self.profiles.len() == next.profiles.len()
+            && self.profiles.iter().zip(&next.profiles).all(|(a, b)| {
+                a.object_id == b.object_id
+                    && a.properties == b.properties
+                    && a.flags == b.flags
+                    && a.texture_flags == b.texture_flags
+                    && a.pivot == b.pivot
+                    && a.parent_id == b.parent_id
+                    && a.ancestors == b.ancestors
+                    && global_matches(&a.translation, &b.translation)
+                    && global_matches(&a.rotation, &b.rotation)
+                    && global_matches(&a.visibility, &b.visibility)
+                    && global_matches(&a.emission, &b.emission)
+            })
+            && match (&self.joints, &next.joints) {
+                (None, None) => true,
+                (Some(left), Some(right)) => {
+                    left.bones == right.bones
+                        && left.pivots == right.pivots
+                        && left.globals == right.globals
+                }
+                _ => false,
+            }
+    }
+
     fn phase(&self, elapsed_ms: u64) -> (&Self, u64) {
-        let boundary = u64::from(self.interval[1] - self.interval[0]);
+        let boundary = self
+            .origin_ms
+            .saturating_add(u64::from(self.interval[1] - self.interval[0]));
         match &self.following {
             Some(next) if elapsed_ms >= boundary => (next, boundary),
-            _ => (self, 0),
+            _ => (self, self.origin_ms),
         }
     }
 
@@ -733,10 +874,17 @@ impl Plan {
         from: Duration,
         to: Duration,
     ) -> [Option<(&Self, Duration, Duration, Duration)>; 2] {
-        let boundary = Duration::from_millis(u64::from(self.interval[1] - self.interval[0]));
+        let origin = Duration::from_millis(self.origin_ms);
+        let boundary =
+            origin + Duration::from_millis(u64::from(self.interval[1] - self.interval[0]));
         match &self.following {
             Some(next) => [
-                (from < boundary).then_some((self, from, to.min(boundary), Duration::ZERO)),
+                (from < boundary).then_some((
+                    self,
+                    from.saturating_sub(origin),
+                    to.min(boundary).saturating_sub(origin),
+                    origin,
+                )),
                 (to > boundary).then_some((
                     next,
                     from.saturating_sub(boundary),
@@ -744,7 +892,15 @@ impl Plan {
                     boundary,
                 )),
             ],
-            None => [Some((self, from, to, Duration::ZERO)), None],
+            None => [
+                Some((
+                    self,
+                    from.saturating_sub(origin),
+                    to.saturating_sub(origin),
+                    origin,
+                )),
+                None,
+            ],
         }
     }
 
@@ -788,7 +944,7 @@ impl Plan {
     }
     pub fn frame(&self, elapsed_ms: u64) -> u32 {
         let (phase, origin) = self.phase(elapsed_ms);
-        phase.local_frame(elapsed_ms - origin)
+        phase.local_frame(elapsed_ms.saturating_sub(origin))
     }
 
     fn local_frame(&self, elapsed_ms: u64) -> u32 {
@@ -804,26 +960,41 @@ impl Plan {
     }
     /// Render pose for a live particle; simulation retains model-space coordinates.
     pub fn world_particle(&self, particle: &Particle, elapsed_ms: u64) -> Result<Particle, Error> {
+        let sample = self.sample_emitter(particle.emitter, elapsed_ms)?;
+        self.place_particle(particle, &sample)
+    }
+
+    /// Applies one already sampled emitter pose. Model-space particles keep their stored coordinates.
+    pub fn place_particle(
+        &self,
+        particle: &Particle,
+        sample: &EmitterSample,
+    ) -> Result<Particle, Error> {
         let profile = self
             .profiles
             .get(particle.emitter)
             .ok_or_else(|| self.error(particle.emitter, Failure::Malformed("particle emitter")))?;
         let mut world = *particle;
         if profile.flags & MODEL_SPACE != 0 {
-            let sample = self.sample_emitter(particle.emitter, elapsed_ms)?;
-            let q = sample.rotation.map(f64::from);
-            let offset = rotate(
-                q,
-                std::array::from_fn(|i| {
-                    f64::from(particle.position[i]) - f64::from(profile.pivot[i])
-                }),
-            );
-            world.position = vector(std::array::from_fn(|i| {
-                f64::from(profile.pivot[i]) + f64::from(sample.translation[i]) + offset[i]
-            }))
-            .map_err(|failure| self.error(particle.emitter, failure))?;
-            world.velocity = vector(rotate(q, particle.velocity.map(f64::from)))
+            if let Some(basis) = sample.basis {
+                world.position = transform_point_f64(&basis, particle.position.map(f64::from))
+                    .map_err(|failure| self.error(particle.emitter, failure))?;
+                world.velocity = transform_vector_f64(&basis, particle.velocity.map(f64::from))
+                    .map_err(|failure| self.error(particle.emitter, failure))?;
+            } else {
+                let q = sample.rotation.map(f64::from);
+                let pivot = profile.pivot;
+                let offset = rotate(
+                    q,
+                    std::array::from_fn(|i| f64::from(particle.position[i]) - f64::from(pivot[i])),
+                );
+                world.position = vector(std::array::from_fn(|i| {
+                    f64::from(pivot[i]) + f64::from(sample.translation[i]) + offset[i]
+                }))
                 .map_err(|failure| self.error(particle.emitter, failure))?;
+                world.velocity = vector(rotate(q, particle.velocity.map(f64::from)))
+                    .map_err(|failure| self.error(particle.emitter, failure))?;
+            }
         }
         Ok(world)
     }
@@ -834,7 +1005,7 @@ impl Plan {
             let profile = phase
                 .profiles
                 .get(index)
-                .ok_or(Failure::Malformed("emitter ordinal"))?;
+                .ok_or(Failure::Malformed("particle emitter"))?;
             let frame = self.frame(elapsed_ms);
             let translation = profile
                 .translation
@@ -853,14 +1024,196 @@ impl Plan {
                     t.sample(frame, elapsed_ms, [1., 0., 0., 0.])
                 })?[0]
                 > 0.;
+            let translation = vector([translation[0], translation[1], translation[2]])?;
+            let rotation = rotation.map(|v| v as f32);
+            let ancestors = profile.ancestors.clone();
+            let pivot = profile.pivot;
+            let basis =
+                phase.parent_basis(&ancestors, pivot, frame, translation, rotation, elapsed_ms)?;
             Ok(EmitterSample {
-                translation: vector([translation[0], translation[1], translation[2]])?,
-                rotation: rotation.map(|v| v as f32),
+                translation,
+                rotation,
                 visible,
+                basis,
             })
         };
         result().map_err(|failure| self.error(index, failure))
     }
+
+    /// One sample per emitter at this clock. A mesh batch reuses these poses.
+    pub fn sample_emitters(&self, elapsed_ms: u64) -> Result<Vec<EmitterSample>, Error> {
+        let count = self.phase(elapsed_ms).0.profiles.len();
+        let mut samples = Vec::new();
+        samples
+            .try_reserve_exact(count)
+            .map_err(|_| self.error(0, Failure::Allocation))?;
+        for index in 0..count {
+            samples.push(self.sample_emitter(index, elapsed_ms)?);
+        }
+        Ok(samples)
+    }
+
+    fn parent_basis(
+        &self,
+        ancestors: &[usize],
+        pivot: [f32; 3],
+        frame: u32,
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        elapsed_ms: u64,
+    ) -> Result<Option<[f32; 16]>, Failure> {
+        if ancestors.is_empty() {
+            return Ok(None);
+        }
+        let joints = self
+            .joints
+            .as_ref()
+            .ok_or(Failure::Unsupported("parented emitter"))?;
+        let mut world = pcx_mdl::identity();
+        for &index in ancestors {
+            let bone = joints
+                .bones
+                .get(index)
+                .ok_or(Failure::Malformed("emitter parent"))?;
+            let pose = joint_pose(bone, frame, elapsed_ms, &joints.globals, self.interval)?;
+            let joint_pivot = joints
+                .pivots
+                .position(bone.object_id)
+                .ok_or(Failure::Malformed("emitter pivot"))?;
+            world = pcx_mdl::compose(world, pose, joint_pivot);
+        }
+        world = pcx_mdl::compose(
+            world,
+            pcx_mdl::Pose {
+                translation,
+                rotation,
+                scale: [1.; 3],
+            },
+            pivot,
+        );
+        if !world.iter().all(|value| value.is_finite()) {
+            return Err(Failure::Arithmetic);
+        }
+        Ok(Some(world))
+    }
+}
+
+fn qualify_parent(joints: &JointPlan, parent: u32, globals: &[u32]) -> Result<Vec<usize>, Failure> {
+    let mut chain = Vec::new();
+    let mut current = parent;
+    for _ in 0..=joints.joints().len() {
+        let index = joints
+            .index_of(current)
+            .ok_or(Failure::Unsupported("missing emitter parent"))?;
+        let joint = &joints.joints()[index];
+        if joint.flags & 0xff != 0 {
+            return Err(Failure::Unsupported("emitter parent transform flags"));
+        }
+        for track in &joint.tracks {
+            if track.global_sequence_id >= 0 {
+                let id = usize::try_from(track.global_sequence_id)
+                    .map_err(|_| Failure::Malformed("global reference"))?;
+                let duration = *globals
+                    .get(id)
+                    .ok_or(Failure::Malformed("global reference"))?;
+                if duration == 0 && track.count != 1 {
+                    return Err(Failure::Unsupported(
+                        "nonconstant zero-duration global track",
+                    ));
+                }
+            }
+            if track.kind == TrackKind::Scaling && !identity_scale(track)? {
+                return Err(Failure::Unsupported("scaled emitter parent"));
+            }
+        }
+        chain.push(index);
+        if joint.parent_id < 0 {
+            chain.reverse();
+            return Ok(chain);
+        }
+        current = joint.parent_id as u32;
+    }
+    Err(Failure::Unsupported("emitter parent cycle"))
+}
+
+fn identity_scale(track: &pcx_mdl::BoneTrack) -> Result<bool, Failure> {
+    for index in 0..track.count as usize {
+        let value = track
+            .value(index)
+            .ok_or(Failure::Malformed("track value/tangent"))?;
+        if value[0] != 1. || value[1] != 1. || value[2] != 1. {
+            return Ok(false);
+        }
+        if track.interpolation.has_tangents() {
+            for tangent in [track.in_tangent(index), track.out_tangent(index)] {
+                let tangent = tangent.ok_or(Failure::Malformed("track value/tangent"))?;
+                if tangent[0] != 0. || tangent[1] != 0. || tangent[2] != 0. {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn joint_pose(
+    bone: &pcx_mdl::Bone,
+    sequence_frame: u32,
+    elapsed_ms: u64,
+    globals: &[u32],
+    interval: [u32; 2],
+) -> Result<pcx_mdl::Pose, Failure> {
+    if bone.tracks.iter().all(|track| track.global_sequence_id < 0) {
+        return Ok(pcx_mdl::sample_joint_pose(
+            bone,
+            sequence_frame,
+            0,
+            globals,
+            interval,
+        ));
+    }
+    let mut pose = pcx_mdl::Pose::default();
+    for track in &bone.tracks {
+        let sampled = if track.global_sequence_id < 0 {
+            pcx_mdl::sample_bone_track_in_interval(track, sequence_frame, interval)
+        } else {
+            let duration = globals
+                .get(track.global_sequence_id as usize)
+                .copied()
+                .ok_or(Failure::Malformed("global reference"))?;
+            let frame = if duration == 0 {
+                0
+            } else {
+                (elapsed_ms % u64::from(duration)) as u32
+            };
+            pcx_mdl::sample_bone_track(track, frame)
+        };
+        match track.kind {
+            TrackKind::Translation => pose.translation = sampled.translation,
+            TrackKind::Rotation => pose.rotation = sampled.rotation,
+            TrackKind::Scaling => {}
+        }
+    }
+    Ok(pose)
+}
+
+fn transform_point_f64(m: &[f32; 16], p: [f64; 3]) -> Result<[f32; 3], Failure> {
+    vector([
+        f64::from(m[0]) * p[0] + f64::from(m[4]) * p[1] + f64::from(m[8]) * p[2] + f64::from(m[12]),
+        f64::from(m[1]) * p[0] + f64::from(m[5]) * p[1] + f64::from(m[9]) * p[2] + f64::from(m[13]),
+        f64::from(m[2]) * p[0]
+            + f64::from(m[6]) * p[1]
+            + f64::from(m[10]) * p[2]
+            + f64::from(m[14]),
+    ])
+}
+
+fn transform_vector_f64(m: &[f32; 16], v: [f64; 3]) -> Result<[f32; 3], Failure> {
+    vector([
+        f64::from(m[0]) * v[0] + f64::from(m[4]) * v[1] + f64::from(m[8]) * v[2],
+        f64::from(m[1]) * v[0] + f64::from(m[5]) * v[1] + f64::from(m[9]) * v[2],
+        f64::from(m[2]) * v[0] + f64::from(m[6]) * v[1] + f64::from(m[10]) * v[2],
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -868,6 +1221,8 @@ pub struct EmitterSample {
     pub translation: [f32; 3],
     pub rotation: [f32; 4],
     pub visible: bool,
+    /// World matrix when the emitter hangs from a qualified joint. Absent for an unparented emitter.
+    pub basis: Option<[f32; 16]>,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Particle {
@@ -960,6 +1315,47 @@ impl Simulation {
             tick: limits.tick,
         })
     }
+    /// Begin a newly projected instance at its accepted clip start, without
+    /// simulating time before that instance's current animation existed.
+    pub fn start_at(&mut self, at: Duration) -> Result<(), Error> {
+        let origin =
+            u64::try_from(at.as_millis()).map_err(|_| self.plan.error(0, Failure::Arithmetic))?;
+        if !self.elapsed.is_zero() || !self.pending.is_zero() || !self.particles.is_empty() {
+            return Err(self
+                .plan
+                .error(0, Failure::Malformed("already started particle instance")));
+        }
+        let source_name = self.plan.source.clone();
+        let plan = Arc::get_mut(&mut self.plan).ok_or(Error {
+            source_name,
+            emitter: None,
+            failure: Failure::Malformed("shared initial particle plan"),
+        })?;
+        plan.origin_ms = origin;
+        self.elapsed = at;
+        Ok(())
+    }
+
+    /// Change the authored clip without retiring live particles, RNG, fractional
+    /// emission or global-sequence time. The caller first catches up to the change.
+    pub fn select_plan(&mut self, mut next: Plan, at: Duration) -> Result<bool, Error> {
+        if at != self.elapsed + self.pending
+            || next.following.is_some()
+            || !self.plan.same_emitters(&next)
+        {
+            return Err(self
+                .plan
+                .error(0, Failure::Malformed("clip-change clock/emitter identity")));
+        }
+        if self.pending >= self.tick {
+            return Ok(false);
+        }
+        next.origin_ms =
+            u64::try_from(at.as_millis()).map_err(|_| self.plan.error(0, Failure::Arithmetic))?;
+        self.plan = Arc::new(next);
+        Ok(true)
+    }
+
     pub fn plan(&self) -> &Plan {
         &self.plan
     }
@@ -1048,6 +1444,25 @@ impl Simulation {
                 }
             }
             for (index, profile) in plan.phase(ms).0.profiles.iter().enumerate() {
+                let pose_work = u64::try_from(profile.ancestors.len())
+                    .map_err(|_| plan.error(index, Failure::Arithmetic))?;
+                updates = updates
+                    .checked_add(pose_work)
+                    .ok_or_else(|| plan.error(index, Failure::Arithmetic))?;
+                let posed = work
+                    .updates
+                    .checked_add(updates)
+                    .ok_or_else(|| plan.error(index, Failure::Arithmetic))?;
+                if posed > limits.max_updates {
+                    return Err(plan.error(
+                        index,
+                        Failure::Budget {
+                            kind: "updates",
+                            needed: u128::from(posed),
+                            limit: u128::from(limits.max_updates),
+                        },
+                    ));
+                }
                 let sample = plan.sample_emitter(index, ms)?;
                 if !sample.visible {
                     continue;
@@ -1207,27 +1622,19 @@ fn spawn_particle(
     rng: &mut Rng,
 ) -> Result<Particle, Failure> {
     let props = profile.properties;
-    let sample = if profile.flags & MODEL_SPACE != 0 {
+    let model_space = profile.flags & MODEL_SPACE != 0;
+    let sample = if model_space {
         EmitterSample {
             translation: [0.; 3],
             rotation: [0., 0., 0., 1.],
             visible: sample.visible,
+            basis: None,
         }
     } else {
         sample
     };
-    let q = sample.rotation.map(f64::from);
-    let offset = rotate(
-        q,
-        [
-            rng.symmetric(f64::from(props.width) * 0.5),
-            rng.symmetric(f64::from(props.length) * 0.5),
-            0.,
-        ],
-    );
-    let position = vector(std::array::from_fn(|i| {
-        f64::from(profile.pivot[i]) + f64::from(sample.translation[i]) + offset[i]
-    }))?;
+    let sx = rng.symmetric(f64::from(props.width) * 0.5);
+    let sy = rng.symmetric(f64::from(props.length) * 0.5);
     let lat = f64::from(props.latitude).to_radians();
     let inclination = rng.symmetric(lat);
     let azimuth = if profile.flags & LINE == 0 {
@@ -1238,13 +1645,35 @@ fn spawn_particle(
     let (sin_lat, cos_lat) = inclination.sin_cos();
     let (sin_az, cos_az) = azimuth.sin_cos();
     // The source plane basis turns the polar cone a quarter turn around local Z.
-    let direction = rotate(q, [-sin_lat * sin_az, sin_lat * cos_az, cos_lat]);
+    let direction = [-sin_lat * sin_az, sin_lat * cos_az, cos_lat];
     let speed = f64::from(props.speed) * (1. + rng.symmetric(f64::from(props.variation)));
+    let (position, velocity) = if let Some(basis) = sample.basis {
+        (
+            transform_point_f64(
+                &basis,
+                [
+                    f64::from(profile.pivot[0]) + sx,
+                    f64::from(profile.pivot[1]) + sy,
+                    f64::from(profile.pivot[2]),
+                ],
+            )?,
+            transform_vector_f64(&basis, direction.map(|component| component * speed))?,
+        )
+    } else {
+        let q = sample.rotation.map(f64::from);
+        let offset = rotate(q, [sx, sy, 0.]);
+        (
+            vector(std::array::from_fn(|i| {
+                f64::from(profile.pivot[i]) + f64::from(sample.translation[i]) + offset[i]
+            }))?,
+            vector(rotate(q, direction).map(|component| component * speed))?,
+        )
+    };
     Ok(Particle {
         emitter: index,
         age: 0.,
         position,
-        velocity: vector(direction.map(|v| v * speed))?,
+        velocity,
         gravity: props.gravity,
     })
 }

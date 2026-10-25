@@ -955,6 +955,22 @@ fn hero_learning_updates_the_same_handle_and_respects_levels_points_and_caps() {
     let handles = vm.host().inner.inner().handles();
     assert_eq!(query(&mut vm, "GetHeroLevel", None), 1); // not the class rating seven
     assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 3); // synthetic source counter
+    let Value::Handle(hero_id) = hero.clone() else {
+        panic!("hero handle: {hero:?}");
+    };
+    let listed = vm.host().inner.learnable_skills(hero_id).unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|skill| { skill.alias == *b"L001" && skill.block.is_none() && skill.rank == 0 })
+    );
+    assert!(listed.iter().any(|skill| {
+        skill.alias == *b"L002"
+            && matches!(
+                skill.block,
+                Some(crate::playercolor_host::LearnBlock::HeroLevel { .. })
+            )
+    }));
     assert_eq!(query(&mut vm, "GetUnitAbilityLevel", Some(*b"L000")), 1);
     assert_eq!(query(&mut vm, "GetUnitAbilityLevel", Some(*b"L001")), 0);
     learn(&mut vm, *b"L001");
@@ -975,6 +991,20 @@ fn hero_learning_updates_the_same_handle_and_respects_levels_points_and_caps() {
     assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 0);
     assert_eq!(query(&mut vm, "GetUnitAbilityLevel", Some(*b"L001")), 3);
     assert_eq!(query(&mut vm, "GetUnitAbilityLevel", Some(*b"L002")), 1);
+    let listed = vm.host().inner.learnable_skills(hero_id).unwrap();
+    assert!(listed.iter().any(|skill| {
+        skill.alias == *b"L001" && skill.block == Some(crate::playercolor_host::LearnBlock::MaxRank)
+    }));
+    assert!(listed.iter().any(|skill| {
+        skill.alias == *b"L002" && skill.block == Some(crate::playercolor_host::LearnBlock::MaxRank)
+    }));
+    assert!(
+        vm.host()
+            .inner
+            .skills_ready_to_learn(hero_id)
+            .unwrap()
+            .is_empty()
+    );
     learn(&mut vm, *b"L001");
     raise(&mut vm, 1);
     raise(&mut vm, -1);
@@ -995,6 +1025,16 @@ fn hero_learning_updates_the_same_handle_and_respects_levels_points_and_caps() {
             .native("GetHeroSkillPoints", std::slice::from_ref(&normal))
             .unwrap(),
         Value::Int(0)
+    );
+    let Value::Handle(normal_id) = normal else {
+        panic!("normal unit handle: {normal:?}");
+    };
+    assert!(
+        vm.host()
+            .inner
+            .skills_ready_to_learn(normal_id)
+            .unwrap()
+            .is_empty()
     );
     vm.host()
         .inner

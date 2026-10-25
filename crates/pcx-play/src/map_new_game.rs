@@ -80,6 +80,9 @@ impl MapStartupHost {
             ));
         }
         // Occupied game slots are real players; unoccupied slots remain lazy.
+        if let Some(colors) = &roles.player_colors {
+            self.objects_mut().admit_default_player_colors(colors)?;
+        }
         for number in participants {
             self.native("Player", &[Value::Int(*number)])
                 .map_err(MapStartupError::Observation)?;

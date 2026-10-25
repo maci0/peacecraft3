@@ -639,6 +639,7 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
+        self.check_widget_enumeration("CreateDestructable")?;
         self.destructables = Some(Admission {
             max_records: budget.max_records,
             records: 0,

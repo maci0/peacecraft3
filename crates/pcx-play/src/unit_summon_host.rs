@@ -11,7 +11,7 @@ pub(super) struct State {
     order: i32,
     pub(super) ready: BTreeMap<HandleId, f64>,
     pending: BTreeMap<HandleId, f64>,
-    animations: BTreeMap<HandleId, (usize, f64, f64)>,
+    animations: BTreeMap<HandleId, (usize, f64)>,
 }
 
 struct Spell {
@@ -144,31 +144,35 @@ impl ObjectHost {
             return Ok(());
         };
         let started = animation.started;
-        let end = started + f64::from(animation.model.sequences[index].duration()) / 1000.;
         self.summoning
             .as_mut()
             .expect("admitted")
             .animations
-            .insert(unit, (index, started, end));
+            .insert(unit, (index, started));
         Ok(())
     }
 
     fn finish_summon_animations(&mut self, now: f64) -> Result<(), Error> {
-        let due: Vec<_> = self
-            .summoning
-            .as_ref()
-            .expect("admitted")
-            .animations
-            .iter()
-            .filter(|(_, (_, _, end))| now >= *end)
-            .map(|(&unit, &state)| (unit, state))
-            .collect();
-        for (unit, (index, started, _)) in due {
-            self.summoning
-                .as_mut()
-                .expect("admitted")
-                .animations
-                .remove(&unit);
+        let mut due = Vec::new();
+        for (&unit, &(index, started)) in &self.summoning.as_ref().expect("admitted").animations {
+            let finished = match self.inner.entry(unit)? {
+                Entry::Unit { record } => match record.animation.as_ref() {
+                    Some(animation)
+                        if animation.sequence == Some(index) && animation.started == started =>
+                    {
+                        animation
+                            .interval_finished(now)
+                            .map_err(|e| self.summon_error(e))?
+                    }
+                    _ => true,
+                },
+                _ => true,
+            };
+            if finished {
+                due.push((unit, index, started));
+            }
+        }
+        for (unit, index, started) in due {
             if let Entry::Unit { record } = self.inner.entry_mut(unit)?
                 && let Some(animation) = &mut record.animation
                 && animation.sequence == Some(index)
@@ -178,6 +182,11 @@ impl ObjectHost {
                     .select("stand", now, None)
                     .map_err(|e| self.summon_error(e))?;
             }
+            self.summoning
+                .as_mut()
+                .expect("admitted")
+                .animations
+                .remove(&unit);
         }
         Ok(())
     }
@@ -355,6 +364,11 @@ impl ObjectHost {
             .as_ref()
             .filter(|s| s.pending.contains_key(&caster))
             .map(|s| s.order)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_schedule_unit_expiration(&mut self, unit: HandleId, due: f64) {
+        self.unit_expirations.insert(unit, due);
     }
 
     pub(crate) fn advance_unit_expirations(&mut self, now: f64) -> Result<(), Error> {

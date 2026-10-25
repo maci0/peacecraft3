@@ -185,8 +185,9 @@ fn project(
     let presentation = objects.and_then(|o| o.presentation());
     let active = view.active();
     state.blocked = active
-        && presentation
-            .is_some_and(|p| p.ui_enabled == Some(false) || p.control_enabled == Some(false));
+        && (view.menu_open()
+            || presentation
+                .is_some_and(|p| p.ui_enabled == Some(false) || p.control_enabled == Some(false)));
     state.hide_interface = presentation.is_some_and(|p| p.interface_visible == Some(false));
     let has_filter = presentation.is_some_and(|p| p.filter.is_some());
     let changed = presentation

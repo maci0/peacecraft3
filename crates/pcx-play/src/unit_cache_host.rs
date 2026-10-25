@@ -107,7 +107,11 @@ impl ObjectHost {
         if record.combat.as_ref().is_some_and(|c| c.dead) {
             return Err("cannot cache a dead unit".into());
         }
-        let policy = self.inventory_policy(unit).map_err(|e| e.to_string())?;
+        let policy = match self.inventory_policy(unit) {
+            Ok(policy) => Some(policy),
+            Err(error) if error.to_string().contains("inventory not admitted") => None,
+            Err(error) => return Err(error.to_string()),
+        };
         let mut items = Vec::new();
         for (id, item) in self.executed_items() {
             let Some((holder, slot)) = item.held_by else {
@@ -121,6 +125,9 @@ impl ObjectHost {
             {
                 return Err("held item belongs to a different install/edition".into());
             }
+            let Some(policy) = policy else {
+                return Err("unit-cache inventory not admitted".into());
+            };
             if slot >= policy.slots || items.len() >= policy.slots {
                 return Err("unit-cache inventory exceeds admitted slots".into());
             }
@@ -157,6 +164,7 @@ impl ObjectHost {
             permanent_strength: record.permanent_strength,
             pools: [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana].map(f32::to_bits),
             items,
+            rally: record.activity.as_ref().and_then(|activity| activity.rally),
         };
         saved.validate()?;
         Ok(saved)

@@ -39,65 +39,71 @@ impl ObjectHost {
                 [Value::Handle(unit)] => *unit,
                 _ => return Err(self.inner.error(REMOVE, Failure::Signature)),
             };
-            let (shown, position, resource_amount, owner, kind, alive) = match self
-                .inner
-                .entry(unit)
-                .map_err(|e| self.inner.error(REMOVE, e.failure))?
-            {
-                Entry::RemovedUnit { .. } => return Ok(Value::Null),
-                Entry::Unit { record } => (
-                    record.shown,
-                    record.position,
-                    record.resource_amount,
-                    record.owner,
-                    record.definition.rawcode,
-                    super::unit_technology::live(record).ok(),
-                ),
-                _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
-            };
-            self.forget_inventory_unit(unit, true)?;
-            if shown && let Some(placement) = &mut self.unit_placement {
-                placement.hide(unit).map_err(|e| {
-                    self.inner
-                        .error(REMOVE, Failure::UnitPlacement(e.to_string()))
-                })?;
-            }
-            self.forget_unit_guard(unit);
-            self.forget_hidden_unit_ranges(unit);
-            self.forget_unit_activity(unit);
-            self.members.retain(|&(_, member)| member != unit);
-            for entry in &mut self.inner.arena {
-                if let Entry::Effect {
-                    unit: target, live, ..
-                } = entry
-                    && *target == unit
-                {
-                    *live = false;
-                }
-                if let Entry::Unit { record } = entry
-                    && record
-                        .look_at
-                        .as_ref()
-                        .is_some_and(|look| look.target == unit)
-                {
-                    record.look_at = None;
-                }
-            }
-            self.clear_unit_cooldowns(unit);
-            self.forget_unit_buffs(unit);
-            self.forget_divine_shield(unit);
-            let now = self.timer_game_time();
-            let location = now.zip(position);
-            *self.inner.entry_mut(unit)? = Entry::RemovedUnit {
-                owner,
-                kind,
-                alive,
-                location,
-                removed_at: now,
-                resource_amount,
-            };
-            self.purge_harvest_cargo(unit);
-            Ok(Value::Null)
+            self.remove_unit_canonical(unit)
         })())
+    }
+    pub(super) fn remove_unit_canonical(
+        &mut self,
+        unit: pcx_script::HandleId,
+    ) -> Result<Value, Error> {
+        let (shown, position, resource_amount, owner, kind, alive) = match self
+            .inner
+            .entry(unit)
+            .map_err(|e| self.inner.error(REMOVE, e.failure))?
+        {
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            Entry::Unit { record } => (
+                record.shown,
+                record.position,
+                record.resource_amount,
+                record.owner,
+                record.definition.rawcode,
+                super::unit_technology::live(record).ok(),
+            ),
+            _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
+        };
+        self.forget_inventory_unit(unit, true)?;
+        if shown && let Some(placement) = &mut self.unit_placement {
+            placement.hide(unit).map_err(|e| {
+                self.inner
+                    .error(REMOVE, Failure::UnitPlacement(e.to_string()))
+            })?;
+        }
+        self.forget_unit_guard(unit);
+        self.forget_hidden_unit_ranges(unit);
+        self.forget_unit_activity(unit);
+        self.members.retain(|&(_, member)| member != unit);
+        for entry in &mut self.inner.arena {
+            if let Entry::Effect {
+                unit: target, live, ..
+            } = entry
+                && *target == unit
+            {
+                *live = false;
+            }
+            if let Entry::Unit { record } = entry
+                && record
+                    .look_at
+                    .as_ref()
+                    .is_some_and(|look| look.target == unit)
+            {
+                record.look_at = None;
+            }
+        }
+        self.clear_unit_cooldowns(unit);
+        self.forget_unit_buffs(unit);
+        self.forget_divine_shield(unit);
+        let now = self.timer_game_time();
+        let location = now.zip(position);
+        *self.inner.entry_mut(unit)? = Entry::RemovedUnit {
+            owner,
+            kind,
+            alive,
+            location,
+            removed_at: now,
+            resource_amount,
+        };
+        self.purge_harvest_cargo(unit);
+        Ok(Value::Null)
     }
 }

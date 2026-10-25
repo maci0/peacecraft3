@@ -49,10 +49,18 @@ and [attenuation](https://learn.microsoft.com/en-us/windows/win32/direct3d9/atte
 
 Light records, pivots, colours, intensities, track layouts, keys, global clocks
 and budgets are validated before scene construction. Supported lights are
-unparented point lights without node animation, within the source slot budget.
+unparented point lights, within the source slot budget. Authored node transforms
+use the checked joint plan and the same local/global clip sampler as geometry;
+their matrices transform the authored light pivot before vertex illumination.
 Scalar intensity and three-channel light colours reuse the shared animation
 samplers. Visibility currently admits discrete binary step tracks; unsupported
-transforms, fractional visibility and excess-light ranking refuse explicitly.
+parent hierarchies, fractional visibility and excess-light ranking refuse explicitly.
+
+The selected RoC `TutorialCampaign3D.mdx` contains two unparented light nodes
+with translation tracks. They previously refused the whole background. A
+nonstock fixture now tests sampled positions at three clip times and refuses
+a missing global clock. This is source sampling support, not a new native
+lighting or rendered-pixel comparison.
 
 Normals follow the existing position skinner's first-matrix group convention,
 using the inverse transpose and excluding translation. Multi-matrix skinning and

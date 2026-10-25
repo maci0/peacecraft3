@@ -289,3 +289,55 @@ every single-byte block/header corruption, truncations, record values, padding
 and the structural parser cases. Local original gate:
 `PCX_W3G_SAMPLE=<path> cargo test -p pcx-net --test w3g_sample -- --ignored`.
 The sample is never committed.
+
+## Action decode (format only)
+
+`crates/pcx-net/src/w3g_action.rs` is the action decoder. It is not declared
+from `w3g.rs` while another owner holds Cargo. The declaration is
+`#[path = "w3g_action.rs"] pub mod action;`.
+
+The admitted layout is the qualified sample's header fields, game version 29
+and build 6060. Those fields are not a product-version string. The capture
+provenance is the local export receipt
+`.scratch/replay-sample-1/replays/match-1.json` (2026-10-20T15:25:23Z) and the
+matching `actions.ndjson` export entry: 6041 bytes, SHA-256
+`7055a5ac8ef45a8e176d7bb7d9abea9baac597761b47cbfec4e94bd57574f5a7`, source
+`LastReplay.w3g`, executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`. The
+preserved copy is
+`.scratch/integration-preservation-20261021/retained-local-files/pc3-wave20-18/.scratch/replay-sample-1/replays/match-1.w3g`,
+with an identical `LastReplay.w3g` beside it. Empty `TempReplay.w3g` files and
+the 9144-byte all-zero icon replay are not fixtures. A local scan found 47
+`.w3g` paths and 3 nonempty files, of which 2 are that same capture. No
+campaign replay provenance is claimed.
+
+`decode_replay` sums time-slot increments with checked addition and reads each
+command with `content.get(action_range)`, including a hand-built `Replay`.
+One `ActionBudget` counts commands, actions, object pairs, and action bytes
+for the whole replay. An unknown action id fails at that byte. Location words
+stay raw dwords. `0x22` checksum values stay raw: that blocks native checksum
+validation and a new recording, and it does not by itself forbid applying the
+observed actions in a bounded recreation. A container roundtrip is not
+original-client playback.
+
+Playback still has these seams:
+
+- Declare the module and run the structural tests plus the ignored sample gate.
+- Bind each `ObjectId` pair through an explicit checked table or by
+  correlation with units on the pinned map. `PlayerCommandLog` stores
+  canonical `HandleId` values and an `f64` timer clock, including Human01
+  Arthas `2203`. Those are not `.w3g` object bytes or slot increments. Decoding
+  stays separate from that resolution: no cast from `2203` to an object pair,
+  and no assumption that the timer or a 64 Hz step is a native time slot.
+  `save_readiness` refusing `NoInitialSnapshot` is the right refusal for that
+  command log until its own cache or snapshot exists.
+- Reconstruct a native replay's initial world by loading the pinned map,
+  config, player and start settings, and the game-start seed through the
+  existing map startup. A later chapter that restores a hero also needs the
+  authored campaign cache from the mission that saved it (Human01 Prep into
+  Human02). An empty profile is not that campaign. No original campaign input
+  file was found.
+- Convert location dwords to finite world values only at that trust boundary.
+- Qualify the writer by playing the unchanged sample in the original client.
+  That needs a root slot and stays headless and muted. No new launch is
+  required to re-parse this capture.

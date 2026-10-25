@@ -99,8 +99,11 @@ ties are explicit recreation choices. Particle lighting/normals, source
 color transfer, radial fog, additive target-alpha behavior and density/spread
 still require comparison to the original presentation. Bevy Add provides the
 selected additive RGB equation through premultiplication; its target-alpha
-semantics are not claimed identical. SortFarZ, parented/scaled emitters and
-unsupported channels remain reported gaps. The bounded model-space, burst and
+semantics are not claimed identical. A PRE2 emitter whose parent is a bone or
+helper in the model's joint plan is admitted with that plan's pivots and the
+authored ancestor tracks. Standalone admission still refuses every parent.
+Non-identity parent scale, missing parents, SortFarZ and unsupported channels
+remain reported gaps. The bounded model-space, burst and
 animated-rate extension is described below. Tests do not close rendered/native
 fidelity.
 

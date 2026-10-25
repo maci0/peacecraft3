@@ -9,6 +9,19 @@ fn guarded() -> (Vm, HandleId, HandleId) {
     guarded_with_limits(8., 16., 1.)
 }
 
+#[test]
+fn hover_computer_units_share_the_ordinary_guard_state() {
+    let field = column(
+        b"M001",
+        SlkId::UnitData,
+        "movetp",
+        FieldKind::Token,
+        "hover",
+    );
+    let (mut vm, a, _) = guarded_configured(8., 16., 1., None, (&[field], ""), |host| host);
+    assert!(vm.host().inner.guard_state().unwrap().get(a).is_some());
+}
+
 fn guarded_with_limits(distance: f32, maximum: f32, timeout: f32) -> (Vm, HandleId, HandleId) {
     guarded_with_flee(distance, maximum, timeout, None)
 }
@@ -36,19 +49,28 @@ fn guarded_configured(
     source: (&[([u8; 4], ObjectField)], &str),
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId, HandleId) {
-    guarded_configured_with_capacity(distance, maximum, timeout, flee, source, 2, configure)
+    guarded_configured_with_orders(
+        (distance, maximum, timeout),
+        flee,
+        source,
+        2,
+        super::super::activity::rules(),
+        configure,
+    )
 }
 
-fn guarded_configured_with_capacity(
-    distance: f32,
-    maximum: f32,
-    timeout: f32,
+fn guarded_configured_with_orders(
+    (distance, maximum, timeout): (f32, f32, f32),
     flee: Option<(
         crate::campaign_flee_policy::FleePolicy,
         crate::script_numeric::NumericPolicy,
     )>,
     source: (&[([u8; 4], ObjectField)], &str),
     max_units: usize,
+    orders: (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId, HandleId) {
     let extra = format!(
@@ -92,7 +114,7 @@ endglobals
     }
     fields.extend_from_slice(source.0);
     let mut h = position_host_admitting(1000, 16, MAP, &extra, &fields, |h| h);
-    let (registry, activity) = super::super::activity::rules();
+    let (registry, activity) = orders;
     let mut native = crate::unit_guard_rules::tests::fixture(registry.id("beta").unwrap());
     native.image_sha256 = registry.binding().image_sha256;
     h = h

@@ -8,14 +8,14 @@
 //! same mask shifted down by 4. The 14-bit index uses `world_z`
 //! (the measured ground scale). Warsmash divides the same index by 512 and
 //! later multiplies by 128; those are one scale, equal to `world_z`, and are
-//! not a second conversion.
+//! not a second conversion. New runtime callers supply checked source scales.
 //!
 //! The `height` column of the caller-selected `Water.slk` row is added in that
 //! same Warsmash height unit. `SoftwareWaterAndGroundMesh` multiplies
 //! `(waterHeight + heightOffset)` by 128, so the column becomes
 //! `parsed_height * TILE_XY` in this world. The row is not a fixed Human01
 //! record: the caller passes a `waterID`, or the W3E tileset byte
-//! ([`pcx_map::Terrain::default_slot`]) plus the Warsmash suffix `Sha`.
+//! ([`pcx_map::Terrain::default_slot`]) selecting its unique matching source row.
 //! A missing row or an unparsable `height` is an error. Texture frames,
 //! colours, opacity, and the animation clock remain available as borrowed raw
 //! cells; this module does not interpret them.
@@ -65,8 +65,8 @@ pub struct RawWaterCorner<'a> {
 pub enum WaterSelection<'a> {
     /// Match this `waterID` cell exactly.
     Explicit(&'a str),
-    /// Warsmash `tileset + "Sha"` from the W3E tileset byte.
-    TilesetSha,
+    /// The unique source row whose waterID starts with the W3E tileset byte.
+    Tileset,
 }
 
 /// Caps checked before water mesh storage is allocated.
@@ -123,6 +123,19 @@ impl<'a> WaterProfile<'a> {
         selection: WaterSelection<'_>,
         terrain: &Terrain,
     ) -> Result<Self, WaterError> {
+        Self::open_scaled(table, source, selection, terrain, TILE_XY)
+    }
+
+    pub fn open_scaled(
+        table: &'a Table,
+        source: &'a str,
+        selection: WaterSelection<'_>,
+        terrain: &Terrain,
+        tile_size: f32,
+    ) -> Result<Self, WaterError> {
+        if !tile_size.is_finite() || tile_size <= 0.0 {
+            return Err(WaterError::NonFinite);
+        }
         if source.trim().is_empty() {
             return Err(WaterError::EmptySource);
         }
@@ -133,17 +146,21 @@ impl<'a> WaterProfile<'a> {
                 }
                 id.to_string()
             }
-            WaterSelection::TilesetSha => {
+            WaterSelection::Tileset => {
                 let byte = terrain.default_slot();
                 if !byte.is_ascii_alphanumeric() {
                     return Err(WaterError::TilesetByte { byte });
                 }
-                format!("{}Sha", char::from(byte))
+                char::from(byte).to_string()
             }
         };
         let mut found = None;
         for row in table.data_rows() {
-            if row.by_name("waterID") == Some(water_id.as_str()) {
+            let matches = row.by_name("waterID").is_some_and(|id| match selection {
+                WaterSelection::Explicit(_) => id == water_id,
+                WaterSelection::Tileset => id.starts_with(&water_id),
+            });
+            if matches {
                 if found.is_some() {
                     return Err(WaterError::Ambiguous {
                         water_id,
@@ -177,7 +194,7 @@ impl<'a> WaterProfile<'a> {
             field: "height",
             table: source.to_string(),
         })?;
-        let height_offset = height * TILE_XY;
+        let height_offset = height * tile_size;
         if !height.is_finite() || !height_offset.is_finite() {
             return Err(WaterError::MissingField {
                 water_id: water_id.clone(),
@@ -299,6 +316,36 @@ impl<'a> WaterData<'a> {
             return Ok(None);
         };
         Ok(Some(level(corner, profile)?))
+    }
+
+    /// Water surface under a world point. Dry tiles have no surface; the four
+    /// authored levels interpolate without replacing shoreline data with a plane.
+    pub fn sample_surface(
+        &self,
+        x: f32,
+        y: f32,
+        mapping: crate::world::Mapping,
+        height_offset: f32,
+    ) -> Result<Option<f32>, WaterError> {
+        if !height_offset.is_finite() || !x.is_finite() || !y.is_finite() {
+            return Err(WaterError::NonFinite);
+        }
+        let Some(point) = mapping.corner_at(self.terrain, x, y) else {
+            return Ok(None);
+        };
+        let [tx, ty] = point.map(|v| v.floor() as u32);
+        if !tile_wet(self.terrain, tx, ty) {
+            return Ok(None);
+        }
+        let index = crate::world::sample_corners(self.terrain, point, |c| {
+            (c.position_word & WATER_INDEX_MASK) as f32
+        })
+        .ok_or(WaterError::NonFinite)?;
+        let height = mapping.height(index) + height_offset;
+        if !height.is_finite() {
+            return Err(WaterError::NonFinite);
+        }
+        Ok(Some(height))
     }
 
     /// One quad per tile that has at least one water flag. Dry terrain is an

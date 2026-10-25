@@ -158,8 +158,7 @@ fn vulkan_menu_app(label: &str) -> App {
             })
             .disable::<WinitPlugin>()
             .disable::<bevy::log::LogPlugin>()
-            .disable::<bevy::audio::AudioPlugin>()
-            .disable::<bevy::gilrs::GilrsPlugin>(),
+            .disable::<bevy::audio::AudioPlugin>(),
     )
     .add_plugins(crate::menu_composition::MenuCompositionPlugin)
     .add_plugins(crate::mainmenu_scene::ParticleMaterialPlugin)

@@ -22,14 +22,28 @@ pub struct Binding {
     pub two_initializer: SourceWindow,
     pub ground_mask: SourceWindow,
     pub fly_mask: SourceWindow,
+    pub float_mask: SourceWindow,
+    pub amphibious_mask: SourceWindow,
+    pub terrain_xy: SourceWindow,
+    pub terrain_height: SourceWindow,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("unit placement: {0}")]
-pub struct Error(pub String);
+pub struct Error(pub String, bool);
+
+impl Error {
+    pub(crate) fn work_exhausted(&self) -> bool {
+        self.1
+    }
+}
+
+fn work_exhausted(message: &str) -> Error {
+    Error(message.into(), true)
+}
 
 fn fail(message: impl Into<String>) -> Error {
-    Error(message.into())
+    Error(message.into(), false)
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +56,11 @@ pub struct Rules {
     two: f32,
     mask: u8,
     fly: u8,
+    float: u8,
+    amphibious: u8,
+    terrain_xy: f32,
+    height_bias: f32,
+    height_factor: f32,
 }
 
 impl Rules {
@@ -66,9 +85,13 @@ impl Rules {
             binding.two_initializer,
             binding.ground_mask,
             binding.fly_mask,
+            binding.float_mask,
+            binding.amphibious_mask,
+            binding.terrain_xy,
+            binding.terrain_height,
         ];
         if image.len() > budget.image_bytes
-            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 12
+            || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 24
                 > budget.profile_bytes as u64
         {
             return Err(fail("input budget exceeded"));
@@ -171,6 +194,39 @@ impl Rules {
         };
         let ground = mask(&binding.ground_mask, "ground mask")?;
         let fly = mask(&binding.fly_mask, "fly mask")?;
+        let float = mask(&binding.float_mask, "float mask")?;
+        let amphibious = mask(&binding.amphibious_mask, "amphibious mask")?;
+        let masks = [ground, fly, float, amphibious];
+        if masks.iter().any(|m| !m.is_power_of_two())
+            || masks
+                .iter()
+                .enumerate()
+                .any(|(i, m)| masks[..i].contains(m))
+        {
+            return Err(fail("movement masks must be distinct single bits"));
+        }
+        let xy = code(&binding.terrain_xy)?;
+        let height = code(&binding.terrain_height)?;
+        if xy.len() != 8
+            || xy[..4] != [0xf3, 0x0f, 0x59, 0x05]
+            || height.len() != 19
+            || height[..4] != [0xf3, 0x0f, 0x58, 0x05]
+            || height[8..15] != [0xc1, 0xe6, 0x0e, 0xf3, 0x0f, 0x59, 0x05]
+        {
+            return Err(fail("terrain coordinate encoding"));
+        }
+        let terrain_xy = f32::from_bits(data(u32::from_le_bytes(xy[4..8].try_into().unwrap()))?);
+        let height_bias =
+            f32::from_bits(data(u32::from_le_bytes(height[4..8].try_into().unwrap()))?);
+        let height_factor = f32::from_bits(data(u32::from_le_bytes(
+            height[15..19].try_into().unwrap(),
+        ))?);
+        if [terrain_xy, height_bias, height_factor]
+            .iter()
+            .any(|v| !v.is_finite() || *v <= 0.0)
+        {
+            return Err(fail("finite positive terrain coordinate encoding required"));
+        }
         Ok(Self {
             binding,
             exponent,
@@ -180,7 +236,17 @@ impl Rules {
             two,
             mask: ground,
             fly,
+            float,
+            amphibious,
+            terrain_xy,
+            height_bias,
+            height_factor,
         })
+    }
+
+    /// (tile edge, world-height bias, raw indices per world-height unit).
+    pub fn terrain_encoding(&self) -> [f32; 3] {
+        [self.terrain_xy, self.height_bias, self.height_factor]
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -193,6 +259,18 @@ impl Rules {
 
     pub fn fly_mask(&self) -> u8 {
         self.fly
+    }
+
+    pub fn float_mask(&self) -> u8 {
+        self.float
+    }
+
+    pub fn amphibious_mask(&self) -> u8 {
+        self.amphibious
+    }
+
+    pub fn solid_mask(&self) -> u8 {
+        self.mask | self.float | self.amphibious
     }
 
     pub fn binding(&self) -> &Binding {
@@ -325,6 +403,7 @@ pub struct Placement {
     footprint_loader: Option<FootprintLoaderBox>,
     script_paths: Option<ScriptPathsLoader>,
     occupied: Vec<u32>,
+    water_occupied: Vec<u32>,
     footprint_occupied: Vec<u32>,
     stamps: Vec<(HandleId, Prepared)>,
     stationary: BTreeMap<StationaryKey, StationaryLayer>,
@@ -360,10 +439,39 @@ where
 type FootprintLoaderBox = Box<dyn FootprintLoader>;
 type ScriptPathsLoader = Box<dyn Fn(i32, bool) -> Result<String, String> + Send + Sync>;
 
+/// Movement retained by collision and route preparation, independent of model presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Movement {
+    Ground,
+    Air,
+    Float,
+    Amphibious,
+}
+
+impl Movement {
+    pub fn from_token(token: &str) -> Result<Self, &'static str> {
+        match token {
+            "" | "_" | "none" | "foot" | "horse" | "hover" => Ok(Self::Ground),
+            "fly" => Ok(Self::Air),
+            "float" => Ok(Self::Float),
+            "amph" => Ok(Self::Amphibious),
+            _ => Err("movement type is outside admitted placement"),
+        }
+    }
+
+    fn ground(self) -> bool {
+        matches!(self, Self::Ground | Self::Amphibious)
+    }
+
+    fn water(self) -> bool {
+        matches!(self, Self::Float | Self::Amphibious)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Candidate {
     creation: bool,
-    air: bool,
+    movement: Movement,
 }
 
 #[derive(Debug)]
@@ -372,7 +480,13 @@ pub(crate) struct Prepared {
     cells: Vec<usize>,
     footprint: Vec<usize>,
     active: bool,
-    air: bool,
+    movement: Movement,
+}
+
+impl Prepared {
+    pub(crate) fn deactivate(&mut self) {
+        self.active = false;
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +497,10 @@ impl Placement {
     #[cfg(test)]
     pub(crate) fn test_cell(&self, cell: usize) -> u8 {
         self.grid.pathing.cells[cell]
+    }
+
+    pub fn rules(&self) -> &Rules {
+        &self.rules
     }
 
     pub fn source(&self) -> &Source {
@@ -449,6 +567,11 @@ impl Placement {
             .try_reserve_exact(count)
             .map_err(|_| fail("occupancy allocation"))?;
         occupied.resize(count, 0);
+        let mut water_occupied = Vec::new();
+        water_occupied
+            .try_reserve_exact(count)
+            .map_err(|_| fail("water occupancy allocation"))?;
+        water_occupied.resize(count, 0);
         let mut footprint_occupied = Vec::new();
         footprint_occupied
             .try_reserve_exact(count)
@@ -462,6 +585,7 @@ impl Placement {
             footprint_loader: None,
             script_paths: None,
             occupied,
+            water_occupied,
             footprint_occupied,
             stamps: Vec::new(),
             stationary: BTreeMap::new(),
@@ -735,7 +859,7 @@ impl Placement {
         if total > self.budget.stationary_cells {
             return Err(fail("stationary cell budget"));
         }
-        let mask = self.rules.ground_mask();
+        let mask = self.rules.solid_mask();
         if mask == 0 {
             return Err(fail("stationary layer mask"));
         }
@@ -964,7 +1088,7 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
-        self.prepare_class(request, radius, path, face, false)
+        self.prepare_class(request, radius, path, face, Movement::Ground)
     }
 
     pub(crate) fn prepare_class(
@@ -973,7 +1097,7 @@ impl Placement {
         radius: Option<f32>,
         path: &str,
         face: f32,
-        air: bool,
+        movement: Movement,
     ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         self.stamps
@@ -987,7 +1111,7 @@ impl Placement {
             None,
             Candidate {
                 creation: true,
-                air,
+                movement,
             },
         )?
         .ok_or_else(|| fail("creation placement refused"))
@@ -995,20 +1119,34 @@ impl Placement {
 
     #[cfg(test)]
     fn blocked(&self, i: usize, exclude: Option<&Prepared>) -> bool {
-        self.blocked_class(i, exclude, false)
+        self.blocked_class(i, exclude, Movement::Ground)
     }
 
-    fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, air: bool) -> bool {
-        let mask = if air {
-            self.rules.fly_mask()
-        } else {
-            self.rules.ground_mask()
+    fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, movement: Movement) -> bool {
+        let cell = self.grid.pathing.cells[i];
+        let terrain_blocked = match movement {
+            Movement::Ground => cell & self.rules.ground_mask() != 0,
+            Movement::Air => cell & self.rules.fly_mask() != 0,
+            Movement::Float => cell & self.rules.float_mask() != 0,
+            Movement::Amphibious => {
+                cell & self.rules.amphibious_mask() != 0
+                    || (cell & self.rules.ground_mask() != 0 && cell & self.rules.float_mask() != 0)
+            }
         };
-        self.grid.pathing.cells[i] & mask != 0
-            || (!air
+        let occupies = |water: bool| {
+            exclude.is_some_and(|p| {
+                (if water {
+                    p.movement.water()
+                } else {
+                    p.movement.ground()
+                }) && p.cells.binary_search(&i).is_ok()
+            })
+        };
+        terrain_blocked
+            || (movement != Movement::Air
                 && exclude.is_none_or(|p| p.active)
-                && (self.occupied[i]
-                    > u32::from(exclude.is_some_and(|p| p.cells.binary_search(&i).is_ok()))
+                && ((movement.ground() && self.occupied[i] > u32::from(occupies(false)))
+                    || (movement.water() && self.water_occupied[i] > u32::from(occupies(true)))
                     || self.footprint_occupied[i]
                         > u32::from(
                             exclude.is_some_and(|p| p.footprint.binary_search(&i).is_ok()),
@@ -1024,7 +1162,7 @@ impl Placement {
         exclude: Option<&Prepared>,
         options: Candidate,
     ) -> Result<Option<Prepared>, Error> {
-        let Candidate { creation, air } = options;
+        let Candidate { creation, movement } = options;
         if request.iter().any(|v| !v.is_finite()) {
             return Err(fail("nonfinite unit position"));
         }
@@ -1067,8 +1205,10 @@ impl Placement {
                     return Ok(false);
                 }
                 let cells = self.rectangle(cell, extents)?;
-                Ok(cells.iter().all(|&i| !self.blocked_class(i, exclude, air))
-                    && (air
+                Ok(cells
+                    .iter()
+                    .all(|&i| !self.blocked_class(i, exclude, movement))
+                    && (movement != Movement::Ground
                         || self
                             .index(i64::from(cell[0]), i64::from(cell[1]))
                             .is_some_and(|i| self.grid.domains[i] == wanted)))
@@ -1131,7 +1271,10 @@ impl Placement {
         } else {
             Vec::new()
         };
-        if cells.iter().any(|&i| self.occupied[i] == u32::MAX) {
+        if cells.iter().any(|&i| {
+            (movement.ground() && self.occupied[i] == u32::MAX)
+                || (movement.water() && self.water_occupied[i] == u32::MAX)
+        }) {
             return Err(fail("occupancy count overflow"));
         }
         let mut footprint = Vec::new();
@@ -1179,7 +1322,7 @@ impl Placement {
             cells,
             footprint,
             active: exclude.is_none_or(|p| p.active),
-            air,
+            movement,
         }))
     }
 
@@ -1191,9 +1334,14 @@ impl Placement {
             .map(|(_, p)| p)
             .ok_or_else(|| fail("unit occupancy is missing"))?;
         if stamp.active {
-            if !stamp.air {
+            if stamp.movement != Movement::Air {
                 for &i in &stamp.cells {
-                    self.occupied[i] -= 1;
+                    if stamp.movement.ground() {
+                        self.occupied[i] -= 1;
+                    }
+                    if stamp.movement.water() {
+                        self.water_occupied[i] -= 1;
+                    }
                 }
                 for &i in &stamp.footprint {
                     self.footprint_occupied[i] -= 1;
@@ -1213,7 +1361,7 @@ impl Placement {
         path: &str,
         face: f32,
     ) -> Result<Prepared, Error> {
-        self.prepare_show_class(unit, request, radius, path, face, false)
+        self.prepare_show_class(unit, request, radius, path, face, Movement::Ground)
     }
 
     pub(crate) fn prepare_show_class(
@@ -1223,7 +1371,7 @@ impl Placement {
         radius: Option<f32>,
         path: &str,
         face: f32,
-        air: bool,
+        movement: Movement,
     ) -> Result<Prepared, Error> {
         if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
             return Err(fail("hidden unit occupancy required"));
@@ -1237,7 +1385,7 @@ impl Placement {
             None,
             Candidate {
                 creation: false,
-                air,
+                movement,
             },
         )? {
             return Ok(prepared);
@@ -1250,7 +1398,7 @@ impl Placement {
             None,
             Candidate {
                 creation: true,
-                air,
+                movement,
             },
         )?
         .ok_or_else(|| fail("no admitted reveal placement"))
@@ -1263,7 +1411,7 @@ impl Placement {
         radius: Option<f32>,
         path: &str,
         face: f32,
-        air: bool,
+        movement: Movement,
     ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
         let stamp = self
@@ -1280,7 +1428,7 @@ impl Placement {
             Some(stamp),
             Candidate {
                 creation: true,
-                air,
+                movement,
             },
         )?
         .ok_or_else(|| fail("no admitted relocation placement"))
@@ -1309,7 +1457,7 @@ impl Placement {
             Some(stamp),
             Candidate {
                 creation: false,
-                air: stamp.air,
+                movement: stamp.movement,
             },
         )
     }
@@ -1346,7 +1494,7 @@ impl Placement {
             .ceil()
             .max(1.);
         if !steps.is_finite() || steps > *work as f64 {
-            return Err(fail("movement segment work exhausted"));
+            return Err(work_exhausted("movement segment work exhausted"));
         }
         let steps = steps as usize;
         let centre = |p: [i32; 2]| {
@@ -1359,7 +1507,7 @@ impl Placement {
         for n in 1..=steps {
             *work = work
                 .checked_sub(1)
-                .ok_or_else(|| fail("movement segment work exhausted"))?;
+                .ok_or_else(|| work_exhausted("movement segment work exhausted"))?;
             let point = [
                 (f64::from(from[0]) + delta[0] * n as f64 / steps as f64) as f32,
                 (f64::from(from[1]) + delta[1] * n as f64 / steps as f64) as f32,
@@ -1373,7 +1521,7 @@ impl Placement {
                 for p in [[cell[0], previous[1]], [previous[0], cell[1]]] {
                     *work = work
                         .checked_sub(1)
-                        .ok_or_else(|| fail("movement segment work exhausted"))?;
+                        .ok_or_else(|| work_exhausted("movement segment work exhausted"))?;
                     if self.prepare_motion(unit, centre(p), radius)?.is_none() {
                         return Ok(before);
                     }
@@ -1548,7 +1696,7 @@ impl Placement {
             }
         };
         if !charge(work) {
-            return Err(fail("movement route work exhausted"));
+            return Err(work_exhausted("movement route work exhausted"));
         }
         let target_clear = reach == 0.0 && self.prepare_motion(unit, target, radius)?.is_some();
         let start_cell = self.cell(start)?;
@@ -1604,7 +1752,9 @@ impl Placement {
             let mut nearest = f64::INFINITY;
             while let Some(open) = candidates.pop() {
                 if !charge(work) {
-                    return Err(fail("movement route work exhausted proving nearest target"));
+                    return Err(work_exhausted(
+                        "movement route work exhausted proving nearest target",
+                    ));
                 }
                 let point = xy(open.cell);
                 if !isolated.contains(&point)
@@ -1764,20 +1914,30 @@ impl Placement {
 
     pub(crate) fn commit(&mut self, unit: HandleId, prepared: Prepared) {
         let old = self.stamps.iter().position(|(id, _)| *id == unit);
-        if let Some(at) = old
-            && self.stamps[at].1.active
-            && !self.stamps[at].1.air
-        {
-            for &i in &self.stamps[at].1.cells {
-                self.occupied[i] -= 1;
-            }
-            for &i in &self.stamps[at].1.footprint {
-                self.footprint_occupied[i] -= 1;
+        if let Some(at) = old {
+            let stamp = &self.stamps[at].1;
+            if stamp.active && stamp.movement != Movement::Air {
+                for &i in &stamp.cells {
+                    if stamp.movement.ground() {
+                        self.occupied[i] -= 1;
+                    }
+                    if stamp.movement.water() {
+                        self.water_occupied[i] -= 1;
+                    }
+                }
+                for &i in &stamp.footprint {
+                    self.footprint_occupied[i] -= 1;
+                }
             }
         }
-        if prepared.active && !prepared.air {
+        if prepared.active && prepared.movement != Movement::Air {
             for &i in &prepared.cells {
-                self.occupied[i] += 1;
+                if prepared.movement.ground() {
+                    self.occupied[i] += 1;
+                }
+                if prepared.movement.water() {
+                    self.water_occupied[i] += 1;
+                }
             }
             for &i in &prepared.footprint {
                 self.footprint_occupied[i] += 1;

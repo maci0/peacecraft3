@@ -107,8 +107,19 @@ pub(crate) fn publish_with_assets(
     assets: BTreeMap<String, crate::binding::Reply>,
     configure: impl FnOnce(&mut MapStartupInputs),
 ) {
+    publish_with_extra_common(app, script, revision, assets, "", configure);
+}
+
+fn publish_with_extra_common(
+    app: &mut App,
+    script: &str,
+    revision: u64,
+    assets: BTreeMap<String, crate::binding::Reply>,
+    extra: &str,
+    configure: impl FnOnce(&mut MapStartupInputs),
+) {
     let common = format!(
-        "{}\n{QUIT_COMMON}",
+        "{}\n{QUIT_COMMON}\n{extra}",
         super::super::timed_trigger_cases::COMMON
     );
     deliver_timer_with_assets(app, script, revision, &common, assets, |inputs| {
@@ -749,4 +760,36 @@ pub(super) fn score_buttons_refuse_replay_and_dismiss_through_the_pending_reques
     assert!(state.0.is_none(), "OK dismisses the request");
     assert_eq!(press(&mut state, "ScoreScreenOkButton"), None);
     assert_eq!(press(&mut state, "ScoreScreenTabButton0"), None);
+}
+
+#[test]
+fn script_menu_selection_survives_the_same_update_exit_and_is_consumed_once() {
+    let script = QUIT_SCRIPT.replace(
+        "call EndGame(true)",
+        "call SetCampaignMenuRaceEx(27)\ncall EndGame(true)",
+    );
+    let mut app = timer_app();
+    app.init_resource::<Time<Real>>();
+    campaign_runtime::install(
+        &mut app,
+        CampaignRuntime::new(Duration::from_millis(125), 8, 8),
+    );
+    let extra = "type version extends handle\nconstant native ConvertVersion takes integer i returns version\nnative VersionGet takes nothing returns version\nnative SetCampaignMenuRaceEx takes integer index returns nothing\nglobals\nconstant version TEST_CAMPAIGN_VERSION=ConvertVersion(-13)\nendglobals\n";
+    publish_with_extra_common(&mut app, &script, 1, BTreeMap::new(), extra, |inputs| {
+        inputs.enumeration.names.push("ConvertVersion".into());
+        inputs.post_config.version_global = Some("TEST_CAMPAIGN_VERSION".into());
+    });
+    app.update();
+    click_quit(&mut app);
+    app.update();
+    assert!(!session_present(&mut app));
+    let mut exit = app.world_mut().resource_mut::<CampaignExitResult>();
+    assert_eq!(exit.take_campaign_menu_index(), Some(27));
+    assert_eq!(exit.take_campaign_menu_index(), None);
+    let snapshot = exit.take().unwrap();
+    assert!(
+        snapshot.score_screen,
+        "taking the menu request leaves the score handoff intact"
+    );
+    assert_eq!(snapshot.campaign_menu_index, None);
 }

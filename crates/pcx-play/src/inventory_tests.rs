@@ -17,12 +17,15 @@ constant native GetTriggerUnit takes nothing returns unit
 constant native GetTriggerPlayer takes nothing returns player
 constant native GetManipulatingUnit takes nothing returns unit
 constant native GetManipulatedItem takes nothing returns item
+native SetItemVisible takes item i, boolean show returns nothing
+native IsItemVisible takes item i returns boolean
 native CreateItem takes integer i, real x, real y returns item
 native GetItemCharges takes item i returns integer
 native SetItemCharges takes item i, integer c returns nothing
 native RemoveItem takes item i returns nothing
 native UnitHasItem takes unit u, item i returns boolean
 native UnitAddItem takes unit u, item i returns boolean
+native UnitAddItemToSlotById takes unit u, integer itemId, integer itemSlot returns boolean
 native UnitRemoveItem takes unit u, item i returns nothing
 native UnitItemInSlot takes unit u, integer i returns item
 native UnitRemoveItemFromSlot takes unit u, integer i returns item
@@ -267,6 +270,13 @@ impl ObjectCatalog for Items {
             (*b"iusa", "usable", "0"),
         ];
         let mut rows = base.to_vec();
+        if rawcode == *b"T001" {
+            for row in &mut rows {
+                if row.1 == "powerup" {
+                    row.2 = "1";
+                }
+            }
+        }
         if rawcode == *b"W001" {
             rows.extend([
                 (*b"iuse", "uses", "-"),
@@ -309,10 +319,21 @@ impl ObjectCatalog for Items {
 fn open() -> ObjectHost {
     open_with_abilities(true)
 }
+fn open_expr() -> ObjectHost {
+    finish_open(true, true)
+}
 fn open_with_abilities(admit: bool) -> ObjectHost {
+    finish_open(admit, false)
+}
+fn finish_open(admit: bool, expr: bool) -> ObjectHost {
     let declarations = format!("{}\n{}\n{}", enumeration::TRIGGERS, activity::ORDERS, CALLS);
+    let map = if expr {
+        "function Pred takes nothing returns boolean\nreturn true\nendfunction\n"
+    } else {
+        "// inventory"
+    };
     let fields = [(*b"uabi", ability_field("abilList", "L000"))];
-    let h = position_host_admitting(65536, 16, "// inventory", &declarations, &fields, |h| h);
+    let h = position_host_admitting(65536, 16, map, &declarations, &fields, |h| h);
     let tables = tables("2");
     let (registry, activity) = order_inputs();
     let rules = Rules::read(
@@ -351,6 +372,8 @@ fn open_with_abilities(admit: bool) -> ObjectHost {
     } else {
         h
     };
+    let mut visibility = crate::item_visibility::Rules::fixture();
+    visibility.image_sha256 = h.player_client_sha256().unwrap();
     let mut h = h
         .with_item_catalog(
             Arc::new(Items),
@@ -361,6 +384,8 @@ fn open_with_abilities(admit: bool) -> ObjectHost {
                 max_modifications: 0,
             },
         )
+        .unwrap()
+        .with_item_visibility(visibility)
         .unwrap()
         .with_inventory(
             rules,
@@ -1647,4 +1672,259 @@ fn consecutive_sales_deliver_their_own_context_and_never_leak() {
     assert_eq!(h.native("GetSoldItem", &[]).unwrap(), Value::Handle(second));
     h.finish_fired_event();
     assert_eq!(h.native("GetSellingUnit", &[]).unwrap(), Value::Null);
+}
+
+#[test]
+fn item_visibility_shares_inventory_ownership_and_ignores_held_setters() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let first = item(&mut h, 16.);
+    let visible = |h: &mut ObjectHost, item: &Value| {
+        h.native("IsItemVisible", std::slice::from_ref(item))
+            .unwrap()
+    };
+    assert_eq!(visible(&mut h, &first), Value::Bool(true));
+    h.native("SetItemVisible", &[first.clone(), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(visible(&mut h, &first), Value::Bool(false));
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[a.clone(), Value::Str("smart".into()), first.clone()]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    // Scripted insertion is independent of world visibility.
+    assert_eq!(
+        h.native("UnitAddItem", &[a.clone(), first.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    h.native("SetItemVisible", &[first.clone(), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(h.executed_item(id(&first)).unwrap().shown, Some(false));
+    assert_eq!(visible(&mut h, &first), Value::Bool(false));
+    h.native("UnitRemoveItem", &[a, first.clone()]).unwrap();
+    assert_eq!(visible(&mut h, &first), Value::Bool(true));
+    h.native("RemoveItem", std::slice::from_ref(&first))
+        .unwrap();
+    assert_eq!(visible(&mut h, &first), Value::Bool(false));
+    h.native("SetItemVisible", &[first, Value::Bool(true)])
+        .unwrap();
+}
+
+fn slot_call(h: &mut ObjectHost, unit: &Value, rawcode: i32, slot: i32) -> Result<Value, String> {
+    h.native(
+        "UnitAddItemToSlotById",
+        &[unit.clone(), Value::Int(rawcode), Value::Int(slot)],
+    )
+}
+
+const SLOT_RAW: i32 = i32::from_be_bytes(*b"I001");
+
+#[test]
+fn created_item_enters_the_requested_slot_at_the_unit_position() {
+    let mut h = open();
+    let a = unit(&mut h, 48.);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let event = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(-71)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[trigger, player, event, Value::Null],
+    )
+    .unwrap();
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, 1).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        h.native("UnitItemInSlot", &[a.clone(), Value::Int(0)])
+            .unwrap(),
+        Value::Null
+    );
+    let held = h
+        .native("UnitItemInSlot", &[a.clone(), Value::Int(1)])
+        .unwrap();
+    let Value::Handle(item) = held else {
+        panic!("requested slot holds the new item")
+    };
+    let position = h.executed_unit(id(&a)).unwrap().position.unwrap();
+    let record = h.executed_item(item).unwrap();
+    assert_eq!(record.held_by, Some((id(&a), 1)));
+    assert_eq!([record.x, record.y], position);
+    let fired = h.take_fired_event().expect("pickup queued");
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(
+        h.native("UnitItemInSlot", &[a, Value::Int(1)]).unwrap(),
+        Value::Handle(item)
+    );
+    h.finish_fired_event();
+}
+
+#[test]
+fn invalid_or_occupied_slot_leaves_the_new_item_unheld_at_the_unit() {
+    let mut h = open();
+    let a = unit(&mut h, 48.);
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let event = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(-71)])
+        .unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[trigger, player, event, Value::Null],
+    )
+    .unwrap();
+    let position = h.executed_unit(id(&a)).unwrap().position.unwrap();
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, -1).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, 2).unwrap(),
+        Value::Bool(false)
+    );
+    assert!(h.take_fired_event().is_none());
+    let ground: Vec<_> = h
+        .executed_items()
+        .map(|(_, record)| (record.held_by, [record.x, record.y]))
+        .collect();
+    assert_eq!(ground.len(), 2);
+    assert!(
+        ground
+            .iter()
+            .all(|(held, at)| held.is_none() && *at == position)
+    );
+    let filler = item(&mut h, 80.);
+    assert_eq!(
+        h.native("UnitAddItem", &[a.clone(), filler.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    h.take_fired_event().expect("filler pickup");
+    let before = h.executed_items().count();
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, 0).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(h.executed_items().count(), before + 1);
+    assert_eq!(
+        h.native("UnitItemInSlot", &[a.clone(), Value::Int(0)])
+            .unwrap(),
+        filler
+    );
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(
+        h.executed_items()
+            .filter(|(_, record)| record.held_by.is_none())
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn slot_creation_refusals_allocate_no_item() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let handles = h.inner().handles();
+    assert_eq!(
+        h.native(
+            "UnitAddItemToSlotById",
+            &[Value::Null, Value::Int(SLOT_RAW), Value::Int(0)]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.executed_items().count(), 0);
+    h.native("RemoveUnit", std::slice::from_ref(&a)).unwrap();
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, 0).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(h.executed_items().count(), 0);
+
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    for _ in 0..8 {
+        item(&mut h, 32.);
+    }
+    let count = h.executed_items().count();
+    let err = slot_call(&mut h, &a, SLOT_RAW, 0).unwrap_err();
+    assert!(err.contains("item creation"), "{err}");
+    assert_eq!(h.executed_items().count(), count);
+    assert_eq!(
+        h.native("UnitItemInSlot", &[a.clone(), Value::Int(0)])
+            .unwrap(),
+        Value::Null
+    );
+    let err = slot_call(&mut h, &a, i32::from_be_bytes(*b"T001"), 0).unwrap_err();
+    assert!(err.contains("not admitted"), "{err}");
+    assert_eq!(h.executed_items().count(), count);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn unprepared_powerup_does_not_leave_a_ground_item_for_an_invalid_slot() {
+    let mut h = open();
+    let a = unit(&mut h, 48.);
+    assert_eq!(
+        slot_call(&mut h, &a, SLOT_RAW, -1).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(h.executed_items().count(), 1);
+    let err = slot_call(&mut h, &a, i32::from_be_bytes(*b"T001"), -1).unwrap_err();
+    assert!(err.contains("not admitted"), "{err}");
+    assert_eq!(h.executed_items().count(), 1);
+    assert!(h.take_fired_event().is_none());
+}
+
+#[test]
+fn pickup_accepts_a_condition_and_a_filter_before_the_item_is_published() {
+    let mut vm = open_expr().into_vm();
+    let pred = Value::Code(vm.program().function_id("Pred").unwrap());
+    let h = vm.host();
+    let a = unit(h, 24.);
+    let condition = h.native("Condition", std::slice::from_ref(&pred)).unwrap();
+    let filter = h.native("Filter", std::slice::from_ref(&pred)).unwrap();
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    let event = h
+        .native("ConvertPlayerUnitEvent", &[Value::Int(-71)])
+        .unwrap();
+    let condition_trigger = h.native("CreateTrigger", &[]).unwrap();
+    let filter_trigger = h.native("CreateTrigger", &[]).unwrap();
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[
+            condition_trigger.clone(),
+            player.clone(),
+            event.clone(),
+            condition,
+        ],
+    )
+    .unwrap();
+    let existing = item(h, 64.);
+    assert_eq!(
+        h.native("UnitAddItem", &[a.clone(), existing]).unwrap(),
+        Value::Bool(true)
+    );
+    let fired = h.take_fired_event().expect("condition pickup");
+    assert_eq!(Value::Handle(fired.trigger), condition_trigger);
+    h.native(
+        "TriggerRegisterPlayerUnitEvent",
+        &[filter_trigger.clone(), player, event, filter],
+    )
+    .unwrap();
+    assert_eq!(slot_call(h, &a, SLOT_RAW, 1).unwrap(), Value::Bool(true));
+    let first = h.take_fired_event().expect("first slot pickup");
+    let second = h.take_fired_event().expect("second slot pickup");
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(Value::Handle(first.trigger), condition_trigger);
+    assert_eq!(Value::Handle(second.trigger), filter_trigger);
+    let held = h.native("UnitItemInSlot", &[a, Value::Int(1)]).unwrap();
+    assert!(matches!(held, Value::Handle(_)));
 }

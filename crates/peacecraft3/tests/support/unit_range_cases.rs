@@ -168,7 +168,30 @@ pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
     let two_initializer = put(0x2a0, &init(2));
     let ground_mask = put(0x2c0, &[0xb9, 8, 0, 0, 0]);
     let fly_mask = put(0x2e0, &[0xb9, 4, 0, 0, 0]);
-    for (at, value) in [(0x700, -8192.25f32), (0x704, 0.5), (0x708, 1.5)] {
+    let float_mask = put(0x300, &[0xb9, 16, 0, 0, 0]);
+    let amphibious_mask = put(0x310, &[0xb9, 32, 0, 0, 0]);
+    let terrain_xy = put(
+        0x320,
+        &[&[0xf3, 0x0f, 0x59, 0x05][..], &address(0x720).to_le_bytes()].concat(),
+    );
+    let terrain_height = put(
+        0x340,
+        &[
+            &[0xf3, 0x0f, 0x58, 0x05][..],
+            &address(0x724).to_le_bytes(),
+            &[0xc1, 0xe6, 0x0e, 0xf3, 0x0f, 0x59, 0x05],
+            &address(0x728).to_le_bytes(),
+        ]
+        .concat(),
+    );
+    for (at, value) in [
+        (0x720, 20_f32),
+        (0x724, 123_f32),
+        (0x728, 8_f32),
+        (0x700, -8192.25f32),
+        (0x704, 0.5),
+        (0x708, 1.5),
+    ] {
         image[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
     let rules = Rules::read(
@@ -184,6 +207,10 @@ pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
             two_initializer,
             ground_mask,
             fly_mask,
+            float_mask,
+            amphibious_mask,
+            terrain_xy,
+            terrain_height,
         },
         RuleInputBudget {
             image_bytes: 4096,
