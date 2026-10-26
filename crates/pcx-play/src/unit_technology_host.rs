@@ -90,10 +90,9 @@ pub(super) fn live(record: &super::ExecutedUnit) -> Result<bool, &'static str> {
     if record.vitals.is_some_and(|v| !v.life.is_finite()) {
         return Err("unit technology life is not finite");
     }
-    Ok(
-        !record.combat.as_ref().is_some_and(|c| c.dead)
-            && record.vitals.is_none_or(|v| v.life > 0.),
-    )
+    Ok(record.construction.is_none()
+        && !record.combat.as_ref().is_some_and(|c| c.dead)
+        && record.vitals.is_none_or(|v| v.life > 0.))
 }
 
 impl ObjectHost {

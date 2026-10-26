@@ -173,6 +173,52 @@ pub fn prepare_new_game(
             },
         )
     });
+    let construction = (|| {
+        let program = context.scripts.program();
+        let native = program
+            .natives()
+            .get("GetUnitState")
+            .ok_or("construction requires selected GetUnitState")?;
+        if program
+            .natives()
+            .get("CreateUnit")
+            .is_none_or(|create| create.source != native.source)
+        {
+            return Err("construction common declaration sources differ".into());
+        }
+        let common = context
+            .scripts
+            .source(&native.source)
+            .ok_or("construction common source is not retained")?;
+        let numeric = inputs
+            .numeric
+            .as_ref()
+            .ok_or("construction numeric policy is not admitted")?;
+        if numeric.image_sha256() != &crate::neutral_player::sha256(image) {
+            return Err("construction numeric/client identities differ".into());
+        }
+        crate::construction_rules::Rules::read(
+            image,
+            client.clone(),
+            common.as_bytes(),
+            context.sources.common.clone(),
+            &game_profiles,
+            crate::campaign_client::numeric_multiplication(image)?,
+            crate::neutral_player::DiscoveryBudget {
+                image: crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 8 << 20,
+                    sections: 96,
+                },
+                registration_candidates: 100000,
+                work_bytes: 256 << 20,
+            },
+        )
+    })();
+    inputs.resources = inputs
+        .resources
+        .take()
+        .map(|rules| rules.with_construction_rules(construction));
     let activity = activity.with_move_speed_profiles(&game_profiles, 8 << 20)?;
     let hero = inputs
         .hero_skills
@@ -394,13 +440,17 @@ pub fn prepare(
         .map_err(|e| e.to_string())?;
     let (camera_label, camera_origin) =
         campaign_assets::identity(&camera_config, edition, 16 << 10)?;
-    let source = crate::campaign_client::read(
+    let mut source = crate::campaign_client::read(
         image,
         client.clone(),
         &camera_config.bytes,
         camera_origin,
         progression,
     )?;
+    source.hero = source.hero.with_mirror_image(
+        crate::mirror_image_rules::Rules::read(image, client.clone())
+            .and_then(|rules| rules.with_random(&source.random)),
+    );
     let rules = NeutralRuleSet::discover_first_family(
         image,
         client.clone(),
@@ -453,8 +503,17 @@ pub fn prepare(
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        cached_unit_source_maps: cached_unit_source_maps(
+            reader,
+            &map_sources.map_label,
+            &context.sources.map.source,
+        )?,
         unit_decay: None,
         unit_blend: Some(crate::unit_blend::Rules::read(image)?),
+        animation_rarity: Some(crate::unit_animation_rarity::Rules::read(
+            image,
+            client.clone(),
+        )),
         item_visibility: Some(crate::item_visibility::Rules::read(image)?),
         preload: Some(crate::preload::Rules::read(image)?),
         world_bounds: None,
@@ -516,7 +575,16 @@ pub fn prepare(
                     sections: 96,
                 },
             )
-            .map_err(|e| e.to_string())?,
+            .map_err(|e| e.to_string())?
+            .with_assault(crate::campaign_assault_policy::Rules::read(
+                image,
+                &source.numeric,
+                crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 0,
+                    sections: 96,
+                },
+            )),
         ),
         new_heroes_policy: Some(
             crate::campaign_new_heroes_policy::NewHeroesPolicy::read(
@@ -613,6 +681,10 @@ pub fn prepare(
             client.clone(),
         )?),
         dialog_layout: Some(crate::dialog_layout::Rules::reviewed_legacy(
+            image,
+            client.clone(),
+        )?),
+        leaderboard_layout: Some(crate::leaderboard_layout::Rules::reviewed_legacy(
             image,
             client.clone(),
         )?),
@@ -735,6 +807,44 @@ fn enum_contracts(context: &ParsedMapContext) -> Result<EnumContracts, String> {
             expression_work: 4 << 20,
         },
     })
+}
+
+/// Inventory qualification needs no map extraction and preserves the selected layer winner.
+fn cached_unit_source_maps(
+    reader: &Resolver,
+    map_label: &str,
+    map_source: &str,
+) -> Result<Vec<pcx_assets::AssetPath>, String> {
+    // Display labels and external maps need not name a mounted map member.
+    let source = [map_label, map_source].into_iter().find_map(|candidate| {
+        let path = pcx_assets::AssetPath::new(candidate).ok()?;
+        if !(path.as_str().ends_with(".w3m") || path.as_str().ends_with(".w3x")) {
+            return None;
+        }
+        reader.source_for(path.as_str()).ok()
+    });
+    let Some(source) = source else {
+        return Ok(Vec::new());
+    };
+    let mut maps = Vec::new();
+    for (index, path) in reader.paths().enumerate() {
+        if index >= crate::install_source::MAX_LISTED_PATHS {
+            return Err("cached unit source-map inventory exceeds path budget".into());
+        }
+        if !(path.as_str().ends_with(".w3m") || path.as_str().ends_with(".w3x")) {
+            continue;
+        }
+        if reader
+            .source_for(path.as_str())
+            .map_err(|e| e.to_string())?
+            == source
+        {
+            maps.try_reserve(1)
+                .map_err(|_| "cached unit source-map allocation failed")?;
+            maps.push(path.clone());
+        }
+    }
+    Ok(maps)
 }
 
 #[cfg_attr(
@@ -895,6 +1005,12 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
             max_records: 65536,
             shop,
         }),
+        leaderboards: Some(LeaderboardBudget {
+            max_boards: 4096,
+            max_items: 16384,
+            max_assignments: 10000,
+            text_bytes: 4 << 20,
+        }),
         dialogs: Some(DialogBudget {
             max_dialogs: 4096,
             max_buttons: 16384,
@@ -937,6 +1053,84 @@ fn holy_light_art(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_source_maps_follow_the_selected_archive_winner_without_reading_maps() {
+        use pcx_assets::{ArchiveLayer, ContentSource, GameMode, LayerKind, Resolver, SourceInfo};
+        struct Source(SourceInfo, Vec<String>);
+        impl ContentSource for Source {
+            fn info(&self) -> &SourceInfo {
+                &self.0
+            }
+            fn paths(&self) -> Result<Vec<String>, pcx_assets::SourceError> {
+                Ok(self.1.clone())
+            }
+            fn read(
+                &self,
+                _: &str,
+            ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+                panic!("source-map qualification must not extract maps")
+            }
+        }
+        let layer = |priority, id: &str, maps: &[&str]| ArchiveLayer {
+            priority,
+            source: Box::new(Source(
+                SourceInfo {
+                    id: id.into(),
+                    kind: LayerKind::Mpq,
+                    origin: format!("{id}.mpq"),
+                    version: Some(format!("synthetic generation {id}")),
+                },
+                maps.iter().map(|s| (*s).into()).collect(),
+            )),
+        };
+        let reader = Resolver::new(
+            GameMode::default(),
+            None,
+            vec![
+                layer(
+                    1,
+                    "selected",
+                    &["Maps\\A.w3m", "Maps\\B.w3m", "Maps\\C.w3x", "UI/art.blp"],
+                ),
+                layer(2, "foreign", &["Maps\\C.w3x", "Maps\\D.w3m"]),
+            ],
+        )
+        .unwrap();
+        let maps =
+            super::cached_unit_source_maps(&reader, "Maps\\B.w3m", "archive-origin.mpq").unwrap();
+        assert_eq!(
+            maps.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+            ["maps/a.w3m", "maps/b.w3m"]
+        );
+        assert_eq!(
+            super::cached_unit_source_maps(&reader, "Localized Chapter Title", "Maps\\B.w3m")
+                .unwrap(),
+            maps,
+        );
+        for source in [
+            "Maps\\missing.w3m",
+            "Maps\\..\\B.w3m",
+            "UI/art.blp",
+            "/external/map.w3x",
+        ] {
+            assert!(
+                super::cached_unit_source_maps(&reader, "Localized Chapter Title", source)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert!(
+            super::cached_unit_source_maps(&reader, "Maps\\missing.w3m", "archive-origin.mpq")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::cached_unit_source_maps(&reader, "/external/map.w3x", "archive-origin.mpq")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn conversion_names_come_from_selected_constants_and_refuse_ambiguity() {
         let common = |extra: &str| {

@@ -17,8 +17,8 @@ unit or handle. Local clips use the logical game clock, wrap or clamp according
 to SEQS, and preserve the actor's global elapsed clock across clip changes.
 Exact names take precedence; token-prefix variants currently use source order.
 That variant choice is a recreation convention, not established original rarity
-selection or RNG call order. The original engine's implicit seed remains a
-separate open question.
+selection or RNG call order. The engine's implicit animation draw history remains
+a separate open question; explicit rarity selection is qualified below.
 
 `QueueUnitAnimation` appends a resolved sequence index to a bounded per-unit
 FIFO. Name resolution and a fallible queue reservation happen before any logical
@@ -174,3 +174,32 @@ workspace native and production WASM Clippy, native/WASM application builds and
 the standalone graphics all-target check pass. There was no WASM runtime, new GPU
 capture or original-client comparison. Earlier failing fixture/compile/lint logs
 and the still-failing TFT horizon are preserved separately from successful gates.
+
+## Explicit rarity control (2026-10-26)
+
+The optional `SetUnitAnimationWithRarity` capability reads the selected Legacy
+1.29.2.9231 executable registration, wrapper mode operands, tag registry,
+Animprops key, SEQS import-to-runtime weight join, extremum filter and weighted
+selection operands. The reader pins the reviewed executable identity and bounds
+all byte reads. Synthetic relocated pointers and nonstock tags, flags, seed,
+weights and source fields exercise the derivation independently of original data.
+The named SEQS rarity accessor preserves the authored float at its format offset.
+
+The reviewed wrapper's Frequent branch selects the maximum rarity weight; its
+Rare branch selects the minimum starting at the source operand. This apparently
+inverted relationship is retained rather than inferred from the enum names.
+Signed cinematic tags do not count as unmatched ordinary tags. Unit Animprops
+come from resolved profile metadata and object overrides; malformed values refuse.
+Missing values contribute no tags. Ordinary Set and Queue selection are unchanged.
+
+The weighted selector uses the independently initialized model generator, not the
+script primary or secondary stream. It draws even for a single candidate or a
+zero total; the latter chooses the final candidate. Failed preparation commits
+neither animation nor generator state. An authored later Set, including a timer
+callback, overrides the explicit rarity selection normally.
+
+Shortcut: ordinary implicit animation selections do not yet consume this model
+stream. Replace that isolated history after those consumers and their draw timing
+are qualified; explicit rarity draws are deterministic but do not establish
+whole-scene native visual lockstep. The local original model gate verifies parsed
+weights and selection relationships, not rendered animation or mission completion.

@@ -27,7 +27,7 @@ impl ObjectHost {
             mana_cost,
             mana: unit.vitals.map(|vitals| vitals.mana),
             cooldown_remaining: ready_at.map_or(0.0, |due| (due - now).max(0.0)),
-            paused: unit.paused_since.is_some(),
+            paused: unit.paused_since.is_some() || unit.construction.is_some(),
         }
     }
 }
@@ -208,6 +208,15 @@ pub struct UnitAbilities {
     pub(super) cooldowns: Vec<([u8; 4], i32, u32)>,
 }
 impl UnitAbilities {
+    pub(crate) fn mirror_snapshot(&self) -> Self {
+        Self {
+            hero: None,
+            levels: self.levels.clone(),
+            learnable: Vec::new(),
+            cooldowns: Vec::new(),
+        }
+    }
+
     pub(crate) fn cooldowns(&self) -> &[([u8; 4], i32, u32)] {
         &self.cooldowns
     }
@@ -351,6 +360,19 @@ impl ObjectHost {
             .heroes
             .as_ref()
             .map(|input| input.rules.hero_alias)
+    }
+    pub(crate) fn admitted_mirror_rules(
+        &self,
+    ) -> Option<Result<Arc<crate::mirror_image_rules::Rules>, String>> {
+        Some(
+            self.units
+                .as_ref()?
+                .heroes
+                .as_ref()?
+                .rules
+                .mirror_image
+                .clone(),
+        )
     }
     pub(crate) fn hero_initial_level(&self) -> Option<i32> {
         self.units
@@ -651,6 +673,9 @@ impl ObjectHost {
             return Ok(Value::Int(0));
         }
         let record = self.created_unit(unit, name)?;
+        if record.illusion.is_some() {
+            return Ok(Value::Int(0));
+        }
         let state = record
             .abilities
             .as_ref()
@@ -724,6 +749,13 @@ impl ObjectHost {
                 ));
             }
             return Ok(Value::Int(level));
+        }
+        if record.illusion.is_some() {
+            return Ok(if name == LEVEL || name == POINTS {
+                Value::Int(0)
+            } else {
+                Value::Null
+            });
         }
         if name == LEVEL {
             let level = if let Some(hero) = &state.hero {

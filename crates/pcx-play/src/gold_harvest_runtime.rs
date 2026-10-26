@@ -2,6 +2,23 @@
 use super::*;
 
 impl ObjectHost {
+    pub(super) fn start_auto_gold_harvest(&mut self, unit: HandleId) -> Result<Value, Error> {
+        let record = self.executed_unit(unit)?;
+        if !record.shown
+            || record.paused_since.is_some()
+            || record.combat.as_ref().is_some_and(|combat| combat.dead)
+        {
+            return Ok(Value::Bool(false));
+        }
+        let position = record
+            .position
+            .ok_or_else(|| self.harvest_error("accepted worker position required"))?;
+        let Some(mine) = self.select_gold_mine(position)? else {
+            return Ok(Value::Bool(false));
+        };
+        self.start_gold_harvest(unit, mine)
+    }
+
     pub(super) fn start_gold_harvest(
         &mut self,
         unit: HandleId,
@@ -153,6 +170,7 @@ impl ObjectHost {
             route,
             animation,
         } = prepared;
+        self.interrupt_unit_construction(worker.unit)?;
         self.commit_steer_unit(worker.unit, route, HARVEST_ORDER)?;
         if let Some(animation) = animation
             && let Entry::Unit { record } = self.inner.entry_mut(worker.unit)?
@@ -174,7 +192,7 @@ impl ObjectHost {
     }
 
     fn gold_mine(&self, mine: HandleId) -> Result<Option<([f32; 2], GoldMineRules)>, Error> {
-        let Some(position) = self.gold_mine_position(mine)? else {
+        let Some(position) = self.gold_mine_position(mine, false)? else {
             return Ok(None);
         };
         let record = self.executed_unit(mine)?;
@@ -185,12 +203,16 @@ impl ObjectHost {
         Ok(rules.map(|rules| (position, rules)))
     }
 
-    fn gold_mine_position(&self, mine: HandleId) -> Result<Option<[f32; 2]>, Error> {
+    fn gold_mine_position(
+        &self,
+        mine: HandleId,
+        retained: bool,
+    ) -> Result<Option<[f32; 2]>, Error> {
         let record = match self.executed_unit(mine) {
             Ok(record) => record,
             Err(_) => return Ok(None),
         };
-        if !record.shown
+        if (!retained && !record.shown)
             || record.combat.as_ref().is_some_and(|c| c.dead)
             || !record.resource_amount.is_some_and(|amount| amount > 0)
         {
@@ -234,7 +256,7 @@ impl ObjectHost {
         position: [f32; 2],
     ) -> Result<(), Error> {
         let old = worker.gold.as_ref().expect("gold task").mine;
-        let mine = if self.gold_mine_position(old)?.is_some() {
+        let mine = if self.gold_mine_position(old, true)?.is_some() {
             Some(old)
         } else {
             self.select_gold_mine(position)?
@@ -247,7 +269,8 @@ impl ObjectHost {
         };
         let (target, rules) = if mine == old {
             (
-                self.gold_mine_position(mine)?.expect("selected live mine"),
+                self.gold_mine_position(mine, true)?
+                    .expect("selected live mine"),
                 worker.gold.as_ref().expect("gold task").rules.clone(),
             )
         } else {
@@ -280,9 +303,17 @@ impl ObjectHost {
             if now < worker.next_hit {
                 return Ok(());
             }
-            let source = self.executed_unit(mine)?;
-            if !source.shown || source.combat.as_ref().is_some_and(|combat| combat.dead) {
-                return Err(self.harvest_error("occupied mine removal/death is not qualified"));
+            let source = self.executed_unit(mine).map_err(|error| {
+                self.harvest_error(format!(
+                    "occupied mine removal is not qualified: worker {:?}, mine {:?}: {error}",
+                    worker.unit, mine,
+                ))
+            })?;
+            if source.combat.as_ref().is_some_and(|combat| combat.dead) {
+                return Err(self.harvest_error(format!(
+                    "occupied mine death is not qualified: worker {:?}, mine {:?}",
+                    worker.unit, mine,
+                )));
             }
             let amount = source
                 .resource_amount
@@ -299,9 +330,13 @@ impl ObjectHost {
             let from = reveal
                 .position
                 .ok_or_else(|| self.harvest_error("accepted exit position required"))?;
-            let depot = self
-                .select_depot(worker.unit, worker.owner, from, &worker.rules, true)?
-                .ok_or_else(|| self.harvest_error("no gold-accepting depot at mine exit"))?;
+            let depot = match worker.depot {
+                Some(depot) if self.usable_retained_depot(depot, worker.owner, true)? => Some(depot),
+                _ => self.select_depot(worker.unit, worker.owner, from, &worker.rules, true)?,
+            }.ok_or_else(|| self.harvest_error(format!(
+                "no gold-accepting depot at mine exit: worker {:?}, exit {:?}, acquisition radius {}, previous depot {:?}",
+                worker.unit, from, worker.rules.search_radius, worker.depot,
+            )))?;
             let target = self.unit_position(depot)?;
             let reach = self.depot_reach(depot, &worker.rules)?;
             let route = self
@@ -328,7 +363,7 @@ impl ObjectHost {
             }
             return Ok(());
         }
-        let Some(target) = self.gold_mine_position(mine)? else {
+        let Some(target) = self.gold_mine_position(mine, true)? else {
             return self.seek_gold(worker, position);
         };
         let rules = &gold.rules;

@@ -34,6 +34,26 @@ const BUDGET: RuleInputBudget = RuleInputBudget {
     sections: 96,
 };
 
+/// The same admitted multiplication role used by numeric and construction readers.
+pub fn numeric_multiplication(image: &[u8]) -> Result<SourceWindow, String> {
+    if image.len() > BUDGET.image_bytes || sha256(image) != crate::menu_lighting::REVIEWED_IMAGE {
+        return Err("unsupported numeric multiplication client".into());
+    }
+    let pe = Pe::parse(image, BUDGET).map_err(|e| e.to_string())?;
+    let va = 0x99ffe0;
+    let len = 195;
+    let bytes = pe
+        .read_from(va, true)
+        .map_err(|e| e.to_string())?
+        .get(..len as usize)
+        .ok_or("truncated numeric multiplication")?;
+    Ok(SourceWindow {
+        va,
+        len,
+        digest: sha256(bytes),
+    })
+}
+
 pub fn unit_activity(
     image: &[u8],
     origin: AssetIdentity,
@@ -190,7 +210,7 @@ pub fn read(
     let image_sha256 = crate::menu_lighting::REVIEWED_IMAGE;
     let math_sub = window(0x9a00b0, 264, true)?;
     let math_add = window(0x9a01c0, 262, true)?;
-    let math_mul = window(0x99ffe0, 195, true)?;
+    let math_mul = numeric_multiplication(image)?;
     let math_lzcnt = window(0x9a0330, 29, true)?;
     let math_i32_to_real = window(0x9a1620, 92, true)?;
     let math = crate::script_math::Binding {

@@ -25,12 +25,15 @@ pub struct EventSubject {
     pub player_state: Option<HandleId>,
     /// Target of the spell whose effect fired the event (`GetSpellTargetUnit`).
     pub spell_target: Option<HandleId>,
+    pub spell_ability: Option<i32>,
+    pub mirror: Option<super::unit_mirror_image::MirrorEventContext>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
     pub sale: Option<SaleContext>,
     pub summon: Option<SummonContext>,
     pub hero: Option<HeroEvent>,
     pub trained: Option<HandleId>,
     pub trained_type: Option<i32>,
+    pub construction: Option<super::unit_construction::Context>,
 }
 
 /// Units captured when a summoning effect creates a unit.
@@ -83,7 +86,10 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 25] = [
+const RESPONSES: [&str; 30] = [
+    "GetConstructingStructure",
+    "GetConstructedStructure",
+    "GetCancelledStructure",
     "GetTrainedUnit",
     "GetTrainedUnitType",
     "GetSummoningUnit",
@@ -93,6 +99,8 @@ const RESPONSES: [&str; 25] = [
     "GetLearnedSkill",
     "GetLearnedSkillLevel",
     "GetSpellTargetUnit",
+    "GetSpellAbilityId",
+    "GetSpellAbilityUnit",
     "GetTriggerUnit",
     "GetSellingUnit",
     "GetSoldItem",
@@ -315,6 +323,8 @@ impl ObjectHost {
         {
             // No delivery means no finish call, so the powerup settles here.
             self.settle_powerup_item(fired.subject.item);
+            self.settle_construction_event(fired.subject.construction);
+            self.settle_mirror_event(fired.subject.mirror);
             return Ok(None);
         }
         let delivery = self.trigger_delivery(fired.trigger, name)?;
@@ -346,11 +356,15 @@ impl ObjectHost {
             state.event_context = previous.as_ref().and_then(|context| context.event);
         }
         let item = self.events.subject.item;
+        let construction = self.events.subject.construction;
+        let mirror = self.events.subject.mirror;
         self.events.subject = previous
             .as_ref()
             .map_or_else(EventSubject::default, |context| context.subject);
         self.events.active = previous.is_some_and(|context| context.active);
         self.settle_powerup_item(item);
+        self.settle_construction_event(construction);
+        self.settle_mirror_event(mirror);
     }
 
     /// Consumes a claimed powerup once no pickup event for that item is still queued.
@@ -370,6 +384,55 @@ impl ObjectHost {
         {
             record.consumed = true;
         }
+    }
+
+    pub(super) fn mirror_event_pending(
+        &self,
+        context: super::unit_mirror_image::MirrorEventContext,
+    ) -> bool {
+        self.events
+            .queue
+            .iter()
+            .any(|e| e.subject.mirror == Some(context))
+            || self
+                .events
+                .synchronous
+                .as_ref()
+                .is_some_and(|q| q.iter().any(|e| e.subject.mirror == Some(context)))
+            || self
+                .synchronous_frames
+                .iter()
+                .any(|f| f.events.iter().any(|e| e.subject.mirror == Some(context)))
+            || (self.events.active && self.events.subject.mirror == Some(context))
+            || self
+                .events
+                .previous
+                .iter()
+                .any(|e| e.active && e.subject.mirror == Some(context))
+    }
+    pub(crate) fn has_queued_mirror_events(&self) -> bool {
+        self.events.queue.iter().any(|e| e.subject.mirror.is_some())
+    }
+
+    pub(super) fn construction_event_pending(
+        &self,
+        context: super::unit_construction::Context,
+    ) -> bool {
+        self.events
+            .queue
+            .iter()
+            .any(|e| e.subject.construction == Some(context))
+            || self
+                .events
+                .synchronous
+                .as_ref()
+                .is_some_and(|q| q.iter().any(|e| e.subject.construction == Some(context)))
+            || (self.events.active && self.events.subject.construction == Some(context))
+            || self
+                .events
+                .previous
+                .iter()
+                .any(|e| e.active && e.subject.construction == Some(context))
     }
 
     pub(super) fn event_response_native(
@@ -395,6 +458,30 @@ impl ObjectHost {
             }
         }
         let subject = self.events.subject;
+        if name == "GetSpellAbilityId" {
+            return Some(Ok(Value::Int(subject.spell_ability.unwrap_or(0))));
+        }
+        if matches!(
+            name,
+            "GetConstructingStructure" | "GetConstructedStructure" | "GetCancelledStructure"
+        ) {
+            let result = (|| {
+                Self::contract(&self.inner, name, &[], "unit", true, None)?;
+                if native.source != self.unit_declaration()?.0 {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                let phase = match name {
+                    "GetConstructingStructure" => super::unit_construction::Phase::Start,
+                    "GetConstructedStructure" => super::unit_construction::Phase::Finish,
+                    _ => super::unit_construction::Phase::Cancel,
+                };
+                Ok(subject
+                    .construction
+                    .filter(|c| c.phase == phase)
+                    .map_or(Value::Null, |c| Value::Handle(c.site)))
+            })();
+            return Some(result);
+        }
         if matches!(name, "GetTrainedUnit" | "GetTrainedUnitType") {
             let result = if name == "GetTrainedUnit" {
                 "unit"

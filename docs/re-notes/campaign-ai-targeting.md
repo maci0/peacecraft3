@@ -184,3 +184,49 @@ the red program's next `SetUnitsFlee` call at 7.218750 seconds, through
 remains failing; no campaign completion is claimed. Receipts are local under
 `.scratch/campaign-targeting-root-review/integration-*.log`.
 Final receipts are under the same directory's `final/` subdirectory.
+
+## Normal-difficulty peon channel band
+
+The later Human02 victory route reached a real acquisition refusal after its
+construction/production prefix: the scorer rejected every nonempty candidate
+set whenever either optional gate was enabled. Its stopped log and partial-tick
+receipt remain local under `human02-victory-1`. No candidate identity, attacker
+rawcode or current difficulty was captured by that run, so those were not inferred
+from its handle or timing.
+
+The existing selected-image `native_default_fallback` reader establishes the
+no-profile input used by campaign admission. The explicit source test records
+that fallback alongside the independently decoded hero, peon and damage gates.
+The peon gate is enabled there; the higher damage/class gate is not. The legacy
+`optional_level_*` field names are retained for compatibility, but their native
+condition is peon classification plus a channel/activity category, not hero level.
+
+The additional bounded join validates the source IsUnitType class table and its
+shared classification field, then the named CAbilitySpell and CAbilityRepair
+vtables. Their shared channel activation supplies the same category tested by
+the scorer. The category setter constructs a private message, whose dispatch
+copies its argument into the candidate field. The ordinary initial category is
+independently read and must differ. Helper/name/message addresses, masks,
+category and enum association are read from the selected image; no observed game
+rule is substituted as a production constant. The existing image/edition pin
+and checked code/data mappings remain mandatory, and dynamic reads consume the
+same declared input budget. Synthetic inputs relocate helpers and vary operands;
+malformed class, category, message, field, truncation and exact-budget cases refuse.
+
+The canonical consumer now ORs the admitted band for a source-classified peon
+with an existing active channel: timed summon casting or actual Human repair
+construction participation. A reserved approach alone is not participation.
+STOP, cancellation, interruption and completion use the existing canonical
+lifecycle; there is no targeting-owned cast or worker store. Instant spell
+operations have no retained channel in the current canonical model. Additional
+cast/backswing models must connect their real channel lifetime when implemented;
+this slice does not establish full native channel timing or arbitrary custom
+peon spell coverage. Harvesting alone does not earn the spell-channel band.
+
+Focused tests compare a farther participating worker against a nearer ordinary
+candidate through public point-build, STOP, repair, cancel and completion. A real
+public harvest regression verifies exclusion. Ordinary nearest/newest ties and
+hero policy remain intact. Higher-difficulty damage/class terms, competing hero
+lower bands, neutral-aggressive and effect-history cases retain their explicit
+refusals. This completes the enabled Normal peon-band slice, not the complete
+native acquisition scorer or the actual Human02 victory playthrough.

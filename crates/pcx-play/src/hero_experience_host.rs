@@ -35,6 +35,9 @@ impl ObjectHost {
             return Err(self.hero_error(name, "XP unit identity required".into()));
         };
         let record = self.created_unit(*unit, name)?;
+        if record.illusion.is_some() {
+            return Ok(null());
+        }
         let Some(hero) = record.abilities.as_ref().and_then(|a| a.hero.as_ref()) else {
             return Ok(null());
         };

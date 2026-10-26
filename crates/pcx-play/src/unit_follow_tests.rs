@@ -72,7 +72,29 @@ fn follow_retains_its_target_at_source_range_and_resumes_when_the_target_moves()
         let mut vm = opened(false);
         let a = unit(&vm, "A");
         let b = unit(&vm, "B");
+        assert_eq!(
+            vm.host()
+                .inner
+                .executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .follow_range(),
+            None
+        );
         assert_eq!(follow(&mut vm, a, b, numeric), Value::Bool(true));
+        assert_eq!(
+            vm.host()
+                .inner
+                .executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .follow_range(),
+            Some(12.0)
+        );
         tick(&mut vm, 2.0);
         assert_eq!(position(&mut vm, a), [32.0, 16.0]);
         tick(&mut vm, 6.5);
@@ -95,6 +117,17 @@ fn follow_retains_its_target_at_source_range_and_resumes_when_the_target_moves()
             .native("RemoveUnit", &[Value::Handle(b)])
             .unwrap();
         tick(&mut vm, 10.0);
+        assert_eq!(
+            vm.host()
+                .inner
+                .executed_unit(a)
+                .unwrap()
+                .activity
+                .as_ref()
+                .unwrap()
+                .follow_range(),
+            None
+        );
         assert_eq!(target(&mut vm, a), None);
         assert_eq!(position(&mut vm, a), [76.0, 16.0]);
         assert_eq!(current(&mut vm, a), Value::Int(0));
@@ -375,5 +408,47 @@ fn blocked_follow_keeps_stand_animation_running_and_recovers_when_unblocked() {
         .native("RemoveUnit", &[Value::Handle(east.unwrap())])
         .unwrap();
     tick(&mut vm, 5.0);
+    assert_eq!(
+        position(&mut vm, a),
+        stop,
+        "the post-projection search grants no elapsed travel"
+    );
+    tick(&mut vm, 6.0);
     assert!(position(&mut vm, a)[0] > stop[0]);
+}
+
+#[test]
+fn deferred_follow_refresh_does_not_credit_the_wait_as_travel() {
+    let mut vm = opened(false);
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    assert_eq!(follow(&mut vm, a, b, false), Value::Bool(true));
+    tick(&mut vm, 8.0);
+    let before = position(&mut vm, a);
+    vm.host()
+        .inner
+        .native("SetUnitPathing", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    vm.host()
+        .inner
+        .native(
+            "SetUnitPosition",
+            &[Value::Handle(b), Value::Real(100.0), Value::Real(16.0)],
+        )
+        .unwrap();
+    let host = &mut vm.host().inner;
+    host.next_timer_expiry(9.0, &mut 1000).unwrap();
+    host.advance_unit_activity(9.0, &mut 1).unwrap();
+    assert_eq!(position(&mut vm, a), before);
+    assert_eq!(target(&mut vm, a), Some(b));
+    tick(&mut vm, 10.0);
+    assert_eq!(position(&mut vm, a), before);
+    let speed = move_speed(&mut vm, a);
+    tick(&mut vm, 11.0);
+    let after = position(&mut vm, a);
+    assert!(after[0] > before[0]);
+    assert!(
+        after[0] - before[0] <= speed,
+        "only one moving interval is credited"
+    );
 }

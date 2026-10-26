@@ -40,6 +40,9 @@ impl ObjectHost {
             holy.ready_at.remove(&unit);
         }
         self.clear_chain_cooldown(unit);
+        if let Some(mirror) = &mut self.mirror_image {
+            mirror.ready.remove(&unit);
+        }
         if let Some(summoning) = &mut self.summoning {
             summoning.ready.remove(&unit);
         }
@@ -100,6 +103,27 @@ impl ObjectHost {
         }
         if let Some(answer) = self.chain_bound_cooldown(unit, ability, end)? {
             return Ok(answer);
+        }
+        if self.mirror_alias(ability) {
+            let ready = &mut self
+                .mirror_image
+                .as_mut()
+                .expect("bound Mirror class")
+                .ready;
+            let deadline = if end {
+                ready.remove(&unit)
+            } else {
+                ready.get(&unit).copied()
+            };
+            if end {
+                return Ok(Value::Null);
+            }
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.hero_error(name, "clock missing".into()))?;
+            return Ok(Value::Real(
+                deadline.map_or(0.0, |at| (at - now).max(0.0) as f32),
+            ));
         }
         // Visibility, death and player availability do not replace the wrapper's unit/ability gate.
         let admitted = match &ability {
@@ -173,18 +197,100 @@ impl ObjectHost {
             .map(|cell| cell.text.trim().to_owned()))
     }
 
+    pub(crate) fn unranked_build_menu_command(
+        &self,
+        ability: [u8; 4],
+    ) -> Result<crate::playercolor_host::BuildMenuCommand, String> {
+        let (tables, overlay) = match self.unit_ability_source() {
+            Some(source) => source,
+            None => {
+                let input = self.heroes_admission()?;
+                (&*input.tables, &input.overlay)
+            }
+        };
+        let profile = |key| -> Result<String, String> {
+            match crate::ability_profile::profiles(tables, overlay, ability, key)?.as_slice() {
+                [one] => Ok(one.clone()),
+                [] => Err(format!("{ability:?}: missing {key} profile")),
+                _ => Err(format!("{ability:?}: ambiguous {key} profile")),
+            }
+        };
+        let position = crate::ability_profile::button_position(tables, overlay, ability)?;
+        let art = profile("Art")?;
+        let hotkeys = crate::ability_profile::profiles(tables, overlay, ability, "Hotkey")?;
+        let hotkey = match hotkeys.as_slice() {
+            [] => None,
+            [one] => {
+                let mut letters = one.chars();
+                let key = letters
+                    .next()
+                    .filter(char::is_ascii_alphabetic)
+                    .ok_or("invalid build-menu hotkey")?;
+                if letters.next().is_some() {
+                    return Err("invalid build-menu hotkey".into());
+                }
+                Some(key)
+            }
+            _ => return Err("ambiguous build-menu hotkey".into()),
+        };
+        let tooltip = (|| {
+            Ok(crate::ability_profile::Tooltip {
+                title: super::tooltip::expand(&profile("Tip")?, |row, field| {
+                    self.tooltip_value(row, field)
+                })?,
+                description: super::tooltip::expand(&profile("Ubertip")?, |row, field| {
+                    self.tooltip_value(row, field)
+                })?,
+            })
+        })();
+        Ok(crate::playercolor_host::BuildMenuCommand {
+            ability,
+            art,
+            position,
+            hotkey,
+            tooltip,
+        })
+    }
+
     pub(crate) fn ability_data_text(&self, alias: [u8; 4], column: &str) -> Result<String, String> {
-        let input = self.heroes_admission()?;
-        let (base, _) = crate::ability_profile::base(&input.tables, &input.overlay, alias)?;
-        Ok(input
-            .tables
+        let (tables, overlay) = match self.unit_ability_source() {
+            Some(source) => source,
+            None => {
+                let input = self.heroes_admission()?;
+                (&*input.tables, &input.overlay)
+            }
+        };
+        let (base, mods) = crate::ability_profile::base(tables, overlay, alias)?;
+        let metadata = tables.editor().fields().iter().filter(|field| field.from == SlkId::AbilityMetaData)
+            .filter(|field| matches!(&field.source, FieldSource::Column { slk: SlkId::AbilityData, column: key } if key == column))
+            .collect::<Vec<_>>();
+        if metadata.len() > 1 {
+            return Err(format!("{alias:?}: ambiguous {column} metadata"));
+        }
+        if let Some(field) = metadata.first()
+            && let Some(entry) = mods.iter().rev().find(|entry| entry.field == field.fourcc)
+        {
+            if field.kind != FieldKind::Token
+                || field.index != -1
+                || entry.selectors.is_some_and(|selectors| selectors != [0, 0])
+            {
+                return Err(format!("{alias:?}: indexed or non-token {column} override"));
+            }
+            let pcx_objects::Value::Str(text) = &entry.value else {
+                return Err(format!("{alias:?}: non-string {column} override"));
+            };
+            return std::str::from_utf8(text)
+                .map(|text| text.trim().to_owned())
+                .map_err(|_| format!("{alias:?}: non-UTF8 {column} override"));
+        }
+        let cell = tables
             .object(pcx_objects::editor::defaults::Family::Ability, base)
-            .map_err(|e| e.to_string())?
-            .cell(pcx_objects::editor::SlkId::AbilityData, column)
-            .map_err(|e| e.to_string())?
-            .text
-            .trim()
-            .to_owned())
+            .map_err(|why| why.to_string())?
+            .cell(SlkId::AbilityData, column)
+            .map_err(|why| why.to_string())?;
+        cell.typed(FieldKind::Token)
+            .map_err(|why| why.to_string())?;
+        Ok(cell.text.trim().to_owned())
     }
 
     pub(crate) fn custom_ability_aliases(&self) -> Result<Vec<CustomAbilityAlias>, String> {
@@ -312,6 +418,7 @@ impl ObjectHost {
             b"AHds" => self.divine_shield.rules.is_some(),
             _ => false,
         } && !self.chain_alias_is_bound(ability)
+            && !self.mirror_alias(ability)
         {
             return Err(fail(
                 "duration behavior for this present ability is not admitted",

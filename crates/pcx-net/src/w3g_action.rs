@@ -1,8 +1,5 @@
 //! Action bytes inside one `.w3g` command block.
 //!
-//! Not declared from `w3g.rs` while another owner holds Cargo. The declaration,
-//! once that window is free, is `#[path = "w3g_action.rs"] pub mod action;`.
-//!
 //! Lengths follow the public post-1.14 action notes and were checked by
 //! consuming every nonempty command in the qualified local sample, whose
 //! header fields are game version 29 and build 6060. An id this module does
@@ -208,10 +205,10 @@ impl<'a> Input<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], ActionError> {
-        let end = self
-            .at
-            .checked_add(n)
-            .ok_or(ActionError::Truncated { at: self.at, need: n })?;
+        let end = self.at.checked_add(n).ok_or(ActionError::Truncated {
+            at: self.at,
+            need: n,
+        })?;
         let slice = self.bytes.get(self.at..end).ok_or(ActionError::Truncated {
             at: self.at,
             need: n,
@@ -227,9 +224,7 @@ impl<'a> Input<'a> {
 
     fn u32(&mut self) -> Result<u32, ActionError> {
         let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3],
-        ]))
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
     fn item(&mut self) -> Result<[u8; 4], ActionError> {
@@ -253,10 +248,7 @@ impl<'a> Input<'a> {
         usage: &mut Usage,
         budget: &ActionBudget,
     ) -> Result<ObjectId, ActionError> {
-        let next = usage
-            .objects
-            .checked_add(1)
-            .ok_or(ActionError::Capacity)?;
+        let next = usage.objects.checked_add(1).ok_or(ActionError::Capacity)?;
         if next > budget.max_objects {
             return Err(ActionError::Budget {
                 limit: BudgetLimit::Objects,
@@ -301,18 +293,22 @@ impl<'a> Input<'a> {
     }
 }
 
-fn admit_command(usage: &mut Usage, budget: &ActionBudget, nbytes: usize) -> Result<(), ActionError> {
-    let commands = usage
-        .commands
-        .checked_add(1)
-        .ok_or(ActionError::Capacity)?;
+fn admit_command(
+    usage: &mut Usage,
+    budget: &ActionBudget,
+    nbytes: usize,
+) -> Result<(), ActionError> {
+    let commands = usage.commands.checked_add(1).ok_or(ActionError::Capacity)?;
     if commands > budget.max_commands {
         return Err(ActionError::Budget {
             limit: BudgetLimit::Commands,
             allowed: budget.max_commands,
         });
     }
-    let bytes = usage.bytes.checked_add(nbytes).ok_or(ActionError::Capacity)?;
+    let bytes = usage
+        .bytes
+        .checked_add(nbytes)
+        .ok_or(ActionError::Capacity)?;
     if bytes > budget.max_bytes {
         return Err(ActionError::Budget {
             limit: BudgetLimit::Bytes,
@@ -340,10 +336,7 @@ fn decode_body(
     let mut input = Input { bytes, at: 0 };
     let mut actions = Vec::new();
     while input.at < bytes.len() {
-        let next = usage
-            .actions
-            .checked_add(1)
-            .ok_or(ActionError::Capacity)?;
+        let next = usage.actions.checked_add(1).ok_or(ActionError::Capacity)?;
         if next > budget.max_actions {
             return Err(ActionError::Budget {
                 limit: BudgetLimit::Actions,
@@ -399,12 +392,14 @@ fn decode_body(
                     0x02 => SelectMode::Remove,
                     _ => return Err(ActionError::Unsupported { at, id }),
                 };
-                let objects = input.objects(input.u16()?, usage, budget)?;
+                let count = input.u16()?;
+                let objects = input.objects(count, usage, budget)?;
                 Action::Selection { mode, objects }
             }
             0x17 => {
                 let group = group_number(at, id, input.u8()?)?;
-                let objects = input.objects(input.u16()?, usage, budget)?;
+                let count = input.u16()?;
+                let objects = input.objects(count, usage, budget)?;
                 Action::AssignGroup { group, objects }
             }
             0x18 => {
@@ -423,6 +418,7 @@ fn decode_body(
             other => return Err(ActionError::Unsupported { at, id: other }),
         };
         usage.actions = next;
+        actions.try_reserve(1).map_err(|_| ActionError::Capacity)?;
         actions.push(action);
     }
     Ok(actions)
@@ -476,6 +472,7 @@ pub fn decode_replay(
                 .get(command.action.clone())
                 .ok_or(ActionError::Range)?;
             admit_command(&mut usage, &budget, bytes.len())?;
+            timed.try_reserve(1).map_err(|_| ActionError::Capacity)?;
             timed.push(TimedActions {
                 time_ms,
                 player_id: command.player_id,
@@ -621,10 +618,7 @@ mod tests {
         point.extend_from_slice(&100u32.to_le_bytes());
         point.extend_from_slice(&200u32.to_le_bytes());
         let actions = decode_actions(&point, version(), budget()).unwrap();
-        assert!(matches!(
-            actions[0],
-            Action::Point { x: 100, y: 200, .. }
-        ));
+        assert!(matches!(actions[0], Action::Point { x: 100, y: 200, .. }));
 
         let mut group = vec![0x17, 0x00];
         group.extend_from_slice(&le16(1));
@@ -675,21 +669,19 @@ mod tests {
     fn replay_budget_is_not_reset_per_command() {
         let replay = hand_replay(
             vec![0x01, 0x01],
-            vec![
-                Record::TimeSlot {
-                    time_increment: 10,
-                    commands: vec![
-                        Command {
-                            player_id: 1,
-                            action: 0..1,
-                        },
-                        Command {
-                            player_id: 1,
-                            action: 1..2,
-                        },
-                    ],
-                },
-            ],
+            vec![Record::TimeSlot {
+                time_increment: 10,
+                commands: vec![
+                    Command {
+                        player_id: 1,
+                        action: 0..1,
+                    },
+                    Command {
+                        player_id: 1,
+                        action: 1..2,
+                    },
+                ],
+            }],
         );
         let tight = ActionBudget {
             max_commands: 2,
@@ -765,7 +757,7 @@ mod tests {
 
     #[test]
     fn slot_increment_addition_is_checked() {
-        let records = (0..65_537)
+        let records = (0..65_538)
             .map(|_| Record::TimeSlot {
                 time_increment: u16::MAX,
                 commands: Vec::new(),

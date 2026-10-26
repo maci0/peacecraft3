@@ -1,6 +1,10 @@
 use super::*;
 
 const EVENTS: &str = r#"
+constant native GetPlayerStructureCount takes player p, boolean includeIncomplete returns integer
+constant native GetConstructingStructure takes nothing returns unit
+constant native GetConstructedStructure takes nothing returns unit
+constant native GetCancelledStructure takes nothing returns unit
 constant native GetTrainedUnit takes nothing returns unit
 constant native GetTrainedUnitType takes nothing returns integer
 constant native SetPlayerTechMaxAllowed takes player p, integer kind, integer maximum returns nothing
@@ -9,6 +13,14 @@ constant native SetPlayerTechResearched takes player p, integer kind, integer le
 constant native GetPlayerTechResearched takes player p, integer kind, boolean specific returns boolean
 constant native GetPlayerTechCount takes player p, integer kind, boolean specific returns integer
 globals
+constant unitevent EVENT_UNIT_CHANGE_OWNER=ConvertUnitEvent(266)
+constant playerunitevent EVENT_PLAYER_UNIT_CHANGE_OWNER=ConvertPlayerUnitEvent(267)
+constant real bj_UNIT_FACING=0.0
+constant playerunitevent EVENT_PLAYER_UNIT_CONSTRUCT_START=ConvertPlayerUnitEvent(226)
+constant playerunitevent EVENT_PLAYER_UNIT_CONSTRUCT_CANCEL=ConvertPlayerUnitEvent(227)
+constant playerunitevent EVENT_PLAYER_UNIT_CONSTRUCT_FINISH=ConvertPlayerUnitEvent(228)
+constant unitevent EVENT_UNIT_CONSTRUCT_CANCEL=ConvertUnitEvent(164)
+constant unitevent EVENT_UNIT_CONSTRUCT_FINISH=ConvertUnitEvent(165)
 constant unitevent EVENT_UNIT_TRAIN_START=ConvertUnitEvent(78)
 constant unitevent EVENT_UNIT_TRAIN_FINISH=ConvertUnitEvent(79)
 constant unitevent EVENT_UNIT_TRAIN_CANCEL=ConvertUnitEvent(80)
@@ -66,6 +78,30 @@ fn fixture_with_training(
     heroes: bool,
     script: &str,
 ) -> (Vm, HandleId, HandleId) {
+    fixture_with_training_configured(
+        overrides,
+        capacity,
+        refund_rate,
+        admit_numeric,
+        orders,
+        heroes,
+        (script, |host| host),
+    )
+}
+
+fn fixture_with_training_configured(
+    overrides: &[([u8; 4], ObjectField)],
+    capacity: usize,
+    refund_rate: f32,
+    admit_numeric: bool,
+    orders: (
+        std::sync::Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+    heroes: bool,
+    source: (&str, impl FnOnce(ObjectHost) -> ObjectHost),
+) -> (Vm, HandleId, HandleId) {
+    let (script, configure) = source;
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
         profile_field(b"T002", "Requires", "techList", ""),
@@ -112,8 +148,25 @@ fn fixture_with_training(
             resources.image_sha256 = *numeric.image_sha256();
             let mut training = crate::training_rules::Rules::fixture(3, refund_rate);
             training.image_sha256 = resources.image_sha256;
+            training.ai_production = Ok(crate::campaign_production_rules::Rules::fixture(
+                resources.image_sha256,
+                5,
+            ));
             resources.training = Ok(training);
             resources.unit_cost = Ok(crate::player_unit_cost::Policy::fixture(17, b'J', b'Q', 3));
+            let construction = crate::construction_rules::Rules {
+                origin: resources.origin.clone(),
+                common_origin: resources.origin.clone(),
+                image_sha256: resources.image_sha256,
+                common_sha256: [7; 32],
+                profile_sources: vec!["synthetic construction".into()],
+                initial_life_fraction: 0.23,
+                human_build_ability: *b"ZYX9",
+                refund_rate: 0.37,
+                damage_refund_penalty: true,
+                life_drain_rate: 4.25,
+            };
+            resources = resources.with_construction_rules(Ok(construction));
             let h = if admit_numeric {
                 h.with_script_numeric(numeric)
             } else {
@@ -134,7 +187,7 @@ fn fixture_with_training(
                     max_records: 8,
                 })
                 .unwrap();
-            if heroes { admit_fixture_heroes(h) } else { h }
+            configure(if heroes { admit_fixture_heroes(h) } else { h })
         },
     );
     let h = &mut vm.host().inner;
@@ -1286,12 +1339,12 @@ fn admit_fixture_heroes(h: ObjectHost) -> ObjectHost {
             install: origin.source.clone(),
             edition_version: origin.version.clone(),
         },
-        &[],
-        &[],
+        &[("Units\\AbilityMetaData.slk", b"ID;PWXL;N;E\r\nB;Y3;X9\r\nC;X1;Y1;K\"ID\"\r\nC;X2;Y1;K\"field\"\r\nC;X3;Y1;K\"slk\"\r\nC;X4;Y1;K\"index\"\r\nC;X5;Y1;K\"type\"\r\nC;X6;Y1;K\"category\"\r\nC;X7;Y1;K\"repeat\"\r\nC;X8;Y1;K\"appendIndex\"\r\nC;X9;Y1;K\"data\"\r\nC;X1;Y2;K\"Mpx1\"\r\nC;X2;Y2;K\"Buttonpos\"\r\nC;X3;Y2;K\"Profile\"\r\nC;X4;Y2;K\"0\"\r\nC;X5;Y2;K\"int\"\r\nC;X6;Y2;K\"art\"\r\nC;X7;Y2;K\"0\"\r\nC;X8;Y2;K\"0\"\r\nC;X9;Y2;K\"\"\r\nC;X1;Y3;K\"Mpy1\"\r\nC;X2;Y3;K\"Buttonpos\"\r\nC;X3;Y3;K\"Profile\"\r\nC;X4;Y3;K\"1\"\r\nC;X5;Y3;K\"int\"\r\nC;X6;Y3;K\"art\"\r\nC;X7;Y3;K\"0\"\r\nC;X8;Y3;K\"0\"\r\nC;X9;Y3;K\"\"\r\nE\r\n"), ("Units\\AbilityData.slk", b"ID;PWXL;N;E\r\nB;Y2;X2\r\nC;X1;Y1;K\"alias\"\r\nC;X2;K\"race\"\r\nC;X1;Y2;K\"ZYX9\"\r\nC;X2;K\"fixture\"\r\nE\r\n")],
+        &[("Units\\HumanAbilityFunc.txt", b"[ZYX9]\nArt=fixture/menu.blp\nButtonpos=3,1\nHotkey=W\nTip=Source menu\nUbertip=Source description\n")],
         pcx_objects::editor::EditorReadLimits {
-            max_listed_paths: 0,
-            max_asset_bytes: 1 << 10,
-            max_aggregate_input_bytes: 1 << 10,
+            max_listed_paths: 3,
+            max_asset_bytes: 4 << 10,
+            max_aggregate_input_bytes: 4 << 10,
         },
     )
     .unwrap();
@@ -1427,4 +1480,465 @@ fn a_restored_producer_keeps_its_rally_and_trains_toward_it() {
             .rally,
         Some(rally)
     );
+}
+
+#[path = "unit_construction_tests.rs"]
+mod construction;
+
+struct AiProductionCatalog(Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>);
+impl pcx_sim::world::ObjectCatalog for AiProductionCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.0.resolve(code)?;
+        if code != *b"b001" {
+            definition.fields.get_mut(b"T001").unwrap().value = Ok(FieldValue::Cell("".into()));
+        }
+        definition.fields.get_mut(b"F001").unwrap().value = Ok(FieldValue::Cell(
+            if code == *b"b001" { "1" } else { "0" }.into(),
+        ));
+        Ok(definition)
+    }
+}
+fn ai_production_fixture() -> (Vm, HandleId, HandleId) {
+    ai_production_fixture_with(&[])
+}
+fn ai_production_fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
+    fixture_with_training_configured(
+        overrides,
+        4,
+        0.37,
+        true,
+        super::super::super::activity::rules(),
+        false,
+        (EVENTS, |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(AiProductionCatalog(catalog)));
+            host
+        }),
+    )
+}
+
+#[test]
+fn ai_production_uses_paid_canonical_queue_and_preserves_partial_acceptance() {
+    let (mut vm, actor, producer) = ai_production_fixture();
+    let start = vm.global("EVENT_PLAYER_UNIT_TRAIN_START");
+    let finish = vm.global("EVENT_PLAYER_UNIT_TRAIN_FINISH");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    for event in [start, finish] {
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[trigger.clone(), Value::Handle(owner), event, Value::Null],
+        )
+        .unwrap();
+    }
+    let kind = i32::from_be_bytes(*b"u001");
+    let handles = h.inner().handles();
+    assert!(!h.set_ai_produce(4, 3, kind, -1).unwrap());
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 8);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 68);
+    assert_eq!(h.ai_unit_count(4, kind, false).unwrap(), 3);
+    assert_eq!(h.ai_unit_count(4, kind, true).unwrap(), 1);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+    observe_event(h, producer, None);
+    step(&mut vm, 9.);
+    let h = &mut vm.host().inner;
+    let trained = h
+        .executed_units()
+        .find(|(id, r)| *id != actor && r.definition.rawcode == *b"u001")
+        .unwrap()
+        .0;
+    assert_eq!(h.executed_unit(trained).unwrap().owner, owner);
+    // Completion and activation publish two events; both refer to the same producer.
+    let mut events = 0;
+    while let Some(event) = h.take_fired_event() {
+        h.begin_fired_event(&event).unwrap();
+        assert_eq!(
+            h.native("GetTriggerUnit", &[]).unwrap(),
+            Value::Handle(producer)
+        );
+        h.finish_fired_event();
+        events += 1;
+    }
+    assert_eq!(events, 2);
+    assert_eq!(h.ai_unit_count(4, kind, true).unwrap(), 2);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 8);
+}
+
+#[test]
+fn ai_production_rejects_invalid_quantity_and_unsupported_requests_without_spending() {
+    let (mut vm, actor, _) = ai_production_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let kind = i32::from_be_bytes(*b"u001");
+    for quantity in [-1, 0, 6] {
+        assert!(!h.set_ai_produce(4, quantity, kind, -1).unwrap());
+    }
+    assert!(h.set_ai_produce(4, 1, kind, 0).is_err());
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"b001"), -1)
+            .is_err()
+    );
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"J001"), -1)
+            .is_err()
+    );
+    assert!(h.set_ai_produce(3, 1, kind, -1).is_err());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    assert!(h.next_training_completion(100.).is_none());
+}
+
+#[test]
+fn ai_production_skips_paused_dead_and_foreign_producers() {
+    let (mut vm, actor, producer) = ai_production_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let kind = i32::from_be_bytes(*b"u001");
+    h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(true)])
+        .unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(false)])
+        .unwrap();
+    let other = h.native("Player", &[Value::Int(3)]).unwrap();
+    let controller = h
+        .native("GetPlayerController", &[Value::Handle(owner)])
+        .unwrap();
+    h.native("SetPlayerController", &[other.clone(), controller])
+        .unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(producer), other, Value::Bool(false)],
+    )
+    .unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(producer),
+            Value::Handle(owner),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+}
+
+#[test]
+fn ai_production_full_queue_preserves_accepted_prefix_and_tech_food_refusals() {
+    let (mut vm, actor, _) = ai_production_fixture_with(&[column(
+        b"T003",
+        SlkId::UnitBalance,
+        "goldcost",
+        FieldKind::Int,
+        "10",
+    )]);
+    let food = vm.global("PLAYER_STATE_RESOURCE_FOOD_CAP");
+    let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let kind = i32::from_be_bytes(*b"u001");
+    h.native(
+        "SetPlayerTechMaxAllowed",
+        &[Value::Handle(owner), Value::Int(kind), Value::Int(0)],
+    )
+    .unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    h.native(
+        "SetPlayerTechMaxAllowed",
+        &[Value::Handle(owner), Value::Int(kind), Value::Int(9)],
+    )
+    .unwrap();
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), food.clone(), Value::Int(6)],
+    )
+    .unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), food, Value::Int(40)],
+    )
+    .unwrap();
+    h.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), gold, Value::Int(1000)],
+    )
+    .unwrap();
+    assert!(!h.set_ai_produce(4, 4, kind, -1).unwrap());
+    assert_eq!(h.ai_unit_count(4, kind, false).unwrap(), 4);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 70);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 9);
+}
+
+#[test]
+fn intermediate_optional_routing_cannot_starve_later_guard_training_projection() {
+    let run = |mandatory_first| {
+        let (mut vm, actor, producer) = fixture();
+        let start = vm.global("EVENT_PLAYER_UNIT_TRAIN_START");
+        let finish = vm.global("EVENT_PLAYER_UNIT_TRAIN_FINISH");
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(actor).unwrap().owner;
+        let trigger = host.native("CreateTrigger", &[]).unwrap();
+        for event in [start, finish] {
+            host.native(
+                "TriggerRegisterPlayerUnitEvent",
+                &[trigger.clone(), Value::Handle(owner), event, Value::Null],
+            )
+            .unwrap();
+        }
+        host.set_ai_replacement_count(4, 4).unwrap();
+        host.native(
+            "IssuePointOrder",
+            &[
+                Value::Handle(producer),
+                Value::Str("gamma".into()),
+                Value::Real(16.),
+                Value::Real(16.),
+            ],
+        )
+        .unwrap();
+        host.native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"d001")),
+                Value::Real(80.),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap();
+        host.next_timer_expiry(10., &mut 1000).unwrap();
+        let mut work = 128;
+        if mandatory_first {
+            host.advance_unit_activity_mandatory(10., &mut work)
+                .unwrap();
+            assert!(work > 0, "intermediate optional search must wait");
+        } else {
+            host.advance_unit_activity(10., &mut work).unwrap();
+            assert_eq!(
+                work, 0,
+                "the previous schedule spends the shared allowance early"
+            );
+        }
+        let after_first = work;
+        // The intervening AI wake removes a post occupant and enqueues actual paid
+        // guard replacement training; no constructor or ready-made replacement.
+        host.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+        host.fill_ai_guard_posts(4).unwrap();
+        let paid = [
+            bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+        ];
+        assert_eq!(paid, [49, 74]);
+        observe_event(host, producer, None);
+        host.next_timer_expiry(10.125, &mut 1000).unwrap();
+        let later = host.advance_unit_activity_mandatory(10.125, &mut work);
+        if !mandatory_first {
+            assert!(
+                later
+                    .unwrap_err()
+                    .to_string()
+                    .contains("training work budget")
+            );
+            return (after_first, work, None);
+        }
+        later.unwrap();
+        assert_eq!(host.unit_training_queue(producer).unwrap().len(), 1);
+        let before_optional = work;
+        host.flush_unit_activity_routes(10.125, &mut work).unwrap();
+        assert!(work <= before_optional);
+        let after_optional = work;
+        host.flush_unit_activity_routes(10.125, &mut work).unwrap();
+        assert_eq!(work, after_optional, "deferred witnesses are consumed once");
+        host.fill_ai_guard_posts(4).unwrap();
+        assert_eq!(
+            [
+                bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+                bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER")
+            ],
+            paid
+        );
+        step(&mut vm, 19.);
+        let host = &mut vm.host().inner;
+        let unit = host
+            .executed_units()
+            .find_map(|(unit, record)| {
+                (unit != actor && record.definition.rawcode == *b"u001").then_some(unit)
+            })
+            .expect("canonical training creates the replacement");
+        assert!(host.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(
+            [
+                bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+                bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER")
+            ],
+            paid
+        );
+        observe_event(host, producer, Some(unit));
+        assert!(
+            host.take_fired_event().is_none(),
+            "START and FINISH each occur once"
+        );
+        (
+            after_first,
+            after_optional,
+            host.executed_unit(unit).unwrap().position,
+        )
+    };
+    run(false);
+    assert_eq!(
+        run(true),
+        run(true),
+        "shared work, paid completion and placement are deterministic"
+    );
+}
+
+#[test]
+fn mandatory_training_still_refuses_a_genuinely_undersized_shared_allowance() {
+    let (mut vm, actor, producer) = fixture();
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(actor).unwrap().owner;
+    host.set_ai_replacement_count(4, 4).unwrap();
+    host.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    host.fill_ai_guard_posts(4).unwrap();
+    let queue = host.unit_training_queue(producer).unwrap();
+    let handles = host.inner().handles();
+    host.next_timer_expiry(1., &mut 1000).unwrap();
+    let error = host
+        .advance_unit_activity_mandatory(1., &mut 0)
+        .unwrap_err();
+    assert!(error.to_string().contains("training work budget"));
+    assert_eq!(host.unit_training_queue(producer).unwrap(), queue);
+    assert_eq!(host.inner().handles(), handles);
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 74);
+}
+
+#[test]
+fn deferred_route_witness_does_not_override_an_intervening_manual_stop() {
+    let (mut vm, actor, producer) = fixture();
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(actor).unwrap().owner;
+    host.native(
+        "IssuePointOrder",
+        &[
+            Value::Handle(producer),
+            Value::Str("gamma".into()),
+            Value::Real(16.),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            Value::Handle(owner),
+            Value::Int(i32::from_be_bytes(*b"d001")),
+            Value::Real(80.),
+            Value::Real(16.),
+            Value::Real(0.),
+        ],
+    )
+    .unwrap();
+    host.next_timer_expiry(10., &mut 1000).unwrap();
+    let mut work = 128;
+    host.advance_unit_activity_mandatory(10., &mut work)
+        .unwrap();
+    assert_eq!(
+        host.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(producer), Value::Int(744)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let before = work;
+    host.flush_unit_activity_routes(10., &mut work).unwrap();
+    assert_eq!(
+        work, before,
+        "stale motion witness must not start another search"
+    );
+    assert_eq!(
+        host.native("GetUnitCurrentOrder", &[Value::Handle(producer)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert!(
+        !host
+            .executed_unit(producer)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving()
+    );
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+}
+
+#[test]
+fn repeated_subwake_witnesses_are_bounded_and_a_later_fault_discards_them() {
+    let (mut vm, actor, producer) = fixture();
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(actor).unwrap().owner;
+    host.native(
+        "IssuePointOrder",
+        &[
+            Value::Handle(producer),
+            Value::Str("gamma".into()),
+            Value::Real(16.),
+            Value::Real(16.),
+        ],
+    )
+    .unwrap();
+    host.native(
+        "CreateUnit",
+        &[
+            Value::Handle(owner),
+            Value::Int(i32::from_be_bytes(*b"d001")),
+            Value::Real(80.),
+            Value::Real(16.),
+            Value::Real(0.),
+        ],
+    )
+    .unwrap();
+    let mut work = 128;
+    for tick in 80..=88 {
+        let now = f64::from(tick) / 8.;
+        host.next_timer_expiry(now, &mut 1000).unwrap();
+        host.advance_unit_activity_mandatory(now, &mut work)
+            .unwrap();
+        assert_eq!(
+            host.deferred_unit_activity_route_count(),
+            1,
+            "repeated queued units replace their witness rather than accumulate"
+        );
+        assert!(host.deferred_unit_activity_route_count() <= host.inner().handles());
+    }
+    host.set_ai_replacement_count(4, 4).unwrap();
+    host.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    host.fill_ai_guard_posts(4).unwrap();
+    let queue = host.unit_training_queue(producer).unwrap();
+    host.next_timer_expiry(11.125, &mut 1000).unwrap();
+    assert!(
+        host.advance_unit_activity_mandatory(11.125, &mut 0)
+            .unwrap_err()
+            .to_string()
+            .contains("training work budget")
+    );
+    assert_eq!(
+        host.deferred_unit_activity_route_count(),
+        0,
+        "failed projection must not leave optional work for a later retry"
+    );
+    assert_eq!(
+        host.unit_training_queue(producer).unwrap(),
+        queue,
+        "cleanup discards witnesses, not committed training effects"
+    );
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
 }

@@ -40,6 +40,7 @@ pub(crate) struct CampaignInput {
     pub last_error: Option<String>,
     /// A command armed by its hotkey, waiting for a target click in the session that armed it.
     pub command: Option<ArmedCommand>,
+    pub build: Option<crate::campaign_build_ui::Intent>,
     /// Accepted player commands of the prepared session, in clock order.
     pub commands: PlayerCommandLog,
 }
@@ -106,7 +107,10 @@ struct CommandControls<'w> {
 fn command_button(
     controls: CommandControls,
     actions: Res<crate::button_actions::ButtonActions>,
-    buttons: Query<&crate::campaign_command_card::ButtonOrder>,
+    buttons: Query<
+        &crate::campaign_command_card::ButtonOrder,
+        Without<bevy::ui::InteractionDisabled>,
+    >,
     mut input: ResMut<CampaignInput>,
     mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
@@ -142,7 +146,27 @@ fn command_button(
         {
             continue;
         }
+        input.build = None;
         let result = match button.kind {
+            crate::campaign_command_card::Kind::CancelConstruction => {
+                cancel_construction(host, &mut input, button.unit);
+                continue;
+            }
+            crate::campaign_command_card::Kind::BuildMenu
+            | crate::campaign_command_card::Kind::Build(_)
+            | crate::campaign_command_card::Kind::BuildCancel => {
+                if let Err(error) = activate_build(
+                    host,
+                    &mut input,
+                    &mut card,
+                    button.unit,
+                    button.kind,
+                    button.session.clone(),
+                ) {
+                    input.last_error = Some(error);
+                }
+                continue;
+            }
             crate::campaign_command_card::Kind::TargetUnit => {
                 match (
                     objects.holy_light_command(button.unit),
@@ -213,11 +237,93 @@ fn command_button(
                 | crate::campaign_command_card::Kind::Train(_)
                 | crate::campaign_command_card::Kind::SkillMenu
                 | crate::campaign_command_card::Kind::SkillCancel
-                | crate::campaign_command_card::Kind::Learn(_) => unreachable!("handled above"),
+                | crate::campaign_command_card::Kind::Learn(_)
+                | crate::campaign_command_card::Kind::BuildMenu
+                | crate::campaign_command_card::Kind::Build(_)
+                | crate::campaign_command_card::Kind::BuildCancel
+                | crate::campaign_command_card::Kind::CancelConstruction => {
+                    unreachable!("handled above")
+                }
             },
             Err(error) => input.last_error = Some(error.to_string()),
             Ok(None) => {}
         }
+    }
+}
+
+fn cancel_construction(host: &mut MapStartupHost, input: &mut CampaignInput, site: HandleId) {
+    input.command = None;
+    input.build = None;
+    let objects = host.objects_mut();
+    let clock = objects.timer_game_time();
+    match objects.cancel_unit_construction(site) {
+        Ok(true) => record_command(input, clock, PlayerCommand::CancelConstruction { site }),
+        Ok(false) => {}
+        Err(error) => input.last_error = Some(error.to_string()),
+    }
+}
+
+fn activate_build(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    card: &mut crate::campaign_command_card::CommandCard,
+    worker: HandleId,
+    kind: crate::campaign_command_card::Kind,
+    session: Weak<()>,
+) -> Result<(), String> {
+    use crate::campaign_command_card::Kind;
+    input.command = None;
+    input.build = None;
+    match kind {
+        Kind::BuildMenu => {
+            if host
+                .objects()
+                .unit_build_menu_command(worker)
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {
+                card.open_builds();
+            }
+        }
+        Kind::Build(kind) => {
+            input.build =
+                crate::campaign_build_ui::Intent::arm(host.objects(), worker, kind, session)?;
+        }
+        Kind::BuildCancel => card.close_skills(),
+        _ => return Err("not a building command".into()),
+    }
+    Ok(())
+}
+
+/// Shared by the live ground click and headless command-surface tests.
+pub(crate) fn place_build(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    session: Option<&Weak<()>>,
+    point: [f32; 2],
+) -> Result<bool, String> {
+    let Some(intent) = input.build.take() else {
+        return Ok(false);
+    };
+    let objects = host.objects_mut();
+    let clock = objects.timer_game_time();
+    if let Some(accepted) = intent.commit(objects, session, point)? {
+        record_command(
+            input,
+            clock,
+            PlayerCommand::PointById {
+                unit: accepted.worker,
+                order: accepted.kind,
+                x: accepted.position[0],
+                y: accepted.position[1],
+            },
+        );
+        Ok(true)
+    } else {
+        if intent.ready(objects, session)? {
+            input.build = Some(intent);
+        }
+        Ok(false)
     }
 }
 
@@ -276,6 +382,7 @@ pub(crate) fn activate_standard(
     kind: pcx_play::standard_command::Kind,
     session: Weak<()>,
 ) -> Result<(), String> {
+    input.build = None;
     let Some(order) = host
         .objects()
         .standard_command_order(unit, kind)
@@ -530,6 +637,7 @@ fn end_cinematic(
     hud: Res<crate::campaign_hud::CampaignHud>,
     dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,
     mut input: ResMut<CampaignInput>,
+    mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
     if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape))
@@ -541,6 +649,9 @@ fn end_cinematic(
     {
         return;
     }
+    input.build = None;
+    input.command = None;
+    card.close_skills();
     let Some(host) = session.host() else {
         return;
     };
@@ -645,6 +756,9 @@ pub(crate) fn minimap_action(
     primary: bool,
 ) -> MinimapAction {
     use pcx_play::standard_command::Kind;
+    if input.build.take().is_some() {
+        return MinimapAction::Cancel;
+    }
     if let Some(armed) = input.command.take().filter(|a| a.is_for(session)) {
         return match armed.kind {
             crate::campaign_command_card::Kind::Standard(kind) if primary && !kind.immediate() => {
@@ -720,7 +834,7 @@ fn commands_available(
 fn command_hotkey(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     controls: CommandControls,
-    card: Res<crate::campaign_command_card::CommandCard>,
+    mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
@@ -736,10 +850,12 @@ fn command_hotkey(
     let witness = session.session_witness();
     let Some(host) = session.host() else {
         input.command = None;
+        input.build = None;
         return;
     };
     if !commands_open(&view, &hud, &inventory, &dialogs, host) {
         input.command = None;
+        input.build = None;
         return;
     }
     let objects = host.objects();
@@ -751,15 +867,43 @@ fn command_hotkey(
             .and_then(|r| objects.player_settings(r.owner).ok())
             .is_some_and(|player| Some(player.number) == local)
     });
+    if let Some(intent) = &input.build {
+        match intent.current(objects, witness.as_ref()) {
+            Ok(true) => {}
+            Ok(false) => input.build = None,
+            Err(error) => {
+                input.build = None;
+                input.last_error = Some(error);
+            }
+        }
+    }
     if let Some(unit) = primary {
+        if card
+            .construction_cancel_hotkey(unit)
+            .and_then(menu_key)
+            .is_some_and(|key| keys.just_pressed(key))
+        {
+            cancel_construction(host, &mut input, unit);
+            return;
+        }
+        let build = card
+            .build_hotkeys(unit)
+            .find(|(_, hotkey)| letter_key(*hotkey).is_some_and(|key| keys.just_pressed(key)));
+        if let (Some((kind, _)), Some(witness)) = (build, witness.clone()) {
+            if let Err(error) = activate_build(host, &mut input, &mut card, unit, kind, witness) {
+                input.last_error = Some(error);
+            }
+            return;
+        }
         for (kind, hotkey) in card.training_hotkeys(unit) {
             if letter_key(hotkey).is_some_and(|key| keys.just_pressed(key)) {
                 input.command = None;
+                input.build = None;
                 immediate_command(host, &mut input, unit, kind);
                 return;
             }
         }
-        for profile in card.standard_profiles() {
+        for profile in card.standard_profiles().filter(|_| !card.build_page_open()) {
             if letter_key(profile.hotkey).is_some_and(|key| keys.just_pressed(key))
                 && host
                     .objects()
@@ -784,6 +928,7 @@ fn command_hotkey(
                 if letter_key(command.hotkey).is_some_and(|key| keys.just_pressed(key)) =>
             {
                 input.command = None;
+                input.build = None;
                 immediate_command(host, &mut input, unit, command.order);
                 return;
             }
@@ -816,6 +961,15 @@ fn command_hotkey(
             kind: crate::campaign_command_card::Kind::TargetUnit,
             session,
         });
+    }
+}
+
+fn menu_key(key: pcx_play::standard_command::MenuHotkey) -> Option<KeyCode> {
+    use pcx_play::standard_command::MenuHotkey;
+    match key {
+        MenuHotkey::Letter(letter) => letter_key(letter),
+        MenuHotkey::Code(code) if code == i32::from(b'\x1b') => Some(KeyCode::Escape),
+        MenuHotkey::Code(_) => None,
     }
 }
 
@@ -880,6 +1034,7 @@ fn click(
     picking: Picking,
     hud: Res<crate::campaign_hud::CampaignHud>,
     mut input: ResMut<CampaignInput>,
+    mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
     let Picking {
@@ -950,6 +1105,20 @@ fn click(
     }) {
         return;
     }
+    if input.build.is_some() {
+        if order {
+            input.build = None;
+            card.close_skills();
+        } else {
+            match place_build(host, &mut input, witness.as_ref(), point) {
+                Ok(true) => card.close_skills(),
+                Ok(false) => {}
+                Err(error) => input.last_error = Some(error),
+            }
+        }
+        return;
+    }
+    let objects = host.objects_mut();
     let visibility = match pick_sight(objects, &mut input) {
         Ok(gate) => gate,
         Err(()) => return,
@@ -1176,6 +1345,12 @@ fn click(
         };
         record_order_result(&mut input, objects.timer_game_time(), result, command);
     }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+pub(crate) fn run_command_button(app: &mut App) {
+    use bevy::ecs::system::RunSystemOnce;
+    app.world_mut().run_system_once(command_button).unwrap();
 }
 
 #[cfg(test)]
@@ -1912,6 +2087,16 @@ mod tests {
         assert_eq!(letter_key('Z'), Some(KeyCode::KeyZ));
         assert_eq!(letter_key('1'), None);
         assert_eq!(letter_key('t'), None);
+        assert_eq!(
+            menu_key(pcx_play::standard_command::MenuHotkey::Code(i32::from(
+                b'\x1b'
+            ))),
+            Some(KeyCode::Escape)
+        );
+        assert_eq!(
+            menu_key(pcx_play::standard_command::MenuHotkey::Code(999)),
+            None
+        );
     }
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "test-fixtures"))]

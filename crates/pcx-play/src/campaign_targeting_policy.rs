@@ -33,8 +33,131 @@ pub struct TargetingPolicy {
     pub optional_class_mask: u32,
     pub optional_unclassified_mask: u32,
     pub unclassified_rawcodes: [[u8; 4]; 3],
+    /// Peon channel priority (legacy field name; not a hero-level test).
     pub optional_level_mask: u32,
     pub optional_level_gate: u8,
+    pub peon_channel: Option<PeonChannelBand>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeonChannelBand {
+    pub unit_type: i32,
+    pub category: u8,
+}
+
+impl PeonChannelBand {
+    fn decode(
+        level: &[u8],
+        mut read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, Error>,
+    ) -> Result<Self, Error> {
+        at(level, 24, &[0xf6, 0x80])?;
+        at(level, 33, &[0x83, 0xb8])?;
+        at(level, 40, &[0x75, 0x0b])?;
+        if level[30].count_ones() != 1 {
+            return Err(Error("peon class mask is not one bit"));
+        }
+        let initial = read(0x675a48, 10, true)?;
+        at(&initial, 0, &[0xc7, 0x86])?;
+        if word(&initial, 2)? != word(level, 35)? || word(&initial, 6)? == u32::from(level[39]) {
+            return Err(Error("channel and initial category are not distinct"));
+        }
+        let classes = read(0x48a660, 44, true)?;
+        at(&classes, 16, &[0x39, 0x0c, 0xc5])?;
+        at(&classes, 26, &[0x83, 0xf8])?;
+        at(&classes, 35, &[0x8b, 0x04, 0xc5])?;
+        let table = word(&classes, 38)?;
+        if word(&classes, 19)? != table.checked_add(4).ok_or(Error("class table overflow"))? {
+            return Err(Error("class table pair differs"));
+        }
+        let rows = read(table, usize::from(classes[28]) * 8, false)?;
+        let mut types = rows
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .filter(|row| word(*row, 0).ok() == Some(u32::from(level[30])));
+        let unit_type = word(types.next().ok_or(Error("peon class mask absent"))?, 4)? as i32;
+        if types.next().is_some() {
+            return Err(Error("ambiguous peon class mask"));
+        }
+        let unit_type_consumer = read(0x49a35d, 6, true)?;
+        at(&unit_type_consumer, 0, &[0x23, 0x86])?;
+        if word(&unit_type_consumer, 2)? != word(level, 26)? {
+            return Err(Error("peon classification field differs"));
+        }
+        let mut activation = None;
+        // Reviewed class/vtable roles; helper and name addresses are read, not copied.
+        for (table, name) in [
+            (0xf18c98_u32, b"CAbilitySpell\0".as_slice()),
+            (0xf4ad58, b"CAbilityRepair\0".as_slice()),
+        ] {
+            let vtable = read(table, 0x384, false)?;
+            let getter = read(word(&vtable, 0x58)?, 6, true)?;
+            at(&getter, 0, &[0xb8])?;
+            at(&getter, 5, &[0xc3])?;
+            if read(word(&getter, 1)?, name.len(), false)? != name {
+                return Err(Error("channel ability class differs"));
+            }
+            let method = word(&vtable, 0x380)?;
+            if activation
+                .replace(method)
+                .is_some_and(|previous| previous != method)
+            {
+                return Err(Error("repair channel activation differs"));
+            }
+        }
+        let activation = activation.ok_or(Error("missing channel activation"))?;
+        let body = read(activation, 304, true)?;
+        at(&body, 295, &[0x6a])?;
+        at(&body, 297, &[0x8b, 0xcf])?;
+        let category = body[296];
+        if category != level[39] || category & 0x80 != 0 {
+            return Err(Error("peon casting category differs"));
+        }
+        let setter = call(&body, activation, 299)?;
+        let message = read(setter, 113, true)?;
+        at(&message, 78, &[0x8b, 0x45, 0x08])?;
+        at(&message, 97, &[0xc7, 0x46, 0x30])?;
+        at(&message, 105, &[0x89, 0x46, 0x34])?;
+        let message_id = word(&message, 100)?;
+        let dispatch = read(0x672cb5, 30, true)?;
+        at(&dispatch, 0, &[0x2d])?;
+        at(&dispatch, 5, &[0x3d])?;
+        at(&dispatch, 16, &[0x0f, 0xb6, 0x80])?;
+        at(&dispatch, 23, &[0xff, 0x24, 0x85])?;
+        let index = message_id
+            .checked_sub(word(&dispatch, 1)?)
+            .ok_or(Error("channel message range"))?;
+        if index > word(&dispatch, 6)? {
+            return Err(Error("channel message range"));
+        }
+        let byte = read(
+            word(&dispatch, 19)?
+                .checked_add(index)
+                .ok_or(Error("channel dispatch overflow"))?,
+            1,
+            false,
+        )?[0];
+        let target = read(
+            word(&dispatch, 26)?
+                .checked_add(u32::from(byte) * 4)
+                .ok_or(Error("channel dispatch overflow"))?,
+            4,
+            false,
+        )?;
+        let consumer = read(word(&target, 0)?, 12, true)?;
+        at(
+            &consumer,
+            0,
+            &[0x8b, 0x41, 0x0c, 0x8b, 0x40, 0x34, 0x89, 0x86],
+        )?;
+        if word(&consumer, 8)? != word(level, 35)? {
+            return Err(Error("channel category consumer differs"));
+        }
+        Ok(Self {
+            unit_type,
+            category,
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -121,7 +244,23 @@ impl TargetingPolicy {
                     .ok_or(Error("short selected instruction window"))?,
             );
         }
-        Self::decode(&windows, REVIEWED_IMAGE)
+        let mut policy = Self::decode(&windows, REVIEWED_IMAGE)?;
+        let mut remaining =
+            budget.profile_bytes - WINDOWS.iter().map(|(_, len, _)| len).sum::<usize>();
+        policy.peon_channel = Some(PeonChannelBand::decode(
+            windows[16],
+            |address, length, code| {
+                remaining = remaining
+                    .checked_sub(length)
+                    .ok_or(Error("channel window budget exceeded"))?;
+                pe.read_from(address, code)
+                    .map_err(|_| Error("channel source mapping"))?
+                    .get(..length)
+                    .map(<[u8]>::to_vec)
+                    .ok_or(Error("truncated channel window"))
+            },
+        )?);
+        Ok(policy)
     }
 
     fn decode(w: &[&[u8]], image_sha256: Sha256Digest) -> Result<Self, Error> {
@@ -366,17 +505,29 @@ impl TargetingPolicy {
             unclassified_rawcodes,
             optional_level_mask: optional_masks[3],
             optional_level_gate: level[3],
+            peon_channel: None,
         })
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn fixture() -> Self {
         let source = synthetic_windows();
-        Self::decode(
+        let mut policy = Self::decode(
             &source.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             [0x42; 32],
         )
-        .expect("synthetic targeting instructions")
+        .expect("synthetic targeting instructions");
+        let data = synthetic_channel_source(&source[16]);
+        policy.peon_channel = Some(
+            PeonChannelBand::decode(&source[16], |address, length, _| {
+                data.get(&address)
+                    .and_then(|b| b.get(..length))
+                    .map(<[u8]>::to_vec)
+                    .ok_or(Error("missing synthetic channel role"))
+            })
+            .expect("synthetic channel operands"),
+        );
+        policy
     }
 }
 
@@ -485,6 +636,12 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
     put(&mut w, 15, 12, &[0xb8]);
     dword(&mut w, 15, 13, 0x2000_0000);
     put(&mut w, 16, 0, &[0x83, 0x7d, 0x10, 0x02]);
+    put(&mut w, 16, 24, &[0xf6, 0x80]);
+    dword(&mut w, 16, 26, 0x654);
+    put(&mut w, 16, 30, &[0x40]);
+    put(&mut w, 16, 33, &[0x83, 0xb8]);
+    dword(&mut w, 16, 35, 0x6a0);
+    put(&mut w, 16, 39, &[7, 0x75, 0x0b]);
     put(&mut w, 16, 42, &[0x81, 0xcb]);
     dword(&mut w, 16, 44, 0x0008_0000);
     put(&mut w, 17, 0, &[0x8b, 0x40, 0x28, 0x83, 0xe0, 0x10, 0xc3]);
@@ -496,6 +653,86 @@ fn synthetic_windows() -> Vec<Vec<u8>> {
         put(&mut w, 19, offset + 6, &[0x74, (0x23 - offset - 8) as u8]);
     }
     w
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn synthetic_channel_source(level: &[u8]) -> std::collections::BTreeMap<u32, Vec<u8>> {
+    use std::collections::BTreeMap;
+    let mut data = BTreeMap::new();
+    data.insert(
+        0x675a48,
+        [
+            vec![0xc7, 0x86],
+            level[35..39].to_vec(),
+            2_u32.to_le_bytes().to_vec(),
+        ]
+        .concat(),
+    );
+    let mut classes = vec![0; 44];
+    classes[16..19].copy_from_slice(&[0x39, 0x0c, 0xc5]);
+    classes[19..23].copy_from_slice(&0x13004_u32.to_le_bytes());
+    classes[26..29].copy_from_slice(&[0x83, 0xf8, 1]);
+    classes[35..38].copy_from_slice(&[0x8b, 0x04, 0xc5]);
+    classes[38..42].copy_from_slice(&0x13000_u32.to_le_bytes());
+    data.insert(0x48a660, classes);
+    data.insert(
+        0x13000,
+        [u32::from(level[30]).to_le_bytes(), 16_u32.to_le_bytes()].concat(),
+    );
+    data.insert(
+        0x49a35d,
+        [vec![0x23, 0x86], level[26..30].to_vec()].concat(),
+    );
+    for (table, getter, name_address, name) in [
+        (
+            0xf18c98,
+            0x11000_u32,
+            0x12000_u32,
+            b"CAbilitySpell\0".as_slice(),
+        ),
+        (0xf4ad58, 0x11100, 0x12100, b"CAbilityRepair\0".as_slice()),
+    ] {
+        let mut bytes = vec![0; 0x384];
+        bytes[0x58..0x5c].copy_from_slice(&getter.to_le_bytes());
+        bytes[0x380..0x384].copy_from_slice(&0x14000_u32.to_le_bytes());
+        data.insert(table, bytes);
+        data.insert(
+            getter,
+            [vec![0xb8], name_address.to_le_bytes().to_vec(), vec![0xc3]].concat(),
+        );
+        data.insert(name_address, name.to_vec());
+    }
+    let mut activation = vec![0; 304];
+    activation[295..300].copy_from_slice(&[0x6a, level[39], 0x8b, 0xcf, 0xe8]);
+    activation[300..304].copy_from_slice(&0x15000_u32.wrapping_sub(0x14000 + 304).to_le_bytes());
+    data.insert(0x14000, activation);
+    let mut message = vec![0; 113];
+    message[78..81].copy_from_slice(&[0x8b, 0x45, 8]);
+    message[97..100].copy_from_slice(&[0xc7, 0x46, 0x30]);
+    message[100..104].copy_from_slice(&0x20003_u32.to_le_bytes());
+    message[105..108].copy_from_slice(&[0x89, 0x46, 0x34]);
+    data.insert(0x15000, message);
+    let mut dispatch = vec![0; 30];
+    dispatch[0] = 0x2d;
+    dispatch[1..5].copy_from_slice(&0x20000_u32.to_le_bytes());
+    dispatch[5] = 0x3d;
+    dispatch[6..10].copy_from_slice(&8_u32.to_le_bytes());
+    dispatch[16..19].copy_from_slice(&[0x0f, 0xb6, 0x80]);
+    dispatch[19..23].copy_from_slice(&0x18000_u32.to_le_bytes());
+    dispatch[23..26].copy_from_slice(&[0xff, 0x24, 0x85]);
+    dispatch[26..30].copy_from_slice(&0x19000_u32.to_le_bytes());
+    data.insert(0x672cb5, dispatch);
+    data.insert(0x18003, vec![2]);
+    data.insert(0x19008, 0x1a000_u32.to_le_bytes().to_vec());
+    data.insert(
+        0x1a000,
+        [
+            vec![0x8b, 0x41, 0x0c, 0x8b, 0x40, 0x34, 0x89, 0x86],
+            level[35..39].to_vec(),
+        ]
+        .concat(),
+    );
+    data
 }
 
 #[cfg(test)]
@@ -647,6 +884,65 @@ mod tests {
     }
 
     #[test]
+    fn channel_class_message_and_dispatch_follow_nonstock_relocated_operands() {
+        let source = synthetic_windows();
+        let level = &source[16];
+        let mut data = synthetic_channel_source(level);
+        let mut activation = data.remove(&0x14000).unwrap();
+        let setter = data.remove(&0x15000).unwrap();
+        activation[300..304]
+            .copy_from_slice(&0x25000_u32.wrapping_sub(0x24000 + 304).to_le_bytes());
+        data.insert(0x24000, activation);
+        data.insert(0x25000, setter);
+        for table in [0xf18c98, 0xf4ad58] {
+            data.get_mut(&table).unwrap()[0x380..0x384].copy_from_slice(&0x24000_u32.to_le_bytes());
+        }
+        let decode = |data: &std::collections::BTreeMap<u32, Vec<u8>>| {
+            PeonChannelBand::decode(level, |address, length, _| {
+                data.get(&address)
+                    .and_then(|b| b.get(..length))
+                    .map(<[u8]>::to_vec)
+                    .ok_or(Error("missing synthetic channel role"))
+            })
+        };
+        let band = decode(&data).unwrap();
+        assert_eq!((band.unit_type, band.category), (16, 7));
+        let total: usize = data.values().map(Vec::len).sum();
+        for (budget, expected) in [(total - 1, false), (total, true)] {
+            let mut remaining = budget;
+            let result = PeonChannelBand::decode(level, |address, length, _| {
+                remaining = remaining
+                    .checked_sub(length)
+                    .ok_or(Error("synthetic channel budget"))?;
+                data.get(&address)
+                    .and_then(|b| b.get(..length))
+                    .map(<[u8]>::to_vec)
+                    .ok_or(Error("missing synthetic channel role"))
+            });
+            assert_eq!(result.is_ok(), expected);
+        }
+        for (address, offset) in [
+            (0x24000, 296),
+            (0x25000, 100),
+            (0x1a000, 8),
+            (0x13000, 0),
+            (0x12100, 0),
+        ] {
+            let mut broken = data.clone();
+            broken.get_mut(&address).unwrap()[offset] ^= 1;
+            assert!(
+                decode(&broken).is_err(),
+                "channel operand {address:x}:{offset}"
+            );
+        }
+        for (&address, bytes) in &data {
+            let mut broken = data.clone();
+            broken.get_mut(&address).unwrap().truncate(bytes.len() - 1);
+            assert!(decode(&broken).is_err(), "truncated role {address:x}");
+        }
+    }
+
+    #[test]
     #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
     fn reviewed_original_image_decodes() {
         let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE required"))
@@ -655,12 +951,20 @@ mod tests {
             &image,
             RuleInputBudget {
                 image_bytes: 32 << 20,
-                profile_bytes: WINDOWS.iter().map(|(_, len, _)| len).sum(),
+                profile_bytes: 64 << 10,
                 sections: 96,
             },
         )
         .expect("selected instruction relationship");
+        let fallback = crate::default_difficulty_image::native_default_fallback(&image).unwrap();
+        println!(
+            "selected targeting gates: fallback={fallback} hero={} damage={} peon={}",
+            policy.hero_min_game_difficulty,
+            policy.optional_damage_gate,
+            policy.optional_level_gate
+        );
         assert_eq!(policy.image_sha256, REVIEWED_IMAGE);
+        assert!(policy.peon_channel.is_some());
         assert!(!policy.target_heroes_default);
         assert!(policy.hero_first <= policy.hero_last);
         assert!(policy.highest_priority_mask > policy.hero_priority_mask);

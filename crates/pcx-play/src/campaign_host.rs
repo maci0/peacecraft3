@@ -67,6 +67,7 @@ pub fn create_host(
                     .map_err(MapStartupError::Observation)?;
             }
             if let Some(names) = ai_source {
+                host = host.with_ai_pause_rules(names.pause.clone());
                 let ai_reader = Arc::clone(&reader);
                 let ai_context = Arc::clone(host.context());
                 let ai_edition = edition.clone();

@@ -119,7 +119,7 @@ impl ObjectHost {
     }
 
     /// A real literal initializer of a selected constant global, e.g. `bj_TOD_DAWN`.
-    fn stock_real_constant(&self, name: &str) -> Option<f64> {
+    pub(super) fn stock_real_constant(&self, name: &str) -> Option<f64> {
         let global = self
             .inner
             .program

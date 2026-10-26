@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 
 const PLACEMENT_OWNER: i16 = 7;
 
+#[path = "unit_animation_rarity_host_tests.rs"]
+mod animation_rarity;
 #[path = "unit_corpse_tests.rs"]
 mod corpses;
 
@@ -3437,6 +3439,7 @@ fn position_host_admitting_placed(
         "ConvertAllianceType",
         "ConvertUnitType",
         "ConvertFogState",
+        "ConvertGameSpeed",
         "ConvertFGameState",
         "ConvertPlayerScore",
         "ConvertLimitOp",
@@ -3910,4 +3913,140 @@ fn animation_of_removed_units_is_a_noop_but_other_handle_families_refuse() {
     }
     assert_eq!(host.executed_units().count(), 0);
     assert_eq!(host.inner().handles(), before + 2);
+}
+
+#[test]
+fn player_structure_count_declaration_is_optional_strict_and_same_source() {
+    let declaration = "constant native GetPlayerStructureCount takes player p, boolean incomplete returns integer\n";
+    for (common_extra, map_extra) in [
+        (
+            declaration.replace("constant native", "native"),
+            String::new(),
+        ),
+        (
+            declaration.replace("boolean incomplete", "integer incomplete"),
+            String::new(),
+        ),
+        (
+            declaration.replace("returns integer", "returns boolean"),
+            String::new(),
+        ),
+        (String::new(), declaration.into()),
+    ] {
+        let common = script_common_with("widget", true, &common_extra);
+        let ctx = context(
+            300,
+            &common,
+            &format!("// count contract\n{map_extra}"),
+            "unit-catalog",
+        );
+        let (catalog, hits, _) = counting();
+        let host = object(&ctx, 32)
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap();
+        assert!(
+            host.with_unit_catalog(catalog, source(), limits(0))
+                .is_err()
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+    let common = script_common_with("widget", true, declaration);
+    let ctx = context(300, &common, MAP, "unit-catalog");
+    let (catalog, _, _) = counting();
+    let host = object(&ctx, 32)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(catalog, source(), limits(4))
+        .unwrap();
+    let mut vm = ctx.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let owner = vm.global("P");
+    let handles = vm.host().inner.inner().handles();
+    let error = vm
+        .host()
+        .inner
+        .native("GetPlayerStructureCount", &[owner, Value::Bool(true)])
+        .unwrap_err();
+    assert!(error.to_string().contains("liveness"));
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE and PCX_PLAYER_COUNT_COMMON from the selected Legacy client"]
+fn local_original_player_structure_count_contract_and_counter_split() {
+    use std::path::Path;
+    let read = |name| {
+        let path = std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        assert!(std::fs::metadata(&path).unwrap().len() <= 32 << 20);
+        std::fs::read(Path::new(&path)).unwrap()
+    };
+    let common = read("PCX_PLAYER_COUNT_COMMON");
+    let common = pcx_script::parse(std::str::from_utf8(&common).unwrap()).unwrap();
+    let declarations: Vec<_> = common
+        .natives()
+        .filter(|n| n.name.as_str() == "GetPlayerStructureCount")
+        .collect();
+    assert_eq!(declarations.len(), 1);
+    let declaration = declarations[0];
+    assert!(declaration.is_constant);
+    assert_eq!(declaration.ret.kind.name(), "integer");
+    assert_eq!(
+        declaration
+            .params
+            .iter()
+            .map(|p| p.ty.kind.name())
+            .collect::<Vec<_>>(),
+        ["player", "boolean"]
+    );
+    assert!(declaration.params.iter().all(|p| !p.ty.array));
+    let image = read("PCX_WAR3_EXE");
+    assert_eq!(
+        crate::neutral_player::sha256(&image),
+        crate::menu_lighting::REVIEWED_IMAGE
+    );
+    let pe = crate::neutral_rule_input::Pe::parse(
+        &image,
+        crate::neutral_player::RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 128,
+            sections: 96,
+        },
+    )
+    .unwrap();
+    let code = |va, len| pe.read_from(va, true).unwrap().get(..len).unwrap();
+    let wrapper = code(0x494af0, 42);
+    assert_eq!(&wrapper[..6], &[0x55, 0x8b, 0xec, 0xff, 0x75, 8]);
+    assert_eq!(
+        &wrapper[11..22],
+        &[0x83, 0xc4, 4, 0x85, 0xc0, 0x75, 4, 0x33, 0xc0, 0x5d, 0xc3]
+    );
+    assert_eq!(
+        &wrapper[28..35],
+        &[0x85, 0xc9, 0x74, 0xf2, 0xff, 0x75, 0x0c]
+    );
+    assert_eq!(wrapper[35], 0xe8);
+    let helper = 0x494af0u32
+        .checked_add(40)
+        .unwrap()
+        .checked_add_signed(i32::from_le_bytes(wrapper[36..40].try_into().unwrap()))
+        .unwrap();
+    let split = code(helper, 32);
+    assert_eq!(
+        &split[..9],
+        &[0x55, 0x8b, 0xec, 0x83, 0x7d, 8, 0, 0x74, 0x0c]
+    );
+    assert_eq!(&split[9..11], &[0x8b, 0x41]);
+    assert_eq!(&split[12..14], &[0x8b, 0x51]);
+    assert_ne!(
+        split[11], split[14],
+        "separate completed and incomplete counters"
+    );
+    assert_eq!(&split[15..21], &[0x03, 0xc2, 0x5d, 0xc2, 4, 0]);
+    assert_eq!(&split[21..23], &[0x8b, 0x41]);
+    assert_eq!(
+        split[11], split[23],
+        "false retains the same completed counter"
+    );
+    assert_eq!(&split[24..], &[0x33, 0xd2, 0x03, 0xc2, 0x5d, 0xc2, 4, 0]);
 }

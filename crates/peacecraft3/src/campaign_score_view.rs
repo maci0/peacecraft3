@@ -386,7 +386,7 @@ fn fill_labels(
 mod selected_tests {
     use super::*;
     use pcx_play::map_startup_host::MapStartupHost;
-    use pcx_script::Value;
+    use pcx_script::{Host, Value};
     use peacecraft3::{
         campaign_runtime::{CampaignRuntime, CampaignTransition},
         campaign_startup::CampaignStartup,
@@ -438,6 +438,7 @@ mod selected_tests {
                 .campaign_for_receipts(&bindings.receipts)
                 .expect("native configuration pins a campaign recipe")
         };
+        let expected_carryover = restored_reference(&mut app);
         let old = {
             let mut session = app
                 .world_mut()
@@ -555,6 +556,17 @@ mod selected_tests {
         let mut session = app
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>();
+        if let Some(expected) = expected_carryover {
+            let Some(Value::Handle(restored)) = session.global("bj_lastLoadedUnit") else {
+                panic!("next chapter did not restore a cached unit")
+            };
+            assert_eq!(session.global("udg_Arthas"), Some(Value::Handle(restored)));
+            let objects = session.host().unwrap().objects_mut();
+            assert!(objects.executed_unit(restored).unwrap().cached);
+            let actual = carryover(objects, restored);
+            assert_eq!(actual, expected);
+            println!("actual chapter carryover verified: {actual:?}");
+        }
         for tick in 1..=seconds * 64 {
             let at = tick as f64 / 64.0;
             pcx_play::campaign_host::advance_tick(&mut session, at, 65536)
@@ -567,6 +579,137 @@ mod selected_tests {
                 "the script must actually advance through the requested opening interval"
             );
         }
+    }
+    #[derive(Debug, PartialEq)]
+    struct Carryover {
+        rawcode: [u8; 4],
+        hero: Option<pcx_play::playercolor_host::HeroProgress>,
+        levels: Vec<([u8; 4], i32)>,
+        permanent_strength: i32,
+        items: Vec<(usize, [u8; 4], i32)>,
+    }
+
+    fn carryover(
+        objects: &mut pcx_play::playercolor_host::ObjectHost,
+        unit: pcx_script::HandleId,
+    ) -> Carryover {
+        let record = objects.executed_unit(unit).unwrap();
+        let abilities = record.abilities.as_ref().expect("cached hero abilities");
+        let mut snapshot = Carryover {
+            rawcode: record.definition.rawcode,
+            hero: abilities.hero.clone(),
+            levels: abilities.levels().collect(),
+            permanent_strength: record.permanent_strength,
+            items: Vec::new(),
+        };
+        let items: Vec<_> = objects
+            .executed_items()
+            .filter_map(|(id, item)| {
+                let (owner, slot) = item.held_by?;
+                (owner == unit).then_some((slot, item.definition.rawcode, id))
+            })
+            .collect();
+        for (slot, rawcode, id) in items {
+            let Value::Int(charges) = objects
+                .native("GetItemCharges", &[Value::Handle(id)])
+                .unwrap()
+            else {
+                panic!("item charges must be an integer")
+            };
+            snapshot.items.push((slot, rawcode, charges));
+        }
+        snapshot.items.sort();
+        snapshot
+    }
+
+    fn restored_reference(app: &mut App) -> Option<Carryover> {
+        use pcx_script::ast::{Expr, Literal, Stmt};
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let context = session.context().unwrap();
+        let body = context
+            .scripts
+            .program()
+            .function("Trig_Next_Level_Prep_Actions")
+            .expect("select Human01 source preparation")
+            .body
+            .as_ref()
+            .unwrap();
+        let arguments = |name: &str| {
+            let calls: Vec<_> = body
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Call { callee, args, .. } if callee.name == name => Some(args),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(calls.len(), 1, "one source call to {name}");
+            calls[0]
+        };
+        let literal = |expression: &Expr| match expression {
+            Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded()),
+            _ => panic!("expected source string literal"),
+        };
+        let filename = literal(&arguments("InitGameCacheBJ")[0]);
+        let store = arguments("StoreUnitBJ");
+        let key = literal(&store[1]);
+        let mission = literal(&store[2]);
+        let objects = session.host().unwrap().objects_mut();
+        let cache = objects.native("InitGameCache", &[filename]).unwrap();
+        if objects
+            .native(
+                "HaveStoredUnit",
+                &[cache.clone(), mission.clone(), key.clone()],
+            )
+            .unwrap()
+            == Value::Bool(false)
+        {
+            return None;
+        }
+        let local = objects.local_player_settings().unwrap().identity;
+        let hero = objects
+            .selection()
+            .first()
+            .copied()
+            .or_else(|| {
+                objects
+                    .executed_units()
+                    .find(|(_, unit)| {
+                        unit.owner == local
+                            && unit.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+                    })
+                    .map(|(id, _)| id)
+            })
+            .expect("local source hero");
+        let source = objects.executed_unit(hero).unwrap();
+        let point = source.position.unwrap();
+        let facing = source.face;
+        // Diagnostic restoration reads the real cache; it is not a campaign win.
+        let Value::Handle(reference) = objects
+            .native(
+                "RestoreUnit",
+                &[
+                    cache,
+                    mission,
+                    key,
+                    Value::Handle(local),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                    Value::Real(facing),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("stored campaign hero must restore")
+        };
+        assert!(objects.executed_unit(reference).unwrap().cached);
+        let snapshot = carryover(objects, reference);
+        objects
+            .native("RemoveUnit", &[Value::Handle(reference)])
+            .unwrap();
+        println!("diagnostic cache reference: {snapshot:?}");
+        Some(snapshot)
     }
 }
 

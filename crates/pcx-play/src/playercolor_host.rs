@@ -94,6 +94,8 @@ pub enum Failure {
     QuestArguments,
     #[error("script dialog: {0}")]
     DialogState(&'static str),
+    #[error("script leaderboard: {0}")]
+    LeaderboardState(&'static str),
     #[error("quest state: {0}")]
     QuestState(&'static str),
     #[error("rectangle state: {0}")]
@@ -242,6 +244,9 @@ enum Entry {
         fade_in_rate: i32,
         fade_out_rate: i32,
         eax_setting: String,
+    },
+    Leaderboard {
+        live: bool,
     },
     Dialog {
         live: bool,
@@ -676,6 +681,10 @@ impl EnumHost {
             Entry::Timer { live: false, .. } | Entry::Group { live: false } => {
                 return Err(self.error("arena", Failure::Identity));
             }
+            Entry::Leaderboard { live: true } => "leaderboard",
+            Entry::Leaderboard { live: false } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
             Entry::Dialog { live: true } => "dialog",
             Entry::DialogButton { live: true, .. } => "button",
             Entry::Dialog { live: false } | Entry::DialogButton { live: false, .. } => {
@@ -829,20 +838,25 @@ pub use objects::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
     DestructableStats, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
     FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    GuardBudget, GuardState, HeroBudget, HeroProgress, ItemBudget, LabelSoundFlags, LearnBlock,
-    LearnableSkill, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget, MessageState,
-    ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration,
-    PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState, PlayerScoreCounter,
-    PlayerScoreSnapshot, PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration,
-    PresentationState, QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind,
-    RegionEventRegistration, RegionRectRequest, ResearchIcon, ResearchObservation,
-    RestoreLifeBinding, RestoreLifePolicy, ShopCapacity, SoundProperties, SoundState,
-    StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
-    StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TerrainFog, TimedMessage,
-    TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
-    TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
-    UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
-    UnitInRangeRegistration, UnitLookAt, UnitRangeEntry, UnitSleep, UnitStateBudget, WeatherEffect,
+    GuardBudget, GuardState, HeroBudget, HeroProgress, Illusion, ItemBudget, LabelSoundFlags,
+    LearnBlock, LearnableSkill, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget,
+    MessageState, MirrorEventContext, MirrorEventPhase, ObjectHost, PlayerAdmissionError,
+    PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration, PlayerRemoval,
+    PlayerRemovalBudget, PlayerRemovalState, PlayerScoreCounter, PlayerScoreSnapshot,
+    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
+    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    RegionRectRequest, ResearchIcon, ResearchObservation, RestoreLifeBinding, RestoreLifePolicy,
+    ShopCapacity, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
+    TechLimitBudget, TerrainFog, TimedMessage, TimerEventRegistration, TimerExpiry, TimerHost,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
+    TriggerRuntimeInput, UnitAbilities, UnitActivity, UnitBudget, UnitEffect,
+    UnitEventRegistration, UnitGuard, UnitInRangeRegistration, UnitLookAt, UnitRangeEntry,
+    UnitSleep, UnitStateBudget, WeatherEffect,
+};
+pub use objects::{
+    BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionContext, ConstructionOrder,
+    ConstructionPhase, ConstructionPreview, ConstructionSite, UnitConstruction,
 };
 pub use objects::{
     CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState,
@@ -853,3 +867,5 @@ pub use objects::{
     VisionSource, VisionState, Vitals, Weapon, present_vision,
 };
 pub use objects::{UseCheck, UseCommit, UseGrant};
+
+pub use objects::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};

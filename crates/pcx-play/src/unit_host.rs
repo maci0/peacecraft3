@@ -69,7 +69,9 @@ pub struct UnitBudget {
 pub(super) enum Birth {
     Ordinary,
     Summoned,
+    Illusion,
     Corpse,
+    Construction,
 }
 
 pub(super) struct PreparedUnit {
@@ -112,6 +114,10 @@ pub struct ExecutedUnitState {
 /// eye-candy effects.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutedUnit {
+    pub illusion: Option<super::Illusion>,
+    pub construction: Option<super::unit_construction::Site>,
+    pub construction_revision: u64,
+    pub construction_request: Option<super::unit_construction::Request>,
     /// Source-qualified death/decay lifecycle, sharing this unit and logical clock.
     pub decay: Option<crate::unit_decay::State>,
     pub definition: Definition,
@@ -222,6 +228,7 @@ struct UnitStateLimits {
 pub(super) struct Admission {
     catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     source: Source,
+    cached_source_maps: Vec<pcx_assets::AssetPath>,
     declaration_source: String,
     span: Span,
     pub(super) max_records: usize,
@@ -247,6 +254,7 @@ pub(super) struct Admission {
     resource_amounts: bool,
     /// Authoring tables used to seed the constructor's resource slot.
     resource_tables: Option<Arc<DefaultTables>>,
+    ability_overlay: Option<Overlay>,
     /// Present after [`ObjectHost::with_defend_ability`].
     order: Option<DefendAbility>,
     /// Present after [`ObjectHost::with_militia_ability`].
@@ -254,6 +262,7 @@ pub(super) struct Admission {
     heroes: Option<hero::Admission>,
     models: Option<ModelLoader>,
     blend: Option<crate::unit_blend::Rules>,
+    rarity: Option<Result<crate::unit_animation_rarity::State, String>>,
 }
 
 impl Admission {
@@ -263,6 +272,19 @@ impl Admission {
 }
 
 impl ObjectHost {
+    /// Members qualified by the caller against the receiving map's selected source archive.
+    pub(crate) fn with_cached_unit_source_maps(
+        mut self,
+        maps: Vec<pcx_assets::AssetPath>,
+    ) -> Result<Self, Error> {
+        self.admitted_units()?;
+        self.units
+            .as_mut()
+            .expect("admitted units")
+            .cached_source_maps = maps;
+        Ok(self)
+    }
+
     pub(super) fn check_unit_creation_capacity(&self, count: usize) -> Result<(), Error> {
         let admission = self.admitted_units()?;
         if count > admission.max_records.saturating_sub(admission.records)
@@ -359,6 +381,37 @@ impl ObjectHost {
         self.unit_buff_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         self.unit_cooldown_reset_declaration(&declaration_source)?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("GetPlayerStructureCount")
+            .is_some()
+            || self
+                .inner
+                .program
+                .natives()
+                .ambiguous("GetPlayerStructureCount")
+                .is_some()
+        {
+            Self::contract(
+                &self.inner,
+                "GetPlayerStructureCount",
+                &["player", "boolean"],
+                "integer",
+                true,
+                Some("player"),
+            )?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get("GetPlayerStructureCount")
+                .is_none_or(|n| n.source != declaration_source)
+            {
+                return Err(self.inner.error("GetPlayerStructureCount", Failure::Source));
+            }
+        }
         for name in ["GetFoodMade", "GetFoodUsed"] {
             if self.inner.program.natives().get(name).is_some()
                 || self.inner.program.natives().ambiguous(name).is_some()
@@ -381,6 +434,7 @@ impl ObjectHost {
         self.units = Some(Admission {
             catalog,
             source,
+            cached_source_maps: Vec::new(),
             declaration_source,
             span: native.span,
             max_records: budget.max_records,
@@ -399,11 +453,13 @@ impl ObjectHost {
             unit_state: None,
             resource_amounts: false,
             resource_tables: None,
+            ability_overlay: None,
             order: None,
             militia: None,
             heroes: None,
             models: None,
             blend: None,
+            rarity: None,
         });
         Ok(self)
     }
@@ -653,6 +709,14 @@ impl ObjectHost {
         tables: &DefaultTables,
         abilities: &Overlay,
     ) -> Result<Self, Error> {
+        if let Some(admitted) = self.units.as_mut()
+            && admitted
+                .resource_tables
+                .as_ref()
+                .is_some_and(|source| source.identity() == tables.identity())
+        {
+            admitted.ability_overlay = Some(abilities.clone());
+        }
         let create_source = {
             let admitted = self
                 .units
@@ -717,6 +781,24 @@ impl ObjectHost {
             .ok_or_else(|| self.inner.error(ORDER, Failure::UnitState("not admitted")))?;
         admitted.militia = Some(snapshot);
         Ok(self)
+    }
+
+    pub(super) fn unit_ability_source(&self) -> Option<(&DefaultTables, &Overlay)> {
+        let admitted = self.units.as_ref()?;
+        Some((
+            admitted.resource_tables.as_deref()?,
+            admitted.ability_overlay.as_ref()?,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn construction_test_catalog(
+        &mut self,
+        catalog: std::sync::Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
+    ) {
+        let units = self.units.as_mut().expect("test catalog admission");
+        assert_eq!(units.records, 0);
+        units.catalog = catalog;
     }
 
     /// Same catalog allocation passed to [`Self::with_unit_catalog`].
@@ -947,6 +1029,112 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    pub fn admit_unit_animation_rarity(
+        &mut self,
+        rules: Result<crate::unit_animation_rarity::Rules, String>,
+    ) -> Result<(), Error> {
+        let name = "SetUnitAnimationWithRarity";
+        if self.admitted_units()?.records != 0 || self.admitted_units()?.rarity.is_some() {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitAnimation("rarity admission requires no created units, once".into()),
+            ));
+        }
+        if let Some(native) = self.inner.program.natives().get(name) {
+            Self::contract(
+                &self.inner,
+                name,
+                &["unit", "string", "raritycontrol"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            if native.source != self.admitted_units()?.declaration_source {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        let policy = self.random_policy();
+        self.units.as_mut().expect("admitted").rarity = Some(rules.and_then(|rules| {
+            crate::unit_animation_rarity::State::new(
+                rules,
+                policy.ok_or("animation rarity random algorithm is not admitted")?,
+            )
+        }));
+        Ok(())
+    }
+
+    fn set_unit_animation_rarity(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "SetUnitAnimationWithRarity";
+        let fail = |s| self.inner.error(name, Failure::UnitAnimation(s));
+        let [unit, Value::Str(sequence), Value::Handle(rarity)] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        let rarity = match self.inner.entry(*rarity)? {
+            Entry::Symbolic { kind, enumerand } if kind == "raritycontrol" => *enumerand,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        if matches!(unit, Value::Null) {
+            return Ok(Value::Null);
+        }
+        let Value::Handle(unit) = unit else {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        };
+        let record = match self.inner.entry(*unit)? {
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            Entry::Unit { record } => record,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        if self.admitted_units()?.models.is_none() {
+            return Err(fail("unit models are not admitted".into()));
+        }
+        let Some(animation) = &record.animation else {
+            return Ok(Value::Null);
+        };
+        let mut state = self
+            .admitted_units()?
+            .rarity
+            .as_ref()
+            .ok_or_else(|| fail("animation rarity capability not admitted".into()))?
+            .as_ref()
+            .map_err(|e| fail(e.clone()))?
+            .clone();
+        let props =
+            crate::unit_animation_rarity::properties(&record.definition, &state.rules.props)
+                .map_err(fail)?;
+        let candidates = state
+            .rules
+            .candidates(&animation.model, sequence, &props, rarity)
+            .map_err(fail)?;
+        if candidates.is_empty() {
+            return Ok(Value::Null);
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| fail("missing game clock".into()))?;
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(candidates.len())
+            .map_err(|_| fail("animation rarity preparation budget".into()))?;
+        let mut weights = Vec::new();
+        weights
+            .try_reserve_exact(candidates.len())
+            .map_err(|_| fail("animation rarity weight budget".into()))?;
+        for index in candidates {
+            let mut next = animation.clone();
+            next.select_index(index, now).map_err(fail)?;
+            weights.push(animation.model.sequences[index].rarity());
+            prepared.push(next);
+        }
+        let selected = state.choose(&weights).map_err(fail)?;
+        let animation = prepared.swap_remove(selected);
+        let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
+            unreachable!()
+        };
+        record.animation = Some(animation);
+        self.units.as_mut().expect("admitted").rarity = Some(Ok(state));
+        Ok(Value::Null)
+    }
+
     fn set_unit_animation(&mut self, args: &[Value]) -> Result<Value, Error> {
         self.animation_native("SetUnitAnimation", args, false)
     }
@@ -1067,6 +1255,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
+        if name == "GetPlayerStructureCount" && self.inner.program.natives().get(name).is_some() {
+            return Some(self.player_structure_count(args));
+        }
         if matches!(name, "GetFoodMade" | "GetFoodUsed")
             && self.inner.program.natives().get(name).is_some()
         {
@@ -1110,6 +1301,10 @@ impl ObjectHost {
             && self.inner.program.natives().get(name).is_some()
         {
             return Some(self.set_unit_animation_control(name, args));
+        }
+        if name == "SetUnitAnimationWithRarity" && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.set_unit_animation_rarity(args));
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));
@@ -1541,7 +1736,7 @@ impl ObjectHost {
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "units.collision_field")
     )]
-    fn catalog_collision_radius(definition: &Definition) -> Result<f32, &'static str> {
+    pub(super) fn catalog_collision_radius(definition: &Definition) -> Result<f32, &'static str> {
         let mut fields = definition.fields.iter().filter(|(_, field)| {
             field.metadata.as_ref().is_some_and(|meta| {
                 matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "collision")
@@ -1684,6 +1879,11 @@ impl ObjectHost {
                 Failure::UnitState("unit and boolean required"),
             ));
         };
+        // The selected native resolver's null branch skips the virtual setter.
+        // Retired units remain typed tombstones; no record is recreated here.
+        if matches!(self.inner.entry(*unit)?, Entry::RemovedUnit { .. }) {
+            return Ok(Value::Null);
+        }
         self.created_unit(*unit, SET_INVULNERABLE)?;
         match self.inner.entry_mut(*unit)? {
             Entry::Unit { record } => {
@@ -1707,7 +1907,8 @@ impl ObjectHost {
         let record = self.created_unit(*unit, GET_INVULNERABLE)?;
         let shielded = self
             .timer_game_time()
-            .is_some_and(|now| self.divine_shield_protects(*unit, now));
+            .is_some_and(|now| self.divine_shield_protects(*unit, now))
+            || self.mirror_protects(*unit);
         // The reviewed 1.29 getter returns the inverse of effective protection
         // (static `499fa0` evaluates `!(unit+0x20 bit 3)`). Keep the internal
         // explicit flag semantics true=protected and invert only this return.
@@ -2078,7 +2279,8 @@ impl ObjectHost {
         saved
             .validate()
             .map_err(|detail| self.inner.error("RestoreUnit", Failure::GameCache(detail)))?;
-        let source = &self.admitted_units()?.source;
+        let admitted = self.admitted_units()?;
+        let source = &admitted.source;
         if self
             .order_registry
             .as_ref()
@@ -2089,7 +2291,9 @@ impl ObjectHost {
                 Failure::GameCache("cached unit belongs to a different client image".into()),
             ));
         }
-        if source.install != saved.install || source.edition != saved.edition {
+        let qualified_map = pcx_assets::AssetPath::new(&saved.install)
+            .is_ok_and(|path| admitted.cached_source_maps.contains(&path));
+        if (source.install != saved.install && !qualified_map) || source.edition != saved.edition {
             return Err(self.inner.error(
                 "RestoreUnit",
                 Failure::GameCache("cached unit belongs to a different install/edition".into()),
@@ -2200,6 +2404,10 @@ impl ObjectHost {
                 None
             };
             ExecutedUnit {
+                illusion: None,
+                construction: None,
+                construction_revision: 0,
+                construction_request: None,
                 decay: None,
                 collision_radius: Self::catalog_collision_radius(&definition),
                 definition,

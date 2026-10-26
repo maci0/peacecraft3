@@ -1201,3 +1201,159 @@ fn movement_and_surface_operands_are_nonstock_and_malformed_inputs_refuse() {
         assert!(Rules::read(&bytes, binding, budget).is_err());
     }
 }
+
+#[test]
+fn construction_uses_full_authored_footprint_without_relocating_blocked_cells() {
+    let source = Source {
+        install: "synthetic".into(),
+        edition: "test".into(),
+        map: "build".into(),
+    };
+    let mut p = placement(source, 100);
+    p.footprints.insert(
+        "build.tga".into(),
+        Footprint {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "test".into(),
+                source: "build.tga".into(),
+            },
+            cells: vec![[-1, -1], [0, -1], [-1, 0], [0, 0]],
+        },
+    );
+    assert_eq!(
+        p.construction_position(None, [33., 35.], 0., "build.tga", 8, 0)
+            .unwrap(),
+        Some([32., 32.])
+    );
+    let cell = 7 * 32 + 7;
+    p.grid.pathing.cells[cell] = 8;
+    assert_eq!(
+        p.construction_position(None, [33., 35.], 0., "build.tga", 8, 0)
+            .unwrap(),
+        None
+    );
+    p.grid.pathing.cells[cell] = 0;
+    p.footprint_occupied[cell] = 1;
+    assert_eq!(
+        p.construction_position(None, [33., 35.], 0., "build.tga", 8, 0)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        p.construction_position(None, [0., 0.], 0., "build.tga", 8, 0)
+            .unwrap(),
+        None
+    );
+    assert!(
+        p.construction_position(None, [f32::NAN, 0.], 0., "build.tga", 8, 0)
+            .is_err()
+    );
+}
+
+#[test]
+fn bounded_route_outcome_preserves_paths_and_distinguishes_search_exhaustion() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "route termination".into(),
+        },
+        10000,
+    );
+    let start = [16., 16.];
+    let target = [112., 16.];
+    let stamp = p.prepare(start, Some(0.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    for y in 0..27 {
+        p.grid.pathing.cells[y * 32 + 16] |= p.rules.mask;
+    }
+    let mut small = 256;
+    let partial = p
+        .route_outcome(id(1), start, target, 0., 0., &mut small)
+        .unwrap();
+    assert!(
+        matches!(partial, RouteOutcome::PartialBudget(_)),
+        "{partial:?}"
+    );
+    assert_eq!(small, 0);
+    for _ in 0..3 {
+        assert_eq!(
+            p.route_outcome(id(1), start, target, 0., 0., &mut 256)
+                .unwrap(),
+            partial,
+            "restarting a bounded search makes no accumulated search progress"
+        );
+    }
+    let RouteOutcome::PartialBudget(path) = partial else {
+        unreachable!()
+    };
+    let mut compatible_work = 256;
+    assert_eq!(
+        p.route_within(id(1), start, target, 0., 0., &mut compatible_work)
+            .unwrap(),
+        path
+    );
+    assert_eq!(compatible_work, 0);
+    let reached = p
+        .route_outcome(id(1), start, target, 0., 0., &mut 100000)
+        .unwrap();
+    assert!(matches!(reached, RouteOutcome::Reached(_)), "{reached:?}");
+    for y in 27..32 {
+        p.grid.pathing.cells[y * 32 + 16] |= p.rules.mask;
+    }
+    let blocked = p
+        .route_outcome(id(1), start, target, 0., 0., &mut 100000)
+        .unwrap();
+    assert!(matches!(blocked, RouteOutcome::Blocked(_)), "{blocked:?}");
+}
+
+#[test]
+fn optional_streaming_probe_charges_near_obstruction_without_complete_segment_budget() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "streamed route probe".into(),
+        },
+        10000,
+    );
+    let start = [16., 16.];
+    let target = [112., 16.];
+    let stamp = p.prepare(start, Some(0.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    p.grid.pathing.cells[4 * 32 + 4] |= p.rules.mask;
+    let mut mandatory = 1;
+    assert!(
+        p.segment_clear(id(1), start, target, 0., &mut mandatory)
+            .unwrap_err()
+            .work_exhausted()
+    );
+    assert_eq!(
+        mandatory, 1,
+        "mandatory preflight retains its existing contract"
+    );
+    let mut optional = 1;
+    assert!(
+        !p.segment_clear_streaming(id(1), start, target, 0., &mut optional)
+            .unwrap()
+    );
+    assert_eq!(
+        optional, 0,
+        "the first blocked sample is actually checked and charged"
+    );
+    for blocked in [true, false] {
+        if !blocked {
+            p.grid.pathing.cells[4 * 32 + 4] &= !p.rules.mask;
+        }
+        let mut complete = 1000;
+        let mut streaming = 1000;
+        assert_eq!(
+            p.clear_fraction(id(1), start, target, 0., &mut complete)
+                .unwrap(),
+            p.clear_fraction_checked(id(1), start, target, 0., &mut streaming, false)
+                .unwrap(),
+        );
+        assert_eq!(complete, streaming, "identical samples cost identical work");
+    }
+}

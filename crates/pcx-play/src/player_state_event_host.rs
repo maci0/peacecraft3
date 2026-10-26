@@ -55,10 +55,19 @@ impl ObjectHost {
         &mut self,
         events: std::collections::VecDeque<super::super::event_delivery::FiredEvent>,
     ) -> Result<ScriptCall, Error> {
+        self.begin_synchronous_events_with_result(events, Value::Null)
+    }
+
+    pub(crate) fn begin_synchronous_events_with_result(
+        &mut self,
+        events: std::collections::VecDeque<super::super::event_delivery::FiredEvent>,
+        result: Value,
+    ) -> Result<ScriptCall, Error> {
         if events.is_empty() {
-            return Ok(ScriptCall::Return(Value::Null));
+            return Ok(ScriptCall::Return(result));
         }
         self.synchronous_frames.push(SynchronousFrame {
+            result,
             events,
             active: false,
             spawn_depth: 0,
@@ -75,8 +84,11 @@ impl ObjectHost {
                 .last_mut()
                 .and_then(|frame| frame.events.pop_front())
             else {
-                self.synchronous_frames.pop();
-                return Ok(ScriptCall::Return(Value::Null));
+                let result = self
+                    .synchronous_frames
+                    .pop()
+                    .map_or(Value::Null, |frame| frame.result);
+                return Ok(ScriptCall::Return(result));
             };
             let filter = event.filter;
             let Some(delivery) = self.begin_player_state_fired_event(&event)? else {

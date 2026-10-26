@@ -46,6 +46,14 @@ fn fail(message: impl Into<String>) -> Error {
     Error(message.into(), false)
 }
 
+/// A bounded route's termination, independent of its best accepted path.
+#[derive(Debug, PartialEq)]
+pub(crate) enum RouteOutcome {
+    Reached(Vec<[f32; 2]>),
+    PartialBudget(Vec<[f32; 2]>),
+    Blocked(Vec<[f32; 2]>),
+}
+
 #[derive(Clone, Debug)]
 pub struct Rules {
     binding: Binding,
@@ -1091,6 +1099,105 @@ impl Placement {
         self.prepare_class(request, radius, path, face, Movement::Ground)
     }
 
+    pub(crate) fn construction_reach(
+        &self,
+        path: &str,
+        radius: f32,
+        worker_radius: f32,
+    ) -> Result<f32, Error> {
+        let key = Self::footprint_key(path)?;
+        let footprint = self
+            .footprints
+            .get(&key)
+            .ok_or_else(|| fail("construction footprint missing"))?;
+        let extent = footprint
+            .cells
+            .iter()
+            .flat_map(|cell| cell.iter())
+            .map(|coordinate| {
+                i64::from(*coordinate)
+                    .abs()
+                    .max((i64::from(*coordinate) + 1).abs())
+            })
+            .max()
+            .ok_or_else(|| fail("construction footprint empty"))? as f32
+            * self.rules.cell_size();
+        let size = self.rules.cell_size();
+        let reach = ((radius.max(extent) + worker_radius) / size).ceil() * size;
+        if !reach.is_finite() {
+            return Err(fail("construction reach overflow"));
+        }
+        Ok(reach)
+    }
+
+    /// A build footprint must fit at the requested grid cell without creation relocation.
+    /// Masks are supplied by the source-qualified pathing token reader.
+    pub(crate) fn construction_position(
+        &mut self,
+        worker: Option<HandleId>,
+        request: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+    ) -> Result<Option<[f32; 2]>, Error> {
+        if !request.iter().all(|value| value.is_finite()) {
+            return Err(fail("finite construction point required"));
+        }
+        self.ensure_footprint(path)?;
+        let key = Self::footprint_key(path)?;
+        let input = self
+            .footprints
+            .get(&key)
+            .ok_or_else(|| fail("construction footprint is not admitted"))?;
+        if input.cells.is_empty() {
+            return Err(fail("construction requires an authored footprint"));
+        }
+        let turns = face / 90.;
+        if !face.is_finite() || turns.fract() != 0. || turns.abs() > 4. {
+            return Err(fail("construction requires quarter-turn facing"));
+        }
+        let quarter = turns.rem_euclid(4.) as u8;
+        let size = self.rules.cell_size();
+        let mut anchor = [0i64; 2];
+        for axis in 0..2 {
+            let cell = ((request[axis] - self.grid.origin[axis]) / size).floor();
+            if cell < 0. || cell >= [self.grid.pathing.width, self.grid.pathing.height][axis] as f32
+            {
+                return Ok(None);
+            }
+            anchor[axis] = cell as i64;
+        }
+        let exclude = worker.and_then(|worker| {
+            self.stamps
+                .iter()
+                .find(|(id, _)| *id == worker)
+                .map(|(_, stamp)| stamp)
+        });
+        for &[x, y] in &input.cells {
+            let (x, y) = match quarter {
+                0 => (i64::from(x), i64::from(y)),
+                1 => (-i64::from(y) - 1, i64::from(x)),
+                2 => (-i64::from(x) - 1, -i64::from(y) - 1),
+                _ => (i64::from(y), -i64::from(x) - 1),
+            };
+            let Some(index) = self.index(anchor[0] + x, anchor[1] + y) else {
+                return Ok(None);
+            };
+            let flags = self.grid.pathing.cells[index];
+            if flags & prevent != 0
+                || flags & require != require
+                || self.blocked_class(index, exclude, Movement::Ground)
+            {
+                return Ok(None);
+            }
+        }
+        // shortcut: source-grid anchor placement; qualify native building snap parity separately.
+        Ok(Some(std::array::from_fn(|axis| {
+            self.grid.origin[axis] + anchor[axis] as f32 * size
+        })))
+    }
+
     pub(crate) fn prepare_class(
         &mut self,
         request: [f32; 2],
@@ -1486,6 +1593,29 @@ impl Placement {
         radius: f32,
         work: &mut usize,
     ) -> Result<f64, Error> {
+        self.clear_fraction_checked(unit, from, to, radius, work, true)
+    }
+
+    fn segment_clear_streaming(
+        &self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        radius: f32,
+        work: &mut usize,
+    ) -> Result<bool, Error> {
+        Ok(self.clear_fraction_checked(unit, from, to, radius, work, false)? == 1.0)
+    }
+
+    fn clear_fraction_checked(
+        &self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        radius: f32,
+        work: &mut usize,
+        complete_budget: bool,
+    ) -> Result<f64, Error> {
         let delta = [
             f64::from(to[0]) - f64::from(from[0]),
             f64::from(to[1]) - f64::from(from[1]),
@@ -1493,7 +1623,10 @@ impl Placement {
         let steps = (delta[0].hypot(delta[1]) / (f64::from(self.rules.cell_size()) * 0.5))
             .ceil()
             .max(1.);
-        if !steps.is_finite() || steps > *work as f64 {
+        if !steps.is_finite()
+            || steps >= usize::MAX as f64
+            || (complete_budget && steps > *work as f64)
+        {
             return Err(work_exhausted("movement segment work exhausted"));
         }
         let steps = steps as usize;
@@ -1647,6 +1780,78 @@ impl Placement {
         reach: f32,
         work: &mut usize,
     ) -> Result<Vec<[f32; 2]>, Error> {
+        match self.route_outcome(unit, start, target, radius, reach, work)? {
+            RouteOutcome::Reached(path)
+            | RouteOutcome::PartialBudget(path)
+            | RouteOutcome::Blocked(path) => Ok(path),
+        }
+    }
+
+    pub(crate) fn route_outcome(
+        &self,
+        unit: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+        reach: f32,
+        work: &mut usize,
+    ) -> Result<RouteOutcome, Error> {
+        if !reach.is_finite() || reach < 0.0 {
+            return Err(fail("invalid route reach"));
+        }
+        let in_range = |point: [f32; 2]| {
+            ((point[0] - target[0]).powi(2) + (point[1] - target[1]).powi(2)).sqrt() <= reach
+        };
+        let approach = approach_point(start, target, reach);
+        if (reach == 0.0 || in_range(approach))
+            && self.segment_clear(unit, start, approach, radius, work)?
+        {
+            let mut path = Vec::new();
+            path.try_reserve_exact(1)
+                .map_err(|_| fail("route storage"))?;
+            path.push(approach);
+            return Ok(RouteOutcome::Reached(path));
+        }
+        self.route_search(unit, start, target, radius, reach, work)
+    }
+
+    pub(crate) fn route_outcome_streaming(
+        &self,
+        unit: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+        reach: f32,
+        work: &mut usize,
+    ) -> Result<RouteOutcome, Error> {
+        if !reach.is_finite() || reach < 0.0 {
+            return Err(fail("invalid route reach"));
+        }
+        let in_range = |point: [f32; 2]| {
+            ((point[0] - target[0]).powi(2) + (point[1] - target[1]).powi(2)).sqrt() <= reach
+        };
+        let approach = approach_point(start, target, reach);
+        if (reach == 0.0 || in_range(approach))
+            && self.segment_clear_streaming(unit, start, approach, radius, work)?
+        {
+            let mut path = Vec::new();
+            path.try_reserve_exact(1)
+                .map_err(|_| fail("route storage"))?;
+            path.push(approach);
+            return Ok(RouteOutcome::Reached(path));
+        }
+        self.route_search(unit, start, target, radius, reach, work)
+    }
+
+    fn route_search(
+        &self,
+        unit: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+        reach: f32,
+        work: &mut usize,
+    ) -> Result<RouteOutcome, Error> {
         use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
         #[derive(PartialEq)]
         struct Open {
@@ -1669,23 +1874,10 @@ impl Placement {
                     .then_with(|| other.travelled.total_cmp(&self.travelled))
             }
         }
-        if !reach.is_finite() || reach < 0.0 {
-            return Err(fail("invalid route reach"));
-        }
         let in_range = |point: [f32; 2]| {
             ((point[0] - target[0]).powi(2) + (point[1] - target[1]).powi(2)).sqrt() <= reach
         };
-        let approach = approach_point(start, target, reach);
-        if (reach == 0.0 || in_range(approach))
-            && self.segment_clear(unit, start, approach, radius, work)?
-        {
-            let mut path = Vec::new();
-            path.try_reserve_exact(1)
-                .map_err(|_| fail("route storage"))?;
-            path.push(approach);
-            return Ok(path);
-        }
-        // Exhausted work ends the search; the unit then goes as near as it got.
+        // Preserve the best path, but distinguish an unfinished search from blockage.
         let charge = |work: &mut usize| -> bool {
             match work.checked_sub(1) {
                 Some(left) => {
@@ -1804,8 +1996,10 @@ impl Placement {
         // Nearest explored cell to the target: (remaining estimate, travelled, cell).
         let mut best = (heuristic(start_cell), 0.0, begin);
         let mut arrived = false;
+        let mut exhausted = false;
         'search: while let Some(open) = frontier.pop() {
             if !charge(work) {
+                exhausted = true;
                 break;
             }
             if open.travelled > reached[&open.cell].0 {
@@ -1849,6 +2043,7 @@ impl Placement {
                         continue;
                     }
                     if !charge(work) {
+                        exhausted = true;
                         break 'search;
                     }
                     if self.prepare_motion(unit, centre(p), radius)?.is_none() {
@@ -1856,6 +2051,7 @@ impl Placement {
                     }
                     if dx != 0 && dy != 0 {
                         if !charge(work) {
+                            exhausted = true;
                             break 'search;
                         }
                         if self
@@ -1865,6 +2061,7 @@ impl Placement {
                             continue;
                         }
                         if !charge(work) {
+                            exhausted = true;
                             break 'search;
                         }
                         if self
@@ -1909,7 +2106,13 @@ impl Placement {
                 path.push(start);
             }
         }
-        Ok(path)
+        Ok(if arrived {
+            RouteOutcome::Reached(path)
+        } else if exhausted {
+            RouteOutcome::PartialBudget(path)
+        } else {
+            RouteOutcome::Blocked(path)
+        })
     }
 
     pub(crate) fn commit(&mut self, unit: HandleId, prepared: Prepared) {

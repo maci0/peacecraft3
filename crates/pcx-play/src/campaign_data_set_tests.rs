@@ -968,6 +968,60 @@ fn local_original_recipe_selects_the_custom_v0_namespace_and_base_fallback() {
     let reader = recipe.open(&map_info(1, 0)).unwrap();
     assert_eq!(reader.selection.prefix, "Custom_V0");
 
+    // Compare a gameplay cell with the exact source member chosen by the
+    // recipe, rather than substituting a value observed in a runtime probe.
+    let ability_member = "Units\\AbilityData.slk";
+    let prefixed_ability = format!("{}\\{ability_member}", reader.selection.prefix);
+    let mut mounts = expected_rules
+        .selected_mounts(recipe.edition())
+        .unwrap()
+        .to_vec();
+    mounts.sort_by_key(|mount| std::cmp::Reverse(mount.priority));
+    let (mount, archive_path, ability_bytes) = mounts
+        .into_iter()
+        .find_map(|mount| {
+            let path = install_file(install, &mount.archive)?;
+            let mut archive = opened_archive(&path, &table);
+            archive.find_block(&prefixed_ability)?;
+            Some((mount, path, archive.extract(&prefixed_ability).unwrap()))
+        })
+        .expect("selected namespace contains ability data");
+    let resolved_ability = reader.resolver.resolve(ability_member).unwrap();
+    assert_eq!(resolved_ability.bytes, ability_bytes);
+    assert_eq!(
+        resolved_ability.provenance.locator,
+        format!("{}::{prefixed_ability}", archive_path.display())
+    );
+    assert_eq!(
+        resolved_ability.provenance.archive_priority,
+        Some(mount.priority)
+    );
+    let alias = String::from_utf8(
+        crate::mirror_image_rules::Rules::read(&image, expected_rules.origin.clone())
+            .unwrap()
+            .ability
+            .to_vec(),
+    )
+    .unwrap();
+    let cost = |bytes: &[u8]| {
+        let parsed = pcx_slq::Table::parse(bytes).unwrap();
+        let row = parsed
+            .rows()
+            .find(|row| row.by_name("alias") == Some(alias.as_str()))
+            .expect("source Mirror Image row");
+        row.by_name("Cost1")
+            .expect("authored first-rank cost")
+            .parse::<f32>()
+            .unwrap()
+    };
+    let source_cost = cost(&ability_bytes);
+    assert!(source_cost.is_finite() && source_cost >= 0.0);
+    assert_eq!(cost(&resolved_ability.bytes), source_cost);
+    println!(
+        "selected Mirror Image ability={alias} first_rank_cost={source_cost} namespace={} provenance={}",
+        reader.selection.prefix, resolved_ability.provenance.locator
+    );
+
     let namespace_only = "Units\\NotUsed_UnitData.slk";
     for mount in &expected_rules.base {
         let Some(path) = install_file(install, &mount.archive) else {

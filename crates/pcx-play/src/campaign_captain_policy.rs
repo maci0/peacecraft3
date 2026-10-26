@@ -13,6 +13,7 @@ pub struct CaptainPolicy {
     pub first_selector_mask: u8,
     pub second_selector_mask: u8,
     pub defenders: DefenderRules,
+    pub(crate) assault: Result<crate::campaign_assault_policy::Rules, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -364,7 +365,16 @@ impl CaptainPolicy {
             first_selector_mask,
             second_selector_mask,
             defenders,
+            assault: Err("assault policy not admitted".into()),
         })
+    }
+
+    pub(crate) fn with_assault(
+        mut self,
+        rules: Result<crate::campaign_assault_policy::Rules, String>,
+    ) -> Self {
+        self.assault = rules;
+        self
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

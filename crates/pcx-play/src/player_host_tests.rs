@@ -1202,3 +1202,6 @@ fn slow_chopping_players_and_lifecycles_are_independent() {
     assert!(host.activate_campaign_ai_player(0).unwrap());
     assert_eq!(host.campaign_slow_chopping_enabled(id(&a)).unwrap(), None);
 }
+
+#[path = "leaderboard_host_tests.rs"]
+mod leaderboards;

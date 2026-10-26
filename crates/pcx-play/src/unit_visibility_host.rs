@@ -62,6 +62,7 @@ impl ObjectHost {
             };
             let prepared = self.prepare_unit_visibility(unit, shown, name)?;
             self.commit_unit_visibility(unit, prepared, name)?;
+            self.mirror_visibility_override(unit);
             Ok(Value::Null)
         })())
     }
@@ -72,8 +73,24 @@ impl ObjectHost {
         shown: bool,
         name: &str,
     ) -> Result<PreparedVisibility, Error> {
+        self.prepare_unit_visibility_at(unit, shown, name, None)
+    }
+    pub(super) fn prepare_mirror_reveal(
+        &mut self,
+        unit: pcx_script::HandleId,
+        point: [f32; 2],
+    ) -> Result<PreparedVisibility, Error> {
+        self.prepare_unit_visibility_at(unit, true, "Mirror Image reveal", Some(point))
+    }
+    fn prepare_unit_visibility_at(
+        &mut self,
+        unit: pcx_script::HandleId,
+        shown: bool,
+        name: &str,
+        target: Option<[f32; 2]>,
+    ) -> Result<PreparedVisibility, Error> {
         let record = self.executed_unit(unit)?;
-        if record.shown == shown {
+        if record.shown == shown && target.is_none() {
             return Ok(PreparedVisibility {
                 position: record.position,
                 shown,
@@ -94,11 +111,11 @@ impl ObjectHost {
             None
         };
         let (position, face, moving) = (
-            record.position,
+            target.or(record.position),
             record.face,
             record.activity.as_ref().is_some_and(|a| a.moving()),
         );
-        let mut relocated = None;
+        let mut relocated = target.filter(|point| Some(*point) != record.position);
         let prepared = if let Some((radius, path, movement)) = geometry {
             let position = position.ok_or_else(|| {
                 self.inner

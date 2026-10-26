@@ -1121,3 +1121,158 @@ TFT first chapter now passes its floating-unit creation and reaches later startu
 calls. Original boat trajectories, bank/pitch, bridge elevation and rendered water
 textures/shorelines remain unverified or unfinished. Water surface sampling is
 not a claim that the missing water renderer has been implemented.
+
+## Player structure count (2026-10-26)
+
+The unchanged Human02 victory controller passed the empty-level XP frontier in
+the same partial tick, then reached `GetPlayerStructureCount(Player(1), true)`
+in its authored All Buildings Destroyed condition. The stopped
+`human02-victory-3-xp` log retains 15,284 completed ticks and host clock
+238.828125; this is a script frontier, not defeat or victory acceptance.
+
+The selected common declaration is constant `(player, boolean) -> integer`.
+The selected primary registration reaches `0x494AF0`, which resolves the player,
+returns zero for a null resolution, and passes includeIncomplete into the
+player's count manager at `0x513600`. False reads its completed-structure counter;
+true adds the separate incomplete counter. The type entry's structure path
+(`0x5134CD`–`0x5134DE`) calls `0x5CC9F0`, also used by IsUnitIdType's structure
+case at `0x499B45`. Counter completion at `0x513566`–`0x513569` moves one from
+the incomplete counter into the completed counter. These are native-code links,
+not source-owned canonical offsets or a requirement to reproduce native storage.
+
+A short original-client probe reuses the already qualified full r4/Arm D
+container and actions, adding only both structure queries to the markers.
+Immediately after the public point-build debits its cost, before arrival and
+before STOP, both counts remain zero. STOP restores the reserved cost and both
+counts remain zero through the terminal at 6.25. No site or construction event
+was published. All 31 strict preload records are retained locally and the
+isolated/null-audio container is stopped. Thus a paid prearrival reservation
+must not be treated as an incomplete structure. Generic queued-counter native
+paths alone did not establish that distinction.
+
+The canonical native scans the existing executed-unit arena, with checked
+integer accumulation bounded by the admitted handle domain. It reads current
+ownership, source-typed UnitBalance/isbldg and admitted liveness. Dead/removed
+units are excluded; presentation visibility does not filter the count. False
+excludes the existing construction marker; true includes a live canonical site.
+Pending requests without a site contribute nothing. Completion, cancellation,
+owner transfer and death need no duplicate count cache or mutation hooks.
+The existing campaign type-count queries share only the unchanged liveness
+predicate; their other semantics were not expanded. GetPlayerUnitCount remains
+a separate unsupported native.
+
+Optional admission validates exact signature/constantness, player handle family
+and the CreateUnit declaration source before catalog reads. An omitted native
+adds no capability requirement to old fixtures/maps. Malformed declarations,
+wrong handles and unknown/nonfinite liveness refuse instead of manufacturing a
+zero count. Null-player zero follows the qualified native wrapper.
+
+Synthetic tests exercise public point-build/prearrival STOP/START/FINISH/cancel,
+completed and incomplete flags, typed source overrides, hidden presentation,
+ownership transfer, death/removal, argument refusal and optional declaration
+boundaries. The explicit selected-source gate parses actual common.j and checks
+the pinned native wrapper/counter split. These tests do not establish all native
+special-unit exclusions, structure-upgrade behavior, exact callback interleaving
+or a complete Human02 victory. Internal construction actors and ordinary direct
+creation remain the canonical unit store used by this slice.
+
+
+## Construction projection work ordering (2026-10-26)
+
+The unchanged Human02 victory replay reached host clock 386.140625 before
+`construction work budget` refused its partial projection. Construction advancement
+was placed after optional blocked/follow route searches, allowing those searches
+to consume work required by the canonical construction sites and pending requests.
+It now runs with the other mandatory consumers before either optional search loop.
+No configured budget, route allowance, search algorithm or mission bound changes.
+
+A synthetic public build request is obstructed after its initial route is accepted.
+With 128 work units, the optional search consumes the remainder and retains moving
+pending state; the old ordering reproduces the exact construction-budget refusal.
+The corrected ordering succeeds twice with identical work and pending state. This
+qualifies ordering and deterministic accounting, not eventual route progress. The
+actual worker's unchanged moving path since clock 130 remains a separate routing
+question; a synthetic stop-short result can also leave a pending request without
+motion. Neither observation establishes completion or full mission victory.
+
+
+### Budget-partial construction routes
+
+The internal planner now distinguishes reaching the requested region, a best path
+returned because forward A* exhausted its allowance, and a completed blocked/nearest
+search. Existing point, follow and patrol callers retain their path choices and
+errors through the existing vector-returning wrappers. Pre-search work-exhaustion
+errors remain explicit. This is host scheduling information, not new asset content.
+
+Only a motion still owned by the current canonical construction request's goal and
+reach uses the optional streaming segment probe. It shares the same sample/corner
+loop with mandatory collision checks, charging each tested sample until the first
+obstruction or allowance exhaustion. Mandatory movement keeps its complete-segment
+preflight contract. The A* body, ordering and configured work limits are unchanged.
+Budget-partial construction paths re-enter the existing optional queue at their
+endpoint, including a zero-progress endpoint. Each new path begins on the current
+clock; waiting does not become credited travel. A nonzero construction retry
+reselects the authored Walk through the existing animation API and admitted speed,
+so a Stand selected at the partial endpoint does not persist during resumed travel. Genuine blocked outcomes retain
+the preceding behavior; blocked-build cancellation/refund policy is not qualified.
+The canonical request and revision remain the only command owner; STOP, explicit
+move, death and removal retire it through existing cleanup and cannot reissue it.
+
+Synthetic tests reproduce the former moving restart and motionless-pending shapes,
+then verify charged deterministic work, retry of a partial detour without a new
+player command, one actual site/START/FINISH and one debit after clearing the
+obstruction, and retirement/refund without a delayed site after interruption.
+Tiny fixed allowances can still spend all optional work repeating a zero-progress
+A* search. No persistent frontier is retained yet; request-owned continuation is
+the upgrade if that allowance must provide eventual progress. The actual Human02
+worker's search termination was not captured, so synthetic symptom agreement is
+not proof of its exact cause. No mission replay or native route parity is claimed.
+
+
+## Mandatory work across script sub-wakes (2026-10-26)
+
+The unchanged Human02 victory5 replay passed its authored base objective at tick
+43328/clock 677, then stopped after tick 43847 with a partial clock of
+685.1156250089407 and `training work budget`. The `FillGuardPosts` diagnostic label
+comes from the training module's shared error constructor; it does not establish
+that the script called that native at the failure. Ordinary and guard training
+both advance through the same canonical queue scan.
+
+Training already preceded optional routing inside one activity projection. The
+session, however, shares one 65536-work allowance across timer, sleeping-thread,
+training and AI sub-wakes in an `advance_timers` call. An early optional search
+could consume that allowance before a later mandatory training scan. The allowance
+is neither reset nor increased. Intermediate wakes now project mandatory work and
+retain optional follow/blocked-route witnesses in the existing activity state.
+At normal target completion, the session flushes optional routes with the remainder.
+Direct `advance_unit_activity` callers still flush immediately. Queues replace by
+canonical handle in sorted order, are bounded by admitted arena handles, and
+revalidate the same motion/follow/pause/death witnesses before any search. A manual
+STOP between a wake and flush cannot be overridden. Paused sessions do not flush
+until delivery resumes. Any failed `advance_timers` call discards its deferred
+optional witnesses, including errors from script/AI callbacks, while preserving
+already committed canonical effects. The mandatory projection entrypoint does
+the same on failure. Session replacement drops the owning activity state; no
+queue is shared between sessions. Span callers retain their error cleanup contract.
+
+The shared allowance pays corpse decay, training jobs, sleep state, active-unit and
+waypoint/collision projection, harvesting, regeneration/blight and inventory work,
+and construction before optional follow refresh/blocked replans. Combat and native
+AI/order admission retain their existing independently bounded work paths. Timer
+and script callback delivery still use their separate expiry/instruction budgets.
+No job, resource, guard assignment, event, route algorithm or configured bound is
+changed. Optional route planning is batched at the completed call target; native
+intra-tick planning cadence is not established by this scheduling choice.
+
+A deterministic synthetic sequence projects a blocked producer, simulates the
+intervening AI world call that enqueues actual paid guard replacement training,
+and performs the next projection with the same 128-work allowance. Immediate
+optional routing reproduces the exact training-budget error; mandatory-first
+sub-wakes succeed, then actual completion emits one START/FINISH and spends once.
+A zero mandatory allowance still refuses before advancing its job, while a second
+optional flush spends nothing. Repeated sub-wakes retain one witness for the
+same unit; a subsequent forced mandatory fault clears it without rolling back
+the paid queue. These are engine scheduling tests, not an original
+client or full mission replay. The earlier pending builder still stalled in the
+actual mission until the route replaced it at clock 520; its travel is not claimed
+fixed by either the earlier partial-route work or this scheduling correction.

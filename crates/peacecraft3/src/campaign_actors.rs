@@ -1761,6 +1761,10 @@ mod tests {
         };
         let id = HandleId::new(std::num::NonZeroU64::new(1).unwrap());
         ExecutedUnit {
+            illusion: None,
+            construction: None,
+            construction_revision: 0,
+            construction_request: None,
             decay: None,
             collision_radius: Err("missing UnitBalance collision field"),
             definition: Definition {

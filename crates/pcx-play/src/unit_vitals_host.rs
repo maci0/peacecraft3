@@ -439,6 +439,15 @@ impl ObjectHost {
         if !record.definition.rawcode[0].is_ascii_uppercase() {
             return Ok((base, 0.0));
         }
+        if let Some(image) = &record.illusion {
+            return Ok((
+                base,
+                (image.attributes.strength + image.attributes.strength_bonus)
+                    * self
+                        .life_per_strength()
+                        .ok_or("unit vitals are not admitted")?,
+            ));
+        }
         let bonus = self.unit_hero_bonus(unit).map_err(|e| e.to_string())?;
         let progress = self.hero_initial_level().zip(
             record
@@ -804,7 +813,12 @@ impl ObjectHost {
         let mut mana = f64::from(vitals.regen.mana_per_second);
         let bonus = self.unit_hero_bonus(unit)?;
         let mut bonus_life = f64::from(bonus.life_regen);
-        if record.definition.rawcode[0].is_ascii_uppercase() {
+        if let Some(image) = &record.illusion {
+            bonus_life += f64::from(image.attributes.strength + image.attributes.strength_bonus)
+                * f64::from(bonuses.life_regen_per_strength);
+            mana += f64::from(image.attributes.intelligence + image.attributes.intelligence_bonus)
+                * f64::from(bonuses.mana_regen_per_intelligence);
+        } else if record.definition.rawcode[0].is_ascii_uppercase() {
             let progress = self.hero_initial_level().zip(
                 record
                     .abilities

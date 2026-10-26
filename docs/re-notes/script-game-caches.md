@@ -354,3 +354,70 @@ It now advances to requested tick 91832, where the script completes the unassign
 `udg_QuestOrcs` and the current quest host rejects the null argument. The script
 actually creates `udg_QuestVillage`; no quest alias or original-map edit was made.
 This is headless recreation evidence, not native or rendered campaign acceptance.
+
+## Cross-chapter source qualification (2026-10-25)
+
+The application had stored the source map member in `CachedUnit.install` and
+compared it with the receiving map member. The legitimate Human01 cache therefore
+failed Human02 `RestoreUnit` despite an identical selected client digest and
+edition. That field remains source-map provenance; it is not an installation
+identity, and no filesystem path is introduced as a compatibility requirement.
+
+Campaign preparation now admits a bounded list of map members whose winning
+`SourceInfo` exactly matches the receiving map's selected archive layer. This
+uses the resolver inventory without extracting every map. The pinned campaign
+layer identifies its client, common script, archive snapshot and edition in its
+source version. A saved source member must either match the host's existing
+source identity or normalize to a safe `AssetPath` in that admitted list. A
+member supplied by another winning layer is excluded. The selected client-image
+SHA-256 and edition must still match exactly before unit creation. Hosts without
+an explicitly qualified list retain the earlier strict source check. External
+map labels without a mounted source member also retain that strict behavior.
+
+PC3UNIT versions 1 through 4 already retain the client digest, edition and map
+member, so their format and bytes do not change. They contain no historical
+archive digest: current selected-archive membership cannot prove which archive
+snapshot originally produced an old record. That existing limitation is explicit;
+this compatibility correction does not claim to authenticate historical source
+bytes or read original W3V data. Receiving-map definition/rank/item validation
+and atomic preparation remain in place.
+
+Synthetic checks exercise all four payload versions across qualified map members,
+strict empty-list behavior, unlisted and unsafe members, client/edition mismatches,
+and a foreign layer overriding an otherwise listed map. These checks establish
+recreation qualification and restoration behavior, not native compatibility or
+complete campaign progression.
+
+The isolated short transition fixture passes with a clone of the legitimate
+Human01 winning profile. It restores a reference through public cache natives,
+removes that diagnostic unit, activates the existing score Continue path, and
+verifies that Human02 publishes the cached `udg_Arthas` as `bj_lastLoadedUnit`.
+The actual persistent hero progress, learned ranks, permanent strength and
+slotted item/charge snapshot equal the reference. This is a focused transition
+and restoration gate: its explicit victory stimulus is not another mission
+playthrough. The original winning profile remains unchanged. Eleven targeted
+cache tests, strict native all-target and WASM library checks, and native/WASM
+application builds pass. Local commands and results are retained under
+`.scratch/campaign-cache-identity-20261025/`.
+
+Direct chapter entry retains the localized title as its diagnostic map label;
+transition entry uses the member path there. Qualification now considers the
+admitted map identity's source as a fallback, only when it is a safe mounted
+`.w3m`/`.w3x` member. Neither a display title, an archive filesystem origin nor
+an unrelated non-map asset can qualify source maps. The same winning-layer
+comparison still controls the admitted list; UI labels and cache formats are
+unchanged.
+
+The direct Human02 entry check with a fresh clone of the earned Human01 profile
+now publishes the cached hero and reaches authored control. Its public peasant
+training command is accepted. The broader fixture remains red at the later
+`IssueImmediateOrder(unit, string)` call in `Blizzard.j:7817` while advancing the
+training queue; completed training and Human02 mission completion are not proved.
+The frozen route's start/end hashes agree and the original profile is unchanged.
+Its diagnostic record is
+`.scratch/campaign-determinism-20261025/human02-direct-fixed-1.log`.
+
+Final direct-entry follow-up checks pass: the eleven cache cases include the
+localized-title fallback; strict native all-target and WASM library checks and
+both production builds are clean. The route fixture's borrow-scope-only lint
+correction was checked afterward without repeating its runtime behavior.

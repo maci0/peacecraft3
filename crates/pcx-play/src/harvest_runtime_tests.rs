@@ -146,12 +146,22 @@ fn harvest_tables_for_range(
     duration: &'static str,
     range: &'static str,
 ) -> Arc<DefaultTables> {
+    harvest_tables_for_search_range(damage, capacity, duration, range, "600")
+}
+
+fn harvest_tables_for_search_range(
+    damage: &'static str,
+    capacity: &'static str,
+    duration: &'static str,
+    range: &'static str,
+    search: &'static str,
+) -> Arc<DefaultTables> {
     let ability_rows: &[&[&str]] = &[
         &[
             "Agld", "Agld", "1", "0", "0", "500", "2.25", "1", "-", "-", "-",
         ],
         &[
-            "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, "600", duration,
+            "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, search, duration,
         ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
         &["Arlm", "Artn", "1", "0", "0", "0", "1", "-", "-", "-", "-"],
@@ -386,6 +396,7 @@ fn harvest_rules() -> (
         (0x6C0, 902),
         (0x6E0, 903),
         (0x760, 967),
+        (0x780, 12347),
     ] {
         let name_va = 0x301000 + (at as u32 - 0x200);
         let mut record = vec![0x68];
@@ -403,6 +414,7 @@ fn harvest_rules() -> (
     image[0x6C0..0x6C8].copy_from_slice(b"harvest\0");
     image[0x6E0..0x6F1].copy_from_slice(b"resumeharvesting\0");
     image[0x760..0x766].copy_from_slice(b"smart\0");
+    image[0x780..0x790].copy_from_slice(b"autoharvestgold\0");
     image[0x220..0x220 + initializer.len()].copy_from_slice(&initializer);
     binding.initializer.len = initializer.len() as u32;
     let mut put = |at: usize, prefix: &[u8], id: i32| {
@@ -422,7 +434,7 @@ fn harvest_rules() -> (
     binding.initializer.digest = sha256(&image[0x220..0x220 + binding.initializer.len as usize]);
     binding.image_sha256 = sha256(&image);
     let registry = Arc::new(
-        crate::order_registry::Registry::read(&image, binding.clone(), budget, 9, 32).unwrap(),
+        crate::order_registry::Registry::read(&image, binding.clone(), budget, 10, 32).unwrap(),
     );
     let rules = crate::unit_activity::Rules::read(
         &image,
@@ -1252,8 +1264,15 @@ fn gold_fixture() -> (Vm, HandleId, HandleId, HandleId) {
 }
 
 fn gold_fixture_budget(max_workers: usize) -> (Vm, HandleId, HandleId, HandleId) {
+    gold_fixture_search(max_workers, "600")
+}
+
+fn gold_fixture_search(
+    max_workers: usize,
+    search: &'static str,
+) -> (Vm, HandleId, HandleId, HandleId) {
     let (mut vm, _) = open_harvest_with_budget(
-        harvest_tables_for_range("9", "20", "4", "20"),
+        harvest_tables_for_search_range("9", "20", "4", "20", search),
         tree_catalog(),
         placed_tree(),
         harvest_fields(),
@@ -2498,5 +2517,305 @@ fn work_catch_up_is_independent_of_the_tick_partition() {
     assert_eq!(
         player_bank(&mut whole, "PLAYER_STATE_RESOURCE_LUMBER"),
         player_bank(&mut split, "PLAYER_STATE_RESOURCE_LUMBER")
+    );
+}
+
+fn auto_gold(vm: &mut Vm, worker: HandleId, numeric: bool) -> Result<Value, String> {
+    vm.host().inner.native(
+        if numeric {
+            "IssueImmediateOrderById"
+        } else {
+            "IssueImmediateOrder"
+        },
+        &[
+            Value::Handle(worker),
+            if numeric {
+                Value::Int(12347)
+            } else {
+                Value::Str("autoharvestgold".into())
+            },
+        ],
+    )
+}
+
+#[test]
+fn autoharvestgold_both_order_forms_enter_the_mine_and_deposit_real_cargo() {
+    for numeric in [false, true] {
+        let (mut vm, worker, _depot, mine) = gold_fixture();
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+        assert_eq!(
+            auto_gold(&mut vm, worker, numeric).unwrap(),
+            Value::Bool(true)
+        );
+        let mut entered = false;
+        for n in 1..=240 {
+            tick(&mut vm, f64::from(n) / 10.0);
+            entered |= hidden(&mut vm, worker);
+            if player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD") > bank {
+                break;
+            }
+        }
+        assert!(entered);
+        assert_eq!(gold_amount(&mut vm, mine), 470);
+        assert_eq!(
+            player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+            bank + 30
+        );
+    }
+}
+
+#[test]
+fn autoharvestgold_selects_nearest_eligible_mine_with_handle_ties() {
+    let (mut vm, worker, _depot, original) = gold_fixture();
+    let first = create_unit(&mut vm, *b"ngol", 80.0, 64.0);
+    let second = create_unit(&mut vm, *b"ngol", 64.0, 80.0);
+    for mine in [first, second] {
+        gold_role(&mut vm, mine, "Agld", true, Some(500));
+    }
+    assert!(first < second);
+    let worker_position = vm
+        .host()
+        .inner
+        .executed_unit(worker)
+        .unwrap()
+        .position
+        .unwrap();
+    let square = |vm: &mut Vm, mine| {
+        let position = vm
+            .host()
+            .inner
+            .executed_unit(mine)
+            .unwrap()
+            .position
+            .unwrap();
+        (position[0] - worker_position[0]).powi(2) + (position[1] - worker_position[1]).powi(2)
+    };
+    assert_eq!(square(&mut vm, first), square(&mut vm, second));
+    assert_eq!(
+        auto_gold(&mut vm, worker, false).unwrap(),
+        Value::Bool(true)
+    );
+    for n in 1..=240 {
+        tick(&mut vm, f64::from(n) / 10.0);
+        if gold_amount(&mut vm, first) < 500 {
+            break;
+        }
+    }
+    assert_eq!(gold_amount(&mut vm, first), 470);
+    assert_eq!(gold_amount(&mut vm, second), 500);
+    assert_eq!(gold_amount(&mut vm, original), 500);
+}
+
+#[test]
+fn autoharvestgold_no_mine_or_failed_admission_preserves_worker_and_resources() {
+    for case in 0..4 {
+        let (mut vm, worker, depot, mine) = gold_fixture_budget(if case == 2 { 0 } else { 4 });
+        if case == 0 {
+            gold_role(&mut vm, mine, "Agld", true, Some(0));
+        }
+        if case == 1 {
+            gold_role(&mut vm, depot, "_", true, None);
+        }
+        if case == 3 {
+            gold_role(&mut vm, worker, "_", false, None);
+        }
+        let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+        assert!(
+            vm.host()
+                .inner
+                .native(
+                    "IssueImmediateOrder",
+                    &[
+                        Value::Handle(worker),
+                        Value::Str("unknown-synthetic-order".into())
+                    ]
+                )
+                .is_err()
+        );
+        let result = auto_gold(&mut vm, worker, false);
+        if case == 0 || case == 3 {
+            assert_eq!(result.unwrap(), Value::Bool(false));
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(vm.host().inner.executed_unit(worker).unwrap(), &before);
+        assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+        assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+        assert_eq!(gold_amount(&mut vm, mine), if case == 0 { 0 } else { 500 });
+    }
+}
+
+#[test]
+fn autoharvestgold_ignores_hidden_empty_and_removed_nearer_mines() {
+    for case in 0..3 {
+        let (mut vm, worker, _depot, mine) = gold_fixture();
+        let nearer = create_unit(&mut vm, *b"ngol", 56.0, 32.0);
+        gold_role(
+            &mut vm,
+            nearer,
+            "Agld",
+            true,
+            Some(if case == 1 { 0 } else { 500 }),
+        );
+        if case == 0 {
+            vm.host()
+                .inner
+                .native("ShowUnit", &[Value::Handle(nearer), Value::Bool(false)])
+                .unwrap();
+        }
+        if case == 2 {
+            remove_unit(&mut vm, nearer);
+        }
+        assert_eq!(
+            auto_gold(&mut vm, worker, false).unwrap(),
+            Value::Bool(true)
+        );
+        for n in 1..=240 {
+            tick(&mut vm, f64::from(n) / 10.0);
+            if gold_amount(&mut vm, mine) < 500 {
+                break;
+            }
+        }
+        assert_eq!(gold_amount(&mut vm, mine), 470);
+    }
+}
+
+#[test]
+fn gold_mine_exit_retains_a_usable_admitted_depot_outside_acquisition_radius() {
+    let (mut vm, worker, depot, mine) = gold_fixture_search(4, "70");
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    start_gold(&mut vm, worker, mine);
+    let mut outside = false;
+    for n in 1..=240 {
+        tick(&mut vm, f64::from(n) / 10.0);
+        let host = &mut vm.host().inner;
+        let from = host.executed_unit(worker).unwrap().position.unwrap();
+        let target = host.executed_unit(depot).unwrap().position.unwrap();
+        outside |= (from[0] - target[0]).hypot(from[1] - target[1]) > 70.0;
+        if player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD") > bank {
+            break;
+        }
+    }
+    assert!(
+        outside,
+        "the accepted mining leg leaves the acquisition radius"
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank + 30
+    );
+    assert_eq!(gold_amount(&mut vm, mine), 470);
+}
+
+#[test]
+fn gold_mine_exit_reacquires_a_depot_when_the_admitted_one_is_stale() {
+    for case in 0..3 {
+        let (mut vm, worker, depot, mine) = gold_fixture();
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+        start_gold(&mut vm, worker, mine);
+        let mut n = 0;
+        while !hidden(&mut vm, worker) {
+            n += 1;
+            tick(&mut vm, f64::from(n) / 10.0);
+            assert!(n < 100);
+        }
+        let replacement = create_unit(&mut vm, *b"htow", 96.0, 96.0);
+        gold_role(&mut vm, replacement, "Argl", true, None);
+        match case {
+            0 => {
+                vm.host()
+                    .inner
+                    .native("ShowUnit", &[Value::Handle(depot), Value::Bool(false)])
+                    .unwrap();
+            }
+            1 => {
+                let owner = vm.host().inner.native("Player", &[Value::Int(1)]).unwrap();
+                vm.host()
+                    .inner
+                    .native(
+                        "SetUnitOwner",
+                        &[Value::Handle(depot), owner, Value::Bool(false)],
+                    )
+                    .unwrap();
+            }
+            _ => remove_unit(&mut vm, depot),
+        }
+        for step in n + 1..=240 {
+            tick(&mut vm, f64::from(step) / 10.0);
+            if player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD") > bank {
+                break;
+            }
+        }
+        assert_eq!(
+            player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+            bank + 30
+        );
+        assert_eq!(gold_amount(&mut vm, mine), 470);
+    }
+}
+
+#[test]
+fn gold_mine_exit_without_a_usable_depot_preserves_hidden_worker_and_mine() {
+    let (mut vm, worker, depot, mine) = gold_fixture();
+    start_gold(&mut vm, worker, mine);
+    let mut n = 0;
+    while !hidden(&mut vm, worker) {
+        n += 1;
+        tick(&mut vm, f64::from(n) / 10.0);
+        assert!(n < 100);
+    }
+    remove_unit(&mut vm, depot);
+    let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    let error = (n + 1..=240)
+        .find_map(|step| advance(&mut vm, f64::from(step) / 10.0, 65536).err())
+        .expect("missing depot refuses");
+    assert!(
+        error
+            .to_string()
+            .contains("no gold-accepting depot at mine exit")
+    );
+    let after = vm.host().inner.executed_unit(worker).unwrap();
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.shown, before.shown);
+    assert_eq!(after.activity, before.activity);
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+}
+
+#[test]
+fn campaign_targeting_harvesting_is_not_the_spell_channel_band() {
+    let mut fields = harvest_fields();
+    let mut class = field(*b"clas", SlkId::UnitBalance, "type", "peon");
+    class.1.metadata.as_mut().unwrap().from = SlkId::UnitMetaData;
+    fields.push(class);
+    let (mut vm, _) = open_harvest_with(harvest_tables(), tree_catalog(), placed_tree(), fields);
+    let worker = create_unit(&mut vm, *b"hpea", 32., 32.);
+    let ordinary = create_unit(&mut vm, *b"hpea", 36., 32.);
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let policy = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+    host.test_set_game_difficulty(i32::from(policy.optional_level_gate));
+    host.admit_campaign_targeting(&context, policy).unwrap();
+    let choices = [(ordinary, 1.), (worker, 20.)];
+    assert_eq!(
+        host.test_campaign_acquisition(&choices).unwrap(),
+        Some(ordinary)
+    );
+    assert_eq!(
+        host.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(worker), Value::Int(900)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    tick(&mut vm, 1.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.harvest_worker_count(worker), 1);
+    assert_eq!(
+        host.test_campaign_acquisition(&choices).unwrap(),
+        Some(ordinary)
     );
 }

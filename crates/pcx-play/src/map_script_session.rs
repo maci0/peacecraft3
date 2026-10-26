@@ -294,6 +294,20 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     pub fn advance_timers(
         &mut self,
         until: f64,
+        budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        let result = self.advance_timers_inner(until, budget);
+        if result.is_err()
+            && let Some(host) = self.host()
+        {
+            host.objects_mut().discard_unit_activity_routes();
+        }
+        result
+    }
+
+    fn advance_timers_inner(
+        &mut self,
+        until: f64,
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
         self.host()
@@ -308,6 +322,11 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects()
                 .has_queued_training_events()
+                || self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects()
+                    .has_queued_mirror_events()
             {
                 let events = self.advance_queued_events(budget)?;
                 budget = budget
@@ -335,6 +354,18 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .objects()
                 .next_training_completion(step_until);
             let step_until = training_wake.unwrap_or(step_until);
+            let step_until = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .next_construction_completion(step_until)
+                .unwrap_or(step_until);
+            let mirror_wake = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .next_mirror_boundary(step_until);
+            let step_until = mirror_wake.unwrap_or(step_until);
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -346,7 +377,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity(now, &mut activity_work)?;
+                objects.advance_unit_activity_mandatory(now, &mut activity_work)?;
                 budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                 self.resume_thread(ticket)?;
                 delivered += 1;
@@ -363,7 +394,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity(now, &mut activity_work)
+                objects.advance_unit_activity_mandatory(now, &mut activity_work)
             };
             if let Err(error) = movement {
                 if let Some(expiry) = expiry {
@@ -375,7 +406,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Err(error.into());
             }
             let Some(expiry) = expiry else {
-                if training_wake == Some(step_until) {
+                if training_wake == Some(step_until) || mirror_wake == Some(step_until) {
                     budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     continue;
                 }
@@ -388,6 +419,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     delivered += 1;
                     continue;
                 }
+                let objects = self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut();
+                let now = objects.timer_game_time().expect("selected timer clock");
+                objects.flush_unit_activity_routes(now, &mut activity_work)?;
                 return Ok(delivered);
             };
             let result = (|| -> Result<(), TimerSessionError> {

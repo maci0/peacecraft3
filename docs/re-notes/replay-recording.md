@@ -292,9 +292,16 @@ The sample is never committed.
 
 ## Action decode (format only)
 
-`crates/pcx-net/src/w3g_action.rs` is the action decoder. It is not declared
-from `w3g.rs` while another owner holds Cargo. The declaration is
-`#[path = "w3g_action.rs"] pub mod action;`.
+`pcx_net::w3g::action` exposes the bounded action decoder in
+`crates/pcx-net/src/w3g_action.rs`. Nine synthetic tests cover its admitted
+shapes and refusal paths. The ignored local sample gate decodes every command
+and compares the decoded actions after a structural writer roundtrip.
+
+Validation (2026-10-25): `cargo test -p pcx-net --lib w3g` passes 29
+tests, including all nine action tests. The ignored `w3g_sample` gate passes
+with the retained capture below. Strict native all-target and WASM library
+Clippy (`-D warnings`) pass. These are parser and compile checks, not playback
+or production recording qualification.
 
 The admitted layout is the qualified sample's header fields, game version 29
 and build 6060. Those fields are not a product-version string. The capture
@@ -322,7 +329,6 @@ original-client playback.
 
 Playback still has these seams:
 
-- Declare the module and run the structural tests plus the ignored sample gate.
 - Bind each `ObjectId` pair through an explicit checked table or by
   correlation with units on the pinned map. `PlayerCommandLog` stores
   canonical `HandleId` values and an `f64` timer clock, including Human01

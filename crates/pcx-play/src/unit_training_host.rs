@@ -123,7 +123,7 @@ impl ObjectHost {
             .error(NATIVE, Failure::UnitActivity(detail.into()))
     }
 
-    fn training_prerequisites_met(
+    pub(super) fn training_prerequisites_met(
         &self,
         definition: &Definition,
         owner: HandleId,
@@ -667,7 +667,7 @@ impl ObjectHost {
                     return Err(self.inner.error(name, Failure::Source));
                 }
                 let record = self.executed_unit(*producer)?;
-                if !live(record) {
+                if !live(record) || record.construction.is_some() {
                     return Ok(Value::Bool(false));
                 }
                 let list = profile(&record.definition, "Trains", "unitList")
@@ -740,13 +740,42 @@ impl ObjectHost {
         if super::unit_types::structure(&definition).map_err(|e| self.training_error(e))? {
             return Err(self.training_error("guard-post construction is not admitted"));
         }
-        // Scan source train lists without interpreting a unit's reported current-order ID as its queue.
+        let selected = self.select_training_producer(owner, requested, true)?;
+        let Some(producer) = selected else {
+            return Ok(());
+        };
+        self.enqueue_training(producer, owner, Some((player, post)), kind, definition)
+            .map(|_| ())
+    }
+
+    fn select_training_producer(
+        &self,
+        owner: HandleId,
+        requested: [u8; 4],
+        idle_only: bool,
+    ) -> Result<Option<HandleId>, Error> {
+        let slots = if idle_only {
+            0
+        } else {
+            self.training_queue_slots()?
+        };
+        // shortcut: canonical arena order is the recreation tie-break, native producer preference remains unqualified.
         let mut selected = None;
         for (id, record) in self.executed_units() {
             if record.owner != owner
                 || !live(record)
+                || record.construction.is_some()
                 || record.paused_since.is_some()
-                || self.training.jobs.iter().any(|j| j.producer == id)
+                || if idle_only {
+                    self.training.jobs.iter().any(|j| j.producer == id)
+                } else {
+                    self.training
+                        .jobs
+                        .iter()
+                        .filter(|j| j.producer == id)
+                        .count()
+                        >= slots
+                }
             {
                 continue;
             }
@@ -772,11 +801,57 @@ impl ObjectHost {
                 break;
             }
         }
-        let Some(producer) = selected else {
-            return Ok(());
-        };
-        self.enqueue_training(producer, owner, Some((player, post)), kind, definition)
-            .map(|_| ())
+        Ok(selected)
+    }
+
+    pub(crate) fn set_ai_produce(
+        &mut self,
+        player: i32,
+        quantity: i32,
+        kind: i32,
+        town: i32,
+    ) -> Result<bool, Error> {
+        let fail = |why: String| self.inner.error("SetProduce", Failure::UnitActivity(why));
+        let maximum = self.admitted_ai_production_max()?;
+        if !(1..=maximum).contains(&quantity) {
+            return Ok(false);
+        }
+        if !self.campaign_ai.is_active(player) {
+            return Err(fail(format!("AI player {player} is not active")));
+        }
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| fail(format!("AI player {player} is not admitted")))?;
+        if town != -1 {
+            return Err(fail(format!(
+                "town-specific production is not admitted: player={player} town={town}"
+            )));
+        }
+        self.require_ordinary_training(kind)?;
+        let requested = kind.to_be_bytes();
+        let definition = self
+            .unit_catalog()?
+            .resolve(requested)
+            .map_err(|problem| fail(format!("AI production catalog {requested:?}: {problem:?}")))?;
+        if definition.rawcode != requested
+            || definition.kind != pcx_objects::editor::ObjectKind::Unit
+        {
+            return Err(fail("AI production catalog identity differs".into()));
+        }
+        if super::unit_types::structure(&definition).map_err(fail)? {
+            return Err(fail(format!(
+                "AI construction is not admitted: player={player} kind={requested:?}"
+            )));
+        }
+        for _ in 0..quantity {
+            let Some(producer) = self.select_training_producer(owner, requested, false)? else {
+                return Ok(false);
+            };
+            if !self.enqueue_training(producer, owner, None, kind, definition.clone())? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn enqueue_training(

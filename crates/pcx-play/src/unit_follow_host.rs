@@ -1,5 +1,10 @@
 use super::*;
 
+enum PreparedFollow {
+    Ready(Option<Box<Motion>>),
+    Deferred,
+}
+
 impl ObjectHost {
     pub(crate) fn follow_position(&self, unit: HandleId) -> Option<[f32; 2]> {
         let record = self.executed_unit(unit).ok()?;
@@ -83,13 +88,17 @@ impl ObjectHost {
                 .timer_game_time()
                 .ok_or_else(|| fail("clock not admitted"))?;
             let mut work = self.unit_activity.as_ref().expect("activity").route_work;
-            let motion = self.prepare_follow_motion(
+            let PreparedFollow::Ready(motion) = self.prepare_follow_motion(
                 *unit,
                 self.follow_position(*target).expect("validated"),
                 follow.range,
                 now,
                 &mut work,
-            )?;
+                false,
+            )?
+            else {
+                unreachable!("initial follow preparation cannot defer");
+            };
             let mut animation = self.executed_unit(*unit)?.animation.clone();
             if let Some(animation) = &mut animation {
                 animation
@@ -113,6 +122,7 @@ impl ObjectHost {
                 .active
                 .try_reserve(1)
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+            self.interrupt_unit_construction(*unit)?;
             self.unit_ordered(*unit);
             self.cancel_inventory_order(*unit);
             self.clear_combat_target(*unit);
@@ -138,7 +148,8 @@ impl ObjectHost {
         range: f32,
         at: f64,
         work: &mut usize,
-    ) -> Result<Option<Box<Motion>>, Error> {
+        defer_exhaustion: bool,
+    ) -> Result<PreparedFollow, Error> {
         let record = self.executed_unit(unit)?;
         let activity = record.activity.as_ref().expect("activity");
         let position = record.position.ok_or_else(|| {
@@ -147,7 +158,7 @@ impl ObjectHost {
         })?;
         let gap = (target[0] - position[0]).hypot(target[1] - position[1]);
         if gap <= range {
-            return Ok(None);
+            return Ok(PreparedFollow::Ready(None));
         }
         let goal = [
             target[0] + (position[0] - target[0]) * (range / gap),
@@ -170,24 +181,32 @@ impl ObjectHost {
                 .expect("admitted placement")
                 .route(unit, position, goal, radius, &mut remaining);
             *work -= allowance - remaining;
-            result.map_err(|e| {
-                self.inner
-                    .error("follow", Failure::UnitActivity(e.to_string()))
-            })?
+            match result {
+                Ok(path) => path,
+                Err(error) if defer_exhaustion && error.work_exhausted() => {
+                    return Ok(PreparedFollow::Deferred);
+                }
+                Err(error) => {
+                    return Err(self
+                        .inner
+                        .error("follow", Failure::UnitActivity(error.to_string())));
+                }
+            }
         };
         if path.as_slice() == [position] {
-            return Ok(None);
+            return Ok(PreparedFollow::Ready(None));
         }
-        Ok(Some(Box::new(Motion {
+        Ok(PreparedFollow::Ready(Some(Box::new(Motion {
             reach: 0.0,
             goal,
             path,
+            budget_partial: false,
             next: 0,
             base: position,
             prefix: 0.0,
             last_distance: 0.0,
             started: at,
-        })))
+        }))))
     }
 
     pub(crate) fn refresh_unit_follow(
@@ -195,20 +214,17 @@ impl ObjectHost {
         unit: HandleId,
         target: Option<[f32; 2]>,
         work: &mut usize,
-    ) -> Result<(), Error> {
+        at: f64,
+        defer_search: bool,
+    ) -> Result<bool, Error> {
         let record = self.executed_unit(unit)?;
         if record.paused_since.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let activity = record.activity.as_ref().expect("activity");
         let Some(follow) = activity.follow else {
-            return Ok(());
+            return Ok(false);
         };
-        let at = self
-            .unit_activity
-            .as_ref()
-            .expect("activity")
-            .projected_through;
         // A stationary target keeps the route epoch; moving targets are sampled at the projection boundary.
         if let Some(target) = target
             && target == follow.observed
@@ -221,14 +237,28 @@ impl ObjectHost {
                 activity.moving()
             };
             if unchanged {
-                return Ok(());
+                return Ok(false);
             }
         }
         if target.is_some() && !activity.can_start_motion() {
-            return Ok(());
+            return Ok(false);
+        }
+        if defer_search
+            && !activity.pathing_off
+            && target.is_some_and(|target| {
+                let position = record.position.expect("accepted follow position");
+                (target[0] - position[0]).hypot(target[1] - position[1]) > follow.range
+            })
+        {
+            return Ok(true);
         }
         let motion = match target {
-            Some(target) => self.prepare_follow_motion(unit, target, follow.range, at, work)?,
+            Some(target) => {
+                match self.prepare_follow_motion(unit, target, follow.range, at, work, true)? {
+                    PreparedFollow::Ready(motion) => motion,
+                    PreparedFollow::Deferred => return Ok(true),
+                }
+            }
             None => None,
         };
         let mut animation = record.animation.clone();
@@ -253,6 +283,6 @@ impl ObjectHost {
             activity.follow = target.map(|observed| Follow { observed, ..follow });
             record.animation = animation;
         }
-        Ok(())
+        Ok(false)
     }
 }

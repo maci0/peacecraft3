@@ -14,6 +14,28 @@ pub struct State {
     secondary: Vec<Primary>,
 }
 
+/// Independently initialized engine generator, sharing only the admitted algorithm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Generator {
+    key: [u8; 32],
+    primary: Primary,
+}
+impl Generator {
+    pub fn new(policy: &Policy, seed: u32) -> Self {
+        Self {
+            key: policy.key,
+            primary: Primary::pack(policy, seed),
+        }
+    }
+    pub fn next(&mut self, policy: &Policy) -> Result<u32, StateError> {
+        if self.key != policy.key {
+            return Err(StateError::Profile);
+        }
+        self.primary = self.primary.preview(policy);
+        Ok(self.primary.word)
+    }
+}
+
 /// A narrow copy of the primary generator state. Restoring it undoes consumed
 /// primary draws without cloning the retained secondary block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +49,8 @@ pub enum StateError {
     Profile,
     #[error("random secondary allocation exceeds the caller budget")]
     Budget,
+    #[error("random secondary channel or die sides are invalid")]
+    SecondaryDie,
     #[error(transparent)]
     Arithmetic(#[from] real::MathError),
 }
@@ -125,6 +149,29 @@ pub fn integer(
     let reduced = ((u64::from(next.word) * u64::from(width)) >> 32) as u32;
     let result = low.wrapping_add(reduced as i32);
     current.primary = next;
+    Ok(result)
+}
+
+/// One die from an already seeded gameplay stream. Unlike equal script bounds,
+/// a one-sided native die still advances its selected generator once.
+pub fn secondary_die(
+    policy: &Policy,
+    state: &mut Option<State>,
+    channel: usize,
+    sides: u32,
+) -> Result<u32, StateError> {
+    if sides == 0 || channel >= policy.secondary_count {
+        return Err(StateError::SecondaryDie);
+    }
+    let current = state.as_mut().ok_or(StateError::Uninitialized)?;
+    current.check(policy)?;
+    let selected = current
+        .secondary
+        .get_mut(channel)
+        .ok_or(StateError::SecondaryDie)?;
+    let next = selected.preview(policy);
+    let result = ((u64::from(next.word) * u64::from(sides)) >> 32) as u32;
+    *selected = next;
     Ok(result)
 }
 

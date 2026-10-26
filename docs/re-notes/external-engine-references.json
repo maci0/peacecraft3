@@ -1,0 +1,272 @@
+{
+  "reviewed_on": "2026-10-26",
+  "policy": "Inspiration and gap discovery only. Do not copy, port, translate, or adapt third-party code into PeaceCraft. Independently implement hypotheses using supplied asset data and original runtime/native evidence. External implementations are not fidelity proof.",
+  "source_storage": "Public repository metadata and selected source snapshots retained locally under ignored .scratch/external-engine-reference-20261026; no game assets fetched.",
+  "projects": [
+    {
+      "repository": "https://github.com/4eb0da/war3-model",
+      "commit": "52d7f421a5505a0434d764294057f2009ce3987b",
+      "kind": "TypeScript WC3 MDL/MDX renderer/converter",
+      "reference_use": "PRE2/ribbon edge cases and parser/renderer test cases.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": [
+        {
+          "path": "renderer/particles.ts",
+          "sha256": "7d6c9c6a859354447b01ac70760559002c80bb9872fcd873c8a244d924ecf757"
+        },
+        {
+          "path": "renderer/ribbons.ts",
+          "sha256": "cb8afdd110473ad627caa45e758bbb0e6d633941e7f29dfa09f63e398c64e407"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/Deamon87/WebWowViewerCpp",
+      "commit": "1a8cccbeffc46231c6497e6b3f5bfbf3507d8071",
+      "kind": "C++ native/WebGL WoW viewer",
+      "reference_use": "Animation, visibility, particles, ribbons and browser/native rendering comparison; no root license detected.",
+      "license_metadata": null,
+      "reviewed_source_files": []
+    },
+    {
+      "repository": "https://github.com/FernandoS27/WhiteoutFlakes",
+      "commit": "d2756ce11e0bbb5dac43b97ea5cf1627d53a402b",
+      "kind": "Multi-game rendering library",
+      "reference_use": "WC3 MDX animation/material/particle/ribbon adapters and format-to-render profile boundaries.",
+      "license_metadata": {
+        "key": "bsd-3-clause",
+        "name": "BSD 3-Clause \"New\" or \"Revised\" License",
+        "spdx_id": "BSD-3-Clause",
+        "url": "https://api.github.com/licenses/bsd-3-clause",
+        "node_id": "MDc6TGljZW5zZTU="
+      },
+      "reviewed_source_files": [
+        {
+          "path": "LICENSE-AI.md",
+          "sha256": "724630ad610d40b9d890343807764774129e5bc751775ead40e95a95033a8381"
+        },
+        {
+          "path": "src/io/mdx_model_adapter.cpp",
+          "sha256": "d302a0dc6195d0472de8e8947c065f7e6d502519d8674bc9469e7b2ba4082284"
+        },
+        {
+          "path": "src/renderer/core/particle_dialect.h",
+          "sha256": "1f2e1f7a0e5c8737b98fb95139d289a2b7e0dc14e912a2022023a607197f0888"
+        },
+        {
+          "path": "src/renderer/particle/base/particle_adapters_wc3_m2.cpp",
+          "sha256": "bd1c21cfee1b656f67a928564b32ea43028a0b197d1a52a4608eb4b6be24d66a"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/Kelsidavis/WoWee",
+      "commit": "9cf6238fd4efb71a696e2b695bcdfe22c33f6076",
+      "kind": "WoW replacement client",
+      "reference_use": "Asset import/provenance, M2 particles, Lua/UI integration; WoW mechanics are not WC3 evidence.",
+      "license_metadata": {
+        "key": "other",
+        "name": "Other",
+        "spdx_id": "NOASSERTION",
+        "url": null,
+        "node_id": "MDc6TGljZW5zZTA="
+      },
+      "reviewed_source_files": [
+        {
+          "path": "src/addons/lua_engine.cpp",
+          "sha256": "cf0fa00ff4192f3e67b72d5066792f1c4fdb6602c0270209d3386a6d018e0bc5"
+        },
+        {
+          "path": "src/pipeline/asset_manager.cpp",
+          "sha256": "2cc88c02c1c190aae810d8a8dafc811ce6594e8d7bf7de242b31759c978c3669"
+        },
+        {
+          "path": "src/rendering/m2_renderer_particles.cpp",
+          "sha256": "7d0f144a56e5fd8738970f9c9995f333e075912256234b46c8bf63a36dcc5c2b"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/Retera/WarsmashModEngine",
+      "commit": "f9e0aeed4be372d6016519d0e97b384aa873f374",
+      "kind": "LibGDX WC3 emulation engine",
+      "reference_use": "Gameplay/JASS/ability lifecycle, sequence selection, movement, construction and campaign hypotheses.",
+      "license_metadata": {
+        "key": "agpl-3.0",
+        "name": "GNU Affero General Public License v3.0",
+        "spdx_id": "AGPL-3.0",
+        "url": "https://api.github.com/licenses/agpl-3.0",
+        "node_id": "MDc6TGljZW5zZTE="
+      },
+      "reviewed_source_files": [
+        {
+          "path": "core/src/com/etheller/warsmash/viewer5/handlers/w3x/SequenceUtils.java",
+          "sha256": "b407f9d4bedb76378ce2fa8c846d89ddc6609c2fb3215a89a905f1459c70268e"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/corepunch/open-realm",
+      "commit": "2cea7464ad1f3bb466dafcdc98b04964981ac1c3",
+      "kind": "WC3 engine plus exploratory WoW/SC2 targets",
+      "reference_use": "JASS lifecycle, FDF, campaign flow, MDX rendering; inspect games/warcraft-3 and shared format boundaries.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": []
+    },
+    {
+      "repository": "https://github.com/flowtsohg/mdx-m3-viewer",
+      "commit": "2ff0bc00c6363f425016e23d88c0fb2929d3b3cc",
+      "kind": "WebGL WC3/SC2 viewer and parsers",
+      "reference_use": "MDX particles/ribbons, hierarchy, sequence interpolation, map parsing and visual regression ideas.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": [
+        {
+          "path": "src/viewer/handlers/mdx/particle2.ts",
+          "sha256": "129706e715a095214a5a0cdbb1dd4319c9399beaae62fb0e25d83057b09a10a5"
+        },
+        {
+          "path": "src/viewer/handlers/mdx/ribbon.ts",
+          "sha256": "70fe07b15af5a99c65ac95c48e30260512ddafa080dbb546a0a3a1b0e30852af"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/wowserhq/scene",
+      "commit": "cbe1211ab658965667bd4bcd61561b11a944028e",
+      "kind": "Three.js WoW renderer",
+      "reference_use": "ModelAnimation and terrain material classes; useful browser rendering concepts, not WC3 gameplay.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": [
+        {
+          "path": "src/lib/map/terrain/TerrainMaterial.ts",
+          "sha256": "7796499100ec913a58730f4b24685dc810c75712dcc4cb23909e8e2dd74c0a39"
+        },
+        {
+          "path": "src/lib/model/ModelAnimation.ts",
+          "sha256": "762f12076b379eb89bc5d8b9ce2a107138517345e720f1e4febb806834d2d09f"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/wowserhq/wowser",
+      "commit": "5fcd3e607db7551a74caf6d7ffa4dd785a264dc8",
+      "kind": "Browser WoW client proof of concept",
+      "reference_use": "Asset transport, workers, world/terrain loading and network/client separation.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": []
+    },
+    {
+      "repository": "https://github.com/game-a11y/OpenWarcraft3",
+      "commit": "a632312e93f82abc42e484b49fadc40acdf23474",
+      "kind": "SDL2/C Warcraft III implementation; GitHub fork of corepunch/open-realm",
+      "reference_use": "Historical simpler src/ layout: JASS API dispatch, routing, FDF, MDX and fog-of-war concepts. Inspect fork-specific differences before treating as independent corroboration.",
+      "license_metadata": null,
+      "parent_repository": "https://github.com/corepunch/open-realm",
+      "reviewed_source_files": [],
+      "limits": [
+        "README and source tree reviewed; no build/runtime validation.",
+        "No root LICENSE found at reviewed commit; do not inherit upstream license assumptions.",
+        "No accessibility-specific implementation established from organization name.",
+        "README download target was not run; only local legally supplied game assets are permitted."
+      ]
+    },
+    {
+      "repository": "https://github.com/ladislav-zezula/StormLib",
+      "commit": "116135c27e8c0dcf8ea0a0c549a6d737ce10fc73",
+      "kind": "MPQ archive library",
+      "reference_use": "Archive headers/tables, sector reads, encryption, chained compression, patch archives, locale lookup and integrity test scenarios.",
+      "license_metadata": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "reviewed_source_files": [],
+      "source_tree_leads": [
+        "src/SFileOpenArchive.cpp",
+        "src/SFileReadFile.cpp",
+        "src/SCompression.cpp",
+        "src/SFilePatchArchives.cpp",
+        "test/StormTest.cpp"
+      ],
+      "limits": [
+        "Repository metadata/tree/license reviewed; not built or run. No code or external archive fixtures imported."
+      ]
+    },
+    {
+      "repository": "https://github.com/mbroemme/libmpq",
+      "commit": "142f5ba26b2387bcc3fb5a3bd7ef928d3d776374",
+      "kind": "MPQ archive library",
+      "reference_use": "Independent archive API/format comparison, malformed-input cases, codec/crypto tests, patch readers and bounded/fuzz scenarios.",
+      "license_metadata": {
+        "key": "lgpl-2.1",
+        "name": "GNU Lesser General Public License v2.1",
+        "spdx_id": "LGPL-2.1",
+        "url": "https://api.github.com/licenses/lgpl-2.1",
+        "node_id": "MDc6TGljZW5zZTEx"
+      },
+      "reviewed_source_files": [],
+      "source_tree_leads": [
+        "src/mpq-compression.c",
+        "src/mpq-patch-reader.c",
+        "tests/test-mpq-malformed.c",
+        "tests/test-mpq-crypto.c",
+        "fuzz/fuzz-encrypted-archive.c"
+      ],
+      "limits": [
+        "Repository metadata/tree/license reviewed; not built or run. No code or external archive fixtures imported."
+      ]
+    }
+  ],
+  "other_references": [
+    {
+      "name": "Nirvana",
+      "url": "https://www.moddb.com/downloads/warcraft-iii-nirvana-release-10",
+      "classification": "Original-engine binary modification, not an independent rebuilt engine",
+      "evidence": "Publisher release describes Nirvana.dll as modified Game.dll and RenderCraft graphics plugin. No source repository verified."
+    }
+  ],
+  "priority": [
+    "Retera/WarsmashModEngine for gameplay hypothesis/test discovery",
+    "corepunch/open-realm for WC3 runtime and multi-game architecture",
+    "FernandoS27/WhiteoutFlakes plus flowtsohg/mdx-m3-viewer and 4eb0da/war3-model for WC3 rendering gaps",
+    "wowserhq/scene for actual Three.js rendering patterns",
+    "Kelsidavis/WoWee for replacement-client integration patterns"
+  ],
+  "validation_limits": [
+    "No external projects built or run. README feature claims are not independently verified.",
+    "License metadata is recorded for provenance, not permission to reuse code; user prohibits code reuse.",
+    "WoWee license adds a commercial-game restriction; Warsmash is AGPL-3.0; do not describe all sources as permissive."
+  ]
+}

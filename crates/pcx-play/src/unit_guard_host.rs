@@ -382,6 +382,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.cancel_mirror_cast(unit);
         self.campaign_ai.clear_captain_route(unit);
         self.forget_campaign_flee(unit);
         self.cancel_harvest(unit);
@@ -498,7 +499,10 @@ impl ObjectHost {
         let Some(mut guard) = state.get(unit).copied() else {
             return Ok(None);
         };
-        if self.captain_route_owned(unit) {
+        if self.captain_route_owned(unit)
+            || self.captain_assault_owned(unit)
+            || self.captain_home_pending(unit)
+        {
             return Ok(None);
         }
         let record = self.executed_unit(unit)?;

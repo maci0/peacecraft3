@@ -231,6 +231,14 @@ impl ObjectHost {
         )))
     }
 
+    /// The available learned rank's admitted cast range, on the canonical cast path.
+    pub fn holy_light_cast_range(&self, unit: HandleId) -> Result<Option<f32>, Error> {
+        if self.holy_light.is_none() {
+            return Ok(None);
+        }
+        Ok(self.holy_spell(unit)?.map(|spell| spell.range))
+    }
+
     /// Drops a walking cast when its caster dies, is removed or takes another order.
     pub(super) fn forget_holy_cast(&mut self, caster: HandleId) {
         if let Some(rules) = &mut self.holy_light {

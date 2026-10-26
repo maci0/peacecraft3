@@ -252,3 +252,11 @@ claim is used for this increment.
 ## Shared tick work regression (2026-10-25)
 
 A synthetic blocked mover followed by a multi-sample mover with motion-aware blight regeneration now completes at a budget that cannot pay the original eager route search. The test derives that mandatory threshold by executing bounded synthetic projections, compares later movement and regeneration with a large-budget run, and repeats the same budget to check deterministic work. A one-token budget still refuses. A separate obstacle-clear test verifies that exhausted optional searching does not credit stationary waiting as movement. Existing collision, patrol, follow and span-refusal regressions remain in the core suite. This does not establish mission victory or original path choice.
+
+## Follow refresh scheduling (2026-10-25)
+
+Moving-target follow refreshes now share the post-mandatory search phase. The target position remains the pre-projection snapshot. Existing accepted motion advances before a replacement search; a newly searched route starts at the current projection time and grants no catch-up distance. Thus a pathing-enabled follower that needs a new route can wait one projection before beginning that route. This is bounded recreation scheduling, not a qualified native latency. Initial public follow orders retain immediate route admission, and updates that need no search retain their earlier timing.
+
+Follow refresh and blocked-replan work for the same unit are deduplicated. After harvest, regeneration, combat and inventory, a refresh proceeds only if its follow and motion witnesses still match and the unit remains live and unpaused; a target that is no longer eligible cancels follow. Typed route-work exhaustion retains the old accepted intent for another projection. The unchanged total tick budget is divided across queued searches, after actual mandatory costs have been paid.
+
+Synthetic regressions cover moving-target follow with a later multi-sample mover and blight-regeneration tail, deterministic work at a bounded budget, a truly insufficient mandatory budget, and a deferred stationary wait that must not become catch-up travel. The enclosed-follow recovery test now separates route preparation from its next projection's travel. No unchanged mission result is claimed by these synthetic tests.

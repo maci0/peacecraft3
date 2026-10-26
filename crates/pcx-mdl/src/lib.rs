@@ -629,12 +629,15 @@ pub struct Sequence {
     pub interval_end: u32,
     pub move_speed: f32,
     pub non_looping: bool,
-    /// Seven trailing floats whose meaning is not yet established. Kept rather
-    /// than dropped so nothing is silently discarded.
+    /// Rarity, sync-point and extent words, retained losslessly.
     pub trailing: [u32; 7],
 }
 
 impl Sequence {
+    /// Authored SEQS rarity weight at byte 96 of the 132-byte record.
+    pub fn rarity(&self) -> f32 {
+        f32::from_bits(self.trailing[0])
+    }
     /// Length in milliseconds.
     pub fn duration(&self) -> u32 {
         self.interval_end.saturating_sub(self.interval_start)

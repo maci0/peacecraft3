@@ -843,3 +843,744 @@ fn guard_wait_keeps_an_active_campaign_flee_route() {
         Some(away)
     );
 }
+
+fn assault_fixture() -> (Vm, HandleId, HandleId) {
+    assault_fixture_with_vision(false)
+}
+
+fn assault_fixture_with_vision(vision: bool) -> (Vm, HandleId, HandleId) {
+    let (image, binding, budget) = crate::script_numeric::tests::fixture();
+    let numeric = crate::script_numeric::NumericPolicy::read(&image, binding, budget, 64).unwrap();
+    let identity = *numeric.image_sha256();
+    let mut fields = vec![
+        column(b"S001", SlkId::UnitBalance, "spd", FieldKind::Real, "32"),
+        column(
+            b"W005",
+            SlkId::UnitWeapons,
+            "acquire",
+            FieldKind::Real,
+            "24",
+        ),
+        column(b"W008", SlkId::UnitWeapons, "dmgplus1", FieldKind::Int, "4"),
+    ];
+    let extra = if vision {
+        fields.extend([
+            column(b"V001", SlkId::UnitBalance, "sight", FieldKind::Real, "10"),
+            column(b"V002", SlkId::UnitBalance, "nsight", FieldKind::Real, "10"),
+        ]);
+        format!(
+            r#"{CLOCK_DECLARATIONS}
+        type gamespeed extends handle
+        constant native ConvertGameSpeed takes integer i returns gamespeed
+        constant native GetGameSpeed takes nothing returns gamespeed
+        native IsFogEnabled takes nothing returns boolean
+        native IsFogMaskEnabled takes nothing returns boolean
+        native FogEnable takes boolean b returns nothing
+        native FogMaskEnable takes boolean b returns nothing
+        globals
+        constant gamespeed SPEED=ConvertGameSpeed(3)
+        endglobals
+        "#
+        )
+    } else {
+        String::new()
+    };
+    let (mut vm, a, b) = guarded_configured(8., 16., 1., None, (&fields, &extra), |host| {
+        let host = host.with_script_numeric(numeric);
+        if vision {
+            host.with_startup_clock(crate::startup_clock::tests::input(9), "CLOCK", 64, 16, 1000)
+                .unwrap()
+        } else {
+            host
+        }
+    });
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    if vision {
+        h.admit_time_of_day(&pcx_objects::editor::misc::DayCycle {
+            day_length: 480.,
+            day_hours: 24.,
+            sources: vec!["synthetic".into()],
+        })
+        .unwrap();
+        let Value::Handle(speed) = h.native("ConvertGameSpeed", &[Value::Int(3)]).unwrap() else {
+            panic!("speed");
+        };
+        h.admit_startup_settings(
+            &context,
+            crate::playercolor_host::StartupSettings {
+                speed,
+                fog_enabled: true,
+                fog_mask_enabled: false,
+            },
+        )
+        .unwrap();
+        assert!(h.admit_shared_vision().unwrap());
+        let work = h.shared_vision_work_limit().unwrap();
+        h.sample_shared_vision(work).unwrap();
+        assert!(matches!(
+            h.vision_capability(),
+            super::VisionCapability::Ready {
+                fog: true,
+                mask: false
+            }
+        ));
+    }
+    let mut gathering = crate::campaign_gathering_policy::GatheringPolicy::fixture();
+    gathering.image_sha256 = identity;
+    h.admit_campaign_gathering(&context, gathering).unwrap();
+    let mut captain = crate::campaign_captain_policy::CaptainPolicy::fixture();
+    captain.image_sha256 = identity;
+    captain = captain.with_assault(Ok(crate::campaign_assault_policy::Rules::fixture(identity)));
+    h.admit_campaign_captains(&context, captain).unwrap();
+    let mut timed = crate::campaign_group_timed_life_policy::GroupTimedLifePolicy::fixture();
+    timed.image_sha256 = identity;
+    h.admit_campaign_group_timed_life(&context, timed).unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    h.create_ai_captains(4).unwrap();
+    (vm, a, b)
+}
+
+#[test]
+fn assault_chain_recruits_routes_and_fights_using_canonical_units() {
+    let (mut vm, a, b) = assault_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let target_owner = h.executed_unit(b).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    let handles = h.inner().handles();
+    h.native("PauseUnit", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    h.init_ai_assault(4).unwrap();
+    assert!(h.ai_captain_is_full(4).unwrap());
+    assert!(!h.add_ai_assault(4, 2, kind).unwrap());
+    assert!(!h.ai_captain_is_full(4).unwrap());
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(!h.ai_captain_is_full(4).unwrap());
+    assert!(!h.suicide_ai_player(4, target_owner, true).unwrap());
+    h.init_ai_assault(4).unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.ai_captain_readiness(4).unwrap() > 0);
+    assert_eq!(h.fixture_captain_members(4, true), &[a]);
+    assert!(h.suicide_ai_player(4, target_owner, true).unwrap());
+    let projected = h.project_assault_orders().unwrap();
+    // One candidate scan and one member order attempt, including repeat calls.
+    assert_eq!(projected, h.executed_units().count() + 1);
+    assert_eq!(h.project_assault_orders().unwrap(), projected);
+    assert!(h.captain_assault_owned(a));
+    assert!(!h.captain_route_owned(a));
+    assert_eq!(h.inner().handles(), handles);
+    let before = h.executed_unit(a).unwrap().position;
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    assert_ne!(h.executed_unit(a).unwrap().position, before);
+    assert!(h.captain_assault_owned(a));
+    step(&mut vm, 4.);
+    let h = &mut vm.host().inner;
+    let enemy = h.executed_unit(b).unwrap();
+    assert!(!enemy.combat.as_ref().unwrap().dead);
+    assert!(enemy.vitals.unwrap().life > 0. && enemy.vitals.unwrap().life < 100.);
+    assert_eq!(
+        h.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(true)
+    );
+    step(&mut vm, 12.);
+    let h = &mut vm.host().inner;
+    assert!(h.executed_unit(b).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(
+        h.campaign_captain_in_combat(owner, true).unwrap(),
+        Some(false)
+    );
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(h.campaign_captain_is_empty(owner).unwrap(), Some(true));
+}
+
+#[test]
+fn assault_acceptance_pending_without_enemy_and_manual_stop_cannot_reissue() {
+    let (mut vm, a, b) = assault_fixture();
+    let h = &mut vm.host().inner;
+    let target = h.executed_unit(b).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    h.native("ShowUnit", &[Value::Handle(b), Value::Bool(false)])
+        .unwrap();
+    h.init_ai_assault(4).unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.suicide_ai_player(4, target, true).unwrap());
+    assert!(h.project_assault_orders().is_ok());
+    h.native("ShowUnit", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    h.project_assault_orders().unwrap();
+    assert!(h.captain_assault_owned(a));
+    let stop = h.native("OrderId", &[Value::Str("beta".into())]).unwrap();
+    assert_eq!(
+        h.native("IssueImmediateOrderById", &[Value::Handle(a), stop])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(!h.captain_assault_owned(a));
+    h.project_assault_orders().unwrap();
+    assert!(!h.captain_assault_owned(a));
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination
+            .is_none()
+    );
+    assert!(h.suicide_ai_player(4, target, true).unwrap());
+    h.project_assault_orders().unwrap();
+    assert!(h.captain_assault_owned(a));
+    let foreign = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(a), foreign, Value::Bool(false)],
+    )
+    .unwrap();
+    assert!(!h.captain_assault_owned(a));
+    assert!(h.fixture_captain_members(4, true).is_empty());
+}
+
+#[test]
+fn assault_manual_move_and_follow_remain_overrides_until_explicit_launch() {
+    for follow in [false, true] {
+        let (mut vm, a, b) = assault_fixture();
+        let h = &mut vm.host().inner;
+        let target = h.executed_unit(b).unwrap().owner;
+        let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+        h.init_ai_assault(4).unwrap();
+        assert!(h.add_ai_assault(4, 1, kind).unwrap());
+        assert!(h.suicide_ai_player(4, target, true).unwrap());
+        h.project_assault_orders().unwrap();
+        let result = if follow {
+            h.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("gamma".into()),
+                    Value::Handle(b),
+                ],
+            )
+        } else {
+            h.native(
+                "IssuePointOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("gamma".into()),
+                    Value::Real(16.),
+                    Value::Real(48.),
+                ],
+            )
+        }
+        .unwrap();
+        assert_eq!(result, Value::Bool(true));
+        assert!(!h.captain_assault_owned(a));
+        for _ in 0..3 {
+            assert_eq!(h.project_assault_orders().unwrap(), 0);
+            assert!(!h.captain_assault_owned(a));
+        }
+        assert!(h.suicide_ai_player(4, target, true).unwrap());
+        assert!(h.captain_assault_owned(a));
+    }
+}
+
+#[test]
+fn assault_readiness_retains_casualty_baseline_until_recruitment() {
+    let (mut vm, a, _) = assault_fixture();
+    let h = &mut vm.host().inner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    h.init_ai_assault(4).unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    let full = h.ai_captain_readiness(4).unwrap();
+    h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+    let casualty = h.ai_captain_readiness(4).unwrap();
+    assert!(casualty < full);
+    vm.call("spawn", &[]).unwrap();
+    let h = &mut vm.host().inner;
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert_eq!(h.ai_captain_readiness(4).unwrap(), full);
+}
+
+#[test]
+fn assault_blocked_route_is_accepted_without_teleport_or_lost_ownership() {
+    let (mut vm, a, b) = assault_fixture();
+    let h = &mut vm.host().inner;
+    let target = h.executed_unit(b).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    // Authored fixture collision geometry encloses the member's cell.
+    for point in [[26., 16.], [10., 16.], [16., 26.], [16., 10.]] {
+        let blocker = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(target),
+                    Value::Int(kind),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap();
+        h.native("SetUnitInvulnerable", &[blocker, Value::Bool(true)])
+            .unwrap();
+    }
+    h.init_ai_assault(4).unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.suicide_ai_player(4, target, true).unwrap());
+    let work = h.project_assault_orders().unwrap();
+    assert_eq!(work, h.executed_units().count() + 1);
+    let before = h.executed_unit(a).unwrap().position.unwrap();
+    step(&mut vm, 2.);
+    let h = &mut vm.host().inner;
+    assert!(h.captain_assault_owned(a));
+    let after = h.executed_unit(a).unwrap().position.unwrap();
+    assert!(distance(before, after) <= 2.);
+    for _ in 0..3 {
+        assert_eq!(h.project_assault_orders().unwrap(), work);
+        assert_eq!(h.executed_unit(a).unwrap().position.unwrap(), after);
+        assert!(h.captain_assault_owned(a));
+    }
+}
+
+#[test]
+fn assault_plans_through_fog_without_revealing_or_attacking_before_sight() {
+    let (mut vm, a, b) = assault_fixture_with_vision(true);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let target = h.executed_unit(b).unwrap().owner;
+    let goal = h.executed_unit(b).unwrap().position.unwrap();
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    let before = h.vision_cell(owner, goal).unwrap().unwrap();
+    assert!(!before.explored);
+    assert_ne!(
+        h.vision_presented(owner, goal, true, false).unwrap(),
+        Some(crate::playercolor_host::VisionState::Visible)
+    );
+    assert!(h.executed_unit(b).unwrap().shown);
+    h.native("PauseUnit", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    let life = h.executed_unit(b).unwrap().vitals.unwrap().life;
+    let start = h.executed_unit(a).unwrap().position.unwrap();
+    h.init_ai_assault(4).unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.suicide_ai_player(4, target, true).unwrap());
+    assert!(h.project_assault_orders().unwrap() > 0);
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .attack_destination,
+        Some(goal)
+    );
+    assert_eq!(h.vision_cell(owner, goal).unwrap().unwrap(), before);
+    step(&mut vm, 0.25);
+    let h = &mut vm.host().inner;
+    assert_ne!(h.executed_unit(a).unwrap().position.unwrap(), start);
+    let work = h.shared_vision_work_limit().unwrap();
+    h.sample_shared_vision(work).unwrap();
+    assert_ne!(
+        h.vision_presented(owner, goal, true, false).unwrap(),
+        Some(crate::playercolor_host::VisionState::Visible)
+    );
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target
+            .is_none()
+    );
+    assert_eq!(h.executed_unit(b).unwrap().vitals.unwrap().life, life);
+    // Refresh the actual sight ledger as the canonical unit approaches.
+    while vm.host().inner.timer_game_time().unwrap() < 2. {
+        let h = &mut vm.host().inner;
+        let next = h.timer_game_time().unwrap() + 1. / 64.;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        let work = h.shared_vision_work_limit().unwrap();
+        h.sample_shared_vision(work).unwrap();
+        h.advance_unit_activity(next, &mut 65536).unwrap();
+    }
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.vision_presented(owner, goal, true, false).unwrap(),
+        Some(crate::playercolor_host::VisionState::Visible)
+    );
+    assert_eq!(
+        h.executed_unit(a).unwrap().combat.as_ref().unwrap().target,
+        Some(b)
+    );
+    assert!(h.executed_unit(b).unwrap().vitals.unwrap().life < life);
+}
+
+fn pending_home_fixture() -> (Vm, HandleId, HandleId, Vec<Value>, i32) {
+    let (mut vm, a, b) = assault_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(b).unwrap().owner;
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    for unit in [a, b] {
+        h.native(
+            "SetUnitInvulnerable",
+            &[Value::Handle(unit), Value::Bool(true)],
+        )
+        .unwrap();
+    }
+    let mut blockers = Vec::new();
+    for point in [[26., 16.], [10., 16.], [16., 26.], [16., 10.]] {
+        let blocker = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(kind),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap();
+        h.native("SetUnitInvulnerable", &[blocker.clone(), Value::Bool(true)])
+            .unwrap();
+        blockers.push(blocker);
+    }
+    let first = i32::from(h.campaign_captain_policy().unwrap().first_selector_mask);
+    h.set_ai_captain_home(4, first, [64., 16.]).unwrap();
+    h.init_ai_assault(4).unwrap();
+    (vm, a, b, blockers, kind)
+}
+
+#[test]
+fn captain_pending_home_recruits_without_path_then_retries_after_unblock_and_pause() {
+    let (mut vm, a, _, blockers, kind) = pending_home_fixture();
+    let h = &mut vm.host().inner;
+    let start = h.executed_unit(a).unwrap().position.unwrap();
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.captain_home_pending(a), "initial route has no progress");
+    assert_eq!(h.fixture_captain_members(4, true), [a]);
+    assert!(h.ai_captain_is_full(4).unwrap());
+    let ready = h.ai_captain_readiness(4).unwrap();
+    assert!(ready > 0);
+    // A ring may admit a short first leg; project it before observing a no-progress retry.
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    assert!(h.captain_home_pending(a));
+    assert!(distance(h.executed_unit(a).unwrap().position.unwrap(), start) <= 2.);
+    for _ in 0..3 {
+        assert_eq!(h.project_assault_orders().unwrap(), 1);
+        assert!(h.captain_home_pending(a));
+    }
+    h.native("PauseUnit", &[Value::Handle(a), Value::Bool(true)])
+        .unwrap();
+    for blocker in blockers {
+        h.native("RemoveUnit", &[blocker]).unwrap();
+    }
+    let paused = h.executed_unit(a).unwrap().position;
+    assert_eq!(h.project_assault_orders().unwrap(), 0);
+    assert_eq!(h.executed_unit(a).unwrap().position, paused);
+    h.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.project_assault_orders().unwrap(), 1);
+    assert_eq!(
+        h.executed_unit(a)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .destination(),
+        Some([64., 16.])
+    );
+    assert_eq!(h.ai_captain_readiness(4).unwrap(), ready);
+    step(&mut vm, 2.);
+    assert!(vm.host().inner.executed_unit(a).unwrap().position.unwrap()[0] > start[0] + 2.);
+    step(&mut vm, 3.);
+    let h = &mut vm.host().inner;
+    assert!(!h.captain_home_pending(a));
+    assert_eq!(h.project_assault_orders().unwrap(), 0);
+}
+
+#[test]
+fn captain_pending_home_preserves_batch_atomicity_and_manual_lifecycle() {
+    let (mut vm, a, b, _, kind) = pending_home_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(b), Value::Handle(owner), Value::Bool(false)],
+    )
+    .unwrap();
+    h.test_set_summoned(b, true);
+    let before = h.executed_unit(a).unwrap().clone();
+    assert!(h.add_ai_assault(4, 2, kind).is_err());
+    assert_eq!(h.executed_unit(a).unwrap(), &before);
+    assert!(h.fixture_captain_members(4, true).is_empty());
+    assert!(!h.captain_home_pending(a));
+    h.test_set_summoned(b, false);
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    assert!(h.captain_home_pending(a));
+    h.native(
+        "IssueImmediateOrder",
+        &[Value::Handle(a), Value::Str("beta".into())],
+    )
+    .unwrap();
+    assert!(!h.captain_home_pending(a));
+    assert_eq!(h.project_assault_orders().unwrap(), 0);
+    let first = i32::from(h.campaign_captain_policy().unwrap().first_selector_mask);
+    // An explicit new home request owns the member again, even when still blocked.
+    h.set_ai_captain_home(4, first, [64., 16.]).unwrap();
+    assert!(h.captain_home_pending(a));
+    let foreign = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(a), foreign, Value::Bool(false)],
+    )
+    .unwrap();
+    assert!(!h.captain_home_pending(a));
+    assert!(h.fixture_captain_members(4, true).is_empty());
+}
+
+#[test]
+fn captain_pending_home_manual_move_follow_death_and_removal_retire_retry() {
+    for mode in 0..4 {
+        let (mut vm, a, b, blockers, kind) = pending_home_fixture();
+        let h = &mut vm.host().inner;
+        assert!(h.add_ai_assault(4, 1, kind).unwrap());
+        step(&mut vm, 1.);
+        let h = &mut vm.host().inner;
+        assert!(h.captain_home_pending(a));
+        for blocker in blockers {
+            h.native("RemoveUnit", &[blocker]).unwrap();
+        }
+        match mode {
+            0 => {
+                let p = h.executed_unit(a).unwrap().position.unwrap();
+                assert_eq!(
+                    h.native(
+                        "IssuePointOrder",
+                        &[
+                            Value::Handle(a),
+                            Value::Str("gamma".into()),
+                            Value::Real(p[0]),
+                            Value::Real(p[1])
+                        ]
+                    )
+                    .unwrap(),
+                    Value::Bool(true)
+                );
+            }
+            1 => {
+                assert_eq!(
+                    h.native(
+                        "IssueTargetOrder",
+                        &[
+                            Value::Handle(a),
+                            Value::Str("gamma".into()),
+                            Value::Handle(b)
+                        ]
+                    )
+                    .unwrap(),
+                    Value::Bool(true)
+                );
+            }
+            2 => {
+                h.native("KillUnit", &[Value::Handle(a)]).unwrap();
+            }
+            _ => {
+                h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+            }
+        }
+        assert!(!h.captain_home_pending(a));
+        for _ in 0..3 {
+            assert_eq!(h.project_assault_orders().unwrap(), 0);
+        }
+    }
+}
+
+#[test]
+fn captain_pending_home_and_assault_attempts_share_the_existing_disjoint_bound() {
+    let (mut vm, a, b, _, kind) = pending_home_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(a).unwrap().owner;
+    let target = h.executed_unit(b).unwrap().owner;
+    let both = i32::from(
+        h.campaign_captain_policy().unwrap().first_selector_mask
+            | h.campaign_captain_policy().unwrap().second_selector_mask,
+    );
+    h.set_ai_captain_home(4, both, [64., 16.]).unwrap();
+    let Value::Handle(c) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(kind),
+                Value::Real(16.),
+                Value::Real(48.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, false), [a]);
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, true), [c]);
+    h.native(
+        "SetUnitInvulnerable",
+        &[Value::Handle(b), Value::Bool(false)],
+    )
+    .unwrap();
+    h.native("PauseUnit", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    assert!(h.suicide_ai_player(4, target, true).unwrap());
+    assert!(h.captain_home_pending(a));
+    assert!(!h.captain_home_pending(c));
+    let records = h.executed_units().count();
+    assert_eq!(
+        h.project_assault_orders().unwrap(),
+        records + 2,
+        "one record scan, one home attempt and one distinct assault attempt"
+    );
+    assert!(h.captain_home_pending(a));
+    assert!(h.captain_assault_owned(c));
+    let accepted = h
+        .executed_unit(c)
+        .unwrap()
+        .combat
+        .as_ref()
+        .unwrap()
+        .attack_destination;
+    assert!(accepted.is_some());
+    for _ in 0..3 {
+        assert_eq!(
+            h.project_assault_orders().unwrap(),
+            records + 2,
+            "home attempt and distinct assault member visit remain bounded"
+        );
+        assert_eq!(
+            h.executed_unit(c)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .attack_destination,
+            accepted
+        );
+    }
+}
+
+#[test]
+fn captain_pending_home_does_not_classify_zero_speed_as_blocked() {
+    let field = column(b"S001", SlkId::UnitBalance, "spd", FieldKind::Real, "0");
+    let (mut vm, a, _) = guarded_configured(128., 256., 1., None, (&[field], ""), |host| host);
+    let h = &mut vm.host().inner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_gathering(
+        &ctx,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    h.admit_campaign_captains(
+        &ctx,
+        crate::campaign_captain_policy::CaptainPolicy::fixture(),
+    )
+    .unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    h.create_ai_captains(4).unwrap();
+    let kind = i32::from_be_bytes(h.executed_unit(a).unwrap().definition.rawcode);
+    let before = h.executed_unit(a).unwrap().clone();
+    assert!(
+        h.add_ai_defenders(4, 1, kind)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot move toward home")
+    );
+    assert!(h.fixture_captain_members(4, false).is_empty());
+    assert_eq!(h.executed_unit(a).unwrap(), &before);
+}
+
+#[test]
+fn captain_pending_home_leaves_canonical_weapon_acquisition_enabled() {
+    let (mut vm, a, _, blockers, kind) = pending_home_fixture();
+    let h = &mut vm.host().inner;
+    assert!(h.add_ai_assault(4, 1, kind).unwrap());
+    assert!(h.captain_home_pending(a));
+    let Value::Handle(target) = blockers[0] else {
+        panic!("unit")
+    };
+    h.native(
+        "SetUnitInvulnerable",
+        &[Value::Handle(target), Value::Bool(false)],
+    )
+    .unwrap();
+    h.test_advance_combat().unwrap();
+    assert_eq!(
+        h.executed_unit(a).unwrap().combat.as_ref().unwrap().target,
+        Some(target)
+    );
+    assert!(h.captain_home_pending(a));
+}
+
+#[test]
+fn captain_pending_home_preserves_existing_live_combat_admission() {
+    let map = "globals\nunit A=null\nendglobals\nfunction setup takes nothing returns nothing\nset A=CreateUnit(Player(4),'U001',16.0,16.0,0.0)\nendfunction\n";
+    let declarations = format!(
+        "{}{}native RemoveUnit takes unit u returns nothing\ntype unittype extends handle\nconstant native ConvertUnitType takes integer n returns unittype\nglobals\nconstant unittype UNIT_TYPE_PEON=ConvertUnitType(-71)\nendglobals\n",
+        super::super::activity::ORDERS,
+        super::super::enumeration::TRIGGERS
+    );
+    let mut h = position_host_admitting_placed(
+        1000,
+        16,
+        map,
+        &declarations,
+        &super::super::activity::gathering::source_fields(false),
+        &[],
+        |host| host,
+    )
+    .with_locations()
+    .unwrap();
+    let (registry, rules) = super::super::activity::rules();
+    h = h.with_order_registry(registry).unwrap();
+    h.admit_unit_activity(rules, 65536).unwrap();
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_gathering(
+        &ctx,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    h.admit_campaign_captains(
+        &ctx,
+        crate::campaign_captain_policy::CaptainPolicy::fixture(),
+    )
+    .unwrap();
+    let mut vm = ctx.scripts.clone().owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(a) = vm.global("A") else {
+        panic!("unit")
+    };
+    let h = &mut vm.host().inner;
+    h.activate_campaign_ai_player(4).unwrap();
+    assert!(h.executed_unit(a).unwrap().combat.is_none());
+    h.create_ai_captains(4).unwrap();
+    h.fixture_captain_member(4, true, a);
+    let first = i32::from(h.campaign_captain_policy().unwrap().first_selector_mask);
+    let owner = h.executed_unit(a).unwrap().owner;
+    let before = h.campaign_captain_state(owner).unwrap().unwrap();
+    let unit_before = h.executed_unit(a).unwrap().clone();
+    assert!(
+        h.set_ai_captain_home(4, first, [64., 16.])
+            .unwrap_err()
+            .to_string()
+            .contains("captain member is no longer owned and live")
+    );
+    assert_eq!(h.campaign_captain_state(owner).unwrap().unwrap(), before);
+    assert_eq!(h.executed_unit(a).unwrap(), &unit_before);
+    assert!(!h.captain_home_pending(a));
+}

@@ -10,12 +10,14 @@ mod import_assets;
 
 mod button_actions;
 mod campaign_actors;
+mod campaign_build_ui;
 mod campaign_command_card;
 mod campaign_diagnostics;
 mod campaign_escape_menu;
 mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;
+mod campaign_leaderboards;
 mod campaign_messages;
 mod campaign_minimap;
 mod campaign_portrait;

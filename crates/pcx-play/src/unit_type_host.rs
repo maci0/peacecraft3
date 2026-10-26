@@ -86,7 +86,7 @@ impl ObjectHost {
             let movement = text(SlkId::UnitData, "movetp").unwrap_or("");
             let weapon = record.combat.as_ref().and_then(|c| c.weapon);
             let value = if is("UNIT_TYPE_HERO") {
-                definition.rawcode[0].is_ascii_uppercase()
+                record.illusion.is_none() && definition.rawcode[0].is_ascii_uppercase()
             } else if is("UNIT_TYPE_DEAD") {
                 record.combat.as_ref().is_some_and(|c| c.dead)
                     || record.vitals.is_some_and(|v| v.life <= 0.0)

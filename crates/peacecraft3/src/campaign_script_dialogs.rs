@@ -732,10 +732,36 @@ fn place(rect: Rect, size: Vec2) -> Node {
         ..default()
     }
 }
+pub(crate) struct BackdropDraw<'a> {
+    pub images: &'a HashMap<(String, bool), Handle<Image>>,
+    pub materials: &'a mut Vec<Handle<BackdropImage>>,
+}
 fn backdrop(
     commands: &mut Commands,
     parent: Entity,
     source: &mut Source,
+    art: &Backdrop,
+    size: Vec2,
+    images: &Assets<Image>,
+    materials: &mut Assets<BackdropImage>,
+) -> Result<(), String> {
+    draw_backdrop(
+        commands,
+        parent,
+        BackdropDraw {
+            images: &source.images,
+            materials: &mut source.materials,
+        },
+        art,
+        size,
+        images,
+        materials,
+    )
+}
+pub(crate) fn draw_backdrop(
+    commands: &mut Commands,
+    parent: Entity,
+    draw: BackdropDraw<'_>,
     art: &Backdrop,
     size: Vec2,
     images: &Assets<Image>,
@@ -755,7 +781,7 @@ fn backdrop(
         if !inset.is_finite() || inset < 0. || rect.width <= 0. || rect.height <= 0. {
             return Err("script dialog backdrop inset is invalid".into());
         }
-        let image = source
+        let image = draw
             .images
             .get(&(path.clone(), art.tile))
             .ok_or("missing script dialog background")?
@@ -775,7 +801,7 @@ fn backdrop(
                 uv_rows: Vec4::new(1., 0., 0., 1.),
             });
             child.insert(MaterialNode(material.clone()));
-            source.materials.push(material);
+            draw.materials.push(material);
         } else {
             child.insert(bevy::ui::widget::ImageNode::new(image));
         }
@@ -786,7 +812,7 @@ fn backdrop(
         if !edge.corner_size.is_finite() || edge.corner_size <= 0. {
             return Err("invalid script dialog corner size".into());
         }
-        let handle = source
+        let handle = draw
             .images
             .get(&(edge.file.clone(), false))
             .ok_or("missing script dialog edge")?
@@ -810,7 +836,7 @@ fn backdrop(
                     false,
                 ));
                 child.insert(MaterialNode(material.clone()));
-                source.materials.push(material);
+                draw.materials.push(material);
             } else {
                 let mut node = bevy::ui::widget::ImageNode::new(handle.clone());
                 node.rect = Some(uv);

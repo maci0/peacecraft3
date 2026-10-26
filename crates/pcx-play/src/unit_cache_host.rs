@@ -96,6 +96,9 @@ impl ObjectHost {
         self.check_activity_boundary(now, "StoreUnit")
             .map_err(|e| e.to_string())?;
         let record = self.executed_unit(unit).map_err(|e| e.to_string())?;
+        if record.construction.is_some() || record.construction_request.is_some() {
+            return Err("unit cache does not encode construction state".into());
+        }
         if record.summoned {
             return Err("unit cache does not encode summoned-unit lifetime".into());
         }

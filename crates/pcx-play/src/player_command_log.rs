@@ -28,6 +28,15 @@ pub enum PlayerCommand {
         x: f32,
         y: f32,
     },
+    /// An integer ground order, including a structure FourCC without an order-name alias.
+    PointById {
+        unit: HandleId,
+        order: i32,
+        x: f32,
+        y: f32,
+    },
+    /// Local UI cancellation; no native order or W3G action mapping is implied.
+    CancelConstruction { site: HandleId },
     /// An order aimed at a unit or item handle, such as `attack` or `smart`.
     Target {
         unit: HandleId,
@@ -208,6 +217,35 @@ mod tests {
             units: vec![handle(1)],
             replace: true,
         }
+    }
+
+    #[test]
+    fn integer_ground_order_preserves_rawcode_and_coordinates() {
+        let mut log = PlayerCommandLog::default();
+        log.begin(start());
+        let command = PlayerCommand::PointById {
+            unit: handle(7),
+            order: i32::from_be_bytes(*b"b007"),
+            x: 91.5,
+            y: -32.,
+        };
+        log.record(Some(3.25), command.clone()).unwrap();
+        assert_eq!(
+            log.entries(),
+            &[Entry {
+                clock: 3.25,
+                command
+            }]
+        );
+    }
+
+    #[test]
+    fn construction_cancel_keeps_its_explicit_local_site_identity() {
+        let mut log = PlayerCommandLog::default();
+        log.begin(start());
+        let command = PlayerCommand::CancelConstruction { site: handle(9) };
+        log.record(Some(4.), command.clone()).unwrap();
+        assert_eq!(log.entries(), &[Entry { clock: 4., command }]);
     }
 
     #[test]

@@ -7,6 +7,8 @@ mod campaign_timed_life;
 mod chain_lightning;
 #[path = "hero_experience_kill_tests.rs"]
 mod experience_kills;
+#[path = "unit_mirror_image_tests.rs"]
+mod mirror_image;
 #[path = "standard_command_host_tests.rs"]
 mod standard_commands;
 #[path = "unit_summon_tests.rs"]
@@ -2463,7 +2465,11 @@ fn holy_tables() -> DefaultTables {
 }
 
 fn holy_tables_with(edits: &[(&str, &str)]) -> DefaultTables {
-    let headers = [
+    holy_tables_profile(edits, false)
+}
+
+fn holy_tables_profile(edits: &[(&str, &str)], mirror: bool) -> DefaultTables {
+    let mut headers = vec![
         "alias",
         "code",
         "levels",
@@ -2537,11 +2543,66 @@ fn holy_tables_with(edits: &[(&str, &str)]) -> DefaultTables {
             .expect("fixture column");
         rows[0][index] = value;
     }
+    if mirror {
+        headers.extend(["DataB1", "DataC1", "DataD1", "HeroDur1", "BuffID1"]);
+        rows[2][15] = "8";
+        rows[2].extend(["0.375", "2.25", "0.5", "3.5", "Zbuf"]);
+    }
     let metadata = sylk(
         &[
             "ID", "field", "slk", "index", "type", "category", "repeat", "data",
         ],
         &[
+            &[
+                "fDtb",
+                "Data",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "2",
+            ],
+            &[
+                "fDtc",
+                "Data",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "3",
+            ],
+            &[
+                "fDtd",
+                "Data",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "4",
+            ],
+            &[
+                "fHDu",
+                "HeroDur",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "fBuf",
+                "BuffID",
+                "AbilityData",
+                "-1",
+                "string",
+                "stats",
+                "1",
+                "0",
+            ],
             &[
                 "fCoo",
                 "Cool",
@@ -2687,6 +2748,17 @@ integer HeroLevel=0
 unit HeroUnit=null
 unit HeroFiltered=null
 boolean HeroAllow=true
+integer MirrorChannels=0
+integer MirrorEffects=0
+integer MirrorEnds=0
+integer MirrorSummons=0
+integer MirrorAbility=0
+unit MirrorCaster=null
+unit MirrorImage=null
+boolean MirrorNested=true
+boolean MirrorInterrupt=false
+real MirrorEffectMana=0.0
+real MirrorEndMana=0.0
 endglobals
 function setup takes nothing returns nothing
 set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
@@ -2759,6 +2831,46 @@ call TriggerRegisterPlayerUnitEvent(T,p,e,f)
 call TriggerAddAction(T,function hero_record)
 return T
 endfunction
+function mirror_channel takes nothing returns nothing
+set MirrorChannels=MirrorChannels+1
+set MirrorAbility=GetSpellAbilityId()
+set MirrorCaster=GetSpellAbilityUnit()
+set MirrorNested=IssueImmediateOrder(H,"gamma")
+if MirrorInterrupt then
+call IssueImmediateOrder(H,"beta")
+endif
+endfunction
+function mirror_effect takes nothing returns nothing
+set MirrorEffects=MirrorEffects+1
+set MirrorEffectMana=GetUnitState(H,UNIT_STATE_MANA)
+endfunction
+function mirror_end takes nothing returns nothing
+set MirrorEnds=MirrorEnds+1
+set MirrorEndMana=GetUnitState(H,UNIT_STATE_MANA)
+endfunction
+function mirror_summon takes nothing returns nothing
+set MirrorSummons=MirrorSummons+1
+set MirrorImage=GetSummonedUnit()
+set MirrorCaster=GetSummoningUnit()
+endfunction
+function mirror_listen takes boolean interrupt returns nothing
+set MirrorInterrupt=interrupt
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,H,EVENT_UNIT_SPELL_CHANNEL)
+call TriggerAddAction(T,function mirror_channel)
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,H,EVENT_UNIT_SPELL_EFFECT)
+call TriggerAddAction(T,function mirror_effect)
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,H,EVENT_UNIT_SPELL_ENDCAST)
+call TriggerAddAction(T,function mirror_end)
+set T=CreateTrigger()
+call TriggerRegisterUnitEvent(T,H,EVENT_UNIT_SUMMON)
+call TriggerAddAction(T,function mirror_summon)
+endfunction
+function mirror_cast takes nothing returns boolean
+return IssueImmediateOrder(H,"gamma")
+endfunction
 function hero_refuse_filter takes nothing returns nothing
 set HeroAllow=false
 set HeroFiltered=null
@@ -2766,11 +2878,22 @@ endfunction
 "#;
 
 const HOLY_DECLARATIONS: &str = r#"
+native BlzIsUnitInvulnerable takes unit u returns boolean
+constant native SetPlayerHandicapXP takes player p, real factor returns nothing
+constant native GetPlayerHandicapXP takes player p returns real
+native GetSpellAbilityId takes nothing returns integer
+native GetSpellAbilityUnit takes nothing returns unit
 native IssueTargetOrderById takes unit u, integer order, widget target returns boolean
 native SetUnitFacing takes unit u, real angle returns nothing
 native SetPlayerAbilityAvailable takes player p, integer ability, boolean available returns nothing
 native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 globals
+constant unitevent EVENT_UNIT_SPELL_CHANNEL = ConvertUnitEvent(1901)
+constant unitevent EVENT_UNIT_SPELL_CAST = ConvertUnitEvent(-1902)
+constant unitevent EVENT_UNIT_SPELL_ENDCAST = ConvertUnitEvent(1903)
+constant playerunitevent EVENT_PLAYER_UNIT_SPELL_CHANNEL = ConvertPlayerUnitEvent(1904)
+constant playerunitevent EVENT_PLAYER_UNIT_SPELL_CAST = ConvertPlayerUnitEvent(-1905)
+constant playerunitevent EVENT_PLAYER_UNIT_SPELL_ENDCAST = ConvertPlayerUnitEvent(1906)
 constant unitevent EVENT_UNIT_SPELL_EFFECT = ConvertUnitEvent(294)
 constant unitevent EVENT_UNIT_SUMMON = ConvertUnitEvent(-128)
 constant playerunitevent EVENT_PLAYER_UNIT_SUMMON = ConvertPlayerUnitEvent(905)
@@ -2781,6 +2904,8 @@ constant playerunitevent EVENT_PLAYER_HERO_LEVEL = ConvertPlayerUnitEvent(1011)
 constant playerunitevent EVENT_PLAYER_HERO_SKILL = ConvertPlayerUnitEvent(-333)
 constant unittype UNIT_TYPE_UNDEAD = ConvertUnitType(2)
 constant unittype UNIT_TYPE_ANCIENT = ConvertUnitType(3)
+constant unittype UNIT_TYPE_HERO = ConvertUnitType(871)
+constant unittype UNIT_TYPE_SUMMONED = ConvertUnitType(-731)
 endglobals
 type effect extends agent
 native AddSpecialEffectTarget takes string model, widget target, string attachPoint returns effect
@@ -2790,6 +2915,11 @@ native SelectHeroSkill takes unit u, integer ability returns nothing
 type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
 native IsUnitType takes unit u, unittype t returns boolean
+constant native IsUnitIllusion takes unit u returns boolean
+constant native GetHeroXP takes unit u returns integer
+constant native GetHeroStr takes unit u, boolean bonus returns integer
+constant native GetHeroAgi takes unit u, boolean bonus returns integer
+constant native GetHeroInt takes unit u, boolean bonus returns integer
 native BlzGetUnitAbilityCooldownRemaining takes unit u, integer ability returns real
 native BlzEndUnitAbilityCooldown takes unit u, integer ability returns nothing
 native UnitResetCooldown takes unit u returns nothing
@@ -2805,6 +2935,7 @@ constant native GetLearnedSkill takes nothing returns integer
 constant native GetLearnedSkillLevel takes nothing returns integer
 constant native GetHeroLevel takes unit u returns integer
 constant native GetHeroSkillPoints takes unit u returns integer
+constant native GetUnitAbilityLevel takes unit u, integer ability returns integer
 "#;
 
 #[path = "hero_event_tests.rs"]
@@ -2856,7 +2987,72 @@ fn holy_open_with_inputs(
     tables: DefaultTables,
     overlay: pcx_objects::editor::Overlay,
 ) -> (Vm, [HandleId; 4]) {
+    holy_open_with_profile(
+        types,
+        abilities,
+        heroes,
+        art_end_ms,
+        model,
+        (tables, overlay, hero_rules().0),
+    )
+}
+
+fn holy_open_with_profile(
+    types: &str,
+    abilities: &str,
+    heroes: &str,
+    art_end_ms: u32,
+    model: Option<Arc<crate::unit_model::Model>>,
+    profile: (
+        DefaultTables,
+        pcx_objects::editor::Overlay,
+        crate::hero_skills::Rules,
+    ),
+) -> (Vm, [HandleId; 4]) {
+    holy_open_with_profile_vitals(
+        types,
+        abilities,
+        heroes,
+        art_end_ms,
+        model,
+        profile,
+        HeroVitals {
+            life_per_strength: 25.0,
+            mana_per_intelligence: 100.0,
+            life_regen_per_strength: 0.0,
+            mana_regen_per_intelligence: 0.0,
+        },
+    )
+}
+
+fn holy_open_with_profile_vitals(
+    types: &str,
+    abilities: &str,
+    heroes: &str,
+    art_end_ms: u32,
+    model: Option<Arc<crate::unit_model::Model>>,
+    profile: (
+        DefaultTables,
+        pcx_objects::editor::Overlay,
+        crate::hero_skills::Rules,
+    ),
+    vitals: HeroVitals,
+) -> (Vm, [HandleId; 4]) {
+    let (tables, overlay, hero_rules) = profile;
+    let experience = hero_rules
+        .experience
+        .as_ref()
+        .is_some_and(|r| r.awards.is_some());
     let mut fields = hero_fields("STR");
+    if experience {
+        fields.push(column(
+            b"ubdg",
+            SlkId::UnitBalance,
+            "isbldg",
+            FieldKind::Bool,
+            "0",
+        ));
+    }
     fields.push(column(
         b"Smp0",
         SlkId::UnitWeapons,
@@ -2899,6 +3095,25 @@ fn holy_open_with_inputs(
         FieldKind::Token,
         heroes,
     ));
+    fields.push(column(
+        b"ufus",
+        SlkId::UnitBalance,
+        "fused",
+        FieldKind::Int,
+        "3",
+    ));
+    fields.push(column(
+        b"ufma",
+        SlkId::UnitBalance,
+        "fmade",
+        FieldKind::Int,
+        "0",
+    ));
+    for (id, field) in &mut fields {
+        if id == b"ufus" || id == b"ufma" {
+            field.metadata.as_mut().unwrap().declared = "int".into();
+        }
+    }
     let extra = format!(
         "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\nnative SetUnitTimeScale takes unit u, real scale returns nothing\n",
         enumeration::TRIGGERS,
@@ -2940,17 +3155,18 @@ fn holy_open_with_inputs(
             .unwrap_or(0),
     };
     h = h
-        .with_hero_skills(tables, origin, overlay, hero_rules().0, hero_budget)
+        .with_hero_skills(tables, origin, overlay, hero_rules, hero_budget)
         .unwrap();
+    if experience {
+        let (rules, numeric) = crate::player_handicap::tests::rules();
+        h = h
+            .with_script_numeric(numeric)
+            .with_player_experience_handicap(rules)
+            .unwrap();
+    }
     h.admit_unit_activity(activity, 65536).unwrap();
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
-    h.admit_unit_vitals(HeroVitals {
-        life_per_strength: 25.0,
-        mana_per_intelligence: 100.0,
-        life_regen_per_strength: 0.0,
-        mana_regen_per_intelligence: 0.0,
-    })
-    .unwrap();
+    h.admit_unit_vitals(vitals).unwrap();
     h.admit_combat(rules(), "beta").unwrap();
     h.admit_holy_light(&holy_art(art_end_ms, false)).unwrap();
     h.set_neutral_passive(15);
@@ -3048,6 +3264,10 @@ fn holy_fractional_source_cells_reach_range_healing_and_cooldown_without_truncat
         Default::default(),
     );
     vm.call("prime", &[]).unwrap();
+    assert_eq!(
+        vm.host().inner.holy_light_cast_range(caster).unwrap(),
+        Some(31.5)
+    );
     assert!(holy_cast(&mut vm, caster, target));
     assert_eq!(
         holy_life(&mut vm, target),
@@ -3305,6 +3525,7 @@ fn unavailable_holy_light_has_no_command_or_cast_and_tracks_current_owner() {
         )
         .unwrap();
     let mana = holy_mana(&mut vm, h);
+    assert_eq!(vm.host().inner.holy_light_cast_range(h).unwrap(), None);
     assert!(vm.host().inner.holy_light_command(h).unwrap().is_none());
     assert!(vm.host().inner.holy_light_readiness(h).unwrap().is_none());
     assert!(!holy_cast(&mut vm, h, f));
@@ -4005,8 +4226,8 @@ fn campaign_targeting_flag_and_difficulty_are_scoped_to_the_attacking_player() {
 }
 
 #[test]
-fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
-    for difficulty in [2, 4] {
+fn campaign_targeting_refuses_higher_damage_bands_and_nonunit_specials() {
+    for difficulty in [4, 5] {
         let (mut vm, a, _) = open(&wide_acquire());
         admit_targeting_with(
             &mut vm,
@@ -4018,7 +4239,7 @@ fn campaign_targeting_refuses_decisive_optional_bands_and_nonunit_specials() {
         vm.host().inner.enable_combat_trace(8);
         let error = step_refused(&mut vm, 1.0 / 64.0);
         assert!(error.contains("campaign targeting"), "{error}");
-        assert!(error.contains("optional scorer bands"), "{error}");
+        assert!(error.contains("damage/class scorer bands"), "{error}");
         assert_eq!(acquired(&mut vm, a), None);
         assert!(vm.host().inner.combat_trace().unwrap().events().is_empty());
     }

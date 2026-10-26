@@ -290,6 +290,25 @@ impl Animation {
         }
         Ok(())
     }
+    pub(crate) fn select_index(&mut self, index: usize, now: f64) -> Result<(), String> {
+        if index >= self.model.sequences.len()
+            || !now.is_finite()
+            || now < self.started
+            || now < self.phase_at
+        {
+            return Err("invalid unit animation index/time".into());
+        }
+        let blend = self.prepare_blend(now)?;
+        self.sequence = Some(index);
+        self.started = now;
+        self.rate = 1.;
+        self.phase_at = now;
+        self.phase_seconds = 0.;
+        self.blend = blend;
+        self.queued.clear();
+        self.queue_active = false;
+        Ok(())
+    }
     /// Engine phase duration is gameplay data; fit its authored clip without changing explicit time scale.
     pub(crate) fn select_for_duration(
         &mut self,

@@ -13,12 +13,14 @@ pub struct ObjectHost {
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
     dialogs: Option<dialogs::DialogState>,
+    leaderboards: Option<leaderboards::LeaderboardState>,
     indicators: Option<(Vec<indicators::Indicator>, usize)>,
     combat: Option<combat::Rules>,
     combat_trace: Option<combat::CombatTrace>,
     holy_light: Option<holy_light::Rules>,
     chain_lightning: Option<chain_lightning::Rules>,
     summoning: Option<unit_summon::State>,
+    mirror_image: Option<unit_mirror_image::State>,
     unit_expirations: std::collections::BTreeMap<HandleId, f64>,
     training: unit_training::State,
     events: event_delivery::Delivery,
@@ -77,6 +79,7 @@ pub struct ObjectHost {
     game_caches: Option<game_caches::State>,
     presentation: Option<presentation::PresentationState>,
     message_layout: Option<crate::message_layout::Rules>,
+    leaderboard_layout: Option<crate::leaderboard_layout::Rules>,
     no_occlusion_pass: bool,
     occlusion_enabled: Option<bool>,
     messages: Option<messages::MessageState>,
@@ -129,6 +132,7 @@ pub struct ObjectHost {
     synchronous_frames: Vec<SynchronousFrame>,
 }
 pub(super) struct SynchronousFrame {
+    result: Value,
     events: std::collections::VecDeque<event_delivery::FiredEvent>,
     active: bool,
     spawn_depth: usize,
@@ -185,6 +189,23 @@ impl ObjectHost {
         Ok(self)
     }
 
+    pub fn with_leaderboard_layout(
+        mut self,
+        rules: crate::leaderboard_layout::Rules,
+    ) -> Result<Self, Error> {
+        if self.leaderboard_layout.is_some() {
+            return Err(self.inner.error(
+                "leaderboard layout",
+                Failure::LeaderboardState("layout already admitted"),
+            ));
+        }
+        self.leaderboard_layout = Some(rules);
+        Ok(self)
+    }
+    pub fn leaderboard_layout(&self) -> Option<&crate::leaderboard_layout::Rules> {
+        self.leaderboard_layout.as_ref()
+    }
+
     pub fn message_layout(&self) -> Option<&crate::message_layout::Rules> {
         self.message_layout.as_ref()
     }
@@ -236,6 +257,7 @@ impl ObjectHost {
             game_caches: None,
             presentation: None,
             message_layout: None,
+            leaderboard_layout: None,
             no_occlusion_pass: false,
             occlusion_enabled: None,
             messages: None,
@@ -266,10 +288,12 @@ impl ObjectHost {
             holy_light: None,
             chain_lightning: None,
             summoning: None,
+            mirror_image: None,
             unit_expirations: std::collections::BTreeMap::new(),
             indicators: None,
             cinematic_scene: None,
             dialogs: None,
+            leaderboards: None,
             pings: Vec::new(),
             selection: None,
             fog_modifiers: false,
@@ -776,6 +800,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_synchronous_mirror_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_destructable_death_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -837,6 +867,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.weather_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.mirror_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.summoning_native(name, args) {
@@ -979,6 +1012,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.location_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.illusion_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_type_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -986,6 +1022,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.selection_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.leaderboard_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.dialog_native(name, args) {
@@ -1019,6 +1058,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.follow_target_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.construction_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.combat_native(name, args) {
@@ -1191,12 +1233,19 @@ pub use destructables::{
     RestoreLifePolicy,
 };
 
+#[path = "unit_construction_host.rs"]
+mod unit_construction;
 #[path = "unit_host.rs"]
 mod unit_creation;
 #[path = "unit_technology_host.rs"]
 mod unit_technology;
 #[path = "unit_training_host.rs"]
 mod unit_training;
+pub use unit_construction::{
+    BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionOrder, ConstructionPreview,
+    Context as ConstructionContext, Phase as ConstructionPhase, Site as ConstructionSite,
+    UnitConstruction,
+};
 pub use unit_creation::{
     ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, LearnBlock, LearnableSkill,
     ResearchIcon, UnitAbilities, UnitBudget, UnitStateBudget,
@@ -1460,6 +1509,10 @@ pub use game_exit::GameExitRequest;
 mod unit_guards;
 pub use unit_guards::{GuardBudget, GuardState, UnitGuard};
 
+#[path = "unit_mirror_image_host.rs"]
+mod unit_mirror_image;
+pub use unit_mirror_image::{Illusion, MirrorEventContext, MirrorEventPhase};
+
 #[path = "unit_summon_host.rs"]
 mod unit_summon;
 
@@ -1477,3 +1530,7 @@ mod ally_colors;
 
 #[path = "unit_decay_host.rs"]
 mod decay;
+
+#[path = "leaderboard_host.rs"]
+mod leaderboards;
+pub use leaderboards::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};

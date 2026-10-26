@@ -454,6 +454,7 @@ pub(crate) fn app_with_plugins(
     crate::hud_render::install(&mut app);
     crate::campaign_messages::install(&mut app);
     crate::campaign_script_dialogs::install(&mut app);
+    crate::campaign_leaderboards::install(&mut app);
     crate::tooltip::install(&mut app);
     crate::menu_settings::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]

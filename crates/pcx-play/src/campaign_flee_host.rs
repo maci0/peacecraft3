@@ -32,6 +32,9 @@ struct PlayerFlags {
     captain_members: [Vec<HandleId>; 2],
     captain_focus: [Option<HandleId>; 2],
     captain_routes: Vec<HandleId>,
+    assault_full: Option<bool>,
+    assault_baseline: Option<i32>,
+    assault_target: Option<HandleId>,
     guard_posts: Vec<super::unit_training::GuardPost>,
 }
 
@@ -69,6 +72,9 @@ impl Registry {
                 captain_members: [Vec::new(), Vec::new()],
                 captain_focus: [None; 2],
                 captain_routes: Vec::new(),
+                assault_full: None,
+                assault_baseline: None,
+                assault_target: None,
                 guard_posts: Vec::new(),
             },
         );
@@ -201,6 +207,37 @@ impl Registry {
             .map(|flags| flags.captain_members[usize::from(!attack)].as_slice())
     }
 
+    pub(super) fn assault_state(
+        &self,
+        player: i32,
+    ) -> Option<(Option<bool>, Option<i32>, Option<HandleId>)> {
+        self.players
+            .get(&player)
+            .map(|row| (row.assault_full, row.assault_baseline, row.assault_target))
+    }
+    pub(super) fn initialize_assault(&mut self, player: i32, count: i32) {
+        if let Some(row) = self.players.get_mut(&player) {
+            row.assault_full = Some(true);
+            row.assault_baseline.get_or_insert(count);
+        }
+    }
+    pub(super) fn assault_shortfall(&mut self, player: i32) {
+        if let Some(row) = self.players.get_mut(&player) {
+            row.assault_full = Some(false);
+        }
+    }
+    pub(super) fn launch_assault(&mut self, player: i32, target: HandleId) {
+        if let Some(row) = self.players.get_mut(&player) {
+            row.assault_target = Some(target);
+        }
+    }
+    pub(super) fn assault_intents(&self) -> Vec<(i32, HandleId)> {
+        self.players
+            .iter()
+            .filter_map(|(&player, row)| row.assault_target.map(|target| (player, target)))
+            .collect()
+    }
+
     pub(super) fn captain_focus(&self, player: i32, attack: bool) -> Option<Option<HandleId>> {
         self.players
             .get(&player)
@@ -259,6 +296,9 @@ impl Registry {
         let members = &mut flags.captain_members[usize::from(!attack)];
         if let Err(at) = members.binary_search(&unit) {
             members.insert(at, unit);
+            if attack {
+                flags.assault_baseline = i32::try_from(members.len()).ok();
+            }
         }
     }
 
@@ -291,6 +331,13 @@ impl Registry {
         if let Err(at) = flags.captain_routes.binary_search(&unit) {
             flags.captain_routes.insert(at, unit);
         }
+    }
+
+    /// Canonical route ownership is disjoint across the existing player rosters.
+    pub(super) fn captain_route_members(&self) -> impl Iterator<Item = (i32, HandleId)> + '_ {
+        self.players.iter().flat_map(|(&player, flags)| {
+            flags.captain_routes.iter().map(move |&unit| (player, unit))
+        })
     }
 
     pub(super) fn has_captain_route(&self, player: i32, unit: HandleId) -> bool {

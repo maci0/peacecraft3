@@ -26,6 +26,13 @@ pub enum Relation {
     Enemy,
 }
 
+pub(super) type AbilityEvent = (
+    HandleId,
+    Option<pcx_script::value::FunctionId>,
+    Option<HandleId>,
+    Option<HandleId>,
+);
+
 const ORDER: &str = "IssueTargetOrder";
 const ORDER_BY_ID: &str = "IssueTargetOrderById";
 const KILL: &str = "KillUnit";
@@ -278,7 +285,11 @@ pub struct HeroAttributeStat {
 
 impl ObjectHost {
     pub(super) fn combat_step_eligible(&self, unit: HandleId, record: &ExecutedUnit) -> bool {
-        self.summon_current_order(unit).is_none()
+        !self.mirror_busy(unit)
+            && self.summon_current_order(unit).is_none()
+            && record.construction.is_none()
+            && record.construction_request.is_none()
+            && self.unit_construction_order(unit).ok().flatten().is_none()
             && record.combat.as_ref().is_some_and(|combat| {
                 record.paused_since.is_none()
                     && !record.is_sleeping()
@@ -523,13 +534,12 @@ impl ObjectHost {
         )
     }
 
-    pub(super) fn queue_ability_event(
+    pub(super) fn prepare_ability_events(
         &mut self,
         caster: HandleId,
         unit_name: &str,
         player_name: &str,
-        subject: EventSubject,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<AbilityEvent>, Error> {
         let unit_event = self.source_constant_enumerand(unit_name, "unitevent")?;
         let player_event = self.source_constant_enumerand(player_name, "playerunitevent")?;
         let owner = self.executed_unit(caster)?.owner;
@@ -552,9 +562,34 @@ impl ObjectHost {
                 _ => {}
             }
         }
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(fired.len())
+            .map_err(|_| self.inner.error("ability events", Failure::Capacity))?;
         for (trigger, filter, event, player) in fired {
-            self.queue_event(trigger, filter, EventSubject { player, ..subject }, event)?;
+            prepared.push((trigger, self.resolve_event_filter(filter)?, event, player));
         }
+        Ok(prepared)
+    }
+    pub(super) fn commit_ability_events(
+        &mut self,
+        events: Vec<AbilityEvent>,
+        subject: EventSubject,
+    ) {
+        for (trigger, filter, event, player) in events {
+            self.push_reserved_event(trigger, filter, EventSubject { player, ..subject }, event);
+        }
+    }
+    pub(super) fn queue_ability_event(
+        &mut self,
+        caster: HandleId,
+        unit_name: &str,
+        player_name: &str,
+        subject: EventSubject,
+    ) -> Result<(), Error> {
+        let events = self.prepare_ability_events(caster, unit_name, player_name)?;
+        self.reserve_event_delivery(events.len())?;
+        self.commit_ability_events(events, subject);
         Ok(())
     }
 
@@ -603,6 +638,9 @@ impl ObjectHost {
 
     pub(crate) fn hero_combat_bonuses(&self, unit: HandleId) -> Result<HeroBonuses, Error> {
         let record = self.executed_unit(unit)?;
+        if let Some(image) = &record.illusion {
+            return Ok(image.combat_bonuses);
+        }
         let progress = self.hero_initial_level().zip(
             record
                 .abilities
@@ -846,6 +884,7 @@ impl ObjectHost {
 
     /// Another order replaces the unit's attack target.
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
+        self.cancel_mirror_cast(unit);
         self.cancel_summon_cast(unit);
         self.forget_holy_cast(unit);
         self.forget_chain_cast(unit);
@@ -870,14 +909,15 @@ impl ObjectHost {
         }
     }
 
-    fn weapon_target(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
+    pub(super) fn weapon_target(&self, unit: HandleId) -> Option<&super::ExecutedUnit> {
         // Effective protection = explicit `SetUnitInvulnerable` OR an active
         // Divine Shield contribution.
         let shielded = self
             .timer_game_time()
             .is_some_and(|now| self.divine_shield_protects(unit, now));
-        self.live(unit)
-            .filter(|record| record.invulnerable != Some(true) && !shielded)
+        self.live(unit).filter(|record| {
+            record.invulnerable != Some(true) && !shielded && !self.mirror_protects(unit)
+        })
     }
 
     fn hostile(&self, attacker: &super::ExecutedUnit, target: &super::ExecutedUnit) -> bool {
@@ -1060,10 +1100,9 @@ impl ObjectHost {
                 return Ok(Value::Bool(false));
             };
             let (unit, target) = (*unit, *target);
-            if self
-                .live(unit)
-                .is_some_and(|record| record.paused_since.is_some())
-            {
+            if self.live(unit).is_some_and(|record| {
+                record.paused_since.is_some() || record.construction.is_some()
+            }) {
                 return Ok(Value::Bool(false));
             }
             let can_attack = self
@@ -1073,6 +1112,7 @@ impl ObjectHost {
             if !can_attack || self.weapon_target(target).is_none() || unit == target {
                 return Ok(Value::Bool(false));
             }
+            self.interrupt_unit_construction(unit)?;
             self.unit_ordered(unit);
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
@@ -1115,6 +1155,7 @@ impl ObjectHost {
         }
         let owner = record.owner;
         let experience = self.plan_hero_kill_experience(unit, killer)?;
+        self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
         self.forget_inventory_unit(unit, false)?;
@@ -1160,6 +1201,7 @@ impl ObjectHost {
                 selected.map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
         }
+        self.forget_construction_unit(unit)?;
         if exploded && !exploded_presented {
             self.note_unrendered_explosion(unit);
         }
@@ -1310,9 +1352,11 @@ impl ObjectHost {
         combat_hit: bool,
         applied: &mut bool,
     ) -> Result<(), Error> {
-        let Some(record) = self.weapon_target(target) else {
+        if self.weapon_target(target).is_none() {
             return Ok(());
-        };
+        }
+        let damage = self.mirror_damage(source, target, damage)?;
+        let record = self.weapon_target(target).expect("validated target");
         let retreat = if combat_hit && damage > 0.0 {
             let life = record.vitals.map(|v| v.life).unwrap_or(0.0) - damage;
             if life > 0.0 {
@@ -1354,6 +1398,11 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(target)?
             && let Some(vitals) = &mut record.vitals
         {
+            if life < vitals.life
+                && let Some(site) = &mut record.construction
+            {
+                site.note_damage();
+            }
             vitals.life = life;
         }
         if damage > 0.0 {
@@ -1418,6 +1467,7 @@ impl ObjectHost {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.inner.error(name, Failure::UnitState("clock missing")))?;
+        self.project_assault_orders()?;
         self.prune_campaign_flee_motion();
         let missiles = std::mem::take(&mut self.combat.as_mut().expect("combat").missiles);
         let (due, pending): (Vec<_>, Vec<_>) =
@@ -1441,6 +1491,7 @@ impl ObjectHost {
                 return Err(*failure.error);
             }
         }
+        self.advance_mirror_image(now)?;
         self.advance_holy_light(now)?;
         self.advance_chain_lightning(now)?;
         self.advance_unit_expirations(now)?;

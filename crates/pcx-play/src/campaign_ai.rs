@@ -14,6 +14,7 @@ pub struct SourceNames {
     pub(crate) common: String,
     pub(crate) ai_common: String,
     pub(crate) fallback_prefix: String,
+    pub(crate) pause: Result<crate::campaign_ai_pause_policy::Rules, String>,
 }
 
 impl SourceNames {
@@ -55,7 +56,7 @@ impl SourceNames {
         {
             return Err("StartCampaignAI image loader call chain differs".into());
         }
-        let names = Self::from_addresses(
+        let mut names = Self::from_addresses(
             |va| {
                 let bytes = pe.read_from(va, false).map_err(|e| e.to_string())?;
                 let end = bytes
@@ -73,6 +74,7 @@ impl SourceNames {
                 push_target(0xac0326)?,
             ],
         )?;
+        names.pause = crate::campaign_ai_pause_policy::Rules::read(image);
         Ok(names)
     }
 
@@ -84,6 +86,7 @@ impl SourceNames {
             common: read(common)?,
             ai_common: read(ai_common)?,
             fallback_prefix: read(prefix)?,
+            pause: Err("PauseCompAI client rules are not admitted".into()),
         };
         for name in [&names.common, &names.ai_common] {
             AssetPath::new(name).map_err(|e| format!("StartCampaignAI image source: {e}"))?;
@@ -113,6 +116,23 @@ type Loader = Box<dyn FnMut(&str) -> Result<Arc<MapScripts>, String> + Send + Sy
 
 pub(crate) trait AiWorld: Host {
     fn ai_clock(&self) -> Option<f64>;
+    fn ai_init_assault(&mut self, player: i32) -> Result<(), String>;
+    fn ai_add_assault(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String>;
+    fn ai_captain_is_full(&mut self, player: i32) -> Result<bool, String>;
+    fn ai_captain_readiness(&mut self, player: i32) -> Result<i32, String>;
+    fn ai_suicide_player(
+        &mut self,
+        player: i32,
+        target: pcx_script::HandleId,
+        check_full: bool,
+    ) -> Result<bool, String>;
+    fn ai_set_produce(
+        &mut self,
+        player: i32,
+        quantity: i32,
+        kind: i32,
+        town: i32,
+    ) -> Result<bool, String>;
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_debug_text(&mut self) -> Result<(), String>;
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String>;
@@ -157,6 +177,77 @@ pub(crate) trait AiWorld: Host {
 }
 
 impl AiWorld for NeutralStack {
+    fn ai_init_assault(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .init_ai_assault(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_add_assault(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .add_ai_assault(player, quantity, kind)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_is_full(&mut self, player: i32) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .ai_captain_is_full(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_readiness(&mut self, player: i32) -> Result<i32, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .ai_captain_readiness(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_suicide_player(
+        &mut self,
+        player: i32,
+        target: pcx_script::HandleId,
+        check_full: bool,
+    ) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .suicide_ai_player(player, target, check_full)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_set_produce(
+        &mut self,
+        player: i32,
+        quantity: i32,
+        kind: i32,
+        town: i32,
+    ) -> Result<bool, String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_produce(player, quantity, kind, town)
+            .map_err(|error| error.to_string())
+    }
     fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String> {
         self.inner_mut()
             .inner_mut()
@@ -515,6 +606,7 @@ pub(crate) struct Runtime<W: AiWorld> {
     active: BTreeMap<i32, OwnedVm<AiHost<W>>>,
     pending_retirement: BTreeSet<i32>,
     remaining_loads: usize,
+    pause_rules: Result<crate::campaign_ai_pause_policy::Rules, String>,
 }
 
 impl<W: AiWorld> Default for Runtime<W> {
@@ -524,11 +616,37 @@ impl<W: AiWorld> Default for Runtime<W> {
             active: BTreeMap::new(),
             pending_retirement: BTreeSet::new(),
             remaining_loads: 64,
+            pause_rules: Err("PauseCompAI client rules are not admitted".into()),
         }
     }
 }
 
 impl<W: AiWorld> Runtime<W> {
+    pub(crate) fn set_pause_rules(
+        &mut self,
+        rules: Result<crate::campaign_ai_pause_policy::Rules, String>,
+    ) {
+        self.pause_rules = rules;
+    }
+
+    pub(crate) fn pause(&mut self, player: i32, pause: bool) -> Result<(), String> {
+        if self.pending_retirement.contains(&player) {
+            return Err("PauseCompAI context is pending retirement".into());
+        }
+        let Some(vm) = self.active.get_mut(&player) else {
+            return Ok(());
+        };
+        let rules = self.pause_rules.as_ref().map_err(Clone::clone)?;
+        let previous = vm.host().pause_depth.unwrap_or(rules.initial);
+        let next = if pause {
+            previous.wrapping_add(1)
+        } else {
+            previous.wrapping_sub(1)
+        };
+        vm.host().pause_depth = Some(next);
+        Ok(())
+    }
+
     pub(crate) fn set_loader(
         &mut self,
         loader: impl FnMut(&str) -> Result<Arc<MapScripts>, String> + Send + Sync + 'static,
@@ -641,6 +759,33 @@ impl<W: AiWorld> Runtime<W> {
     ) -> Result<(), String> {
         if self.pending_retirement.contains(&player) {
             return Err("campaign AI context is pending retirement".into());
+        }
+        if let Some(vm) = self.active.get_mut(&player)
+            && vm.host().pause_depth.is_some_and(|depth| depth != 0)
+        {
+            let period = self
+                .pause_rules
+                .as_ref()
+                .map_err(Clone::clone)?
+                .retry_seconds;
+            let now = world
+                .as_ref()
+                .and_then(AiWorld::ai_clock)
+                .ok_or("PauseCompAI canonical clock is missing")?;
+            let next = now + period;
+            if !next.is_finite() || next <= now {
+                return Err("PauseCompAI retry deadline is invalid".into());
+            }
+            let deadline = vm
+                .host()
+                .sleepers
+                .get_mut(&ticket)
+                .ok_or("PauseCompAI wake ticket is missing")?;
+            if now < *deadline {
+                return Err("PauseCompAI clock has not reached wake deadline".into());
+            }
+            *deadline = next;
+            return Ok(());
         }
         if !self.active.contains_key(&player) {
             return Err("campaign AI player is not running".into());
@@ -893,6 +1038,7 @@ pub(crate) struct AiHost<W: AiWorld> {
     player: i32,
     world: Option<W>,
     pending_sleep: Option<f64>,
+    pause_depth: Option<i32>,
     sleepers: BTreeMap<u64, f64>,
     next_ticket: u64,
 }
@@ -903,6 +1049,7 @@ impl<W: AiWorld> AiHost<W> {
             player,
             world: Some(world),
             pending_sleep: None,
+            pause_depth: None,
             sleepers: BTreeMap::new(),
             next_ticket: 0,
         }
@@ -1267,6 +1414,56 @@ impl<W: AiWorld> Host for AiHost<W> {
                 let player = self.player;
                 Ok(Value::Bool(self.world_mut()?.ai_captain_is_empty(player)?))
             }
+            "InitAssault" => {
+                if !args.is_empty() {
+                    return Err("InitAssault: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_init_assault(player)?;
+                Ok(Value::Null)
+            }
+            "AddAssault" => {
+                let [Value::Int(quantity), Value::Int(kind)] = args else {
+                    return Err("AddAssault: expected quantity and unit type".into());
+                };
+                let player = self.player;
+                self.world_mut()?
+                    .ai_add_assault(player, *quantity, *kind)
+                    .map(Value::Bool)
+            }
+            "CaptainIsFull" | "CaptainReadiness" => {
+                if !args.is_empty() {
+                    return Err(format!("{name}: expected no arguments"));
+                }
+                let player = self.player;
+                if name == "CaptainIsFull" {
+                    self.world_mut()?
+                        .ai_captain_is_full(player)
+                        .map(Value::Bool)
+                } else {
+                    self.world_mut()?
+                        .ai_captain_readiness(player)
+                        .map(Value::Int)
+                }
+            }
+            "SuicidePlayer" => {
+                let [Value::Handle(target), Value::Bool(check_full)] = args else {
+                    return Err("SuicidePlayer: expected player and check-full boolean".into());
+                };
+                let player = self.player;
+                self.world_mut()?
+                    .ai_suicide_player(player, *target, *check_full)
+                    .map(Value::Bool)
+            }
+            "SetProduce" => {
+                let [Value::Int(quantity), Value::Int(kind), Value::Int(town)] = args else {
+                    return Err("SetProduce: expected quantity, unit type and town integers".into());
+                };
+                let player = self.player;
+                self.world_mut()?
+                    .ai_set_produce(player, *quantity, *kind, *town)
+                    .map(Value::Bool)
+            }
             "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
@@ -1286,7 +1483,7 @@ mod tests {
     use std::num::NonZeroU64;
     use std::sync::Mutex;
 
-    #[derive(Default)]
+    #[derive(Clone, Debug, Default, PartialEq)]
     struct State {
         clock: f64,
         gold: BTreeMap<u64, i32>,
@@ -1316,11 +1513,136 @@ mod tests {
         defender_requests: Vec<(i32, i32, i32)>,
         group_timed_life: BTreeMap<i32, bool>,
         retirement_blocked: bool,
+        production_requests: Vec<(i32, i32, i32, i32)>,
+        assault_calls: Vec<(i32, &'static str)>,
+    }
+
+    #[test]
+    fn production_dispatch_preserves_owner_arguments_and_acceptance() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(7, World(Arc::clone(&shared)));
+        let kind = i32::from_be_bytes(*b"u123");
+        for quantity in [2, 3] {
+            assert_eq!(
+                host.native(
+                    "SetProduce",
+                    &[Value::Int(quantity), Value::Int(kind), Value::Int(-1)]
+                )
+                .unwrap(),
+                Value::Bool(quantity == 2)
+            );
+        }
+        assert_eq!(
+            shared.lock().unwrap().production_requests,
+            vec![(7, 2, kind, -1), (7, 3, kind, -1)]
+        );
+        assert!(
+            host.native("SetProduce", &[Value::Int(3)])
+                .unwrap_err()
+                .contains("expected quantity")
+        );
+        assert_eq!(shared.lock().unwrap().production_requests.len(), 2);
+    }
+
+    #[test]
+    fn assault_dispatch_keeps_world_owner_and_native_results() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(7, World(Arc::clone(&shared)));
+        assert_eq!(host.native("InitAssault", &[]).unwrap(), Value::Null);
+        assert_eq!(
+            host.native(
+                "AddAssault",
+                &[Value::Int(2), Value::Int(i32::from_be_bytes(*b"u123"))]
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            host.native("CaptainIsFull", &[]).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            host.native("CaptainReadiness", &[]).unwrap(),
+            Value::Int(73)
+        );
+        let target = HandleId::new(std::num::NonZeroU64::new(3).unwrap());
+        assert_eq!(
+            host.native("SuicidePlayer", &[Value::Handle(target), Value::Bool(true)])
+                .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(host.native("InitAssault", &[Value::Int(1)]).is_err());
+        assert!(
+            host.native("SuicidePlayer", &[Value::Int(3), Value::Bool(true)])
+                .is_err()
+        );
+        assert_eq!(
+            shared.lock().unwrap().assault_calls,
+            vec![
+                (7, "init"),
+                (7, "add"),
+                (7, "full"),
+                (7, "readiness"),
+                (7, "launch")
+            ]
+        );
     }
 
     struct World(Arc<Mutex<State>>);
 
     impl AiWorld for World {
+        fn ai_init_assault(&mut self, player: i32) -> Result<(), String> {
+            self.0.lock().unwrap().assault_calls.push((player, "init"));
+            Ok(())
+        }
+        fn ai_add_assault(
+            &mut self,
+            player: i32,
+            _quantity: i32,
+            _kind: i32,
+        ) -> Result<bool, String> {
+            self.0.lock().unwrap().assault_calls.push((player, "add"));
+            Ok(false)
+        }
+        fn ai_captain_is_full(&mut self, player: i32) -> Result<bool, String> {
+            self.0.lock().unwrap().assault_calls.push((player, "full"));
+            Ok(false)
+        }
+        fn ai_captain_readiness(&mut self, player: i32) -> Result<i32, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .assault_calls
+                .push((player, "readiness"));
+            Ok(73)
+        }
+        fn ai_suicide_player(
+            &mut self,
+            player: i32,
+            _target: pcx_script::HandleId,
+            _check_full: bool,
+        ) -> Result<bool, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .assault_calls
+                .push((player, "launch"));
+            Ok(true)
+        }
+        fn ai_set_produce(
+            &mut self,
+            player: i32,
+            quantity: i32,
+            kind: i32,
+            town: i32,
+        ) -> Result<bool, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .production_requests
+                .push((player, quantity, kind, town));
+            Ok(quantity == 2)
+        }
         fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();
             if !state.active.contains_key(&player) {
@@ -3497,6 +3819,126 @@ mod tests {
                 None => assert!(result.unwrap_err().to_string().contains("unreadable")),
             }
         }
+    }
+
+    #[test]
+    fn nested_pause_polls_retained_tickets_and_preserves_other_players_wakes() {
+        let script = program(
+            "synthetic:pause.ai",
+            "globals\ninteger count=0\nendglobals\nfunction main takes nothing returns nothing\ncall Sleep(1.0)\nset count=count+1\ncall Sleep(1.0)\nset count=count+1\nendfunction\n",
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        runtime.set_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
+            initial: 0,
+            retry_seconds: 1.0,
+        }));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "pause.ai").unwrap();
+        runtime.start(&mut world, 2, "pause.ai").unwrap();
+        runtime.pause(1, true).unwrap();
+        runtime.pause(1, true).unwrap();
+        while let Some((deadline, player, ticket)) = runtime.next_wake(2.0) {
+            shared.lock().unwrap().clock = deadline;
+            runtime.resume(&mut world, player, ticket).unwrap();
+        }
+        assert_eq!(runtime.active[&1].global("count"), Value::Int(0));
+        assert_eq!(runtime.active[&2].global("count"), Value::Int(2));
+        runtime.pause(1, false).unwrap();
+        shared.lock().unwrap().clock = 3.0;
+        let (deadline, player, ticket) = runtime.next_wake(3.0).unwrap();
+        assert_eq!((deadline, player), (3.0, 1));
+        runtime.resume(&mut world, player, ticket).unwrap();
+        assert_eq!(runtime.active[&1].global("count"), Value::Int(0));
+        runtime.pause(1, false).unwrap();
+        assert_eq!(runtime.next_wake(3.5), None);
+        let (deadline, player, ticket) = runtime.next_wake(4.0).unwrap();
+        assert_eq!((deadline, player), (4.0, 1));
+        shared.lock().unwrap().clock = 4.0;
+        runtime.resume(&mut world, player, ticket).unwrap();
+        assert_eq!(runtime.active[&1].global("count"), Value::Int(1));
+        shared.lock().unwrap().clock = 5.0;
+        let (_, player, ticket) = runtime.next_wake(5.0).unwrap();
+        runtime.resume(&mut world, player, ticket).unwrap();
+        assert_eq!(runtime.active[&1].global("count"), Value::Int(2));
+        assert!(world.is_some());
+        assert_eq!(runtime.next_wake(10.0), None);
+    }
+
+    #[test]
+    fn paused_continuation_fault_restores_world_and_retires_its_pause_state() {
+        let script = program(
+            "synthetic:pause.ai",
+            "function main takes nothing returns nothing\ncall Sleep(1.0)\ncall SetPlayerState(Player(GetAiPlayer()),null,7)\nendfunction\n",
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        runtime.set_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
+            initial: 0,
+            retry_seconds: 1.0,
+        }));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.start(&mut world, 1, "pause.ai").unwrap();
+        runtime.pause(1, true).unwrap();
+        let ticket = *runtime
+            .active
+            .get_mut(&1)
+            .unwrap()
+            .host()
+            .sleepers
+            .keys()
+            .next()
+            .unwrap();
+        shared.lock().unwrap().clock = 1.0;
+        runtime.resume(&mut world, 1, ticket).unwrap();
+        assert_eq!(
+            runtime.active.get_mut(&1).unwrap().host().sleepers[&ticket],
+            2.0
+        );
+        assert!(shared.lock().unwrap().gold.is_empty());
+        shared.lock().unwrap().clock = 2.0;
+        runtime.pause(1, false).unwrap();
+        shared.lock().unwrap().callbacks = true;
+        assert!(
+            runtime
+                .resume(&mut world, 1, ticket)
+                .unwrap_err()
+                .contains("map callbacks")
+        );
+        assert!(world.is_some());
+        assert!(!runtime.active.contains_key(&1));
+        assert!(shared.lock().unwrap().gold.is_empty());
+        shared.lock().unwrap().callbacks = false;
+        runtime.start(&mut world, 1, "pause.ai").unwrap();
+        assert!(
+            runtime
+                .active
+                .get_mut(&1)
+                .unwrap()
+                .host()
+                .pause_depth
+                .is_none()
+        );
+        assert_eq!(runtime.next_wake(3.0).unwrap().0, 3.0);
+    }
+
+    #[test]
+    fn unadmitted_pause_refuses_active_context_without_consuming_sleep_or_world() {
+        let script = program(
+            "synthetic:pause.ai",
+            "function main takes nothing returns nothing\ncall Sleep(1.0)\nendfunction\n",
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut world = Some(World(Arc::clone(&shared)));
+        runtime.pause(1, true).unwrap();
+        runtime.start(&mut world, 1, "pause.ai").unwrap();
+        assert!(runtime.pause(1, true).unwrap_err().contains("not admitted"));
+        assert_eq!(runtime.next_wake(1.0).unwrap().0, 1.0);
+        assert!(world.is_some());
     }
 
     #[test]

@@ -179,6 +179,22 @@ pub(super) fn rules_with_setrally() -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,
 ) {
+    rules_with_extra_order("setrally")
+}
+
+pub(super) fn rules_with_repair() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    rules_with_extra_order("repair")
+}
+
+fn rules_with_extra_order(
+    order: &str,
+) -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
     use crate::neutral_player::sha256;
     let (mut image, mut binding, budget) = crate::order_registry::tests::fixture([431, 744]);
     let third = 0x220 + 9 + 15 + 17;
@@ -199,7 +215,8 @@ pub(super) fn rules_with_setrally() -> (
     reg.extend_from_slice(&(0x301100i32 - va_next as i32).to_le_bytes());
     image.copy_within(insert_at..insert_at + 2, insert_at + reg.len());
     image[insert_at..insert_at + reg.len()].copy_from_slice(&reg);
-    image[0x6c0..0x6c9].copy_from_slice(b"setrally\0");
+    let name = [order.as_bytes(), &[0]].concat();
+    image[0x6c0..0x6c0 + name.len()].copy_from_slice(&name);
     binding.initializer.len = (old_len + reg.len()) as u32;
     let mut put = |at: usize, prefix: &[u8], id: i32| {
         let mut bytes = prefix.to_vec();
@@ -2245,5 +2262,256 @@ fn deferred_replan_wait_is_not_credited_when_the_obstacle_clears() {
     assert!(
         after[0] <= 42.0 + speed * 2.0,
         "blocked waiting time is not catch-up distance"
+    );
+}
+
+#[test]
+fn removed_image_cleanup_chain_crosses_real_sleep_without_replacing_unit_or_moving_survivor() {
+    let declarations = r#"
+native SetUnitInvulnerable takes unit u, boolean flag returns nothing
+native SetUnitPositionLoc takes unit u, location at returns nothing
+native SetUnitFacingTimed takes unit u, real angle, real duration returns nothing
+constant native Atan2 takes real y, real x returns real
+native TriggerSleepAction takes real timeout returns nothing
+"#;
+    // Self-authored equivalent call chain; no original script bytes are embedded.
+    let map = r#"
+globals
+unit A=null
+unit B=null
+location DEST=null
+trigger T=null
+boolean DONE=false
+boolean ORDERED=true
+endglobals
+function face_retained takes unit image, unit target returns nothing
+local location a=GetUnitLoc(image)
+local location b=GetUnitLoc(target)
+call SetUnitFacingTimed(image,Atan2(GetLocationY(b)-GetLocationY(a),GetLocationX(b)-GetLocationX(a)),0.0)
+call RemoveLocation(b)
+call RemoveLocation(a)
+endfunction
+function cleanup takes nothing returns nothing
+call SetUnitInvulnerable(A,true)
+call SetUnitPositionLoc(A,DEST)
+call face_retained(A,B)
+call TriggerSleepAction(0.5)
+set ORDERED=IssuePointOrderLoc(A,"gamma",DEST)
+set DONE=true
+endfunction
+function setup takes nothing returns nothing
+set A=CreateUnit(Player(4),'U001',16.0,16.0,0.0)
+set B=CreateUnit(Player(4),'U001',80.0,16.0,0.0)
+set DEST=Location(48.0,16.0)
+call SetUnitInvulnerable(B,true)
+call PauseUnit(B,true)
+call RemoveUnit(A)
+set T=CreateTrigger()
+call TriggerAddAction(T,function cleanup)
+call TriggerExecute(T)
+endfunction
+"#;
+    let mut h = host_fields_with_placed_source(65536, &[], &[], rules(), map, declarations);
+    let numeric = crate::campaign_flee_policy::tests::route_fixture().1;
+    let wait = f64::from(pcx_script::RealOps::literal(&numeric, "0.5").unwrap());
+    h = h.with_script_numeric(numeric);
+    h.admit_thread_sleep(2).unwrap();
+    let ctx = Arc::clone(h.player_context().unwrap());
+    let mut vm = ctx.scripts.clone().owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    let before = {
+        let u = vm.host().inner.executed_unit(b).unwrap();
+        (u.position, u.face, u.owner, u.invulnerable, u.paused_since)
+    };
+    let handles = vm.host().inner.inner().handles();
+    assert_eq!(vm.global("DONE"), Value::Bool(false));
+    assert_eq!(vm.host().inner.parked_thread_count(), 1);
+    assert!(vm.host().inner.executed_unit(a).is_err());
+    assert!(
+        vm.host()
+            .inner
+            .next_thread_wake(wait / 2.)
+            .unwrap()
+            .is_none()
+    );
+    let ticket = vm.host().inner.next_thread_wake(wait).unwrap().unwrap();
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("DONE"), Value::Bool(true));
+    assert_eq!(vm.global("ORDERED"), Value::Bool(false));
+    assert_eq!(vm.host().inner.parked_thread_count(), 0);
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+    let u = vm.host().inner.executed_unit(b).unwrap();
+    assert_eq!(
+        (u.position, u.face, u.owner, u.invulnerable, u.paused_since),
+        before
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_units()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        [b]
+    );
+    // The removed alias neither reserves its requested destination nor resurrects
+    // its old footprint. A real later factory request can use that freed point.
+    let Value::Handle(c) = position_create(&mut vm.host().inner, 16., 16.).unwrap() else {
+        panic!("unit")
+    };
+    assert_eq!(position(&mut vm, c), [16., 16.]);
+    let location = vm.global("DEST");
+    let timer = vm.host().inner.native("CreateTimer", &[]).unwrap();
+    let unknown = HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap());
+    for bad in [timer.clone(), Value::Handle(unknown)] {
+        for (name, rest) in [
+            ("SetUnitPositionLoc", vec![location.clone()]),
+            ("SetUnitFacingTimed", vec![Value::Real(0.), Value::Real(0.)]),
+            (
+                "IssuePointOrderLoc",
+                vec![Value::Str("gamma".into()), location.clone()],
+            ),
+        ] {
+            let mut args = vec![bad.clone()];
+            args.extend(rest);
+            assert!(vm.host().inner.native(name, &args).is_err());
+        }
+    }
+    assert!(
+        vm.host()
+            .inner
+            .native("SetUnitPositionLoc", &[Value::Handle(a), timer])
+            .is_err()
+    );
+    assert!(
+        vm.host()
+            .inner
+            .native(
+                "SetUnitPosition",
+                &[Value::Handle(a), Value::Real(f32::NAN), Value::Real(0.)]
+            )
+            .is_err()
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "SetUnitPosition",
+                &[Value::Handle(a), Value::Real(48.), Value::Real(16.)]
+            )
+            .unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_REMOVED_SETTER_CLIENT and PCX_REMOVED_SETTER_BLIZZARD local original inputs"]
+fn selected_removed_image_cleanup_wrapper_and_native_branches() {
+    let bytes = std::fs::read(std::env::var("PCX_REMOVED_SETTER_CLIENT").unwrap()).unwrap();
+    assert_eq!(
+        crate::neutral_player::sha256(&bytes),
+        crate::menu_lighting::REVIEWED_IMAGE
+    );
+    let pe = crate::pe_image::PeSections::parse(&bytes).unwrap();
+    let word = |b: &[u8], i| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+    for (registration, name, call_at, expected_prefix, branch_at, expected_branch) in [
+        (
+            0x49d446,
+            "SetUnitPositionLoc",
+            0x21,
+            &[0x8b, 0xd8, 0x83, 0xc4, 4, 0x85, 0xdb][..],
+            0x2d,
+            &[0x74, 0x31][..],
+        ),
+        (
+            0x49d432,
+            "SetUnitPosition",
+            0x0a,
+            &[0x8b, 0xf0, 0x83, 0xc4, 4, 0x85, 0xf6][..],
+            0x16,
+            &[0x74, 0x3b][..],
+        ),
+        (
+            0x49d471,
+            "SetUnitFacingTimed",
+            0x1a,
+            &[0x83, 0xc4, 4, 0x85, 0xc0][..],
+            0x24,
+            &[0x0f, 0x84, 0x26, 1, 0, 0][..],
+        ),
+        (
+            0x49e05d,
+            "IssuePointOrderLoc",
+            0x7f,
+            &[0x8b, 0xf0, 0x83, 0xc4, 4, 0x85, 0xf6][..],
+            0x8b,
+            &[0x74, 0xda][..],
+        ),
+    ] {
+        let reg = pe.va_bytes(registration, 20).unwrap();
+        assert_eq!(reg[10], 0x68);
+        assert_eq!(
+            pe.va_bytes(word(reg, 6), name.len() + 1).unwrap(),
+            format!("{name}\0").as_bytes()
+        );
+        let handler = word(reg, 11);
+        let body = pe
+            .va_bytes(handler, branch_at + expected_branch.len())
+            .unwrap();
+        assert_eq!(body[call_at], 0xe8);
+        assert_eq!(
+            handler
+                .wrapping_add(call_at as u32 + 5)
+                .wrapping_add(word(body, call_at + 1)),
+            0x483940
+        );
+        assert_eq!(
+            &body[call_at + 5..call_at + 5 + expected_prefix.len()],
+            expected_prefix
+        );
+        assert_eq!(
+            &body[branch_at..branch_at + expected_branch.len()],
+            expected_branch
+        );
+    }
+    let bj =
+        std::fs::read_to_string(std::env::var("PCX_REMOVED_SETTER_BLIZZARD").unwrap()).unwrap();
+    let body = |name: &str| {
+        bj.split(&format!("function {name} takes"))
+            .nth(1)
+            .unwrap()
+            .split("endfunction")
+            .next()
+            .unwrap()
+    };
+    for (name, calls) in [
+        (
+            "SetUnitFacingToFaceUnitTimed",
+            &[
+                "GetUnitLoc(target)",
+                "SetUnitFacingToFaceLocTimed(whichUnit, unitLoc, duration)",
+                "RemoveLocation(unitLoc)",
+            ][..],
+        ),
+        (
+            "SetUnitFacingToFaceLocTimed",
+            &[
+                "GetUnitLoc(whichUnit)",
+                "SetUnitFacingTimed(whichUnit, AngleBetweenPoints(unitLoc, target), duration)",
+                "RemoveLocation(unitLoc)",
+            ][..],
+        ),
+        ("IssuePointOrderLocBJ", &["return IssuePointOrderLoc("][..]),
+    ] {
+        for call in calls {
+            assert!(body(name).contains(call), "{name} missing {call}");
+        }
+    }
+    // The failed unit-resolution branch returns false explicitly, never acceptance.
+    assert_eq!(
+        pe.va_bytes(0x49af37, 9).unwrap(),
+        &[0x5f, 0x5e, 0x33, 0xc0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc3]
     );
 }

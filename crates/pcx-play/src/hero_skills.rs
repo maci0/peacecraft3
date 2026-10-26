@@ -21,6 +21,7 @@ pub struct Binding {
 
 #[derive(Clone, Debug)]
 pub struct Rules {
+    pub mirror_image: Result<std::sync::Arc<crate::mirror_image_rules::Rules>, String>,
     pub(crate) experience: Option<std::sync::Arc<crate::hero_experience::Rules>>,
     pub(crate) binding: Binding,
     pub(crate) progression: Progression,
@@ -33,6 +34,20 @@ pub struct Rules {
 }
 
 impl Rules {
+    /// Optional ability capability; unrelated hero skills retain their admission.
+    pub fn with_mirror_image(
+        mut self,
+        rules: Result<crate::mirror_image_rules::Rules, String>,
+    ) -> Self {
+        self.mirror_image = rules.and_then(|rules| {
+            if rules.image_sha256 != self.binding.image_sha256 {
+                Err("Mirror Image source differs from hero admission".into())
+            } else {
+                Ok(std::sync::Arc::new(rules))
+            }
+        });
+        self
+    }
     pub fn with_experience(
         mut self,
         image: &[u8],
@@ -193,6 +208,7 @@ impl Rules {
             other_implicit.push(id);
         }
         Ok(Self {
+            mirror_image: Err("Mirror Image source not admitted".into()),
             experience: None,
             binding,
             progression,

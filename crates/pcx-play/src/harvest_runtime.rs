@@ -266,6 +266,9 @@ impl ObjectHost {
         if order == Some(state.return_order) {
             return Some(self.return_resources(unit));
         }
+        if order.is_some_and(|order| self.order_id("autoharvestgold") == Some(order)) {
+            return Some(self.start_auto_gold_harvest(unit));
+        }
         None
     }
 
@@ -850,10 +853,7 @@ impl ObjectHost {
         };
         let owner = self.executed_unit(worker.unit)?.owner;
         worker.owner = owner;
-        let usable = self
-            .executed_unit(depot)
-            .is_ok_and(|record| record.shown && !record.combat.as_ref().is_some_and(|c| c.dead))
-            && self.depot_accepts(depot, owner, worker.gold.is_some())?;
+        let usable = self.usable_retained_depot(depot, owner, worker.gold.is_some())?;
         if !usable {
             worker.depot = None;
             return self.route_depot(worker, position);
@@ -1241,6 +1241,18 @@ impl ObjectHost {
 
     fn depot_reach(&self, depot: HandleId, rules: &HarvestRules) -> Result<f32, Error> {
         Ok(self.unit_collision_radius(depot, ORDER)? + rules.range)
+    }
+
+    fn usable_retained_depot(
+        &mut self,
+        depot: HandleId,
+        owner: HandleId,
+        gold: bool,
+    ) -> Result<bool, Error> {
+        Ok(self.executed_unit(depot).is_ok_and(|record| {
+            // Accepted gold legs survive ShowUnit hiding; new acquisition still requires shown.
+            (record.shown || gold) && !record.combat.as_ref().is_some_and(|combat| combat.dead)
+        }) && self.depot_accepts(depot, owner, gold)?)
     }
 
     fn depot_accepts(

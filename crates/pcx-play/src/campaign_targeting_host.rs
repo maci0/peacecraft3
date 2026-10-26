@@ -108,10 +108,8 @@ impl ObjectHost {
             .game_difficulty
             .and_then(|handle| self.inner.symbolic_value(handle, "gamedifficulty").ok())
             .ok_or("game difficulty is not admitted")?;
-        if difficulty >= i32::from(policy.optional_damage_gate)
-            || difficulty >= i32::from(policy.optional_level_gate)
-        {
-            return Err("optional scorer bands are enabled");
+        if difficulty >= i32::from(policy.optional_damage_gate) {
+            return Err("higher-difficulty damage/class scorer bands are enabled");
         }
 
         let aggressive = self.combat.as_ref().and_then(|r| r.neutral_aggressive);
@@ -143,6 +141,24 @@ impl ObjectHost {
                 key |= policy.hero_priority_mask;
                 heroes += 1;
             }
+            if difficulty >= i32::from(policy.optional_level_gate)
+                && super::unit_types::class(&record.definition, "UNIT_TYPE_PEON")
+                    .map_err(|_| "candidate peon classification is not admitted")?
+            {
+                let channel = policy
+                    .peon_channel
+                    .as_ref()
+                    .ok_or("peon channel policy is not admitted")?;
+                let source_type = self
+                    .source_constant_enumerand("UNIT_TYPE_PEON", "unittype")
+                    .map_err(|_| "source peon classification is not admitted")?;
+                if source_type != channel.unit_type {
+                    return Err("source peon classification differs from client");
+                }
+                if self.campaign_channeling(candidate)? {
+                    key |= policy.optional_level_mask;
+                }
+            }
             let token = candidate.token();
             let replace = match best {
                 None => true,
@@ -160,6 +176,33 @@ impl ObjectHost {
             return Err("multiple hero candidates need unmodelled lower bands");
         }
         Ok(best.map(|(_, _, _, id)| id))
+    }
+
+    fn campaign_channeling(&self, unit: HandleId) -> Result<bool, &'static str> {
+        if self.summon_current_order(unit).is_some() {
+            return Ok(true);
+        }
+        let Some(order) = self
+            .unit_construction_order(unit)
+            .map_err(|_| "candidate construction order is not admitted")?
+        else {
+            return Ok(false);
+        };
+        let Some(site) = order.site else {
+            return Ok(false);
+        };
+        Ok(self
+            .unit_construction(site)
+            .map_err(|_| "candidate construction participation is not admitted")?
+            .is_some_and(|state| state.worker == Some(unit)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_campaign_acquisition(
+        &self,
+        candidates: &[(HandleId, f32)],
+    ) -> Result<Option<HandleId>, &'static str> {
+        self.campaign_acquisition(false, candidates.iter().copied())
     }
 
     #[cfg(test)]

@@ -13,6 +13,7 @@ pub struct Rules {
     pub origin: AssetIdentity,
     pub image_sha256: Sha256Digest,
     pub queue_slots: usize,
+    pub(crate) ai_production: Result<crate::campaign_production_rules::Rules, String>,
     pub profile_sources: Vec<String>,
     refund_rate: f32,
 }
@@ -43,7 +44,12 @@ impl Rules {
                 },
             )
         })();
-        result.map_err(|error| format!("{}: training rules: {error}", origin.source))
+        result
+            .map(|mut rules| {
+                rules.ai_production = crate::campaign_production_rules::Rules::read(image, budget);
+                rules
+            })
+            .map_err(|error| format!("{}: training rules: {error}", origin.source))
     }
 
     fn decode(
@@ -113,6 +119,7 @@ impl Rules {
         Ok(Self {
             origin,
             image_sha256,
+            ai_production: Err("AI production not admitted".into()),
             queue_slots: usize::try_from(slots).map_err(|_| "training slot width")?,
             profile_sources,
             refund_rate: rate.ok_or("missing Misc/TrainRefundRate")?,
@@ -149,6 +156,7 @@ impl Rules {
             },
             image_sha256: [0x42; 32],
             queue_slots,
+            ai_production: Err("synthetic AI production not admitted".into()),
             profile_sources: vec!["synthetic".into()],
             refund_rate,
         }

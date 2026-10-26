@@ -3,6 +3,7 @@
 //! Run with `PCX_W3G_SAMPLE=<path> cargo test -p pcx-net --test w3g_sample -- --ignored`.
 //! The sample is never committed. The gate fails when the variable is unset.
 
+use pcx_net::w3g::action::{Action, ActionBudget, decode_replay};
 use pcx_net::w3g::{Leave, Record, parse, write};
 
 #[test]
@@ -44,9 +45,40 @@ fn legacy_sample_matches_the_observed_structure() {
             trailer: 1,
         }))
     );
+    // Caller limits apply across the entire replay, including empty commands.
+    let budget = ActionBudget {
+        max_commands: replay.content.len(),
+        max_actions: replay.content.len(),
+        max_objects: replay.content.len() / 8,
+        max_bytes: replay.content.len(),
+    };
+    let decoded = decode_replay(&replay, budget).expect("qualified sample actions decode fully");
+    assert!(decoded.iter().any(|command| !command.actions.is_empty()));
+    assert!(
+        decoded
+            .windows(2)
+            .all(|pair| pair[0].time_ms <= pair[1].time_ms)
+    );
+    let slot_time: u32 = replay
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            Record::TimeSlot { time_increment, .. } => Some(u32::from(*time_increment)),
+            _ => None,
+        })
+        .sum();
+    assert!(decoded.iter().all(|command| command.time_ms <= slot_time));
+    assert_ne!(slot_time, replay.header.length_ms);
+    assert!(
+        decoded
+            .iter()
+            .flat_map(|command| &command.actions)
+            .any(|action| matches!(action, Action::Target { object, .. } if object.is_absent()))
+    );
     // Recompression preserves content and recomputes block checksums.
     let written = write(&replay).expect("sample writes with its block fields present");
     let round = parse(&written).expect("written sample re-parses");
+    assert_eq!(decode_replay(&round, budget).unwrap(), decoded);
     let mut expected = replay;
     expected.header.block_fields = round.header.block_fields.clone();
     assert_eq!(round, expected);

@@ -68,6 +68,47 @@ impl Host for AiResearchWorld {
 }
 
 impl AiWorld for AiResearchWorld {
+    fn ai_init_assault(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .init_ai_assault(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_add_assault(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String> {
+        self.object
+            .add_ai_assault(player, quantity, kind)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_is_full(&mut self, player: i32) -> Result<bool, String> {
+        self.object
+            .ai_captain_is_full(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_readiness(&mut self, player: i32) -> Result<i32, String> {
+        self.object
+            .ai_captain_readiness(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_suicide_player(
+        &mut self,
+        player: i32,
+        target: pcx_script::HandleId,
+        check_full: bool,
+    ) -> Result<bool, String> {
+        self.object
+            .suicide_ai_player(player, target, check_full)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_set_produce(
+        &mut self,
+        player: i32,
+        quantity: i32,
+        kind: i32,
+        town: i32,
+    ) -> Result<bool, String> {
+        self.object
+            .set_ai_produce(player, quantity, kind, town)
+            .map_err(|e| e.to_string())
+    }
     fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String> {
         self.object
             .return_ai_guard_posts(player)

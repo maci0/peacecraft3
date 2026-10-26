@@ -81,3 +81,51 @@ fn tolerance_equality_consumes_a_draw_while_strictly_below_does_not() {
     integer(&policy, &mut control, 0, 1).unwrap();
     assert_eq!(state, control);
 }
+
+#[test]
+fn secondary_die_consumes_only_selected_stream_including_one_sided_die() {
+    let policy = profile::fixture();
+    let mut state = Some(seeded(&policy, 17, 3).unwrap());
+    let before = state.clone().unwrap();
+    assert_eq!(secondary_die(&policy, &mut state, 1, 1), Ok(0));
+    let after = state.as_ref().unwrap();
+    assert_eq!(after.primary_word(), before.primary_word());
+    let old: Vec<_> = before.secondary_words().collect();
+    let new: Vec<_> = after.secondary_words().collect();
+    assert_eq!(old[0], new[0]);
+    assert_ne!(old[1], new[1]);
+    assert_eq!(old[2], new[2]);
+    let mut control = Some(before);
+    secondary_die(&policy, &mut control, 1, 91).unwrap();
+    assert_eq!(state, control);
+    assert!(secondary_die(&policy, &mut state, 1, 91).unwrap() < 91);
+}
+
+#[test]
+fn secondary_die_refusals_preserve_all_streams() {
+    let policy = profile::fixture();
+    let mut state = Some(seeded(&policy, -8, 3).unwrap());
+    let before = state.clone();
+    assert_eq!(
+        secondary_die(&policy, &mut state, 3, 2),
+        Err(StateError::SecondaryDie)
+    );
+    assert_eq!(
+        secondary_die(&policy, &mut state, 0, 0),
+        Err(StateError::SecondaryDie)
+    );
+    assert_eq!(state, before);
+    let mut other = policy.clone();
+    other.key[0] ^= 1;
+    assert_eq!(
+        secondary_die(&other, &mut state, 0, 2),
+        Err(StateError::Profile)
+    );
+    assert_eq!(state, before);
+    let mut missing = None;
+    assert_eq!(
+        secondary_die(&policy, &mut missing, 0, 2),
+        Err(StateError::Uninitialized)
+    );
+    assert_eq!(missing, None);
+}

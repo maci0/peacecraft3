@@ -383,3 +383,17 @@ selection or sequence start was observed to establish that choice, and the
 runtime refuses a unit whose admitted model lacks `attack`. Work and carry
 variant selection, animation phase and harvest audio fidelity are unqualified;
 dedicated carry animation selection is not implemented by this runtime.
+
+## Immediate automatic gold order (2026-10-25)
+
+`IssueImmediateOrder` and its numeric form now claim `autoharvestgold` only when that name resolves through the admitted order registry. They select a mine from the worker's accepted position using the existing bounded live-mine scan, then enter the same prepared gold-harvest task as an explicit targeted harvest. The scan excludes hidden, removed/dead and depleted mines and orders candidates by squared distance, then handle identity. This is the existing recreation selection policy, not a measured native auto-order search radius or tie policy. There is no new resource store, instant bank credit or copied order number.
+
+No eligible mine returns false. Worker capability, depot, route and task-capacity admission still run before publication. The unchanged Human02 intro-cancel script recreates its gold workers, sleeps briefly and issues this order; source and timer position identify that as the likely earlier wrapper refusal, whose diagnostic did not include the string argument. Actual mission continuation must verify that inference.
+
+## Retained gold depot at mine exit (2026-10-25)
+
+A gold task already admits a return depot before the worker enters its mine. Mine exit now retains that depot while it remains shown, alive, owned by the worker's current task owner and capable of accepting gold through its admitted `Artn` definition. This uses the same predicate as the existing return walk. Only a stale depot triggers a new acquisition scan. Acquisition radius is not reapplied to a still-usable admitted target after mining travel or reveal placement; the authored radius itself is unchanged.
+
+The prior exit path always acquired from the revealed position. A synthetic task with a depot initially inside its acquisition radius and a mining exit outside that radius reproduced the resulting inconsistency. It now exits, travels and deposits the real load. Hidden, wrong-owner and removed targets reacquire a usable replacement; genuine absence still refuses before revealing the worker, consuming mine resources or crediting a bank. The error includes worker, exit position, acquisition radius and prior depot for diagnosis. Malformed source errors and unreachable-route errors remain distinct and propagate.
+
+The Human02 failure showed a live town hall while mine exit reported no depot. A reveal relocation crossing acquisition distance is an inference from that receipt, not a measured displacement. This is a faithful recreation correction consistent with the already-admitted return walk, not a claim about native internal depot storage or search policy.

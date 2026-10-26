@@ -97,13 +97,19 @@ and triggers, so this is source-selection evidence, not campaign acceptance.
 
 ## Implementation boundary
 
-No production selector is implemented by this note. A reader should derive
-namespace strings, selector operands and the flag mask from the selected image,
-and the edition enumerand from the admitted source constants. Copying a
-RoC-to-`Custom_V0` mapping into a match arm would conceal those inputs.
-Do not switch unrelated rule consumers until their source lookup and receipt
-paths agree. In particular, the native RoC speed probe accepted 80 and clamped
-zero to 10; the unprefixed MiscGame minimum of 150 cannot qualify that behavior.
+Production `campaign_data_set::ImageRules` now derives namespace strings,
+selector operands, archive names and mount priorities from the selected image.
+`CampaignRecipe` derives the edition enumerand from admitted common-script
+constants and scopes a resolver to the actual map information. Native campaign
+startup, chapter transition and headless startup use that resolver for both the
+unit catalog and startup rule/profile tables. UI ability profiles use the same
+admitted ObjectHost tables; logical `Units` paths do not imply unprefixed bytes.
 
+The explicit selected-install recipe test compares the resolved Mirror Image
+ranked mana-cost cell and provenance with the actual archive member under the
+recipe-derived namespace. It does not assert a copied runtime cost. Existing
+synthetic tests cover selector/mode/edition combinations and malformed input.
+This qualification must not be generalized to callers that construct an
+unscoped resolver independently.
 Disassembly and local binary bytes remain in ignored
 `.scratch/dataset-selection-native`. No original asset content is published.

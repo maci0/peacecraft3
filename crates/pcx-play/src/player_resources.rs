@@ -20,6 +20,7 @@ pub struct Rules {
     pub(crate) gathered_scale: i32,
     pub(crate) unit_cost: Result<crate::player_unit_cost::Policy, String>,
     pub(crate) training: Result<crate::training_rules::Rules, String>,
+    construction: Result<crate::construction_rules::Rules, String>,
     upkeep: Result<upkeep::Upkeep, String>,
     food_limit: Option<i32>,
     food_defaults: Vec<i32>,
@@ -47,6 +48,7 @@ impl Rules {
             gathered_scale: 1,
             unit_cost: Err("synthetic cost policy is not admitted".into()),
             training: Err("synthetic training rules are not admitted".into()),
+            construction: Err("synthetic construction rules are not admitted".into()),
             upkeep: Err("synthetic upkeep is not admitted".into()),
             food_limit: None,
             food_defaults: vec![0],
@@ -629,6 +631,7 @@ impl Rules {
             gathered_scale: gathered_get_scale,
             unit_cost: crate::player_unit_cost::Policy::selected(image),
             training: Err("training profiles are not admitted".into()),
+            construction: Err("construction rules are not admitted".into()),
             food_limit,
             food_defaults: food_defaults.clone(),
             food_marker_default,
@@ -646,6 +649,23 @@ impl Rules {
             crate::training_rules::Rules::read(image, self.origin.clone(), profiles, budget)
         };
         self
+    }
+
+    pub fn with_construction_rules(
+        mut self,
+        rules: Result<crate::construction_rules::Rules, String>,
+    ) -> Self {
+        self.construction = rules.and_then(|rules| {
+            if rules.image_sha256 != self.image_sha256 || rules.origin != self.origin {
+                return Err("construction and resource client identities differ".into());
+            }
+            Ok(rules)
+        });
+        self
+    }
+
+    pub fn construction_rules(&self) -> Result<&crate::construction_rules::Rules, &str> {
+        self.construction.as_ref().map_err(String::as_str)
     }
 
     pub fn training_rules(&self) -> Result<&crate::training_rules::Rules, &str> {
@@ -1199,6 +1219,59 @@ mod normal_profile_tests {
             sha256(&profile),
             rules.food_defaults,
             rules.image_sha256
+        );
+    }
+}
+
+#[cfg(test)]
+mod construction_admission_tests {
+
+    #[test]
+    fn construction_admission_retains_refusal_and_rejects_foreign_client() {
+        let resources = super::fixture::rules();
+        let rules = crate::construction_rules::Rules {
+            origin: resources.origin.clone(),
+            common_origin: resources.origin.clone(),
+            image_sha256: resources.image_sha256,
+            common_sha256: [3; 32],
+            profile_sources: vec!["synthetic".into()],
+            initial_life_fraction: 0.23,
+            human_build_ability: *b"ZYX9",
+            refund_rate: 0.37,
+            damage_refund_penalty: false,
+            life_drain_rate: 4.25,
+        };
+        assert!(
+            resources
+                .clone()
+                .with_construction_rules(Ok(rules.clone()))
+                .construction_rules()
+                .is_ok()
+        );
+        let mut foreign = rules.clone();
+        foreign.image_sha256[0] ^= 1;
+        assert!(
+            resources
+                .clone()
+                .with_construction_rules(Ok(foreign))
+                .construction_rules()
+                .is_err()
+        );
+        let mut foreign = rules;
+        foreign.origin.edition.push_str(" foreign");
+        assert!(
+            resources
+                .clone()
+                .with_construction_rules(Ok(foreign))
+                .construction_rules()
+                .is_err()
+        );
+        assert_eq!(
+            resources
+                .with_construction_rules(Err("unsupported source".into()))
+                .construction_rules()
+                .unwrap_err(),
+            "unsupported source"
         );
     }
 }

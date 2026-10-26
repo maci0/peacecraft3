@@ -8,10 +8,10 @@ use crate::map_admission::ParsedMapContext;
 use crate::neutral_player::{NeutralError, SelectedMapNeutralHost, VerifiedNeutralRule};
 use crate::playercolor_host::{
     ConditionBudget, DestructableBudget, DialogBudget, EnumHost, Error as HostError, FilterBudget,
-    ForceBudget, ItemBudget, Limits, MapConfigBudget, ObjectHost, PlayerAdmissionError,
-    PlayerAllianceBudget, PlayerBudget, PlayerStateRequestBudget, QuestBudget, RegionBudget,
-    ResearchObservation, StartupSettings, StockBudget, TechLimitBudget, TimerHost, TriggerBudget,
-    UnitBudget, UnitStateBudget,
+    ForceBudget, ItemBudget, LeaderboardBudget, Limits, MapConfigBudget, ObjectHost,
+    PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget, PlayerStateRequestBudget,
+    QuestBudget, RegionBudget, ResearchObservation, StartupSettings, StockBudget, TechLimitBudget,
+    TimerHost, TriggerBudget, UnitBudget, UnitStateBudget,
 };
 use crate::sound_parameters::Banks;
 use crate::startup_clock::StartupClock;
@@ -97,6 +97,8 @@ pub struct MapStartupBudgets {
     pub quests: Option<QuestBudget>,
     /// None keeps script-created dialogs and dialog events unsupported.
     pub dialogs: Option<DialogBudget>,
+    /// None keeps script leaderboards unsupported.
+    pub leaderboards: Option<LeaderboardBudget>,
     /// None keeps `CreateItem` unsupported.
     pub items: Option<ItemBudget>,
     /// Pending `EndGame` requests awaiting the campaign consumer.
@@ -286,8 +288,11 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    /// Map members from the receiving chapter's selected source archive generation.
+    pub cached_unit_source_maps: Vec<pcx_assets::AssetPath>,
     pub unit_decay: Option<crate::unit_decay::Rules>,
     pub unit_blend: Option<crate::unit_blend::Rules>,
+    pub animation_rarity: Option<Result<crate::unit_animation_rarity::Rules, String>>,
     pub item_visibility: Option<crate::item_visibility::Rules>,
     pub preload: Option<crate::preload::Rules>,
     pub world_bounds: Option<[f32; 4]>,
@@ -336,6 +341,7 @@ pub struct MapStartupInputs {
     pub cheats: Option<crate::cheat_rules::Rules>,
     pub dialog_layout: Option<crate::dialog_layout::Rules>,
     pub message_layout: Option<crate::message_layout::Rules>,
+    pub leaderboard_layout: Option<crate::leaderboard_layout::Rules>,
     pub clock: StartupClockInput,
     /// Explicit game time for positive-timeout timers; absent keeps TimerStart unsupported.
     pub timer_time: Option<f64>,
@@ -397,6 +403,14 @@ impl MapStartupHost {
 
     fn world_mut(&mut self) -> &mut NeutralStack {
         self.inner.as_mut().expect("map world is not lent to AI")
+    }
+
+    pub fn with_ai_pause_rules(
+        mut self,
+        rules: Result<crate::campaign_ai_pause_policy::Rules, String>,
+    ) -> Self {
+        self.ai.set_pause_rules(rules);
+        self
     }
 
     pub fn with_ai_loader(
@@ -625,8 +639,10 @@ fn assemble_inner(
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        cached_unit_source_maps,
         unit_decay,
         unit_blend,
+        animation_rarity,
         item_visibility,
         preload: _,
         world_bounds,
@@ -664,6 +680,7 @@ fn assemble_inner(
         cheats,
         dialog_layout,
         message_layout,
+        leaderboard_layout,
         clock,
         timer_time,
         trigger_runtime,
@@ -740,6 +757,7 @@ fn assemble_inner(
             context.world.source.clone(),
             budgets.units,
         )?
+        .with_cached_unit_source_maps(cached_unit_source_maps)?
         .with_unit_states(budgets.unit_states)?
         .with_resource_amounts(Arc::clone(&defend.tables))?
         .with_defend_ability(&defend.tables, &defend.alias)?
@@ -883,11 +901,17 @@ fn assemble_inner(
             object.admit_thread_sleep(parked)?;
         }
     }
+    if let Some(budget) = budgets.leaderboards {
+        object = object.with_leaderboards(budget)?;
+    }
     if let Some(budget) = budgets.dialogs {
         object = object.with_dialogs(budget)?;
     }
     if let Some(rules) = dialog_layout {
         object = object.with_dialog_layout(rules)?;
+    }
+    if let Some(rules) = leaderboard_layout {
+        object = object.with_leaderboard_layout(rules)?;
     }
     if let Some(rules) = message_layout {
         object = object.with_message_layout(rules)?;
@@ -906,6 +930,9 @@ fn assemble_inner(
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;
+    }
+    if let Some(rules) = animation_rarity {
+        object.admit_unit_animation_rarity(rules)?;
     }
     if let Some(input) = ally_colors {
         object.admit_ally_colors(input)?;
@@ -961,6 +988,7 @@ fn assemble_inner(
             object.admit_combat(rules, "attack")?;
             if object.has_hero_skills() {
                 object.admit_water_elemental()?;
+                object.admit_mirror_image()?;
             }
             if let (true, Some(art)) = (object.has_hero_skills(), holy_light_art.as_deref()) {
                 object.admit_holy_light(art)?;
@@ -1118,6 +1146,51 @@ impl Host for MapStartupHost {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if let Some(result) = self.preload_native(name, args) {
             return result;
+        }
+        if name == "PauseCompAI" {
+            let scripts = &self.context().scripts;
+            let declaration = scripts
+                .program()
+                .natives()
+                .get(name)
+                .ok_or("PauseCompAI: selected common does not declare the native")?;
+            if scripts
+                .digests
+                .first()
+                .is_none_or(|common| declaration.source != common.label)
+                || declaration.is_constant
+                || !declaration.also_declared_in.is_empty()
+                || declaration.ret.array
+                || declaration
+                    .params
+                    .iter()
+                    .any(|parameter| parameter.ty.array)
+                || declaration.params.len() != 2
+                || declaration.params[0].ty.kind.name() != "player"
+                || declaration.params[1].ty.kind.name() != "boolean"
+                || declaration.ret.kind.name() != "nothing"
+            {
+                return Err("PauseCompAI: selected common declaration differs".into());
+            }
+            let [player, Value::Bool(pause)] = args else {
+                return Err("PauseCompAI: expected player and boolean".into());
+            };
+            if matches!(player, Value::Null) {
+                return Ok(Value::Null);
+            }
+            let Value::Handle(player) = player else {
+                return Err("PauseCompAI: expected player identity".into());
+            };
+            let slots = self
+                .objects()
+                .player_slots()
+                .ok_or("PauseCompAI: players are not admitted")?;
+            let ordinal = (0..slots)
+                .filter_map(|slot| i32::try_from(slot).ok())
+                .find(|&slot| self.objects().player_identity(slot) == Some(*player))
+                .ok_or("PauseCompAI: player is not a current identity")?;
+            self.ai.pause(ordinal, *pause)?;
+            return Ok(Value::Null);
         }
         if name == "StartCampaignAI" {
             let scripts = &self.context().scripts;

@@ -13,7 +13,17 @@ pub(super) struct State {
     active: Vec<HandleId>,
     follow_positions: Vec<(HandleId, Option<[f32; 2]>)>,
     projected_through: f64,
+    pending_blocked: Vec<PendingBlocked>,
+    pending_refresh: Vec<PendingRefresh>,
 }
+
+type PendingBlocked = (HandleId, Option<Box<Motion>>);
+type PendingRefresh = (
+    HandleId,
+    Option<[f32; 2]>,
+    Option<Follow>,
+    Option<Box<Motion>>,
+);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnitActivity {
@@ -60,6 +70,7 @@ struct Motion {
     goal: [f32; 2],
     reach: f32,
     path: Vec<[f32; 2]>,
+    budget_partial: bool,
     next: usize,
     base: [f32; 2],
     prefix: f64,
@@ -201,6 +212,10 @@ impl UnitActivity {
     pub fn followed_unit(&self) -> Option<HandleId> {
         self.follow.map(|f| f.target)
     }
+    /// The admitted range retained by the current accepted follow order.
+    pub fn follow_range(&self) -> Option<f32> {
+        self.follow.map(|follow| follow.range)
+    }
     /// Whether the unit's class admits movement orders at all.
     pub fn movable(&self) -> bool {
         self.movable
@@ -335,7 +350,9 @@ impl ObjectHost {
             )
         })?;
         Ok(self
-            .summon_current_order(unit)
+            .construction_current_order(unit)?
+            .or_else(|| self.mirror_current_order(unit))
+            .or_else(|| self.summon_current_order(unit))
             .or_else(|| self.inventory_order(unit))
             .or_else(|| activity.patrol.map(|_| state.rules.patrol))
             .or_else(|| activity.follow.map(|_| state.rules.movement))
@@ -483,6 +500,8 @@ impl ObjectHost {
             route_work,
             active: Vec::new(),
             follow_positions: Vec::new(),
+            pending_blocked: Vec::new(),
+            pending_refresh: Vec::new(),
             projected_through: self.timer_game_time().expect("admitted clock"),
         });
         Ok(())
@@ -775,6 +794,7 @@ impl ObjectHost {
                     goal: [x, y],
                     reach: 0.0,
                     path,
+                    budget_partial: false,
                     next: 0,
                     base: start,
                     prefix: 0.,
@@ -829,6 +849,7 @@ impl ObjectHost {
                     .try_reserve(1)
                     .map_err(|_| self.inner.error(name, Failure::Capacity))?;
             }
+            self.interrupt_unit_construction(unit)?;
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                 let activity = record.activity.as_mut().expect("initialized activity");
                 activity.held = !point && order == hold;
@@ -864,7 +885,23 @@ impl ObjectHost {
     /// Project explicit motion at one logical game time. Work is deterministic;
     /// a failure preserves prior effects and the caller must stop this session.
     pub fn advance_unit_activity(&mut self, now: f64, work: &mut usize) -> Result<usize, Error> {
-        self.advance_activity(now, work, None)
+        let moved = self.advance_unit_activity_mandatory(now, work)?;
+        self.flush_unit_activity_routes(now, work)?;
+        Ok(moved)
+    }
+
+    /// Intermediate script wake: optional routing waits until all mandatory
+    /// projections sharing this call's work allowance have finished.
+    pub(crate) fn advance_unit_activity_mandatory(
+        &mut self,
+        now: f64,
+        work: &mut usize,
+    ) -> Result<usize, Error> {
+        let result = self.advance_activity(now, work, None);
+        if result.is_err() {
+            self.discard_unit_activity_routes();
+        }
+        result
     }
 
     /// [`Self::advance_unit_activity`] that also appends the accepted spans of this
@@ -877,7 +914,18 @@ impl ObjectHost {
         work: &mut usize,
         spans: &mut Vec<AcceptedSpan>,
     ) -> Result<usize, Error> {
-        self.advance_activity(now, work, Some(spans))
+        let base = spans.len();
+        let result = self
+            .advance_activity(now, work, Some(spans))
+            .and_then(|moved| {
+                self.flush_unit_activity_routes(now, work)?;
+                Ok(moved)
+            });
+        if result.is_err() {
+            self.discard_unit_activity_routes();
+            spans.truncate(base);
+        }
+        result
     }
 
     /// Reserve room for a unit that will advance queued animation without motion.
@@ -993,6 +1041,7 @@ impl ObjectHost {
             Some((unit, self.follow_position(follow.target)))
         }));
         let mut blocked = Vec::new();
+        let mut refresh = Vec::new();
         let result = (|| {
             let mut moved = 0;
             for &unit in &active {
@@ -1009,8 +1058,19 @@ impl ObjectHost {
                         )),
                     )
                 })?;
-                if let Ok(index) = followed.binary_search_by_key(&unit, |(id, _)| *id) {
-                    self.refresh_unit_follow(unit, followed[index].1, work)?;
+                if let Ok(index) = followed.binary_search_by_key(&unit, |(id, _)| *id)
+                    && self.refresh_unit_follow(
+                        unit,
+                        followed[index].1,
+                        work,
+                        self.unit_activity
+                            .as_ref()
+                            .expect("activity")
+                            .projected_through,
+                        true,
+                    )?
+                {
+                    refresh.push((unit, followed[index].1));
                 }
                 self.advance_unit_animation(unit, now)?;
                 if self
@@ -1092,6 +1152,20 @@ impl ObjectHost {
                         break;
                     }
                     moved += result?.0;
+                    if motion.budget_partial && self.construction_owns_motion(unit, &motion)? {
+                        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                            record.activity.as_mut().expect("activity").motion = Some(motion);
+                        }
+                        let witness = self
+                            .executed_unit(unit)?
+                            .activity
+                            .as_ref()
+                            .expect("activity")
+                            .motion
+                            .clone();
+                        blocked.push((unit, witness));
+                        break;
+                    }
                     let arrival = credited_time(&motion, speed, motion.last_distance);
                     let Some(next) =
                         self.next_patrol_motion(unit, arrival, Some(motion.goal), work)?
@@ -1119,6 +1193,14 @@ impl ObjectHost {
             _ => true,
         });
         self.unit_activity.as_mut().expect("activity").active = active;
+        let refresh: Vec<_> = refresh
+            .into_iter()
+            .filter_map(|(unit, target)| {
+                let activity = self.executed_unit(unit).ok()?.activity.as_ref()?;
+                Some((unit, target, activity.follow, activity.motion.clone()))
+            })
+            .collect();
+        blocked.retain(|(unit, _)| !refresh.iter().any(|(refresh, ..)| refresh == unit));
         followed.clear();
         self.unit_activity
             .as_mut()
@@ -1131,68 +1213,8 @@ impl ObjectHost {
             self.advance_combat()?;
             self.advance_inventory(work)?;
             self.advance_sound_environments();
-            // Optional searches spend only work left after every unit and mandatory consumer.
-            let queued = blocked.len();
-            for (index, (unit, witness)) in blocked.into_iter().enumerate() {
-                let Ok(record) = self.executed_unit(unit) else {
-                    continue;
-                };
-                if record.paused_since.is_some()
-                    || record.position.is_none()
-                    || record.combat.as_ref().is_some_and(|combat| combat.dead)
-                    || record
-                        .activity
-                        .as_ref()
-                        .is_none_or(|activity| activity.motion != witness)
-                {
-                    continue;
-                }
-                let Some(mut motion) = (match self.inner.entry_mut(unit)? {
-                    Entry::Unit { record } => {
-                        record.activity.as_mut().and_then(|a| a.motion.take())
-                    }
-                    _ => None,
-                }) else {
-                    continue;
-                };
-                let from = self.executed_unit(unit)?.position.expect("moving position");
-                let allowance = *work / (queued - index);
-                let mut search_work = allowance;
-                let result =
-                    self.replan_blocked(unit, from, &mut motion, now, &mut search_work, true);
-                *work -= allowance - search_work;
-                let mut animation_error = None;
-                if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                    if matches!(result, Ok(false)) {
-                        record.activity.as_mut().expect("activity").motion = None;
-                        if let Some(animation) = &mut record.animation {
-                            animation_error = animation.select("stand", now, None).err();
-                        }
-                        let still_active = record
-                            .animation
-                            .as_ref()
-                            .is_some_and(crate::unit_model::Animation::needs_advance)
-                            || record.activity.as_ref().is_some_and(|a| {
-                                a.turn.is_some() || a.patrol.is_some() || a.follow.is_some()
-                            });
-                        if !still_active {
-                            self.unit_activity
-                                .as_mut()
-                                .expect("activity")
-                                .active
-                                .retain(|id| *id != unit);
-                        }
-                    } else {
-                        record.activity.as_mut().expect("activity").motion = Some(motion);
-                    }
-                }
-                if let Some(error) = animation_error {
-                    return Err(self
-                        .inner
-                        .error("unit activity", Failure::UnitAnimation(error)));
-                }
-                result?;
-            }
+            self.advance_construction(now, work)?;
+            self.defer_optional_routes(blocked, refresh)?;
             Ok(moved)
         });
         if result.is_ok() {
@@ -1204,6 +1226,167 @@ impl ObjectHost {
             sink.spans.truncate(sink.base);
         }
         result
+    }
+
+    fn defer_optional_routes(
+        &mut self,
+        blocked: Vec<PendingBlocked>,
+        refresh: Vec<PendingRefresh>,
+    ) -> Result<(), Error> {
+        let state = self.unit_activity.as_mut().expect("activity");
+        state
+            .pending_blocked
+            .try_reserve(blocked.len())
+            .map_err(|_| self.inner.error("unit activity", Failure::Capacity))?;
+        state
+            .pending_refresh
+            .try_reserve(refresh.len())
+            .map_err(|_| self.inner.error("unit activity", Failure::Capacity))?;
+        for next in refresh {
+            if let Ok(at) = state
+                .pending_blocked
+                .binary_search_by_key(&next.0, |old| old.0)
+            {
+                state.pending_blocked.remove(at);
+            }
+            match state
+                .pending_refresh
+                .binary_search_by_key(&next.0, |old| old.0)
+            {
+                Ok(at) => state.pending_refresh[at] = next,
+                Err(at) => state.pending_refresh.insert(at, next),
+            }
+        }
+        for next in blocked {
+            if let Ok(at) = state
+                .pending_refresh
+                .binary_search_by_key(&next.0, |old| old.0)
+            {
+                state.pending_refresh.remove(at);
+            }
+            match state
+                .pending_blocked
+                .binary_search_by_key(&next.0, |old| old.0)
+            {
+                Ok(at) => state.pending_blocked[at] = next,
+                Err(at) => state.pending_blocked.insert(at, next),
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn discard_unit_activity_routes(&mut self) {
+        if let Some(state) = &mut self.unit_activity {
+            state.pending_blocked.clear();
+            state.pending_refresh.clear();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deferred_unit_activity_route_count(&self) -> usize {
+        self.unit_activity.as_ref().map_or(0, |state| {
+            state.pending_blocked.len() + state.pending_refresh.len()
+        })
+    }
+
+    /// Flush optional routes once no later mandatory sub-wake can consume this
+    /// allowance. Queues are deduplicated by canonical handle and revalidate the
+    /// same follow/motion witnesses as immediate projections.
+    pub(crate) fn flush_unit_activity_routes(
+        &mut self,
+        now: f64,
+        work: &mut usize,
+    ) -> Result<(), Error> {
+        self.check_activity_boundary(now, "optional unit routes")?;
+        let Some(state) = &mut self.unit_activity else {
+            return Ok(());
+        };
+        let blocked = std::mem::take(&mut state.pending_blocked);
+        let refresh = std::mem::take(&mut state.pending_refresh);
+        // Optional searches spend only work left after every unit and mandatory consumer.
+        let queued = blocked.len() + refresh.len();
+        for (index, (unit, target, follow, motion)) in refresh.iter().enumerate() {
+            let Ok(record) = self.executed_unit(*unit) else {
+                continue;
+            };
+            if record.paused_since.is_some()
+                || record.position.is_none()
+                || record.combat.as_ref().is_some_and(|combat| combat.dead)
+                || record
+                    .activity
+                    .as_ref()
+                    .is_none_or(|activity| activity.follow != *follow || activity.motion != *motion)
+            {
+                continue;
+            }
+            let allowance = *work / (queued - index);
+            let mut search_work = allowance;
+            let target = follow
+                .and_then(|follow| self.follow_position(follow.target))
+                .and(*target);
+            let result = self.refresh_unit_follow(*unit, target, &mut search_work, now, false);
+            *work -= allowance - search_work;
+            result?;
+        }
+        let queued = blocked.len();
+        for (index, (unit, witness)) in blocked.into_iter().enumerate() {
+            let Ok(record) = self.executed_unit(unit) else {
+                continue;
+            };
+            if record.paused_since.is_some()
+                || record.position.is_none()
+                || record.combat.as_ref().is_some_and(|combat| combat.dead)
+                || record
+                    .activity
+                    .as_ref()
+                    .is_none_or(|activity| activity.motion != witness)
+            {
+                continue;
+            }
+            let Some(mut motion) = (match self.inner.entry_mut(unit)? {
+                Entry::Unit { record } => record.activity.as_mut().and_then(|a| a.motion.take()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let from = self.executed_unit(unit)?.position.expect("moving position");
+            let allowance = *work / (queued - index);
+            let mut search_work = allowance;
+            let result = self.replan_blocked(unit, from, &mut motion, now, &mut search_work, true);
+            *work -= allowance - search_work;
+            let mut animation_error = None;
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                if matches!(result, Ok(false)) {
+                    record.activity.as_mut().expect("activity").motion = None;
+                    if let Some(animation) = &mut record.animation {
+                        animation_error = animation.select("stand", now, None).err();
+                    }
+                    let still_active = record
+                        .animation
+                        .as_ref()
+                        .is_some_and(crate::unit_model::Animation::needs_advance)
+                        || record.activity.as_ref().is_some_and(|a| {
+                            a.turn.is_some() || a.patrol.is_some() || a.follow.is_some()
+                        });
+                    if !still_active {
+                        self.unit_activity
+                            .as_mut()
+                            .expect("activity")
+                            .active
+                            .retain(|id| *id != unit);
+                    }
+                } else {
+                    record.activity.as_mut().expect("activity").motion = Some(motion);
+                }
+            }
+            if let Some(error) = animation_error {
+                return Err(self
+                    .inner
+                    .error("unit activity", Failure::UnitAnimation(error)));
+            }
+            result?;
+        }
+        Ok(())
     }
 
     // Script sessions project units before delivering a native. Direct callers must do the same.
@@ -1295,14 +1478,23 @@ impl ObjectHost {
                     .ok_or_else(|| fail("accepted position required"))?;
                 let radius = record.collision_radius.map_err(fail)?;
                 let mut work = route_work;
-                let path = if activity.pathing_off {
-                    vec![crate::unit_placement::approach_point(start, target, reach)]
+                let (path, budget_partial) = if activity.pathing_off {
+                    (
+                        vec![crate::unit_placement::approach_point(start, target, reach)],
+                        false,
+                    )
                 } else {
-                    self.unit_placement
+                    match self
+                        .unit_placement
                         .as_ref()
                         .ok_or_else(|| fail("live placement required"))?
-                        .route_within(unit, start, target, radius, reach, &mut work)
+                        .route_outcome(unit, start, target, radius, reach, &mut work)
                         .map_err(|e| self.inner.error(name, Failure::UnitActivity(e.to_string())))?
+                    {
+                        crate::unit_placement::RouteOutcome::PartialBudget(path) => (path, true),
+                        crate::unit_placement::RouteOutcome::Reached(path)
+                        | crate::unit_placement::RouteOutcome::Blocked(path) => (path, false),
+                    }
                 };
                 let target_distance =
                     ((target[0] - start[0]).powi(2) + (target[1] - start[1]).powi(2)).sqrt();
@@ -1315,6 +1507,7 @@ impl ObjectHost {
                     goal: target,
                     reach,
                     path,
+                    budget_partial,
                     next: 0,
                     base: start,
                     prefix: 0.,
@@ -1369,6 +1562,11 @@ impl ObjectHost {
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         self.set_explicit_guard_move(unit, false);
+        let assault_owner = self
+            .campaign_ai
+            .captain_member_role(unit)
+            .filter(|_| self.captain_assault_owned(unit))
+            .map(|(player, _)| player);
         self.campaign_ai.clear_captain_route(unit);
         let moving = prepared.motion.is_some();
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
@@ -1380,6 +1578,9 @@ impl ObjectHost {
         let active = &mut self.unit_activity.as_mut().expect("activity").active;
         if let (true, Err(at)) = (moving, active.binary_search(&unit)) {
             active.insert(at, unit);
+        }
+        if let Some(player) = assault_owner {
+            self.campaign_ai.mark_captain_route(player, unit);
         }
         Ok(())
     }
@@ -1430,6 +1631,7 @@ impl ObjectHost {
     }
 
     pub(super) fn forget_unit_activity(&mut self, unit: HandleId) {
+        self.cancel_mirror_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit) {
             record.ai_harvest_flags = None;
         }
@@ -1506,6 +1708,7 @@ impl ObjectHost {
             goal: patrol.goal(),
             reach: 0.0,
             path: Vec::new(),
+            budget_partial: false,
             next: 0,
             base: position,
             prefix: 0.0,
@@ -1722,6 +1925,16 @@ impl ObjectHost {
             [Value::Handle(unit), location] => (*unit, self.location_point(location, name)?),
             _ => return Err(fail("unit and point required")),
         };
+        // Both selected position wrappers skip relocation after failed unit resolution.
+        // Point/location validation still precedes the typed tombstone no-op.
+        if matches!(
+            self.inner
+                .entry(unit)
+                .map_err(|e| self.inner.error(name, e.failure))?,
+            Entry::RemovedUnit { .. }
+        ) {
+            return Ok(Value::Null);
+        }
         let record = self.executed_unit(unit)?;
         let activity = record
             .activity
@@ -1846,6 +2059,12 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
+    fn construction_owns_motion(&self, unit: HandleId, motion: &Motion) -> Result<bool, Error> {
+        Ok(self
+            .construction_route_revision(unit, motion.goal, motion.reach)?
+            .is_some())
+    }
+
     /// Route a blocked motion from its accepted position to its order goal on the
     /// live collision cache. Work is drawn from the tick budget, capped per route.
     /// Returns false when the route makes no progress, so the unit stops.
@@ -1862,14 +2081,29 @@ impl ObjectHost {
         let radius = self.unit_collision_radius(unit, "unit activity")?;
         let allowance = route_work.min(*work);
         let mut budget = allowance;
-        let path = self
-            .unit_placement
-            .as_ref()
-            .expect("admitted placement")
-            .route_within(unit, from, motion.goal, radius, motion.reach, &mut budget);
+        let construction = self.construction_owns_motion(unit, motion)?;
+        let placement = self.unit_placement.as_ref().expect("admitted placement");
+        // shortcut: zero-progress searches restart; retain request-owned search state
+        // when progress under repeatedly insufficient allowances is required.
+        let path = if construction && defer_exhaustion {
+            placement.route_outcome_streaming(
+                unit,
+                from,
+                motion.goal,
+                radius,
+                motion.reach,
+                &mut budget,
+            )
+        } else {
+            placement.route_outcome(unit, from, motion.goal, radius, motion.reach, &mut budget)
+        };
         *work -= allowance - budget;
-        let path = match path {
-            Ok(path) => path,
+        let (path, budget_partial) = match path {
+            Ok(crate::unit_placement::RouteOutcome::PartialBudget(path)) => (path, true),
+            Ok(
+                crate::unit_placement::RouteOutcome::Reached(path)
+                | crate::unit_placement::RouteOutcome::Blocked(path),
+            ) => (path, false),
             Err(error) if defer_exhaustion && error.work_exhausted() => return Ok(true),
             Err(error) => {
                 return Err(self
@@ -1877,10 +2111,27 @@ impl ObjectHost {
                     .error("unit activity", Failure::UnitActivity(error.to_string())));
             }
         };
-        if path.as_slice() == [from] {
+        if path.as_slice() == [from] && !(construction && budget_partial) {
             return Ok(false);
         }
+        if construction
+            && path.iter().any(|point| *point != from)
+            && let Entry::Unit { record } = self.inner.entry_mut(unit)?
+            && let Some(animation) = &mut record.animation
+        {
+            animation
+                .select(
+                    "walk",
+                    now,
+                    record.activity.as_ref().and_then(|activity| activity.speed),
+                )
+                .map_err(|error| {
+                    self.inner
+                        .error("unit activity", Failure::UnitAnimation(error))
+                })?;
+        }
         motion.path = path;
+        motion.budget_partial = budget_partial;
         motion.next = 0;
         motion.base = from;
         motion.prefix = 0.;

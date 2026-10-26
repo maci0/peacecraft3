@@ -105,6 +105,9 @@ impl ObjectHost {
     }
 
     pub(crate) fn captain_route_owned(&self, unit: HandleId) -> bool {
+        if self.captain_assault_owned(unit) {
+            return false;
+        }
         let Some((player, attack)) = self.campaign_ai.captain_member_role(unit) else {
             return false;
         };
@@ -122,6 +125,42 @@ impl ObjectHost {
                 .and_then(|record| record.activity.as_ref())
                 .and_then(|activity| activity.destination())
                 == Some(home)
+    }
+
+    /// A retained home intent without an active home leg. The source collision
+    /// extent is the same arrival tolerance used by ordinary guard observation.
+    pub(crate) fn captain_home_pending(&self, unit: HandleId) -> bool {
+        if self.captain_assault_owned(unit) {
+            return false;
+        }
+        let Some((player, attack)) = self.campaign_ai.captain_member_role(unit) else {
+            return false;
+        };
+        if !self.campaign_ai.has_captain_route(player, unit) {
+            return false;
+        }
+        let Some(home) = self
+            .campaign_ai
+            .captains(player)
+            .and_then(|(_, homes)| homes[usize::from(!attack)])
+        else {
+            return false;
+        };
+        let Some(record) = self.live(unit) else {
+            return false;
+        };
+        if self.player_identity(player) != Some(record.owner) {
+            return false;
+        }
+        let (Some(position), Ok(radius), Some(activity)) = (
+            record.position,
+            record.collision_radius,
+            record.activity.as_ref(),
+        ) else {
+            return false;
+        };
+        activity.destination() != Some(home)
+            && (home[0] - position[0]).hypot(home[1] - position[1]) > radius
     }
 
     pub(super) fn forget_captain_member(&mut self, unit: HandleId) {

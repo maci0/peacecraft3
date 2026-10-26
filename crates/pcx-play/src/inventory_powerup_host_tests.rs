@@ -2972,6 +2972,136 @@ fn cached_restore_uses_current_item_data_and_fills_both_pools_before_attaching_i
 }
 
 #[test]
+fn cached_unit_cross_chapter_requires_qualified_map_client_and_edition_for_all_versions() {
+    use crate::game_cache::{
+        CachedUnit, Kind, Profile, Stored,
+        tests::{Memory, budget},
+    };
+    let store = Arc::new(Memory::default());
+    let Fixture { mut h, hero, .. } = open();
+    h.admit_game_caches(store.clone(), budget()).unwrap();
+    h.native(
+        "SetHeroLevel",
+        &[Value::Handle(hero), Value::Int(4), Value::Bool(false)],
+    )
+    .unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("campaign".into())])
+        .unwrap();
+    h.native(
+        "StoreUnit",
+        &[
+            cache.clone(),
+            Value::Str("next".into()),
+            Value::Str("hero".into()),
+            Value::Handle(hero),
+        ],
+    )
+    .unwrap();
+    h.native("SaveGameCache", &[cache]).unwrap();
+    let bytes = store.bytes.lock().unwrap().clone().unwrap();
+    let profile = Profile::decode(&bytes, budget()).unwrap();
+    let Some(Stored::Unit(bytes)) = profile.get("campaign", "next", "hero", Kind::Unit) else {
+        panic!("stored unit");
+    };
+    let mut saved = CachedUnit::decode(bytes, budget().storage_bytes).unwrap();
+    saved.install = "Maps\\A.w3m".into();
+    saved.cooldowns.clear();
+    saved.experience = None;
+    saved.rally = None;
+    for version in 1..=4 {
+        for case in 0..6 {
+            let mut saved = saved.clone();
+            match case {
+                1 => saved.install = "Maps\\Unlisted.w3m".into(),
+                2 => saved.install = "Maps\\..\\A.w3m".into(),
+                3 => saved.client_sha256[0] ^= 1,
+                4 => saved.edition = "foreign edition".into(),
+                _ => {}
+            }
+            let mut bytes = saved.encode(budget().storage_bytes).unwrap();
+            bytes[7] = version;
+            let suffix = match version {
+                1 => 6,
+                2 => 2,
+                3 => 1,
+                _ => 0,
+            };
+            bytes.truncate(bytes.len() - suffix);
+            let saved = CachedUnit::decode(&bytes, budget().storage_bytes).unwrap();
+            let Fixture { mut h, .. } = open();
+            if case != 5 {
+                h = h
+                    .with_cached_unit_source_maps(vec![
+                        pcx_assets::AssetPath::new("maps/a.w3m").unwrap(),
+                    ])
+                    .unwrap();
+            }
+            let mut profile = Profile::default();
+            profile
+                .put(
+                    "campaign",
+                    "next".into(),
+                    "hero".into(),
+                    Stored::Unit(bytes),
+                    budget(),
+                )
+                .unwrap();
+            let storage = Arc::new(Memory::default());
+            *storage.bytes.lock().unwrap() = Some(profile.encode(budget()).unwrap());
+            h.admit_game_caches(storage, budget()).unwrap();
+            let cache = h
+                .native("InitGameCache", &[Value::Str("campaign".into())])
+                .unwrap();
+            let player = h.native("Player", &[Value::Int(4)]).unwrap();
+            let handles = h.inner().handles();
+            let restore = h.native(
+                "RestoreUnit",
+                &[
+                    cache,
+                    Value::Str("next".into()),
+                    Value::Str("hero".into()),
+                    player,
+                    Value::Real(64.),
+                    Value::Real(16.),
+                    Value::Real(90.),
+                ],
+            );
+            if case == 0 {
+                let Value::Handle(unit) = restore.unwrap() else {
+                    panic!("restored unit");
+                };
+                let restored = h.executed_unit(unit).unwrap();
+                let progress = restored.abilities.as_ref().unwrap().hero.as_ref().unwrap();
+                assert_eq!(Some([progress.level, progress.skill_points]), saved.hero);
+                assert_eq!(progress.experience, saved.experience);
+                let mut ranks = restored
+                    .abilities
+                    .as_ref()
+                    .unwrap()
+                    .levels()
+                    .collect::<Vec<_>>();
+                ranks.sort_unstable_by_key(|(alias, _)| *alias);
+                assert_eq!(ranks, saved.abilities);
+                assert_eq!(restored.permanent_strength, saved.permanent_strength);
+                assert_ne!(restored.source.install, saved.install);
+            } else {
+                let reason = if case == 3 {
+                    "different client image"
+                } else {
+                    "different install/edition"
+                };
+                assert!(
+                    restore.unwrap_err().to_string().contains(reason),
+                    "version {version} case {case}"
+                );
+                assert_eq!(h.inner().handles(), handles);
+            }
+        }
+    }
+}
+
+#[test]
 fn cached_unit_restore_refusals_leave_the_arena_inventory_and_cache_intact() {
     use crate::game_cache::{
         CachedUnit, Kind, Profile, Stored,

@@ -58,6 +58,7 @@ pub mod camera_margins;
 pub mod campaign;
 pub mod campaign_ai;
 mod campaign_ai_flag;
+pub mod campaign_ai_pause_policy;
 pub mod campaign_assets;
 pub mod campaign_cache;
 pub mod campaign_captain_policy;
@@ -91,6 +92,7 @@ pub mod hero_experience;
 pub mod hero_skills;
 pub mod install_source;
 pub mod label_sounds;
+pub mod leaderboard_layout;
 pub mod map_admission;
 pub mod map_script_session;
 pub mod map_scripts_import;
@@ -119,10 +121,12 @@ pub mod script_numeric;
 pub mod script_random;
 pub mod standard_command;
 pub mod unit_activity;
+pub mod unit_animation_rarity;
 pub mod unit_blend;
 pub mod unit_decay;
 pub mod unit_model;
 pub use rpl::{Expectation, Rpl, RplError};
+pub mod construction_rules;
 pub(crate) mod pe_image;
 pub mod scenario;
 pub mod script_trace;
@@ -195,3 +199,9 @@ pub mod weather;
 
 pub mod ally_color;
 pub mod preload;
+
+pub mod campaign_production_rules;
+
+pub mod campaign_assault_policy;
+
+pub mod mirror_image_rules;

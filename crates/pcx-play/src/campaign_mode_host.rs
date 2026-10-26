@@ -1,12 +1,43 @@
 //! Campaign context configuration and queries over canonical unit ownership.
 use super::{Error, Failure, ObjectHost};
 use crate::{campaign_mode_policy::CampaignModePolicy, map_admission::ParsedMapContext};
-use pcx_script::HandleId;
+use pcx_script::{HandleId, Value};
 use std::sync::Arc;
 
 const NATIVE: &str = "SetCampaignAI";
 
 impl ObjectHost {
+    pub(super) fn player_structure_count(&self, args: &[Value]) -> Result<Value, Error> {
+        const NAME: &str = "GetPlayerStructureCount";
+        let fail = |detail| self.inner.error(NAME, Failure::ConfigState(detail));
+        let [owner, Value::Bool(include_incomplete)] = args else {
+            return Err(self.inner.error(NAME, Failure::PlayerArguments));
+        };
+        let owner = match owner {
+            Value::Null => return Ok(Value::Int(0)),
+            Value::Handle(owner) => *owner,
+            _ => return Err(self.inner.error(NAME, Failure::WrongFamily)),
+        };
+        self.player_settings(owner)
+            .map_err(|e| self.inner.error(NAME, e.failure))?;
+        self.executed_units()
+            .filter(|(_, record)| record.owner == owner)
+            .try_fold(0i32, |count, (_, record)| {
+                if !counted_unit_live(record).map_err(fail)? {
+                    return Ok(count);
+                }
+                if !super::unit_types::structure(&record.definition)
+                    .map_err(|detail| self.inner.error(NAME, Failure::UnitActivity(detail)))?
+                    || (!include_incomplete && record.construction.is_some())
+                {
+                    return Ok(count);
+                }
+                count
+                    .checked_add(1)
+                    .ok_or_else(|| fail("structure count exceeds integer range"))
+            })
+            .map(Value::Int)
+    }
     pub fn admit_campaign_mode(
         &mut self,
         context: &Arc<ParsedMapContext>,
@@ -197,18 +228,8 @@ impl ObjectHost {
                 record.owner == owner && record.definition.rawcode == unit.to_be_bytes()
             })
             .try_fold(0i32, |count, (id, record)| {
-                if record.combat.is_none() && record.vitals.is_none() {
-                    return Err(self
-                        .inner
-                        .error(name, Failure::ConfigState("unit liveness is not admitted")));
-                }
-                if record.vitals.as_ref().is_some_and(|v| !v.life.is_finite()) {
-                    return Err(self
-                        .inner
-                        .error(name, Failure::ConfigState("unit life is not finite")));
-                }
-                if record.combat.as_ref().is_some_and(|c| c.dead)
-                    || record.vitals.as_ref().is_some_and(|v| v.life <= 0.)
+                if !counted_unit_live(record)
+                    .map_err(|detail| self.inner.error(name, Failure::ConfigState(detail)))?
                 {
                     return Ok(count);
                 }
@@ -230,4 +251,17 @@ impl ObjectHost {
                 })
             })
     }
+}
+
+fn counted_unit_live(record: &super::ExecutedUnit) -> Result<bool, &'static str> {
+    if record.combat.is_none() && record.vitals.is_none() {
+        return Err("unit liveness is not admitted");
+    }
+    if record.vitals.is_some_and(|v| !v.life.is_finite()) {
+        return Err("unit life is not finite");
+    }
+    Ok(
+        !record.combat.as_ref().is_some_and(|c| c.dead)
+            && record.vitals.is_none_or(|v| v.life > 0.),
+    )
 }

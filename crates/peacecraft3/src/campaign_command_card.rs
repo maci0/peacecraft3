@@ -32,6 +32,10 @@ pub(crate) enum Kind {
     TargetUnit,
     Immediate,
     Train(i32),
+    BuildMenu,
+    Build(i32),
+    BuildCancel,
+    CancelConstruction,
     Standard(pcx_play::standard_command::Kind),
     /// Opens the research submenu on this same grid.
     SkillMenu,
@@ -46,6 +50,7 @@ enum SkillPage {
     #[default]
     Main,
     Skills,
+    Builds,
 }
 
 #[derive(Component, Clone)]
@@ -59,6 +64,7 @@ pub(crate) struct ButtonOrder {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Icon {
+    unavailable: Option<pcx_play::playercolor_host::BuildUnavailable>,
     kind: Kind,
     data: IconData,
     tooltip: Result<ability_profile::Tooltip, String>,
@@ -85,10 +91,12 @@ struct Header {
     dead: Option<bool>,
     movable: bool,
     can_attack: bool,
+    constructing: bool,
 }
 struct Signature {
     header: Header,
     abilities: Vec<([u8; 4], i32, bool)>,
+    builds: Vec<pcx_play::playercolor_host::BuildOption>,
 }
 
 fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
@@ -117,6 +125,10 @@ fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
         dead: record.combat.as_ref().map(|combat| combat.dead),
         movable: record.activity.as_ref().is_some_and(|a| a.movable()),
         can_attack: record.combat.as_ref().is_some_and(|c| c.weapon.is_some()),
+        constructing: objects
+            .unit_construction(unit)
+            .map_err(|e| e.to_string())?
+            .is_some(),
     }))
 }
 
@@ -144,7 +156,21 @@ fn unchanged(objects: &ObjectHost, previous: Option<&Signature>) -> Result<bool,
             return Ok(false);
         }
     }
-    Ok(old.next().is_none())
+    Ok(old.next().is_none() && build_options(objects, current.unit)? == previous.builds)
+}
+
+fn build_options(
+    objects: &ObjectHost,
+    unit: HandleId,
+) -> Result<Vec<pcx_play::playercolor_host::BuildOption>, String> {
+    if objects
+        .unit_build_menu_ability(unit)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    objects.unit_build_options(unit).map_err(|e| e.to_string())
 }
 
 fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
@@ -165,7 +191,12 @@ fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
                 .map_err(|error| error.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Some(Signature { header, abilities }))
+    let builds = build_options(objects, header.unit)?;
+    Ok(Some(Signature {
+        header,
+        abilities,
+        builds,
+    }))
 }
 
 struct Source {
@@ -174,6 +205,7 @@ struct Source {
     standard: Vec<(pcx_play::standard_command::Command, String)>,
     skill: (pcx_play::standard_command::MenuButton, String),
     cancel: (pcx_play::standard_command::MenuButton, String),
+    cancel_build: (pcx_play::standard_command::MenuButton, String),
     images: HashMap<String, Handle<Image>>,
     failed: HashMap<String, String>,
     retained: usize,
@@ -223,6 +255,44 @@ impl CommandCard {
         self.source
             .as_ref()
             .map_or(0, |source| source.receipts.len())
+    }
+
+    pub(crate) fn build_hotkeys(&self, unit: HandleId) -> impl Iterator<Item = (Kind, char)> + '_ {
+        self.view
+            .iter()
+            .filter(move |view| view.unit == unit && self.last_error.is_none())
+            .flat_map(|view| &view.icons)
+            .filter(|icon| icon.unavailable.is_none())
+            .filter_map(|icon| match icon.kind {
+                Kind::BuildMenu | Kind::Build(_) | Kind::BuildCancel => {
+                    icon.data.hotkey.map(|key| (icon.kind, key))
+                }
+                _ => None,
+            })
+    }
+
+    pub(crate) fn construction_cancel_hotkey(
+        &self,
+        unit: HandleId,
+    ) -> Option<pcx_play::standard_command::MenuHotkey> {
+        self.view
+            .as_ref()
+            .filter(|view| view.unit == unit && self.last_error.is_none())
+            .filter(|view| {
+                view.icons
+                    .iter()
+                    .any(|icon| icon.kind == Kind::CancelConstruction)
+            })
+            .and(self.source.as_ref())
+            .map(|source| source.cancel_build.0.hotkey)
+    }
+
+    pub(crate) fn build_page_open(&self) -> bool {
+        self.page == SkillPage::Builds
+    }
+
+    pub(crate) fn open_builds(&mut self) {
+        self.page = SkillPage::Builds;
     }
 
     pub(crate) fn open_skills(&mut self) {
@@ -294,6 +364,30 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
     {
         return Ok(None);
     }
+    if objects
+        .unit_construction(unit)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        let (cancel, art) = &source.cancel_build;
+        return Ok(Some(View {
+            unit,
+            icons: vec![Icon {
+                unavailable: None,
+                kind: Kind::CancelConstruction,
+                data: IconData {
+                    art: art.clone(),
+                    position: cancel.position,
+                    hotkey: menu_letter(cancel.hotkey),
+                },
+                tooltip: Ok(cancel.tooltip.clone()),
+                order: None,
+            }],
+        }));
+    }
+    if page == SkillPage::Builds {
+        return building_page(objects, unit, source);
+    }
     if page == SkillPage::Skills {
         return research_page(objects, unit, source);
     }
@@ -311,6 +405,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 return Err("standard commands collide at the same authored Buttonpos".into());
             }
             icons.push(Icon {
+                unavailable: None,
                 kind: Kind::Standard(profile.kind),
                 data: IconData {
                     art: art.clone(),
@@ -344,6 +439,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 .map_err(|e| e.to_string())
                 .and_then(|tip| tip.ok_or("command has no learned tooltip".into()));
             icons.push(Icon {
+                unavailable: None,
                 kind,
                 data: IconData {
                     art: data.art,
@@ -369,7 +465,30 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             return Err("training commands collide at the same authored Buttonpos".into());
         }
         icons.push(Icon {
+            unavailable: None,
             kind: Kind::Train(command.kind),
+            data: IconData {
+                art: command.art,
+                position: command.position,
+                hotkey: command.hotkey,
+            },
+            tooltip: command.tooltip,
+            order: None,
+        });
+    }
+    if let Some(command) = objects
+        .unit_build_menu_command(unit)
+        .map_err(|e| e.to_string())?
+    {
+        if icons
+            .iter()
+            .any(|icon| icon.data.position == command.position)
+        {
+            return Err("build menu collides at the authored Buttonpos".into());
+        }
+        icons.push(Icon {
+            unavailable: None,
+            kind: Kind::BuildMenu,
             data: IconData {
                 art: command.art,
                 position: command.position,
@@ -391,6 +510,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             return Err("hero abilities collide at the same authored Buttonpos".into());
         }
         icons.push(Icon {
+            unavailable: None,
             kind: Kind::SkillMenu,
             data: IconData {
                 art: art.clone(),
@@ -401,6 +521,60 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             order: None,
         });
     }
+    Ok(Some(View { unit, icons }))
+}
+
+fn building_page(
+    objects: &ObjectHost,
+    unit: HandleId,
+    source: &Source,
+) -> Result<Option<View>, String> {
+    if objects
+        .unit_build_menu_ability(unit)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let mut icons = Vec::new();
+    for choice in crate::campaign_build_ui::choices(objects, unit)? {
+        let command = choice.command;
+        if icons
+            .iter()
+            .any(|icon: &Icon| icon.data.position == command.position)
+        {
+            return Err("building choices collide at the authored Buttonpos".into());
+        }
+        icons.push(Icon {
+            unavailable: choice.unavailable,
+            kind: Kind::Build(command.kind),
+            data: IconData {
+                art: command.art,
+                position: command.position,
+                hotkey: command.hotkey,
+            },
+            tooltip: command.tooltip,
+            order: None,
+        });
+    }
+    let (cancel, art) = &source.cancel;
+    if icons
+        .iter()
+        .any(|icon| icon.data.position == cancel.position)
+    {
+        return Err("build cancel collides at the authored Buttonpos".into());
+    }
+    icons.push(Icon {
+        unavailable: None,
+        kind: Kind::BuildCancel,
+        data: IconData {
+            art: art.clone(),
+            position: cancel.position,
+            hotkey: menu_letter(cancel.hotkey),
+        },
+        tooltip: Ok(cancel.tooltip.clone()),
+        order: None,
+    });
     Ok(Some(View { unit, icons }))
 }
 
@@ -427,6 +601,7 @@ fn research_page(
             return Err("research icons collide at the same authored Researchbuttonpos".into());
         }
         icons.push(Icon {
+            unavailable: None,
             kind: Kind::Learn(i32::from_be_bytes(icon.ability)),
             data: IconData {
                 art: icon.art,
@@ -448,6 +623,7 @@ fn research_page(
         return Err("research cancel collides with a research icon".into());
     }
     icons.push(Icon {
+        unavailable: None,
         kind: Kind::SkillCancel,
         data: IconData {
             art: art.clone(),
@@ -473,6 +649,7 @@ fn read_standard_profiles(
 ) -> Result<
     (
         Vec<pcx_play::standard_command::Command>,
+        pcx_play::standard_command::MenuButton,
         pcx_play::standard_command::MenuButton,
         pcx_play::standard_command::MenuButton,
     ),
@@ -508,7 +685,8 @@ fn read_standard_profiles(
         .collect::<Result<Vec<_>, _>>()?;
     let skill = pcx_play::standard_command::MenuButton::read(&editor, "CmdSelectSkill")?;
     let cancel = pcx_play::standard_command::MenuButton::read(&editor, "CmdCancel")?;
-    Ok((standard, skill, cancel))
+    let cancel_build = pcx_play::standard_command::MenuButton::read(&editor, "CmdCancelBuild")?;
+    Ok((standard, skill, cancel, cancel_build))
 }
 
 fn reset(
@@ -605,10 +783,11 @@ fn paint(
             icon.order,
             rect,
             &icon.tooltip,
+            icon.unavailable,
         ));
     }
     commands.entity(root).despawn_children();
-    for (node, image, kind, order, rect, tooltip) in nodes {
+    for (node, image, kind, order, rect, tooltip, unavailable) in nodes {
         commands.entity(root).with_children(|parent| {
             let mut button = parent.spawn((
                 node,
@@ -626,6 +805,10 @@ fn paint(
                     order,
                 },
             ));
+            if unavailable.is_some() {
+                // shortcut: source disabled-art projection is pending; do not invent a tint.
+                button.insert(bevy::ui::InteractionDisabled);
+            }
             match tooltip {
                 Ok(tip) => {
                     button.insert(crate::campaign_inventory::ControlTooltip {
@@ -712,7 +895,8 @@ fn project(
                     .map_err(|error| error.to_string())?,
             )?;
             let console = skin_file(&skin, &sections, &rules.console_key)?;
-            let (commands, skill, cancel) = read_standard_profiles(&reader, &mut receipts)?;
+            let (commands, skill, cancel, cancel_build) =
+                read_standard_profiles(&reader, &mut receipts)?;
             let resolve = |art_key: &str, position: [usize; 2]| -> Result<String, String> {
                 let art = skin_file(&skin, &sections, art_key)?;
                 pcx_assets::AssetPath::new(&art).map_err(|e| e.to_string())?;
@@ -734,6 +918,10 @@ fn project(
                 let art = resolve(&cancel.art_key, cancel.position)?;
                 (cancel, art)
             };
+            let cancel_build = {
+                let art = resolve(&cancel_build.art_key, cancel_build.position)?;
+                (cancel_build, art)
+            };
             text(&reader, CONSOLE, &mut receipts)?;
             Ok::<_, String>(Source {
                 rules,
@@ -741,6 +929,7 @@ fn project(
                 standard,
                 skill,
                 cancel,
+                cancel_build,
                 receipts,
                 images: HashMap::new(),
                 failed: HashMap::new(),
@@ -805,7 +994,8 @@ fn project(
         {
             card.page = SkillPage::Main;
         }
-        if changed || card.shown != card.page {
+        let page_changed = card.shown != card.page;
+        if changed || page_changed {
             card.view = wanted(host.objects(), &source, card.page)?;
             card.shown = card.page;
             if changed {
@@ -826,7 +1016,7 @@ fn project(
         if nodes.get(root).map_or(true, |node| node.display != display) {
             commands.entity(root).insert(root_node(display));
         }
-        if rebuilt || changed || card.last_error.is_some() {
+        if rebuilt || changed || page_changed || card.last_error.is_some() {
             if let Some(view) = &card.view {
                 for icon in &view.icons {
                     image(&reader, &mut source, &icon.data.art, &mut images)?;
@@ -916,6 +1106,7 @@ mod tests {
                 .map(|v| v.trim().parse().unwrap())
                 .collect();
             icons.push(Icon {
+                unavailable: None,
                 kind,
                 tooltip: Err("standalone icon fixture has no learned unit".into()),
                 data: IconData {
@@ -947,6 +1138,7 @@ mod tests {
                 standard: Vec::new(),
                 skill: fixture_menu(),
                 cancel: fixture_menu(),
+                cancel_build: fixture_menu(),
                 images: HashMap::new(),
                 failed: HashMap::new(),
                 retained: 0,
@@ -1539,6 +1731,7 @@ mod tests {
             standard: Vec::new(),
             skill: fixture_menu(),
             cancel: fixture_menu(),
+            cancel_build: fixture_menu(),
             images: HashMap::from([("fixture".into(), owned.clone())]),
             failed: HashMap::new(),
             retained: 0,
@@ -1551,6 +1744,7 @@ mod tests {
         let mut view = View {
             unit: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
             icons: vec![Icon {
+                unavailable: None,
                 kind: Kind::TargetUnit,
                 tooltip: Err("synthetic icon-only fixture".into()),
                 data: IconData {
@@ -1579,6 +1773,7 @@ mod tests {
             Val::Percent(rect.width / source.rules.viewport[0] * 100.)
         );
         view.icons.push(Icon {
+            unavailable: None,
             kind: Kind::Immediate,
             tooltip: Err("synthetic icon-only fixture".into()),
             data: IconData {
@@ -1708,6 +1903,7 @@ mod tests {
             view: Some(View {
                 unit,
                 icons: vec![Icon {
+                    unavailable: None,
                     kind: Kind::Train(i32::from_be_bytes(*b"uNEW")),
                     data: IconData {
                         art: "fixture/icon.blp".into(),
@@ -1730,5 +1926,37 @@ mod tests {
         assert!(card.training_hotkeys(other).next().is_none());
         card.last_error = Some("source mismatch".into());
         assert!(card.training_hotkeys(unit).next().is_none());
+    }
+    #[test]
+    fn building_hotkeys_follow_source_readiness_and_page_changes() {
+        let unit = HandleId::new(std::num::NonZeroU64::new(51).unwrap());
+        let kind = Kind::Build(i32::from_be_bytes(*b"bNEW"));
+        let mut card = CommandCard {
+            view: Some(View {
+                unit,
+                icons: vec![Icon {
+                    unavailable: Some(pcx_play::playercolor_host::BuildUnavailable::Resources),
+                    kind,
+                    data: IconData {
+                        art: "fixture/build.blp".into(),
+                        position: [2, 1],
+                        hotkey: Some('Q'),
+                    },
+                    tooltip: Err("fixture".into()),
+                    order: None,
+                }],
+            }),
+            ..default()
+        };
+        card.open_builds();
+        assert!(card.build_page_open());
+        assert!(card.build_hotkeys(unit).next().is_none());
+        card.view.as_mut().unwrap().icons[0].unavailable = None;
+        assert_eq!(
+            card.build_hotkeys(unit).collect::<Vec<_>>(),
+            vec![(kind, 'Q')]
+        );
+        card.close_skills();
+        assert!(!card.build_page_open());
     }
 }

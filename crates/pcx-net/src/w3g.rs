@@ -9,6 +9,9 @@
 //! payload. Checksum records and the encoded startup tail remain uninterpreted.
 //! Structure only: a parsed replay is not evidence that the game would reproduce it.
 
+#[path = "w3g_action.rs"]
+pub mod action;
+
 use std::io::Write;
 use std::ops::Range;
 

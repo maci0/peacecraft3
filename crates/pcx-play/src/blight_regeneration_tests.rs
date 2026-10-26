@@ -241,3 +241,90 @@ fn blocked_replan_cannot_starve_later_motion_or_blight_regeneration() {
         "a genuinely undersized mandatory budget still refuses"
     );
 }
+
+#[test]
+fn moving_follow_refresh_leaves_later_motion_and_blight_tail_work() {
+    fn run(budget: usize) -> Result<([f32; 2], f64, usize), String> {
+        let flags = vec![0x20; 21];
+        let blight =
+            InitialBlight::read(&terrain([7, 3], [0.0; 2], &flags), 16.0, identity(), 21).unwrap();
+        let mut fields = regen_fields("0.25", "blight", "0.5");
+        fields.push(column(
+            b"F001",
+            SlkId::UnitBalance,
+            "isbldg",
+            FieldKind::Bool,
+            "0",
+        ));
+        let (mut vm, a, enemy) = open_fixture(&fields, None, rules(), false, Some(blight), None);
+        vm.host()
+            .inner
+            .native("KillUnit", &[Value::Handle(enemy)])
+            .unwrap();
+        let owner = vm
+            .host()
+            .inner
+            .native("GetOwningPlayer", &[Value::Handle(a)])
+            .unwrap();
+        let create = |vm: &mut Vm, x, y| {
+            let Value::Handle(id) = vm
+                .host()
+                .inner
+                .native(
+                    "CreateUnit",
+                    &[
+                        owner.clone(),
+                        Value::Int(i32::from_be_bytes(*b"u001")),
+                        Value::Real(x),
+                        Value::Real(y),
+                        Value::Real(0.0),
+                    ],
+                )
+                .unwrap()
+            else {
+                panic!("unit");
+            };
+            id
+        };
+        let target = create(&mut vm, 72.0, 16.0);
+        let later = create(&mut vm, 16.0, 40.0);
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(a),
+                    Value::Str("gamma".into()),
+                    Value::Handle(target),
+                ],
+            )
+            .unwrap();
+        move_to(&mut vm, target, [100.0, 16.0]);
+        move_to(&mut vm, later, [72.0, 40.0]);
+        project(&mut vm, 1.0).unwrap();
+        // Obstruct the new follow goal after the initial public follow order was accepted.
+        create(&mut vm, 56.0, 16.0);
+        let host = &mut vm.host().inner;
+        host.next_timer_expiry(4.0, &mut 1000).unwrap();
+        let mut work = budget;
+        host.advance_unit_activity(4.0, &mut work)
+            .map_err(|error| error.to_string())?;
+        let record = host.executed_unit(later).unwrap();
+        assert!(record.position.unwrap()[0] > 32.0);
+        assert_eq!(record.vitals.unwrap().regen.through, 4.0);
+        let follower = host.executed_unit(a).unwrap().activity.as_ref().unwrap();
+        assert_eq!(follower.followed_unit(), Some(target));
+        Ok((
+            record.position.unwrap(),
+            record.vitals.unwrap().regen.through,
+            budget - work,
+        ))
+    }
+    let full = run(65536).unwrap();
+    let bounded = (1..full.2)
+        .find_map(|budget| run(budget).ok().map(|state| (budget, state)))
+        .expect("follow search can defer");
+    assert_eq!((bounded.1.0, bounded.1.1), (full.0, full.1));
+    assert_eq!(run(bounded.0).unwrap(), bounded.1);
+    assert!(run(1).is_err());
+}

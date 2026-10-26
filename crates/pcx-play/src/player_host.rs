@@ -825,6 +825,18 @@ impl ObjectHost {
         }
         Ok(Value::Null)
     }
+    pub(super) fn admitted_construction_rules(
+        &self,
+    ) -> Result<&crate::construction_rules::Rules, Error> {
+        let fail = |why: String| self.inner.error("construction", Failure::UnitActivity(why));
+        self.players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("construction resources not admitted".into()))?
+            .rules
+            .construction_rules()
+            .map_err(|e| fail(e.into()))
+    }
     /// Admit selected initial resource counters and assignment limits before any request.
     pub fn with_player_resources(
         mut self,
@@ -919,10 +931,17 @@ impl ObjectHost {
         crate::player_unit_cost::amount_with_marker(definition, column, marker)
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
+        self.live_food(owner, column)
+    }
+
     fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
         self.executed_units()
             .filter(|(_, u)| {
                 u.owner == owner
+                    && u.illusion.is_none()
+                    && u.construction.is_none()
                     && u.combat.as_ref().is_none_or(|c| !c.dead)
                     && u.vitals.is_none_or(|v| v.life > 0.0)
             })
@@ -2129,7 +2148,16 @@ impl ObjectHost {
                 Failure::PlayerState("negative production limit is not admitted"),
             ));
         }
-        Ok(self.ai_player_unit_type_count(Some(owner), kind)? < maximum)
+        let count = self
+            .ai_player_unit_type_count(Some(owner), kind)?
+            .checked_add(self.pending_construction_count(owner, kind)?)
+            .ok_or_else(|| {
+                self.inner.error(
+                    "production limit",
+                    Failure::PlayerState("production count overflow"),
+                )
+            })?;
+        Ok(count < maximum)
     }
 
     pub(super) fn require_ordinary_training(&self, kind: i32) -> Result<(), Error> {
@@ -2150,6 +2178,27 @@ impl ObjectHost {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn admitted_ai_production_max(&self) -> Result<i32, Error> {
+        let fail = |why: String| self.inner.error("SetProduce", Failure::UnitActivity(why));
+        let rules = &self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("AI production resources are not admitted".into()))?
+            .rules;
+        let training = rules.training_rules().map_err(|e| fail(e.into()))?;
+        let production = training
+            .ai_production
+            .as_ref()
+            .map_err(|e| fail(e.clone()))?;
+        if production.image_sha256 != rules.image_sha256 || production.maximum_quantity < 1 {
+            return Err(fail(
+                "AI production source or quantity bound differs".into(),
+            ));
+        }
+        Ok(production.maximum_quantity)
     }
 
     pub(super) fn training_queue_slots(&self) -> Result<usize, Error> {

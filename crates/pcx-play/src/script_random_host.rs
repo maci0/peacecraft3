@@ -13,6 +13,9 @@ pub(super) struct Random {
 }
 
 impl ObjectHost {
+    pub(super) fn random_policy(&self) -> Option<Arc<Policy>> {
+        self.random.as_ref().map(|r| Arc::clone(&r.policy))
+    }
     /// Parameters and an allocation ceiling admit the three declarations. State
     /// begins only at an executed `SetRandomSeed`; map/session replacement drops it.
     pub fn with_script_random(
@@ -65,6 +68,23 @@ impl ObjectHost {
                 .error(caller, Failure::RandomSetup("not admitted"))
         })?;
         state::integer(&random.policy, &mut random.state, low, high)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))
+    }
+
+    /// One source-qualified gameplay die from an already retained secondary stream.
+    /// The ability policy supplies the channel and sides; this does not seed or
+    /// borrow the primary script stream.
+    pub fn draw_random_secondary_die(
+        &mut self,
+        channel: usize,
+        sides: u32,
+        caller: &str,
+    ) -> Result<u32, Error> {
+        let random = self.random.as_mut().ok_or_else(|| {
+            self.inner
+                .error(caller, Failure::RandomSetup("not admitted"))
+        })?;
+        state::secondary_die(&random.policy, &mut random.state, channel, sides)
             .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))
     }
 

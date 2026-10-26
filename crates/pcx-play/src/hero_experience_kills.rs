@@ -23,6 +23,9 @@ impl ObjectHost {
         };
         let fail = |detail: String| self.hero_error("hero kill XP", detail);
         let victim_record = self.created_unit(victim, "hero kill XP")?;
+        if victim_record.illusion.is_some() {
+            return Ok(empty);
+        }
         let killer_owner = self.created_unit(killer, "hero kill XP")?.owner;
         if !self.hostile_owners(killer_owner, victim_record.owner) {
             return Ok(empty);
@@ -47,6 +50,10 @@ impl ObjectHost {
                 )
                 .map_err(fail)?
                 .ok_or_else(|| fail("victim UnitBalance/level absent".into()))?;
+                // Authored no-level sentinel: the selected client reports level zero, with no XP.
+                if matches!(field, FieldValue::Cell(text) if text.trim() == "-") {
+                    return Ok(empty);
+                }
                 let level = crate::playercolor_host::objects::combat::number(field, "level")
                     .map_err(fail)?
                     .ok_or_else(|| fail("victim UnitBalance/level empty".into()))?;
