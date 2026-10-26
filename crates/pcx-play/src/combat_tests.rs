@@ -1,6 +1,8 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "autocast_host_tests.rs"]
+mod autocast;
 #[path = "campaign_group_timed_life_host_tests.rs"]
 mod campaign_timed_life;
 #[path = "chain_lightning_tests.rs"]

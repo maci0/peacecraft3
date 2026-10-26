@@ -185,6 +185,18 @@ impl<'a> Pe<'a> {
                 )
             })
     }
+    /// Initialized readable bytes, excluding virtual padding; callers bound their scans.
+    pub(crate) fn initialized_ranges(&self) -> impl Iterator<Item = (u32, &'a [u8])> + '_ {
+        self.sections
+            .iter()
+            .filter(|s| Self::initialized(s, false) && s.raw_size != 0)
+            .map(|s| {
+                (
+                    self.base + s.rva,
+                    &self.d[s.raw..s.raw + s.raw_size as usize],
+                )
+            })
+    }
     fn initialized(s: &Section, code: bool) -> bool {
         s.flags & 0x4000_0000 != 0
             && s.flags & 0x80 == 0

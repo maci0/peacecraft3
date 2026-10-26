@@ -26,6 +26,8 @@ pub struct EventSubject {
     /// Target of the spell whose effect fired the event (`GetSpellTargetUnit`).
     pub spell_target: Option<HandleId>,
     pub spell_ability: Option<i32>,
+    pub issued_order: Option<i32>,
+    pub autocast: Option<(HandleId, u64)>,
     pub mirror: Option<super::unit_mirror_image::MirrorEventContext>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
     pub sale: Option<SaleContext>,
@@ -86,7 +88,7 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 30] = [
+const RESPONSES: [&str; 31] = [
     "GetConstructingStructure",
     "GetConstructedStructure",
     "GetCancelledStructure",
@@ -100,6 +102,7 @@ const RESPONSES: [&str; 30] = [
     "GetLearnedSkillLevel",
     "GetSpellTargetUnit",
     "GetSpellAbilityId",
+    "GetIssuedOrderId",
     "GetSpellAbilityUnit",
     "GetTriggerUnit",
     "GetSellingUnit",
@@ -325,6 +328,7 @@ impl ObjectHost {
             self.settle_powerup_item(fired.subject.item);
             self.settle_construction_event(fired.subject.construction);
             self.settle_mirror_event(fired.subject.mirror);
+            self.settle_autocast_event(fired.subject.autocast);
             return Ok(None);
         }
         let delivery = self.trigger_delivery(fired.trigger, name)?;
@@ -358,6 +362,7 @@ impl ObjectHost {
         let item = self.events.subject.item;
         let construction = self.events.subject.construction;
         let mirror = self.events.subject.mirror;
+        let autocast = self.events.subject.autocast;
         self.events.subject = previous
             .as_ref()
             .map_or_else(EventSubject::default, |context| context.subject);
@@ -365,6 +370,7 @@ impl ObjectHost {
         self.settle_powerup_item(item);
         self.settle_construction_event(construction);
         self.settle_mirror_event(mirror);
+        self.settle_autocast_event(autocast);
     }
 
     /// Consumes a claimed powerup once no pickup event for that item is still queued.
@@ -386,6 +392,27 @@ impl ObjectHost {
         }
     }
 
+    pub(super) fn autocast_event_pending(&self, context: (HandleId, u64)) -> bool {
+        self.events
+            .queue
+            .iter()
+            .any(|e| e.subject.autocast == Some(context))
+            || self
+                .events
+                .synchronous
+                .as_ref()
+                .is_some_and(|q| q.iter().any(|e| e.subject.autocast == Some(context)))
+            || self
+                .synchronous_frames
+                .iter()
+                .any(|f| f.events.iter().any(|e| e.subject.autocast == Some(context)))
+            || (self.events.active && self.events.subject.autocast == Some(context))
+            || self
+                .events
+                .previous
+                .iter()
+                .any(|e| e.active && e.subject.autocast == Some(context))
+    }
     pub(super) fn mirror_event_pending(
         &self,
         context: super::unit_mirror_image::MirrorEventContext,
@@ -458,6 +485,16 @@ impl ObjectHost {
             }
         }
         let subject = self.events.subject;
+        if name == "GetIssuedOrderId" {
+            let result = (|| {
+                Self::contract(&self.inner, name, &[], "integer", true, None)?;
+                if native.source != self.unit_declaration()?.0 {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                Ok(Value::Int(subject.issued_order.unwrap_or(0)))
+            })();
+            return Some(result);
+        }
         if name == "GetSpellAbilityId" {
             return Some(Ok(Value::Int(subject.spell_ability.unwrap_or(0))));
         }

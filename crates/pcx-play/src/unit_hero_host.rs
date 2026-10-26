@@ -7,6 +7,8 @@ use pcx_objects::editor::Overlay;
 use pcx_script::value::FunctionId;
 use std::collections::BTreeSet;
 
+#[path = "autocast_host.rs"]
+mod autocast;
 #[path = "ability_cooldown.rs"]
 mod cooldown;
 #[path = "hero_experience_host.rs"]
@@ -72,6 +74,9 @@ mod cached_tests {
             }),
             levels: vec![(*b"B001", 1)],
             cooldowns: vec![],
+            autocast_disabled: Vec::new(),
+            autocast_revision: 0,
+            autocast_order: None,
             learnable: vec![Skill {
                 alias: *b"A001",
                 maximum: 3,
@@ -201,6 +206,9 @@ struct Skill {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitAbilities {
+    pub(super) autocast_disabled: Vec<[u8; 4]>,
+    pub(super) autocast_revision: u64,
+    pub(super) autocast_order: Option<(u64, i32)>,
     pub hero: Option<HeroProgress>,
     levels: Vec<([u8; 4], i32)>,
     learnable: Vec<Skill>,
@@ -208,12 +216,25 @@ pub struct UnitAbilities {
     pub(super) cooldowns: Vec<([u8; 4], i32, u32)>,
 }
 impl UnitAbilities {
+    pub(crate) fn autocast_modified(&self) -> bool {
+        !self.autocast_disabled.is_empty()
+    }
+    pub(crate) fn autocast_current_order(&self) -> Option<i32> {
+        self.autocast_order.map(|(_, order)| order)
+    }
+    pub(crate) fn clear_autocast_order(&mut self) {
+        self.autocast_order = None;
+    }
+
     pub(crate) fn mirror_snapshot(&self) -> Self {
         Self {
             hero: None,
             levels: self.levels.clone(),
             learnable: Vec::new(),
             cooldowns: Vec::new(),
+            autocast_disabled: Vec::new(),
+            autocast_revision: 0,
+            autocast_order: None,
         }
     }
 
@@ -537,6 +558,9 @@ impl ObjectHost {
                 levels: Vec::new(),
                 learnable: Vec::new(),
                 cooldowns: Vec::new(),
+                autocast_disabled: Vec::new(),
+                autocast_revision: 0,
+                autocast_order: None,
             };
             for alias in ability_list(definition, "abilList", input.budget.abilities_per_unit)? {
                 // Resolve the same alias even when a custom row shares a stock code.

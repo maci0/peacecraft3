@@ -21,6 +21,7 @@ pub struct Binding {
 
 #[derive(Clone, Debug)]
 pub struct Rules {
+    pub autocast: Result<std::sync::Arc<crate::autocast_rules::Rules>, String>,
     pub mirror_image: Result<std::sync::Arc<crate::mirror_image_rules::Rules>, String>,
     pub(crate) experience: Option<std::sync::Arc<crate::hero_experience::Rules>>,
     pub(crate) binding: Binding,
@@ -34,6 +35,17 @@ pub struct Rules {
 }
 
 impl Rules {
+    pub fn with_autocast(mut self, rules: Result<crate::autocast_rules::Rules, String>) -> Self {
+        self.autocast = rules.and_then(|rules| {
+            if rules.image_sha256 != self.binding.image_sha256 {
+                Err("autocast source differs from ability admission".into())
+            } else {
+                Ok(std::sync::Arc::new(rules))
+            }
+        });
+        self
+    }
+
     /// Optional ability capability; unrelated hero skills retain their admission.
     pub fn with_mirror_image(
         mut self,
@@ -208,6 +220,7 @@ impl Rules {
             other_implicit.push(id);
         }
         Ok(Self {
+            autocast: Err("autocast source not admitted".into()),
             mirror_image: Err("Mirror Image source not admitted".into()),
             experience: None,
             binding,

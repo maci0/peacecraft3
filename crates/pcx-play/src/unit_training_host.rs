@@ -419,11 +419,10 @@ impl ObjectHost {
                 continue;
             }
             let unit = post.unit.expect("occupied post");
-            if self
+            let current_order = self
                 .current_unit_order(unit)
-                .map_err(|e| self.inner.error(name, e.failure))?
-                != 0
-            {
+                .map_err(|e| self.inner.error(name, e.failure))?;
+            if current_order != 0 {
                 continue;
             }
             let record = self.executed_unit(unit)?;
@@ -431,11 +430,21 @@ impl ObjectHost {
                 || record.summoned
                 || record.admitted_order.is_some()
                 || record.paused_since.is_some()
-                || !record.shown
                 || self.unit_has_effect_history(unit)
                 || record.combat.is_none()
             {
-                return Err(fail("guard return state is unsupported"));
+                return Err(fail(&format!(
+                    "guard return state is unsupported: AI player {player}, unit {unit:?}, rawcode {:?}, home {:?}, current_order {current_order}, cached {}, summoned {}, admitted_order {:?}, paused_since {:?}, shown {}, effect_history {}, combat_admitted {}",
+                    record.definition.rawcode,
+                    post.home,
+                    record.cached,
+                    record.summoned,
+                    record.admitted_order,
+                    record.paused_since,
+                    record.shown,
+                    self.unit_has_effect_history(unit),
+                    record.combat.is_some(),
+                )));
             }
             let position = record
                 .position

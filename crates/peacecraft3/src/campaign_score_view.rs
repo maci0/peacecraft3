@@ -398,16 +398,16 @@ mod selected_tests {
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, MAP, ADDON and PCX_NATIVE_NEXT_CHAPTER_MAP"]
     fn selected_victory_continue_admits_and_starts_the_next_chapter() {
-        check_selected_continue(0);
+        let _ = check_selected_continue(0, false);
     }
 
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, MAP, ADDON and PCX_NATIVE_NEXT_CHAPTER_MAP"]
     fn selected_victory_continue_runs_the_next_chapters_opening_minute() {
-        check_selected_continue(60);
+        let _ = check_selected_continue(60, false);
     }
 
-    fn check_selected_continue(seconds: usize) {
+    fn check_selected_continue(seconds: usize, interlude: bool) -> (App, Option<Carryover>) {
         let next = std::env::var("PCX_NATIVE_NEXT_CHAPTER_MAP")
             .expect("set PCX_NATIVE_NEXT_CHAPTER_MAP to the next selected campaign member");
         let mut app = crate::native_campaign::tests::started_app();
@@ -415,10 +415,9 @@ mod selected_tests {
             "/missing-install-must-not-replace-the-admitted-source".into(),
             std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() == Ok("roc"),
         ));
-        peacecraft3::campaign_runtime::install(
-            &mut app,
-            CampaignRuntime::new(Duration::from_secs_f64(1.0 / 64.0), 8, 65536),
-        );
+        let mut runtime = CampaignRuntime::new(Duration::from_secs_f64(1.0 / 64.0), 8, 65536);
+        runtime.paused = true;
+        peacecraft3::campaign_runtime::install(&mut app, runtime);
         peacecraft3::campaign_score::install(&mut app);
         peacecraft3::campaign_score_assets::install(&mut app);
         app.init_resource::<crate::glue_menu::GlueImages>()
@@ -452,9 +451,15 @@ mod selected_tests {
                     &[Value::Str(next.clone())],
                 )
                 .unwrap();
-            let player = session
-                .global("udg_AAAP_Arthas")
-                .expect("select Human01, whose authored victory names this player");
+            let player = Value::Handle(
+                session
+                    .host()
+                    .unwrap()
+                    .objects()
+                    .local_player_settings()
+                    .unwrap()
+                    .identity,
+            );
             session
                 .call_function(
                     program.function_id("CustomVictoryBJ").unwrap(),
@@ -553,33 +558,133 @@ mod selected_tests {
                 .context()
                 .is_some_and(|ctx| Arc::ptr_eq(ctx, &admitted))
         );
-        let mut session = app
-            .world_mut()
-            .resource_mut::<MapScriptSession<MapStartupHost>>();
-        if let Some(expected) = expected_carryover {
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            if !interlude && let Some(expected) = &expected_carryover {
+                let Some(Value::Handle(restored)) = session.global("bj_lastLoadedUnit") else {
+                    panic!("next chapter did not restore a cached unit")
+                };
+                assert_eq!(session.global("udg_Arthas"), Some(Value::Handle(restored)));
+                let objects = session.host().unwrap().objects_mut();
+                assert!(objects.executed_unit(restored).unwrap().cached);
+                let actual = carryover(objects, restored);
+                assert_eq!(&actual, expected);
+                println!("actual chapter carryover verified: {actual:?}");
+            }
+            for tick in 1..=seconds * 64 {
+                let at = tick as f64 / 64.0;
+                pcx_play::campaign_host::advance_tick(&mut session, at, 65536)
+                    .unwrap_or_else(|error| panic!("next chapter at {at:.6}s: {error}"));
+            }
+            if seconds > 0 {
+                assert_eq!(
+                    session.host().unwrap().objects().timer_game_time(),
+                    Some(seconds as f64),
+                    "the script must actually advance through the requested opening interval"
+                );
+            }
+        }
+        (app, expected_carryover)
+    }
+
+    #[test]
+    #[ignore = "requires selected Human02 and a private clone of its earned Human03 cache"]
+    fn selected_human02_continue_through_interlude_restores_human03() {
+        use pcx_script::ast::{Expr, Literal, Stmt};
+        let (mut app, expected) = check_selected_continue(0, true);
+        let expected =
+            expected.expect("earned Human03 cache must exist; fallback is not carryover");
+        let (interlude, next) = {
+            let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+            let context = session.context().unwrap();
+            assert!(context.sources.map.source.ends_with("Human02Interlude.w3m"));
+            let body = context
+                .scripts
+                .program()
+                .function("Trig_VICTORY_Actions")
+                .unwrap()
+                .body
+                .as_ref()
+                .unwrap();
+            let next = body
+                .iter()
+                .find_map(|statement| match statement {
+                    Stmt::Call { callee, args, .. } if callee.name == "SetNextLevelBJ" => {
+                        match &args[0] {
+                            Expr::Literal(Literal::Str(value), _) => Some(value.decoded()),
+                            _ => panic!("authored next chapter must be a string"),
+                        }
+                    }
+                    _ => None,
+                })
+                .expect("interlude authored next map");
+            (Arc::clone(context), next)
+        };
+        println!("actual interlude published; source next={next}");
+        // Bound canonical work, not cinematic wall duration; normal authored ending is required.
+        for _ in 0..4096 {
+            app.world_mut()
+                .resource_scope(|world, mut runtime: Mut<CampaignRuntime>| {
+                    let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
+                    runtime.paused = false;
+                    let result = runtime.advance_ticks(&mut session, 8);
+                    runtime.paused = true;
+                    result.unwrap_or_else(|error| {
+                        panic!("interlude tick {}: {error}", runtime.tick())
+                    });
+                });
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<CampaignTransition>()
+                    .last_error
+                    .is_none(),
+                "transition: {:?}",
+                app.world().resource::<CampaignTransition>().last_error
+            );
+            assert!(
+                app.world()
+                    .resource::<CampaignStartup>()
+                    .last_error
+                    .is_none(),
+                "startup: {:?}",
+                app.world().resource::<CampaignStartup>().last_error
+            );
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let context = session.context().unwrap();
+            if Arc::ptr_eq(context, &interlude) {
+                continue;
+            }
+            assert_eq!(context.sources.map.source, next);
             let Some(Value::Handle(restored)) = session.global("bj_lastLoadedUnit") else {
-                panic!("next chapter did not restore a cached unit")
+                panic!("Human03 did not restore the earned hero")
             };
             assert_eq!(session.global("udg_Arthas"), Some(Value::Handle(restored)));
             let objects = session.host().unwrap().objects_mut();
             assert!(objects.executed_unit(restored).unwrap().cached);
             let actual = carryover(objects, restored);
             assert_eq!(actual, expected);
-            println!("actual chapter carryover verified: {actual:?}");
+            println!("actual Human03 published and earned carryover verified: {actual:?}");
+            return;
         }
-        for tick in 1..=seconds * 64 {
-            let at = tick as f64 / 64.0;
-            pcx_play::campaign_host::advance_tick(&mut session, at, 65536)
-                .unwrap_or_else(|error| panic!("next chapter at {at:.6}s: {error}"));
-        }
-        if seconds > 0 {
-            assert_eq!(
-                session.host().unwrap().objects().timer_game_time(),
-                Some(seconds as f64),
-                "the script must actually advance through the requested opening interval"
-            );
-        }
+        let runtime = app.world().resource::<CampaignRuntime>();
+        let diagnostic = (runtime.tick(), format!("{:?}", runtime.last_error));
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        panic!(
+            "interlude bounded work exhausted: tick={} runtime={} clock={:?} next={:?}",
+            diagnostic.0,
+            diagnostic.1,
+            session.host().unwrap().objects().timer_game_time(),
+            session.global("bj_changeLevelMapName")
+        );
     }
+
     #[derive(Debug, PartialEq)]
     struct Carryover {
         rawcode: [u8; 4],

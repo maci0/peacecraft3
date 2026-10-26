@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-blp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "jpeg-decoder",
  "pcx-mpq",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "flate2",
  "implode",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sim"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "pcx-map",
  "pcx-objects",
@@ -138,14 +138,14 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pcx-tga"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "thiserror",
 ]

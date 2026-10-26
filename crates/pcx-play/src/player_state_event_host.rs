@@ -208,10 +208,27 @@ impl ObjectHost {
         self.begin_next_synchronous_event().map(Some)
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_synchronous_frame_limit(&mut self) {
+        for _ in self.synchronous_frames.len()..pcx_script::eval::MAX_CALL_DEPTH as usize {
+            self.synchronous_frames.push(SynchronousFrame {
+                result: Value::Null,
+                events: Default::default(),
+                active: false,
+                spawn_depth: 0,
+                callback_depth: 0,
+                conditions: None,
+            });
+        }
+    }
+
     pub(crate) fn abort_synchronous_delivery(&mut self) {
         while let Some(frame) = self.synchronous_frames.pop() {
             if frame.active {
                 self.finish_fired_event();
+            }
+            for event in frame.events {
+                self.settle_autocast_event(event.subject.autocast);
             }
         }
     }

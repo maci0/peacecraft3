@@ -2819,3 +2819,219 @@ fn campaign_targeting_harvesting_is_not_the_spell_channel_band() {
         Some(ordinary)
     );
 }
+
+#[test]
+fn gold_hidden_world_keeps_accepted_mine_and_depot_across_multiple_cycles() {
+    let (mut vm, worker, depot, mine) = gold_fixture();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    let gathered = player_bank(&mut vm, "PLAYER_STATE_GOLD_GATHERED");
+    start_gold(&mut vm, worker, mine);
+    let mut n = 0;
+    while !hidden(&mut vm, worker) {
+        n += 1;
+        tick(&mut vm, f64::from(n) / 10.0);
+        assert!(n < 100);
+    }
+    for unit in [mine, depot, worker] {
+        vm.host()
+            .inner
+            .native("ShowUnit", &[Value::Handle(unit), Value::Bool(false)])
+            .unwrap();
+    }
+    let mut revealed_with_cargo = false;
+    for step in n + 1..=300 {
+        tick(&mut vm, f64::from(step) / 10.0);
+        assert!(hidden(&mut vm, mine) && hidden(&mut vm, depot));
+        revealed_with_cargo |= !hidden(&mut vm, worker) && gold_amount(&mut vm, mine) < 500;
+        if player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD") >= bank + 60 {
+            break;
+        }
+    }
+    assert!(
+        revealed_with_cargo,
+        "mining exit reveals the explicitly hidden occupant"
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank + 60
+    );
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_GOLD_GATHERED"),
+        gathered + 60
+    );
+    assert_eq!(gold_amount(&mut vm, mine), 440);
+    for unit in [mine, depot] {
+        vm.host()
+            .inner
+            .native("ShowUnit", &[Value::Handle(unit), Value::Bool(true)])
+            .unwrap();
+    }
+    assert!(!hidden(&mut vm, mine) && !hidden(&mut vm, depot));
+    assert_eq!(
+        player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank + 60
+    );
+}
+
+#[test]
+fn gold_hidden_replacement_depot_is_not_newly_acquired_and_exit_is_atomic() {
+    for changed in 0..2 {
+        let (mut vm, worker, depot, mine) = gold_fixture();
+        let replacement = create_unit(&mut vm, *b"htow", 96.0, 96.0);
+        gold_role(&mut vm, replacement, "Argl", true, None);
+        vm.host()
+            .inner
+            .native(
+                "ShowUnit",
+                &[Value::Handle(replacement), Value::Bool(false)],
+            )
+            .unwrap();
+        start_gold(&mut vm, worker, mine);
+        let mut n = 0;
+        while !hidden(&mut vm, worker) {
+            n += 1;
+            tick(&mut vm, f64::from(n) / 10.0);
+            assert!(n < 100);
+        }
+        match changed {
+            0 => remove_unit(&mut vm, depot),
+            1 => {
+                let owner = vm.host().inner.native("Player", &[Value::Int(1)]).unwrap();
+                vm.host()
+                    .inner
+                    .native(
+                        "SetUnitOwner",
+                        &[Value::Handle(depot), owner, Value::Bool(false)],
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+        let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+        let error = (n + 1..=240)
+            .find_map(|step| advance(&mut vm, f64::from(step) / 10.0, 65536).err())
+            .expect("hidden replacement is not acquisition eligible");
+        assert!(
+            error
+                .to_string()
+                .contains("no gold-accepting depot at mine exit")
+        );
+        let after = vm.host().inner.executed_unit(worker).unwrap();
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.shown, before.shown);
+        assert_eq!(after.activity, before.activity);
+        assert_eq!(gold_amount(&mut vm, mine), 500);
+        assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+    }
+}
+
+#[test]
+fn gold_removed_occupied_mine_refuses_with_identity_without_exit_or_credit() {
+    let (mut vm, worker, _depot, mine) = gold_fixture();
+    start_gold(&mut vm, worker, mine);
+    let mut n = 0;
+    while !hidden(&mut vm, worker) {
+        n += 1;
+        tick(&mut vm, f64::from(n) / 10.0);
+        assert!(n < 100);
+    }
+    let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    remove_unit(&mut vm, mine);
+    let error = (n + 1..=240)
+        .find_map(|step| advance(&mut vm, f64::from(step) / 10.0, 65536).err())
+        .expect("removed occupied mine remains unsupported")
+        .to_string();
+    assert!(error.contains("occupied mine removal is not qualified"));
+    assert!(error.contains(&format!("worker {worker:?}, mine {mine:?}")));
+    let after = vm.host().inner.executed_unit(worker).unwrap();
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.shown, before.shown);
+    assert_eq!(after.activity, before.activity);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+}
+
+#[test]
+fn gold_dead_occupied_mine_refuses_with_identity_without_debit_or_reveal() {
+    use super::super::combat;
+    let mut fields = combat::armed("80", "normal");
+    fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W001")
+        .unwrap()
+        .1
+        .value = Ok(pcx_sim::world::FieldValue::Cell("0".into()));
+    fields.extend(harvest_fields().into_iter().filter(|(_, value)| {
+        value.metadata.as_ref().is_some_and(|meta| {
+            !matches!(
+                meta.source,
+                pcx_objects::editor::FieldSource::Column {
+                    slk: SlkId::UnitWeapons,
+                    ..
+                }
+            )
+        })
+    }));
+    let declarations = combat::DECLARATIONS.replace(
+        "native IssueTargetOrder takes unit u, string o, widget t returns boolean\n",
+        "",
+    );
+    let map = "globals\ninteger MineDeaths=0\nunit ObservedMine=null\nendglobals\nfunction mine_death takes nothing returns nothing\nset MineDeaths=MineDeaths+1\nset ObservedMine=GetDyingUnit()\nendfunction\n";
+    let map = format!("{}\n{map}", MAP.replace("'U001'", "'u001'"));
+    let (mut vm, _) = open_harvest_configured(
+        harvest_tables_for_range("9", "20", "4", "20"),
+        tree_catalog(),
+        placed_tree(),
+        fields,
+        crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
+        (&declarations, &map),
+        |host| {
+            let mut host = host
+                .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
+                .unwrap()
+                .with_player_unit_events(8)
+                .unwrap();
+            host.admit_unit_vitals(pcx_objects::editor::misc::HeroVitals {
+                life_per_strength: 25.0,
+                mana_per_intelligence: 15.0,
+                life_regen_per_strength: 0.0,
+                mana_regen_per_intelligence: 0.0,
+            })
+            .unwrap();
+            host.admit_combat(combat::rules(), "alpha").unwrap();
+            host
+        },
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let depot = create_unit(&mut vm, *b"htow", 32.0, 96.0);
+    let mine = create_unit(&mut vm, *b"ngol", 96.0, 32.0);
+    gold_role(&mut vm, worker, "Ahar", false, None);
+    gold_role(&mut vm, depot, "Argl", true, None);
+    gold_role(&mut vm, mine, "Agld", true, Some(500));
+    start_gold(&mut vm, worker, mine);
+    let mut n = 0;
+    while !hidden(&mut vm, worker) {
+        n += 1;
+        tick(&mut vm, f64::from(n) / 10.0);
+        assert!(n < 100);
+    }
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(mine)])
+        .unwrap();
+    let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+    let bank = player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD");
+    let error = (n + 1..=240)
+        .find_map(|step| advance(&mut vm, f64::from(step) / 10.0, 65536).err())
+        .expect("dead occupied mine remains unsupported")
+        .to_string();
+    assert!(error.contains("occupied mine death is not qualified"));
+    assert!(error.contains(&format!("worker {worker:?}, mine {mine:?}")));
+    assert_eq!(gold_amount(&mut vm, mine), 500);
+    let after = vm.host().inner.executed_unit(worker).unwrap();
+    assert_eq!(after.shown, before.shown);
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.activity, before.activity);
+    assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
+}

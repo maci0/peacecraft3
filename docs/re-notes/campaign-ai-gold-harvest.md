@@ -133,3 +133,55 @@ The unchanged Human02 opening-minute test now passes `HarvestGold` and refuses
 `HarvestWood` at 8.312500 seconds. Its complete failure is retained in
 `.scratch/harvest-gold/consumer-final-gates-r3/frontier.log`; no chapter-completion
 claim follows from this advance.
+
+## Hidden accepted mine and depot continuation (2026-10-26)
+
+The short Human02 outro diagnostic stopped at host clock 3.640625 because the
+occupied-mine exit treated `shown == false` as removal/death. Its source action
+hid the playable-rectangle units; those canonical records remained alive. This
+was an authored-scene diagnostic, not mission victory evidence.
+
+The first local hide probe never reached occupancy: it transplanted Human02
+positions into different terrain. Its 245 raw records and timeout refusal remain
+under `.scratch/gold-world-hide-probe/arm-a/`; they establish no hide behavior.
+Corrected arms preserve the exact full map, destructables, player-nine setup and
+acknowledged `HarvestGold(0,1)` from the earlier successful gold probe. The
+selected executable is the same pinned Legacy image identified above; launch
+used `-classic`. These are stopped, isolated and muted original-client runs.
+
+Arm B observed actual mine occupancy before calling public `ShowUnit(false)` on
+the mine, depot and worker. At logical 2.750 the worker emerged, its return order
+was active and the mine had lost cargo while both structures were still hidden.
+The structures were restored at 3.750; this arm alone did not qualify depositing
+into a hidden depot. Arm B2 changes only the diagnostic hide window to fifteen
+seconds. Before restoration at 16.750, both structures were still hidden, mine
+resources had fallen from 20,000 to 19,980, and bank/gathered gold had increased
+from zero to twenty. The worker was visible again with a harvest order. Thus
+accepted mining, exit/reveal, return, credit and another cycle continued while
+the accepted mine and depot were hidden, despite the explicit worker hide.
+These sampled amounts and times are observations, not production rule constants.
+
+B and B2 collectors accepted respectively 83 and 135 strict records. Map hashes
+are `cafdb9f01d7d0b898195f6cf1fd9e4efa62a6ac1ed132b68196d48ce3da30fb5`
+and `1e79a89dc08c6bf286d62c0860cdb16500f79288a3221548ba1e836e0087cc6a`.
+Raw captures, source-table provenance, member round trips and results remain
+local in `.scratch/gold-world-hide-probe/`. The fifteen-second window belongs
+only to the diagnostic controller.
+
+The runtime now distinguishes retained accepted relationships from acquisition.
+A live occupied mine can exit while hidden, and the existing gold task can
+return to and deposit into its retained hidden, live, owned gold-accepting depot.
+Subsequent cycles keep that task's accepted live mine. New mine/depot selection
+still excludes hidden candidates. Ownership, life, resource and capability checks
+remain; there is no new resource store, suspension rule, automatic credit or
+visibility override marker. Removed/dead occupied mines still refuse before
+exit or debit, with both worker and mine identities in the error. External
+occupied-mine destruction remains unqualified, as do independent hide ownership
+outside the observed occupied phase and other resource/race-specific behavior.
+
+Synthetic regressions use nonstock cargo and mining duration to exercise repeated
+hidden-world deposits, explicit worker reveal, restoration without duplicate
+credit, hidden replacement exclusion after depot removal/owner transfer, and
+atomic removed/dead occupied-mine refusals. Existing new-acquisition and
+capability-refusal tests remain in the focused gold suite. Parser/synthetic
+checks do not establish rendered parity or completion of the full chapter.

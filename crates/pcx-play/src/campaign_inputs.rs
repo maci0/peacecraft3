@@ -447,6 +447,9 @@ pub fn prepare(
         camera_origin,
         progression,
     )?;
+    source.hero = source
+        .hero
+        .with_autocast(crate::autocast_rules::Rules::read(image, client.clone()));
     source.hero = source.hero.with_mirror_image(
         crate::mirror_image_rules::Rules::read(image, client.clone())
             .and_then(|rules| rules.with_random(&source.random)),

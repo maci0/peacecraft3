@@ -204,4 +204,5 @@ pub mod campaign_production_rules;
 
 pub mod campaign_assault_policy;
 
+pub mod autocast_rules;
 pub mod mirror_image_rules;

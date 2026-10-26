@@ -382,6 +382,11 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
+            && let Some(abilities) = &mut record.abilities
+        {
+            abilities.clear_autocast_order();
+        }
         self.cancel_mirror_cast(unit);
         self.campaign_ai.clear_captain_route(unit);
         self.forget_campaign_flee(unit);

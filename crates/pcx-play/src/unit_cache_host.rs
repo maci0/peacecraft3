@@ -106,6 +106,12 @@ impl ObjectHost {
             .abilities
             .as_ref()
             .ok_or("unit-cache abilities not admitted")?;
+        if abilities.autocast_modified() {
+            return Err(format!(
+                "unit cache does not encode altered autocast state: {:?} from {:?}",
+                record.definition.rawcode, record.source
+            ));
+        }
         let vitals = record.vitals.ok_or("unit-cache vitals not admitted")?;
         if record.combat.as_ref().is_some_and(|c| c.dead) {
             return Err("cannot cache a dead unit".into());

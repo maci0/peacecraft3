@@ -21,20 +21,28 @@ No Blizzard assets are committed. The game reads them from your own install at r
 
 ## Screenshots
 
-Captured from PeaceCraft III's Bevy renderer on 25 October 2026 using locally
+Captured from PeaceCraft III's Bevy renderer on 26 October 2026 using locally
 supplied game assets. Rendering and gameplay remain in progress.
 
 **Main menu**
 
 ![PeaceCraft III rendering the Reign of Chaos main menu](docs/screenshots/main-menu.png)
 
-**Campaign scene and selected-unit HUD**
+**Campaign and chapter selection**
 
-![PeaceCraft III rendering a campaign scene with Thrall selected](docs/screenshots/campaign.png)
+![PeaceCraft III campaign and chapter selection](docs/screenshots/chapter-selection.png)
+
+**Campaign world and command card**
+
+![PeaceCraft III rendering the Prologue02 campaign world and command card](docs/screenshots/campaign.png)
+
+[Capture details and known rendering limits](docs/screenshots/README.md).
 
 ## Status
 
-Reverse-engineering harness is live. See [TRACKER.md](TRACKER.md) for current state.
+Human01 and Human02 have reached authored Victory in local scripted gameplay runs.
+The remaining campaign, interlude continuation and complete rendering fidelity are
+still in progress. See [TRACKER.md](TRACKER.md) for the current scope.
 
 ```
 wc3/game/app/game.dll    71 810 procedures / 17 207 strings   (REA + Ghidra 12.1.3)

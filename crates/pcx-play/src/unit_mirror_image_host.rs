@@ -139,6 +139,11 @@ impl ObjectHost {
         if abilities.hero.is_none() || abilities.level(ability) <= 0 {
             return Err(fail("image snapshot requires the learned hero ability"));
         }
+        if abilities.autocast_modified() {
+            return Err(fail(
+                "image snapshot of altered autocast state is not qualified",
+            ));
+        }
         if !abilities.cooldowns().is_empty() {
             return Err(fail(
                 "image snapshot of custom cooldown overrides is not qualified",

@@ -800,6 +800,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_synchronous_autocast_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_mirror_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -1064,6 +1070,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.combat_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.autocast_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.activity_native(name, args) {

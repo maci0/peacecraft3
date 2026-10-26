@@ -349,14 +349,18 @@ impl ObjectHost {
                 Failure::UnitActivity("activity not initialized".into()),
             )
         })?;
-        Ok(self
-            .construction_current_order(unit)?
-            .or_else(|| self.mirror_current_order(unit))
-            .or_else(|| self.summon_current_order(unit))
-            .or_else(|| self.inventory_order(unit))
-            .or_else(|| activity.patrol.map(|_| state.rules.patrol))
-            .or_else(|| activity.follow.map(|_| state.rules.movement))
-            .or_else(|| self.combat_attack_order(unit))
+        Ok(record
+            .abilities
+            .as_ref()
+            .and_then(|a| a.autocast_current_order())
+            .or(self
+                .construction_current_order(unit)?
+                .or_else(|| self.mirror_current_order(unit))
+                .or_else(|| self.summon_current_order(unit))
+                .or_else(|| self.inventory_order(unit))
+                .or_else(|| activity.patrol.map(|_| state.rules.patrol))
+                .or_else(|| activity.follow.map(|_| state.rules.movement))
+                .or_else(|| self.combat_attack_order(unit)))
             .unwrap_or(if activity.moving() {
                 state.rules.movement
             } else {

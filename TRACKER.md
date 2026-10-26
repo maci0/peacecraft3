@@ -1,5 +1,18 @@
 # PeaceCraft3 — Tracker
 
+- [x] Release 0.6.0: Human01 and Human02 earned Victory verified at pinned
+  gameplay snapshots; construction controls, campaign AI, Mirror Image,
+  leaderboard and hidden-unit lifecycles, and source-qualified autocast OFF
+  handling are integrated. The frozen release workspace passes 4,507 tests,
+  with zero failures and 268 explicit ignores. Doc tests, strict native/WASM
+  checks, both application builds, packaging self-tests, 73 reference-tool tests
+  and the performance-tool locked check pass. Fresh offscreen renderer captures
+  show the main menu, chapter selection and campaign control. The capture
+  diagnostic stops at this chapter's missing visible-ground-item precondition;
+  it is not a full rendering pass. Autocast ON/effects, interlude continuation,
+  later campaign chapters and rendered parity remain open. No original assets
+  or desktop binaries are included in the source release.
+
 - [x] Release 0.5.0: integrated the pending campaign/runtime, HUD, renderer and
   reference-tooling work and removed the repository OpenCode configuration.
   Final isolated/muted workspace run: 4,343 passed, 0 failed, 246 explicitly

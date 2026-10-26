@@ -10,7 +10,7 @@ Track each item separately through bounded parsing, canonical runtime integratio
 
 | Area | Existing implementation / evidence | Remaining completion gate |
 |---|---|---|
-| Current campaign frontier | Human01 authored victory repeated; Human02 base, combat and cinematic slices run through production paths | Finish Human02 outro and verify earned player Victory, real continuation and carryover; then remaining Human chapters/interludes, other campaigns and community maps |
+| Current campaign frontier | Human01 authored victory repeated; Human02 earned base, boss defeat and player Victory passed at tick 72769 / simulation time 1137.015625 with six surviving footmen | Verify real Human02 continuation through its interlude and Human03 carryover; then remaining Human chapters/interludes, other campaigns and community maps |
 | Archives and install/import | MPQ/CASC and installer/import modules exist; archive evidence and bounds retained | Inventory unsupported codec/version/patch/locale/corruption cases against current code; test actual native/browser import and mount precedence |
 | Map containers and world data | Map info, terrain, placements, pathing, regions, cameras, sounds, shadows and minimap modules exist | Version/variant census plus runtime consumers for every required map member; unchanged custom-map acceptance |
 | Object edits and metadata | Current ObjectFile parser accepts all seven w3u/w3t/w3a/w3b/w3d/w3h/w3q families for supported v1/v2 layouts | Verify field/metadata/overlay semantics and runtime behavior per family; older PLAN census/refusal wording is historical, not current parser capability |
@@ -33,3 +33,22 @@ The active tracked inventory task lives in the existing local campaign Taskwarri
 Human02 has not yet been verified won in the recreation. The support route reached the boss/outro boundary; a harness assertion incorrectly treated authored-hidden units as absent. The short outro confirms hidden-live identity and currently exposes hidden-world gold-harvest continuation. Original probes establish mining exit and retained hidden-depot travel; deposit-while-hidden is under measurement. Original-client Human02 victory is separate evidence and does not close recreation completion.
 
 See [external references](re-notes/external-engine-references.md) for the pinned inspiration-only index. Existing historical tracker entries retain their original slice results; do not infer that every older frontier is still active.
+
+## Source-audited next format gaps (2026-10-26)
+
+Campaign continuation must distinguish mission and interlude startup. The current `campaign_human_route::continue_campaign` helper assumes a newly restored Arthas and a score continuation, which is qualified for Human01→Human02 only. The supplied Human02Interlude script has no cache restore/store calls; its victory action at lines 1689–1690 selects Human03 with both victory dialog/scores flags false. Reuse the production transition lifecycle, but assert hero restoration and score controls only where the authored chapter requests them. This source audit does not verify interlude execution or Human03 carryover.
+
+The carryover acceptance must also cover multiple heroes. Human03's `Trig_Load_Heroes_Actions` restores Arthas from the Human03 cache entry and otherwise creates a fallback hero; an earned-chain check must distinguish those paths. Its next-level preparation stores both Arthas and Jaina for Human04, whose loader restores each separately. A successful Arthas-only comparison cannot establish that later transition's complete carryover. Derive hero entries from the authored cache calls and compare every restored persistent snapshot; do not count fallback creation as a restored campaign state.
+
+These are concrete remaining surfaces identified in the current source, not an exhaustive inventory. An explicit unsupported diagnostic is a safe boundary, not evidence that every input reaching it should be accepted.
+
+| Surface | Current source evidence | Next implementation acceptance |
+|---|---|---|
+| Editor-generated control flow | `pcx-trig/src/lower.rs` has an `EDITOR_EXPANDED` refusal set for multiple-action Boolean/loop/group/force/custom-script constructs; initially-off custom text and custom-text run-on-init are separately refused | Lower each construct from selected TriggerData/BJ/editor output, preserve callbacks and variable scoping, compare generated semantics and unchanged GUI maps |
+| W3G actions and startup | `pcx-net/src/w3g_action.rs` admits the qualified game-version29/build6060 layout and refuses other actions at their exact byte; object pairs remain unresolved file identities | Qualify additional action/version layouts with locally owned captures; map slots and object IDs explicitly; replay through reconstructed production startup and exact command phases, not the separate simulation harness |
+| Archive compression combinations | `pcx-mpq/src/payload.rs` has bounded codec-mask checks and explicit LZMA/BZIP2/other-chain refusals; sparse and sparse+zlib have dedicated paths | Audit each source-qualified codec/chain with synthetic bounded data, exact output checks and malformed-input refusal before broadening acceptance; preserve imported-table provenance |
+| Object-family runtime semantics | `pcx-objects/src/lib.rs` currently accepts all seven named object extensions for v1/v2, with indexed records selected by family/version | Audit map overrides, metadata interpretation and canonical consumers per family; do not add a second parser merely because an older census said a family was unmeasured |
+
+The trigger-lowering module's introductory comment is less current than its implementation: custom text already has a path, with specific restrictions. Any change must inspect actual branches and callers rather than treating the whole feature as absent. Similarly, archive rejection variants include malformed-input protections, not only missing codecs.
+
+The campaign test remains the immediate runtime priority. These independent format gaps can be selected at a coordinated source/build boundary; no extra implementation or Cargo job is started while the full mission inputs are frozen.

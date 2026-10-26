@@ -175,3 +175,58 @@ states, blocked-route outcomes, ownership-return/post reuse, and exact arrival
 extent/polling remain fidelity questions. The implementation reuses the house
 point-routing path rather than fitting the observed settled coordinates. Human02
 and the full game goal remain under end-to-end acceptance testing.
+
+## Explicit return while hidden (2026-10-26)
+
+The short authored Human02 outro diagnostic reached `ReturnGuardPosts` at host
+7.115625008940697 and refused a canonical live `ohun` guard. Diagnostic context
+identified AI player zero, unit 2326, home `[-1374.75,1910.25]`, zero current order,
+shown false, and no cached, summoned, admitted-order, pause or effect-history
+state. Combat was admitted. Only the hidden-state restriction caused the
+refusal. This direct-scene run is not earned mission-victory evidence.
+
+A stopped, isolated and muted original-client probe reuses the exact full map,
+source grunt/barracks/fortress setup and acknowledged AI return path from the
+qualified ordinary-guard probe above. It retains the diagnostic +256 X
+displacement. The map hides the displaced idle guard before the first explicit
+return request, samples while it remains hidden, shows it without another order,
+and later requests a visible return as a control. An independent non-AI peasant
+retains its identity, owner, life, visibility, order and position.
+
+All 113 strict records were accepted. The guard was hidden at logical 5.563
+with position `[-857,1790]`; the return request at 6.063 was acknowledged. Before
+show at 10.063 it was still hidden, had moved to `[-1099.554,1789.905]` near its
+source home `[-1113,1790]`, and had settled to zero order. Thus this ordinary
+guard's explicit return causes actual motion while hidden, rather than being
+ignored or deferred until shown. Those coordinates/times remain diagnostic
+observations, not production arrival or scheduling constants. The actual outro
+guard is a headhunter; the original probe retains the previously qualified
+grunt to isolate the hidden-state variable. No universal class-specific or
+paused-return claim follows from it.
+
+The map SHA-256 is
+`068901f05d84b68e9e8e6d7a94d01e120901b56f9b7995bf1cb61206e67bc807`.
+Raw records, source/build/round-trip receipts, stopped capture receipt and result
+remain ignored/local under `.scratch/hidden-guard-return-probe/arm-a/`.
+
+The canonical return handler now allows an otherwise eligible hidden guard to
+receive its existing point route. Shared route/motion already supports hidden
+stamps: `candidate` preserves the excluded stamp's `active` value, so motion
+updates its position without republishing collision cells. No placement or
+activity-engine change is needed. A later authored show uses ordinary reveal
+placement. There is no new hidden-motion switch, guard store, automatic order
+for idle hidden units or visibility/acquisition relaxation. Existing work bounds
+and active manual-order exclusions remain. Pause and other unsupported states
+still refuse atomically with exact unit/player/home/state context. Native return
+arrival extent/polling and unsupported-state semantics retain the earlier
+explicit fidelity limits.
+
+Synthetic integration controls cover hidden motion followed by reveal both
+mid-route and after arrival, visible collision versus hidden nonoccupancy,
+unchanged non-guard public state, and idle hidden units without an explicit
+return request. Additional lifecycle controls retain pause refusal/unpause
+retry, accepted manual movement after reveal, and post retirement on death,
+removal and transfer. Existing placement hidden-stamp tests and return-work
+refusal tests remain unchanged. Internal combat observation fields can update
+on an unrelated control during projection; the control assertion therefore
+compares its public position, owner, shown state, life and order.
