@@ -20,6 +20,7 @@ pub struct Rules {
     pub(crate) catalog: defaults::Identity,
     origin: AssetIdentity,
     maximum: Vec<(i32, i32)>,
+    classes: Result<Vec<(i32, String)>, String>,
     pub(crate) initial: i32,
     threshold: u32,
 }
@@ -68,6 +69,7 @@ impl Rules {
             Ok(Self {
                 catalog: tables.identity().clone(),
                 origin: origin.clone(),
+                classes: read_classes(tables, overlay, &maximum),
                 maximum,
                 initial: 0,
                 threshold,
@@ -84,6 +86,13 @@ impl Rules {
             .binary_search_by_key(&techid, |entry| entry.0)
             .ok()
             .map(|at| self.maximum[at].1)
+    }
+    pub(crate) fn class(&self, techid: i32) -> Result<&str, String> {
+        let classes = self.classes.as_ref().map_err(Clone::clone)?;
+        let at = classes
+            .binary_search_by_key(&techid, |entry| entry.0)
+            .map_err(|_| format!("upgrade presentation: unknown identifier {techid}"))?;
+        Ok(&classes[at].1)
     }
     pub(crate) fn researched(&self, level: i32) -> bool {
         level as u32 >= self.threshold
@@ -106,6 +115,63 @@ impl Rules {
             }
         })
     }
+}
+
+// Presentation failures must not invalidate otherwise valid research counters.
+fn read_classes(
+    tables: &DefaultTables,
+    overlay: &Overlay,
+    maximum: &[(i32, i32)],
+) -> Result<Vec<(i32, String)>, String> {
+    let mut fields = tables.editor().fields().iter().filter(|f| {
+        f.from == SlkId::UpgradeMetaData
+            && matches!(&f.source,
+            FieldSource::Column { slk: SlkId::UpgradeData, column } if column == "class")
+    });
+    let field = fields
+        .next()
+        .ok_or("upgrade presentation: missing class metadata")?;
+    if fields.next().is_some() || field.kind != FieldKind::Token || field.index != -1 {
+        return Err("upgrade presentation: ambiguous or unsupported class metadata".into());
+    }
+    maximum
+        .iter()
+        .map(|&(id, _)| {
+            let bytes = id.to_be_bytes();
+            let alias = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+            let (base, mods) = overlay
+                .new_object(alias)
+                .unwrap_or((alias, overlay.on(alias)));
+            let value = if let Some(edit) = mods.iter().rev().find(|m| m.field == field.fourcc) {
+                if edit.selectors.is_some_and(|s| s != [0, 0])
+                    || edit.value_type != pcx_objects::ValueType::Str
+                {
+                    return Err(format!("{alias}: unsupported upgrade class edit"));
+                }
+                let pcx_objects::Value::Str(bytes) = &edit.value else {
+                    return Err(format!("{alias}: nonstring upgrade class"));
+                };
+                std::str::from_utf8(bytes)
+                    .map_err(|e| e.to_string())?
+                    .to_string()
+            } else {
+                let object = tables
+                    .object(Family::Upgrade, base)
+                    .map_err(|e| e.to_string())?;
+                let cell = object
+                    .cell(SlkId::UpgradeData, "class")
+                    .map_err(|e| e.to_string())?;
+                if cell.parse_error.is_some() {
+                    return Err(format!("{alias}: malformed upgrade class"));
+                }
+                cell.text.to_string()
+            };
+            if value.len() > 4096 || value.contains('\0') {
+                return Err(format!("{alias}: invalid upgrade class"));
+            }
+            Ok((id, value))
+        })
+        .collect()
 }
 
 fn read_maximum(
@@ -227,6 +293,7 @@ pub fn fixture(catalog: &AssetIdentity) -> Rules {
             edition: "synthetic".into(),
             version: "synthetic".into(),
         },
+        classes: Err("synthetic research fixture has no presentation classes".into()),
         maximum: vec![(-37, 2), (5, 4), (i32::from_be_bytes(*b"Qtec"), 1)],
         initial: 0,
         threshold: 1,
@@ -260,14 +327,63 @@ mod tests {
         text.push_str("E\r\n");
         text.into_bytes()
     }
+    #[test]
+    fn presentation_classes_keep_stock_custom_and_last_map_override() {
+        let tables = tables(false);
+        let mut overlay = Overlay::default();
+        let edit = |value: &str| pcx_objects::Mod {
+            field: *b"QCLS",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: None,
+            value: pcx_objects::Value::Str(value.as_bytes().to_vec()),
+            end_word: 0,
+        };
+        overlay
+            .mods
+            .insert("R001".into(), vec![edit("old"), edit("new")]);
+        overlay
+            .custom
+            .insert("Z903".into(), ("R001".into(), vec![edit("CustomGuard")]));
+        let ids = [
+            (i32::from_be_bytes(*b"R001"), 2),
+            (i32::from_be_bytes(*b"R002"), 0),
+            (i32::from_be_bytes(*b"Z903"), 2),
+        ];
+        let classes = read_classes(&tables, &overlay, &ids).unwrap();
+        assert_eq!(
+            classes
+                .iter()
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "_", "CustomGuard"]
+        );
+        overlay.mods.get_mut("R001").unwrap()[1].selectors = Some([9, 1]);
+        assert!(read_classes(&tables, &overlay, &ids).is_err());
+        // Class presentation is independent of the counter's valid maximum data.
+        assert!(
+            read_maximum(
+                &tables,
+                &overlay,
+                &NoUnits,
+                Budget {
+                    upgrades: 8,
+                    modifications_per_upgrade: 8
+                }
+            )
+            .is_ok()
+        );
+    }
     fn tables(unit_collision: bool) -> DefaultTables {
         let data = table(
-            &["upgradeid", "maxlevel"],
-            &[&["R001", "2"], &["R002", "0"]],
+            &["upgradeid", "maxlevel", "class"],
+            &[&["R001", "2", "SyntheticProtection"], &["R002", "0", "_"]],
         );
         let meta = table(
             &["ID", "field", "slk", "type", "index", "category"],
-            &[&["QMAX", "maxlevel", "UpgradeData", "int", "-1", "tech"]],
+            &[
+                &["QMAX", "maxlevel", "UpgradeData", "int", "-1", "tech"],
+                &["QCLS", "class", "UpgradeData", "token", "-1", "tech"],
+            ],
         );
         let units = table(&["unitID"], if unit_collision { &[&["R001"]] } else { &[] });
         DefaultTables::from_bytes(

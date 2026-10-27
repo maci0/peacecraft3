@@ -808,6 +808,20 @@ fn hero_xp_thresholds_positive_set_and_suspension_share_real_level_state() {
     vm.call("setup", &[]).unwrap();
     let hero = vm.global("H");
     let ordinary = vm.global("N");
+    let Value::Handle(hero_id) = hero else {
+        panic!("hero handle")
+    };
+    let Value::Handle(ordinary_id) = ordinary else {
+        panic!("unit handle")
+    };
+    assert_eq!(
+        vm.host().inner.hero_experience_range(hero_id).unwrap(),
+        Some([0, 0, 17])
+    );
+    assert_eq!(
+        vm.host().inner.hero_experience_range(ordinary_id).unwrap(),
+        None
+    );
     assert_eq!(query(&mut vm, "GetHeroXP", None), 0);
     assert_eq!(
         vm.host().inner.native("GetHeroXP", &[ordinary]).unwrap(),
@@ -828,6 +842,10 @@ fn hero_xp_thresholds_positive_set_and_suspension_share_real_level_state() {
     call(&mut vm, "AddHeroXP", 21);
     assert_eq!(query(&mut vm, "GetHeroXP", None), 38);
     assert_eq!(query(&mut vm, "GetHeroLevel", None), 3);
+    assert_eq!(
+        vm.host().inner.hero_experience_range(hero_id).unwrap(),
+        Some([38, 38, 66])
+    );
     vm.host()
         .inner
         .native("SuspendHeroXP", &[hero.clone(), Value::Bool(true)])
@@ -850,6 +868,24 @@ fn hero_xp_thresholds_positive_set_and_suspension_share_real_level_state() {
     }
     raise(&mut vm, 4);
     assert_eq!(query(&mut vm, "GetHeroXP", None), 66);
+    assert_eq!(
+        vm.host().inner.hero_experience_range(hero_id).unwrap(),
+        Some([66, 66, 101])
+    );
+    let mut without_xp = host(NATIVES, "L001", Overlay::default(), "", 8);
+    without_xp.call("setup", &[]).unwrap();
+    let Value::Handle(unadmitted) = without_xp.global("H") else {
+        panic!("hero handle")
+    };
+    assert!(
+        without_xp
+            .host()
+            .inner
+            .hero_experience_range(unadmitted)
+            .unwrap_err()
+            .to_string()
+            .contains("legacy cache")
+    );
 }
 
 fn query(

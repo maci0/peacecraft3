@@ -13,16 +13,35 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     /// Skin key naming the console parent used by the command-bar constructor.
     pub console_key: String,
+    pub active_key: String,
+    pub badge: RankBadge,
+    pub disabled_key: String,
+    disabled_format: String,
     pub columns: usize,
     pub rows: usize,
     /// Logical UI coordinates, with positive Y upwards.
     pub viewport: [f32; 2],
     /// Addressing selected by the command-button texture setter's source flags.
     pub icon_repeat: bool,
+    /// Normal gameplay world frame, relative to the logical UI viewport.
+    pub world_frame: Rect,
     frame_size: [f32; 2],
     insets: [f32; 4],
     offset: [f32; 2],
     button_size: [f32; 2],
+}
+
+/// Number overlay attached to a command button's bottom-right corner.
+#[derive(Clone, Debug)]
+pub struct RankBadge {
+    pub art_key: String,
+    pub font_key: String,
+    pub section: String,
+    pub height_key: String,
+    pub size: [f32; 2],
+    pub offset: [f32; 2],
+    pub text_offset: [f32; 2],
+    pub colour: u32,
 }
 
 impl Rules {
@@ -148,6 +167,108 @@ impl Rules {
         if console_key.chars().any(char::is_control) {
             return Err("invalid command parent skin key".into());
         }
+        fn source_text(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            pointer: u32,
+        ) -> Result<String, String> {
+            let mut bytes = Vec::new();
+            for offset in 0..4096 {
+                let address = pointer
+                    .checked_add(offset)
+                    .ok_or("command string overflow")?;
+                let value = read(address, 1, false)?;
+                let [byte] = value.as_slice() else {
+                    return Err("truncated command string".into());
+                };
+                if *byte == 0 {
+                    let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+                    if text.is_empty() || text.chars().any(char::is_control) {
+                        return Err("invalid command string".into());
+                    }
+                    return Ok(text);
+                }
+                bytes.push(*byte);
+            }
+            Err("overlong command string".into())
+        }
+        let mut source_string = |va| {
+            let pointer = word(operand(&mut read, va, &[0x68], 4)?)?;
+            source_text(&mut read, pointer)
+        };
+        let disabled_key = source_string(0x5d3eaa)?;
+        let disabled_format = source_string(0x5d3eb8)?;
+        let active_key = source_string(0x62c08c)?;
+        if source_string(0x85b6b4)? != "ADD" {
+            return Err("unsupported active command blend name".into());
+        }
+        let art_key = source_string(0x62c561)?;
+        let height_key = source_string(0x62c5cc)?;
+        let font_key = source_string(0x62c5f8)?;
+        let section_global = word(operand(&mut read, 0x62c5d1, &[0xff, 0x35], 4)?)?;
+        let section_pointer = word(read(section_global, 4, false)?)?;
+        let section = source_text(&mut read, section_pointer)?;
+        for (va, target) in [
+            (0x62c4c3_u32, 0x888120_u32),
+            (0x62c4f4, 0x873a10),
+            (0x62c507, 0x873830),
+            (0x62c51a, 0x873b40),
+            (0x62c552, 0x8864c0),
+            (0x62c578, 0x887c20),
+            (0x62c587, 0x873750),
+            (0x62c5bf, 0x886400),
+            (0x62c608, 0x887470),
+            (0x62c62d, 0x873a10),
+        ] {
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != target.wrapping_sub(va + 5) {
+                return Err("command number overlay call relation".into());
+            }
+        }
+        for (va, anchor) in [(0x62c4ef, 8), (0x62c4f2, 8), (0x62c623, 4), (0x62c62b, 4)] {
+            if operand(&mut read, va, &[0x6a], 1)? != [anchor] {
+                return Err("command number overlay anchor pair".into());
+            }
+        }
+        if u32::from(operand(&mut read, 0x62c0b8, &[0x6a], 1)?[0])
+            != word(operand(&mut read, 0x85b6c6, &[0xc7, 0x43, 0x38], 4)?)?
+        {
+            return Err("active command blend differs from source ADD mapping".into());
+        }
+        for (va, target) in [
+            (0x62c07f_u32, 0x8864c0_u32),
+            (0x62c0ad, 0x887c20),
+            (0x62c0ba, 0x887410),
+            (0x62c0c8, 0x873750),
+        ] {
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != target.wrapping_sub(va + 5) {
+                return Err("active command texture call relation".into());
+            }
+        }
+        let badge = RankBadge {
+            art_key,
+            font_key,
+            section,
+            height_key,
+            size: [
+                number(&mut read, 0x62c500, &[0xc7, 0x04, 0x24])?,
+                number(&mut read, 0x62c513, &[0xc7, 0x04, 0x24])?,
+            ],
+            offset: [
+                number(&mut read, 0x62c4e8, &[0xc7, 0x04, 0x24])?,
+                number(&mut read, 0x62c4e0, &[0xc7, 0x44, 0x24, 0x04])?,
+            ],
+            text_offset: [
+                number(&mut read, 0x62c61c, &[0xc7, 0x04, 0x24])?,
+                number(&mut read, 0x62c614, &[0xc7, 0x44, 0x24, 0x04])?,
+            ],
+            colour: word(operand(&mut read, 0x885fcb, &[0xc7, 0x46, 0x6d], 4)?)?,
+        };
+        if badge.size.iter().any(|v| *v <= 0.) {
+            return Err("command number overlay dimensions".into());
+        }
+        let parts = disabled_format.split("%s").collect::<Vec<_>>();
+        if parts.len() != 3 || parts.iter().any(|part| part.contains('%')) {
+            return Err("unsupported disabled command art format".into());
+        }
         let columns = usize::from(operand(&mut read, 0x61d1c4, &[0x6a], 1)?[0]);
         let rows = usize::from(operand(&mut read, 0x61d1c6, &[0x6a], 1)?[0]);
         if columns == 0
@@ -185,6 +306,47 @@ impl Rules {
             referenced(&mut read, 0x640ea8, &[0xf3, 0x0f, 0x10, 5])?,
             referenced(&mut read, 0x640e96, &[0xf3, 0x0f, 0x10, 0x1d])?,
         ];
+        // Both world-frame anchors must address the same constructed child.
+        for (va, prefix) in [(0x5e7b5a, &[0x8b, 0x8f][..]), (0x5e7b92, &[0x8b, 0x8f][..])] {
+            if word(operand(&mut read, va, prefix, 4)?)?
+                != word(operand(&mut read, 0x5e77e7, &[0x89, 0x87], 4)?)?
+            {
+                return Err("world frame constructor/anchor relation".into());
+            }
+        }
+        for (va, target) in [
+            (0x5e77d2_u32, 0x608c10_u32),
+            (0x5e7b68, 0x873a10),
+            (0x5e7ba0, 0x873a10),
+        ] {
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != target.wrapping_sub(va + 5) {
+                return Err("world frame anchor call relation".into());
+            }
+        }
+        for (va, anchor) in [(0x5e7b57, 6), (0x5e7b60, 6), (0x5e7b8f, 2), (0x5e7b98, 2)] {
+            if operand(&mut read, va, &[0x6a], 1)? != [anchor] {
+                return Err("world frame anchor pair".into());
+            }
+        }
+        let x = number(&mut read, 0x5e7b50, &[0xc7, 0x04, 0x24])?;
+        let bottom = number(&mut read, 0x5e7b48, &[0xc7, 0x44, 0x24, 0x04])?;
+        let right = viewport[0] + number(&mut read, 0x5e7b86, &[0xc7, 0x04, 0x24])?;
+        let top = viewport[1] + number(&mut read, 0x5e7b7c, &[0xc7, 0x44, 0x24, 0x04])?;
+        let world_frame = Rect {
+            x,
+            y: bottom,
+            width: right - x,
+            height: top - bottom,
+        };
+        if x < 0.
+            || bottom < 0.
+            || right > viewport[0]
+            || top > viewport[1]
+            || world_frame.width <= 0.
+            || world_frame.height <= 0.
+        {
+            return Err("world frame exceeds source viewport".into());
+        }
         if frame_size
             .iter()
             .chain(&button_size)
@@ -200,15 +362,35 @@ impl Rules {
             origin,
             image_sha256,
             console_key,
+            active_key,
+            badge,
+            disabled_key,
+            disabled_format,
             columns,
             rows,
             viewport,
             icon_repeat,
+            world_frame,
             frame_size,
             insets,
             offset,
             button_size,
         })
+    }
+
+    pub fn disabled_art(&self, folder: &str, art: &str) -> Result<String, String> {
+        let basename = art
+            .rsplit_once('\\')
+            .or_else(|| art.rsplit_once('/'))
+            .map_or(art, |(_, name)| name);
+        if folder.is_empty() || basename.is_empty() {
+            return Err("missing disabled command art input".into());
+        }
+        let parts = self.disabled_format.split("%s").collect::<Vec<_>>();
+        let [head, middle, tail] = parts.as_slice() else {
+            return Err("disabled command art format".into());
+        };
+        Ok(format!("{head}{folder}{middle}{basename}{tail}"))
     }
 
     /// `Buttonpos` column and row; row zero is the top row in the native grid.

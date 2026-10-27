@@ -79,6 +79,12 @@ struct DamageFailure {
 }
 
 impl Combat {
+    pub(super) fn replace_form_profile(&mut self, source: &Self) {
+        self.weapon = source.weapon;
+        self.armor = source.armor;
+        self.defense = source.defense;
+    }
+
     pub(super) fn resume_after_pause(&mut self, elapsed: f64) {
         self.ready_at += elapsed;
         if let Some((_, impact)) = &mut self.swing {
@@ -1147,6 +1153,7 @@ impl ObjectHost {
         else {
             return Ok(());
         };
+        self.require_morph_interruption(unit, "unit death")?;
         let mut decay = record.decay.clone();
         if let Some(state) = &mut decay {
             state
@@ -1155,6 +1162,7 @@ impl ObjectHost {
         }
         let owner = record.owner;
         let experience = self.plan_hero_kill_experience(unit, killer)?;
+        self.forget_morph_unit(unit);
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
@@ -1196,7 +1204,7 @@ impl ObjectHost {
                 let selected = if !exploded_presented && let Some(decay) = &record.decay {
                     animation.select_for_duration(sequence, now, decay.death)
                 } else {
-                    animation.select(sequence, now, None)
+                    animation.select_engine(sequence, now, None)
                 };
                 selected.map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
@@ -1491,6 +1499,7 @@ impl ObjectHost {
                 return Err(*failure.error);
             }
         }
+        self.advance_morph(now)?;
         self.advance_mirror_image(now)?;
         self.advance_holy_light(now)?;
         self.advance_chain_lightning(now)?;
@@ -1697,7 +1706,7 @@ impl ObjectHost {
                         combat.chase = None;
                         if let Some(animation) = &mut record.animation {
                             animation
-                                .select("attack", now, None)
+                                .select_engine("attack", now, None)
                                 .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
                         }
                     }

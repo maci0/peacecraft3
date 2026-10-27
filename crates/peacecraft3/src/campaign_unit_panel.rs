@@ -25,6 +25,7 @@ use std::sync::{Arc, Weak};
 
 const MEMBER: &str = r"UI\FrameDef\UI\SimpleInfoPanel.fdf";
 const STRINGS: &str = r"UI\FrameDef\InfoPanelStrings.fdf";
+const GLOBAL_STRINGS: &str = r"UI\FrameDef\GlobalStrings.fdf";
 const CONSOLE: &str = r"UI\FrameDef\UI\ConsoleUI.fdf";
 /// Skin keys for the one hero-attribute icon. Order is the primary token, not a native table index.
 const HERO_ICON_KEYS: [&str; 3] = [
@@ -54,22 +55,53 @@ impl UnitPanel {
     }
 }
 struct Source {
+    class: ClassHeader,
+    experience: ExperienceBar,
     rules: Rules,
     viewport: [f32; 2],
     info: Rect,
     console: String,
     title_style: menu_text::TextStyle,
     title_offset: [f32; 2],
-    fonts: [Handle<Font>; 2],
+    fonts: [Handle<Font>; 3],
+    status_text: String,
+    status_rect: Rect,
     stat_height: f32,
     stat_font: Handle<Font>,
     label_style: menu_text::TextStyle,
     value_style: menu_text::TextStyle,
     rows: StatRows,
     hero_icons: [Handle<Image>; 3],
+    armor_icons: Vec<Handle<Image>>,
+    damage_icons: Vec<Handle<Image>>,
     receipts: Vec<AssetReceipt>,
 }
+struct ExperienceBar {
+    offset: [f32; 2],
+    height: f32,
+    width: f32,
+    fill: Handle<Image>,
+    border: Handle<Image>,
+    fill_size: Vec2,
+}
+struct ClassHeader {
+    style: menu_text::TextStyle,
+    offset: [f32; 2],
+    format: [String; 3],
+}
+impl ClassHeader {
+    fn text(&self, level: i32, name: &str) -> Result<String, String> {
+        if level <= 0 {
+            return Err("unit panel: invalid hero level".into());
+        }
+        let [prefix, middle, suffix] = &self.format;
+        let text = format!("{prefix}{level}{middle}{name}{suffix}");
+        crate::rich_text::parse(&text).map_err(|e| e.to_string())?;
+        Ok(text)
+    }
+}
 struct StatRows {
+    damage_height: f32,
     icon: [f32; 4],
     label_at: [f32; 2],
     value_at: [f32; 2],
@@ -88,6 +120,8 @@ struct StatRows {
 }
 #[derive(Clone, Debug, PartialEq)]
 struct View {
+    class: Option<String>,
+    experience: Option<f32>,
     unit: pcx_script::HandleId,
     name: String,
     health: String,
@@ -95,6 +129,8 @@ struct View {
     colour: u32,
     damage: String,
     armor: String,
+    armor_icon: usize,
+    damage_icon: Option<usize>,
     strength: String,
     agility: String,
     intelligence: String,
@@ -149,6 +185,12 @@ fn project(
             }
             if !shared {
                 fonts.remove(stat);
+            }
+            for image in [source.experience.fill, source.experience.border] {
+                images.remove(image.id());
+            }
+            for image in source.armor_icons.into_iter().chain(source.damage_icons) {
+                images.remove(image.id());
             }
             for image in source.hero_icons {
                 images.remove(image.id());
@@ -257,7 +299,7 @@ fn project(
         state.view = None;
     }
     let source = state.source.as_ref().unwrap();
-    let result = wanted(host.objects(), &context.scripts, &source.rules);
+    let result = wanted(host.objects(), &context.scripts, source);
     let root = state.root.unwrap();
     let mut desired = match result {
         Ok(view) => {
@@ -372,15 +414,36 @@ fn load(
     let (title_style, title_offset) = title_style(&member, &rules.frame, &rules.title)?;
     let fdf = Fdf::parse(&normalize(&member)?).map_err(|e| e.to_string())?;
     let strings = text(reader, STRINGS, &mut receipts)?;
+    let globals = text(reader, GLOBAL_STRINGS, &mut receipts)?;
     let label_style = menu_text::render_style(&fdf, "SimpleInfoPanelLabelTextTemplate")?;
     let value_style = menu_text::render_style(&fdf, "SimpleInfoPanelValueTextTemplate")?;
     if !value_style.font.eq_ignore_ascii_case(&label_style.font) {
         return Err("unit panel: stat value font".into());
     }
-    let rows = stat_rows(&fdf, &strings)?;
+    let class = class_header(&fdf, &rules.frame, &rules.title, &globals)?;
+    if !class.style.font.eq_ignore_ascii_case(&value_style.font) {
+        return Err("unit panel: unsupported class font differs from value font".into());
+    }
+    let rows = stat_rows(&fdf, &strings, &globals)?;
     let info = inventory.info_panel();
+    let status_rect = rules.status.rect(info)?;
+    let status_text = menu_text::global_string(&strings, &rules.status.text)
+        .or_else(|| menu_text::global_string(&globals, &rules.status.text))
+        .filter(|text| !text.trim().is_empty() && text.len() <= 4096)
+        .ok_or_else(|| format!("unit panel: missing/invalid {}", rules.status.text))?;
+    crate::rich_text::parse(&status_text).map_err(|e| e.to_string())?;
     if info.width <= rows.icon[0] + rows.icon[2] {
         return Err("unit panel: stat row wider than the information frame".into());
+    }
+    let (bar_offset, bar_height, bar_width) = experience_frame(
+        &fdf,
+        &rules.frame,
+        &rules.title,
+        &rules.experience.frame,
+        rules.experience.width,
+    )?;
+    if bar_height <= rules.experience.inset * 2. {
+        return Err("unit panel: XP inset exceeds bar height".into());
     }
     let damage_width = rules.damage_row_width();
     let icon_right = rows.icon[0] + rows.icon[2];
@@ -406,7 +469,8 @@ fn load(
         .filter(|v| v.is_finite() && *v > 0.)
         .ok_or("unit panel: invalid portrait font height")?;
     let mut decoded = Vec::new();
-    for key in [&title_style.font, &rules.font] {
+    let font_keys = [&title_style.font, &rules.font, &rules.status.font];
+    for key in font_keys {
         let path = skin_file(&skin, &sections, key)?;
         let bytes = read(reader, &path, 16 << 20, &mut receipts)?;
         if !crate::hud_render::font_registers(&bytes) {
@@ -414,16 +478,17 @@ fn load(
         }
         decoded.push(Font::from_bytes(bytes));
     }
-    let loaded: [Handle<Font>; 2] = decoded
+    let loaded: [Handle<Font>; 3] = decoded
         .into_iter()
         .map(|font| fonts.add(font))
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
-    let stat_font = if label_style.font.eq_ignore_ascii_case(&rules.font) {
-        loaded[1].clone()
-    } else if label_style.font.eq_ignore_ascii_case(&title_style.font) {
-        loaded[0].clone()
+    let stat_font = if let Some(index) = font_keys
+        .iter()
+        .position(|key| key.eq_ignore_ascii_case(&label_style.font))
+    {
+        loaded[index].clone()
     } else {
         let path = skin_file(&skin, &sections, &label_style.font)?;
         let bytes = read(reader, &path, 16 << 20, &mut receipts)?;
@@ -432,6 +497,16 @@ fn load(
         }
         fonts.add(Font::from_bytes(bytes))
     };
+    let mut armor_icons = Vec::new();
+    for key in &rules.armor_icons.keys {
+        let path = skin_file(&skin, &sections, key)?;
+        armor_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+    }
+    let mut damage_icons = Vec::new();
+    for key in &rules.damage_icons.keys {
+        let path = skin_file(&skin, &sections, key)?;
+        damage_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+    }
     let mut hero_icons = Vec::new();
     for key in HERO_ICON_KEYS {
         let path = skin_file(&skin, &sections, key)?;
@@ -439,7 +514,32 @@ fn load(
     }
     let hero_icons = <[Handle<Image>; 3]>::try_from(hero_icons)
         .map_err(|_| "unit panel: hero icon count".to_string())?;
+    let fill = ui_image(
+        reader,
+        &skin_file(&skin, &sections, &rules.experience.fill_key)?,
+        &mut receipts,
+        images,
+    )?;
+    let border = ui_image(
+        reader,
+        &skin_file(&skin, &sections, &rules.experience.border_key)?,
+        &mut receipts,
+        images,
+    )?;
+    let fill_size = images
+        .get(&fill)
+        .ok_or("unit panel: XP texture missing")?
+        .size_f32();
     Ok(Source {
+        experience: ExperienceBar {
+            offset: bar_offset,
+            height: bar_height,
+            width: bar_width,
+            fill,
+            border,
+            fill_size,
+        },
+        class,
         rules,
         viewport: inventory.viewport,
         info,
@@ -447,12 +547,16 @@ fn load(
         title_style,
         title_offset,
         fonts: loaded,
+        status_text,
+        status_rect,
         stat_height,
         stat_font,
         label_style,
         value_style,
         rows,
         hero_icons,
+        armor_icons,
+        damage_icons,
         receipts,
     })
 }
@@ -510,9 +614,91 @@ fn anchor(props: &crate::fdf::Props, point: &str) -> Result<[f32; 2], String> {
     };
     Ok([number(x)?, number(y)?])
 }
-fn stat_rows(fdf: &Fdf, strings: &str) -> Result<StatRows, String> {
+fn experience_frame(
+    fdf: &Fdf,
+    parent: &str,
+    title: &str,
+    name: &str,
+    constructor_width: f32,
+) -> Result<([f32; 2], f32, f32), String> {
+    let bar = child(fdf, parent, name)?;
+    if bar.kind != "SIMPLESTATUSBAR" || bar.props.set_points.len() != 1 {
+        return Err("unit panel: unsupported hero XP bar frame".into());
+    }
+    let offset = point_offset(
+        bar,
+        crate::fdf::Point::Top,
+        title,
+        crate::fdf::Point::Bottom,
+    )?;
+    let height = bar
+        .props
+        .height
+        .filter(|h| h.is_finite() && *h > 0.)
+        .ok_or("unit panel: XP bar height missing/invalid")?;
+    // FDF dimensions override the selected frame factory, not the parent span.
+    let width = bar.props.width.unwrap_or(constructor_width);
+    if !width.is_finite() || width <= 0. || offset.iter().any(|n| !n.is_finite()) {
+        return Err("unit panel: invalid XP bar extent/anchor".into());
+    }
+    Ok((offset, height, width))
+}
+
+fn class_header(
+    fdf: &Fdf,
+    parent: &str,
+    title: &str,
+    globals: &str,
+) -> Result<ClassHeader, String> {
+    let panel = child(fdf, parent, "SimpleUnitStatsPanel")?;
+    if !panel
+        .props
+        .records
+        .iter()
+        .any(|(key, _)| key == "SetAllPoints")
+    {
+        return Err("unit panel: class panel must follow detail frame".into());
+    }
+    let label = child(fdf, &panel.name, "SimpleClassValue")?;
+    if label.kind != "TEXT"
+        || label.props.set_points.len() != 1
+        || label.props.width.is_some()
+        || label.props.height.is_some()
+        || fdf.record(&label.name, "FontJustificationH").as_deref() != Some("JUSTIFYCENTER")
+    {
+        return Err("unit panel: unsupported class label geometry".into());
+    }
+    let offset = point_offset(
+        label,
+        crate::fdf::Point::Top,
+        title,
+        crate::fdf::Point::Bottom,
+    )?;
+    if offset.iter().any(|v| !v.is_finite()) {
+        return Err("unit panel: invalid class anchor".into());
+    }
+    let format = menu_text::global_string(globals, "INFOPANEL_LEVEL_CLASS")
+        .ok_or("unit panel: missing level/class format")?;
+    let (prefix, tail) = format
+        .split_once("%u")
+        .ok_or("unit panel: level conversion missing")?;
+    let (middle, suffix) = tail
+        .split_once("%s")
+        .ok_or("unit panel: class conversion missing")?;
+    if [prefix, middle, suffix].iter().any(|s| s.contains('%')) {
+        return Err("unit panel: unsupported level/class conversions".into());
+    }
+    Ok(ClassHeader {
+        style: menu_text::render_style(fdf, &label.name)?,
+        offset,
+        format: [prefix.into(), middle.into(), suffix.into()],
+    })
+}
+fn stat_rows(fdf: &Fdf, strings: &str, globals: &str) -> Result<StatRows, String> {
     let text = |key: &str| {
-        menu_text::global_string(strings, key).ok_or_else(|| format!("unit panel: missing {key}"))
+        menu_text::global_string(strings, key)
+            .or_else(|| menu_text::global_string(globals, key))
+            .ok_or_else(|| format!("unit panel: missing {key}"))
     };
     let icon = fdf
         .frame("InfoPanelIconTemplate")
@@ -523,6 +709,12 @@ fn stat_rows(fdf: &Fdf, strings: &str) -> Result<StatRows, String> {
     };
     if width <= 0. || height <= 0. {
         return Err("unit panel: icon size".into());
+    }
+    let damage_height = fdf
+        .height("SimpleInfoPanelIconDamage")
+        .map_err(|e| e.to_string())?;
+    if !damage_height.is_finite() || damage_height <= 0. {
+        return Err("unit panel: damage row height".into());
     }
     let (label_at, value_at) = icon_text_anchors(fdf, "SimpleInfoPanelIconDamage")?;
     let armor_anchors = icon_text_anchors(fdf, "SimpleInfoPanelIconArmor")?;
@@ -613,6 +805,7 @@ fn stat_rows(fdf: &Fdf, strings: &str) -> Result<StatRows, String> {
         return Err("unit panel: hero line step".into());
     }
     Ok(StatRows {
+        damage_height,
         icon: [at[0], at[1], width, height],
         label_at,
         value_at,
@@ -734,8 +927,9 @@ fn profile_name(
 fn wanted(
     objects: &ObjectHost,
     scripts: &MapScripts,
-    rules: &Rules,
+    source: &Source,
 ) -> Result<Option<View>, String> {
+    let rules = &source.rules;
     let [id] = objects.selection() else {
         return Ok(None);
     };
@@ -774,6 +968,12 @@ fn wanted(
         None => String::new(),
     };
     let armor = rules.armor_text(stats.armor, stats.armor_bonus)?;
+    let classes = objects.unit_upgrade_classes(*id)?;
+    let armor_icon = rules.armor_icons.index(stats.defense, &classes)?;
+    let damage_icon = stats
+        .attack
+        .map(|attack| rules.damage_icons.index(attack, &classes))
+        .transpose()?;
     let hero_icon = match stats.attributes.as_ref() {
         Some(attributes) => Some(hero_icon_index(&attributes.primary)?),
         None => None,
@@ -787,7 +987,22 @@ fn wanted(
     } else {
         (String::new(), String::new(), String::new())
     };
+    let class = abilities
+        .hero
+        .as_ref()
+        .map(|hero| {
+            let name = profile_name(&unit.definition, "Name", |id| scripts.table_string(id))?;
+            source.class.text(hero.level, &name)
+        })
+        .transpose()?;
+    let experience = objects
+        .hero_experience_range(*id)
+        .map_err(|e| e.to_string())?
+        .map(|range| rules.experience.fraction(range))
+        .transpose()?;
     let view = View {
+        experience,
+        class,
         unit: *id,
         name,
         health: rules.readout(vitals.life, vitals.max_life, true)?,
@@ -799,6 +1014,8 @@ fn wanted(
         colour: rules.health_colour(vitals.life / vitals.max_life)?,
         damage,
         armor,
+        armor_icon,
+        damage_icon,
         strength,
         agility,
         intelligence,
@@ -929,6 +1146,35 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
         Color::srgba(sr, sg, sb, sa),
         style.shadow_offset,
     );
+    if let Some(fraction) = view.experience {
+        paint_experience(commands, root, source, fraction);
+    }
+    if let Some(value) = &view.class {
+        let class = &source.class;
+        let [r, g, b, a] = class.style.colour;
+        let [sr, sg, sb, sa] = class.style.shadow_colour;
+        text_node(
+            commands,
+            root,
+            Rect {
+                x: source.info.x + source.title_offset[0] + class.offset[0],
+                y: source.info.y + source.info.height + source.title_offset[1]
+                    - source.title_style.height
+                    + class.offset[1]
+                    - class.style.height,
+                width: source.info.width,
+                height: class.style.height,
+            },
+            source.viewport,
+            value,
+            &source.stat_font,
+            class.style.height,
+            bevy::text::Justify::Center,
+            Color::srgba(r, g, b, a),
+            Color::srgba(sr, sg, sb, sa),
+            class.style.shadow_offset,
+        );
+    }
     for (rect, value, foreground) in [
         (source.rules.health, &view.health, view.colour),
         (source.rules.mana, &view.mana, source.rules.mana_colour),
@@ -958,20 +1204,96 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
         );
     }
     paint_stats(commands, root, source, view);
+    let status = &source.rules.status;
+    text_node(
+        commands,
+        root,
+        source.status_rect,
+        source.viewport,
+        &source.status_text,
+        &source.fonts[2],
+        status.height,
+        bevy::text::Justify::Right,
+        colour(status.colour),
+        colour(status.shadow),
+        status.shadow_offset,
+    );
 }
+fn paint_experience(commands: &mut Commands, root: Entity, source: &Source, fraction: f32) {
+    let bar = &source.experience;
+    let rules = &source.rules.experience;
+    let rect = Rect {
+        x: source.info.x
+            + source.title_offset[0]
+            + (source.info.width - bar.width) / 2.
+            + bar.offset[0],
+        y: source.info.y + source.info.height + source.title_offset[1] - source.title_style.height
+            + bar.offset[1]
+            - bar.height,
+        width: bar.width,
+        height: bar.height,
+    };
+    let background = Rect {
+        x: rect.x - rules.inset,
+        y: rect.y - rules.inset,
+        width: rect.width + 2. * rules.inset,
+        height: rect.height + 2. * rules.inset,
+    };
+    commands.spawn((
+        label_frame(background, source.viewport, bevy::text::Justify::Left),
+        BackgroundColor(colour(rules.background)),
+        Pickable::IGNORE,
+        ChildOf(root),
+    ));
+    if fraction > 0. {
+        commands.spawn((
+            label_frame(
+                Rect {
+                    width: rect.width * fraction,
+                    ..rect
+                },
+                source.viewport,
+                bevy::text::Justify::Left,
+            ),
+            ImageNode {
+                image: bar.fill.clone(),
+                image_mode: bevy::ui::widget::NodeImageMode::Stretch,
+                color: colour(rules.tint),
+                rect: Some(bevy::math::Rect::from_corners(
+                    Vec2::ZERO,
+                    Vec2::new(bar.fill_size.x * fraction, bar.fill_size.y),
+                )),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(root),
+        ));
+    }
+    paint_image(commands, root, source, rect, &bar.border);
+}
+
 fn paint_stats(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
-    // Damage is TopLeft on the detail frame. Armor and the hero block are
-    // TopLeft on that row's TopRight, one constructor width across.
-    // Damage and armor textures stay unmounted. `GetUnitTypeId` (`0x497d30`)
-    // returns the resolved unit's `+0x34`; that integer is the unit-type key
-    // hashed by `0x95c860` and looked up in `0x113e8d8` by `0x6993a0`, the same
-    // registry as `GetFoodMade`. `0x694230` then tests three fields of that type
-    // record against its `+0x234` vector. `GetOwningPlayer` does not read `+0x34`.
-    // The Neutral-suffix keys stay unused until those type fields are named.
+    // Recreate the observed stacked combat readouts using the authored row height;
+    // the constructor's overlapping initial armor anchor is not its displayed layout.
     let top = source.info.y + source.info.height + source.rules.damage_row_dy();
     let left = source.info.x;
     let beside = left + source.rules.damage_row_width();
     if !view.damage.is_empty() {
+        if let Some(index) = view.damage_icon {
+            let [x, y, width, height] = source.rows.icon;
+            paint_image(
+                commands,
+                root,
+                source,
+                Rect {
+                    x: left + x,
+                    y: top + y - height,
+                    width,
+                    height,
+                },
+                &source.damage_icons[index],
+            );
+        }
         paint_pair(
             commands,
             root,
@@ -983,12 +1305,25 @@ fn paint_stats(commands: &mut Commands, root: Entity, source: &Source, view: &Vi
         );
     }
     if !view.armor.is_empty() {
+        let [x, y, width, height] = source.rows.icon;
+        paint_image(
+            commands,
+            root,
+            source,
+            Rect {
+                x: left + x,
+                y: top - source.rows.damage_height + y - height,
+                width,
+                height,
+            },
+            &source.armor_icons[view.armor_icon],
+        );
         paint_pair(
             commands,
             root,
             source,
-            beside,
-            top,
+            left,
+            top - source.rows.damage_height,
             &source.rows.armor,
             &view.armor,
         );
@@ -1075,7 +1410,11 @@ fn paint_image(
                 height: percent(rect.height / source.viewport[1] * 100.),
                 ..default()
             },
-            ImageNode::new(image.clone()),
+            ImageNode {
+                image: image.clone(),
+                image_mode: bevy::ui::widget::NodeImageMode::Stretch,
+                ..default()
+            },
             Pickable::IGNORE,
         ))
         .id();
@@ -1156,6 +1495,74 @@ fn paint_styled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn experience_frame_keeps_authored_height_anchor_and_constructor_width() {
+        let source = r#"Frame "SIMPLEFRAME" "P" {
+            Frame "SIMPLESTATUSBAR" "XP" {
+                SetPoint TOP, "Title", BOTTOM, 0.003, -0.007,
+                Height 0.019,
+            }
+        }"#;
+        let parse = |text: &str| Fdf::parse(text).unwrap();
+        assert_eq!(
+            experience_frame(&parse(source), "P", "Title", "XP", 0.213).unwrap(),
+            ([0.003, -0.007], 0.019, 0.213)
+        );
+        let explicit = source.replace("Height 0.019,", "Height 0.019,\n Width 0.147,");
+        assert_eq!(
+            experience_frame(&parse(&explicit), "P", "Title", "XP", 0.213)
+                .unwrap()
+                .2,
+            0.147
+        );
+        for bad in [
+            source.replace("Height 0.019,", ""),
+            source.replace("BOTTOM", "TOP"),
+            source.replace("SIMPLESTATUSBAR", "SIMPLEFRAME"),
+        ] {
+            assert!(experience_frame(&parse(&bad), "P", "Title", "XP", 0.213).is_err());
+        }
+    }
+    #[test]
+    fn class_label_uses_authored_anchor_style_and_localized_format() {
+        let raw = r#"
+String "Value" {
+ Font "FixtureClassFont",0.017,
+ FontColor 0.2 0.3 0.4 0.7,
+ FontShadowColor 0.1 0.2 0.3 0.8,
+ FontShadowOffset 0.003 -0.004,
+}
+Frame "SIMPLEFRAME" "Detail" {
+ Frame "SIMPLEFRAME" "SimpleUnitStatsPanel" {
+  SetAllPoints,
+  String "SimpleClassValue" INHERITS "Value" {
+   SetPoint TOP, "Name", BOTTOM, 0.004, -0.009,
+   FontJustificationH JUSTIFYCENTER,
+  }
+ }
+}
+"#;
+        let fdf = Fdf::parse(&normalize(raw).unwrap()).unwrap();
+        let globals = "\nINFOPANEL_LEVEL_CLASS \"Stage %u — %s!\",\n";
+        let header = class_header(&fdf, "Detail", "Name", globals).unwrap();
+        assert_eq!(header.offset, [0.004, -0.009]);
+        assert_eq!(header.style.font, "FixtureClassFont");
+        assert_eq!(header.style.height, 0.017);
+        assert_eq!(header.style.colour, [0.2, 0.3, 0.4, 0.7]);
+        assert_eq!(header.style.shadow_offset, [0.003, -0.004]);
+        assert_eq!(
+            header.text(7, "Fixture Seer").unwrap(),
+            "Stage 7 — Fixture Seer!"
+        );
+        assert!(header.text(0, "Fixture Seer").is_err());
+        assert!(class_header(&fdf, "Detail", "WrongName", globals).is_err());
+        assert!(class_header(&fdf, "Detail", "Name", &globals.replace("%s", "%d")).is_err());
+        assert!(class_header(&fdf, "Detail", "Name", &globals.replace("%u", "%u%u")).is_err());
+        let left =
+            Fdf::parse(&normalize(&raw.replace("JUSTIFYCENTER", "JUSTIFYLEFT")).unwrap()).unwrap();
+        assert!(class_header(&left, "Detail", "Name", globals).is_err());
+    }
+
     #[test]
     fn no_wrap_readouts_align_their_intrinsic_text_in_the_source_frame() {
         let rect = Rect {
@@ -1321,7 +1728,17 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
 }
 "#;
         let strings = "COLON_DAMAGE \"Damage:\",\nCOLON_ARMOR \"Armor:\",\nCOLON_STRENGTH \"Strength:\",\nCOLON_AGILITY \"Agility:\",\nCOLON_INTELLECT \"Intelligence:\",\n";
-        let rows = stat_rows(&Fdf::parse(&normalize(source).unwrap()).unwrap(), strings).unwrap();
+        let fdf = Fdf::parse(&normalize(source).unwrap()).unwrap();
+        let primary = strings.replace("COLON_ARMOR \"Armor:\",\n", "");
+        let rows = stat_rows(&fdf, &primary, "COLON_ARMOR \"Armor:\",\n").unwrap();
+        assert!(stat_rows(&fdf, &primary, "").is_err());
+        assert_eq!(rows.damage_height, 0.03125);
+        assert_eq!(
+            stat_rows(&fdf, strings, "COLON_ARMOR \"other\",\n")
+                .unwrap()
+                .armor,
+            "Armor:"
+        );
         assert_eq!(
             HERO_ICON_KEYS[usize::from(hero_icon_index("STR").unwrap())],
             "InfoPanelIconHeroIconSTR"
@@ -1362,7 +1779,9 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
         let mut app = crate::native_campaign::tests::started_app();
         let camera = app.world_mut().spawn_empty().id();
         app.insert_resource(CampaignCamera::active_for_test(camera))
-            .init_resource::<UnitPanel>();
+            .init_resource::<UnitPanel>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>();
         let (revision, path, hero, other, witness) = {
             let mut session = app
                 .world_mut()
@@ -1458,13 +1877,48 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
         let state = app.world().resource::<UnitPanel>();
         assert!(state.last_error.is_none(), "{:?}", state.last_error);
         assert_eq!(state.view.as_ref().unwrap().name, "Arthas");
+        assert!(state.view.as_ref().unwrap().class.is_some());
         assert!(state.view.as_ref().unwrap().damage.contains(" - "));
         assert!(!state.view.as_ref().unwrap().strength.is_empty());
         assert!(!state.view.as_ref().unwrap().armor.is_empty());
         assert_eq!(state.parent, Some(parent));
         assert!(state.receipt_count() > 0);
         assert!(Weak::ptr_eq(state.witness.as_ref().unwrap(), &witness));
+        let status_text = state.source.as_ref().unwrap().status_text.clone();
+        let status_font = state.source.as_ref().unwrap().fonts[2].id();
         let previous = state.view.as_ref().unwrap().health.clone();
+        let source = state.source.as_ref().unwrap();
+        let view = state.view.as_ref().unwrap();
+        let expected = [
+            source.armor_icons[view.armor_icon].id(),
+            source.damage_icons[view.damage_icon.unwrap()].id(),
+        ];
+        let owned_icons = source
+            .armor_icons
+            .iter()
+            .chain(&source.damage_icons)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut spans = app.world_mut().query::<&TextSpan>();
+        assert_eq!(
+            spans
+                .iter(app.world())
+                .filter(|span| span.0 == status_text)
+                .count(),
+            1
+        );
+        let mut query = app.world_mut().query::<&ImageNode>();
+        for expected in expected {
+            let mounted = query
+                .iter(app.world())
+                .filter(|image| image.image.id() == expected)
+                .collect::<Vec<_>>();
+            assert_eq!(mounted.len(), 1);
+            assert_eq!(
+                mounted[0].image_mode,
+                bevy::ui::widget::NodeImageMode::Stretch
+            );
+        }
         {
             use pcx_script::{Host, Value};
             let mut session = app
@@ -1500,6 +1954,15 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
                 .unit,
             other
         );
+        assert!(
+            app.world()
+                .resource::<UnitPanel>()
+                .view
+                .as_ref()
+                .unwrap()
+                .class
+                .is_none()
+        );
         select(app.world_mut(), &[]);
         app.world_mut().run_system_once(project).unwrap();
         let state = app.world().resource::<UnitPanel>();
@@ -1518,5 +1981,11 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
         app.world_mut().run_system_once(project).unwrap();
         assert!(app.world().resource::<UnitPanel>().source.is_none());
         assert!(app.world().get_entity(root).is_err());
+        assert!(!app.world().resource::<Assets<Font>>().contains(status_font));
+        assert!(
+            owned_icons
+                .iter()
+                .all(|image| !app.world().resource::<Assets<Image>>().contains(image.id()))
+        );
     }
 }

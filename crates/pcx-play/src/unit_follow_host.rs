@@ -54,6 +54,7 @@ impl ObjectHost {
             {
                 return Ok(Value::Bool(false));
             }
+            self.require_morph_interruption(*unit, name)?;
             let record = self.executed_unit(*unit)?;
             if record.paused_since.is_some()
                 || record
@@ -102,7 +103,7 @@ impl ObjectHost {
             let mut animation = self.executed_unit(*unit)?.animation.clone();
             if let Some(animation) = &mut animation {
                 animation
-                    .select(
+                    .select_engine(
                         if motion.is_some() { "walk" } else { "stand" },
                         now,
                         if motion.is_some() {
@@ -266,7 +267,7 @@ impl ObjectHost {
             && let Some(animation) = &mut animation
         {
             animation
-                .select(
+                .select_engine(
                     if motion.is_some() { "walk" } else { "stand" },
                     at,
                     if motion.is_some() {

@@ -1,5 +1,15 @@
 # PeaceCraft3 — Tracker
 
+- [x] Release 0.7.0: source-derived HUD command states, selected-unit panel,
+  portrait composition, upper buttons and quest layout improvements; scripted
+  vertex color, look-at and morphing updates. Fresh headless renderer screenshots
+  include the selected hero, skill menu and populated quest dialog. The dedicated
+  HUD capture passes. Final workspace tests: 4,554 passed, zero failed, 272 opt-in
+  tests ignored. Doc tests, strict native/WASM checks, both builds, packaging
+  and reference-tool checks pass. Full campaign, interlude carryover and pixel
+  parity remain open.
+  Implementation is paused at the user's request after publication.
+
 - [x] Release 0.6.0: Human01 and Human02 earned Victory verified at pinned
   gameplay snapshots; construction controls, campaign AI, Mirror Image,
   leaderboard and hidden-unit lifecycles, and source-qualified autocast OFF

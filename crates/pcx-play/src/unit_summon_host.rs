@@ -179,7 +179,7 @@ impl ObjectHost {
                 && animation.started == started
             {
                 animation
-                    .select("stand", now, None)
+                    .select_engine("stand", now, None)
                     .map_err(|e| self.summon_error(e))?;
             }
             self.summoning
@@ -330,7 +330,7 @@ impl ObjectHost {
                 .filter(|animation| animation.has_sequence("spell"));
             if let Some(animation) = &mut animation {
                 animation
-                    .select("spell", now, None)
+                    .select_engine("spell", now, None)
                     .map_err(|e| self.summon_error(e))?;
             }
             self.steer_unit(caster, None, NATIVE)?;
@@ -456,7 +456,7 @@ impl ObjectHost {
                     && animation.has_sequence("birth")
                 {
                     animation
-                        .select("birth", now, None)
+                        .select_engine("birth", now, None)
                         .map_err(|e| self.summon_error(e))?;
                     self.track_summon_animation(unit)?;
                 }

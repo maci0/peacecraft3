@@ -64,6 +64,9 @@ pub(crate) struct ButtonOrder {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Icon {
+    active: bool,
+    rank: Option<i32>,
+    blocked_learning: bool,
     unavailable: Option<pcx_play::playercolor_host::BuildUnavailable>,
     kind: Kind,
     data: IconData,
@@ -84,6 +87,9 @@ struct View {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Header {
+    current: Option<i32>,
+    held: bool,
+    hero: Option<(i32, i32)>,
     unit: HandleId,
     owner: HandleId,
     local: i32,
@@ -118,6 +124,18 @@ fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
         return Ok(None);
     }
     Ok(Some(Header {
+        current: record
+            .activity
+            .as_ref()
+            .map(|_| objects.current_unit_order(unit))
+            .transpose()
+            .map_err(|e| e.to_string())?,
+        held: record.activity.as_ref().is_some_and(|a| a.held()),
+        hero: record
+            .abilities
+            .as_ref()
+            .and_then(|a| a.hero.as_ref())
+            .map(|h| (h.level, h.skill_points)),
         unit,
         owner: record.owner,
         local,
@@ -200,6 +218,12 @@ fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
 }
 
 struct Source {
+    active_art: String,
+    active_material: Option<Handle<crate::glue_menu::AdditiveImage>>,
+    badge_art: String,
+    badge_font: Option<Handle<Font>>,
+    badge_height: f32,
+    disabled_path: String,
     rules: Rules,
     console: String,
     standard: Vec<(pcx_play::standard_command::Command, String)>,
@@ -228,6 +252,17 @@ pub(crate) struct CommandCard {
 }
 
 impl CommandCard {
+    pub(crate) fn world_frame(&self) -> Option<[f32; 4]> {
+        let rules = &self.source.as_ref()?.rules;
+        let r = rules.world_frame;
+        Some([
+            r.x / rules.viewport[0],
+            1. - (r.y + r.height) / rules.viewport[1],
+            r.width / rules.viewport[0],
+            r.height / rules.viewport[1],
+        ])
+    }
+
     pub(crate) fn training_hotkeys(
         &self,
         unit: HandleId,
@@ -309,6 +344,7 @@ pub(crate) struct CommandCardSet;
 
 #[derive(SystemParam)]
 struct Inputs<'w, 's> {
+    materials: ResMut<'w, Assets<crate::glue_menu::AdditiveImage>>,
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
     camera: Res<'w, CampaignCamera>,
@@ -319,6 +355,7 @@ struct Inputs<'w, 's> {
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<CommandCard>()
+        .init_resource::<Assets<crate::glue_menu::AdditiveImage>>()
         .add_observer(capture_press)
         .add_systems(
             Update,
@@ -373,6 +410,9 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
         return Ok(Some(View {
             unit,
             icons: vec![Icon {
+                active: false,
+                rank: None,
+                blocked_learning: false,
                 unavailable: None,
                 kind: Kind::CancelConstruction,
                 data: IconData {
@@ -392,11 +432,16 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
         return research_page(objects, unit, source);
     }
     let mut icons = Vec::new();
+    let current = record
+        .activity
+        .as_ref()
+        .map(|_| objects.current_unit_order(unit))
+        .transpose()
+        .map_err(|e| e.to_string())?;
     for (profile, art) in &source.standard {
-        if objects
+        if let Some(order) = objects
             .standard_command_order(unit, profile.kind)
             .map_err(|e| e.to_string())?
-            .is_some()
         {
             if icons
                 .iter()
@@ -405,6 +450,16 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 return Err("standard commands collide at the same authored Buttonpos".into());
             }
             icons.push(Icon {
+                active: current.is_some_and(|current| {
+                    standard_active(
+                        profile.kind,
+                        order,
+                        current,
+                        record.activity.as_ref().is_some_and(|a| a.held()),
+                    )
+                }),
+                rank: None,
+                blocked_learning: false,
                 unavailable: None,
                 kind: Kind::Standard(profile.kind),
                 data: IconData {
@@ -439,6 +494,9 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 .map_err(|e| e.to_string())
                 .and_then(|tip| tip.ok_or("command has no learned tooltip".into()));
             icons.push(Icon {
+                active: false,
+                rank: None,
+                blocked_learning: false,
                 unavailable: None,
                 kind,
                 data: IconData {
@@ -465,6 +523,9 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             return Err("training commands collide at the same authored Buttonpos".into());
         }
         icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
             unavailable: None,
             kind: Kind::Train(command.kind),
             data: IconData {
@@ -487,6 +548,9 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             return Err("build menu collides at the authored Buttonpos".into());
         }
         icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
             unavailable: None,
             kind: Kind::BuildMenu,
             data: IconData {
@@ -510,6 +574,9 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             return Err("hero abilities collide at the same authored Buttonpos".into());
         }
         icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
             unavailable: None,
             kind: Kind::SkillMenu,
             data: IconData {
@@ -546,6 +613,9 @@ fn building_page(
             return Err("building choices collide at the authored Buttonpos".into());
         }
         icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
             unavailable: choice.unavailable,
             kind: Kind::Build(command.kind),
             data: IconData {
@@ -565,6 +635,9 @@ fn building_page(
         return Err("build cancel collides at the authored Buttonpos".into());
     }
     icons.push(Icon {
+        active: false,
+        rank: None,
+        blocked_learning: false,
         unavailable: None,
         kind: Kind::BuildCancel,
         data: IconData {
@@ -601,6 +674,9 @@ fn research_page(
             return Err("research icons collide at the same authored Researchbuttonpos".into());
         }
         icons.push(Icon {
+            active: false,
+            rank: Some(icon.rank),
+            blocked_learning: icon.block.is_some(),
             unavailable: None,
             kind: Kind::Learn(i32::from_be_bytes(icon.ability)),
             data: IconData {
@@ -623,6 +699,9 @@ fn research_page(
         return Err("research cancel collides with a research icon".into());
     }
     icons.push(Icon {
+        active: false,
+        rank: None,
+        blocked_learning: false,
         unavailable: None,
         kind: Kind::SkillCancel,
         data: IconData {
@@ -693,12 +772,20 @@ fn reset(
     commands: &mut Commands,
     card: &mut CommandCard,
     images: &mut Assets<Image>,
+    fonts: &mut Assets<Font>,
+    materials: &mut Assets<crate::glue_menu::AdditiveImage>,
     witness: Option<Weak<()>>,
 ) {
     if let Some(root) = card.root {
         commands.entity(root).try_despawn();
     }
     if let Some(source) = card.source.take() {
+        if let Some(material) = source.active_material {
+            materials.remove(material.id());
+        }
+        if let Some(font) = source.badge_font {
+            fonts.remove(font.id());
+        }
         for image in source.images.values() {
             images.remove(image.id());
         }
@@ -752,6 +839,32 @@ fn image(
     result
 }
 
+fn standard_active(
+    kind: pcx_play::standard_command::Kind,
+    order: i32,
+    current: i32,
+    held: bool,
+) -> bool {
+    use pcx_play::standard_command::Kind;
+    if held {
+        return kind == Kind::Hold;
+    }
+    if kind == Kind::Hold {
+        return false;
+    }
+    (kind == Kind::Stop && current == 0) || current == order
+}
+
+fn command_art(source: &Source, icon: &Icon) -> Result<String, String> {
+    if icon.blocked_learning {
+        source
+            .rules
+            .disabled_art(&source.disabled_path, &icon.data.art)
+    } else {
+        Ok(icon.data.art.clone())
+    }
+}
+
 fn paint(
     commands: &mut Commands,
     root: Entity,
@@ -764,9 +877,10 @@ fn paint(
         let rect = source
             .rules
             .slot(icon.data.position[0], icon.data.position[1])?;
+        let art = command_art(source, icon)?;
         let image = source
             .images
-            .get(&icon.data.art)
+            .get(&art)
             .ok_or("command icon is not decoded")?
             .clone();
         nodes.push((
@@ -780,18 +894,28 @@ fn paint(
             },
             image,
             icon.kind,
+            icon.active,
+            icon.rank,
             icon.order,
             rect,
             &icon.tooltip,
-            icon.unavailable,
+            icon.unavailable.is_some() || icon.blocked_learning,
         ));
     }
+    if view.icons.iter().any(|icon| icon.rank.is_some())
+        && (source.badge_font.is_none() || !source.images.contains_key(&source.badge_art))
+    {
+        return Err("command rank overlay is not decoded".into());
+    }
+    if view.icons.iter().any(|icon| icon.active) && source.active_material.is_none() {
+        return Err("active command overlay is not decoded".into());
+    }
     commands.entity(root).despawn_children();
-    for (node, image, kind, order, rect, tooltip, unavailable) in nodes {
+    for (node, image, kind, active, rank, order, rect, tooltip, disabled) in nodes {
         commands.entity(root).with_children(|parent| {
             let mut button = parent.spawn((
                 node,
-                ImageNode::new(image),
+                ImageNode::new(image).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
                 Button,
                 bevy::picking::hover::Hovered::default(),
                 crate::campaign_inventory::TooltipAnchor {
@@ -805,9 +929,93 @@ fn paint(
                     order,
                 },
             ));
-            if unavailable.is_some() {
-                // shortcut: source disabled-art projection is pending; do not invent a tint.
+            if disabled {
                 button.insert(bevy::ui::InteractionDisabled);
+            }
+            if active {
+                button.with_children(|button| {
+                    button.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: Val::Percent(100.),
+                            height: Val::Percent(100.),
+                            ..default()
+                        },
+                        MaterialNode(
+                            source
+                                .active_material
+                                .as_ref()
+                                .expect("preflighted active art")
+                                .clone(),
+                        ),
+                        Pickable::IGNORE,
+                    ));
+                });
+            }
+            if let Some(rank) = rank {
+                let badge = &source.rules.badge;
+                let art = source
+                    .images
+                    .get(&source.badge_art)
+                    .expect("preflighted badge art");
+                let font = source.badge_font.as_ref().expect("preflighted badge font");
+                let [a, r, g, b] = badge.colour.to_be_bytes();
+                button.with_children(|button| {
+                    button
+                        .spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                right: Val::Percent(-badge.offset[0] / rect.width * 100.),
+                                bottom: Val::Percent(badge.offset[1] / rect.height * 100.),
+                                width: Val::Percent(badge.size[0] / rect.width * 100.),
+                                height: Val::Percent(badge.size[1] / rect.height * 100.),
+                                ..default()
+                            },
+                            ImageNode::new(art.clone())
+                                .with_mode(bevy::ui::widget::NodeImageMode::Stretch),
+                            Pickable::IGNORE,
+                        ))
+                        .with_children(|badge_node| {
+                            badge_node
+                                .spawn((
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        left: Val::Percent(
+                                            badge.text_offset[0] / badge.size[0] * 100.,
+                                        ),
+                                        bottom: Val::Percent(
+                                            badge.text_offset[1] / badge.size[1] * 100.,
+                                        ),
+                                        width: Val::Percent(100.),
+                                        height: Val::Percent(100.),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        ..default()
+                                    },
+                                    Pickable::IGNORE,
+                                ))
+                                .with_children(|text| {
+                                    text.spawn((
+                                        Text::new(rank.to_string()),
+                                        TextFont {
+                                            font: font.clone().into(),
+                                            font_size: bevy::text::FontSize::Vh(
+                                                source.badge_height / source.rules.viewport[1]
+                                                    * 100.,
+                                            ),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgba_u8(r, g, b, a)),
+                                        TextLayout::new(
+                                            bevy::text::Justify::Center,
+                                            bevy::text::LineBreak::NoWrap,
+                                        ),
+                                        bevy::text::LineHeight::RelativeToFont(1.0),
+                                        Pickable::IGNORE,
+                                    ));
+                                });
+                        });
+                });
             }
             match tooltip {
                 Ok(tip) => {
@@ -838,14 +1046,22 @@ fn root_node(display: Display) -> Node {
 fn project(
     mut commands: Commands,
     mut card: ResMut<CommandCard>,
-    inputs: Inputs,
+    mut inputs: Inputs,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut images: ResMut<Assets<Image>>,
+    mut fonts: ResMut<Assets<Font>>,
     nodes: Query<&Node>,
 ) {
     let witness = session.session_witness();
     if !same_session(card.witness.as_ref(), witness.as_ref()) {
-        reset(&mut commands, &mut card, &mut images, witness.clone());
+        reset(
+            &mut commands,
+            &mut card,
+            &mut images,
+            &mut fonts,
+            &mut inputs.materials,
+            witness.clone(),
+        );
     }
     let (Some(witness), Some(context)) = (witness, session.context().cloned()) else {
         return;
@@ -922,8 +1138,44 @@ fn project(
                 let art = resolve(&cancel_build.art_key, cancel_build.position)?;
                 (cancel_build, art)
             };
+            let active_art = skin_file(&skin, &sections, &rules.active_key)?;
+            let badge_art = skin_file(&skin, &sections, &rules.badge.art_key)?;
+            let font_path = skin_file(&skin, &sections, &rules.badge.font_key)?;
+            let font_bytes = read(&reader, &font_path, 16 << 20, &mut receipts)?;
+            if !crate::hud_render::font_registers(&font_bytes) {
+                return Err(format!("command badge font is unreadable: {font_path}"));
+            }
+            let profile = crate::menu_skin::SkinTable::parse(&text(
+                &reader,
+                r"UI\MiscUI.txt",
+                &mut receipts,
+            )?)
+            .map_err(|e| e.to_string())?;
+            let heights = profile
+                .sections()
+                .iter()
+                .filter(|s| s.name.eq_ignore_ascii_case(&rules.badge.section))
+                .flat_map(|s| &s.entries)
+                .filter(|(key, _)| key.eq_ignore_ascii_case(&rules.badge.height_key))
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>();
+            let [height] = heights.as_slice() else {
+                return Err("command badge font height missing or ambiguous".into());
+            };
+            let badge_height = height
+                .parse::<f32>()
+                .ok()
+                .filter(|h| h.is_finite() && *h > 0.)
+                .ok_or("command badge font height is invalid")?;
             text(&reader, CONSOLE, &mut receipts)?;
+            let badge_font = Some(fonts.add(Font::from_bytes(font_bytes)));
             Ok::<_, String>(Source {
+                active_art,
+                active_material: None,
+                badge_art,
+                badge_font,
+                badge_height,
+                disabled_path: skin_file(&skin, &sections, &rules.disabled_key)?,
                 rules,
                 console,
                 standard,
@@ -1018,8 +1270,22 @@ fn project(
         }
         if rebuilt || changed || page_changed || card.last_error.is_some() {
             if let Some(view) = &card.view {
+                if view.icons.iter().any(|icon| icon.active) && source.active_material.is_none() {
+                    let art = source.active_art.clone();
+                    let texture = image(&reader, &mut source, &art, &mut images)?;
+                    source.active_material = Some(
+                        inputs
+                            .materials
+                            .add(crate::glue_menu::AdditiveImage::new(texture)),
+                    );
+                }
+                if view.icons.iter().any(|icon| icon.rank.is_some()) {
+                    let art = source.badge_art.clone();
+                    image(&reader, &mut source, &art, &mut images)?;
+                }
                 for icon in &view.icons {
-                    image(&reader, &mut source, &icon.data.art, &mut images)?;
+                    let art = command_art(&source, icon)?;
+                    image(&reader, &mut source, &art, &mut images)?;
                 }
                 paint(&mut commands, root, &source, view, &witness)?;
             } else {
@@ -1106,6 +1372,9 @@ mod tests {
                 .map(|v| v.trim().parse().unwrap())
                 .collect();
             icons.push(Icon {
+                active: false,
+                rank: None,
+                blocked_learning: false,
                 unavailable: None,
                 kind,
                 tooltip: Err("standalone icon fixture has no learned unit".into()),
@@ -1133,6 +1402,12 @@ mod tests {
         .unwrap();
         (
             Source {
+                active_art: String::new(),
+                active_material: None,
+                badge_art: String::new(),
+                badge_font: None,
+                badge_height: 0.,
+                disabled_path: "fixture-disabled/".into(),
                 rules,
                 console: "synthetic component parent".into(),
                 standard: Vec::new(),
@@ -1397,6 +1672,7 @@ mod tests {
     #[test]
     #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs and PCX_WAR3_EXE"]
     fn selected_chapter_mounts_the_card_under_its_admitted_console_and_retires_it() {
+        use bevy::ecs::system::RunSystemOnce;
         use pcx_script::{Host, Value};
         let mut app = crate::native_campaign::tests::started_app();
         let camera = app.world_mut().spawn_empty().id();
@@ -1483,6 +1759,11 @@ mod tests {
             }
             for child in buttons {
                 assert_eq!(app.world().get::<ButtonOrder>(*child).unwrap().unit, unit);
+                assert_eq!(
+                    app.world().get::<ImageNode>(*child).unwrap().image_mode,
+                    bevy::ui::widget::NodeImageMode::Stretch,
+                    "command art must fill the authored frame independently of image aspect"
+                );
                 let tooltip = app
                     .world()
                     .get::<crate::campaign_inventory::ControlTooltip>(*child)
@@ -1531,11 +1812,16 @@ mod tests {
             .unwrap();
         assert!(!Arc::ptr_eq(&old_context, replacement.context().unwrap()));
         app.insert_resource(replacement);
-        app.update();
+        app.world_mut().run_system_once(project).unwrap();
         assert!(app.world().get_entity(root).is_err());
         assert!(
             app.world().get_entity(parent).is_ok(),
             "the card does not own the console"
+        );
+        app.update();
+        assert!(
+            app.world().get_entity(parent).is_err(),
+            "the HUD owner retires the console when its source session changes"
         );
         for image in owned {
             assert!(
@@ -1725,7 +2011,20 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let owned = images.add(Image::default());
         let unrelated = images.add(Image::default());
+        let mut fonts = Assets::<Font>::default();
+        let owned_font = fonts.add(Font::from_bytes(Vec::new()));
+        let unrelated_font = fonts.add(Font::from_bytes(Vec::new()));
+        let mut materials = Assets::<crate::glue_menu::AdditiveImage>::default();
+        let owned_material = materials.add(crate::glue_menu::AdditiveImage::new(owned.clone()));
+        let unrelated_material =
+            materials.add(crate::glue_menu::AdditiveImage::new(unrelated.clone()));
         let source = Source {
+            active_art: String::new(),
+            active_material: Some(owned_material.clone()),
+            badge_art: String::new(),
+            badge_font: Some(owned_font.clone()),
+            badge_height: 0.,
+            disabled_path: "fixture-disabled/".into(),
             rules,
             console: "synthetic parent".into(),
             standard: Vec::new(),
@@ -1744,6 +2043,9 @@ mod tests {
         let mut view = View {
             unit: HandleId::new(std::num::NonZeroU64::new(7).unwrap()),
             icons: vec![Icon {
+                active: true,
+                rank: None,
+                blocked_learning: false,
                 unavailable: None,
                 kind: Kind::TargetUnit,
                 tooltip: Err("synthetic icon-only fixture".into()),
@@ -1767,12 +2069,38 @@ mod tests {
         queue.apply(&mut world);
         let child = world.get::<Children>(root).unwrap()[0];
         assert_eq!(world.get::<ButtonOrder>(child).unwrap().unit, view.unit);
+        let overlay = world.get::<Children>(child).unwrap()[0];
+        assert_eq!(
+            world
+                .get::<MaterialNode<crate::glue_menu::AdditiveImage>>(overlay)
+                .unwrap()
+                .0
+                .id(),
+            owned_material.id()
+        );
         let rect = source.rules.slot(0, 0).unwrap();
         assert_eq!(
             world.get::<Node>(child).unwrap().width,
             Val::Percent(rect.width / source.rules.viewport[0] * 100.)
         );
+        view.icons[0].rank = Some(7);
+        assert!(
+            paint(
+                &mut Commands::new(&mut queue, &world),
+                root,
+                &source,
+                &view,
+                &witness
+            )
+            .is_err()
+        );
+        queue.apply(&mut world);
+        assert_eq!(world.get::<Children>(root).unwrap()[0], child);
+        view.icons[0].rank = None;
         view.icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
             unavailable: None,
             kind: Kind::Immediate,
             tooltip: Err("synthetic icon-only fixture".into()),
@@ -1806,6 +2134,8 @@ mod tests {
             &mut Commands::new(&mut queue, &world),
             &mut card,
             &mut images,
+            &mut fonts,
+            &mut materials,
             None,
         );
         queue.apply(&mut world);
@@ -1813,6 +2143,10 @@ mod tests {
         assert!(world.get_entity(child).is_err());
         assert!(images.get(&owned).is_none());
         assert!(images.get(&unrelated).is_some());
+        assert!(fonts.get(&owned_font).is_none());
+        assert!(fonts.get(&unrelated_font).is_some());
+        assert!(materials.get(&owned_material).is_none());
+        assert!(materials.get(&unrelated_material).is_some());
         assert!(card.root.is_none() && card.source.is_none() && card.witness.is_none());
     }
 
@@ -1903,6 +2237,9 @@ mod tests {
             view: Some(View {
                 unit,
                 icons: vec![Icon {
+                    active: false,
+                    rank: None,
+                    blocked_learning: false,
                     unavailable: None,
                     kind: Kind::Train(i32::from_be_bytes(*b"uNEW")),
                     data: IconData {
@@ -1935,6 +2272,9 @@ mod tests {
             view: Some(View {
                 unit,
                 icons: vec![Icon {
+                    active: false,
+                    rank: None,
+                    blocked_learning: false,
                     unavailable: Some(pcx_play::playercolor_host::BuildUnavailable::Resources),
                     kind,
                     data: IconData {
@@ -1958,5 +2298,22 @@ mod tests {
         );
         card.close_skills();
         assert!(!card.build_page_open());
+    }
+}
+
+#[cfg(test)]
+mod active_tests {
+    use super::standard_active;
+    use pcx_play::standard_command::Kind;
+    #[test]
+    fn idle_stop_hold_and_admitted_nonstock_orders_select_one_standard_icon() {
+        assert!(standard_active(Kind::Stop, 17, 0, false));
+        assert!(!standard_active(Kind::Hold, 23, 0, false));
+        assert!(standard_active(Kind::Hold, 23, 41, true));
+        assert!(!standard_active(Kind::Attack, 41, 41, true));
+        assert!(standard_active(Kind::Move, 31, 31, false));
+        assert!(!standard_active(Kind::Stop, 17, 31, false));
+        assert!(standard_active(Kind::Attack, 41, 41, false));
+        assert!(!standard_active(Kind::Move, 31, 41, false));
     }
 }

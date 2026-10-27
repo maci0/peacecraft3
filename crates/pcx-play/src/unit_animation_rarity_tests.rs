@@ -317,3 +317,17 @@ fn independent_weighted_draws_are_repeatable_include_zero_sum_and_refuse_transac
     }
     assert_eq!(a.choose(&[1., 2.]).unwrap(), b.choose(&[1., 2.]).unwrap());
 }
+
+#[test]
+fn engine_properties_select_authored_form_without_changing_explicit_script_selection() {
+    let rules = Arc::new(rules());
+    let model = Arc::new(model(&[("still", 0.0), ("still wave", 0.0)]));
+    let mut animation = crate::unit_model::Animation::new(model, 0.).unwrap();
+    animation.set_engine_properties(rules, vec!["wave".into()]);
+    animation.select_engine("still", 0., None).unwrap();
+    assert_eq!(animation.sequence, Some(1));
+    animation.select("still", 0., None).unwrap();
+    assert_eq!(animation.sequence, Some(0));
+    animation.select_engine("still", 0., None).unwrap();
+    assert_eq!(animation.sequence, Some(1));
+}

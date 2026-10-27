@@ -60,6 +60,7 @@ impl ObjectHost {
             if pause == since.is_some() {
                 return Ok(Value::Null);
             }
+            self.require_morph_interruption(unit, "PauseUnit")?;
             let now = self.timer_game_time().ok_or_else(|| {
                 self.inner
                     .error(name, Failure::UnitState("pause requires game clock"))

@@ -178,6 +178,8 @@ pub struct LearnableSkill {
 /// Learn-menu icon. Fields come from the research profiles, not the cast button.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResearchIcon {
+    /// Upcoming rank displayed by the research title and number overlay.
+    pub rank: i32,
     pub ability: [u8; 4],
     pub art: String,
     pub position: [usize; 2],
@@ -381,6 +383,11 @@ impl ObjectHost {
             .heroes
             .as_ref()
             .map(|input| input.rules.hero_alias)
+    }
+    pub(crate) fn admitted_morph_rules(
+        &self,
+    ) -> Option<Result<Arc<crate::unit_morph_rules::Rules>, String>> {
+        Some(self.units.as_ref()?.heroes.as_ref()?.rules.morph.clone())
     }
     pub(crate) fn admitted_mirror_rules(
         &self,
@@ -1286,6 +1293,7 @@ impl ObjectHost {
         let description =
             text("Researchubertip").map_err(|detail| self.hero_error(ABILITY, detail))?;
         Ok(Some(ResearchIcon {
+            rank: shown,
             ability,
             art,
             position,

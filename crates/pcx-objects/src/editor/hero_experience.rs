@@ -4,6 +4,7 @@ use super::defaults::{parse_config_profile, profile_elements};
 #[derive(Clone, Debug)]
 pub struct Experience {
     thresholds: Vec<i32>,
+    presentation_ceiling: Result<i32, String>,
     pub sources: Vec<String>,
 }
 impl Experience {
@@ -80,27 +81,33 @@ impl Experience {
         thresholds
             .try_reserve_exact(count)
             .map_err(|_| "XP allocation")?;
+        let threshold = |index: usize, previous: Option<i32>| -> Result<i32, String> {
+            if let Some(value) = table.get(index) {
+                return Ok(*value);
+            }
+            let level = initial
+                .checked_add(i32::try_from(index).map_err(|_| "XP index")?)
+                .and_then(|n| n.checked_add(1))
+                .ok_or("XP level overflow")?;
+            let previous = previous.ok_or("XP table is empty")?;
+            a.checked_mul(previous)
+                .and_then(|n| b.checked_mul(level).and_then(|b| n.checked_add(b)))
+                .and_then(|n| n.checked_add(c))
+                .ok_or_else(|| "XP recurrence overflow".into())
+        };
         for index in 0..count {
-            let value = if let Some(value) = table.get(index) {
-                *value
-            } else {
-                let level = initial
-                    .checked_add(i32::try_from(index).map_err(|_| "XP index")?)
-                    .and_then(|n| n.checked_add(1))
-                    .ok_or("XP level overflow")?;
-                let previous: i32 = *thresholds.last().ok_or("XP table is empty")?;
-                a.checked_mul(previous)
-                    .and_then(|n| b.checked_mul(level).and_then(|b| n.checked_add(b)))
-                    .and_then(|n| n.checked_add(c))
-                    .ok_or("XP recurrence overflow")?
-            };
+            let value = threshold(index, thresholds.last().copied())?;
             if value <= thresholds.last().copied().unwrap_or(0) {
                 return Err("XP thresholds must be positive and strictly increasing".into());
             }
             thresholds.push(value);
         }
+        // The status bar reads one threshold beyond the gameplay level cap.
+        // An unusable presentation endpoint must not reject valid leveling rules.
+        let presentation_ceiling = threshold(count, thresholds.last().copied());
         Ok(Self {
             thresholds,
+            presentation_ceiling,
             sources,
         })
     }
@@ -114,6 +121,20 @@ impl Experience {
                     .map_err(|_| "XP level overflow")?,
             )
             .ok_or_else(|| "XP level overflow".into())
+    }
+    /// XP floor and next threshold, including the source endpoint at the level cap.
+    pub fn presentation_range(&self, initial: i32, level: i32) -> Result<[i32; 2], String> {
+        let offset = level
+            .checked_sub(initial)
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n <= self.thresholds.len())
+            .ok_or("XP level outside source table")?;
+        let lower = self.minimum_for(initial, level)?;
+        let upper = match self.thresholds.get(offset) {
+            Some(value) => *value,
+            None => self.presentation_ceiling.clone()?,
+        };
+        Ok([lower, upper])
     }
     pub fn minimum_for(&self, initial: i32, level: i32) -> Result<i32, String> {
         if level == initial {
@@ -159,6 +180,11 @@ mod tests {
             assert_eq!(p.level_for(1, xp).unwrap(), level);
         }
         assert_eq!(p.minimum_for(1, 3).unwrap(), 41);
+        assert_eq!(p.presentation_range(1, 1).unwrap(), [0, 17]);
+        assert_eq!(p.presentation_range(1, 3).unwrap(), [41, 101]);
+        assert_eq!(p.presentation_range(1, 4).unwrap(), [101, 224]);
+        assert!(p.presentation_range(1, 0).is_err());
+        assert!(p.presentation_range(1, 5).is_err());
         assert!(p.minimum_for(1, 5).is_err());
         assert!(p.level_for(1, -1).is_err());
         assert!(Experience::read(&[("stock", base)], 1, 4, 1024, 1).is_err());
@@ -185,5 +211,22 @@ mod tests {
                 "{field}"
             );
         }
+    }
+    #[test]
+    fn presentation_endpoint_does_not_extend_or_reject_gameplay_levels() {
+        let profile = b"[Misc]\nNeedHeroXP=23\nNeedHeroXPFormulaA=2147483647\nNeedHeroXPFormulaB=0\nNeedHeroXPFormulaC=0";
+        let rules = Experience::read(&[("synthetic", profile)], 3, 4, 1024, 8).unwrap();
+        assert_eq!(rules.level_for(3, i32::MAX).unwrap(), 4);
+        assert_eq!(rules.presentation_range(3, 3).unwrap(), [0, 23]);
+        assert!(
+            rules
+                .presentation_range(3, 4)
+                .unwrap_err()
+                .contains("overflow")
+        );
+        let constant = b"[Misc]\nNeedHeroXP=23\nNeedHeroXPFormulaA=1\nNeedHeroXPFormulaB=0\nNeedHeroXPFormulaC=0";
+        let rules = Experience::read(&[("synthetic", constant)], 3, 4, 1024, 8).unwrap();
+        assert_eq!(rules.presentation_range(3, 4).unwrap(), [23, 23]);
+        assert_eq!(rules.level_for(3, 100).unwrap(), 4);
     }
 }

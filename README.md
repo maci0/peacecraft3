@@ -21,7 +21,7 @@ No Blizzard assets are committed. The game reads them from your own install at r
 
 ## Screenshots
 
-Captured from PeaceCraft III's Bevy renderer on 26 October 2026 using locally
+Captured from PeaceCraft III's Bevy renderer on 27 October 2026 using locally
 supplied game assets. Rendering and gameplay remain in progress.
 
 **Main menu**
@@ -35,6 +35,14 @@ supplied game assets. Rendering and gameplay remain in progress.
 **Campaign world and command card**
 
 ![PeaceCraft III rendering the Prologue02 campaign world and command card](docs/screenshots/campaign.png)
+
+**Hero skill menu**
+
+![PeaceCraft III hero skill menu](docs/screenshots/research-menu.png)
+
+**Quest dialog**
+
+![PeaceCraft III populated quest dialog](docs/screenshots/quest-log.png)
 
 [Capture details and known rendering limits](docs/screenshots/README.md).
 

@@ -99,6 +99,15 @@ impl ObjectHost {
         if record.construction.is_some() || record.construction_request.is_some() {
             return Err("unit cache does not encode construction state".into());
         }
+        if record.morph.is_some() {
+            return Err("cached form state is not representable".into());
+        }
+        if record.vertex_color.is_some() {
+            return Err(format!(
+                "unit cache does not encode explicit vertex color: {:?} from {:?}",
+                record.definition.rawcode, record.source
+            ));
+        }
         if record.summoned {
             return Err("unit cache does not encode summoned-unit lifetime".into());
         }

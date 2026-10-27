@@ -63,6 +63,7 @@ impl ObjectHost {
             _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
         };
         self.forget_construction_unit(unit)?;
+        self.forget_morph_unit(unit);
         self.forget_mirror_unit(unit);
         self.forget_inventory_unit(unit, true)?;
         if shown && let Some(placement) = &mut self.unit_placement {

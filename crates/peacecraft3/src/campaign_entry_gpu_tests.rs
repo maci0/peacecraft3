@@ -288,6 +288,16 @@ fn item_visibility_roundtrip(app: &mut App, output: &Path) {
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_menu_enters_the_rendered_campaign() {
+    check_mounted_campaign(false);
+}
+
+#[test]
+#[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
+fn mounted_campaign_hud_and_research_states() {
+    check_mounted_campaign(true);
+}
+
+fn check_mounted_campaign(hud_only: bool) {
     let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
     let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
     let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
@@ -472,7 +482,6 @@ fn mounted_menu_enters_the_rendered_campaign() {
         "cinematic Escape input must return control within 600 updates"
     );
     capture(&mut app, &output.join("campaign-control.png"));
-    item_visibility_roundtrip(&mut app, &output);
     // Exercise the real mounted console, rather than supplying a synthetic parent.
     let selected = {
         let mut session = app
@@ -495,6 +504,324 @@ fn mounted_menu_enters_the_rendered_campaign() {
         unit
     };
     capture(&mut app, &output.join("selected-unit.png"));
+    if hud_only {
+        let button = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find(|(_, name)| name.as_str() == "UpperButtonBarQuestsButton")
+            .expect("authored Quests button")
+            .0;
+        let normal = app.world().get::<ImageNode>(button).unwrap().rect;
+        #[derive(Resource)]
+        struct ButtonVisualDiagnostic {
+            frame: &'static str,
+            pressed: bool,
+        }
+        app.add_systems(
+            Update,
+            (|mut commands: Commands,
+              diagnostic: Option<Res<ButtonVisualDiagnostic>>,
+              buttons: Query<(Entity, &Name)>| {
+                let Some(diagnostic) = diagnostic else {
+                    return;
+                };
+                for (button, name) in &buttons {
+                    if name.as_str() != diagnostic.frame {
+                        continue;
+                    }
+                    commands
+                        .entity(button)
+                        .insert(bevy::picking::hover::Hovered(true));
+                    if diagnostic.pressed {
+                        commands.entity(button).insert(bevy::ui::Pressed);
+                    }
+                }
+            })
+            .before(crate::campaign_hud::upper_buttons::CampaignHudSet),
+        );
+        app.insert_resource(ButtonVisualDiagnostic {
+            frame: "UpperButtonBarQuestsButton",
+            pressed: false,
+        });
+        capture(&mut app, &output.join("upper-button-hover.png"));
+        app.world_mut()
+            .entity_mut(button)
+            .insert(bevy::ui::InteractionDisabled);
+        capture(&mut app, &output.join("upper-button-disabled.png"));
+        assert_ne!(app.world().get::<ImageNode>(button).unwrap().rect, normal);
+        app.world_mut()
+            .entity_mut(button)
+            .remove::<bevy::ui::InteractionDisabled>();
+
+        app.world_mut().remove_resource::<ButtonVisualDiagnostic>();
+        step(&mut app);
+
+        app.world_mut().entity_mut(button).insert(bevy::ui::Pressed);
+        capture(&mut app, &output.join("upper-button-pressed.png"));
+        assert_ne!(app.world().get::<ImageNode>(button).unwrap().rect, normal);
+        assert!(
+            !app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .quest_log_open,
+            "a visual-state diagnostic must not activate the quest log"
+        );
+        app.world_mut()
+            .entity_mut(button)
+            .remove::<bevy::ui::Pressed>();
+        step(&mut app);
+        assert_eq!(app.world().get::<ImageNode>(button).unwrap().rect, normal);
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .push(button);
+        step(&mut app);
+        assert!(
+            app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .quest_log_open
+        );
+        let pane = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find(|(_, name)| name.as_str() == "QuestDisplayBackdrop")
+            .expect("source details pane")
+            .0;
+        let parts = app
+            .world()
+            .get::<Children>(pane)
+            .expect("details artwork children");
+        assert!(
+            parts
+                .iter()
+                .any(|part| app.world().get::<ImageNode>(part).is_some()),
+            "details pane mounts its border"
+        );
+        assert!(
+            parts.iter().any(|part| app
+                .world()
+                .get::<MaterialNode<crate::glue_menu::BackdropImage>>(part)
+                .is_some()),
+            "details pane mounts its tiled background"
+        );
+        capture(&mut app, &output.join("quest-log.png"));
+        app.insert_resource(ButtonVisualDiagnostic {
+            frame: "QuestAcceptButton",
+            pressed: false,
+        });
+        capture(&mut app, &output.join("quest-done-hover.png"));
+        for frame in ["QuestItemListContainer", "QuestDisplay"] {
+            let area = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find(|(_, name)| name.as_str() == frame)
+                .expect("source content frame")
+                .0;
+            assert!(
+                app.world()
+                    .get::<bevy::ui_widgets::ScrollArea>(area)
+                    .is_some(),
+                "{frame} must keep overflowing text reachable"
+            );
+        }
+
+        app.world_mut()
+            .resource_mut::<ButtonVisualDiagnostic>()
+            .pressed = true;
+        capture(&mut app, &output.join("quest-done-pressed.png"));
+        app.world_mut().remove_resource::<ButtonVisualDiagnostic>();
+        let close = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find(|(_, name)| name.as_str() == "QuestAcceptButton")
+            .expect("current authored Done button")
+            .0;
+        app.world_mut()
+            .entity_mut(close)
+            .remove::<bevy::ui::Pressed>();
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .push(close);
+        step(&mut app);
+        assert!(
+            !app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .quest_log_open
+        );
+
+        {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects();
+            assert_eq!(
+                objects.current_unit_order(selected).unwrap(),
+                0,
+                "HUD diagnostic requires an idle selected hero"
+            );
+            assert!(
+                !objects
+                    .executed_unit(selected)
+                    .unwrap()
+                    .activity
+                    .as_ref()
+                    .unwrap()
+                    .held()
+            );
+        }
+        let highlighted = app
+            .world_mut()
+            .query::<(&crate::campaign_command_card::ButtonOrder, &Children)>()
+            .iter(app.world())
+            .filter(|(_, children)| {
+                children.first().is_some_and(|&child| {
+                    app.world()
+                        .get::<MaterialNode<crate::glue_menu::AdditiveImage>>(child)
+                        .is_some()
+                })
+            })
+            .map(|(button, _)| button.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            highlighted,
+            vec![crate::campaign_command_card::Kind::Standard(
+                pcx_play::standard_command::Kind::Stop
+            )]
+        );
+    }
+    let skill_menu = app
+        .world_mut()
+        .query::<(Entity, &crate::campaign_command_card::ButtonOrder)>()
+        .iter(app.world())
+        .find(|(_, button)| button.kind == crate::campaign_command_card::Kind::SkillMenu)
+        .map(|(entity, _)| entity);
+    if let Some(skill_menu) = skill_menu {
+        activate(&mut app, skill_menu);
+        capture(&mut app, &output.join("skill-menu.png"));
+        assert!(
+            app.world()
+                .resource::<crate::campaign_command_card::CommandCard>()
+                .last_error
+                .is_none()
+        );
+        let rendered = app
+            .world_mut()
+            .query::<(
+                &crate::campaign_command_card::ButtonOrder,
+                Has<InteractionDisabled>,
+            )>()
+            .iter(app.world())
+            .filter_map(|(button, disabled)| {
+                if let crate::campaign_command_card::Kind::Learn(alias) = button.kind {
+                    Some((alias.to_be_bytes(), disabled))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let image_modes = app
+            .world_mut()
+            .query::<(Entity, &ImageNode)>()
+            .iter(app.world())
+            .filter_map(|(entity, image)| {
+                let mut at = entity;
+                loop {
+                    if let Some(button) = app
+                        .world()
+                        .get::<crate::campaign_command_card::ButtonOrder>(at)
+                    {
+                        return matches!(button.kind, crate::campaign_command_card::Kind::Learn(_))
+                            .then(|| image.image_mode.clone());
+                    }
+                    at = app.world().get::<ChildOf>(at)?.parent();
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !image_modes.is_empty(),
+            "research image tree must be mounted"
+        );
+        assert!(
+            image_modes
+                .iter()
+                .all(|mode| *mode == bevy::ui::widget::NodeImageMode::Stretch),
+            "research icons and badge backgrounds must fill their authored frames"
+        );
+        let ranks = app
+            .world_mut()
+            .query::<(Entity, &Text)>()
+            .iter(app.world())
+            .filter_map(|(entity, text)| {
+                let mut at = entity;
+                loop {
+                    if let Some(button) = app
+                        .world()
+                        .get::<crate::campaign_command_card::ButtonOrder>(at)
+                    {
+                        return if let crate::campaign_command_card::Kind::Learn(alias) = button.kind
+                        {
+                            Some((alias.to_be_bytes(), text.0.clone()))
+                        } else {
+                            None
+                        };
+                    }
+                    at = app.world().get::<ChildOf>(at)?.parent();
+                }
+            })
+            .collect::<Vec<_>>();
+        let skills = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects()
+            .learnable_skills(selected)
+            .unwrap();
+        for skill in skills {
+            let shown = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>()
+                .host()
+                .unwrap()
+                .objects()
+                .research_icon(selected, skill.alias)
+                .unwrap()
+                .unwrap()
+                .rank;
+            assert_eq!(
+                ranks
+                    .iter()
+                    .filter(|(alias, _)| *alias == skill.alias)
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>(),
+                vec![shown.to_string().as_str()],
+                "research number {:?}",
+                skill.alias
+            );
+            assert_eq!(
+                rendered
+                    .iter()
+                    .find(|(alias, _)| *alias == skill.alias)
+                    .map(|(_, disabled)| *disabled),
+                Some(skill.block.is_some()),
+                "research availability {:?}",
+                skill.alias
+            );
+        }
+        let cancel = app
+            .world_mut()
+            .query::<(Entity, &crate::campaign_command_card::ButtonOrder)>()
+            .iter(app.world())
+            .find(|(_, button)| button.kind == crate::campaign_command_card::Kind::SkillCancel)
+            .map(|(entity, _)| entity)
+            .expect("source research cancel");
+        activate(&mut app, cancel);
+        step(&mut app);
+    }
     let attachments = app
         .world_mut()
         .query::<&crate::hud_render::HudSourceAttachment>()
@@ -515,6 +842,30 @@ fn mounted_menu_enters_the_rendered_campaign() {
         .unwrap(),
     )
     .unwrap();
+    if hud_only {
+        for error in [
+            &app.world()
+                .resource::<crate::campaign_hud::CampaignHud>()
+                .last_error,
+            &app.world()
+                .resource::<crate::campaign_input::CampaignInput>()
+                .last_error,
+            &app.world()
+                .resource::<crate::campaign_unit_panel::UnitPanel>()
+                .last_error,
+            &app.world()
+                .resource::<crate::campaign_command_card::CommandCard>()
+                .last_error,
+        ] {
+            assert!(error.is_none(), "HUD projection: {error:?}");
+        }
+        assert!(
+            skill_menu.is_some(),
+            "diagnostic chapter needs a research menu"
+        );
+        return;
+    }
+    item_visibility_roundtrip(&mut app, &output);
     // Retain every stage before refusing a known renderer gap.
     let errors = [
         (

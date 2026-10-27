@@ -8,6 +8,34 @@ pub(super) const NATIVES: [(&str, &[&str], &str); 5] = [
     ("IsSuspendedXP", &["unit"], "boolean"),
 ];
 impl ObjectHost {
+    /// Current XP, current-level floor, and next threshold for the selected-unit bar.
+    pub fn hero_experience_range(&self, unit: HandleId) -> Result<Option<[i32; 3]>, Error> {
+        let record = self.created_unit(unit, "hero XP presentation")?;
+        let Some(hero) = record.abilities.as_ref().and_then(|a| a.hero.as_ref()) else {
+            return Ok(None);
+        };
+        let state = hero.experience.ok_or_else(|| {
+            self.hero_error(
+                "hero XP presentation",
+                "XP is absent from this legacy cache or unadmitted".into(),
+            )
+        })?;
+        let initial = self.hero_initial_level().ok_or_else(|| {
+            self.hero_error("hero XP presentation", "initial level absent".into())
+        })?;
+        let rules = self
+            .admitted_units()?
+            .heroes
+            .as_ref()
+            .and_then(|a| a.rules.experience.as_ref())
+            .ok_or_else(|| self.hero_error("hero XP presentation", "XP rules absent".into()))?;
+        let [lower, upper] = rules
+            .thresholds
+            .presentation_range(initial, hero.level)
+            .map_err(|e| self.hero_error("hero XP presentation", e))?;
+        Ok(Some([state.xp, lower, upper]))
+    }
+
     pub(super) fn hero_experience_call(
         &mut self,
         name: &str,

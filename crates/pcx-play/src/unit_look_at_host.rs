@@ -1,7 +1,7 @@
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 
-/// Script-selected bone and a live target; offsets use source world axes.
+/// Script-selected BONE/HELP joint and a live target; offsets use source world axes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnitLookAt {
     pub bone: String,
@@ -91,15 +91,8 @@ impl ObjectHost {
                         )
                     })?
                     .model;
-                let bones = pcx_mdl::Mdlx::parse(&model.bytes)
-                    .and_then(|mdl| mdl.bones(&model.bytes))
-                    .map_err(|e| {
-                        self.inner.error(
-                            name,
-                            Failure::UnitAnimation(format!("{}: {e}", model.member)),
-                        )
-                    })?;
-                if bones
+                if model
+                    .joints
                     .iter()
                     .filter(|b| b.name.eq_ignore_ascii_case(bone))
                     .count()

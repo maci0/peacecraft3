@@ -82,8 +82,6 @@ impl ObjectHost {
                     .is_ok_and(|v| v == *enumerand)
             };
             let definition = &record.definition;
-            let text = |slk, column| super::unit_positions::text(definition, slk, column);
-            let movement = text(SlkId::UnitData, "movetp").unwrap_or("");
             let weapon = record.combat.as_ref().and_then(|c| c.weapon);
             let value = if is("UNIT_TYPE_HERO") {
                 record.illusion.is_none() && definition.rawcode[0].is_ascii_uppercase()
@@ -98,9 +96,15 @@ impl ObjectHost {
                 structure(definition)
                     .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e)))?
             } else if is("UNIT_TYPE_FLYING") {
-                movement == "fly"
+                record
+                    .movement()
+                    .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e.into())))?
+                    == crate::unit_placement::Movement::Air
             } else if is("UNIT_TYPE_GROUND") {
-                movement != "fly"
+                record
+                    .movement()
+                    .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e.into())))?
+                    != crate::unit_placement::Movement::Air
             } else if is("UNIT_TYPE_MELEE_ATTACKER") {
                 weapon.is_some_and(|w| w.missile_speed.is_none())
             } else if is("UNIT_TYPE_RANGED_ATTACKER") {

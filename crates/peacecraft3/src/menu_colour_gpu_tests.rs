@@ -461,6 +461,74 @@ fn source_additive_layers_weight_texture_and_material_alpha_once() {
 }
 
 #[test]
+#[ignore = "requires a local Vulkan adapter; synthetic scripted unit-opacity readback"]
+fn scripted_unit_opacity_reaches_solid_cutout_and_additive_layers() {
+    let mut app = vulkan_menu_app("scripted-unit-opacity");
+    let target = spawn_readback_camera(&mut app);
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(QUAD_EXTENT, QUAD_EXTENT));
+    let rgb = [0.17, 0.43, 0.71];
+    let authored_alpha = 0.61;
+    let cases = [
+        (0, AlphaMode::Opaque, 1.0),
+        (0, AlphaMode::Opaque, 0.23),
+        (1, AlphaMode::Mask(0.37), 0.23),
+        (3, AlphaMode::Add, 0.23),
+    ];
+    for (column, (mode, source, unit_alpha)) in cases.into_iter().enumerate() {
+        let mut material = checked_source_mode(
+            StandardMaterial {
+                base_color: Color::linear_rgba(rgb[0], rgb[1], rgb[2], authored_alpha * unit_alpha),
+                alpha_mode: source,
+                unlit: true,
+                fog_enabled: false,
+                cull_mode: None,
+                ..default()
+            },
+            mode,
+            0,
+        )
+        .unwrap();
+        if mode == 1 {
+            material
+                .extension
+                .bind_native_cutout(&mut material.base, 0.37)
+                .unwrap();
+        }
+        material
+            .extension
+            .apply_unit_opacity(&mut material.base, unit_alpha);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<MenuMaterial>>()
+            .add(material);
+        app.world_mut().spawn((
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(handle),
+            Transform::from_xyz(column as f32 - 1.5, 0.0, 0.0),
+        ));
+    }
+    let readback = drive_readback(&mut app, target);
+    for (column, (_, _, unit_alpha)) in cases.into_iter().enumerate() {
+        for (channel, color) in rgb.into_iter().enumerate() {
+            let expected = color
+                * if column == 0 {
+                    1.0
+                } else {
+                    authored_alpha * unit_alpha
+                };
+            let actual = channel_at(&readback.bytes, readback.stride, column, 16, 16, channel);
+            assert!(
+                (actual - expected).abs() < 0.002,
+                "column={column} channel={channel}: {actual} != {expected}"
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires a local Vulkan render adapter; synthetic GPU readback"]
 fn authored_geoset_colour_reaches_the_menu_material_render_graph() {
     let mut app = vulkan_menu_app("colour-readback");

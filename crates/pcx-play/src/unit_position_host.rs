@@ -14,6 +14,9 @@ pub(super) struct Enumeration {
 
 impl ExecutedUnit {
     pub fn movement(&self) -> Result<crate::unit_placement::Movement, &'static str> {
+        if let Some(movement) = self.morph.as_ref().and_then(super::UnitMorph::movement) {
+            return Ok(movement);
+        }
         crate::unit_placement::Movement::from_token(text(
             &self.definition,
             SlkId::UnitData,

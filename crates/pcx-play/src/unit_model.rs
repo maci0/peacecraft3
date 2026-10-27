@@ -183,6 +183,7 @@ struct QueuedClip {
 pub struct Animation {
     pub model: Arc<Model>,
     pub sequence: Option<usize>,
+    engine_properties: Option<(Arc<crate::unit_animation_rarity::Rules>, Vec<String>)>,
     pub created: f64,
     pub started: f64,
     /// Sequence seconds per game second, fixed when the sequence is selected.
@@ -233,6 +234,7 @@ impl Animation {
         Ok(Self {
             model,
             sequence,
+            engine_properties: None,
             created: now,
             started: now,
             rate: 1.,
@@ -255,10 +257,50 @@ impl Animation {
     /// `None`, or a zero `move_speed`, keeps the authored clock. A missing
     /// selection leaves the state unchanged.
     pub fn select(&mut self, name: &str, now: f64, unit_speed: Option<f32>) -> Result<(), String> {
+        self.select_candidate(self.model.select(name), name, now, unit_speed)
+    }
+    /// Engine activity respects the current form's source-authored properties.
+    /// Explicit script animation selections retain their separate selection policy.
+    pub(crate) fn select_engine(
+        &mut self,
+        name: &str,
+        now: f64,
+        unit_speed: Option<f32>,
+    ) -> Result<(), String> {
+        let candidate = match &self.engine_properties {
+            None => self.model.select(name),
+            Some((rules, props)) => {
+                // shortcut: engine variants retain source-first selection; replace after ordinary animation RNG history is qualified.
+                rules
+                    .engine_candidates(&self.model, name, props)?
+                    .into_iter()
+                    .next()
+            }
+        };
+        self.select_candidate(candidate, name, now, unit_speed)
+    }
+    /// Bind source properties for automatic activity without changing explicit script selection.
+    pub(crate) fn copy_engine_properties_from(&mut self, source: &Self) {
+        self.engine_properties.clone_from(&source.engine_properties);
+    }
+    pub(crate) fn set_engine_properties(
+        &mut self,
+        rules: Arc<crate::unit_animation_rarity::Rules>,
+        props: Vec<String>,
+    ) {
+        self.engine_properties = Some((rules, props));
+    }
+    fn select_candidate(
+        &mut self,
+        candidate: Option<usize>,
+        name: &str,
+        now: f64,
+        unit_speed: Option<f32>,
+    ) -> Result<(), String> {
         if !now.is_finite() || now < self.started || now < self.phase_at {
             return Err("invalid unit animation game time".into());
         }
-        if let Some(index) = self.model.select(name) {
+        if let Some(index) = candidate {
             let rate = match unit_speed {
                 None => 1.,
                 Some(speed) if !speed.is_finite() || speed <= 0. => {

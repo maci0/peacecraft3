@@ -424,7 +424,18 @@ pub fn install(app: &mut App) {
 pub struct AdditiveImage {
     #[texture(0)]
     #[sampler(1)]
-    texture: Handle<Image>,
+    pub(crate) texture: Handle<Image>,
+    #[uniform(2)]
+    pub(crate) uv_transform: Vec4,
+}
+
+impl AdditiveImage {
+    pub(crate) fn new(texture: Handle<Image>) -> Self {
+        Self {
+            texture,
+            uv_transform: Vec4::new(1., 1., 0., 0.),
+        }
+    }
 }
 
 impl UiMaterial for AdditiveImage {
@@ -493,7 +504,7 @@ pub(crate) fn composition_test_nodes(
         });
     let additive = world
         .resource_mut::<Assets<AdditiveImage>>()
-        .add(AdditiveImage { texture });
+        .add(AdditiveImage::new(texture));
     let node = |top| Node {
         position_type: PositionType::Absolute,
         left: Val::Px(0.0),
@@ -1422,9 +1433,7 @@ fn load_art(
         let mut entity = commands.entity(entity);
         entity.remove::<PendingArt>();
         if art.additive {
-            entity.insert(MaterialNode(
-                additive.add(AdditiveImage { texture: handle }),
-            ));
+            entity.insert(MaterialNode(additive.add(AdditiveImage::new(handle))));
         } else if matches!(art.piece, Some(EdgePiece::Top | EdgePiece::Bottom)) {
             let source = rect.expect("checked source rectangle for an edge piece");
             let image_size = Vec2::new(image_asset.width() as f32, image_asset.height() as f32);

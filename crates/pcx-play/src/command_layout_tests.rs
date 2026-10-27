@@ -75,6 +75,131 @@ fn fixture() -> BTreeMap<u32, Vec<u8>> {
         records.insert(va, [prefix, &pointer.to_le_bytes()].concat());
         records.insert(pointer, value.to_le_bytes().to_vec());
     }
+    for (va, target) in [
+        (0x5e77d2_u32, 0x608c10_u32),
+        (0x5e7b68, 0x873a10),
+        (0x5e7ba0, 0x873a10),
+    ] {
+        records.insert(
+            va,
+            [
+                vec![0xe8],
+                target.wrapping_sub(va + 5).to_le_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+    }
+    for (va, prefix) in [
+        (0x5e77e7, &[0x89, 0x87][..]),
+        (0x5e7b5a, &[0x8b, 0x8f][..]),
+        (0x5e7b92, &[0x8b, 0x8f][..]),
+    ] {
+        records.insert(va, [prefix, &0x123_u32.to_le_bytes()].concat());
+    }
+    for (va, anchor) in [(0x5e7b57, 6), (0x5e7b60, 6), (0x5e7b8f, 2), (0x5e7b98, 2)] {
+        records.insert(va, vec![0x6a, anchor]);
+    }
+    for (va, prefix, value) in [
+        (0x5e7b50, &[0xc7, 0x04, 0x24][..], 0.03_f32),
+        (0x5e7b48, &[0xc7, 0x44, 0x24, 0x04][..], 0.17),
+        (0x5e7b86, &[0xc7, 0x04, 0x24][..], -0.04),
+        (0x5e7b7c, &[0xc7, 0x44, 0x24, 0x04][..], -0.06),
+    ] {
+        records.insert(va, [prefix, &value.to_le_bytes()].concat());
+    }
+    for (instruction, pointer, text) in [
+        (0x5d3eaa, 0x400_u32, "FixtureDisabledFolder"),
+        (0x5d3eb8, 0x500_u32, "%sUnavailable_%s"),
+    ] {
+        records.insert(
+            instruction,
+            [vec![0x68], pointer.to_le_bytes().to_vec()].concat(),
+        );
+        records.insert(pointer, [text.as_bytes(), &[0]].concat());
+    }
+    for (va, target) in [
+        (0x62c4c3_u32, 0x888120_u32),
+        (0x62c4f4, 0x873a10),
+        (0x62c507, 0x873830),
+        (0x62c51a, 0x873b40),
+        (0x62c552, 0x8864c0),
+        (0x62c578, 0x887c20),
+        (0x62c587, 0x873750),
+        (0x62c5bf, 0x886400),
+        (0x62c608, 0x887470),
+        (0x62c62d, 0x873a10),
+    ] {
+        records.insert(
+            va,
+            [
+                vec![0xe8],
+                target.wrapping_sub(va + 5).to_le_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+    }
+    for (va, value) in [(0x62c4ef, 8), (0x62c4f2, 8), (0x62c623, 4), (0x62c62b, 4)] {
+        records.insert(va, vec![0x6a, value]);
+    }
+    for (va, prefix, value) in [
+        (0x62c500, &[0xc7, 4, 0x24][..], 0.013_f32),
+        (0x62c513, &[0xc7, 4, 0x24][..], 0.019),
+        (0x62c4e8, &[0xc7, 4, 0x24][..], 0.001),
+        (0x62c4e0, &[0xc7, 0x44, 0x24, 4][..], -0.002),
+        (0x62c61c, &[0xc7, 4, 0x24][..], 0.003),
+        (0x62c614, &[0xc7, 0x44, 0x24, 4][..], -0.004),
+    ] {
+        records.insert(va, [prefix, &value.to_le_bytes()].concat());
+    }
+    for (va, pointer, text) in [
+        (0x62c561, 0x600_u32, "FixtureBadgeArt"),
+        (0x62c5cc, 0x700, "FixtureBadgeHeight"),
+        (0x62c5f8, 0x800, "FixtureBadgeFont"),
+    ] {
+        records.insert(va, [vec![0x68], pointer.to_le_bytes().to_vec()].concat());
+        records.insert(pointer, [text.as_bytes(), &[0]].concat());
+    }
+    records.insert(
+        0x62c5d1,
+        [vec![0xff, 0x35], 0x900_u32.to_le_bytes().to_vec()].concat(),
+    );
+    records.insert(0x900, 0xa00_u32.to_le_bytes().to_vec());
+    records.insert(0xa00, b"FixtureFontSection\0".to_vec());
+    records.insert(
+        0x885fcb,
+        [
+            vec![0xc7, 0x46, 0x6d],
+            0xaabbccdd_u32.to_le_bytes().to_vec(),
+        ]
+        .concat(),
+    );
+    for (va, target) in [
+        (0x62c07f_u32, 0x8864c0_u32),
+        (0x62c0ad, 0x887c20),
+        (0x62c0ba, 0x887410),
+        (0x62c0c8, 0x873750),
+    ] {
+        records.insert(
+            va,
+            [
+                vec![0xe8],
+                target.wrapping_sub(va + 5).to_le_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+    }
+    for (va, pointer, text) in [
+        (0x62c08c, 0xb00_u32, "FixtureActiveArt"),
+        (0x85b6b4, 0xc00, "ADD"),
+    ] {
+        records.insert(va, [vec![0x68], pointer.to_le_bytes().to_vec()].concat());
+        records.insert(pointer, [text.as_bytes(), &[0]].concat());
+    }
+    records.insert(0x62c0b8, vec![0x6a, 7]);
+    records.insert(
+        0x85b6c6,
+        [vec![0xc7, 0x43, 0x38], 7_u32.to_le_bytes().to_vec()].concat(),
+    );
     records
 }
 
@@ -207,4 +332,74 @@ fn selected_original_command_geometry_has_ordered_slots() {
     assert!(first.x < last.x && first.y > last.y);
     assert!(first.x >= 0. && last.x + last.width <= rules.viewport[0]);
     assert!(last.y >= 0. && first.y + first.height <= rules.viewport[1]);
+}
+
+#[test]
+fn world_frame_uses_both_source_anchors_and_rejects_another_child() {
+    let mut bytes = fixture();
+    let rules = decode(&bytes).unwrap();
+    near(rules.world_frame.x, 0.03);
+    near(rules.world_frame.y, 0.17);
+    near(rules.world_frame.width, 1.13);
+    near(rules.world_frame.height, 0.67);
+    bytes.insert(
+        0x5e7b92,
+        [vec![0x8b, 0x8f], 0x456_u32.to_le_bytes().to_vec()].concat(),
+    );
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn disabled_art_reads_the_source_format_and_basename_without_a_guessed_prefix() {
+    let rules = decode(&fixture()).unwrap();
+    assert_eq!(rules.disabled_key, "FixtureDisabledFolder");
+    assert_eq!(
+        rules.disabled_art("skin/", "icons/example.blp").unwrap(),
+        "skin/Unavailable_example.blp"
+    );
+    assert_eq!(
+        rules.disabled_art("skin/", r"icons\example.blp").unwrap(),
+        "skin/Unavailable_example.blp"
+    );
+    assert!(rules.disabled_art("", "example.blp").is_err());
+    let mut bytes = fixture();
+    bytes.insert(0x500, b"%s%u%s\0".to_vec());
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn source_number_overlay_preserves_geometry_font_keys_and_default_colour() {
+    let r = decode(&fixture()).unwrap();
+    assert_eq!(r.badge.art_key, "FixtureBadgeArt");
+    assert_eq!(r.badge.font_key, "FixtureBadgeFont");
+    assert_eq!(r.badge.section, "FixtureFontSection");
+    assert_eq!(r.badge.height_key, "FixtureBadgeHeight");
+    assert_eq!(r.badge.colour, 0xaabbccdd);
+    near(r.badge.size[0], 0.013);
+    near(r.badge.size[1], 0.019);
+    near(r.badge.offset[0], 0.001);
+    near(r.badge.offset[1], -0.002);
+    near(r.badge.text_offset[0], 0.003);
+    near(r.badge.text_offset[1], -0.004);
+    let mut bad = fixture();
+    bad.insert(0x62c623, vec![0x6a, 8]);
+    assert!(decode(&bad).is_err());
+    let mut bad = fixture();
+    bad.insert(
+        0x62c500,
+        [vec![0xc7, 4, 0x24], 0_f32.to_le_bytes().to_vec()].concat(),
+    );
+    assert!(decode(&bad).is_err());
+}
+
+#[test]
+fn active_texture_uses_the_source_add_mapping() {
+    let r = decode(&fixture()).unwrap();
+    assert_eq!(r.active_key, "FixtureActiveArt");
+    let mut bad = fixture();
+    bad.insert(0x62c0b8, vec![0x6a, 9]);
+    assert!(decode(&bad).is_err());
+    let mut bad = fixture();
+    bad.insert(0xc00, b"BLEND\0".to_vec());
+    assert!(decode(&bad).is_err());
 }

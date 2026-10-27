@@ -29,6 +29,7 @@ pub struct EventSubject {
     pub issued_order: Option<i32>,
     pub autocast: Option<(HandleId, u64)>,
     pub mirror: Option<super::unit_mirror_image::MirrorEventContext>,
+    pub morph: Option<super::unit_morph::Context>,
     /// Shop sale in progress: the seller and the sold item, set only by a queued sale.
     pub sale: Option<SaleContext>,
     pub summon: Option<SummonContext>,
@@ -310,6 +311,14 @@ impl ObjectHost {
         nested: bool,
     ) -> Result<Option<TriggerDelivery>, Error> {
         let name = "event delivery";
+        if fired
+            .subject
+            .morph
+            .is_some_and(|c| !self.morph_context_live(c))
+        {
+            self.settle_morph_event(fired.subject.morph);
+            return Ok(None);
+        }
         if !nested
             && (self.events.active
                 || self
@@ -328,6 +337,7 @@ impl ObjectHost {
             self.settle_powerup_item(fired.subject.item);
             self.settle_construction_event(fired.subject.construction);
             self.settle_mirror_event(fired.subject.mirror);
+            self.settle_morph_event(fired.subject.morph);
             self.settle_autocast_event(fired.subject.autocast);
             return Ok(None);
         }
@@ -362,6 +372,7 @@ impl ObjectHost {
         let item = self.events.subject.item;
         let construction = self.events.subject.construction;
         let mirror = self.events.subject.mirror;
+        let morph = self.events.subject.morph;
         let autocast = self.events.subject.autocast;
         self.events.subject = previous
             .as_ref()
@@ -370,6 +381,7 @@ impl ObjectHost {
         self.settle_powerup_item(item);
         self.settle_construction_event(construction);
         self.settle_mirror_event(mirror);
+        self.settle_morph_event(morph);
         self.settle_autocast_event(autocast);
     }
 
@@ -413,6 +425,27 @@ impl ObjectHost {
                 .iter()
                 .any(|e| e.active && e.subject.autocast == Some(context))
     }
+    pub(super) fn morph_event_pending(&self, context: super::unit_morph::Context) -> bool {
+        self.events
+            .queue
+            .iter()
+            .any(|e| e.subject.morph == Some(context))
+            || self
+                .events
+                .synchronous
+                .as_ref()
+                .is_some_and(|q| q.iter().any(|e| e.subject.morph == Some(context)))
+            || self
+                .synchronous_frames
+                .iter()
+                .any(|f| f.events.iter().any(|e| e.subject.morph == Some(context)))
+            || (self.events.active && self.events.subject.morph == Some(context))
+            || self
+                .events
+                .previous
+                .iter()
+                .any(|e| e.active && e.subject.morph == Some(context))
+    }
     pub(super) fn mirror_event_pending(
         &self,
         context: super::unit_mirror_image::MirrorEventContext,
@@ -438,7 +471,10 @@ impl ObjectHost {
                 .any(|e| e.active && e.subject.mirror == Some(context))
     }
     pub(crate) fn has_queued_mirror_events(&self) -> bool {
-        self.events.queue.iter().any(|e| e.subject.mirror.is_some())
+        self.events
+            .queue
+            .iter()
+            .any(|e| e.subject.mirror.is_some() || e.subject.morph.is_some())
     }
 
     pub(super) fn construction_event_pending(

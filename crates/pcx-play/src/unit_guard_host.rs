@@ -382,6 +382,7 @@ impl ObjectHost {
         }
     }
     pub(super) fn unit_ordered(&mut self, unit: HandleId) {
+        self.morph_ordered(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(abilities) = &mut record.abilities
         {

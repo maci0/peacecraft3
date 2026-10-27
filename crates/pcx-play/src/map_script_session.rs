@@ -366,6 +366,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .objects()
                 .next_mirror_boundary(step_until);
             let step_until = mirror_wake.unwrap_or(step_until);
+            let step_until = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .next_morph_boundary(step_until)
+                .unwrap_or(step_until);
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?

@@ -2,7 +2,7 @@
 use crate::{neutral_player::sha256, pe_image::PeSections, scripts::AssetIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
     pub origin: AssetIdentity,
     pub image_sha256: [u8; 32],
@@ -349,6 +349,23 @@ impl Rules {
         props: &[String],
         rarity: i32,
     ) -> Result<Vec<usize>, String> {
+        self.candidates_mode(model, name, props, rarity == self.rare)
+    }
+    pub(crate) fn engine_candidates(
+        &self,
+        model: &crate::unit_model::Model,
+        name: &str,
+        props: &[String],
+    ) -> Result<Vec<usize>, String> {
+        self.candidates_mode(model, name, props, false)
+    }
+    fn candidates_mode(
+        &self,
+        model: &crate::unit_model::Model,
+        name: &str,
+        props: &[String],
+        rare: bool,
+    ) -> Result<Vec<usize>, String> {
         if model.sequences.len() > self.sequence_limit {
             return Err("animation rarity source sequence index budget".into());
         }
@@ -406,17 +423,13 @@ impl Rules {
                 k += 1
             }
         }
-        let mut extremum = if rarity == self.rare {
-            self.rare_initial
-        } else {
-            0.
-        };
+        let mut extremum = if rare { self.rare_initial } else { 0. };
         for index in &selected {
             let n = model.sequences[*index].rarity();
             if !n.is_finite() || n < 0. {
                 return Err("animation rarity requires finite nonnegative SEQS weights".into());
             }
-            extremum = if rarity == self.rare {
+            extremum = if rare {
                 extremum.min(n)
             } else {
                 extremum.max(n)

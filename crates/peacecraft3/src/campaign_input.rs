@@ -1068,6 +1068,12 @@ fn click(
     let Some(cursor) = window.cursor_position() else {
         return;
     };
+    if !camera
+        .logical_viewport_rect()
+        .is_some_and(|rect| rect.contains(cursor))
+    {
+        return;
+    }
     let Ok(ray) = camera.viewport_to_world(transform, cursor) else {
         return;
     };

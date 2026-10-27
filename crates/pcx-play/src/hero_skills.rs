@@ -21,6 +21,7 @@ pub struct Binding {
 
 #[derive(Clone, Debug)]
 pub struct Rules {
+    pub morph: Result<std::sync::Arc<crate::unit_morph_rules::Rules>, String>,
     pub autocast: Result<std::sync::Arc<crate::autocast_rules::Rules>, String>,
     pub mirror_image: Result<std::sync::Arc<crate::mirror_image_rules::Rules>, String>,
     pub(crate) experience: Option<std::sync::Arc<crate::hero_experience::Rules>>,
@@ -35,6 +36,18 @@ pub struct Rules {
 }
 
 impl Rules {
+    /// Optional ordinary form capability, retaining unrelated ability admission.
+    pub fn with_morph(mut self, rules: Result<crate::unit_morph_rules::Rules, String>) -> Self {
+        self.morph = rules.and_then(|rules| {
+            if rules.image_sha256 != self.binding.image_sha256 {
+                Err("morph source differs from ability admission".into())
+            } else {
+                Ok(std::sync::Arc::new(rules))
+            }
+        });
+        self
+    }
+
     pub fn with_autocast(mut self, rules: Result<crate::autocast_rules::Rules, String>) -> Self {
         self.autocast = rules.and_then(|rules| {
             if rules.image_sha256 != self.binding.image_sha256 {
@@ -220,6 +233,7 @@ impl Rules {
             other_implicit.push(id);
         }
         Ok(Self {
+            morph: Err("morph source not admitted".into()),
             autocast: Err("autocast source not admitted".into()),
             mirror_image: Err("Mirror Image source not admitted".into()),
             experience: None,

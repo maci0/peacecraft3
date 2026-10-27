@@ -21,6 +21,8 @@ pub struct ObjectHost {
     chain_lightning: Option<chain_lightning::Rules>,
     summoning: Option<unit_summon::State>,
     mirror_image: Option<unit_mirror_image::State>,
+    morph_active: Vec<HandleId>,
+    morph_fault: Option<String>,
     unit_expirations: std::collections::BTreeMap<HandleId, f64>,
     training: unit_training::State,
     events: event_delivery::Delivery,
@@ -289,6 +291,8 @@ impl ObjectHost {
             chain_lightning: None,
             summoning: None,
             mirror_image: None,
+            morph_active: Vec::new(),
+            morph_fault: None,
             unit_expirations: std::collections::BTreeMap::new(),
             indicators: None,
             cinematic_scene: None,
@@ -806,6 +810,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_synchronous_morph_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_mirror_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -873,6 +883,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.weather_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.morph_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.mirror_native(name, args) {
@@ -1149,6 +1162,22 @@ impl Host for ObjectHost {
         match name {
             "CreateTimer" => self.create(args).map_err(|e| e.to_string()),
             "DestroyTimer" => self.destroy(args).map_err(|e| e.to_string()),
+            "IssueImmediateOrder" | "IssueImmediateOrderById" => {
+                self.inner.native(name, args).map_err(|error| {
+                    let unit = args.first().and_then(|value| match value {
+                        Value::Handle(unit) => Some(*unit),
+                        _ => None,
+                    });
+                    let record = unit.and_then(|unit| self.executed_unit(unit).ok());
+                    let abilities = record.and_then(|record| record.abilities.as_ref())
+                        .map(|abilities| abilities.levels().take(16).collect::<Vec<_>>());
+                    let order = args.get(1).map(|order| match order {
+                        Value::Str(text) => format!("{:?}", text.chars().take(128).collect::<String>()),
+                        value => format!("{value:?}"),
+                    });
+                    format!("{error}; rejected immediate order: unit={unit:?} rawcode={:?} abilities_first16={abilities:?} order_first128={order:?} clock={:?}", record.map(|record| record.definition.rawcode), self.timer_game_time())
+                })
+            }
             _ => self.inner.native(name, args),
         }
     }
@@ -1517,6 +1546,12 @@ pub use game_exit::GameExitRequest;
 #[path = "unit_guard_host.rs"]
 mod unit_guards;
 pub use unit_guards::{GuardBudget, GuardState, UnitGuard};
+
+#[path = "unit_morph_host.rs"]
+mod unit_morph;
+pub use unit_morph::{
+    Context as MorphEventContext, EventPhase as MorphEventPhase, MorphPhase, UnitMorph,
+};
 
 #[path = "unit_mirror_image_host.rs"]
 mod unit_mirror_image;

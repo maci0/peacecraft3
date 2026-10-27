@@ -1220,6 +1220,16 @@ fn continue_campaign(app: &mut App, mut runtime: CampaignRuntime) {
             startup.last_error
         );
         let seed = app.world().resource::<CampaignSeed>().prepared.unwrap();
+        let member = app
+            .world()
+            .resource::<peacecraft3::map_requests::MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .receipts
+            .map
+            .path
+            .clone();
         let mut session = app
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>();
@@ -1230,9 +1240,10 @@ fn continue_campaign(app: &mut App, mut runtime: CampaignRuntime) {
             continue;
         }
         let identity = StartIdentity::from_context(seed, context);
-        assert!(
-            identity.sources.map.source == next,
-            "{identity:?}; next={next}"
+        assert_eq!(
+            member,
+            pcx_assets::AssetPath::new(&next).unwrap(),
+            "{identity:?}; member={member:?}; next={next}"
         );
         let restored = handle(&session, "bj_lastLoadedUnit");
         assert_eq!(

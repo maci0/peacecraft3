@@ -186,6 +186,11 @@ fn emit(
 }
 
 impl UnitActivity {
+    pub(super) fn replace_form_profile(&mut self, source: &Self) {
+        self.movable = source.movable;
+        self.speed = source.speed;
+    }
+
     pub(super) fn resume_after_pause(&mut self, since: f64, now: f64) {
         if let Some(motion) = &mut self.motion {
             motion.started += now - since.max(motion.started);
@@ -336,7 +341,8 @@ impl ObjectHost {
             .is_some_and(UnitActivity::moving))
     }
 
-    pub(super) fn current_unit_order(&self, unit: HandleId) -> Result<i32, Error> {
+    /// Read-only admitted current order, also used by the command-card highlight.
+    pub fn current_unit_order(&self, unit: HandleId) -> Result<i32, Error> {
         let name = "GetUnitCurrentOrder";
         let state = self.unit_activity.as_ref().ok_or_else(|| {
             self.inner
@@ -355,6 +361,7 @@ impl ObjectHost {
             .and_then(|a| a.autocast_current_order())
             .or(self
                 .construction_current_order(unit)?
+                .or_else(|| self.morph_current_order(unit))
                 .or_else(|| self.mirror_current_order(unit))
                 .or_else(|| self.summon_current_order(unit))
                 .or_else(|| self.inventory_order(unit))
@@ -686,6 +693,7 @@ impl ObjectHost {
                     return Ok(Value::Bool(false));
                 }
             }
+            self.require_morph_interruption(unit, name)?;
             if rally {
                 let [x, y] = if location {
                     self.location_point(&args[2], name).map_err(|e| {
@@ -830,7 +838,7 @@ impl ObjectHost {
                 && let Some(animation) = &mut animation
             {
                 animation
-                    .select(
+                    .select_engine(
                         if moving { "walk" } else { "stand" },
                         now,
                         if moving { activity.speed } else { None },
@@ -1363,7 +1371,7 @@ impl ObjectHost {
                 if matches!(result, Ok(false)) {
                     record.activity.as_mut().expect("activity").motion = None;
                     if let Some(animation) = &mut record.animation {
-                        animation_error = animation.select("stand", now, None).err();
+                        animation_error = animation.select_engine("stand", now, None).err();
                     }
                     let still_active = record
                         .animation
@@ -1531,7 +1539,7 @@ impl ObjectHost {
         let mut animation = record.animation.clone();
         if let Some(animation) = &mut animation {
             animation
-                .select(
+                .select_engine(
                     if motion.is_some() { "walk" } else { "stand" },
                     now,
                     if motion.is_some() {
@@ -1730,7 +1738,7 @@ impl ObjectHost {
         };
         if progress && let Some(animation) = &mut animation {
             animation
-                .select("walk", at, speed)
+                .select_engine("walk", at, speed)
                 .map_err(|e| self.inner.error("patrol", Failure::UnitAnimation(e)))?;
         }
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
@@ -1816,7 +1824,7 @@ impl ObjectHost {
                 && let Some(animation) = &mut animation
             {
                 animation
-                    .select("walk", now, Some(speed))
+                    .select_engine("walk", now, Some(speed))
                     .map_err(|detail| self.inner.error(name, Failure::UnitAnimation(detail)))?;
             }
             let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
@@ -2124,7 +2132,7 @@ impl ObjectHost {
             && let Some(animation) = &mut record.animation
         {
             animation
-                .select(
+                .select_engine(
                     "walk",
                     now,
                     record.activity.as_ref().and_then(|activity| activity.speed),
@@ -2235,9 +2243,11 @@ impl ObjectHost {
                             delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
                     }
                     if last && let Some(animation) = &mut record.animation {
-                        animation.select("stand", stand_at, None).map_err(|e| {
-                            self.inner.error("unit activity", Failure::UnitAnimation(e))
-                        })?;
+                        animation
+                            .select_engine("stand", stand_at, None)
+                            .map_err(|e| {
+                                self.inner.error("unit activity", Failure::UnitAnimation(e))
+                            })?;
                     }
                 }
                 moved += 1;
@@ -2390,7 +2400,7 @@ impl ObjectHost {
                     && let Some(animation) = &mut record.animation
                 {
                     animation_error = animation
-                        .select(
+                        .select_engine(
                             "stand",
                             motion.started + (motion.prefix + length) / f64::from(speed),
                             None,

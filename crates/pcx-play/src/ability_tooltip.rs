@@ -17,6 +17,55 @@ pub(super) fn source_integer(format: &str, value: i32) -> Result<String, String>
     Ok(format!("{prefix}{value}{suffix}"))
 }
 
+fn whole_percent(value: &str) -> Result<String, String> {
+    if value.len() > MAX_TEXT {
+        return Err("tooltip percentage text budget".into());
+    }
+    let (negative, digits) = if let Some(v) = value.strip_prefix('-') {
+        (true, v)
+    } else {
+        (false, value.strip_prefix('+').unwrap_or(value))
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    if (whole.is_empty() && fraction.is_empty())
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|c| c.is_ascii_digit())
+    {
+        return Err("tooltip percentage is not a decimal number".into());
+    }
+    let fraction = fraction.trim_end_matches('0');
+    // shortcut: fractional percentages refuse until the native rounding policy is qualified.
+    if fraction.len() > 2 {
+        return Err("fractional tooltip percentage formatting is unsupported".into());
+    }
+    let integer = if whole.is_empty() {
+        0
+    } else {
+        whole
+            .parse::<i128>()
+            .map_err(|_| "tooltip percentage overflow")?
+    };
+    let decimal = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<i128>()
+            .map_err(|_| "tooltip percentage overflow")?
+    };
+    let scaled = integer
+        .checked_mul(100)
+        .and_then(|v| v.checked_add(decimal * 10_i128.pow(2 - fraction.len() as u32)))
+        .ok_or("tooltip percentage overflow")?;
+    let signed = if negative {
+        scaled.checked_neg().ok_or("tooltip percentage overflow")?
+    } else {
+        scaled
+    };
+    Ok(signed.to_string())
+}
+
 pub(super) fn expand(
     raw: &str,
     mut read: impl FnMut([u8; 4], &str) -> Result<String, String>,
@@ -47,6 +96,11 @@ pub(super) fn expand(
         let (row, field) = token
             .split_once(',')
             .ok_or_else(|| format!("unsupported tooltip reference <{token}>"))?;
+        let (field, percentage) = match field.split_once(',') {
+            None => (field, false),
+            Some((field, "%")) => (field, true),
+            _ => return Err(format!("unsupported tooltip modifier <{token}>")),
+        };
         let row: [u8; 4] = row
             .as_bytes()
             .try_into()
@@ -66,6 +120,11 @@ pub(super) fn expand(
         if value.contains(['<', '>']) {
             return Err(format!("nested tooltip reference <{token}>"));
         }
+        let value = if percentage {
+            whole_percent(&value).map_err(|e| format!("tooltip <{token}>: {e}"))?
+        } else {
+            value
+        };
         if result
             .len()
             .checked_add(value.len())
@@ -183,7 +242,7 @@ mod tests {
             "|cffaabbccValue|r 17|n"
         );
         for raw in [
-            "<TEST,DataA1,%>",
+            "<TEST,DataA1,unknown>",
             "<TEST,>",
             "<ABC,DataA1>",
             "<TEST,DataA1",
@@ -199,6 +258,40 @@ mod tests {
         assert!(expand(&"x".repeat(MAX_TEXT + 1), |_, _| unreachable!()).is_err());
         assert!(expand(&"<TEST,A1>".repeat(MAX_TOKENS + 1), |_, _| Ok("1".into())).is_err());
         assert!(expand("<TEST,A1>", |_, _| Ok("x".repeat(MAX_TEXT + 1))).is_err());
+    }
+
+    #[test]
+    fn whole_percentage_tokens_preserve_literal_percent_and_refuse_ambiguous_rounding() {
+        for (raw, expected) in [
+            ("0.83", "83"),
+            (".07", "7"),
+            ("-0.3700", "-37"),
+            ("1.25", "125"),
+            ("+2", "200"),
+        ] {
+            assert_eq!(
+                expand("<TEST,DataC1,%>%", |_, field| {
+                    assert_eq!(field, "DataC1");
+                    Ok(raw.into())
+                })
+                .unwrap(),
+                format!("{expected}%")
+            );
+        }
+        for raw in [
+            "0.333",
+            "NaN",
+            "1e-2",
+            "",
+            "1.2.3",
+            "170141183460469231731687303715884105727",
+        ] {
+            assert!(
+                expand("<TEST,DataC1,%>", |_, _| Ok(raw.into())).is_err(),
+                "{raw}"
+            );
+        }
+        assert!(expand("<TEST,DataC1,%,extra>", |_, _| unreachable!()).is_err());
     }
 
     #[test]

@@ -550,8 +550,73 @@ impl Fdf {
                 height: self.height(name).unwrap_or(viewport.1),
             });
         };
-        let width = self.width(name)?;
-        let height = self.height(name)?;
+        let optional = |value: Result<f32, FdfError>| match value {
+            Ok(value) => Ok(Some(value)),
+            Err(FdfError::Missing { .. }) => Ok(None),
+            Err(error) => Err(error),
+        };
+        let (width, height) = (optional(self.width(name))?, optional(self.height(name))?);
+        let (width, height) = if let (Some(width), Some(height)) = (width, height) {
+            (width, height)
+        } else {
+            let unsupported = |value: &str| FdfError::Unsupported {
+                frame: name.into(),
+                property: "SetPoint dimensions",
+                value: value.into(),
+            };
+            let anchors = self
+                .inherited(name, |props| {
+                    (!props.set_points.is_empty()).then(|| props.set_points.clone())
+                })
+                .unwrap_or_default();
+            let [a, b] = anchors.as_slice() else {
+                return Err(unsupported(
+                    "missing dimensions require two constraining anchors",
+                ));
+            };
+            stack.push(name.into());
+            let points = [a, b].map(|anchor| {
+                let relative = self.rect_inner(&anchor.relative, viewport, stack)?;
+                let target = relative.point(anchor.relative_point);
+                let unit = Rect {
+                    left: 0.,
+                    bottom: 0.,
+                    width: 1.,
+                    height: 1.,
+                }
+                .point(anchor.point);
+                Ok::<_, FdfError>((unit.0, unit.1, target.0 + anchor.x, target.1 + anchor.y))
+            });
+            stack.pop();
+            let [a, b] = points;
+            let (a, b) = (a?, b?);
+            let width = match width {
+                Some(value) => value,
+                None if a.0 != b.0 => (b.2 - a.2) / (b.0 - a.0),
+                None => return Err(unsupported("anchors do not constrain Width")),
+            };
+            let height = match height {
+                Some(value) => value,
+                None if a.1 != b.1 => (b.3 - a.3) / (b.1 - a.1),
+                None => return Err(unsupported("anchors do not constrain Height")),
+            };
+            if !width.is_finite() || !height.is_finite() || width <= 0. || height <= 0. {
+                return Err(unsupported("invalid derived size"));
+            }
+            for (actual, expected) in [
+                (a.2 + (b.0 - a.0) * width, b.2),
+                (a.3 + (b.1 - a.1) * height, b.3),
+            ] {
+                let tolerance = f32::EPSILON * actual.abs().max(expected.abs()).max(1.) * 8.;
+                if !actual.is_finite()
+                    || !expected.is_finite()
+                    || (actual - expected).abs() > tolerance
+                {
+                    return Err(unsupported("conflicting anchors and dimensions"));
+                }
+            }
+            (width, height)
+        };
         stack.push(name.to_string());
         let rel = self.rect_inner(&sp.relative, viewport, stack)?;
         stack.pop();
@@ -859,6 +924,56 @@ Frame "FRAME" "MainMenuFrame" {
         assert!(f.frame("").is_none());
         assert!(f.frames().iter().all(|fr| !fr.name.is_empty()));
         assert_eq!(f.frame("A").unwrap().children.len(), 0);
+    }
+
+    #[test]
+    fn opposite_anchors_derive_missing_dimensions_and_reject_conflicts() {
+        let source = r#"
+Frame "FRAME" "Panel" {
+    Width 0.51,
+    Height 0.32,
+    SetPoint TOPLEFT, "Root", TOPLEFT, 0.09, -0.07,
+}
+Frame "FRAME" "Root" {
+    SetAllPoints,
+}
+Frame "TEXTAREA" "Area" {
+    SetPoint TOPLEFT, "Panel", TOPLEFT, 0.012, -0.023,
+    SetPoint BOTTOMRIGHT, "Panel", BOTTOMRIGHT, -0.034, 0.045,
+}
+"#;
+        let read = |source: &str| Fdf::parse(source).unwrap().rect("Area", (0.91, 0.73));
+        let rect = read(source).unwrap();
+        assert!((rect.left - 0.102).abs() < 0.000001);
+        assert!((rect.bottom - 0.385).abs() < 0.000001);
+        assert!((rect.width - 0.464).abs() < 0.000001);
+        assert!((rect.height - 0.252).abs() < 0.000001);
+        let reversed = source.replace("    SetPoint TOPLEFT, \"Panel\", TOPLEFT, 0.012, -0.023,\n    SetPoint BOTTOMRIGHT, \"Panel\", BOTTOMRIGHT, -0.034, 0.045,", "    SetPoint BOTTOMRIGHT, \"Panel\", BOTTOMRIGHT, -0.034, 0.045,\n    SetPoint TOPLEFT, \"Panel\", TOPLEFT, 0.012, -0.023,");
+        let reversed = read(&reversed).unwrap();
+        for (actual, expected) in [
+            (reversed.left, rect.left),
+            (reversed.bottom, rect.bottom),
+            (reversed.width, rect.width),
+            (reversed.height, rect.height),
+        ] {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+        assert!(
+            read(&source.replace(
+                "Frame \"TEXTAREA\" \"Area\" {",
+                "Frame \"TEXTAREA\" \"Area\" {\n    Width 0.1,"
+            ))
+            .is_err()
+        );
+        assert!(read(&source.replace("-0.034", "-0.9")).is_err());
+        assert!(read(&source.replace("BOTTOMRIGHT, \"Panel\"", "TOPLEFT, \"Panel\"")).is_err());
+        assert!(matches!(
+            read(&source.replace(
+                "TOPLEFT, \"Panel\", TOPLEFT, 0.012",
+                "TOPLEFT, \"Area\", TOPLEFT, 0.012"
+            )),
+            Err(FdfError::Cycle(_))
+        ));
     }
 
     /// The label key is reached through the button's `ButtonText`, which names

@@ -11,10 +11,14 @@ mod chain_lightning;
 mod experience_kills;
 #[path = "unit_mirror_image_tests.rs"]
 mod mirror_image;
+#[path = "unit_morph_host_tests.rs"]
+mod morph;
 #[path = "standard_command_host_tests.rs"]
 mod standard_commands;
 #[path = "unit_summon_tests.rs"]
 mod summoning;
+#[path = "unit_vertex_color_host_tests.rs"]
+mod vertex_color;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent, VisionCapability};
 use pcx_objects::editor::misc::{CombatRules, DayCycle, HeroVitals};
 use pcx_script::HandleId;
@@ -5715,3 +5719,22 @@ fn unavailable_ledger_refuses_new_acquisition_without_blocking_expiry_or_existin
 
 #[path = "ally_color_host_tests.rs"]
 mod ally_color_tests;
+
+#[test]
+fn unsupported_immediate_order_retains_error_and_reports_bounded_actual_context_without_effects() {
+    let (mut vm, unit, _) = open(&armed("64", "normal"));
+    let h = &mut vm.host().inner;
+    let before = h.executed_unit(unit).unwrap().clone();
+    let handles = h.inner().handles();
+    let args = [
+        Value::Handle(unit),
+        Value::Str("unimplemented_actual_order".into()),
+    ];
+    let error = h.native("IssueImmediateOrder", &args).unwrap_err();
+    assert!(error.contains("native `IssueImmediateOrder` is unsupported by this host"));
+    assert!(error.contains("rejected immediate order"));
+    assert!(error.contains("unimplemented_actual_order"));
+    assert!(error.contains(&format!("rawcode={:?}", Some(before.definition.rawcode))));
+    assert_eq!(h.executed_unit(unit).unwrap(), &before);
+    assert_eq!(h.inner().handles(), handles);
+}

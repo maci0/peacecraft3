@@ -38,9 +38,12 @@ struct Actor {
     selection: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
     uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
     tint: [f32; 3],
+    channel_scale: f32,
+    material_modes: Vec<(AlphaMode, crate::menu_material::MenuBlend)>,
     scale: f32,
     height: f32,
     color: i32,
+    definition_revision: Option<u64>,
     image_bytes: usize,
     vertices: usize,
     /// Geosets whose authored material is lit, captured before sun lighting.
@@ -60,7 +63,7 @@ pub(crate) struct UnitActors {
     item_animations: BTreeMap<HandleId, pcx_play::unit_model::Animation>,
     item_models: BTreeMap<String, Arc<pcx_play::unit_model::Model>>,
     item_source_bytes: usize,
-    failed: BTreeMap<HandleId, Option<i32>>,
+    failed: BTreeMap<HandleId, Option<(i32, u64)>>,
     image_bytes: usize,
     vertices: usize,
     parameters: Option<pcx_play::menu_lighting::Parameters>,
@@ -301,7 +304,7 @@ fn transform_for(
     let z = water
         .or_else(|| pcx_tera::world::sample_world_z(terrain, x, y))
         .ok_or("unit position is outside admitted terrain")?
-        + height;
+        + unit.flight_height.unwrap_or(height);
     let transform = Transform::from_translation(Vec3::new(x, z, -y))
         .with_rotation(
             Quat::from_rotation_y(unit.face.to_radians())
@@ -640,6 +643,12 @@ enum Visual<'a> {
     Sky(&'a pcx_play::unit_model::Animation, Vec3),
 }
 impl<'a> Visual<'a> {
+    fn definition_revision(self) -> Option<u64> {
+        match self {
+            Self::Unit(unit, ..) => Some(unit.definition_revision),
+            _ => None,
+        }
+    }
     fn animation(self) -> Result<&'a pcx_play::unit_model::Animation, String> {
         match self {
             Self::Unit(unit, ..) => unit
@@ -950,6 +959,17 @@ impl Actor {
             .iter()
             .map(|(_, _, handle)| assets.materials.get(handle).is_some_and(|m| !m.base.unlit))
             .collect();
+        let material_modes = geosets
+            .bound
+            .iter()
+            .map(|(_, _, handle)| {
+                let material = assets
+                    .materials
+                    .get(handle)
+                    .expect("spawned actor material");
+                (material.base.alpha_mode, material.extension.clone())
+            })
+            .collect();
         Ok((
             Self {
                 root,
@@ -961,9 +981,12 @@ impl Actor {
                 selection,
                 uv,
                 tint,
+                channel_scale,
+                material_modes,
                 scale,
                 height,
                 color,
+                definition_revision: visual.definition_revision(),
                 image_bytes: available_images - remaining,
                 vertices,
                 lit,
@@ -1083,15 +1106,41 @@ impl Actor {
             &mut assets.materials,
         )
         .map_err(|e| e.to_string())?;
-        for (_, _, handle) in &self.geosets.bound {
+        let tint = match visual {
+            Visual::Unit(unit, ..) => unit_tint(unit, self.tint, self.channel_scale),
+            _ => [self.tint[0], self.tint[1], self.tint[2], 1.0],
+        };
+        if tint[3] < 1.0
+            && self
+                .material_modes
+                .iter()
+                .any(|(mode, _)| *mode == AlphaMode::Multiply)
+        {
+            return Err("scripted unit opacity on modulate layers is not qualified".into());
+        }
+        for ((_, entity, handle), (mode, blend)) in
+            self.geosets.bound.iter().zip(&self.material_modes)
+        {
             if let Some(material) = assets.materials.get_mut(handle).as_deref_mut() {
                 let c = material.base.base_color.to_linear();
                 material.base.base_color = Color::linear_rgba(
-                    c.red * self.tint[0],
-                    c.green * self.tint[1],
-                    c.blue * self.tint[2],
-                    c.alpha,
+                    c.red * tint[0],
+                    c.green * tint[1],
+                    c.blue * tint[2],
+                    c.alpha * tint[3],
                 );
+                material.base.alpha_mode = *mode;
+                material.extension = blend.clone();
+                material
+                    .extension
+                    .apply_unit_opacity(&mut material.base, tint[3]);
+                if let Ok(mut visible) = visibility.get_mut(*entity) {
+                    *visible = if c.alpha * tint[3] <= 0.0 {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    };
+                }
             }
         }
         if let Some((sun, parameters)) = light {
@@ -1109,6 +1158,18 @@ impl Actor {
             )?;
         }
         Ok(())
+    }
+}
+
+fn unit_tint(unit: &ExecutedUnit, source: [f32; 3], channel_scale: f32) -> [f32; 4] {
+    match unit.vertex_color {
+        Some([r, g, b, a]) => [
+            f32::from(r) * channel_scale,
+            f32::from(g) * channel_scale,
+            f32::from(b) * channel_scale,
+            f32::from(a) / f32::from(u8::MAX),
+        ],
+        None => [source[0], source[1], source[2], 1.0],
     }
 }
 
@@ -1476,14 +1537,12 @@ fn project(
                 continue;
             }
         };
-        if state.failed.get(&id) == Some(&Some(color)) {
+        if state.failed.get(&id) == Some(&Some((color, unit.definition_revision))) {
             continue;
         }
-        if state
-            .actors
-            .get(&id)
-            .is_some_and(|actor| actor.color != color)
-        {
+        if state.actors.get(&id).is_some_and(|actor| {
+            actor.color != color || actor.definition_revision != Some(unit.definition_revision)
+        }) {
             retire(&mut commands, &mut state, id);
         }
         if !state.actors.contains_key(&id) {
@@ -1511,7 +1570,9 @@ fn project(
                     state.actors.insert(id, actor);
                 }
                 Err(e) => {
-                    state.failed.insert(id, Some(color));
+                    state
+                        .failed
+                        .insert(id, Some((color, unit.definition_revision)));
                     state.last_error = Some(format!("unit {id:?}: {e}"));
                     continue;
                 }
@@ -1743,6 +1804,22 @@ fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
 mod tests {
     use super::*;
     use pcx_objects::editor::{FieldDef, FieldKind, FieldSource, ObjectKind, SlkId};
+    #[test]
+    fn live_vertex_color_replaces_source_tint_and_preserves_authored_opacity_multiplier() {
+        let mut unit = unit();
+        let source = [0.17, 0.43, 0.79];
+        assert_eq!(unit_tint(&unit, source, 0.01), [0.17, 0.43, 0.79, 1.0]);
+        unit.vertex_color = Some([23, 67, 131, 51]);
+        let tint = unit_tint(&unit, source, 0.01);
+        for (actual, expected) in tint.into_iter().zip([0.23, 0.67, 1.31, 0.2]) {
+            assert!((actual - expected).abs() < 0.00001);
+        }
+        unit.vertex_color = Some([0, 0, 0, 0]);
+        assert_eq!(unit_tint(&unit, source, 0.01), [0.0; 4]);
+        unit.vertex_color = Some([19, 37, 73, 255]);
+        assert_eq!(unit_tint(&unit, source, 0.01)[3], 1.0);
+    }
+
     fn unit() -> ExecutedUnit {
         let field = FieldDef {
             fourcc: *b"S001",
@@ -1784,6 +1861,10 @@ mod tests {
             owner: id,
             vision_viewers: Vec::new(),
             team_color: None,
+            vertex_color: None,
+            definition_revision: 0,
+            morph: None,
+            flight_height: None,
             creation_color: None,
             source: pcx_sim::world::Source {
                 install: "synthetic".into(),
@@ -2012,6 +2093,25 @@ mod tests {
         );
         let transform = transform_for(&unit, &terrain, 2., 7., Some(25.)).unwrap();
         assert_eq!(transform.translation, Vec3::new(32., 32., -64.));
+        unit.flight_height = Some(19.);
+        let transform = transform_for(&unit, &terrain, 2., 7., Some(25.)).unwrap();
+        assert_eq!(transform.translation, Vec3::new(32., 44., -64.));
+        unit.flight_height = Some(f32::NAN);
+        assert!(transform_for(&unit, &terrain, 2., 7., Some(25.)).is_err());
+    }
+
+    #[test]
+    fn unit_visual_retains_definition_revision_without_changing_identity() {
+        let mut unit = unit();
+        assert_eq!(
+            Visual::Unit(&unit, None, None).definition_revision(),
+            Some(0)
+        );
+        unit.definition_revision = 7;
+        assert_eq!(
+            Visual::Unit(&unit, None, None).definition_revision(),
+            Some(7)
+        );
     }
 
     #[test]

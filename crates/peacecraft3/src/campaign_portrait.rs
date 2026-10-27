@@ -513,6 +513,7 @@ fn spawn(
     let camera_entity = commands
         .spawn((
             Camera3d::default(),
+            crate::menu_composition::MenuColourCamera,
             Camera {
                 order: -1,
                 is_active: false,
@@ -947,6 +948,16 @@ mod tests {
             )
             .unwrap();
         assert!(app.world().get::<Camera>(camera).is_some());
+        assert!(
+            app.world()
+                .get::<crate::menu_composition::MenuColourCamera>(camera)
+                .is_some(),
+            "numeric portrait inputs require the matching camera composition space"
+        );
+        assert_eq!(
+            app.world().get::<bevy::camera::CompositingSpace>(camera),
+            Some(&bevy::camera::CompositingSpace::Srgb)
+        );
         app.world_mut()
             .run_system_once(
                 |mut commands: Commands, mut fixture: ResMut<Fixture>, mut assets: DrawAssets| {

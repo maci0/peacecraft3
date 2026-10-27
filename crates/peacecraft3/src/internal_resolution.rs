@@ -18,6 +18,7 @@ pub(crate) struct InternalResolution {
     pub(crate) factor: u32,
     pub(crate) error: Option<String>,
     pass: Option<Pass>,
+    clear: Option<Entity>,
 }
 impl Default for InternalResolution {
     fn default() -> Self {
@@ -25,6 +26,7 @@ impl Default for InternalResolution {
             factor: 1,
             error: None,
             pass: None,
+            clear: None,
         }
     }
 }
@@ -129,18 +131,104 @@ fn retire(
 }
 type SkyFilter = (With<SkyCamera>, Without<CampaignSceneCamera>);
 
+fn world_viewport(frame: [f32; 4], size: UVec2) -> bevy::camera::Viewport {
+    let edge = |fraction: f32, extent: u32| {
+        (fraction * extent as f32).round().clamp(0., extent as f32) as u32
+    };
+    let start = UVec2::new(edge(frame[0], size.x), edge(frame[1], size.y));
+    let end = UVec2::new(
+        edge(frame[0] + frame[2], size.x),
+        edge(frame[1] + frame[3], size.y),
+    );
+    bevy::camera::Viewport {
+        physical_position: start,
+        physical_size: (end - start).max(UVec2::ONE),
+        ..default()
+    }
+}
+
 fn sync(
     mut commands: Commands,
     mut state: ResMut<InternalResolution>,
     mut targets: Targets,
     mut scenes: Query<(Entity, &mut Camera, &mut RenderTarget), With<CampaignSceneCamera>>,
     mut skies: Query<(&mut Camera, &mut RenderTarget), SkyFilter>,
+    card: Option<Res<crate::campaign_command_card::CommandCard>>,
+    mut session: Option<
+        ResMut<
+            peacecraft3::map_script_session::MapScriptSession<
+                pcx_play::map_startup_host::MapStartupHost,
+            >,
+        >,
+    >,
 ) {
     let scene = scenes
         .single()
         .ok()
         .filter(|(_, c, _)| c.is_active)
         .map(|(e, _, _)| e);
+    if let Some(entity) = scene {
+        let normal = session
+            .as_mut()
+            .and_then(|s| s.host())
+            .and_then(|h| h.objects().presentation())
+            .is_none_or(|p| p.interface_visible != Some(false));
+        if let Some(frame) = card.as_ref().and_then(|c| c.world_frame()) {
+            let (_, mut camera, target) = scenes.get_mut(entity).expect("live scene");
+            let output = state
+                .pass
+                .as_ref()
+                .filter(|p| p.scene == entity)
+                .map_or(target.as_ref(), |p| &p.output)
+                .clone();
+            if let Some((size, _)) = targets
+                .size(&output)
+                .filter(|(size, _)| size.min_element() > 0)
+            {
+                let viewport = normal.then(|| world_viewport(frame, size));
+                camera.clear_color = bevy::camera::ClearColorConfig::None;
+                if let Some(pass) = state.pass.as_mut().filter(|p| p.scene == entity) {
+                    pass.viewport = viewport.clone();
+                    camera.viewport = viewport.map(|mut v| {
+                        v.physical_position *= pass.factor;
+                        v.physical_size *= pass.factor;
+                        v
+                    });
+                } else {
+                    camera.viewport = viewport;
+                }
+                let clear = *state.clear.get_or_insert_with(|| {
+                    commands
+                        .spawn((
+                            Camera2d,
+                            RenderLayers::none(),
+                            Camera {
+                                order: -3,
+                                clear_color: bevy::camera::ClearColorConfig::Custom(Color::BLACK),
+                                ..default()
+                            },
+                            output.clone(),
+                        ))
+                        .id()
+                });
+                // Clear the render target outside the source world frame, below every scene pass.
+                commands.entity(clear).insert((
+                    Camera {
+                        order: -3,
+                        is_active: true,
+                        clear_color: bevy::camera::ClearColorConfig::Custom(Color::BLACK),
+                        ..default()
+                    },
+                    output,
+                ));
+            }
+        }
+    } else if let Some(clear) = state.clear {
+        commands.entity(clear).insert(Camera {
+            is_active: false,
+            ..default()
+        });
+    }
     let mut desired = None;
     let mut error = if scene.is_none() && state.factor != 1 {
         state.error.clone()
@@ -271,6 +359,9 @@ fn sync(
     }
     // Actor projection refreshes the sky camera every frame, before this system.
     for (mut camera, mut target) in &mut skies {
+        if scene.is_some() && state.clear.is_some() {
+            camera.clear_color = bevy::camera::ClearColorConfig::None;
+        }
         if let Some(pass) = &state.pass {
             camera.order = -2;
             let (_, scene, scene_target) = scenes.get(pass.scene).expect("live scene");
@@ -291,6 +382,18 @@ fn sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_world_frame_scales_both_edges_without_losing_the_display_origin() {
+        for size in [UVec2::new(800, 600), UVec2::new(1600, 1200)] {
+            let v = world_viewport([0.025, 0.05, 0.95, 0.7], size);
+            assert_eq!(v.physical_position, UVec2::new(size.x / 40, size.y / 20));
+            assert_eq!(
+                v.physical_size,
+                UVec2::new(size.x * 19 / 20, size.y * 7 / 10)
+            );
+        }
+    }
+
     #[test]
     fn factors_preserve_aspect_and_refuse_unbounded_allocations() {
         for factor in 1..=4 {

@@ -131,7 +131,15 @@ fn look_at_retains_target_and_offsets_refuses_atomically_and_reset_restores_anim
     assert_eq!(host.inner().handles(), before);
 }
 
-fn animation_vm(mut fail_first: bool) -> (VmHost, Arc<crate::unit_model::Model>) {
+fn animation_vm(fail_first: bool) -> (VmHost, Arc<crate::unit_model::Model>) {
+    animation_vm_with_joints(fail_first, Some("head"), &[])
+}
+
+fn animation_vm_with_joints(
+    mut fail_first: bool,
+    bone_name: Option<&str>,
+    helpers: &[&str],
+) -> (VmHost, Arc<crate::unit_model::Model>) {
     let common = script_common_with(
         "widget",
         true,
@@ -165,13 +173,29 @@ native RemoveUnit takes unit u returns nothing
     host.admit_unit_blend(blend).unwrap();
     let original = crate::unit_model::tests::model();
     let mut bytes = original.bytes.to_vec();
-    let mut bone = vec![0u8; 104];
-    bone[..4].copy_from_slice(&96u32.to_le_bytes());
-    bone[4..8].copy_from_slice(b"head");
-    bone[88..92].copy_from_slice(&(-1i32).to_le_bytes());
-    bytes.extend(b"BONE");
-    bytes.extend((bone.len() as u32).to_le_bytes());
-    bytes.extend(bone);
+    if let Some(name) = bone_name {
+        let mut bone = vec![0u8; 104];
+        bone[..4].copy_from_slice(&96u32.to_le_bytes());
+        bone[4..4 + name.len()].copy_from_slice(name.as_bytes());
+        bone[88..92].copy_from_slice(&(-1i32).to_le_bytes());
+        bytes.extend(b"BONE");
+        bytes.extend((bone.len() as u32).to_le_bytes());
+        bytes.extend(bone);
+    }
+    if !helpers.is_empty() {
+        let mut records = Vec::new();
+        for (index, name) in helpers.iter().enumerate() {
+            let mut node = vec![0u8; 96];
+            node[..4].copy_from_slice(&96u32.to_le_bytes());
+            node[4..4 + name.len()].copy_from_slice(name.as_bytes());
+            node[84..88].copy_from_slice(&(index as u32 + 1).to_le_bytes());
+            node[88..92].copy_from_slice(&(-1i32).to_le_bytes());
+            records.extend(node);
+        }
+        bytes.extend(b"HELP");
+        bytes.extend((records.len() as u32).to_le_bytes());
+        bytes.extend(records);
+    }
     let model = Arc::new(
         crate::unit_model::Model::read(
             original.origin.clone(),
@@ -4049,4 +4073,128 @@ fn local_original_player_structure_count_contract_and_counter_split() {
         "false retains the same completed counter"
     );
     assert_eq!(&split[24..], &[0x33, 0xd2, 0x03, 0xc2, 0x5d, 0xc2, 4, 0]);
+}
+
+#[test]
+fn look_at_accepts_helper_only_joint_using_the_retained_combined_model() {
+    let (mut fixture, model) = animation_vm_with_joints(false, None, &["helper_focus"]);
+    fixture.vm.init_globals().unwrap();
+    fixture.vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = fixture.vm.global("U") else {
+        panic!("unit")
+    };
+    let h = &mut fixture.vm.host().inner;
+    let before = h.executed_unit(unit).unwrap().clone();
+    let handles = h.inner().handles();
+    h.native(
+        "SetUnitLookAt",
+        &[
+            Value::Handle(unit),
+            Value::Str("HELPER_FOCUS".into()),
+            Value::Handle(unit),
+            Value::Real(1.),
+            Value::Real(2.),
+            Value::Real(3.),
+        ],
+    )
+    .unwrap();
+    let mut expected = before.clone();
+    expected.look_at = Some(crate::playercolor_host::UnitLookAt {
+        bone: "HELPER_FOCUS".into(),
+        target: unit,
+        offset: [1., 2., 3.],
+    });
+    assert_eq!(h.executed_unit(unit).unwrap(), &expected);
+    assert_eq!(h.inner().handles(), handles);
+    assert!(Arc::ptr_eq(
+        &h.executed_unit(unit)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap()
+            .model,
+        &model
+    ));
+    h.native("ResetUnitLookAt", &[Value::Handle(unit)]).unwrap();
+    assert_eq!(h.executed_unit(unit).unwrap(), &before);
+}
+
+#[test]
+fn look_at_missing_or_duplicate_joint_names_across_node_classes_refuse_atomically() {
+    for (bone, helpers, wanted) in [
+        (Some("focus"), vec!["FOCUS", "safe"], "focus"),
+        (None, vec!["focus", "FOCUS", "safe"], "focus"),
+        (Some("focus"), vec!["safe"], "missing"),
+    ] {
+        let (mut fixture, _) = animation_vm_with_joints(false, bone, &helpers);
+        fixture.vm.init_globals().unwrap();
+        fixture.vm.call("main", &[]).unwrap();
+        let Value::Handle(unit) = fixture.vm.global("U") else {
+            panic!("unit")
+        };
+        let h = &mut fixture.vm.host().inner;
+        let mut args = [
+            Value::Handle(unit),
+            Value::Str("safe".into()),
+            Value::Handle(unit),
+            Value::Real(1.),
+            Value::Real(2.),
+            Value::Real(3.),
+        ];
+        h.native("SetUnitLookAt", &args).unwrap();
+        let before = h.executed_unit(unit).unwrap().clone();
+        let handles = h.inner().handles();
+        args[1] = Value::Str(wanted.into());
+        assert!(
+            h.native("SetUnitLookAt", &args)
+                .unwrap_err()
+                .contains("missing or ambiguous")
+        );
+        assert_eq!(h.executed_unit(unit).unwrap(), &before);
+        assert_eq!(h.inner().handles(), handles);
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_LOOK_AT_MODEL and PCX_LOOK_AT_JOINT from the selected local model and authored script"]
+fn selected_original_look_at_helper_is_in_the_admitted_joint_list() {
+    let path = std::env::var_os("PCX_LOOK_AT_MODEL").expect("PCX_LOOK_AT_MODEL");
+    let wanted = std::env::var("PCX_LOOK_AT_JOINT").expect("PCX_LOOK_AT_JOINT");
+    let bytes = std::fs::read(&path).unwrap();
+    let mdl = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+    assert_eq!(
+        mdl.bones(&bytes)
+            .unwrap()
+            .iter()
+            .filter(|b| b.name.eq_ignore_ascii_case(&wanted))
+            .count(),
+        0
+    );
+    assert_eq!(
+        mdl.nodes(&bytes, pcx_mdl::tag::HELP)
+            .unwrap()
+            .iter()
+            .filter(|b| b.name.eq_ignore_ascii_case(&wanted))
+            .count(),
+        1
+    );
+    let model = crate::unit_model::Model::read(
+        crate::scripts::AssetIdentity {
+            source: path.to_string_lossy().into_owned(),
+            edition: "explicit selected local model".into(),
+            version: "selected install".into(),
+        },
+        "explicit local model".into(),
+        bytes.into(),
+        16 << 20,
+    )
+    .unwrap();
+    assert_eq!(
+        model
+            .joints
+            .iter()
+            .filter(|b| b.name.eq_ignore_ascii_case(&wanted))
+            .count(),
+        1
+    );
 }

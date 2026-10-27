@@ -31,6 +31,8 @@ use std::sync::Arc;
 #[path = "unit_hero_host.rs"]
 mod hero;
 pub use hero::{HeroBudget, HeroProgress, LearnBlock, LearnableSkill, ResearchIcon, UnitAbilities};
+#[path = "unit_vertex_color_host.rs"]
+mod vertex_color;
 
 const NATIVE: &str = "CreateUnit";
 const CORPSE: &str = "CreateCorpse";
@@ -38,6 +40,7 @@ const GET_TYPE: &str = "GetUnitTypeId";
 const GET_OWNER: &str = "GetOwningPlayer";
 const SET_OWNER: &str = "SetUnitOwner";
 const SET_COLOR: &str = "SetUnitColor";
+const SET_VERTEX_COLOR: &str = "SetUnitVertexColor";
 const GET_COLLISION: &str = "BlzGetUnitCollisionSize";
 const SET_RANGE: &str = "SetUnitAcquireRange";
 const SET_HERO_LEVEL: &str = "SetHeroLevel";
@@ -121,6 +124,12 @@ pub struct ExecutedUnit {
     /// Source-qualified death/decay lifecycle, sharing this unit and logical clock.
     pub decay: Option<crate::unit_decay::State>,
     pub definition: Definition,
+    /// Changes when a same-handle form transition replaces the definition.
+    pub definition_revision: u64,
+    pub morph: Option<super::UnitMorph>,
+    /// Effective visual altitude; absence preserves the current source definition.
+    /// This is independent of the public GetUnitFlyHeight target.
+    pub flight_height: Option<f32>,
     /// Derived once from the retained definition; invalid geometry refuses only when queried.
     /// Runtime collision setters must update this value if they are admitted later.
     pub collision_radius: Result<f32, &'static str>,
@@ -134,6 +143,8 @@ pub struct ExecutedUnit {
     pub team_color: Option<HandleId>,
     /// Assigned creation-player colour, captured before later ownership transfers.
     pub creation_color: Option<HandleId>,
+    /// Explicit script RGBA bytes; absence preserves authored unit tint and model opacity.
+    pub vertex_color: Option<[u8; 4]>,
     pub source: Source,
     /// Executed `CreateUnit` x. Live acceptance is still unresolved.
     pub x: f32,
@@ -241,6 +252,7 @@ pub(super) struct Admission {
     owner_span: Option<Span>,
     owner_setter_span: Option<Span>,
     color_setter_span: Option<Span>,
+    vertex_color_span: Option<Span>,
     collision_span: Option<Span>,
     /// Present when this program declares `SetUnitAcquireRange` on the same source.
     acquire_span: Option<Span>,
@@ -345,6 +357,7 @@ impl ObjectHost {
         let owner_span = self.optional_unit_getter(&declaration_source, GET_OWNER, "player")?;
         let owner_setter_span = self.owner_declaration(&declaration_source)?;
         let color_setter_span = self.color_declaration(&declaration_source)?;
+        let vertex_color_span = self.vertex_color_declaration(&declaration_source)?;
         let collision_span =
             self.optional_unit_getter(&declaration_source, GET_COLLISION, "real")?;
         let acquire_span = self.acquire_declaration(&declaration_source)?;
@@ -445,6 +458,7 @@ impl ObjectHost {
             owner_span,
             owner_setter_span,
             color_setter_span,
+            vertex_color_span,
             collision_span,
             acquire_span,
             hero_level_span,
@@ -1332,6 +1346,9 @@ impl ObjectHost {
         }
         if name == SET_COLOR && self.admitted_units().ok()?.color_setter_span.is_some() {
             return Some(self.set_unit_color(args));
+        }
+        if name == SET_VERTEX_COLOR && self.admitted_units().ok()?.vertex_color_span.is_some() {
+            return Some(self.set_unit_vertex_color(args));
         }
         if name == GET_COLLISION && self.admitted_units().ok()?.collision_span.is_some() {
             return Some(self.unit_collision(args));
@@ -2416,6 +2433,10 @@ impl ObjectHost {
                 vision_viewers: Vec::new(),
                 team_color: None,
                 creation_color: None,
+                vertex_color: None,
+                definition_revision: 0,
+                morph: None,
+                flight_height: None,
                 source,
                 x,
                 y,
@@ -3092,5 +3113,196 @@ fn finite_state_value(value: &Value) -> Result<f32, Failure> {
         Err(Failure::UnitState(
             "recreation policy: finite real required",
         ))
+    }
+}
+
+impl ObjectHost {
+    pub(super) fn prepare_morph_form(
+        &mut self,
+        unit: HandleId,
+        kind: [u8; 4],
+    ) -> Result<super::unit_morph::Form, Error> {
+        let fail = |why: String| self.inner.error("morph", Failure::UnitActivity(why));
+        let source = self.executed_unit(unit)?.clone();
+        let definition = self
+            .unit_catalog()?
+            .resolve(kind)
+            .map_err(|e| fail(format!("form catalog: {e:?}")))?;
+        if definition.rawcode != kind {
+            return Err(fail("form catalog returned another kind".into()));
+        }
+        let admitted = self.admitted_units()?;
+        if definition.kind != ObjectKind::Unit
+            || definition.fields.len() > admitted.max_retained_fields
+            || definition.modifications.len() > admitted.max_modifications
+        {
+            return Err(fail(
+                "form catalog family or retained-definition budget differs".into(),
+            ));
+        }
+        let old = self.prepare_unit_abilities(&source.definition)?;
+        let new = self.prepare_unit_abilities(&definition)?;
+        if old.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+            != new.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+        {
+            return Err(fail("form changes owned ability association".into()));
+        }
+        let source_vitals = self.prepare_unit_vitals(&source.definition, source.health_handicap)?;
+        let next_vitals = self.prepare_unit_vitals(&definition, source.health_handicap)?;
+        if source_vitals != next_vitals {
+            return Err(fail(
+                "form changes effective pool/regeneration rules".into(),
+            ));
+        }
+        let activity = self.prepare_unit_activity(&definition)?;
+        let combat = self.prepare_unit_combat(&definition)?;
+        let rules = self
+            .admitted_units()?
+            .rarity
+            .as_ref()
+            .ok_or_else(|| fail("animation property capability missing".into()))?
+            .as_ref()
+            .map_err(|e| fail(e.clone()))?
+            .rules
+            .clone();
+        let props =
+            crate::unit_animation_rarity::properties(&definition, &rules.props).map_err(fail)?;
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| fail("clock missing".into()))?;
+        let loader = self
+            .units
+            .as_mut()
+            .and_then(|u| u.models.as_mut())
+            .ok_or_else(|| {
+                self.inner.error(
+                    "morph",
+                    Failure::UnitAnimation("form model loader missing".into()),
+                )
+            })?;
+        let model = loader(&definition)
+            .map_err(|e| self.inner.error("morph", Failure::UnitAnimation(e)))?
+            .ok_or_else(|| {
+                self.inner.error(
+                    "morph",
+                    Failure::UnitAnimation("form has no materialized model".into()),
+                )
+            })?;
+        if source
+            .animation
+            .as_ref()
+            .is_none_or(|a| a.model.member != model.member || a.model.bytes != model.bytes)
+        {
+            return Err(self.inner.error("morph", Failure::UnitAnimation("ordinary form requires the same authored model; other form model transitions are unqualified".into())));
+        }
+        let mut animation = crate::unit_model::Animation::new(model, now)
+            .map_err(|e| self.inner.error("morph", Failure::UnitAnimation(e)))?;
+        animation.set_engine_properties(rules, props);
+        animation
+            .select_engine("stand", now, None)
+            .map_err(|e| self.inner.error("morph", Failure::UnitAnimation(e)))?;
+        let prepared = super::unit_morph::Form {
+            definition,
+            animation: Some(animation),
+            activity,
+            combat,
+        };
+        self.prepare_morph_placement(unit, &prepared.definition)?;
+        Ok(prepared)
+    }
+    fn prepare_morph_placement(
+        &mut self,
+        unit: HandleId,
+        definition: &Definition,
+    ) -> Result<crate::unit_placement::Prepared, Error> {
+        let record = self.executed_unit(unit)?;
+        let point = record.position.ok_or_else(|| {
+            self.inner
+                .error("morph", Failure::UnitActivity("position missing".into()))
+        })?;
+        let face = record.face;
+        let shown = record.shown;
+        let geometry = super::unit_positions::geometry(definition)
+            .map_err(|e| self.inner.error("morph", Failure::UnitActivity(e.into())))?;
+        let placement = self.unit_placement.as_mut().ok_or_else(|| {
+            self.inner
+                .error("morph", Failure::UnitActivity("placement missing".into()))
+        })?;
+        let mut prepared = placement
+            .prepare_relocation_class(
+                unit,
+                point,
+                geometry.radius,
+                geometry.path,
+                face,
+                geometry.movement,
+            )
+            .map_err(|e| {
+                self.inner
+                    .error("morph", Failure::UnitPlacement(e.to_string()))
+            })?;
+        if prepared.position != point {
+            return Err(self.inner.error(
+                "morph",
+                Failure::UnitActivity(
+                    "form cannot occupy the current position; landing relocation is unqualified"
+                        .into(),
+                ),
+            ));
+        }
+        if !shown {
+            prepared.deactivate();
+        }
+        Ok(prepared)
+    }
+    pub(super) fn commit_morph_placement(
+        &mut self,
+        unit: HandleId,
+        definition: &Definition,
+    ) -> Result<(), Error> {
+        let prepared = self.prepare_morph_placement(unit, definition)?;
+        self.unit_placement
+            .as_mut()
+            .expect("prepared placement")
+            .commit(unit, prepared);
+        Ok(())
+    }
+    pub(super) fn commit_morph_form(
+        &mut self,
+        unit: HandleId,
+        form: &super::unit_morph::Form,
+    ) -> Result<(), Error> {
+        let placement = self.prepare_morph_placement(unit, &form.definition)?;
+        let radius = Self::catalog_collision_radius(&form.definition);
+        let next = self
+            .executed_unit(unit)?
+            .definition_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                self.inner.error(
+                    "morph",
+                    Failure::UnitActivity("definition revision exhausted".into()),
+                )
+            })?;
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("checked unit")
+        };
+        record.definition = form.definition.clone();
+        record.definition_revision = next;
+        record.collision_radius = radius;
+        if let (Some(current), Some(profile)) = (&mut record.activity, &form.activity) {
+            current.replace_form_profile(profile);
+        }
+        if let (Some(current), Some(profile)) = (&mut record.combat, &form.combat) {
+            current.replace_form_profile(profile);
+        }
+        if let (Some(current), Some(profile)) = (&mut record.animation, &form.animation) {
+            current.copy_engine_properties_from(profile);
+        }
+        self.unit_placement
+            .as_mut()
+            .expect("prepared placement")
+            .commit(unit, placement);
+        Ok(())
     }
 }

@@ -132,6 +132,16 @@ impl ObjectHost {
         {
             return Err(fail("image snapshot requires a live ordinary caster"));
         }
+        if source.morph.is_some() {
+            return Err(fail(
+                "image snapshot of a morphed unit is not representable",
+            ));
+        }
+        if source.vertex_color.is_some() {
+            return Err(fail(
+                "image snapshot of explicit vertex color is not qualified",
+            ));
+        }
         let abilities = source
             .abilities
             .as_ref()
@@ -761,7 +771,7 @@ impl ObjectHost {
                     .contains("spell")
             })
         {
-            a.select("stand", now, None)
+            a.select_engine("stand", now, None)
                 .map_err(|e| self.inner.error("Mirror Image", Failure::UnitAnimation(e)))?;
         }
         Ok(())

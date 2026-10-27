@@ -1,17 +1,20 @@
 {
-  "version": "0.6.0",
-  "captured": "2026-10-26",
+  "version": "0.7.0",
+  "captured": "2026-10-27",
   "renderer": "PeaceCraft III production Bevy renderer, offscreen Vulkan software adapter",
   "extent": [
     1280,
     960
   ],
   "map": "Maps\\Campaign\\Prologue02.w3m",
-  "scope": "Locally supplied classic game assets; rendered screenshots only, no original asset archives. No pixel-parity claim.",
+  "scope": "Locally supplied classic game assets; rendered screenshots only. No pixel-parity claim.",
   "images": {
     "main-menu.png": "33aadebe44b14fbd5facb8f65435d613a1f869364a08f640f0a0c8feaca23e43",
     "chapter-selection.png": "d82e9f5e848f6e66085a9f177a90e1a705c62d7c798901102d319d5d66f6e879",
-    "campaign.png": "b54e6b6d8e00c3d7ddd65b478ed3d3669ba5c3b886aa295ed516df88d88bb463"
+    "campaign.png": "85fc6754161dc1764e7f48f93193b0cb852286d57b6938eb15f7e29992c76006",
+    "research-menu.png": "35a057a356517bac4bd93d387989409de03091661caba7946071066de89c900a",
+    "quest-log.png": "edfeeed58a87f2b1792c97437e2d5c22c54bbc903ab66df3e24834bbaf5d847c"
   },
-  "diagnostic_limit": "Capture test reached campaign control, then stopped at the visible-ground-item precondition. Unit-panel label, ambiguous doodad model and terrain/tree sight occlusion remain open."
+  "validation": "Dedicated mounted_campaign_hud_and_research_states passed; separate full campaign/item diagnostic not claimed.",
+  "diagnostic_limit": "Quest border/row/status/scrollbar presentation, effect icons and world rendering remain incomplete."
 }

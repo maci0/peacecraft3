@@ -599,7 +599,27 @@ mod selected_tests {
         let (interlude, next) = {
             let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
             let context = session.context().unwrap();
-            assert!(context.sources.map.source.ends_with("Human02Interlude.w3m"));
+            let member = &app
+                .world()
+                .resource::<MapRequests>()
+                .bindings
+                .as_ref()
+                .unwrap()
+                .receipts
+                .map
+                .path;
+            let selected = std::env::var("PCX_NATIVE_NEXT_CHAPTER_MAP").unwrap();
+            assert_eq!(
+                member,
+                &pcx_assets::AssetPath::new(&selected).unwrap(),
+                "archive={} label={} member={member:?}",
+                context.sources.map.source,
+                context.map_digest.label
+            );
+            println!(
+                "interlude publication: archive={} label={} member={member:?}",
+                context.sources.map.source, context.map_digest.label
+            );
             let body = context
                 .scripts
                 .program()
@@ -627,9 +647,18 @@ mod selected_tests {
         for _ in 0..4096 {
             app.world_mut()
                 .resource_scope(|world, mut runtime: Mut<CampaignRuntime>| {
-                    let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
                     runtime.paused = false;
-                    let result = runtime.advance_ticks(&mut session, 8);
+                    let result = {
+                        let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
+                        let result = runtime.advance_ticks(&mut session, 8);
+                        if result.is_err() {
+                            let clock = session.host().map(|host| host.objects().timer_game_time());
+                            eprintln!("interlude failure: completed_tick={} host_clock={clock:?} runtime_error={:?} source={:?}",
+                                runtime.tick(), runtime.last_error,
+                                session.context().map(|context| (&context.sources, &context.map_digest)));
+                        }
+                        result
+                    };
                     runtime.paused = true;
                     result.unwrap_or_else(|error| {
                         panic!("interlude tick {}: {error}", runtime.tick())
@@ -652,6 +681,16 @@ mod selected_tests {
                 "startup: {:?}",
                 app.world().resource::<CampaignStartup>().last_error
             );
+            let member = app
+                .world()
+                .resource::<MapRequests>()
+                .bindings
+                .as_ref()
+                .unwrap()
+                .receipts
+                .map
+                .path
+                .clone();
             let mut session = app
                 .world_mut()
                 .resource_mut::<MapScriptSession<MapStartupHost>>();
@@ -659,7 +698,17 @@ mod selected_tests {
             if Arc::ptr_eq(context, &interlude) {
                 continue;
             }
-            assert_eq!(context.sources.map.source, next);
+            assert_eq!(
+                member,
+                pcx_assets::AssetPath::new(&next).unwrap(),
+                "archive={} label={} member={member:?}",
+                context.sources.map.source,
+                context.map_digest.label
+            );
+            println!(
+                "Human03 publication: archive={} label={} member={member:?}",
+                context.sources.map.source, context.map_digest.label
+            );
             let Some(Value::Handle(restored)) = session.global("bj_lastLoadedUnit") else {
                 panic!("Human03 did not restore the earned hero")
             };
@@ -760,6 +809,9 @@ mod selected_tests {
         let store = arguments("StoreUnitBJ");
         let key = literal(&store[1]);
         let mission = literal(&store[2]);
+        println!(
+            "diagnostic source cache lookup: filename={filename:?} mission={mission:?} key={key:?}"
+        );
         let objects = session.host().unwrap().objects_mut();
         let cache = objects.native("InitGameCache", &[filename]).unwrap();
         if objects
