@@ -625,9 +625,8 @@ At cell (5776, 2512), covered by an acolyte during the first search, the capture
 has state `0x20000001` and a low pathing mask intersecting `0x08`. The state test skips it.
 At farm cell (6160, 2800), the captured entry has state `0x10000000` and a low pathing mask
 intersecting `0x08`; the state test admits it and the cell blocks. The former entry's linked
-native object was captured, but its reference was not resolved directly to an acolyte unit;
-its overlapping rectangle and the order-time unit positions are runtime observations. The
-meaning and lifecycle of the state bits for other units, mines and destructables remain open.
+native object was captured. Its overlapping rectangle and the order-time unit positions are
+runtime observations; its unit type was not established by that capture.
 
 The spatial-entry constructor at `0x8c1950` initializes the state word to zero. The wrapper
 at `0x8c19e0` sets `0x10000000` on the new entry. Two call sites use that wrapper, at
@@ -640,16 +639,36 @@ one particular constructor.
 The movement update at `0x8bca70` changes `0x20000000` on the second entry: it combines two
 stored components with an input, applies a magnitude threshold, and sets or clears that bit
 according to a stored positive scalar. Another operation sets `0x40000000` temporarily at
-`0x8ac327` and clears it at `0x8ac378`. These writes do not explain the low bit in the
-`0x20000001` entry observed at the acolyte-overlapping cell, which is the bit that makes the
-validator skip it. The native owner has not yet been resolved to a recreation unit, and the
-low-bit writer and its lifecycle remain unknown.
+`0x8ac327` and clears it at `0x8ac378`.
 
 An isolated Wine debugger run placed a hardware watchpoint on the state word of the first
 newly constructed movement entry after `0x8bafd6`. The watchpoint was accepted, but did not
 fire during the bounded observation window. That entry was not identified as the captured
-acolyte-overlapping entry; this negative result does not establish its later state or the
-missing writer. The original-client run used a private Xvfb display and null audio sink.
+acolyte-overlapping entry; this negative result does not establish its later state. The
+original-client run used a private Xvfb display and null audio sink.
+
+### Placement exclusion count, 2026-10-28
+
+The low portion of the spatial state is a nested exclusion count, not a mobile-unit class bit.
+`0x7ffd00` resolves the supplied object's movement entry and increments the word at `+0x44`
+for a nonzero argument (`0x7ffd2f`), or decrements it for zero (`0x7ffd36`). The placement
+validator `0x697940` can enumerate objects in its candidate rectangle using `0x7f4d30`,
+conditionally increments selected objects through `0x6bde70`, checks the footprint, then
+decrements the saved list at `0x697f0d`. The predicate includes native object-type, state,
+player and virtual-method checks (`0x697a83` through `0x697c1a`); their complete mapping to
+recreation objects is not established. The supplied object at context `+0x4c` is also
+temporarily excluded. The cell-query helper `0x7f6890` independently brackets its optional
+object with the same increment and decrement (`0x7f6962`, `0x7f69a4`). The movement query at
+`0x8b03c0` also temporarily increments and then decrements its own entry.
+
+In an isolated farm-layout capture, a watchpoint installed on the entry actually reached by
+the (5776, 2512) validator query observed `0x20000001` become `0x20000000` at `0x7ffd36`.
+The stack passes through `0x697f0d` after the footprint check, confirming that the observed
+count belongs to the validator's temporary exclusion list. The native object passed to the
+decrement is different from the builder pointer captured at the placement driver in that same
+run. This identifies the writer and its placement lifetime, but not the object's rawcode or
+the full selection predicate. A fixed address observed in three earlier captures shifted in a
+later run, so the watchpoint was attached to the entry resolved at the query in the same run.
 
 An order-event probe records all four acolyte positions at 8.211 s, when the site is issued.
 Two acolytes occupy cells selected by the Necropolis construction texture. The ignored

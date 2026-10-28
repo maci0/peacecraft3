@@ -5313,3 +5313,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   WASM Clippy passed with `-D warnings`. The simulation performance check passed with the cargo
   lock and offline environment; budgets were unchanged. An earlier simulation check passed but
   was started without that lock or offline setting. No campaign route was rerun.
+
+### 2026-10-28: Placement exclusion counter
+
+- [x] A watchpoint on the entry reached by the farm validator captured the exclusion count
+  returning from one to zero immediately after the footprint check. Native code increments and
+  decrements the same word for nested exclusions; the captured object differs from the builder:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] The validator constructs and restores a list of eligible objects. Its full object-selection
+  predicate and mapping to recreation units and destructables remain open. The diagnostic's
+  blanket mobile-occupancy switch is not established as a native rule.
+- [ ] Native reach and town integration remain incomplete; production continues to refuse.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
+  WASM Clippy passed with `-D warnings`. The locked, offline simulation performance check passed
+  without changing budgets. No campaign route was rerun.
