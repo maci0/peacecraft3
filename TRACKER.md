@@ -5593,3 +5593,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - The per-cell spatial-entry state and geometry required by `0x8be420` are not provided by
   the recreation's aggregate occupancy counts or the recorded reach tables. The 100 and 12
   recorded reach queries remain unvalidated, and production placement remains refused.
+
+### 2026-10-28: Input state and control groups
+
+- [x] One input-state resource (`GameInput`) holds Shift, Ctrl and Alt as left/right
+  pairs, one "game input open" gate and the `mousescroll`, `keyscroll` and
+  `mousescrolldisable` values. Click selection, command hotkeys, arrow scroll, control
+  groups and the pacing chord read it.
+- [x] Control groups: digits select, Ctrl+digit defines, Shift+digit adds, cap 12, a second
+  press within the window centres the camera, dead units drop, refusals show the shipped
+  `[Errors]` texts. Digit binding, cap, window and the three key names are decoded from the
+  Legacy executable at runtime. Evidence and decisions:
+  [input control groups](docs/re-notes/input-control-groups.md).
+- [~] Shift+digit as "add" is inferred from the executable's merge branch, not observed. The
+  refusal text is held in state; the error line that draws it is not built. No saved
+  Gameplay option value exists to override the executable fallbacks (the settings store
+  binds audio only), and the camera does not apply the scroll values yet. No original
+  client was run.
