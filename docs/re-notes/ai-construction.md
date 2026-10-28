@@ -399,9 +399,9 @@ two coordinates supplied to that check are the town coordinate and the snapped c
 (`0xad43ee` through `0xad4458`). Before calling `0x8a2270`, `0x7fd6b0` resolves each of those
 two reference lists and changes associated spatial rectangles via `0x8b7b30` with argument 1;
 afterward it calls the same routine with argument 0 (`0x7fd832` through `0x7fd8cb`,
-`0x7fd95f` through `0x7fd9ab`). The meaning and contents of those worker-associated references,
-the search's treatment of a town center inside the mine footprint and the state of the actual
-worker references are not yet established. `0x8b7b30` clips each rectangle and dispatches updates
+`0x7fd95f` through `0x7fd9ab`). The farm trace below identifies the first resolved object as the
+builder; the search's treatment of a town center inside the mine footprint and the general
+contents of the second reference remain open. `0x8b7b30` clips each rectangle and dispatches updates
 at several spatial levels. At the base level, `0x8b7740` clears byte 7 of every covered entry for
 either argument. With argument 0 it also recomputes four two-bit fields from four underlying
 spatial queries apiece (`0x8b781e` through `0x8b7877`, `0x8b78b0` through `0x8b7978`). Those
@@ -475,21 +475,33 @@ recreation's pathing layers. The selected first classification uses the image ma
 object-chain links and applies object-state and lower-mask tests (`0x8b7835`, `0x8be420`).
 Those native object-state bits do not by themselves identify the corresponding recreation
 objects. The first builder reference is a position-bearing handle resolved
-through `0x4707f0`; the second is a container resolved through `0x804ad0`. Their actual objects
-and rectangles at the first Human05 order remain unobserved.
+through `0x4707f0`; the second is a container resolved through `0x804ad0`. The farm trace
+below identifies the first object and its rectangle; the second reference was empty in that run.
 
 The unit constructor initializes the `+0x26c` field as an embedded position handle with an
 empty reference (`0x6759c8` through `0x6759e6`). Its methods resolve a spatial object through
 the handle's two stored words (`0x801cc0`), and another method follows that object's owner
 link (`0x801ce0`). Unit position and facing operations use the same field (`0x690e7e`,
-`0x4ab4d0`). This establishes a unit-associated spatial handle, but the identity reached in
-the farm trace has not yet been read from its owner link. The first reach classification's
+`0x4ab4d0`). A read-only farm capture resolved this handle and followed the spatial object's
+`+0x30` link and that linked object's `+0x54` owner. The owner was the same orange `uaco`
+pointer passed as the builder to `0xad4970`; its native spatial rectangle was
+(398, 505, 400, 507). This establishes the identity for that order, not every possible unit
+or the conversion of its live rectangle to recreation cache cells. The first reach classification's
 selected image mask contains both low bits 2 and 4 as well as their corresponding high-byte
 cell bits (`0x10e92a8`). The recreation's aggregate ground occupancy alone does not expose
 the native per-entry state filter, so this mask cannot yet be mapped by counting all mobile
 or footprint stamps as blockers. The test-only hierarchy module now classifies four supplied
 spatial results and models clearing without dropping the auxiliary link; it does not derive
 the four results from live objects.
+
+The unresolved input to replay the two recorded reach tables is the order-time result of
+`0x8be420` for each underlying spatial cell consulted by the hierarchy. Its result depends on
+each intersecting entry's active flag, visit state, `+0x34` pathing mask and `+0x44` state,
+as well as the terrain cell flags. The recreation's `diagnostic_cell_state` exposes aggregate
+occupancy counts, not those entry attributes, and the recorded candidate and removal tables
+do not contain the missing cache cells. The builder-owner capture alone does not establish
+which other entries pass that filter or their order-time geometry. Neither the 100 at-start
+nor the 12 near-mine results have therefore been compared against the hierarchical search.
 
 The blocked-start early result is an acceptance, not a route: when an in-bounds starting-cell
 lookup returns -1, the initializer returns its immediate-result status and `0x8a2270` returns a
@@ -530,8 +542,9 @@ The first reach call in all five traces used a
 nonempty handle at builder `+0x26c` and an empty reference at `+0x13c`. The handle resolved
 to a spatial object with a rectangle, which `0x7fd84b` through `0x7fd85d` clears before the
 query. In native rectangle coordinates the baseline and farm captured (398, 505, 400, 507),
-while the near-mine trace captured (399, 505, 401, 507). Its exact object identity and mapping
-to recreation occupancy are still open. For the first candidates the inner query returned
+while the near-mine trace captured (399, 505, 401, 507). The farm capture identifies its
+owner as the builder, as described above; the mapping to recreation occupancy is still open.
+For the first candidates the inner query returned
 0, 0, 12, 0 and 8 respectively; these finite results
 pass the native reach test. They do not prove that all later candidates pass it.
 

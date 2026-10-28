@@ -5583,3 +5583,13 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - [ ] Open: Shift+Tab with three subgroups, cursor mode to sequence names, edge-scroll speed
   in world units and its option dependence, multi-hall Backspace, selection cap 12. All
   numbers are Wine runtime observations with xdotool input.
+
+### 2026-10-28: Farm reach-reference identity
+
+- [~] A read-only debugger capture in the isolated, muted farm scenario followed the
+  builder's `+0x26c` handle to its owner. The owner is the builder acolyte passed to the
+  placement driver, and its cleared native rectangle is (398, 505, 400, 507). The other
+  reference was empty. See [AI construction](docs/re-notes/ai-construction.md).
+- The per-cell spatial-entry state and geometry required by `0x8be420` are not provided by
+  the recreation's aggregate occupancy counts or the recorded reach tables. The 100 and 12
+  recorded reach queries remain unvalidated, and production placement remains refused.
