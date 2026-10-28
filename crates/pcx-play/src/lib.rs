@@ -136,6 +136,8 @@ pub mod unit_decay;
 pub mod unit_model;
 pub use rpl::{Expectation, Rpl, RplError};
 pub mod construction_rules;
+pub mod control_group_rules;
+pub mod control_groups;
 pub(crate) mod pe_image;
 pub mod scenario;
 pub mod script_trace;
