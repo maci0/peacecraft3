@@ -132,10 +132,13 @@ The diagnostic applies the per-unit exclusion predicate and source-derived enume
 rectangle with snapshot-specific effect evidence. This does not change the 1223 s production
 refusal or establish a later run.
 
-The live host now records ownership re-registrations and can select a visible peon using
-registration order. The structure fallback still refuses because its native root-ability state
-is not represented, and the selector is not connected to production placement. Human05 was not
-rerun for this change; the `town-order` runs remain the latest verified production state.
+The live host records ownership re-registrations and selects a visible peon using registration
+order before considering the structure fallback. The fallback refuses when needed because its
+native root-ability state is not represented. Release runs `undead-lifecycle-1` and
+`undead-lifecycle-2` both stop at 1223 s, and their 98 Human05 and RNG checkpoint lines match
+each other and `town-order-1`. Their first refusal identifies the missing live town association,
+reach occupancy and links, and effect-source evidence. The selector and unattended construction
+path are not connected to AI placement.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
@@ -161,10 +164,9 @@ details in [AI construction](ai-construction.md).
   search and player orders share a validator, for which the existing player-placement code is
   the current implementation, with the sampled-state discrepancy above. Native town list and
   state mapping, texture dimensions, the additional reach check and
-  complete texture-rectangle enumeration remain open; undead construction, cost charging,
-  worker choice and script retry timing are also open
-  ([AI construction](ai-construction.md)). The recreation's human construction path
-  (`unit_construction_host.rs`) is human-only and cannot take an undead worker.
+  complete texture-rectangle enumeration remain open; AI cost timing, worker choice and
+  script retry timing are also open ([AI construction](ai-construction.md)). The shared
+  construction path now supports an unattended Undead site, but AI placement does not call it.
 - The 1800 s survival timer and the ending are not reached; refusals after 1223 s are unknown.
 - Gold return distance (no probe), the choice among several lumber depots, and path versus
   straight-line "nearest" are the recreation's, not measured.

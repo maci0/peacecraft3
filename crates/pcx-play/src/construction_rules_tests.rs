@@ -126,6 +126,15 @@ fn fixture(shift: u32, fraction: f32) -> Vec<u8> {
     put(&mut text, 0xc20, &[0xb8, b'9', b'X', b'Y', b'Z', 0xc3]);
     put(&mut text, 0xc40, &[0xc7, 0x06]);
     word(&mut text, 0xc42, rdata_va + 0xd00);
+    put(&mut rdata, 0x140, b"CAbilityUndeadBuild\0");
+    put(&mut text, 0xc60, &[0xb8]);
+    word(&mut text, 0xc61, rdata_va + 0x140);
+    text[0xc65] = 0xc3;
+    word(&mut rdata, 0xf58, text_va + 0xc60);
+    word(&mut rdata, 0xf1c, text_va + 0xc80);
+    put(&mut text, 0xc80, &[0xb8, b'8', b'X', b'Y', b'Z', 0xc3]);
+    put(&mut text, 0xca0, &[0xc7, 0x06]);
+    word(&mut text, 0xca2, rdata_va + 0xf00);
     let data = fraction.to_le_bytes();
     let mut image = synthetic_image(&[
         (TEXT, 0x1000, &text),
@@ -178,6 +187,7 @@ fn relocated_nonstock_initial_life_and_ordered_profiles() {
         .unwrap();
         assert_eq!(rules.initial_life_fraction, 0.23);
         assert_eq!(rules.human_build_ability, *b"ZYX9");
+        assert_eq!(rules.undead_build_ability, *b"ZYX8");
         assert_eq!(rules.refund_rate, 0.61);
         assert_eq!(rules.life_drain_rate, 4.25);
         assert!(!rules.damage_refund_penalty);
@@ -210,6 +220,13 @@ fn malformed_relationships_and_fraction_ranges_refuse() {
             "offset {text_offset:#x}"
         );
     }
+    let mut bad = image.clone();
+    bad[0x400 + 0xc60] ^= 1;
+    assert!(
+        read(&bad, COMMON, &[("stock", PROFILE)], budget())
+            .unwrap_err()
+            .contains("Undead build class")
+    );
     assert!(
         read(
             &image,
@@ -333,6 +350,13 @@ fn selected_original_construction_rules() {
         .object(pcx_objects::editor::defaults::Family::Ability, row)
         .unwrap();
     let race = ability
+        .cell(pcx_objects::editor::SlkId::AbilityData, "race")
+        .unwrap();
+    assert!(!matches!(race.text.trim(), "" | "_" | "-"));
+    let undead = std::str::from_utf8(&rules.undead_build_ability).unwrap();
+    let race = tables
+        .object(pcx_objects::editor::defaults::Family::Ability, undead)
+        .unwrap()
         .cell(pcx_objects::editor::SlkId::AbilityData, "race")
         .unwrap();
     assert!(!matches!(race.text.trim(), "" | "_" | "-"));

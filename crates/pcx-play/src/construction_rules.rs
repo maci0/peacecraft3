@@ -15,6 +15,7 @@ pub struct Rules {
     pub profile_sources: Vec<String>,
     pub initial_life_fraction: f32,
     pub human_build_ability: [u8; 4],
+    pub undead_build_ability: [u8; 4],
     pub refund_rate: f32,
     pub damage_refund_penalty: bool,
     /// Retained source setting; the qualified Human stop observation does not apply it.
@@ -92,11 +93,33 @@ impl<'a> Reader<'a> {
     }
 
     fn unique(&mut self, needle: &[u8], code: bool) -> Result<u32, String> {
-        let matches = self.find(needle, code)?;
-        match matches.as_slice() {
-            [va] => Ok(*va),
-            _ => Err("missing or ambiguous construction anchor".into()),
+        let section = self
+            .pe
+            .section(if code { TEXT } else { RDATA })?
+            .ok_or("missing construction scan section")?;
+        self.remaining = self
+            .remaining
+            .checked_sub(section.bytes.len())
+            .ok_or("construction scan work budget")?;
+        let base = self
+            .pe
+            .image_base
+            .checked_add(section.rva)
+            .ok_or("scan VA overflow")?;
+        let mut found = None;
+        for offset in occurrences(section.bytes, needle) {
+            self.candidates = self
+                .candidates
+                .checked_sub(1)
+                .ok_or("construction candidate budget")?;
+            let va = base
+                .checked_add(u32::try_from(offset).map_err(|_| "scan offset width")?)
+                .ok_or("scan VA overflow")?;
+            if found.replace(va).is_some() {
+                return Err("missing or ambiguous construction anchor".into());
+            }
         }
+        found.ok_or_else(|| "missing or ambiguous construction anchor".into())
     }
 
     fn call(&self, va: u32) -> Result<u32, String> {
@@ -170,7 +193,10 @@ impl Rules {
                 return Err("construction numeric multiplication window differs".into());
             }
             let fraction = initial_fraction(&mut read, common, multiplication.va)?;
-            let human_build_ability = human_build_class(&mut read)?;
+            let human_build_ability = build_class(&mut read, b"CAbilityHumanBuild\0")
+                .map_err(|error| format!("Human build class: {error}"))?;
+            let undead_build_ability = build_class(&mut read, b"CAbilityUndeadBuild\0")
+                .map_err(|error| format!("Undead build class: {error}"))?;
             let ([refund, penalty, drain], profile_sources) =
                 pcx_objects::editor::misc::misc_scalars(
                     profiles,
@@ -203,6 +229,7 @@ impl Rules {
                 profile_sources,
                 initial_life_fraction: fraction,
                 human_build_ability,
+                undead_build_ability,
                 refund_rate,
                 damage_refund_penalty,
                 life_drain_rate,
@@ -212,30 +239,24 @@ impl Rules {
     }
 }
 
-fn human_build_class(read: &mut Reader<'_>) -> Result<[u8; 4], String> {
-    let name = read.unique(b"CAbilityHumanBuild\0", false)?;
-    let getter = [vec![0xb8], name.to_le_bytes().to_vec(), vec![0xc3]].concat();
+fn build_class(read: &mut Reader<'_>, name: &[u8]) -> Result<[u8; 4], String> {
+    let name = read.unique(name, false)?;
+    let mut getter = [0xb8, 0, 0, 0, 0, 0xc3];
+    getter[1..5].copy_from_slice(&name.to_le_bytes());
     let getter = read.unique(&getter, true)?;
     let pointer = read.unique(&getter.to_le_bytes(), false)?;
-    let table = pointer
-        .checked_sub(0x58)
-        .ok_or("HumanBuild vtable underflow")?;
-    let code_getter = read.word(
-        table
-            .checked_add(0x1c)
-            .ok_or("HumanBuild code slot overflow")?,
-        false,
-    )?;
+    let table = pointer.checked_sub(0x58).ok_or("vtable underflow")?;
+    let code_getter = read.word(table.checked_add(0x1c).ok_or("code slot overflow")?, false)?;
     let code = read.bytes(code_getter, 6, true)?;
     if code[0] != 0xb8 || code[5] != 0xc3 {
-        return Err("HumanBuild virtual code getter differs".into());
+        return Err("virtual code getter differs".into());
     }
-    let code = u32::from_le_bytes(code[1..5].try_into().map_err(|_| "HumanBuild code width")?)
-        .to_be_bytes();
+    let code = u32::from_le_bytes(code[1..5].try_into().map_err(|_| "code width")?).to_be_bytes();
     if !code.iter().all(u8::is_ascii_graphic) {
-        return Err("HumanBuild code is not a rawcode".into());
+        return Err("code is not a rawcode".into());
     }
-    let constructor = [vec![0xc7, 0x06], table.to_le_bytes().to_vec()].concat();
+    let mut constructor = [0xc7, 0x06, 0, 0, 0, 0];
+    constructor[2..].copy_from_slice(&table.to_le_bytes());
     read.unique(&constructor, true)?;
     Ok(code)
 }

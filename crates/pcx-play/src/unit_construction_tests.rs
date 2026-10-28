@@ -500,6 +500,106 @@ fn public_point_order_reserves_once_arrives_and_delivers_real_construction() {
     observe(host, site, "GetConstructedStructure");
 }
 
+#[test]
+fn unattended_build_releases_worker_and_finishes_from_source_duration() {
+    let (mut vm, worker, _) = public_fixture_with(&[column(
+        b"C002",
+        SlkId::UnitData,
+        "race",
+        FieldKind::Token,
+        "other-fixture",
+    )]);
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_START");
+    register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.unit_build_menu_ability(worker).unwrap(),
+        Some(*b"ZYX8")
+    );
+    assert_eq!(
+        host.native(
+            "IssueBuildOrderById",
+            &[
+                Value::Handle(worker),
+                Value::Int(i32::from_be_bytes(*b"b001")),
+                Value::Real(80.),
+                Value::Real(16.),
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 10.);
+    let host = &mut vm.host().inner;
+    let site = host
+        .executed_units()
+        .find(|(_, record)| record.definition.rawcode == *b"b001" && record.construction.is_some())
+        .unwrap()
+        .0;
+    assert!(host.unit_construction_order(worker).unwrap().is_none());
+    assert_eq!(
+        host.native("GetUnitCurrentOrder", &[Value::Handle(worker)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().worker, None);
+    observe(host, site, "GetConstructingStructure");
+    step(&mut vm, 20.);
+    let host = &mut vm.host().inner;
+    assert!(host.unit_construction(site).unwrap().is_none());
+    assert!(host.executed_unit(worker).unwrap().vitals.unwrap().life > 0.);
+    assert_eq!(
+        host.player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")
+            .unwrap(),
+        Some(49)
+    );
+    observe(host, site, "GetConstructedStructure");
+}
+
+#[test]
+fn unattended_site_survives_worker_removal_and_cancel_refunds_once() {
+    let (mut vm, worker, _) = public_fixture_with(&[column(
+        b"C002",
+        SlkId::UnitData,
+        "race",
+        FieldKind::Token,
+        "other-fixture",
+    )]);
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueBuildOrderById",
+                &[
+                    Value::Handle(worker),
+                    Value::Int(i32::from_be_bytes(*b"b001")),
+                    Value::Real(80.),
+                    Value::Real(16.),
+                ]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    step(&mut vm, 10.);
+    let host = &mut vm.host().inner;
+    let site = host
+        .executed_units()
+        .find(|(_, record)| record.definition.rawcode == *b"b001" && record.construction.is_some())
+        .unwrap()
+        .0;
+    host.native("RemoveUnit", &[Value::Handle(worker)]).unwrap();
+    assert!(host.unit_construction(site).unwrap().is_some());
+    assert!(host.cancel_unit_construction(site).unwrap());
+    assert!(!host.cancel_unit_construction(site).unwrap());
+    assert_eq!(
+        host.player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")
+            .unwrap(),
+        Some(64)
+    );
+}
+
 fn point_build(host: &mut ObjectHost, worker: HandleId) {
     assert_eq!(
         host.native(

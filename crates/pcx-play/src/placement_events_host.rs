@@ -11,8 +11,6 @@ impl ObjectHost {
                 source_name: "town owner",
             })?;
         let mut peon: Option<((u64, usize), HandleId)> = None;
-        let mut other: Option<((u64, usize), HandleId)> = None;
-        let mut unqualified_structure = None;
         for (unit, record) in self.executed_units() {
             if record.owner != owner || !record.shown {
                 continue;
@@ -27,29 +25,34 @@ impl ObjectHost {
                         source_name: "town peon class",
                     }
                 })?;
-            if is_peon {
-                if peon.is_none_or(|(old, _)| sequence > old) {
-                    peon = Some((sequence, unit));
-                }
-            } else if super::unit_types::structure(&record.definition).map_err(|_| {
-                ExclusionError::Unavailable {
-                    unit,
-                    source_name: "town structure class",
-                }
-            })? {
-                unqualified_structure = Some(unit);
-            } else if other.is_none_or(|(old, _)| sequence < old) {
-                other = Some((sequence, unit));
+            if is_peon && peon.is_none_or(|(old, _)| sequence > old) {
+                peon = Some((sequence, unit));
             }
         }
         if let Some((_, unit)) = peon {
             return Ok(Some(unit));
         }
-        if let Some(unit) = unqualified_structure {
-            return Err(ExclusionError::Unavailable {
-                unit,
-                source_name: "town structure state bits 0x80 and 0x8000000",
-            });
+        let mut other: Option<((u64, usize), HandleId)> = None;
+        for (unit, record) in self.executed_units() {
+            if record.owner != owner || !record.shown {
+                continue;
+            }
+            let Some(sequence) = self.town_registration_sequence(unit)? else {
+                continue;
+            };
+            if super::unit_types::structure(&record.definition).map_err(|_| {
+                ExclusionError::Unavailable {
+                    unit,
+                    source_name: "town structure class",
+                }
+            })? {
+                return Err(ExclusionError::Unavailable {
+                    unit,
+                    source_name: "town structure root-ability state bits 0x80 and 0x8000000",
+                });
+            } else if other.is_none_or(|(old, _)| sequence < old) {
+                other = Some((sequence, unit));
+            }
         }
         Ok(other.map(|(_, unit)| unit))
     }

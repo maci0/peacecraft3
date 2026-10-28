@@ -88,10 +88,13 @@ incomplete sites. FINISH clears the marker before its callbacks observe benefits
 
 Ordinary work uses source-duration interpolation; native polling/sub-tick
 arithmetic is not claimed identical. Native snap/approach fidelity and the
-source-default-facing equivalence need further qualification. Only the admitted
-Human style, stationary footprints, supported placement tokens and zero building
+source-default-facing equivalence need further qualification. The Human and unattended
+Undead styles, stationary footprints, supported placement tokens and zero building
 food reservation are accepted. Shoreline placement, other styles and multiple
-builders refuse. A worker with an existing build request/participation must stop
+builders refuse. Worker style is selected by matching the authored worker race and build list
+to the ability's source race; native implicit enrollment is not established. The unattended
+worker is released at site creation, while the probe only bounds the original release between
+successive one-second samples. A worker with an existing build request/participation must stop
 before beginning another. Damaged cancellation refunds remain an explicit refusal,
 including damage healed before the next work sample. Fractional refund rounding
 uses the admitted numeric product and truncation; native rounding parity is not
@@ -103,5 +106,7 @@ presentation and a complete recreation Human02 playthrough remain separate work.
 Synthetic tests exercise public point-order reservation/travel/events/completion,
 STOP and death refunds, repair resumption, placement invalidation, production
 limits, callback life changes/removal/cancellation, incomplete benefits and
-unranked nonstock menu profiles. Their success is not an original-client or
-rendered-behavior proof.
+unranked nonstock menu profiles. A separate nonstock test covers unattended site
+completion after release of its builder. The original-client observation of an Undead
+builder and its site through completion is recorded in [AI construction](ai-construction.md).
+These tests do not establish rendered behavior.

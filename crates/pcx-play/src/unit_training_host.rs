@@ -902,11 +902,11 @@ impl ObjectHost {
             // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
             // whose build ability lists the kind) and, failing that, for an idle unit that
             // upgrades into the kind. With neither the request answers false and orders nothing.
-            // The snapshot search does not yet have qualified live state or undead build semantics.
+            // The snapshot search does not yet have qualified live town and reach inputs.
             for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
                 if let Some((rawcode, position)) = self.ai_unit_lists(owner, requested, key)? {
                     let reason = if key == "Builds" {
-                        "; live town registration and eligibility, reach occupancy and links, effect-source evidence, and undead construction are not admitted"
+                        "; live town association, reach occupancy and links, and effect-source evidence are not admitted"
                     } else {
                         ""
                     };

@@ -5700,3 +5700,25 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   crates and WASM Clippy for `pcx-play` and `peacecraft3` with warnings denied; the ignored
   Human01 group-panel mount test and the decoder test against the selected client pass. The
   WASM all-target app build already fails at baseline in tests that use `native_campaign`.
+
+### 2026-10-29: Unattended construction and town fallback
+
+- [~] The live town selector resolves eligible peons before evaluating the structure fallback;
+  a synthetic test covers an unqualified structure alongside a peon. The shared construction
+  host reads the Undead build class from the selected client and supports an unattended site
+  through the public build order. A synthetic nonstock test covers payment, release and finish.
+- An isolated original-client run tracked the first builder and Necropolis through the finish
+  event: the original builder remained alive and idle, with all four acolytes still present.
+  The selected map's build-duration override accounts for the observed interval. The Warp
+  class vtable also identifies one reach-link registration path; a trigger-region method is
+  another writer of the reach query's tested spatial-entry state bit. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Production AI placement remains refused: live town association, source-qualified reach
+  occupancy and link state, and movement-effect source history are not connected. Snapshot
+  oracle results do not establish those live inputs.
+- The `pcx-play` library suite passed 2,288 tests with 89 ignored; native and WASM Clippy
+  passed with warnings denied. The local-input construction rules test passed, and the
+  recorded baseline and farm snapshots again chose their original sites at dequeues 1 and 280
+  with reach enabled. The simulation budget check passed with lower Human03 allocations and
+  bytes. Human03 and Human04 reached victory and matched their `g1` checkpoint and RNG lines;
+  both Human05 runs stopped at 1223 s with matching checkpoints and the named refusal.

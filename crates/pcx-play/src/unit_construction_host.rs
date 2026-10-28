@@ -64,6 +64,7 @@ pub struct Request {
     duration: i32,
     reach: f32,
     site: Option<HandleId>,
+    autonomous: bool,
 }
 
 struct PreparedBuild {
@@ -82,6 +83,7 @@ pub struct Site {
     lumber: i32,
     initial_pending: bool,
     canceled: bool,
+    autonomous: bool,
     last_life: f32,
     damaged: bool,
     fault: Option<String>,
@@ -238,14 +240,12 @@ impl ObjectHost {
         }
         // Optional card discovery must not require this capability. The retained
         // admission Result remains authoritative for actual construction requests.
-        let Ok(rules) = self.admitted_construction_rules() else {
-            return Ok(None);
-        };
-        let ability = rules.human_build_ability;
-        if !self.human_construction_worker(worker)? {
+        if self.admitted_construction_rules().is_err() {
             return Ok(None);
         }
-        Ok(Some(ability))
+        Ok(self
+            .construction_worker_style(worker)?
+            .map(|(ability, _)| ability))
     }
 
     pub fn unit_build_menu_command(
@@ -295,6 +295,34 @@ impl ObjectHost {
         Ok(worker_race.eq_ignore_ascii_case(race.trim()))
     }
 
+    fn construction_worker_style(
+        &self,
+        worker: HandleId,
+    ) -> Result<Option<([u8; 4], bool)>, Error> {
+        if self.human_construction_worker(worker)? {
+            return Ok(Some((
+                self.construction_rules()?.human_build_ability,
+                false,
+            )));
+        }
+        let ability = self.construction_rules()?.undead_build_ability;
+        let race = self
+            .ability_data_text(ability, "race")
+            .map_err(|why| self.construction_error(why))?;
+        if matches!(race.trim(), "" | "_" | "-") {
+            return Err(self.construction_error("construction ability race is not admitted"));
+        }
+        let worker_race = super::unit_positions::text(
+            &self.executed_unit(worker)?.definition,
+            pcx_objects::editor::SlkId::UnitData,
+            "race",
+        )
+        .map_err(|why| self.construction_error(why))?;
+        Ok(worker_race
+            .eq_ignore_ascii_case(race.trim())
+            .then_some((ability, true)))
+    }
+
     pub fn preview_unit_construction(
         &mut self,
         worker: HandleId,
@@ -323,7 +351,9 @@ impl ObjectHost {
         {
             return Ok(ConstructionPreview::Blocked);
         }
-        self.require_human_construction_worker(worker)?;
+        if self.construction_worker_style(worker)?.is_none() {
+            return Err(self.construction_error("worker construction style is not admitted"));
+        }
         self.construction_facing()?;
         self.construction_placement(worker, kind, point)
     }
@@ -520,6 +550,7 @@ impl ObjectHost {
         };
         if state.canceled
             || state.initial_pending
+            || state.autonomous
             || state.worker.is_some()
             || target.vitals.is_none_or(|vitals| vitals.life <= 0.)
         {
@@ -570,6 +601,7 @@ impl ObjectHost {
                 duration: state.duration as i32,
                 reach,
                 site: Some(site),
+                autonomous: false,
             });
         }
         self.unit_ordered(worker);
@@ -612,6 +644,10 @@ impl ObjectHost {
         }
         let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
         let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
+        let autonomous = self
+            .construction_worker_style(worker)?
+            .ok_or_else(|| self.construction_error("worker construction style is not admitted"))?
+            .1;
         let reach = self.construction_reach(worker, &definition)?;
         let Some(steer) =
             self.prepare_steer_unit_in_range(worker, Some(position), reach, "construction")?
@@ -628,6 +664,7 @@ impl ObjectHost {
                 duration,
                 reach,
                 site: None,
+                autonomous,
             },
             revision,
             steer,
@@ -705,16 +742,21 @@ impl ObjectHost {
         self.executed_units()
             .filter_map(|(_, record)| {
                 let site = record.construction.as_ref()?;
-                let worker = self.executed_unit(site.worker?).ok()?;
+                let worker_ready = if site.autonomous {
+                    true
+                } else {
+                    let worker = self.executed_unit(site.worker?).ok()?;
+                    worker.paused_since.is_none()
+                        && worker.combat.as_ref().is_none_or(|state| !state.dead)
+                };
                 (!site.initial_pending
                     && !site.canceled
                     && record.paused_since.is_none()
-                    && worker.paused_since.is_none()
-                    && worker.combat.as_ref().is_none_or(|state| !state.dead))
-                .then(|| {
-                    (site.through + site.duration - site.elapsed)
-                        .max(self.timer_game_time().expect("construction clock"))
-                })
+                    && worker_ready)
+                    .then(|| {
+                        (site.through + site.duration - site.elapsed)
+                            .max(self.timer_game_time().expect("construction clock"))
+                    })
             })
             .filter(|at| *at <= until)
             .min_by(f64::total_cmp)
@@ -1048,8 +1090,9 @@ impl ObjectHost {
             .vitals
             .ok_or_else(|| self.construction_error("construction vitals not admitted"))?;
         self.construction_math(BinOp::Mul, vitals.max_life, fraction)?;
+        let autonomous = request.as_ref().is_some_and(|request| request.autonomous);
         prepared.record.construction = Some(Site {
-            worker: Some(worker),
+            worker: (!autonomous).then_some(worker),
             duration: f64::from(duration),
             elapsed: 0.,
             through: now,
@@ -1057,6 +1100,7 @@ impl ObjectHost {
             lumber,
             initial_pending: true,
             canceled: false,
+            autonomous,
             last_life: vitals.life,
             damaged: false,
             fault: None,
@@ -1136,7 +1180,7 @@ impl ObjectHost {
             if let Some(since) = worker.paused_since {
                 delta = (since - state.through).clamp(0., delta);
             }
-        } else {
+        } else if !state.autonomous {
             delta = 0.;
         }
         if let Some(since) = record.paused_since {
@@ -1214,7 +1258,7 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(site)?
             && let Some(state) = &mut record.construction
         {
-            if state.canceled || state.initial_pending {
+            if state.canceled || state.initial_pending || state.autonomous {
                 return Ok(false);
             }
             state.worker = worker;

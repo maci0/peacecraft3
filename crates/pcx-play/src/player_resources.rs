@@ -1237,6 +1237,7 @@ mod construction_admission_tests {
             profile_sources: vec!["synthetic".into()],
             initial_life_fraction: 0.23,
             human_build_ability: *b"ZYX9",
+            undead_build_ability: *b"ZYX8",
             refund_rate: 0.37,
             damage_refund_penalty: false,
             life_drain_rate: 4.25,

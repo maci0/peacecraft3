@@ -162,6 +162,7 @@ fn fixture_with_training_configured(
                 profile_sources: vec!["synthetic construction".into()],
                 initial_life_fraction: 0.23,
                 human_build_ability: *b"ZYX9",
+                undead_build_ability: *b"ZYX8",
                 refund_rate: 0.37,
                 damage_refund_penalty: true,
                 life_drain_rate: 4.25,
@@ -1339,7 +1340,7 @@ fn admit_fixture_heroes(h: ObjectHost) -> ObjectHost {
             install: origin.source.clone(),
             edition_version: origin.version.clone(),
         },
-        &[("Units\\AbilityMetaData.slk", b"ID;PWXL;N;E\r\nB;Y3;X9\r\nC;X1;Y1;K\"ID\"\r\nC;X2;Y1;K\"field\"\r\nC;X3;Y1;K\"slk\"\r\nC;X4;Y1;K\"index\"\r\nC;X5;Y1;K\"type\"\r\nC;X6;Y1;K\"category\"\r\nC;X7;Y1;K\"repeat\"\r\nC;X8;Y1;K\"appendIndex\"\r\nC;X9;Y1;K\"data\"\r\nC;X1;Y2;K\"Mpx1\"\r\nC;X2;Y2;K\"Buttonpos\"\r\nC;X3;Y2;K\"Profile\"\r\nC;X4;Y2;K\"0\"\r\nC;X5;Y2;K\"int\"\r\nC;X6;Y2;K\"art\"\r\nC;X7;Y2;K\"0\"\r\nC;X8;Y2;K\"0\"\r\nC;X9;Y2;K\"\"\r\nC;X1;Y3;K\"Mpy1\"\r\nC;X2;Y3;K\"Buttonpos\"\r\nC;X3;Y3;K\"Profile\"\r\nC;X4;Y3;K\"1\"\r\nC;X5;Y3;K\"int\"\r\nC;X6;Y3;K\"art\"\r\nC;X7;Y3;K\"0\"\r\nC;X8;Y3;K\"0\"\r\nC;X9;Y3;K\"\"\r\nE\r\n"), ("Units\\AbilityData.slk", b"ID;PWXL;N;E\r\nB;Y2;X2\r\nC;X1;Y1;K\"alias\"\r\nC;X2;K\"race\"\r\nC;X1;Y2;K\"ZYX9\"\r\nC;X2;K\"fixture\"\r\nE\r\n")],
+        &[("Units\\AbilityMetaData.slk", b"ID;PWXL;N;E\r\nB;Y3;X9\r\nC;X1;Y1;K\"ID\"\r\nC;X2;Y1;K\"field\"\r\nC;X3;Y1;K\"slk\"\r\nC;X4;Y1;K\"index\"\r\nC;X5;Y1;K\"type\"\r\nC;X6;Y1;K\"category\"\r\nC;X7;Y1;K\"repeat\"\r\nC;X8;Y1;K\"appendIndex\"\r\nC;X9;Y1;K\"data\"\r\nC;X1;Y2;K\"Mpx1\"\r\nC;X2;Y2;K\"Buttonpos\"\r\nC;X3;Y2;K\"Profile\"\r\nC;X4;Y2;K\"0\"\r\nC;X5;Y2;K\"int\"\r\nC;X6;Y2;K\"art\"\r\nC;X7;Y2;K\"0\"\r\nC;X8;Y2;K\"0\"\r\nC;X9;Y2;K\"\"\r\nC;X1;Y3;K\"Mpy1\"\r\nC;X2;Y3;K\"Buttonpos\"\r\nC;X3;Y3;K\"Profile\"\r\nC;X4;Y3;K\"1\"\r\nC;X5;Y3;K\"int\"\r\nC;X6;Y3;K\"art\"\r\nC;X7;Y3;K\"0\"\r\nC;X8;Y3;K\"0\"\r\nC;X9;Y3;K\"\"\r\nE\r\n"), ("Units\\AbilityData.slk", b"ID;PWXL;N;E\r\nB;Y3;X2\r\nC;X1;Y1;K\"alias\"\r\nC;X2;K\"race\"\r\nC;X1;Y2;K\"ZYX9\"\r\nC;X2;K\"fixture\"\r\nC;X1;Y3;K\"ZYX8\"\r\nC;X2;K\"other-fixture\"\r\nE\r\n")],
         &[("Units\\HumanAbilityFunc.txt", b"[ZYX9]\nArt=fixture/menu.blp\nButtonpos=3,1\nHotkey=W\nTip=Source menu\nUbertip=Source description\n")],
         pcx_objects::editor::EditorReadLimits {
             max_listed_paths: 3,
@@ -1658,7 +1659,18 @@ fn ai_town_reference_refuses_unqualified_structure_fallback() {
     let h = &mut vm.host().inner;
     let owner = h.executed_unit(actor).unwrap().owner;
     let error = h.ai_town_reference(owner).unwrap_err();
-    assert!(error.to_string().contains("town structure state bits"));
+    assert!(
+        error
+            .to_string()
+            .contains("town structure root-ability state")
+    );
+    h.fixture_gathering_class(actor, "peon");
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(actor));
+    h.native("ShowUnit", &[Value::Handle(actor), Value::Bool(false)])
+        .unwrap();
+    assert!(h.ai_town_reference(owner).is_err());
+    h.native("ShowUnit", &[Value::Handle(actor), Value::Bool(true)])
+        .unwrap();
     h.fixture_gathering_class(producer, "peon");
     assert_eq!(h.ai_town_reference(owner).unwrap(), Some(producer));
     h.native("ShowUnit", &[Value::Handle(producer), Value::Bool(false)])
@@ -2237,14 +2249,17 @@ fn ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_wit
         "{error}"
     );
     assert!(
-        error.to_string().contains("live town registration"),
+        error.to_string().contains("live town association"),
         "{error}"
     );
     assert!(
         error.to_string().contains("reach occupancy and links"),
         "{error}"
     );
-    assert!(error.to_string().contains("undead construction"), "{error}");
+    assert!(
+        error.to_string().contains("effect-source evidence"),
+        "{error}"
+    );
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
     // A unit that upgrades into the kind also routes the request (the executable's fallback).
     let (mut vm, actor, _) =

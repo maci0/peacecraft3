@@ -257,10 +257,14 @@ start. Map SHA-256 `7513e385...`.
 | 79 to 108 s | Six more ziggurats, then a sacrificial pit `usap` (181 s) and a temple of the damned `utod` (188 s). |
 
 The same samples report four acolytes at 11 s, before the first structure appears, and still
-four at 12 through 17 s as the Necropolis and first ziggurat appear. The 13 s sample lists
-the original builder at (6064, 2800) with no current order. In this observed sequence the
-builder remains after starting the structure. The later build lifecycle and other builder
-classes require separate qualification.
+four at 12 through 17 s as the Necropolis and first ziggurat appear. A second isolated run
+recorded the exact unit receiving the first Necropolis order, that structure's life and its
+finish event once per second. The unit was alive and idle at 13 s; it and the other three
+acolytes were still present when the finish event appeared at 72 s on the probe clock. The
+site first appeared at 12 s, and the selected map's object override sets its build duration to
+60 seconds. The probe clock begins three seconds after initialization. The construction host
+now supports this unattended builder style using the selected ability class and the normal paid
+site lifecycle. Other builder classes and native sub-tick timing remain unqualified.
 
 All sites are multiples of 32 world units. Player 5's start location (`DefineStartLocation` 4) is
 (7488, 2752), start location 0 is (6208, 2880); the Necropolis stands 128 from the latter on the
@@ -457,9 +461,12 @@ allocates an index, writes it across a clipped rectangle, and removes that index
 (`0x7f6eb0`, `0x7f6d00`, `0x8b66c0`, `0xb2ef00`, `0xb33177`). The lookup checks an active
 bit and a destination in the indexed record (`0x8a4371`, `0x8b73e0`). The index is stored in
 byte 6 of each covered base cell; an otherwise open child with a nonzero index makes its parent
-mixed, requiring finer search expansion (`0x8b6784`, `0x8b7990`, `0x8a3b50`). A nearby native class
-identifier reports `Awrp`, which the selected ability table calls Warp; associating that class
-with this registration is an inference until its vtable relationship is checked. The
+mixed, requiring finer search expansion (`0x8b6784`, `0x8b7990`, `0x8a3b50`). The vtable at
+`0xf1a720` binds the Warp class-name getter at `0xb2ed70`, its ability-code getter at `0xb2ed80`,
+and its initializer at `0xb2ed90`. The initializer allocates the index and registers its rectangle;
+the selected ability table identifies the same code as Warp. The checked direct call sites for
+the index allocator are confined to this initializer. Whether all indirect registration paths
+and the live recreation's ability inventory can establish absence of a link remains open. The
 recreation's movement router is a
 separate eight-neighbor A* with its own octile heuristic, tie order and work accounting
 (`unit_placement.rs`, `route_search`); its work policy and nearest-reachable behavior are not a
@@ -504,8 +511,12 @@ accounting for the coordinate order. This is not yet a general live-state implem
 The reach query at `0x8be420` requires state bit `0x10000000` on an entry in addition to its
 active and pathing-mask tests. The movement-object constructor `0x8baf10` creates its entries
 through `0x8c1950`, which initializes their state to zero; the separate `0x8c19e0` wrapper sets
-that bit on entries it creates. The diagnostic applies this distinction to units whose selected
-data says they are not structures, while retaining structure footprint and terrain stamps.
+that bit on entries it creates. The direct call at `0x8013a3` is in a virtual method of the
+trigger-region class: its table at `0xebd234` also contains the class-name getter at `0x801290`.
+The call at `0x805343` is used by the texture-cell path at `0x6c098f`. These findings do not
+establish that trigger-region entries pass the other selected-mask tests. The diagnostic applies
+this distinction to units whose selected data says they are not structures, while retaining
+structure footprint and terrain stamps.
 This class-to-entry association, absent auxiliary links and complete order-time object state
 are not yet established for arbitrary games. The fixture uses the exact issuing worker position
 and other workers sampled at the preceding whole second; it does not replay movement or timers.
@@ -1113,5 +1124,5 @@ deterministically sampled unsigned words; that is not a comparison of full reach
   placed), refund on cancel, and retry cadence when a site or the builder is not ready.
 - The early false answers listed above, and the upgrade fallback.
 
-Production placement needs those live inputs and a construction lifecycle for an undead builder.
+Production placement needs those live inputs and an admitted site selection.
 Until then Human05's orange AI refuses at its first structure, at the recorded 1223 s stop.
