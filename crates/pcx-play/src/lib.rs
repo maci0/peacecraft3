@@ -140,6 +140,7 @@ pub use rpl::{Expectation, Rpl, RplError};
 pub mod construction_rules;
 pub mod control_group_rules;
 pub mod control_groups;
+pub mod cursor_rules;
 pub(crate) mod pe_image;
 pub mod scenario;
 pub mod script_trace;
