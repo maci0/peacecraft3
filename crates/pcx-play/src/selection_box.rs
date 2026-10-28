@@ -335,12 +335,19 @@ pub fn add_to_selection(current: &[Candidate], pick: &Pick, cap: usize) -> Resul
     Ok(Pick { units, truncated })
 }
 
-/// Double click: every candidate sharing the clicked unit's type and owner.
+/// Double click: every own candidate sharing the clicked unit's type. Another
+/// player's unit is never grouped. `None` when `clicked` is not among `hits`.
 pub fn same_type(hits: &[(Candidate, [u8; 4])], clicked: HandleId, cap: usize) -> Option<Pick> {
     let (target, rawcode) = hits.iter().find(|(c, _)| c.id == clicked)?;
+    if !target.own {
+        return Some(Pick {
+            units: vec![*target],
+            truncated: false,
+        });
+    }
     Some(capped(
         hits.iter()
-            .filter(|(c, code)| code == rawcode && c.own == target.own)
+            .filter(|(c, code)| c.own && code == rawcode)
             .map(|(c, _)| *c),
         cap,
     ))
@@ -565,16 +572,19 @@ mod tests {
     }
 
     #[test]
-    fn double_click_takes_the_clicked_type_and_owner() {
+    fn double_click_takes_the_clicked_type_among_own_units() {
         let hits = [
             (unit(1, true), *b"opeo"),
             (unit(2, true), *b"ogru"),
             (unit(3, true), *b"opeo"),
             (unit(4, false), *b"opeo"),
+            (unit(5, false), *b"opeo"),
         ];
         let pick = same_type(&hits, handle(1), CAP).unwrap();
         assert_eq!(pick.ids(), [handle(1), handle(3)]);
         assert_eq!(same_type(&hits, handle(9), CAP), None);
+        // Another player's unit stays a single selection.
+        assert_eq!(same_type(&hits, handle(4), CAP).unwrap().ids(), [handle(4)]);
     }
 
     /// Minimal PE with the four reviewed instruction sites and the tolerance word.
