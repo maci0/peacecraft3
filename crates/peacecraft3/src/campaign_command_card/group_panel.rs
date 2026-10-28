@@ -413,3 +413,207 @@ pub(super) fn click(
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+mod tests {
+    use super::*;
+    use crate::{
+        campaign_input::box_select_tests::{Rig, SCREEN, Spec},
+        campaign_startup_cases::box_select_cases::{FOOTMAN, PEON},
+    };
+    use pcx_play::selection_subgroups::Subgroup;
+
+    fn handle(n: u64) -> HandleId {
+        HandleId::new(std::num::NonZeroU64::new(n + 1).unwrap())
+    }
+
+    fn subgroup(kind: &[u8; 4], units: &[u64]) -> Subgroup {
+        Subgroup {
+            kind: *kind,
+            units: units.iter().map(|&n| handle(n)).collect(),
+        }
+    }
+
+    #[test]
+    fn cells_follow_subgroup_order_and_flag_the_active_subgroup() {
+        let groups = [
+            subgroup(b"hfoo", &[4, 2]),
+            subgroup(b"hpea", &[3]),
+            subgroup(b"hrif", &[9, 8]),
+        ];
+        assert_eq!(
+            order(&groups, Some(1), 12),
+            [
+                (handle(4), false),
+                (handle(2), false),
+                (handle(3), true),
+                (handle(9), false),
+                (handle(8), false),
+            ]
+        );
+        assert_eq!(order(&groups, Some(0), 3).len(), 3);
+        assert!(order(&groups, None, 12).iter().all(|(_, lit)| !lit));
+        assert!(order(&[], None, 12).is_empty());
+    }
+
+    #[test]
+    fn highlight_tint_multiplies_colour_and_keeps_alpha() {
+        let mut image = Image::default();
+        image.data = Some(vec![200, 100, 50, 77]);
+        let tinted_image = tinted(&image, 0xff80_ff00).unwrap();
+        assert_eq!(tinted_image.data.unwrap(), [100, 100, 0, 77]);
+        image.data = Some(vec![1, 2, 3]);
+        assert!(tinted(&image, 0xffff_ffff).is_err());
+    }
+
+    fn press(rig: &mut Rig, unit: HandleId, shift: bool) {
+        let witness = rig
+            .app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .session_witness()
+            .unwrap();
+        let button = rig
+            .app
+            .world_mut()
+            .spawn(GroupButton {
+                unit,
+                session: witness,
+            })
+            .id();
+        rig.app
+            .world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities = vec![button];
+        rig.hold(KeyCode::ShiftLeft, shift);
+        rig.frame();
+        rig.hold(KeyCode::ShiftLeft, false);
+        rig.app.world_mut().despawn(button);
+    }
+
+    #[test]
+    #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs and PCX_WAR3_EXE"]
+    fn selected_chapter_mounts_the_group_panel_and_follows_the_active_subgroup() {
+        let mut app = crate::native_campaign::tests::started_app();
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(CampaignCamera::active_for_test(camera))
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<crate::glue_menu::BackdropImage>>()
+            .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>()
+            .init_resource::<crate::campaign_minimap::CampaignMinimap>()
+            .init_resource::<crate::campaign_messages::MessageHistory>()
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .init_resource::<crate::campaign_box_select::BoxSelect>()
+            .init_resource::<crate::campaign_input::CampaignInput>()
+            .init_resource::<ButtonInput<KeyCode>>();
+        crate::campaign_hud::install(&mut app);
+        crate::hud_render::install(&mut app);
+        install(&mut app);
+        let own = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            let local = objects.local_player_number();
+            let own: Vec<HandleId> = objects
+                .executed_units()
+                .filter(|(_, unit)| {
+                    unit.shown
+                        && objects
+                            .player_settings(unit.owner)
+                            .is_ok_and(|p| Some(p.number) == local)
+                })
+                .map(|(id, _)| id)
+                .collect();
+            assert!(own.len() >= 2, "the fixture needs several own units");
+            let chosen: Vec<HandleId> = own.iter().copied().take(12).collect();
+            objects.select_units(&chosen, true);
+            chosen
+        };
+        for _ in 0..6 {
+            app.update();
+        }
+        let buttons = |app: &App| -> Vec<(HandleId, bool)> {
+            let card = app.world().resource::<CommandCard>();
+            assert!(card.group.error.is_none(), "{:?}", card.group.error);
+            let root = card.group.root.expect("group panel root");
+            assert_eq!(
+                app.world().get::<ChildOf>(root).unwrap().parent(),
+                card.parent.unwrap()
+            );
+            card.group
+                .cells
+                .iter()
+                .map(|cell| (cell.unit, cell.highlighted))
+                .collect()
+        };
+        let before = buttons(&app);
+        assert_eq!(before.len(), own.len().min(12));
+        let node_count = |app: &mut App| {
+            app.world_mut()
+                .query::<&GroupButton>()
+                .iter(app.world())
+                .count()
+        };
+        assert_eq!(node_count(&mut app), before.len());
+        let highlighted: Vec<_> = before.iter().filter(|(_, lit)| *lit).collect();
+        assert!(!highlighted.is_empty());
+        let groups = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            let groups = objects.subgroups().unwrap();
+            if groups.len() > 1 {
+                objects.cycle_subgroup(true).unwrap();
+            }
+            groups
+        };
+        for _ in 0..3 {
+            app.update();
+        }
+        let after = buttons(&app);
+        println!("subgroups {groups:?}\nbefore {before:?}\nafter {after:?}");
+        assert_eq!(after.len(), before.len());
+        if groups.len() > 1 {
+            assert_ne!(after, before, "Tab moves the highlight to the next subgroup");
+        }
+        assert!(
+            app.world()
+                .resource::<CommandCard>()
+                .last_error
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_group_button_press_goes_through_the_panel_system() {
+        let specs: Vec<Spec> = vec![
+            (0, PEON, [24.0, 40.0]),
+            (0, FOOTMAN, [56.0, 40.0]),
+            (0, FOOTMAN, [72.0, 40.0]),
+            (1, PEON, [90.0, 40.0]),
+        ];
+        let mut rig = Rig::new(&specs, SCREEN);
+        rig.app
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .add_systems(Update, click);
+        let [peon, foot, foot2, foreign] = [0, 1, 2, 3].map(|i| rig.units[i]);
+        rig.select(&[peon, foot, foot2]);
+        // The peon is in another subgroup: it only becomes the active one.
+        press(&mut rig, peon, false);
+        assert_eq!(rig.selection(), [peon, foot, foot2]);
+        // Now it is in the active subgroup: selected alone.
+        press(&mut rig, peon, false);
+        assert_eq!(rig.selection(), [peon]);
+        rig.select(&[peon, foot, foot2]);
+        press(&mut rig, foot, true);
+        assert_eq!(rig.selection(), [peon, foot2]);
+        // Another player's unit is never acted on by the panel.
+        rig.select(&[foreign]);
+        press(&mut rig, foreign, false);
+        assert_eq!(rig.selection(), [foreign]);
+        assert_eq!(rig.error(), None);
+    }
+}
