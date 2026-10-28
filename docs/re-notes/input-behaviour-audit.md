@@ -70,12 +70,12 @@ Facts every later row relies on.
 | A7 | Click on selected unit in a group | Information-panel group buttons: click selects that unit (and makes it primary), Shift removes it, Ctrl selects its type among the selection. | EX `0x5fc020` (Shift via `0x83fea0`, Ctrl via `0x83fdc0`); button meaning INF | exe | OK, with a correction: a plain click selects the unit only inside the active subgroup, otherwise it switches subgroup ([selection rules](input-selection-rules.md)) | `campaign_command_card/group_panel.rs` |
 | A8 | Left click on hero/portrait buttons | Event `0x30067` calls `0x5fff10` with the unit stored on the clicked button, so Shift and Ctrl follow A3/A4. That the button is the hero button is INF. | EX `0x5fb580`; role INF | exe | MISS | none |
 | A9 | Drag box | Left press on world posts `0x1a0068`, starting `CDragSelectMode`; release calls `0x5fff10` per unit (`0x5f9b40`). Cap and which units qualify not yet read. No drag threshold: a 1 px move already acts as a box, using the same unit region as a click. | EX `0x610880`, `0x5fe070`, `0x5f9b40`; RO ([live capture](input-live-capture.md)) | exe | other agent | n/a |
-| A10 | Right click on ground | Issues the **smart** order (id `0xd0003`) at the point. Order flags: bit0 Shift (queue); bits 2-4 come from `0x62f120`, the selection size and an option check (formation related, INF). Validity is checked first (`0x4f5d70`); a failure reports a `[Errors]` string. Click feedback uses attack/move markers (`0xd0012`/`0xd000f`). | EX `0x5fd2f0`; id names DOC (smart 851971, attack 851986, move 851983) | exe; `[Errors]` in `Units\CommandStrings.txt` (SB) | DIFF: always Move for non-enemy ground | `campaign_input.rs:1291`-`1349` |
-| A11 | Right click on enemy | Smart order with target (`0x5fd4c0`), resolved to attack. | EX | exe | OK for attack, via `Kind::Attack` | `campaign_input.rs:1291` |
-| A12 | Right click on friendly unit, resource, building, item, transport | Smart order resolves to follow, harvest/return, repair, rally, pick up, load. The resolution table was not read. Rally behaviour text is in `CmdRally` Ubertip (SB). | DOC; resolver UNK; rally text SB | exe | MISS except item pick-up (`"smart"` target order to an item) | `campaign_input.rs:1270` |
-| A13 | Shift+right click | Queued smart order (flag bit0). | EX `0x5fd2f0` | exe | MISS | none |
+| A10 | Right click on ground | Issues the **smart** order (id `0xd0003`) at the point. Order flags: bit0 Shift (queue); bits 2-4 come from `0x62f120`, the selection size and an option check (formation related, INF). Validity is checked first (`0x4f5d70`); a failure reports a `[Errors]` string. Click feedback uses attack/move markers (`0xd0012`/`0xd000f`). | EX `0x5fd2f0`; ids from the order registry: smart `0xd0003`, attack `0xd000f`, move `0xd0012`, setrally `0xd000c` (the earlier "attack 851986, move 851983" was swapped) | exe; `[Errors]` in `Units\CommandStrings.txt` (SB) | OK: rally for trainers, move otherwise ([smart order](input-smart-order.md)); the error text is not the shipped `[Errors]` string | `campaign_input.rs` `issue_smart_orders` |
+| A11 | Right click on enemy | Smart order with target (`0x5fd4c0`), resolved to attack. | EX `0xb18400` | exe | OK: attack with a weapon, follow without | `smart_order.rs` `classify_unit` |
+| A12 | Right click on friendly unit, resource, building, item, transport | Smart order resolves by the abilities of each unit: follow, harvest, return, repair, rally, pick up, load. The per-class checks of move, attack, harvest, repair, rally and cargo load were read; the point validators were not. | EX `0xb64440`, `0xb18400`, `0xb75d70`, `0xbb55e0`, `0xb13520`, `0xb4b980`; data SB | exe | OK for follow, attack, harvest, return, resume construction, item pick-up, rally on the ground. REFUSE (shown): damaged repair, load, rally on a target, haunted or entangled mines | `smart_order.rs` |
+| A13 | Shift+right click | Queued smart order (flag bit0). | EX `0x5fd2f0` | exe | OK: queued behind the current order; the client's length limit is UNK | `order_queue_host.rs`, `campaign_input.rs` `issue_form` |
 | A14 | Right click while a command is armed | Cancels targeting. | DOC; Esc path EX `0x5fc700` is separate | exe | OK | `campaign_input.rs:788` |
-| A15 | Left click while a command is armed | Issues the armed order. Shift keeps targeting for queued orders. | DOC | exe | DIFF: clears targeting after one click, no queue | `campaign_input.rs:1159`-`1243` |
+| A15 | Left click while a command is armed | Issues the armed order. Shift keeps targeting for queued orders. | DOC | exe | OK as documented: Shift queues and keeps targeting armed (UNVERIFIED, [smart order](input-smart-order.md)) | `campaign_input.rs` `click` |
 | A16 | Middle button drag | `CDragScrollMode`: press (code 2) on world starts a drag scroll (`0x5fd0d0` to `0x5f9ed0`), release ends it. Scroll ratio not read. | EX `0x63bd00`, `0x5fd0d0` | exe | OK (ground-grab drag, INF; see [camera input](input-camera.md)) | `campaign_camera_input.rs` |
 | A17 | X1/X2 mouse buttons | Delivered as button codes 8 and 0x10; no game binding located. | EX platform; binding UNK | exe | MISS | none |
 | A18 | Mouse wheel | One zoom step per 120 units of delta (`delta / 0x78`, toward zero); positive zooms in (level + 1), negative zooms out. See C1. | EX `0x5e12f0` | exe | OK | `campaign_camera_input.rs` |
@@ -91,7 +91,7 @@ Facts every later row relies on.
 
 | # | Key | Original behaviour | Evidence | Lives in | Recreation | Handler |
 | --- | --- | --- | --- | --- | --- | --- |
-| B1 | Command-card hotkeys | Per-ability `Hotkey`/`Unhotkey`/`Researchhotkey` letters from the ability data and `CommandStrings.txt` (Move `M`, Attack `A`, Attack Ground `G`, Stop `S`, Hold `H`, Patrol `P`, Rally `Y`, Hero Abilities `O`, Build `B`, Shop `s`). Cancel is `27` in `CommandStrings.txt` and `512` in the CustomKeys sample. Dispatch ignores the key when Ctrl or Alt is held; Shift is read for queueing. | SB; EX `0x5fc700` (Alt/Ctrl gate at `0x5fcd0a`, matching `0x638ed0`/`0x639140`) | data files | DIFF: letters from data for Move/Stop/Hold/Patrol/Attack, training, build menus, Holy Light, Water Elemental. MISS: Attack Ground, Rally, Shop, hero-abilities `O`, learn (`Researchhotkey`) and `Unhotkey` keys; Shift queue. OK: a key pressed with Ctrl or Alt held is ignored. | `campaign_input.rs:834`, `standard_command.rs:6` |
+| B1 | Command-card hotkeys | Per-ability `Hotkey`/`Unhotkey`/`Researchhotkey` letters from the ability data and `CommandStrings.txt` (Move `M`, Attack `A`, Attack Ground `G`, Stop `S`, Hold `H`, Patrol `P`, Rally `Y`, Hero Abilities `O`, Build `B`, Shop `s`). Cancel is `27` in `CommandStrings.txt` and `512` in the CustomKeys sample. Dispatch ignores the key when Ctrl or Alt is held; Shift is read for queueing. | SB; EX `0x5fc700` (Alt/Ctrl gate at `0x5fcd0a`, matching `0x638ed0`/`0x639140`) | data files | DIFF: letters from data for Move/Stop/Hold/Patrol/Attack, training, build menus, Holy Light, Water Elemental. MISS: Attack Ground, Rally, Shop, hero-abilities `O`, learn (`Researchhotkey`) and `Unhotkey` keys. OK: Shift with Stop, Hold and immediate abilities queues them ([smart order](input-smart-order.md)); a key pressed with Ctrl or Alt held is ignored. | `campaign_input.rs:834`, `standard_command.rs:6` |
 | B2 | Digits 1-9, 0 | `1`..`9` are groups 0..8, `0` is group 9. | EX `0x5fc700` | exe | OK: the binding is decoded from the image | `campaign_control_groups.rs`, [note](input-control-groups.md) |
 | B3 | Ctrl+digit | Defines the group from the current selection (replaces; helper `0x4f4fb0` also runs on this path, purpose UNK). Empty or foreign selections report `Emptycontrolgroup`/`Invalidcontrolgroup`/`Nonunitincontrolgroup`. | EX `0x5fc700` (`0x6cc8e0` is the define dispatch); error texts SB | exe; `[Errors]` | OK: refusals use the shipped texts | `campaign_control_groups.rs`, [note](input-control-groups.md) |
 | B4 | Shift+digit | Adds the current selection to the group (extends and dedupes). Confirmed live: the group gains the selection and the current selection does not change. Ctrl+Shift+digit behaves as Ctrl+digit (replace). Decompiler output for this branch is noisy. | EX; RO ([live capture](input-live-capture.md)) | exe | OK | `campaign_control_groups.rs::shift_digit` |
@@ -161,8 +161,8 @@ Fallbacks are not the player's saved values.
 
 ## F. What the recreation already matches
 
-- Select on press with Shift add (A1, partly A3); right-click attack and move;
-  item smart-target (A10-A12 partly).
+- Select on press with Shift add (A1, partly A3); the smart right click and Shift queueing
+  (A10-A13, A15, [smart order](input-smart-order.md)).
 - Armed-command targeting with right-click cancel (A14), Esc clearing targets.
 - Arrow-key scroll direction and rate at default options (C1).
 - Minimap left camera jump and drag, right-click point order, input gating.
@@ -177,9 +177,9 @@ Ordered by user-visible impact in a campaign playthrough (first is worst).
 
 | Rank | Gap | Rows | Why it ranks here |
 | --- | --- | --- | --- |
-| 1 | Smart right-click: harvest, return cargo, repair, follow, rally, load | A10, A12 | Workers cannot gather or build economy by the normal mouse flow |
+| 1 | Smart right-click: harvest, return cargo, repair, follow, rally, load (done except repair of damaged buildings and load) | A10, A12 | Workers cannot gather or build economy by the normal mouse flow |
 | 2 | Control groups (Ctrl/Shift/digit, 0.5 s double-tap centre) | B2-B5 | Core multi-unit control and the most used keys |
-| 3 | Shift-queued orders and Shift-held targeting | A13, A15, B1 | Build orders and patrol routes depend on it |
+| 3 | Shift-queued orders and Shift-held targeting (done; Shift on training and the minimap are open) | A13, A15, B1 | Build orders and patrol routes depend on it |
 | 4 | Zoom: wheel and Page Up/Down, six levels with 1.0 s easing | A18, B13, C2 | Constant use; the camera is fixed today |
 | 5 | Selection rules: cap 12, Shift toggle, Ctrl and double-click same-type, group-button clicks | A3-A7 | Large armies are unmanageable and cannot be trimmed |
 | 6 | Edge scroll and the scroll-arrow cursor | A19, D2 | Default mouse navigation; blocked by margin capture (UNK) |
@@ -226,10 +226,13 @@ copied constants; read keys, rates and tables from the data and the supplied exe
 4. **Zoom and rotation. Done**, see [camera input](input-camera.md). Six levels via wheel and Page Up/Down with 1.0 s easing;
    Insert/Delete rotation states with 0.5 s easing; distance and angle per level from the exe's
    literals (the live camera ignores the `[Camera]` file values at level 5).
-5. **Smart right-click.** Resolve target classes (resource, friendly unit,
-   own building, item, transport) to harvest, return, follow, rally, load.
-   Start from the existing harvest and rally order paths.
-6. **Order queueing.** Shift on right-click and on armed targeting; Shift+hotkey.
+5. **Smart right-click. Done**, see [smart order](input-smart-order.md). Target classes
+   resolve to follow, attack, harvest, return, resume construction, item pick-up and rally
+   from the abilities and unit data; damaged-building repair, loading, rally on a target and
+   haunted or entangled mines refuse loudly because the simulation lacks them.
+6. **Order queueing. Done**, see [smart order](input-smart-order.md). Shift on right-click,
+   armed targeting and Stop, Hold and immediate abilities queues behind the unit's current
+   order and keeps targeting armed (unverified); the client's queue length is UNK.
 7. **Selection rules.** Shift toggle, Ctrl and double-click (500 ms) same-type,
    subgroup model, Tab and Shift+Tab, group-button clicks, F1-F5 hero keys. A click
    on empty ground keeps the selection (already the recreation's behaviour).
@@ -261,7 +264,8 @@ zoom level (C3), Shift+digit and Ctrl+Shift+digit (B4).
   or data (the value, 0.004 of the 0.8 x 0.6 UI space, is a fit to measurements).
 - Edge-scroll speed in world units, and the effect of `mousescroll`.
 - Shift+Tab with three or more subgroups, live (B6; the handler is decoded, see [selection rules](input-selection-rules.md)).
-- The target-class resolution table behind the smart order (A12).
+- The point validators and the remaining ability classes of the smart order, and the queue
+  length limit (A12, A13; see [smart order](input-smart-order.md)).
 - The key-binding hash table contents (action ids behind `0x7cd160`), which may
   hold keys not seen in `CSelectMode` and `CCameraWar3`.
 - The hero-bar index semantics of F1-F5 (B7), and several-hall Backspace cycling (B16).

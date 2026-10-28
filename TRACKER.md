@@ -5740,3 +5740,24 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   budget check passed, and the sampled baseline and farm searches still selected the recorded
   sites at dequeues 1 and 280. Human05 was not rerun because production placement remains
   disconnected.
+
+### 2026-10-29: Smart right click and Shift-queued orders (input slices 5 and 6)
+
+- [~] A right click resolves per selected unit from its abilities and the target: ground
+  (move, or `setrally` for units that train), enemy (attack, else follow), own or allied
+  unit (follow), worker on a gold mine or tree (harvest), carrying worker on a depot
+  (`returnresources`), worker on an unfinished building (`repair`), item (pick-up) and a tree
+  or rock nobody takes (move to the point). Classes the simulation lacks refuse with a shown
+  reason: repair of a damaged building, loading, rally on a target, haunted and entangled
+  mines. Shift queues the order behind the unit's current order, also for armed Move, Attack,
+  Patrol and spells and for Stop, Hold and immediate abilities, and keeps targeting armed.
+  Evidence, the client's per-ability checks and what is unverified:
+  [smart order](docs/re-notes/input-smart-order.md).
+- [ ] Open: the client's queue length (the host bounds it at 64 per unit), point validators of
+  the other ability classes, a live check of Shift keeping targeting armed, Shift on training
+  and on the minimap right click, damaged-building repair and cargo in the simulation.
+- Checks: `pcx-play` lib 2,309 passed (89 ignored); `peacecraft3` bins 868 passed (99
+  ignored), both with `test-fixtures`; native all-target and WASM Clippy for both crates
+  with warnings denied; the ignored Human04 smart-order test passes. Three ignored Human01
+  command tests (`selected_chapter_standard_buttons_*`, `*_command_click_*`,
+  `*_training_button_*`) fail with "Resource does not exist" at baseline as well.
