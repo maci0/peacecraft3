@@ -76,7 +76,7 @@ A3, A4, B1, C1, C5). Decisions:
   `campaign_game_input::sync_gate`. The interface reasons are set once before the
   camera chain, from the previous frame, and again after the HUD and dialog sets
   for click and hotkey handling.
-- Click selection, command-card hotkeys, arrow-key scroll, control groups and the
+- Click selection and drag-box gestures, command-card hotkeys, arrow-key scroll, control groups and the
   Ctrl+Shift+F9 pacing chord read `GameInput`. `commands_available` (used by the
   command card and minimap buttons) builds the same gate from the same function.
 - Not on the gate: Escape. The client raises the end-cinematic event on every
