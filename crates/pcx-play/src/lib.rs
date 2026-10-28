@@ -70,6 +70,7 @@ pub mod campaign_gathering_policy;
 pub mod campaign_group_timed_life_policy;
 pub mod campaign_host;
 pub mod campaign_inputs;
+pub mod campaign_loading;
 pub mod campaign_mode_policy;
 pub mod campaign_new_heroes_policy;
 pub mod campaign_placement;

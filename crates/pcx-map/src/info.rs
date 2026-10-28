@@ -335,16 +335,16 @@ pub struct MapInfo {
     pub flags: u32,
     /// A single byte, observed 0.
     pub byte_field: Option<u8>,
-    /// A u32 written from `VERSION_EXTRA_U32`.
+    /// Loading background number, `-1` as a raw word for none. Read it through
+    /// [`Self::loading_screen`].
     pub extra_u32: Option<u32>,
-    /// The first string written from `VERSION_EXTRA_U32`.
+    /// Custom loading screen model path, from `VERSION_FIRST_STRING`.
     pub first_string: Option<String>,
-    /// The fog/parallax string.
+    /// Loading screen text (the historical name is wrong).
     pub fog_string: String,
-    /// A second string written from the same version gate.
+    /// Loading screen title, from `VERSION_SECOND_STRING`.
     pub second_string: Option<String>,
-    /// A third string, written from the same version gate as
-    /// [`Self::second_string`].
+    /// Loading screen subtitle, from the same gate as [`Self::second_string`].
     pub third_string: Option<String>,
     /// Three strings written from `VERSION_LOADING_STRINGS`.
     pub loading_strings: Option<[String; 3]>,
@@ -861,6 +861,22 @@ impl MapInfo {
         m
     }
 
+    /// The header's loading screen fields under their meaning; see
+    /// `docs/re-notes/campaign-loading-screen.md`. A version that lacks a field
+    /// reports it absent.
+    pub fn loading_screen(&self) -> LoadingScreenFields<'_> {
+        LoadingScreenFields {
+            // The word is signed in the game: `-1` means no background number.
+            background: self
+                .extra_u32
+                .and_then(|word| u32::try_from(i32::from_ne_bytes(word.to_ne_bytes())).ok()),
+            custom_model: self.first_string.as_deref().filter(|path| !path.is_empty()),
+            text: &self.fog_string,
+            title: self.second_string.as_deref(),
+            subtitle: self.third_string.as_deref(),
+        }
+    }
+
     /// The forced-table lists.
     pub fn table_lists(&self) -> &[TableList] {
         &self.table_lists
@@ -880,6 +896,18 @@ impl MapInfo {
     pub fn framing(&self) -> MapInfoFraming {
         MapInfoFraming::of(self)
     }
+}
+
+/// The loading screen fields of one `.w3i`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadingScreenFields<'a> {
+    /// Index into the game's `[LoadingScreens]` table; `None` when absent or negative.
+    pub background: Option<u32>,
+    /// Model path of a map-supplied loading screen; `None` when absent or empty.
+    pub custom_model: Option<&'a str>,
+    pub text: &'a str,
+    pub title: Option<&'a str>,
+    pub subtitle: Option<&'a str>,
 }
 
 /// The measured framing of one `.w3i`.
@@ -1560,6 +1588,18 @@ mod version25_regressions {
         assert_eq!(info.loading_path.as_deref(), Some("intropath"));
         assert_eq!(info.loading_id, Some(10));
         assert_eq!(info.fog_style, Some(2));
+        let screen = info.loading_screen();
+        assert_eq!(screen.background, Some(9));
+        assert_eq!(screen.custom_model, Some("loadpath"));
+        assert_eq!(screen.text, "loadtext");
+        assert_eq!(screen.title, Some("loadtitle"));
+        assert_eq!(screen.subtitle, Some("loadsubtitle"));
+        let mut none = info.clone();
+        none.extra_u32 = Some(u32::MAX);
+        none.first_string = Some(String::new());
+        let screen = none.loading_screen();
+        assert_eq!(screen.background, None);
+        assert_eq!(screen.custom_model, None);
         assert_eq!(info.extra_u32_19, Some(0x99aabbcc));
         assert_eq!(info.item_tables[0].sets, [vec![[33, 0x41424344]], vec![]]);
     }
