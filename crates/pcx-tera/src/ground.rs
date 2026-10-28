@@ -145,7 +145,12 @@ pub fn tile_texture_selectors(
         nibbles[index] = nibble;
     }
     let mut ids = nibbles;
-    ids.sort_unstable();
+    // Five compare-exchanges sort four values, with no generic sort setup per tile.
+    for (low, high) in [(0, 1), (2, 3), (0, 2), (1, 3), (1, 2)] {
+        if ids[low] > ids[high] {
+            ids.swap(low, high);
+        }
+    }
     let mut unique = [0u8; 4];
     let mut count = 0usize;
     for id in ids {

@@ -324,6 +324,8 @@ pub struct Anomaly {
 pub struct Table {
     cells: BTreeMap<(u32, u32), String>,
     headers: BTreeMap<u32, String>,
+    /// Row-1 name to its lowest column, built once so name lookups do not scan.
+    columns: BTreeMap<String, u32>,
     generated: BTreeSet<(u32, u32)>,
     declared: Option<Dimensions>,
     max_row: u32,
@@ -440,19 +442,18 @@ impl Table {
         let mut cursor_seen = false;
         let mut record = 1usize;
         let mut terminated = false;
+        let mut staged = StagedCells::default();
+        let mut fields = Fields::default();
 
         while offset < data.len() {
             // Linear scan for the next CRLF; re-slicing the tail per record
             // would make this quadratic on the 828 KB `Units\UnitWeapons.slk`.
             let tail = &data[offset..];
-            let end = tail
-                .windows(2)
-                .position(|w| w == b"\r\n")
-                .ok_or(Error::Truncated {
-                    what: "record terminator",
-                    offset,
-                    len: data.len(),
-                })?;
+            let end = find_crlf(tail).ok_or(Error::Truncated {
+                what: "record terminator",
+                offset,
+                len: data.len(),
+            })?;
             let line = &tail[..end];
             let line_offset = offset;
             offset += end + 2;
@@ -468,7 +469,7 @@ impl Table {
             *t.record_counts.entry(kind.letter()).or_default() += 1;
 
             let record_index = record;
-            let fields = split_fields(&line[1..], record, line_offset)?;
+            split_fields(&mut fields, &line[1..], record, line_offset)?;
             record += 1;
 
             if terminated {
@@ -493,10 +494,10 @@ impl Table {
                     }
                 }
                 RecordKind::Cell | RecordKind::Format => {
-                    if let Some(v) = field(&fields, 'X') {
+                    if let Some(v) = fields.get('X') {
                         cursor_x = parse_index(v, 'X', record)?;
                     }
-                    if let Some(v) = field(&fields, 'Y') {
+                    if let Some(v) = fields.get('Y') {
                         cursor_y = parse_index(v, 'Y', record)?;
                     }
                     cursor_seen = true;
@@ -520,10 +521,17 @@ impl Table {
                         }
                     }
                     if kind == RecordKind::Cell {
-                        let generated = field(&fields, 'E').is_some();
-                        match field(&fields, 'K') {
+                        let generated = fields.get('E').is_some();
+                        match fields.get('K') {
                             Some(value) => {
-                                t.insert(cursor_y, cursor_x, value, generated, record_index);
+                                t.insert(
+                                    &mut staged,
+                                    cursor_y,
+                                    cursor_x,
+                                    value,
+                                    generated,
+                                    record_index,
+                                );
                                 // Extra K fields were previously ignored; preserve the
                                 // first value while retaining each repeated write.
                                 for _ in fields.iter().filter(|(tag, _)| *tag == 'K').skip(1) {
@@ -580,12 +588,22 @@ impl Table {
             return Err(Error::NoTerminator);
         }
 
+        t.flush_staged(&mut staged);
         t.finish();
         Ok(t)
     }
 
-    fn insert(&mut self, row: u32, column: u32, value: &str, generated: bool, record: usize) {
-        if self.cells.contains_key(&(row, column)) {
+    fn insert(
+        &mut self,
+        staged: &mut StagedCells,
+        row: u32,
+        column: u32,
+        value: &str,
+        generated: bool,
+        record: usize,
+    ) {
+        // The first value of a repeated coordinate wins and the repeat is recorded.
+        if !staged.store(&mut self.cells, (row, column), value) {
             self.duplicate_cell(row, column, record);
         }
         self.max_row = self.max_row.max(row);
@@ -606,9 +624,11 @@ impl Table {
                 detail: format!("row {row} col {column} carries an E formula"),
             });
         }
-        self.cells
-            .entry((row, column))
-            .or_insert_with(|| value.to_string());
+    }
+
+    /// Moves cells still waiting in ascending order into the map.
+    fn flush_staged(&mut self, staged: &mut StagedCells) {
+        staged.drain_into(&mut self.cells);
     }
 
     fn duplicate_cell(&mut self, row: u32, column: u32, record: usize) {
@@ -644,12 +664,11 @@ impl Table {
                 a.detail.push_str(" (a later record supplies the value)");
             }
         }
-        for &(row, column) in self.cells.keys() {
-            if row == 1 {
-                self.headers
-                    .entry(column)
-                    .or_insert_with(|| self.cells[&(row, column)].clone());
-            }
+        for (&(_, column), value) in self.cells.range((1, 0)..=(1, u32::MAX)) {
+            self.headers.entry(column).or_insert_with(|| value.clone());
+        }
+        for (&column, name) in &self.headers {
+            self.columns.entry(name.clone()).or_insert(column);
         }
         let named: Vec<u32> = self.headers.keys().copied().collect();
         let unnamed: Vec<u32> = (1..=self.max_column)
@@ -741,10 +760,7 @@ impl Table {
     /// space) and `PortraitAnims.slk` spells its first `Sound Label` — so
     /// trimming here would answer for a column that does not exist.
     pub fn column_of(&self, name: &str) -> Option<u32> {
-        self.headers
-            .iter()
-            .find(|(_, v)| v.as_str() == name)
-            .map(|(k, _)| *k)
+        self.columns.get(name).copied()
     }
 
     /// One cell by 1-based coordinates.
@@ -901,93 +917,170 @@ pub fn fnv1a64(data: &[u8]) -> u64 {
     h
 }
 
-/// One `;`-separated field: a one-character tag and its unquoted value.
-type Fields = Vec<(char, String)>;
+/// The `;`-separated fields of one record: a one-character tag and its unquoted
+/// value. The values share one buffer, so a record costs no per-field allocation
+/// once the buffers have grown to the longest record seen.
+#[derive(Default)]
+struct Fields {
+    /// Tag with the value's byte range in `text`, in record order.
+    spans: Vec<(char, usize, usize)>,
+    text: String,
+    /// The field being scanned, before it is checked as UTF-8.
+    value: Vec<u8>,
+}
 
-fn split_fields(line: &[u8], index: usize, offset: usize) -> Result<Fields, Error> {
-    let mut out: Fields = Vec::new();
+impl Fields {
+    fn clear(&mut self) {
+        self.spans.clear();
+        self.text.clear();
+        self.value.clear();
+    }
+
+    /// The first value carried under `tag`.
+    fn get(&self, tag: char) -> Option<&str> {
+        self.spans
+            .iter()
+            .find(|(t, _, _)| *t == tag)
+            .map(|&(_, start, end)| &self.text[start..end])
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (char, &str)> {
+        self.spans
+            .iter()
+            .map(|&(tag, start, end)| (tag, &self.text[start..end]))
+    }
+}
+
+/// Offset of the first `\r\n` in `bytes`.
+fn find_crlf(bytes: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(at) = bytes[from..].iter().position(|&b| b == b'\r') {
+        let at = from + at;
+        if bytes.get(at + 1) == Some(&b'\n') {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+fn split_fields(out: &mut Fields, line: &[u8], index: usize, offset: usize) -> Result<(), Error> {
+    out.clear();
     let mut tag: Option<char> = None;
-    let mut value: Vec<u8> = Vec::new();
     let mut quoted = false;
     let mut i = 0usize;
     while i < line.len() {
-        let c = line[i];
         if quoted {
-            if c == b'"' {
+            // Everything up to the next quote is value text.
+            let stop = line[i..].iter().position(|&b| b == b'"');
+            let end = stop.map_or(line.len(), |p| i + p);
+            out.value.extend_from_slice(&line[i..end]);
+            i = end;
+            if i < line.len() {
                 if line.get(i + 1) == Some(&b'"') {
-                    value.push(b'"');
+                    out.value.push(b'"');
                     i += 2;
-                    continue;
+                } else {
+                    quoted = false;
+                    i += 1;
                 }
-                quoted = false;
-                i += 1;
-                continue;
             }
-            value.push(c);
-            i += 1;
             continue;
         }
+        let c = line[i];
         match c {
             b'"' => {
                 quoted = true;
                 i += 1;
             }
             b';' => {
-                push_field(&mut out, tag, &mut value, line, index)?;
+                push_field(out, tag, line, index)?;
                 tag = None;
                 i += 1;
             }
+            _ if tag.is_none() => {
+                // The tag is the first byte of the field. Anything that is
+                // not printable ASCII is not a tag this crate can read.
+                tag = Some(c as char);
+                i += 1;
+            }
             _ => {
-                if tag.is_none() {
-                    // The tag is the first byte of the field. Anything that is
-                    // not printable ASCII is not a tag this crate can read.
-                    tag = Some(c as char);
-                    i += 1;
-                } else {
-                    value.push(c);
-                    i += 1;
-                }
+                let stop = line[i..].iter().position(|&b| b == b'"' || b == b';');
+                let end = stop.map_or(line.len(), |p| i + p);
+                out.value.extend_from_slice(&line[i..end]);
+                i = end;
             }
         }
     }
     if quoted {
         return Err(Error::UnterminatedQuote { index, offset });
     }
-    push_field(&mut out, tag, &mut value, line, index)?;
-    Ok(out)
+    push_field(out, tag, line, index)
 }
 
-fn push_field(
-    out: &mut Fields,
-    tag: Option<char>,
-    value: &mut Vec<u8>,
-    line: &[u8],
-    index: usize,
-) -> Result<(), Error> {
+/// Ends the field being scanned: checks it as UTF-8 and appends it under `tag`.
+/// A value without a tag is discarded.
+fn push_field(out: &mut Fields, tag: Option<char>, line: &[u8], index: usize) -> Result<(), Error> {
     if let Some(t) = tag {
-        let v = match std::str::from_utf8(value) {
-            Ok(s) => s.to_string(),
-            Err(_) => {
-                return Err(Error::Unsupported {
-                    what: "field value is not UTF-8",
-                    detail: Some(format!(
-                        "record {index}: {:?}",
-                        truncate(&String::from_utf8_lossy(line), 48)
-                    )),
-                });
-            }
+        let Ok(text) = std::str::from_utf8(&out.value) else {
+            return Err(Error::Unsupported {
+                what: "field value is not UTF-8",
+                detail: Some(format!(
+                    "record {index}: {:?}",
+                    truncate(&String::from_utf8_lossy(line), 48)
+                )),
+            });
         };
-        out.push((t, v));
+        let start = out.text.len();
+        out.text.push_str(text);
+        out.spans.push((t, start, out.text.len()));
     }
-    value.clear();
+    out.value.clear();
     Ok(())
 }
 
-fn field(fields: &Fields, tag: char) -> Option<&str> {
-    fields
-        .iter()
-        .find(|(t, _)| *t == tag)
-        .map(|(_, v)| v.as_str())
+/// Cells collected while they arrive in ascending coordinate order, which every
+/// shipped table does. They then enter the map as one sorted bulk build instead
+/// of one tree descent per cell. The first out-of-order or repeated coordinate
+/// moves everything into the map and later cells are inserted individually.
+#[derive(Default)]
+struct StagedCells {
+    ascending: Vec<((u32, u32), String)>,
+    in_map: bool,
+}
+
+impl StagedCells {
+    /// Stores `value` unless the coordinate is already present; false when it was.
+    fn store(
+        &mut self,
+        cells: &mut BTreeMap<(u32, u32), String>,
+        key: (u32, u32),
+        value: &str,
+    ) -> bool {
+        if !self.in_map {
+            if self.ascending.last().is_none_or(|(last, _)| *last < key) {
+                self.ascending.push((key, value.to_string()));
+                return true;
+            }
+            self.drain_into(cells);
+            self.in_map = true;
+        }
+        match cells.entry(key) {
+            std::collections::btree_map::Entry::Occupied(_) => false,
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(value.to_string());
+                true
+            }
+        }
+    }
+
+    fn drain_into(&mut self, cells: &mut BTreeMap<(u32, u32), String>) {
+        if !self.ascending.is_empty() {
+            // `cells` is empty here: staging only holds cells while nothing is in the map.
+            debug_assert!(cells.is_empty());
+            *cells = self.ascending.drain(..).collect();
+        }
+    }
 }
 
 fn parse_index(v: &str, tag: char, index: usize) -> Result<u32, Error> {
@@ -999,12 +1092,12 @@ fn parse_index(v: &str, tag: char, index: usize) -> Result<u32, Error> {
 }
 
 fn read_dimensions(fields: &Fields, index: usize) -> Result<Option<Dimensions>, Error> {
-    let (Some(x), Some(y)) = (field(fields, 'X'), field(fields, 'Y')) else {
+    let (Some(x), Some(y)) = (fields.get('X'), fields.get('Y')) else {
         // A `B` record without both counts declares nothing usable. Every
         // shipped `B` has all three, so this is a shape we have not seen.
         return Ok(None);
     };
-    let date = match field(fields, 'D') {
+    let date = match fields.get('D') {
         Some(d) => {
             // Three shipped files pack extra numbers into `D`, separated by
             // spaces rather than by the `;` field separator. Only the leading

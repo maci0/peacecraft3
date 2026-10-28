@@ -103,6 +103,22 @@ pub fn decompress_sector_with_huffman(
     out: &mut [u8],
     table: Option<&crate::huffman::HuffmanTable>,
 ) -> Result<usize, PayloadError> {
+    decompress_sector_in(&mut Scratch::default(), sector, out, table)
+}
+
+/// Decoder state shared by the sectors of one block, so each sector does not
+/// allocate and clear a fresh inflate window.
+#[derive(Default)]
+struct Scratch {
+    zlib: Option<flate2::Decompress>,
+}
+
+fn decompress_sector_in(
+    scratch: &mut Scratch,
+    sector: &[u8],
+    out: &mut [u8],
+    table: Option<&crate::huffman::HuffmanTable>,
+) -> Result<usize, PayloadError> {
     let Some(&mask) = sector.first() else {
         return Ok(0);
     };
@@ -116,7 +132,13 @@ pub fn decompress_sector_with_huffman(
         // least one remaining byte, including a capped terminal run.
         let capacity = sparse_stage_capacity(out.len())?;
         let mut intermediate = vec![0; capacity];
-        let produced = decompress_stage(COMPRESSION_ZLIB, &sector[1..], &mut intermediate, table)?;
+        let produced = decompress_stage(
+            scratch,
+            COMPRESSION_ZLIB,
+            &sector[1..],
+            &mut intermediate,
+            table,
+        )?;
         return Ok(crate::sparse::decompress(&intermediate[..produced], out)?);
     }
     let allowed = COMPRESSION_PKWARE
@@ -144,23 +166,32 @@ pub fn decompress_sector_with_huffman(
     }
     // FUN_1500dd30 visits the runtime dispatcher table backwards:
     // ev_7be596f3cf153d1fe4da9a3529555c088e88377b6c47cf10ab20d521226f82e0.
-    let stages: Vec<_> = [
+    let mut stages = [0u8; 5];
+    let mut count = 0;
+    for stage in [
         COMPRESSION_PKWARE,
         COMPRESSION_ZLIB,
         COMPRESSION_HUFFMAN,
         COMPRESSION_ADPCM_STEREO,
         COMPRESSION_ADPCM_MONO,
-    ]
-    .into_iter()
-    .filter(|stage| mask & stage != 0)
-    .collect();
+    ] {
+        if mask & stage != 0 {
+            stages[count] = stage;
+            count += 1;
+        }
+    }
+    let stages = &stages[..count];
+    // The usual sector has one stage and decodes straight from the archive bytes.
+    if let [only] = stages {
+        return decompress_stage(scratch, *only, body, out, table);
+    }
     let mut input = body.to_vec();
     for (index, stage) in stages.iter().enumerate() {
         if index + 1 == stages.len() {
-            return decompress_stage(*stage, &input, out, table);
+            return decompress_stage(scratch, *stage, &input, out, table);
         }
         let mut next = vec![0; out.len()];
-        let produced = decompress_stage(*stage, &input, &mut next, table)?;
+        let produced = decompress_stage(scratch, *stage, &input, &mut next, table)?;
         next.truncate(produced);
         input = next;
     }
@@ -178,6 +209,7 @@ fn sparse_stage_capacity(output_capacity: usize) -> Result<usize, PayloadError> 
 }
 
 fn decompress_stage(
+    scratch: &mut Scratch,
     mask: u8,
     body: &[u8],
     out: &mut [u8],
@@ -185,7 +217,13 @@ fn decompress_stage(
 ) -> Result<usize, PayloadError> {
     match mask {
         COMPRESSION_ZLIB => {
-            let mut z = flate2::Decompress::new(true);
+            let z = match &mut scratch.zlib {
+                Some(z) => {
+                    z.reset(true);
+                    z
+                }
+                empty => empty.insert(flate2::Decompress::new(true)),
+            };
             match z.decompress(body, out, flate2::FlushDecompress::Finish) {
                 Ok(flate2::Status::StreamEnd) if z.total_in() == body.len() as u64 => {
                     Ok(z.total_out() as usize)
@@ -312,13 +350,14 @@ fn decompress_implode(body: &[u8], out: &mut [u8]) -> Result<usize, PayloadError
 }
 
 fn decompress_payload(
+    scratch: &mut Scratch,
     data: &[u8],
     out: &mut [u8],
     block_flags: u32,
     table: Option<&crate::huffman::HuffmanTable>,
 ) -> Result<usize, PayloadError> {
     if block_flags & flags::COMPRESS != 0 {
-        decompress_sector_with_huffman(data, out, table)
+        decompress_sector_in(scratch, data, out, table)
     } else {
         decompress_implode(data, out)
     }
@@ -350,15 +389,22 @@ pub fn decode_block_with_huffman(
     let encrypted = block_flags & flags::ENCRYPTED != 0;
 
     if block_flags & flags::SINGLE_UNIT != 0 {
-        let mut buf = raw.to_vec();
+        // Copied only when decryption must rewrite it.
+        let mut buf = std::borrow::Cow::Borrowed(raw);
         if encrypted {
-            decrypt(&mut buf, key, crate::crypt::table());
+            decrypt(buf.to_mut(), key, crate::crypt::table());
         }
         if (block_flags & flags::COMPRESS != 0 || block_flags & flags::IMPLODE != 0)
             && buf.len() != file_size as usize
         {
             let mut plain = vec![0u8; file_size as usize];
-            let n = decompress_payload(&buf, &mut plain, block_flags, table)?;
+            let n = decompress_payload(
+                &mut Scratch::default(),
+                &buf,
+                &mut plain,
+                block_flags,
+                table,
+            )?;
             if n != file_size as usize {
                 return Err(PayloadError::SizeMismatch {
                     file_size: file_size as usize,
@@ -374,7 +420,7 @@ pub fn decode_block_with_huffman(
                 produced: buf.len(),
             });
         }
-        return Ok(buf);
+        return Ok(buf.into_owned());
     }
 
     let nsec = sector_count(file_size, sector_size);
@@ -412,6 +458,7 @@ pub fn decode_block_with_huffman(
     };
 
     out.reserve(file_size as usize);
+    let mut scratch = Scratch::default();
     for i in 0..nsec {
         let start = offsets[i] as usize;
         let end = offsets[i + 1] as usize;
@@ -421,10 +468,11 @@ pub fn decode_block_with_huffman(
                 count: nsec,
             });
         }
-        let mut sector = raw[start..end].to_vec();
+        // Copied only when decryption must rewrite it.
+        let mut sector = std::borrow::Cow::Borrowed(&raw[start..end]);
         if encrypted {
             decrypt(
-                &mut sector,
+                sector.to_mut(),
                 key.wrapping_add(i as u32),
                 crate::crypt::table(),
             );
@@ -433,15 +481,16 @@ pub fn decode_block_with_huffman(
         if (block_flags & (flags::COMPRESS | flags::IMPLODE) != 0)
             && !is_stored_verbatim(sector.len(), remaining, sector_size as usize)
         {
-            let mut buf = vec![0u8; remaining];
-            let n = decompress_payload(&sector, &mut buf, block_flags, table)?;
+            // Decode in place at the end of the output.
+            let at = out.len();
+            out.resize(at + remaining, 0);
+            let n = decompress_payload(&mut scratch, &sector, &mut out[at..], block_flags, table)?;
             if n != remaining {
                 return Err(PayloadError::SizeMismatch {
                     file_size: remaining,
                     produced: n,
                 });
             }
-            out.extend_from_slice(&buf);
         } else {
             if sector.len() != remaining {
                 return Err(PayloadError::SizeMismatch {
@@ -695,6 +744,36 @@ mod tests {
             decompress_sector(&packed, &mut [0; 128]),
             Err(PayloadError::UnsupportedCompression { mask: 3 })
         ));
+    }
+
+    /// Sectors of one block share inflate state; none may see an earlier one's.
+    #[test]
+    fn compressed_sectors_around_a_stored_sector_decode_independently() {
+        const SECTOR: usize = 64;
+        let first: Vec<u8> = (0..SECTOR as u32).map(|i| (i % 5) as u8).collect();
+        let second: Vec<u8> = (0..SECTOR as u32).map(|i| (i * 7 + 3) as u8).collect();
+        let third = vec![b'z'; 21];
+        let sectors = [zlib(&first), second.clone(), zlib(&third)];
+        // The middle sector fills a whole sector, so it carries no mask byte.
+        assert_eq!(sectors[1].len(), SECTOR);
+        let table_bytes = (sectors.len() + 1) * 4;
+        let mut raw = Vec::new();
+        let mut at = table_bytes as u32;
+        raw.extend(at.to_le_bytes());
+        for sector in &sectors {
+            at += sector.len() as u32;
+            raw.extend(at.to_le_bytes());
+        }
+        sectors.iter().for_each(|sector| raw.extend(sector));
+        let expected: Vec<u8> = [first, second, third].concat();
+        let decoded = decode_block(
+            &raw,
+            0,
+            expected.len() as u32,
+            flags::COMPRESS,
+            SECTOR as u32,
+        );
+        assert_eq!(decoded.unwrap(), expected);
     }
 
     #[test]

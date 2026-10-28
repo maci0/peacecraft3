@@ -1402,21 +1402,9 @@ pub fn sample_bone_track_in_interval(track: &BoneTrack, frame: u32, interval: [u
 fn sample_bone_track_range(track: &BoneTrack, frame: u32, first: usize, end: usize) -> Pose {
     let mut pose = Pose::default();
     match track.kind {
-        TrackKind::Translation => {
-            pose.translation = [
-                sample_vec3(track, frame, 0, first, end),
-                sample_vec3(track, frame, 1, first, end),
-                sample_vec3(track, frame, 2, first, end),
-            ]
-        }
+        TrackKind::Translation => pose.translation = sample_vec3(track, frame, first, end),
         TrackKind::Rotation => pose.rotation = sample_rotation(track, frame, first, end),
-        TrackKind::Scaling => {
-            pose.scale = [
-                sample_vec3(track, frame, 0, first, end),
-                sample_vec3(track, frame, 1, first, end),
-                sample_vec3(track, frame, 2, first, end),
-            ]
-        }
+        TrackKind::Scaling => pose.scale = sample_vec3(track, frame, first, end),
     }
     pose
 }
@@ -1462,25 +1450,28 @@ fn span(track: &BoneTrack, frame: u32, first: usize, end: usize) -> Option<Span>
     Some(Span::Between { lo, hi, t })
 }
 
-/// Samples component `c` of a translation or scaling track.
-fn sample_vec3(track: &BoneTrack, frame: u32, component: usize, first: usize, end: usize) -> f32 {
-    let at = |i: usize| track.value(i).map(|v| v[component]).unwrap_or(0.0);
+/// Samples all three components of a translation or scaling track from one key search.
+fn sample_vec3(track: &BoneTrack, frame: u32, first: usize, end: usize) -> [f32; 3] {
+    let at = |i: usize| {
+        let v = track.value(i).unwrap_or([0.0; 4]);
+        [v[0], v[1], v[2]]
+    };
     let (lo, hi, t) = match span(track, frame, first, end) {
-        None => return 0.0,
+        None => return [0.0; 3],
         Some(Span::Key(i)) => return at(i),
         Some(Span::Between { lo, hi, t }) => (lo, hi, t),
     };
     let (v0, v1) = (at(lo), at(hi));
     match track.interpolation {
         Interpolation::None => v0,
-        Interpolation::Linear => v0 + (v1 - v0) * t,
+        Interpolation::Linear => std::array::from_fn(|c| v0[c] + (v1[c] - v0[c]) * t),
         Interpolation::Hermite | Interpolation::Bezier => {
             // A midpoint is *not* Hermite. With tangents available the curve
             // bulges, and ignoring that flattens every bone animation into
             // something close to linear — which looks almost right and is not.
-            let m0 = track.out_tangent(lo).map_or(0.0, |v| v[component]);
-            let m1 = track.in_tangent(hi).map_or(0.0, |v| v[component]);
-            cubic(track.interpolation, v0, v1, m0, m1, t)
+            let m0 = track.out_tangent(lo).unwrap_or([0.0; 4]);
+            let m1 = track.in_tangent(hi).unwrap_or([0.0; 4]);
+            std::array::from_fn(|c| cubic(track.interpolation, v0[c], v1[c], m0[c], m1[c], t))
         }
     }
 }
@@ -1538,6 +1529,55 @@ pub fn bone_matrices(
     bone_matrices_from_poses(bones, parent, pivots, &poses)
 }
 
+/// Object id to bone index; a later bone with the same id replaces an earlier one.
+///
+/// Ids are node indices, so a flat table serves every ordinary model without
+/// hashing. Ids far past the bone count use a map instead of a huge table.
+enum BoneIndex {
+    Flat(Vec<u32>),
+    Sparse(std::collections::HashMap<u32, usize>),
+}
+
+/// Flat tables are used while the largest id stays within this many ids per bone, plus slack.
+const FLAT_IDS_PER_BONE: usize = 4;
+const FLAT_ID_SLACK: usize = 64;
+/// Flat-table marker for an id no bone has.
+const NO_BONE: u32 = u32::MAX;
+
+impl BoneIndex {
+    fn new(bones: &[Bone]) -> Self {
+        let largest = bones.iter().map(|b| b.object_id).max().unwrap_or(0) as usize;
+        if largest <= bones.len() * FLAT_IDS_PER_BONE + FLAT_ID_SLACK
+            && bones.len() < NO_BONE as usize
+        {
+            let mut table = vec![NO_BONE; largest + 1];
+            for (i, b) in bones.iter().enumerate() {
+                table[b.object_id as usize] = i as u32;
+            }
+            Self::Flat(table)
+        } else {
+            Self::Sparse(
+                bones
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| (b.object_id, i))
+                    .collect(),
+            )
+        }
+    }
+
+    fn get(&self, id: u32) -> Option<usize> {
+        match self {
+            Self::Flat(table) => table
+                .get(id as usize)
+                .copied()
+                .filter(|&i| i != NO_BONE)
+                .map(|i| i as usize),
+            Self::Sparse(map) => map.get(&id).copied(),
+        }
+    }
+}
+
 /// Compose supplied poses with the same hierarchy, pivot and cycle behavior as `bone_matrices`.
 /// Missing poses retain the pose adapter's existing identity fallback; extra poses are ignored.
 #[cfg_attr(
@@ -1551,25 +1591,26 @@ pub fn bone_matrices_from_poses(
     poses: &[Pose],
 ) -> Vec<[f32; 16]> {
     // By object id, so a parent can be found without walking the list.
-    let by_id: std::collections::HashMap<u32, usize> = bones
+    let by_id = BoneIndex::new(bones);
+    // One `parent` query per bone; the walk and the composition both reuse it.
+    // Per bone: its parent's index, and whether its matrix is composed yet.
+    let mut links: Vec<(Option<usize>, bool)> = bones
         .iter()
-        .enumerate()
-        .map(|(i, b)| (b.object_id, i))
+        .map(|b| (parent(b.object_id).and_then(|p| by_id.get(p)), false))
         .collect();
     let mut world = vec![[0.0f32; 16]; bones.len()];
-    let mut done = vec![false; bones.len()];
-    let mut chain = Vec::new();
+    let mut chain = Vec::with_capacity(bones.len());
 
     // Iterative rather than recursive, and it terminates: a cycle in the parent
     // chain would otherwise recurse forever.
     for start in 0..bones.len() {
-        if done[start] {
+        if links[start].1 {
             continue;
         }
         chain.clear();
         let mut cur = Some(start);
         while let Some(i) = cur {
-            if done[i] {
+            if links[i].1 {
                 break;
             }
             if chain.contains(&i) {
@@ -1579,19 +1620,19 @@ pub fn bone_matrices_from_poses(
                 break;
             }
             chain.push(i);
-            cur = parent(bones[i].object_id).and_then(|p| by_id.get(&p).copied());
+            cur = links[i].0;
         }
         // Compose root-down so each parent exists before its child.
         for &i in chain.iter().rev() {
             let pose = poses.get(i).copied().unwrap_or_default();
-            let base = parent(bones[i].object_id)
-                .and_then(|p| by_id.get(&p).copied())
+            let base = links[i]
+                .0
                 .filter(|&p| p != i)
                 .map(|p| world[p])
                 .unwrap_or_else(identity);
             let pivot = pivots.position(bones[i].object_id).unwrap_or([0.0; 3]);
             world[i] = compose(base, pose, pivot);
-            done[i] = true;
+            links[i].1 = true;
         }
     }
     world
@@ -7436,6 +7477,81 @@ mod compose_tests {
         // index 9 (which would be out of bounds).
         assert_eq!(world[0], identity());
         assert_eq!(world[1], identity());
+    }
+
+    fn rest_bone(object_id: u32) -> Bone {
+        Bone {
+            offset: 0,
+            span: 0,
+            name: String::new(),
+            object_id,
+            parent_id: -1,
+            flags: 0x100,
+            tracks: Vec::new(),
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        }
+    }
+
+    fn translated(t: [f32; 3]) -> Pose {
+        pose(t, I, [1.0; 3])
+    }
+
+    fn compose_tree(ids: &[u32], parents: &[Option<u32>], poses: &[Pose]) -> Vec<[f32; 16]> {
+        let bones: Vec<Bone> = ids.iter().map(|&id| rest_bone(id)).collect();
+        let parent = |id: u32| {
+            // The last bone carrying `id` is the one a lookup by id reaches.
+            ids.iter().rposition(|&i| i == id).and_then(|i| parents[i])
+        };
+        bone_matrices_from_poses(&bones, &parent, &Pivots(Vec::new()), poses)
+    }
+
+    /// Ids far beyond the bone count must compose like dense ones.
+    #[test]
+    fn huge_node_ids_compose_through_their_parents() {
+        let dense = compose_tree(
+            &[0, 1],
+            &[None, Some(0)],
+            &[translated([1.0, 0.0, 0.0]), translated([0.0, 2.0, 0.0])],
+        );
+        let sparse = compose_tree(
+            &[7, 4_000_000_000],
+            &[None, Some(7)],
+            &[translated([1.0, 0.0, 0.0]), translated([0.0, 2.0, 0.0])],
+        );
+        assert_eq!(dense, sparse);
+        assert_eq!(&sparse[1][12..15], &[1.0, 2.0, 0.0]);
+    }
+
+    /// A parent id carried by two bones resolves to the later one, as a map
+    /// built in bone order would.
+    #[test]
+    fn a_repeated_object_id_resolves_to_the_later_bone() {
+        let world = compose_tree(
+            &[5, 5, 6],
+            &[None, None, Some(5)],
+            &[
+                translated([1.0, 0.0, 0.0]),
+                translated([0.0, 10.0, 0.0]),
+                translated([0.0, 0.0, 1.0]),
+            ],
+        );
+        assert_eq!(&world[2][12..15], &[0.0, 10.0, 1.0]);
+    }
+
+    /// Bones on a parent cycle, including a bone that is its own parent, keep
+    /// their zero matrices; their descendants and unrelated bones compose.
+    #[test]
+    fn parent_cycles_keep_zero_matrices() {
+        let world = compose_tree(
+            &[0, 1, 2, 3],
+            &[Some(1), Some(0), Some(2), None],
+            &[translated([1.0, 0.0, 0.0]); 4],
+        );
+        assert_eq!(world[0], [0.0; 16]);
+        assert_eq!(world[1], [0.0; 16]);
+        assert_eq!(world[2], [0.0; 16]);
+        assert_eq!(&world[3][12..15], &[1.0, 0.0, 0.0]);
     }
 }
 

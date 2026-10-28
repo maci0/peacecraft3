@@ -79,20 +79,31 @@ impl MpqSource {
         };
         info.validate().map_err(invalid)?;
         let members = mappings(names)?;
+        // Entries with an existing block, ordered by name hash, from one pass over
+        // the table. Scanning the whole table per declared member would grow with
+        // members times entries.
+        let mut by_hash: Vec<(u32, u32, usize)> = Vec::new();
+        if !members.is_empty() {
+            for (index, entry) in archive.hash_entries().iter().enumerate() {
+                if archive
+                    .block(entry.block_index as usize)
+                    .is_ok_and(|block| block.exists())
+                {
+                    by_hash.push((entry.name1, entry.name2, index));
+                }
+            }
+            by_hash.sort_unstable();
+        }
         for mapping in members.values() {
             let hash = pcx_mpq::hash::hash_string(&mapping.member);
-            let candidates = archive
-                .hash_entries()
-                .iter()
-                .filter(|entry| {
-                    entry.name1 == hash.name1
-                        && entry.name2 == hash.name2
-                        && archive
-                            .block(entry.block_index as usize)
-                            .is_ok_and(|block| block.exists())
-                })
-                .collect::<Vec<_>>();
-            if candidates.len() > 1 {
+            let key = (hash.name1, hash.name2);
+            let first = by_hash.partition_point(|&(a, b, _)| (a, b) < key);
+            let count = by_hash[first..].partition_point(|&(a, b, _)| (a, b) == key);
+            if count > 1 {
+                let candidates = by_hash[first..first + count]
+                    .iter()
+                    .map(|&(_, _, index)| &archive.hash_entries()[index])
+                    .collect::<Vec<_>>();
                 return Err(SourceError::Ambiguous {
                     detail: format!(
                         "MPQ member {:?} has multiple locale/platform candidates: {candidates:?}; no locale selection policy supplied",

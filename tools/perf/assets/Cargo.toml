@@ -1,0 +1,31 @@
+[package]
+name = "peacecraft-assets-perf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+# Own workspace and lockfile: the game workspace and tools/perf stay untouched.
+[workspace]
+
+[dependencies]
+pcx-assets = { path = "../../../crates/pcx-assets" }
+pcx-blp = { path = "../../../crates/pcx-blp" }
+pcx-map = { path = "../../../crates/pcx-map" }
+pcx-mdl = { path = "../../../crates/pcx-mdl" }
+pcx-mpq = { path = "../../../crates/pcx-mpq" }
+pcx-objects = { path = "../../../crates/pcx-objects" }
+pcx-slq = { path = "../../../crates/pcx-slq" }
+pcx-tera = { path = "../../../crates/pcx-tera" }
+
+# Same code generation as the game's `profiling` profile (O3, thin LTO, symbols).
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+debug = 1
+strip = false
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"

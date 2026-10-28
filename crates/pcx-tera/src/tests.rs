@@ -502,6 +502,32 @@ fn fixture_mesh_is_closed_manifold() {
 }
 
 #[test]
+fn manifold_report_rejects_a_flipped_triangle_a_shared_third_use_and_a_degenerate_edge() {
+    let base = TerrainMesh::build(&fixture_terrain());
+
+    // Reversing the first triangle makes it traverse its shared edge the same way
+    // as its neighbour. Every edge is still used at most twice.
+    let mut flipped = base.clone();
+    flipped.indices.swap(1, 2);
+    let r = flipped.manifold();
+    assert_eq!(r.max_shared, 2);
+    assert!(!r.oriented);
+    assert!(!r.is_clean());
+
+    // A third triangle on the interior edge between vertices 0 and 4.
+    let mut tripled = base.clone();
+    tripled.indices.extend_from_slice(&[1, 0, 4]);
+    let r = tripled.manifold();
+    assert_eq!(r.max_shared, 3);
+    assert!(!r.oriented);
+
+    // A triangle with a repeated vertex is degenerate and breaks orientation.
+    let mut degenerate = base;
+    degenerate.indices.extend_from_slice(&[0, 0, 1]);
+    assert!(!degenerate.manifold().oriented);
+}
+
+#[test]
 fn build_scaled_overrides_the_defaults() {
     let t = fixture_terrain();
     let m = TerrainMesh::build_scaled(&t, 100.0, 1.0, 0.0);

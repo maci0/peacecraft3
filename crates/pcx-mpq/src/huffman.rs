@@ -1,6 +1,9 @@
 //! Storm Huffman decoding with weights imported from the user's PE image.
 //! Native algorithm evidence and source identity are recorded in format-mpq.md.
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HuffmanError {
@@ -19,6 +22,10 @@ pub struct HuffmanTable {
     pub file_backed_bytes: usize,
     pub zero_filled_bytes: usize,
     rows: Vec<[u8; 256]>,
+    /// The initial adaptive tree of each row, built on first use. Every sector
+    /// starts from its row's initial tree, so a sector clones it instead of
+    /// rebuilding it from the weights. `None` records a row that cannot build one.
+    trees: [OnceLock<Option<Box<Tree>>>; ROWS],
     /// ADPCM tables from the same source; `None` when the source has no unique run.
     pub adpcm: Option<AdpcmTables>,
 }
@@ -66,6 +73,27 @@ fn dword(bytes: &[u8], at: usize) -> Result<u32, HuffmanError> {
             .try_into()
             .unwrap(),
     ))
+}
+
+/// Offset of the first `needle` at or after `from`, comparing eight bytes at a
+/// time. Image scans visit every byte of a 15 MB executable, so a byte loop is
+/// the cost of opening the codec table.
+fn find_byte(haystack: &[u8], from: usize, needle: u8) -> Option<usize> {
+    const LOW: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let pattern = LOW * u64::from(needle);
+    let mut at = from;
+    while let Some(chunk) = haystack.get(at..at + 8) {
+        let word = u64::from_le_bytes(chunk.try_into().unwrap()) ^ pattern;
+        // Flags every zero byte; only bytes above the first zero can be false positives.
+        let zero = word.wrapping_sub(LOW) & !word & HIGH;
+        if zero != 0 {
+            return Some(at + (zero.trailing_zeros() / 8) as usize);
+        }
+        at += 8;
+    }
+    let tail = haystack.get(at..)?;
+    tail.iter().position(|&b| b == needle).map(|p| at + p)
 }
 
 impl HuffmanTable {
@@ -148,7 +176,14 @@ impl HuffmanTable {
         }
         let mut operands = Vec::new();
         for section in sections.iter().filter(|s| s.code) {
-            for code in bytes[section.raw..section.raw + section.raw_size].windows(12) {
+            let image = &bytes[section.raw..section.raw + section.raw_size];
+            // Every 12-byte window opens with the IMUL opcode byte.
+            let mut at = 0;
+            while let Some(found) = find_byte(image, at, 0x69) {
+                at = found + 1;
+                let Some(code) = image.get(found..found + 12) else {
+                    break;
+                };
                 // LEA with mod=10, rm=EAX and any destination register.
                 if code[..2] == [0x69, 0xc0] && code[6] == 0x8d && code[7] & 0xc7 == 0x80 {
                     let stride = dword(code, 2)? as usize;
@@ -201,6 +236,7 @@ impl HuffmanTable {
             file_backed_bytes,
             zero_filled_bytes,
             rows,
+            trees: empty_trees(),
             adpcm,
         })
     }
@@ -227,8 +263,21 @@ fn find_adpcm_tables(
     let mut found: Option<(u32, u32, Vec<u32>, Vec<i32>)> = None;
     for section in sections {
         let raw = &bytes[section.raw..section.raw + section.raw_size];
-        for at in index_bytes..=raw.len().saturating_sub(step_bytes) {
-            let Some(steps) = read_steps(&raw[at..at + step_bytes]) else {
+        // A step run ends with the 16-bit maximum, so only its trailing dword needs a
+        // full check. Candidates come out in ascending run offset.
+        let last = (ADPCM_STEP_COUNT - 1) * 4;
+        let maximum = ADPCM_STEP_MAX.to_le_bytes();
+        let mut from = index_bytes + last;
+        while let Some(end) = find_byte(raw, from, maximum[0]) {
+            from = end + 1;
+            if raw.get(end..end + 4) != Some(&maximum[..]) {
+                continue;
+            }
+            let at = end - last;
+            let Some(window) = raw.get(at..at + step_bytes) else {
+                continue;
+            };
+            let Some(steps) = read_steps(window) else {
                 continue;
             };
             let Some(index) = read_index(&raw[at - index_bytes..at]) else {
@@ -283,7 +332,31 @@ fn read_index(bytes: &[u8]) -> Option<Vec<i32>> {
         .then_some(index)
 }
 
-#[derive(Default, Clone, Copy)]
+/// Number of weight rows, one per possible first byte of a Huffman sector.
+const ROWS: usize = 256;
+
+fn empty_trees() -> [OnceLock<Option<Box<Tree>>>; ROWS] {
+    std::array::from_fn(|_| OnceLock::new())
+}
+
+/// Nodes a tree can hold: the construction limit plus the sentinel.
+const MAX_NODES: usize = 0x204;
+
+impl HuffmanTable {
+    /// A private copy of the row's initial tree, with room for its adaptive growth.
+    fn initial_tree(&self, row: usize) -> Result<Tree, HuffmanError> {
+        let built = self.trees[row].get_or_init(|| Tree::new(&self.rows[row]).ok().map(Box::new));
+        let tree = built.as_ref().ok_or(HuffmanError::Corrupt)?;
+        let mut nodes = Vec::with_capacity(MAX_NODES);
+        nodes.extend_from_slice(&tree.nodes);
+        Ok(Tree {
+            nodes,
+            symbols: tree.symbols,
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 struct Node {
     next: usize,
     prev: usize,
@@ -293,6 +366,7 @@ struct Node {
     low: usize,
 }
 
+#[derive(Debug, Clone)]
 struct Tree {
     // Index zero replaces Storm's intrusive-list sentinel. All links are indices.
     nodes: Vec<Node>,
@@ -500,7 +574,7 @@ pub fn decompress(
         available: 0,
     };
     let row = bits.take(8)?;
-    let mut tree = Tree::new(&table.rows[row])?;
+    let mut tree = table.initial_tree(row)?;
     let adaptive = row == 0;
     let mut written = 0;
     while written < out.len() {
@@ -538,6 +612,7 @@ pub(crate) mod tests {
             file_backed_bytes: 0,
             zero_filled_bytes: 0,
             rows,
+            trees: empty_trees(),
             adpcm: None,
         }
     }
@@ -745,6 +820,62 @@ pub(crate) mod tests {
         assert_eq!(&out[..2], b"AB");
         assert_eq!(decompress(&[1, 0x2d], &mut out[..1], &table).unwrap(), 1);
         assert!(decompress(&[1], &mut out, &table).is_err());
+    }
+
+    /// A sector must not inherit adaptation from an earlier sector of the same row.
+    #[test]
+    fn repeated_sectors_of_one_row_decode_identically() {
+        let table = synthetic_table(0, [0; 256]);
+        let sector = [0, 0x82, 0];
+        let mut first = [0; 8];
+        let mut second = [0; 8];
+        assert_eq!(decompress(&sector, &mut first, &table).unwrap(), 2);
+        assert_eq!(decompress(&sector, &mut second, &table).unwrap(), 2);
+        assert_eq!(&first[..2], b"AA");
+        assert_eq!(first, second);
+        // A clone starts from its own trees and agrees.
+        let mut cloned = [0; 8];
+        assert_eq!(decompress(&sector, &mut cloned, &table.clone()).unwrap(), 2);
+        assert_eq!(first, cloned);
+    }
+
+    #[test]
+    fn find_byte_matches_a_byte_scan_at_every_offset_and_length() {
+        let mut data = Vec::new();
+        let mut state = 0x2545_f491u32;
+        for _ in 0..67 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            data.push((state >> 24) as u8 % 7);
+        }
+        for needle in 0..9u8 {
+            for len in [0, 1, 7, 8, 9, 15, 16, 17, 67] {
+                for from in 0..=len + 1 {
+                    let slice = &data[..len];
+                    let expected = slice
+                        .get(from..)
+                        .and_then(|tail| tail.iter().position(|&b| b == needle))
+                        .map(|p| from + p);
+                    assert_eq!(
+                        find_byte(slice, from, needle),
+                        expected,
+                        "{needle} {len} {from}"
+                    );
+                }
+            }
+        }
+        // The high-bit and 0x01 neighbours must not produce false positives.
+        assert_eq!(
+            find_byte(&[0x80, 0x01, 0x7f, 0xff, 0x00, 0, 0, 0, 0x69], 0, 0x00),
+            Some(4)
+        );
+        assert_eq!(
+            find_byte(
+                &[0x01, 0x80, 0xfe, 0x02, 0x03, 0x04, 0x05, 0x06, 0x69],
+                0,
+                0x69
+            ),
+            Some(8)
+        );
     }
 
     #[test]

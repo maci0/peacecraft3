@@ -172,8 +172,11 @@ impl Doodads {
         let n = u32_at(&bytes, 12)? as usize;
 
         let mut cursor = DOO_HEADER;
-        let mut instances = Vec::new();
-        let mut item_drops = Vec::new();
+        // The declared count is untrusted: reserve no more than the bytes can hold
+        // (version 8 records are longer than version 7, so this only over-reserves).
+        let plausible = n.min(bytes.len().saturating_sub(DOO_HEADER) / DOO_RECORD);
+        let mut instances = Vec::with_capacity(plausible);
+        let mut item_drops = Vec::with_capacity(plausible);
         for _ in 0..n {
             let r = bytes
                 .get(cursor..cursor + 38)

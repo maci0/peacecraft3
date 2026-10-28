@@ -652,18 +652,8 @@ pub fn decode_jpeg_with_limit(
         .ok_or(Error::Unsupported("jpeg RGBA budget"))?;
     let head = jpeg_header(d, h)?;
 
-    let stream_len = head
-        .len()
-        .checked_add(body.len())
-        .ok_or(Error::Unsupported("jpeg stream size overflow"))?;
-    let mut stream = Vec::new();
-    stream
-        .try_reserve_exact(stream_len)
-        .map_err(|_| Error::Unsupported("jpeg stream allocation"))?;
-    stream.extend_from_slice(head);
-    stream.extend_from_slice(body);
-
-    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&stream));
+    // The shared header then the mip scan data, read in place rather than joined.
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Read::chain(head, body));
     decoder.set_max_decoding_buffer_size(max_rgba_bytes);
     decoder
         .read_info()
@@ -699,11 +689,32 @@ pub fn decode_jpeg_with_limit(
     out.try_reserve_exact(rgba_bytes)
         .map_err(|_| Error::Unsupported("jpeg RGBA allocation"))?;
     out.resize(rgba_bytes, 0);
-    for i in 0..px {
-        let p = &rgb[i * channels..(i + 1) * channels];
-        out[i * 4..i * 4 + 4].copy_from_slice(&rgba_from_jpeg(format, p));
+    // One pass per format, so the format is not matched again for every pixel.
+    use jpeg_decoder::PixelFormat;
+    match format {
+        PixelFormat::L8 => fill_rgba::<1>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::L8, p)),
+        PixelFormat::L16 => {
+            fill_rgba::<2>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::L16, p));
+        }
+        PixelFormat::RGB24 => {
+            fill_rgba::<3>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::RGB24, p));
+        }
+        PixelFormat::CMYK32 => {
+            fill_rgba::<4>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::CMYK32, p));
+        }
     }
     Ok(out)
+}
+
+fn fill_rgba<const N: usize>(out: &mut [u8], source: &[u8], convert: impl Fn(&[u8; N]) -> [u8; 4]) {
+    for (pixel, components) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(source.as_chunks::<N>().0)
+    {
+        pixel.copy_from_slice(&convert(components));
+    }
 }
 
 /// One JPEG pixel's components as straight RGBA8.

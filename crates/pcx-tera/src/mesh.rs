@@ -1,7 +1,5 @@
 //! The triangle mesh itself: plain vectors, deterministic order, no engine types.
 
-use std::collections::BTreeMap;
-
 use pcx_map::Terrain;
 
 use crate::world::{TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX};
@@ -196,8 +194,10 @@ impl ManifoldReport {
     }
 
     fn of(mesh: &TerrainMesh) -> Self {
-        let mut undirected: BTreeMap<(u32, u32), usize> = BTreeMap::new();
-        let mut directed: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+        // One word per directed triangle edge: the undirected edge (smaller vertex
+        // first) in the high bits and, in bit 0, whether the triangle traverses it
+        // in that order. Sorting groups the uses of each undirected edge.
+        let mut uses: Vec<u128> = Vec::with_capacity(mesh.indices.len());
         let mut degenerate = 0usize;
         for tri in mesh.indices.as_chunks::<3>().0 {
             let (a, b, c) = (tri[0], tri[1], tri[2]);
@@ -206,28 +206,34 @@ impl ManifoldReport {
                     degenerate += 1;
                     continue;
                 }
-                *directed.entry((p, q)).or_insert(0) += 1;
-                let key = if p < q { (p, q) } else { (q, p) };
-                *undirected.entry(key).or_insert(0) += 1;
+                let (low, high, forward) = if p < q { (p, q, 1) } else { (q, p, 0) };
+                uses.push(u128::from(low) << 33 | u128::from(high) << 1 | forward);
             }
         }
-        let max_shared = undirected.values().copied().max().unwrap_or(0);
-        let interior_edges = undirected.values().filter(|&&n| n == 2).count();
-        let boundary_edges = undirected.values().filter(|&&n| n == 1).count();
+        uses.sort_unstable();
+        let mut max_shared = 0usize;
+        let mut interior_edges = 0usize;
+        let mut boundary_edges = 0usize;
         // Orientability: an edge shared by exactly two triangles must be
         // traversed once in each direction. A *boundary* edge (count 1) has no
         // partner and is not evidence of a flip, so it must not be required to
         // have a reverse — requiring that made every cut-off boundary node
         // report the mesh as non-orientable while the winding was in fact
         // consistent. No edge may be shared by three or more.
-        let oriented = degenerate == 0
-            && undirected.values().all(|&n| n <= 2)
-            && undirected.iter().all(|(&(p, q), &n)| {
-                if n != 2 {
-                    return true;
+        let mut oriented = degenerate == 0;
+        for edge in uses.chunk_by(|a, b| a >> 1 == b >> 1) {
+            let shared = edge.len();
+            max_shared = max_shared.max(shared);
+            match shared {
+                1 => boundary_edges += 1,
+                2 => {
+                    interior_edges += 1;
+                    // Sorted, `false` precedes `true`: one use each way.
+                    oriented &= edge[0] & 1 == 0 && edge[1] & 1 == 1;
                 }
-                directed.get(&(p, q)) == Some(&1) && directed.get(&(q, p)) == Some(&1)
-            });
+                _ => oriented = false,
+            }
+        }
         Self {
             max_shared,
             interior_edges,

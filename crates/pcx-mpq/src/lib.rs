@@ -881,6 +881,7 @@ impl MpqSet {
     /// is the union, so callers enumerating content must use this instead.
     pub fn file_list(&mut self) -> Result<Vec<String>, Error> {
         let mut seen = std::collections::HashSet::new();
+        let mut key = String::new();
         let mut out = Vec::new();
         let mut missing = Vec::new();
         for a in self.members.iter_mut() {
@@ -891,7 +892,10 @@ impl MpqSet {
                         continue;
                     };
                     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                        if seen.insert(normalize(line)) {
+                        // A repeated line costs no allocation: only new keys are copied.
+                        normalize_into(&mut key, line);
+                        if !seen.contains(key.as_str()) {
+                            seen.insert(key.clone());
                             out.push(line.to_string());
                         }
                     }
@@ -911,11 +915,23 @@ impl MpqSet {
 
 /// Normalise an MPQ path: backslash separators, no leading slash, no `.`/`..`.
 pub fn normalize(path: &str) -> String {
-    path.replace('\\', "/")
-        .split('/')
-        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut out = String::with_capacity(path.len());
+    normalize_into(&mut out, path);
+    out
+}
+
+/// [`normalize`] into a caller-owned buffer, replacing its contents.
+fn normalize_into(out: &mut String, path: &str) {
+    out.clear();
+    let segments = path
+        .split(['\\', '/'])
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..");
+    for segment in segments {
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(segment);
+    }
 }
 
 #[cfg(test)]
