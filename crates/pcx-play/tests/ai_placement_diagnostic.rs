@@ -278,12 +278,29 @@ fn human05_placement_diagnostic() {
     let catalog = objects.unit_catalog().unwrap();
     let acolyte = catalog.resolve(*b"uaco").unwrap();
     let worker_radius = text(&acolyte, "collision").parse::<f32>().unwrap();
-    let blocked_sample = [
+    let mut blocked_sample = vec![
         [5611.785, 2795.562],
         [5676.686, 2656.12],
         [5779.904, 2595.492],
         [5468.591, 2861.923],
     ];
+    let exact_farm = std::env::var("PCX_HUMAN05_FARM_ORDER").ok();
+    if let Some(path) = &exact_farm {
+        let log = std::fs::read_to_string(path).unwrap();
+        blocked_sample = probe_sample_workers(&log);
+        assert_eq!(blocked_sample.len(), 4);
+        let issuer = probe_point(
+            log.split_once("issuer ")
+                .unwrap()
+                .1
+                .split_once(" site ")
+                .unwrap()
+                .0,
+        );
+        let index = blocked_sample.iter().position(|p| *p == issuer).unwrap();
+        blocked_sample.swap(0, index);
+    }
+    let ignore_mobile = std::env::var_os("PCX_HUMAN05_DIAGNOSTIC_NO_MOBILE").is_some();
     let mut workers = Vec::new();
     for point in std::iter::once(order_worker).chain(sample_workers.into_iter().take(3)) {
         let created = objects
@@ -326,7 +343,17 @@ fn human05_placement_diagnostic() {
 
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
         if blocked {
-            for (&handle, point) in workers.iter().zip(blocked_sample) {
+            if exact_farm.is_some() || ignore_mobile {
+                for &handle in &workers {
+                    objects
+                        .native(
+                            "SetUnitPathing",
+                            &[Value::Handle(handle), Value::Bool(false)],
+                        )
+                        .unwrap();
+                }
+            }
+            for (&handle, &point) in workers.iter().zip(&blocked_sample) {
                 objects
                     .native(
                         "SetUnitPosition",
@@ -337,6 +364,16 @@ fn human05_placement_diagnostic() {
                         ],
                     )
                     .unwrap();
+            }
+            if exact_farm.is_some() && !ignore_mobile {
+                for &handle in &workers {
+                    objects
+                        .native(
+                            "SetUnitPathing",
+                            &[Value::Handle(handle), Value::Bool(true)],
+                        )
+                        .unwrap();
+                }
             }
             let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
             objects
@@ -351,16 +388,29 @@ fn human05_placement_diagnostic() {
                     ],
                 )
                 .unwrap();
-            objects
-                .native(
-                    "SetUnitPosition",
-                    &[
-                        Value::Handle(worker),
-                        Value::Real(5577.521),
-                        Value::Real(2708.195),
-                    ],
-                )
-                .unwrap();
+            if exact_farm.is_none() {
+                objects
+                    .native(
+                        "SetUnitPosition",
+                        &[
+                            Value::Handle(worker),
+                            Value::Real(5577.521),
+                            Value::Real(2708.195),
+                        ],
+                    )
+                    .unwrap();
+            }
+            println!(
+                "farm order sample {blocked_sample:?}; diagnostic mobile collision disabled={ignore_mobile}"
+            );
+            let actual = workers
+                .iter()
+                .map(|handle| objects.executed_unit(*handle).unwrap().position.unwrap())
+                .collect::<Vec<_>>();
+            if exact_farm.is_some() {
+                assert_eq!(actual, blocked_sample);
+            }
+            println!("farm recreated worker positions {actual:?}");
         }
         let worker_point = objects.executed_unit(worker).unwrap().position.unwrap();
         println!("probe-sampled first worker {worker_point:?}, collision radius {worker_radius}");
@@ -504,6 +554,12 @@ fn human05_placement_diagnostic() {
                     },
                 )
                 .unwrap();
+                if exact_farm.is_some() && ignore_mobile && origin_name == "native-trace" {
+                    assert_eq!(
+                        first_same_score_valid.get(),
+                        Some((oracle, if blocked { 280 } else { 1 }))
+                    );
+                }
                 println!(
                     "blocked={blocked} origin={origin_name} center={center:?} axis_swap={swap} oracle_bfs_rank={:?} first_valid={:?} first_same_score_valid={:?} total_pops={}",
                     oracle_rank.get(),

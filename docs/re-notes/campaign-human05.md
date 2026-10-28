@@ -113,11 +113,12 @@ Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reach
 1223 s refusal. Their Human05 checkpoints, RNG checkpoints and refusal text match each other
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
 changed by those runs. The placement search remains disconnected from orders, so Human05 was
-not rerun before the original-map oracles were reproduced. A local-input diagnostic uses captured
-town coordinates and sampled workers. It selects the unblocked site but selects (6080, 2432)
-in the farm layout, while the client selects (5952, 2432). The native town selection and
-reach-query traces narrow the remaining differences, but the recreation still lacks the native
-list and occupancy mapping and hierarchical reach search. See
+not rerun before the original-map oracles were reproduced. With the native town coordinate and
+exact order-time workers, a local-input diagnostic selects the unblocked site but selects
+(6144, 2432) in the farm layout, while the client selects (5952, 2432). An experimental run
+that disables mobile occupancy matches the two sites and their dequeue ranks, but does not
+implement the native object-state mapping or reach check. The recreation also lacks the native
+town list and hierarchical reach search. See
 [AI construction](ai-construction.md) for the evidence and limitations. No later Human05 state
 has been verified.
 

@@ -587,6 +587,13 @@ an implemented native pathfinder. The hierarchy's edge expansion, queue tie beha
 of spatial object-state masks remain unresolved, so the recreation does not yet reproduce those
 100 and 12 reach decisions.
 
+An additional breakpoint trace of the at-start dequeue 35 shows 15 queue removals before
+the failure sentinel. The removed nodes include all four hierarchy levels. Removal 10 is a
+stale entry: its recorded generation is 1 while the node's current generation is 5. It still
+consumes a removal, as the control flow at `0x8a3c10` through `0x8a3c4b` predicts. The trace
+does not establish the missing edge expansion or occupancy mapping, and it has not been
+reproduced by a recreation search.
+
 With the captured baseline center and the updated construction raster, the diagnostic still
 chooses the unblocked site (6208, 2752), rank 1. In the farm layout it rejects the formerly
 accepted (6464, 2752), but chooses (6080, 2432), rank 282, instead of native (5952, 2432),
@@ -596,6 +603,41 @@ site using its sampled worker state. The sample is at whole seconds rather than 
 order instant, and the client's treatment of mobile occupancy in this check is not yet mapped;
 the evidence does not distinguish those causes. The route surrogate also exhausts its own work
 bound for the farm case. Neither observation licenses changing the result to fit the oracle.
+
+### Farm validator and exact order-time workers, 2026-10-28
+
+An isolated farm-layout breakpoint capture records all 280 dequeues through the chosen site.
+It records 77 nonzero prevented-mask cell queries, with no required-mask, special-mask or
+visibility rejection captured. The first rejected cells include the neutral farm's footprint;
+the mine footprint also produces rejected cells. The trace's immediate-candidate validator
+returns `0x44` on 13 captured returns. The retained-candidate return site was not separately
+instrumented, so that count does not cover every rejected candidate.
+
+The query at `0x7f69d0` expands the requested low-byte mask into both the upper and lower
+bytes of a spatial mask. `0x8bdbe0` first rejects a matching upper-byte cell flag. Otherwise it
+walks eligible spatial entries: an entry must be active and have a valid visit marker, its state
+at `+0x44` must have no bits in `0x8fffffff`, and its low pathing mask at `+0x34` must intersect
+the requested lower mask to block the cell. `0x7f6890` temporarily enables the query option that
+otherwise filters state bits `0x60000000`. These checks describe the native state, not yet a
+mapping from every recreation unit and destructable to that state.
+
+At cell (5776, 2512), covered by an acolyte during the first search, the captured spatial entry
+has state `0x20000001` and a low pathing mask intersecting `0x08`. The state test skips it.
+At farm cell (6160, 2800), the captured entry has state `0x10000000` and a low pathing mask
+intersecting `0x08`; the state test admits it and the cell blocks. The former entry's linked
+native object was captured, but its reference was not resolved directly to an acolyte unit;
+its overlapping rectangle and the order-time unit positions are runtime observations. The
+meaning and lifecycle of the state bits for other units, mines and destructables remain open.
+
+An order-event probe records all four acolyte positions at 8.211 s, when the site is issued.
+Two acolytes occupy cells selected by the Necropolis construction texture. The ignored
+local-input diagnostic can load that local event record. With the recorded town coordinate and
+those exact positions, the ordinary recreation validator selects (6144, 2432), rank 283, in
+the farm layout. An experimental run that disables the recreation's mobile occupancy
+selects (6208, 2752) at rank 1 without the farm and (5952, 2432) at rank 280 with the farm,
+for both tested texture-axis readings. The diagnostic asserts those results. It bypasses the
+native reach check and disables all four mobile stamps rather than deriving each object's native
+state, so it is not a production implementation or validation of the complete search.
 
 ## Not established
 

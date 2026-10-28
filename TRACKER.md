@@ -5279,3 +5279,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   local-input diagnostic, native and WASM Clippy with `-D warnings`, and
   `python3 tools/perf/sim_run.py --check` passed without raised budgets. Human03 and Human04
   checkpoint and RNG lines match `g1`, with victories at 279.02 s and 449.02 s.
+
+### 2026-10-28: Farm validator object masks
+
+- [~] Isolated debugger traces capture the 280 farm-layout dequeues and show different native
+  state-mask outcomes for a farm cell and an acolyte-overlapping cell. An order-event probe
+  supplies all four worker positions at the actual build order:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] The local-input diagnostic reads that record. With ordinary mobile occupancy it chooses
+  (6144, 2432), rank 283; an experimental run with mobile occupancy disabled chooses the native
+  site (5952, 2432), rank 280, and matches the baseline at rank 1. It bypasses native reach and
+  does not map native object states, so this is not a production placement rule.
+- [~] A reach-node trace confirms the first at-start failure removes 15 nodes from all four
+  hierarchy levels, including a stale entry. The recreation does not yet reproduce that search.
+- [ ] Native object-state mapping, the hierarchical reach search and the town-list mapping remain
+  incomplete. Production still refuses; no new Human05 run was made and the last reproducible
+  pair stops at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored. The local-input
+  diagnostic, native and WASM Clippy with `-D warnings`, and the simulation performance check
+  passed without raised budgets. Human03 and Human04 checkpoint and RNG lines match `g1`.
