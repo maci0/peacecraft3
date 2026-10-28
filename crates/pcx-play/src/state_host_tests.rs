@@ -324,6 +324,77 @@ fn camera_ramps_toward_setups_and_game_fields_over_their_durations() {
 }
 
 #[test]
+fn player_zoom_eases_the_live_fields_and_becomes_the_game_camera() {
+    let mut h = host();
+    let game = GameCamera {
+        angle_of_attack: 304.0,
+        field_of_view: 70.0,
+        rotation: 90.0,
+        distance: 1650.0,
+        far_z: 5000.0,
+        height: 0.0,
+        forward_rate: 3000.0,
+        strafe_rate: 3000.0,
+    };
+    let pose = crate::camera_input::Pose {
+        distance: 1600.0,
+        angle_of_attack: 311.0,
+        rotation: 20.0,
+    };
+    assert!(h.ease_player_camera(pose, 1.0).is_err(), "no camera yet");
+    h.admit_camera_view(&game).unwrap();
+    let field = |h: &mut ObjectHost, index: i32| match h
+        .native("ConvertCameraField", &[Value::Int(index)])
+        .unwrap()
+    {
+        Value::Handle(id) => id,
+        other => panic!("{other:?}"),
+    };
+    let (distance, attack, rotation) = (field(&mut h, 0), field(&mut h, 2), field(&mut h, 5));
+    let live = |h: &ObjectHost| {
+        [distance, attack, rotation].map(|id| h.camera_field(id).unwrap().unwrap())
+    };
+    let start = h.timer_game_time().unwrap();
+    h.ease_player_camera(pose, 1.0).unwrap();
+    assert_eq!(live(&h), [1650.0, 304.0, 90.0]);
+    advance(&mut h, start + 0.5);
+    assert_eq!(live(&h), [1625.0, 307.5, 55.0]);
+    advance(&mut h, start + 2.0);
+    assert_eq!(live(&h), [1600.0, 311.0, 20.0]);
+    // A script camera replaces the live fields; resetting returns to the player's pose.
+    h.native(
+        "PanCameraToTimed",
+        &[Value::Real(0.0), Value::Real(0.0), Value::Real(0.0)],
+    )
+    .unwrap();
+    let setup = h.native("CreateCameraSetup", &[]).unwrap();
+    h.native(
+        "CameraSetupSetField",
+        &[
+            setup.clone(),
+            Value::Handle(distance),
+            Value::Real(900.0),
+            Value::Real(0.0),
+        ],
+    )
+    .unwrap();
+    h.native(
+        "CameraSetupApplyForceDuration",
+        &[setup, Value::Bool(false), Value::Real(0.0)],
+    )
+    .unwrap();
+    assert_eq!(live(&h)[0], 900.0);
+    h.native("ResetToGameCamera", &[Value::Real(0.0)]).unwrap();
+    assert_eq!(live(&h), [1600.0, 311.0, 20.0]);
+    for bad in [f32::NAN, f32::INFINITY] {
+        assert!(h.ease_player_camera(pose, bad).is_err());
+        let mut broken = pose;
+        broken.distance = bad;
+        assert!(h.ease_player_camera(broken, 1.0).is_err());
+    }
+}
+
+#[test]
 fn camera_getters_report_live_target_and_fields_with_angles_in_radians() {
     let mut h = host();
     h.admit_camera_view(&GameCamera {

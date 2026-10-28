@@ -50,18 +50,8 @@ impl ObjectHost {
     /// the client's idle-worker list is not decoded.
     pub fn idle_workers(&self, owner: i32) -> Result<Vec<pcx_script::HandleId>, String> {
         let mut idle = Vec::new();
-        for (id, unit) in self.executed_units() {
-            let present = unit.shown
-                && !unit.combat.as_ref().is_some_and(|c| c.dead)
-                && !unit.vitals.as_ref().is_some_and(|v| v.life <= 0.0);
-            if !present
-                || self
-                    .player_settings(unit.owner)
-                    .map_err(|e| e.to_string())?
-                    .number
-                    != owner
-                || !class(&unit.definition, "UNIT_TYPE_PEON")?
-            {
+        for (id, unit) in self.live_units(owner)? {
+            if !class(&unit.definition, "UNIT_TYPE_PEON")? {
                 continue;
             }
             if !self.harvest_runs(id)
@@ -71,6 +61,48 @@ impl ObjectHost {
             }
         }
         Ok(idle)
+    }
+
+    /// Living, shown `UNIT_TYPE_TOWNHALL` units of player `owner` with their camera
+    /// points, in creation order. The Backspace list of the client holds the own Town
+    /// Hall (`input-camera.md`); its class test and order are not decoded.
+    pub fn town_halls(&self, owner: i32) -> Result<Vec<(pcx_script::HandleId, [f32; 2])>, String> {
+        let mut halls = Vec::new();
+        for (id, unit) in self.live_units(owner)? {
+            if class(&unit.definition, "UNIT_TYPE_TOWNHALL")? {
+                halls.push((id, unit.position.unwrap_or([unit.x, unit.y])));
+            }
+        }
+        Ok(halls)
+    }
+
+    /// Where the camera centres on `unit`.
+    pub fn unit_camera_point(&self, unit: pcx_script::HandleId) -> Result<[f32; 2], String> {
+        let unit = self.executed_unit(unit).map_err(|e| e.to_string())?;
+        Ok(unit.position.unwrap_or([unit.x, unit.y]))
+    }
+
+    /// Living, shown units of player `owner` in creation order.
+    fn live_units(
+        &self,
+        owner: i32,
+    ) -> Result<Vec<(pcx_script::HandleId, &super::ExecutedUnit)>, String> {
+        let mut found = Vec::new();
+        for (id, unit) in self.executed_units() {
+            let present = unit.shown
+                && !unit.combat.as_ref().is_some_and(|c| c.dead)
+                && !unit.vitals.as_ref().is_some_and(|v| v.life <= 0.0);
+            if present
+                && self
+                    .player_settings(unit.owner)
+                    .map_err(|e| e.to_string())?
+                    .number
+                    == owner
+            {
+                found.push((id, unit));
+            }
+        }
+        Ok(found)
     }
 
     pub(super) fn unit_type_native(

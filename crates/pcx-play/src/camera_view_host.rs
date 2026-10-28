@@ -2,6 +2,7 @@
 //! pans, setup applications and resets to the selected game camera.
 //! Linear interpolation over the requested duration is a recreation choice.
 use super::{Entry, Error, Failure, ObjectHost};
+use crate::camera_input::Pose;
 use pcx_objects::editor::camera::GameCamera;
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
@@ -199,6 +200,41 @@ impl ObjectHost {
         }
         let view = self.camera_view.as_mut().ok_or_else(|| fail("no camera"))?;
         view.target = Some(Ramp::fixed(to, now));
+        Ok(())
+    }
+
+    /// Player zoom or rotation: the game camera takes `pose`, so `ResetToGameCamera`
+    /// returns to it, and the live distance, angle of attack and rotation ease there
+    /// over `duration`. Linear easing and the shared game clock are recreation choices.
+    pub fn ease_player_camera(&mut self, pose: Pose, duration: f32) -> Result<(), Error> {
+        let fail = |reason| {
+            self.inner
+                .error("camera zoom", Failure::CameraSetupObject(reason))
+        };
+        let values = [pose.distance, pose.angle_of_attack, pose.rotation];
+        if !duration.is_finite() || !values.iter().all(|v| v.is_finite()) {
+            return Err(fail("finite pose and duration required"));
+        }
+        let now = self.timer_game_time().ok_or_else(|| fail("game clock"))?;
+        let fields = [
+            ("CAMERA_FIELD_TARGET_DISTANCE", pose.distance),
+            ("CAMERA_FIELD_ANGLE_OF_ATTACK", pose.angle_of_attack),
+            ("CAMERA_FIELD_ROTATION", pose.rotation),
+        ]
+        .map(|(global, value)| self.camera_field_constant(global).map(|field| (field, value)))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+        let view = self.camera_view.as_mut().ok_or_else(|| fail("no camera"))?;
+        for (field, value) in fields {
+            match view.game.iter_mut().find(|(known, _)| *known == field) {
+                Some(game) => game.1 = value,
+                None => view.game.push((field, value)),
+            }
+            view.fields
+                .entry(field)
+                .or_insert(Ramp::fixed([value], now))
+                .retarget([value], now, duration);
+        }
         Ok(())
     }
 
