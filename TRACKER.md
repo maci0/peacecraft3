@@ -5298,3 +5298,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored. The local-input
   diagnostic, native and WASM Clippy with `-D warnings`, and the simulation performance check
   passed without raised budgets. Human03 and Human04 checkpoint and RNG lines match `g1`.
+
+### 2026-10-28: Spatial-entry state writers
+
+- [~] Native constructors and writers establish zero initialization, a separate
+  `0x10000000` constructor path, a movement-dependent `0x20000000` update and a temporary
+  `0x40000000` update. The low bit that skips the acolyte-overlapping entry remains unexplained:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] A watchpoint on the first newly constructed movement entry did not fire in the bounded
+  isolated run. Its owner was not identified as the acolyte, so it does not resolve the writer.
+- [ ] Object-state mapping remains incomplete. Reach and town integration were not attempted;
+  production still refuses and the last reproducible Human05 pair stops at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
+  WASM Clippy passed with `-D warnings`. The simulation performance check passed with the cargo
+  lock and offline environment; budgets were unchanged. An earlier simulation check passed but
+  was started without that lock or offline setting. No campaign route was rerun.

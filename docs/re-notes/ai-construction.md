@@ -629,6 +629,28 @@ native object was captured, but its reference was not resolved directly to an ac
 its overlapping rectangle and the order-time unit positions are runtime observations. The
 meaning and lifecycle of the state bits for other units, mines and destructables remain open.
 
+The spatial-entry constructor at `0x8c1950` initializes the state word to zero. The wrapper
+at `0x8c19e0` sets `0x10000000` on the new entry. Two call sites use that wrapper, at
+`0x8013a3` and `0x805343`; the latter creates a collection of entries and assigns their lower
+pathing masks. The movement-object constructor at `0x8baf10` instead creates two entries with
+the zero-initializing constructor, keeping them at offsets `+0x94` and `+0x98` and setting the
+active flag on the second. This does not establish that every farm, mine or destructable uses
+one particular constructor.
+
+The movement update at `0x8bca70` changes `0x20000000` on the second entry: it combines two
+stored components with an input, applies a magnitude threshold, and sets or clears that bit
+according to a stored positive scalar. Another operation sets `0x40000000` temporarily at
+`0x8ac327` and clears it at `0x8ac378`. These writes do not explain the low bit in the
+`0x20000001` entry observed at the acolyte-overlapping cell, which is the bit that makes the
+validator skip it. The native owner has not yet been resolved to a recreation unit, and the
+low-bit writer and its lifecycle remain unknown.
+
+An isolated Wine debugger run placed a hardware watchpoint on the state word of the first
+newly constructed movement entry after `0x8bafd6`. The watchpoint was accepted, but did not
+fire during the bounded observation window. That entry was not identified as the captured
+acolyte-overlapping entry; this negative result does not establish its later state or the
+missing writer. The original-client run used a private Xvfb display and null audio sink.
+
 An order-event probe records all four acolyte positions at 8.211 s, when the site is issued.
 Two acolytes occupy cells selected by the Necropolis construction texture. The ignored
 local-input diagnostic can load that local event record. With the recorded town coordinate and
