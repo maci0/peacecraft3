@@ -682,6 +682,7 @@ impl ObjectHost {
                     self.commit_morph_placement(c.unit, &pending.normal.definition)?;
                 }
                 if let Entry::Unit { record } = self.inner.entry_mut(c.unit)? {
+                    let record = &mut **record;
                     let from = record.flight_height.unwrap_or(pending.alternate_height);
                     if morph.phase == MorphPhase::Landing {
                         let m = record.morph.as_mut().expect("same revision");
@@ -762,13 +763,15 @@ impl ObjectHost {
         }
         let active = self.morph_active.clone();
         for unit in active {
-            if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
-                && let Some(m) = &mut record.morph
-                && let Some(flight) = m.flight
-            {
-                record.flight_height = Some(flight.sample(now));
-                if flight.finish <= now {
-                    m.flight = None;
+            if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit) {
+                let record = &mut **record;
+                if let Some(m) = &mut record.morph
+                    && let Some(flight) = m.flight
+                {
+                    record.flight_height = Some(flight.sample(now));
+                    if flight.finish <= now {
+                        m.flight = None;
+                    }
                 }
             }
             let Some(m) = self.executed_unit(unit).ok().and_then(|r| r.morph.clone()) else {

@@ -801,6 +801,14 @@ fn owned_vm_retains_catalog_result_and_typed_resolve_failures() {
         Value::Int(4)
     );
     let executed = session.vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert_eq!(
+        session.vm.host().inner.unit_birth(unit).unwrap().position,
+        None
+    );
+    assert_eq!(
+        session.vm.host().inner.unit_birth(unit).unwrap().game_time,
+        session.vm.host().inner.timer_game_time()
+    );
     assert_eq!(executed.definition.rawcode, *b"hfoo");
     assert_eq!(executed.definition.base_rawcode, "hfoo");
     assert_eq!(executed.executed_owner, 4);

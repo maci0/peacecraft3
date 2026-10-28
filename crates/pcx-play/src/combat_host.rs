@@ -1364,6 +1364,7 @@ impl ObjectHost {
         let exploded = self.unit_exploded(unit) == Some(true);
         let mut exploded_presented = false;
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+            let record = &mut **record;
             let combat = record.combat.as_mut().expect("live combat");
             combat.dead = true;
             record.decay = decay;
@@ -1582,15 +1583,16 @@ impl ObjectHost {
                 clock: h.timer_game_time(),
             })
         });
-        if let Entry::Unit { record } = self.inner.entry_mut(target)?
-            && let Some(vitals) = &mut record.vitals
-        {
-            if life < vitals.life
-                && let Some(site) = &mut record.construction
-            {
-                site.note_damage();
+        if let Entry::Unit { record } = self.inner.entry_mut(target)? {
+            let record = &mut **record;
+            if let Some(vitals) = &mut record.vitals {
+                if life < vitals.life
+                    && let Some(site) = &mut record.construction
+                {
+                    site.note_damage();
+                }
+                vitals.life = life;
             }
-            vitals.life = life;
         }
         if damage > 0.0 {
             *applied = true;

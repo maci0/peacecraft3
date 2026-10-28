@@ -1,5 +1,8 @@
 use super::{Entry, ObjectHost};
-use crate::ai_placement::{ExclusionError, PlacementEvent, PlacementEventKind};
+use crate::ai_placement::{
+    ExclusionError, KinematicWindow, PlacementEvent, PlacementEventKind, beyond_birth_cast_reach,
+    beyond_cast_reach,
+};
 use pcx_script::HandleId;
 
 impl ObjectHost {
@@ -167,6 +170,133 @@ impl ObjectHost {
         Ok(self
             .placement_event_history()
             .filter(move |event| event.unit == unit))
+    }
+
+    /// Bound a live source against a target using their retained creation state.
+    /// The caller must supply qualified speed caps and account for non-script displacement.
+    pub fn ai_birth_reach_bound(
+        &self,
+        source: HandleId,
+        target: HandleId,
+        maximum_speeds: [f32; 2],
+        range: f32,
+    ) -> Result<bool, ExclusionError> {
+        let units = [source, target];
+        let mut births = [crate::playercolor_host::UnitBirth {
+            game_time: None,
+            position: None,
+        }; 2];
+        let mut radii = [0.; 2];
+        let mut positions = [None; 2];
+        for (index, unit) in units.into_iter().enumerate() {
+            let record = self
+                .executed_unit(unit)
+                .map_err(|_| ExclusionError::Unavailable {
+                    unit,
+                    source_name: "live unit record",
+                })?;
+            if record.definition_revision != 0 {
+                return Err(ExclusionError::UnknownMovement {
+                    unit,
+                    source_name: "unit form history may change collision and movement bounds",
+                });
+            }
+            births[index] = self
+                .unit_birth(unit)
+                .map_err(|_| ExclusionError::Unavailable {
+                    unit,
+                    source_name: "unit creation history",
+                })?;
+            radii[index] = record
+                .collision_radius
+                .map_err(|source_name| ExclusionError::Unavailable { unit, source_name })?;
+            positions[index] = record.position;
+            if self
+                .placement_events(unit)?
+                .any(|event| matches!(event.kind, PlacementEventKind::Relocated))
+            {
+                return Err(ExclusionError::UnknownMovement {
+                    unit,
+                    source_name: "scripted relocation invalidates the movement bound",
+                });
+            }
+        }
+        let now = self.timer_game_time().ok_or(ExclusionError::Unavailable {
+            unit: target,
+            source_name: "game clock",
+        })?;
+        let fail = |source_name| ExclusionError::Unavailable {
+            unit: target,
+            source_name,
+        };
+        if beyond_birth_cast_reach(births, now, maximum_speeds, range, radii).map_err(fail)? {
+            return Ok(true);
+        }
+        let [Some(source_position), Some(target_position)] = positions else {
+            return Err(fail("live unit position"));
+        };
+        let start = births[0]
+            .game_time
+            .expect("validated creation clock")
+            .max(births[1].game_time.expect("validated creation clock"));
+        let elapsed = (now - start).next_up();
+        beyond_cast_reach(
+            Some(KinematicWindow {
+                origin: source_position,
+                maximum_speed: maximum_speeds[0],
+                elapsed,
+            }),
+            Some(KinematicWindow {
+                origin: target_position,
+                maximum_speed: maximum_speeds[1],
+                elapsed,
+            }),
+            range,
+            radii,
+        )
+        .map_err(fail)
+    }
+
+    /// Derive speed bounds from the live units and admitted gameplay limits.
+    /// The caller must still account for non-script displacement.
+    pub fn ai_live_birth_reach_bound(
+        &self,
+        source: HandleId,
+        target: HandleId,
+        range: f32,
+    ) -> Result<bool, ExclusionError> {
+        let limits = self
+            .unit_activity
+            .as_ref()
+            .and_then(|state| state.move_speed_limits())
+            .ok_or(ExclusionError::Unavailable {
+                unit: target,
+                source_name: "movement speed limits",
+            })?;
+        let mut speeds = [0.; 2];
+        for (index, unit) in [source, target].into_iter().enumerate() {
+            let record = self
+                .executed_unit(unit)
+                .map_err(|_| ExclusionError::Unavailable {
+                    unit,
+                    source_name: "live unit record",
+                })?;
+            if record.activity.is_none() {
+                return Err(ExclusionError::Unavailable {
+                    unit,
+                    source_name: "unit movement state",
+                });
+            }
+            let authored =
+                super::unit_activity::balance_real(&record.definition, "spd").map_err(|_| {
+                    ExclusionError::Unavailable {
+                        unit,
+                        source_name: "unit movement speed",
+                    }
+                })?;
+            speeds[index] = authored.max(limits.max_unit).max(limits.max_building);
+        }
+        self.ai_birth_reach_bound(source, target, speeds, range)
     }
 
     fn placement_event_history(&self) -> impl Iterator<Item = PlacementEvent> + '_ {

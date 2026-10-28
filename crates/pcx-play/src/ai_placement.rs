@@ -143,9 +143,21 @@ pub fn beyond_cast_reach(
     let (Some(source), Some(target)) = (source, target) else {
         return Err("incomplete movement history");
     };
-    if source.elapsed != target.elapsed
-        || !source.elapsed.is_finite()
-        || source.elapsed < 0.
+    if source.elapsed != target.elapsed {
+        return Err("invalid movement or effect bounds");
+    }
+    beyond_movement_bounds(source, target, range, collision_radii)
+}
+
+fn beyond_movement_bounds(
+    source: KinematicWindow,
+    target: KinematicWindow,
+    range: f32,
+    collision_radii: [f32; 2],
+) -> Result<bool, &'static str> {
+    if ![source.elapsed, target.elapsed]
+        .iter()
+        .all(|elapsed| elapsed.is_finite() && *elapsed >= 0.)
         || !source
             .origin
             .iter()
@@ -173,14 +185,54 @@ pub fn beyond_cast_reach(
     for radius in collision_radii {
         upper_distance = (upper_distance + f64::from(radius)).next_up();
     }
-    for speed in [source.maximum_speed, target.maximum_speed] {
-        let displacement = (f64::from(speed) * source.elapsed).next_up();
+    for window in [source, target] {
+        let displacement = (f64::from(window.maximum_speed) * window.elapsed).next_up();
         upper_distance = (upper_distance + displacement).next_up();
     }
     if !upper_distance.is_finite() {
         return Err("movement bound overflow");
     }
     Ok(lower_distance > upper_distance)
+}
+
+/// Bound separation from each unit's own birth, even when their birth times differ.
+/// The caller must qualify speed limits and exclude unbounded displacement.
+pub fn beyond_birth_cast_reach(
+    births: [crate::playercolor_host::UnitBirth; 2],
+    now: f64,
+    maximum_speeds: [f32; 2],
+    range: f32,
+    collision_radii: [f32; 2],
+) -> Result<bool, &'static str> {
+    let [source, target] = births;
+    let (Some(source_time), Some(target_time)) = (source.game_time, target.game_time) else {
+        return Err("unit creation clock unavailable");
+    };
+    let (Some(source_origin), Some(target_origin)) = (source.position, target.position) else {
+        return Err("accepted creation position unavailable");
+    };
+    if !now.is_finite()
+        || !source_time.is_finite()
+        || !target_time.is_finite()
+        || now < source_time
+        || now < target_time
+    {
+        return Err("invalid unit creation clock");
+    }
+    beyond_movement_bounds(
+        KinematicWindow {
+            origin: source_origin,
+            maximum_speed: maximum_speeds[0],
+            elapsed: (now - source_time).next_up(),
+        },
+        KinematicWindow {
+            origin: target_origin,
+            maximum_speed: maximum_speeds[1],
+            elapsed: (now - target_time).next_up(),
+        },
+        range,
+        collision_radii,
+    )
 }
 
 /// Apply the tests for the observed AI branch with nonzero context fields `+0` and `+0x58`.
@@ -925,6 +977,65 @@ mod tests {
         assert_eq!(
             beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
             Ok(true)
+        );
+    }
+
+    #[test]
+    fn birth_bound_handles_distinct_creation_times_and_missing_history() {
+        let source = crate::playercolor_host::UnitBirth {
+            game_time: Some(1.),
+            position: Some([0., 0.]),
+        };
+        let target = crate::playercolor_host::UnitBirth {
+            game_time: Some(3.),
+            position: Some([50., 0.]),
+        };
+        assert_eq!(
+            beyond_birth_cast_reach([source, target], 5., [2., 3.], 4., [1., 1.]),
+            Ok(true)
+        );
+        assert_eq!(
+            beyond_birth_cast_reach([source, target], 20., [2., 3.], 4., [1., 1.]),
+            Ok(false)
+        );
+        assert_eq!(
+            beyond_birth_cast_reach(
+                [
+                    crate::playercolor_host::UnitBirth {
+                        game_time: Some(0.),
+                        ..source
+                    },
+                    crate::playercolor_host::UnitBirth {
+                        game_time: Some(9.),
+                        position: Some([20., 0.]),
+                    },
+                ],
+                10.,
+                [1., 1.],
+                4.,
+                [0., 0.],
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            beyond_birth_cast_reach([source, target], 2., [2., 3.], 4., [1., 1.]),
+            Err("invalid unit creation clock")
+        );
+        assert_eq!(
+            beyond_birth_cast_reach(
+                [
+                    source,
+                    crate::playercolor_host::UnitBirth {
+                        position: None,
+                        ..target
+                    }
+                ],
+                5.,
+                [2., 3.],
+                4.,
+                [1., 1.],
+            ),
+            Err("accepted creation position unavailable")
         );
     }
 

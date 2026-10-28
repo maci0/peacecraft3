@@ -10,7 +10,19 @@ pub struct EntryRules {
     forbidden: u32,
     class_mask: u32,
     object_class: u32,
+    skipped_class: u32,
     pathing_mask: u32,
+    max_entries: u8,
+}
+
+/// One spatial-chain link, in newest-first order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainEntry {
+    pub identity: u64,
+    pub present: bool,
+    pub flags: u32,
+    pub state: u32,
+    pub class: u32,
 }
 
 impl EntryRules {
@@ -43,12 +55,16 @@ impl EntryRules {
                 .ok_or_else(|| format!("truncated reach entry test at {address:#x}"))
         };
         let class = read(0x8be4ac, 6)?;
+        let skipped = read(0x8be4b8, 6)?;
+        let limit = read(0x8be499, 3)?;
         let active = read(0x8be4ce, 5)?;
         let registered = read(0x8be4d8, 5)?;
         let object = read(0x8be4ea, 6)?;
         let forbidden = read(0x8be4f2, 7)?;
         let pathing = read(0x8be504, 6)?;
         if class[..2] != [0x81, 0xe3]
+            || skipped[..2] != [0x81, 0xfb]
+            || limit[..2] != [0x83, 0xff]
             || active[..2] != [0xc1, 0xe8]
             || active[3..] != [0xa8, 0x01]
             || registered[..2] != [0xc1, 0xe8]
@@ -70,7 +86,9 @@ impl EntryRules {
             forbidden: word(&forbidden[3..]),
             class_mask: word(&class[2..]),
             object_class: word(&object[2..]),
+            skipped_class: word(&skipped[2..]),
             pathing_mask: word(&pathing[2..]),
+            max_entries: limit[2].checked_sub(1).ok_or("reach chain limit")?,
         })
     }
 
@@ -90,6 +108,36 @@ impl EntryRules {
             && chain_class & self.class_mask == self.object_class
             && entry_state & self.forbidden == 0
             && entry_flags & selected_mask & self.pathing_mask != 0
+    }
+
+    /// Apply the full-mask query to an in-bounds cell's newest-first chain.
+    pub fn cell_blocked(
+        self,
+        cell_word: u32,
+        selected_mask: u32,
+        entries: impl IntoIterator<Item = ChainEntry>,
+    ) -> bool {
+        if cell_word & selected_mask & self.class_mask != 0 {
+            return true;
+        }
+        let mut visited = [0_u64; u8::MAX as usize];
+        let mut visited_count = 0;
+        for entry in entries.into_iter().take(usize::from(self.max_entries)) {
+            if entry.class & self.class_mask == self.skipped_class
+                || !entry.present
+                || entry.flags & self.active == 0
+                || entry.state & self.registered == 0
+                || visited[..visited_count].contains(&entry.identity)
+            {
+                continue;
+            }
+            visited[visited_count] = entry.identity;
+            visited_count += 1;
+            if self.blocks(true, entry.flags, entry.state, entry.class, selected_mask) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -1031,7 +1079,9 @@ mod tests {
             forbidden: 0x40,
             class_mask: 0xf000,
             object_class: 0x3000,
+            skipped_class: 0x4000,
             pathing_mask: 0xff,
+            max_entries: 3,
         };
         let check =
             |present, flags, state, class, mask| rules.blocks(present, flags, state, class, mask);
@@ -1043,6 +1093,44 @@ mod tests {
         assert!(!check(true, 0x104, 0x200, 0x4001, 4));
         assert!(!check(true, 0x104, 0x200, 0x3001, 2));
         assert!(!check(true, 0, 0x200, 0x3001, 4));
+    }
+
+    #[test]
+    fn cell_chain_counts_skipped_entries_and_deduplicates_before_class_check() {
+        let rules = EntryRules {
+            active: 0x100,
+            registered: 0x200,
+            forbidden: 0x40,
+            class_mask: 0xf000,
+            object_class: 0x3000,
+            skipped_class: 0x4000,
+            pathing_mask: 0xff,
+            max_entries: 3,
+        };
+        let blocked = ChainEntry {
+            identity: 7,
+            present: true,
+            flags: 0x104,
+            state: 0x200,
+            class: 0x3000,
+        };
+        let inactive = ChainEntry {
+            flags: 0,
+            ..blocked
+        };
+        let tombstone = ChainEntry {
+            class: 0,
+            ..blocked
+        };
+        let skipped = ChainEntry {
+            class: 0x4000,
+            ..blocked
+        };
+        assert!(rules.cell_blocked(0x1000, 0x1004, []));
+        assert!(rules.cell_blocked(0, 4, [inactive, inactive, blocked]));
+        assert!(!rules.cell_blocked(0, 4, [inactive, inactive, inactive, blocked]));
+        assert!(!rules.cell_blocked(0, 4, [tombstone, blocked]));
+        assert!(rules.cell_blocked(0, 4, [skipped, blocked]));
     }
 
     #[test]

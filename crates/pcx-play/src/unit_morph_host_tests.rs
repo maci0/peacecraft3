@@ -595,6 +595,10 @@ fn same_handle_public_on_off_events_and_independent_nonstock_clocks() {
         assert_eq!(r.position, before.position);
         assert_eq!(r.vitals.unwrap().life, before.vitals.unwrap().life);
         assert_eq!(r.vitals.unwrap().mana, 93.);
+        assert!(matches!(
+            vm.host().inner.ai_birth_reach_bound(u, u, [0., 0.], 0.),
+            Err(crate::ai_placement::ExclusionError::UnknownMovement { unit, .. }) if unit == u
+        ));
         assert_eq!(vm.host().inner.executed_units().count(), count);
         assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(false));
         for t in [0.125, 0.375, 0.75, 1., 1.25] {

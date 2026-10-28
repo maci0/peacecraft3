@@ -117,6 +117,86 @@ fn tick(vm: &mut Vm, now: f64) {
 }
 
 #[test]
+fn unit_birth_retains_accepted_position_and_time_after_movement_and_removal() {
+    let (mut vm, unit, _) = open();
+    let birth = vm.host().inner.unit_birth(unit).unwrap();
+    assert_eq!(birth.game_time, vm.host().inner.timer_game_time());
+    assert_eq!(
+        birth.position,
+        vm.host().inner.executed_unit(unit).unwrap().position
+    );
+    assert!(birth.position.is_some());
+    assert_eq!(
+        vm.call("walk", &[Value::Real(64.0)]).unwrap(),
+        Value::Bool(true)
+    );
+    tick(&mut vm, birth.game_time.unwrap() + 10.0);
+    assert_ne!(
+        vm.host().inner.executed_unit(unit).unwrap().position,
+        birth.position
+    );
+    assert_eq!(vm.host().inner.unit_birth(unit).unwrap(), birth);
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(unit)])
+        .unwrap();
+    assert_eq!(vm.host().inner.unit_birth(unit).unwrap(), birth);
+}
+
+#[test]
+fn live_birth_bound_refuses_after_a_scripted_relocation() {
+    let (mut vm, source, target) = open();
+    let h = &mut vm.host().inner;
+    assert!(matches!(
+        h.ai_live_birth_reach_bound(source, target, 0.),
+        Err(crate::ai_placement::ExclusionError::Unavailable {
+            source_name: "movement speed limits",
+            ..
+        })
+    ));
+    assert_eq!(
+        h.ai_birth_reach_bound(source, target, [0., 0.], 0.),
+        Ok(true)
+    );
+    h.native(
+        "SetUnitPosition",
+        &[Value::Handle(source), Value::Real(48.), Value::Real(48.)],
+    )
+    .unwrap();
+    assert!(matches!(
+        h.ai_birth_reach_bound(source, target, [0., 0.], 0.),
+        Err(crate::ai_placement::ExclusionError::UnknownMovement { unit, .. }) if unit == source
+    ));
+}
+
+#[test]
+fn live_birth_bound_uses_the_overlap_of_the_two_lifetimes() {
+    let (mut vm, source, _) = open();
+    tick(&mut vm, 100.);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(source).unwrap().owner;
+    let Value::Handle(target) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(80.),
+                Value::Real(80.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("target unit")
+    };
+    assert_eq!(
+        h.ai_birth_reach_bound(source, target, [2., 2.], 0.),
+        Ok(true)
+    );
+}
+
+#[test]
 fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
     let (mut vm, a, b) = open();
     let (Value::Handle(enter), Value::Handle(leave)) = (vm.global("In"), vm.global("Out")) else {

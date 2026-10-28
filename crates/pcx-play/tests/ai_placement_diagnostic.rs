@@ -824,6 +824,28 @@ fn human05_placement_diagnostic() {
         workers.push(handle);
     }
     let worker = workers[0];
+    if std::env::var_os("PCX_REACH_TRACE").is_none()
+        && std::env::var_os("PCX_REACH_ORACLE_SITE").is_none()
+    {
+        let casters: Vec<_> = objects
+            .executed_units()
+            .filter(|(_, unit)| unit.definition.rawcode == *b"nmrr")
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(casters.len(), 2);
+        for caster in casters {
+            println!(
+                "live birth bound caster={:?} worker={:?} limits={limits:?} result={:?}",
+                objects.unit_birth(caster).unwrap(),
+                objects.unit_birth(worker).unwrap(),
+                objects.ai_live_birth_reach_bound(caster, worker, range)
+            );
+            assert_eq!(
+                objects.ai_live_birth_reach_bound(caster, worker, range),
+                Ok(true)
+            );
+        }
+    }
     if let Ok(trace) = std::env::var("PCX_REACH_TRACE") {
         let center = probe_point(&std::env::var("PCX_HUMAN05_TRACE_ORIGIN").unwrap());
         let mobile: Vec<_> = objects

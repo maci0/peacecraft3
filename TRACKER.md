@@ -5740,3 +5740,24 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   budget check passed, and the sampled baseline and farm searches still selected the recorded
   sites at dequeues 1 and 280. Human05 was not rerun because production placement remains
   disconnected.
+
+### 2026-10-29: Unit creation history and reach-chain query
+
+- [~] The existing unit arena retains each committed unit's creation clock and accepted
+  position when admitted, including after removal. A live separation query uses this history,
+  source-derived speed limits and collision sizes, and refuses scripted relocation, form
+  changes or missing evidence. Non-script displacement and a complete effect-source inventory
+  remain caller qualifications. The original-input fixture exercises the bound with its sampled
+  worker creation time; it is not a replay of the worker's earlier history.
+- A source-checked query now handles the native chain visit limit, duplicate entries and
+  link-class order for caller-supplied entries. The live placement cache still does not record
+  the insertion and removal history needed to supply those entries. AI structure placement
+  remains refused, and the recorded reach tables have not been checked against live chains.
+- The `pcx-play` library suite passed 2,295 tests with 89 ignored. The sampled baseline and
+  farm sites still match at dequeues 1 and 280. The simulation budget check passed with
+  allocation counts, reallocation counts and allocated bytes equal to the prior Human03
+  measurements after placing the birth record in the existing arena entry. No budget was raised.
+  Native and WASM Clippy passed with warnings denied.
+  Human03 and Human04 reached victory at 279.02 s and 449.02 s, respectively, and matched
+  their `g1` checkpoint and RNG lines. Two Human05 runs both stopped at the existing
+  1223 s placement refusal; their checkpoint and RNG lines matched each other and the prior run.

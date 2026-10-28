@@ -46,7 +46,7 @@ impl ObjectHost {
         &mut self,
         unit: pcx_script::HandleId,
     ) -> Result<Value, Error> {
-        let (shown, position, resource_amount, owner, kind, alive) = match self
+        let (shown, position, resource_amount, owner, kind, alive, birth) = match self
             .inner
             .entry(unit)
             .map_err(|e| self.inner.error(REMOVE, e.failure))?
@@ -59,6 +59,7 @@ impl ObjectHost {
                 record.owner,
                 record.definition.rawcode,
                 super::unit_technology::live(record).ok(),
+                record.birth,
             ),
             _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
         };
@@ -107,6 +108,7 @@ impl ObjectHost {
             location,
             removed_at: now,
             resource_amount,
+            birth,
         };
         self.purge_harvest_cargo(unit);
         Ok(Value::Null)

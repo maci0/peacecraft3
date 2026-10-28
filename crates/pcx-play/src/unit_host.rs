@@ -856,6 +856,15 @@ impl ObjectHost {
             })
     }
 
+    /// Creation clock and accepted position, including for a removed unit.
+    pub fn unit_birth(&self, id: HandleId) -> Result<crate::playercolor_host::UnitBirth, Error> {
+        match self.inner.entry(id)? {
+            Entry::Unit { record } => Ok(record.birth),
+            Entry::RemovedUnit { birth, .. } => Ok(*birth),
+            _ => Err(self.inner.error(NATIVE, Failure::WrongFamily)),
+        }
+    }
+
     /// Count of unit allocations and mutable accesses to unit records. While it is equal, no
     /// unit's position, definition, owner, visibility, vitals or other record field has
     /// changed, so a consumer can reuse what it derived from them. It is a superset: an
@@ -2663,9 +2672,16 @@ impl ObjectHost {
             inventory,
             binding,
         } = prepared;
+        let birth = crate::playercolor_host::UnitBirth {
+            game_time: self.timer_game_time(),
+            position: record.position,
+        };
         let id = self.inner.allocate(
             Entry::Unit {
-                record: Box::new(record),
+                record: crate::playercolor_host::UnitRecord {
+                    unit: Box::new(record),
+                    birth,
+                },
             },
             NATIVE,
         )?;

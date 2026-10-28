@@ -519,8 +519,12 @@ created region entry starts with its object flags at `+0x34` clear (`0x8c19c6`).
 addition path `0x4a4ed0` to `0x801a50` and `0x8c23f0` inserts the region into each covered
 cell through `0x8c2470`. It assigns a class to the cell-chain link, but does not set the entry's
 object flags. The two words are distinct: `0x8be420` checks the entry's active and pathing bits
-as well as the link class and entry state. A source-checked classifier now exposes those tests;
-it does not reconstruct the ordered cell chains or apply their 49-entry traversal limit.
+as well as the link class and entry state. A source-checked classifier applies those tests to
+caller-supplied newest-first links. The limit comparison at `0x8be499` permits 49 link visits;
+skipped and duplicate links still consume visits, and exhaustion returns the open result.
+Eligible entries are marked visited before their link class is tested (`0x8be4c3` through
+`0x8be50e`), so an earlier non-object link can suppress a later link for the same entry. The
+classifier does not yet reconstruct ordered cell chains from the live simulation.
 Deserialization can restore the object flags (`0x8c1a44`), so an initial zero is not a general
 proof about every later region entry.
 
@@ -1137,10 +1141,15 @@ deterministically sampled unsigned words; that is not a comparison of full reach
   boundary cases and placement requirements such as blight. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.
   The current placement cache stores aggregate cell counts rather than the ordered native
-  entry chains. Unit records preserve requested creation coordinates and current accepted
-  positions, but do not generally retain the accepted creation position or creation time;
-  model animation creation time is conditional on model admission. The live effect bound
-  therefore cannot yet use those fields as complete movement history.
+  entry chains. The unit arena now retains a creation clock and accepted creation position
+  when those systems were admitted, including after removal. The live separation helper uses
+  those records, selected movement limits, collision sizes and the placement event log; it
+  refuses when inputs are unavailable, a scripted relocation occurred, or a form change may
+  have changed collision and speed data. It still requires
+  the caller to qualify non-script displacement and enumerate all possible effect sources.
+  Its creation-position test bounds each unit using its own elapsed lifetime. If that is
+  inconclusive, it also bounds backward from the two current positions over the period in
+  which both units existed. Both tests round toward a larger possible reach.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
 - Cost charging for AI construction (the human construction path charges when the structure is

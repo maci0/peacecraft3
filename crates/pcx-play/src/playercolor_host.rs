@@ -282,7 +282,7 @@ enum Entry {
         state: objects::DestructableState,
     },
     Unit {
-        record: Box<objects::ExecutedUnit>,
+        record: UnitRecord,
     },
     /// A unit after `RemoveUnit`; its handle stays allocated.
     RemovedUnit {
@@ -295,6 +295,7 @@ enum Entry {
         /// Captured constructor/executed amount. `None` means the unit was not
         /// in the `buffType=resource` family, not an authored zero.
         resource_amount: Option<i32>,
+        birth: UnitBirth,
     },
     RemovedItem,
     /// `None` after `DestroyFogModifier`.
@@ -373,6 +374,33 @@ enum Entry {
         function: FunctionId,
     },
 }
+/// Creation state captured when a unit is committed to the arena.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitBirth {
+    pub game_time: Option<f64>,
+    pub position: Option<[f32; 2]>,
+}
+
+#[derive(Debug)]
+struct UnitRecord {
+    unit: Box<objects::ExecutedUnit>,
+    birth: UnitBirth,
+}
+
+impl std::ops::Deref for UnitRecord {
+    type Target = objects::ExecutedUnit;
+
+    fn deref(&self) -> &Self::Target {
+        &self.unit
+    }
+}
+
+impl std::ops::DerefMut for UnitRecord {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.unit
+    }
+}
+
 pub struct EnumHost {
     program: Arc<Program>,
     source_context: String,

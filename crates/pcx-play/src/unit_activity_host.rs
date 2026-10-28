@@ -17,6 +17,12 @@ pub(super) struct State {
     pending_refresh: Vec<PendingRefresh>,
 }
 
+impl State {
+    pub(super) fn move_speed_limits(&self) -> Option<pcx_objects::editor::misc::MoveSpeedLimits> {
+        self.rules.move_speed_limits()
+    }
+}
+
 type PendingBlocked = (HandleId, Option<Box<Motion>>);
 type PendingRefresh = (
     HandleId,
@@ -1116,6 +1122,7 @@ impl ObjectHost {
                 }
                 let (speed, mut motion) = match self.inner.entry_mut(unit)? {
                     Entry::Unit { record } => {
+                        let record = &mut **record;
                         if record.paused_since.is_some() {
                             if let Some(position) = record.position {
                                 emit(
@@ -2118,6 +2125,7 @@ impl ObjectHost {
         let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
             unreachable!("checked unit");
         };
+        let record = &mut **record;
         let activity = record.activity.as_mut().expect("checked activity");
         if done {
             record.face = turn.at(now);
@@ -2190,18 +2198,20 @@ impl ObjectHost {
         if construction
             && path.iter().any(|point| *point != from)
             && let Entry::Unit { record } = self.inner.entry_mut(unit)?
-            && let Some(animation) = &mut record.animation
         {
-            animation
-                .select_engine(
-                    "walk",
-                    now,
-                    record.activity.as_ref().and_then(|activity| activity.speed),
-                )
-                .map_err(|error| {
-                    self.inner
-                        .error("unit activity", Failure::UnitAnimation(error))
-                })?;
+            let record = &mut **record;
+            if let Some(animation) = &mut record.animation {
+                animation
+                    .select_engine(
+                        "walk",
+                        now,
+                        record.activity.as_ref().and_then(|activity| activity.speed),
+                    )
+                    .map_err(|error| {
+                        self.inner
+                            .error("unit activity", Failure::UnitAnimation(error))
+                    })?;
+            }
         }
         motion.path = path;
         motion.budget_partial = budget_partial;
