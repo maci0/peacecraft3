@@ -70,7 +70,9 @@ The game-time origin comes from the admitted Host clock. A missing clock refuses
 budget. The runtime samples before startup publishes a replacement, then binds
 that replacement on the following frame, excluding the loading-frame delta.
 Explicit simulation pause and application-view suspension each exclude elapsed
-time while retaining work already due. A successful
+time while retaining work already due. The campaign loading screen suspends the
+view from the mission launch until its key press, so the simulation does not start
+behind it (see [loading screen](campaign-loading-screen.md)). A successful
 replacement resets the timeline by session identity; a refused replacement keeps
 the prior session. Callback failure stops advancement without replaying effects
 that completed before the failure.

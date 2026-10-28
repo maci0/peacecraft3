@@ -1,5 +1,27 @@
 # PeaceCraft3 — Tracker
 
+- [~] Campaign loading screen. Launching a mission opens the original loading
+  screen: `Loading.fdf` frames, the background model and sequence the map header
+  selects through `UI\WorldEditData.txt` `[LoadingScreens]`, the `LoadingProgressBar`
+  model, and the map's text, title and subtitle. The bar's easing steps are read
+  from the reviewed image. The simulation is held and input blocked until the map
+  is playable and a key or click ends the screen. Selection, the bar mechanism and
+  the completion states are traced in
+  [campaign loading screen](docs/re-notes/campaign-loading-screen.md), with
+  evidence classes labelled. The bar's stage weights in the original are not
+  attributed to one load path, so the recreation reports four equal stages; this is
+  a recreation choice. The selected-install gate builds the screen for all 42 RoC
+  and 37 TFT indexed maps from the real archives, and an offscreen Vulkan render of
+  Human01 shows the map background, text, bar and `L O A D I N G` with a fill that
+  follows progress. `cargo test -p pcx-map -p pcx-play -p peacecraft3` passes with
+  zero failures (pcx-play 2,062, application binary 580, local-input gates
+  ignored); strict native all-target and wasm32 library/binary Clippy are clean.
+  Open: the emblem and location icons draw on black rectangles
+  (source layers are Blend over alpha-less BLPs, cause not established), colour is
+  not qualified, the screen has not been compared with an original capture, and
+  the melee panel, network wait, custom map-supplied loading models, continuation
+  and browser launches have no loading screen.
+
 - [x] Release 0.7.0: source-derived HUD command states, selected-unit panel,
   portrait composition, upper buttons and quest layout improvements; scripted
   vertex color, look-at and morphing updates. Fresh headless renderer screenshots

@@ -130,14 +130,75 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
 
 - The screen opens when the mission is launched and the map header is read (the
   original reads the header in the constructor, before the load stages).
-- Selection, text, frames, fonts, bar model and the easing step sizes come from the
-  files and image above; the easing and minimum-time constants are read from the
-  reviewed image at runtime.
+- Selection, text, frames, fonts and the bar model come from the selected files.
+  The three bar constants (`0.01`, `0.001`, `1.0`) are read from the reviewed image
+  at runtime by `ProgressRules::read` and checked to be an ordered ramp. The
+  minimum display time is not read or applied: the original uses it only for a
+  network game.
 - **Recreation choice.** Progress reports come from the recreation's own load
-  stages, each worth an equal share. They are not the original's immediates.
-- **Recreation choice.** The key wait applies to local campaign loads. The simulation
-  stays held until it ends.
+  stages, each worth an equal share (`STAGES` in `campaign_loading.rs`): map bindings
+  published, host inputs prepared, script session running, campaign view active.
+  They are not the original's immediates.
+- **Recreation choice.** The bar eases once per presented frame, the closest
+  observable to the original's per-update callback.
+- **Recreation choice.** The simulation is held (`CampaignRuntime::view_paused`)
+  from the launch until a press ends the loaded screen, the stand-in for the
+  original's load hold token. The campaign view, input and menu are blocked
+  meanwhile.
+- **Recreation choice.** Escape ends a screen whose load never completes. The
+  original has no such key.
+- **Recreation choice.** Sprite models are drawn without scene lighting, and the
+  background sequence loops by the real-time clock; whether the original plays
+  these sequences once is not established.
 - The post-load bar sequence in state 1 (`[ebp-0x88] = 4`, `0x966c10`) does not map to
   `LoadBar.mdx` (two sequences). The bar holds its end frame; unresolved.
-- Not implemented: melee panel, network wait, the text-fitting routine, the
-  sound played by the bar event objects.
+- Not implemented: the melee panel (headers with neither a number nor a model),
+  the network wait and timer, the text-fitting routine (`0x53fba0`), map-supplied
+  custom loading models (the pre-admission source does not mount the map archive;
+  the screen refuses loudly and the mission loads without it), and a loading screen
+  for next-level continuation or the browser path, which do not go through the
+  chapter launch.
+
+## Verification
+
+Static facts above were read from the image's disassembly and the shipped
+members listed. Nothing here is a runtime observation of the original.
+
+- Unit tests with synthetic fixtures: table parsing and selection
+  (`pcx-play/src/campaign_loading.rs`), header fields (`pcx-map/src/info.rs`), the
+  state machine and press handling
+  (`peacecraft3/src/campaign_loading_tests.rs`), anchor layout
+  (`peacecraft3/src/campaign_loading_view.rs`).
+- Explicit local-input gates, which need the Legacy install:
+  `PEACECRAFT3_LEGACY_DIR` for
+  `campaign_loading::tests::the_selected_image_supplies_the_bar_constants`;
+  `PCX_NATIVE_CHAPTER_INSTALL` for
+  `native_campaign::tests::selected_install_every_indexed_map_builds_its_loading_screen`.
+  The second builds the screen for every indexed map of both editions (42 RoC, 37
+  TFT) through the real archives, FDF, fonts, models and textures, in a bare world.
+- Offscreen render, ignored test
+  `native_campaign::tests::selected_chapter_loading_screen_renders_offscreen`
+  (`PCX_NATIVE_CHAPTER_*`, `PCX_LOADING_CAPTURE_DIR`, a Vulkan adapter, no window):
+  Human01 renders the Lordaeron map background, the title ("Chapter One"), the
+  subtitle, the paragraph, the bar border and glass, `L O A D I N G`, and a fill that
+  follows the bar's progress (empty at no stages, about half at two). The capture
+  target is plain `Rgba8UnormSrgb`, not the menu's colour working space, so colour is
+  not qualified. The frames are local files under `.scratch/` and are not committed.
+- **Unresolved rendering difference.** The shield emblem and the location icons draw
+  on opaque black rectangles in that capture. Their source layers are filter mode 2
+  (Blend) over `HumanSymbol.blp` and `LordaeronLocationIcons.blp`, both JPEG-content
+  BLP1 files whose header alpha bits are 0. Whether the original blends them some
+  other way, or the BLP decode or the capture harness drops information, is not
+  established. The screen is not claimed to match the original until this is
+  resolved.
+- Not compared against a capture of the original loading screen.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Loading: mission launched
+    Loading --> AwaitKey: view active
+    Loading --> Idle: stage failed or Escape
+    AwaitKey --> Idle: key or pointer press
+    Idle --> [*]
+```
