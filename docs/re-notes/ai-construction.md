@@ -16,7 +16,7 @@ build an architecture for this PE image here, so no decompiler output is used.
 | With a zero second argument, `0xac2880` classifies the id (`0x5cc9f0`) and calls the structure method `0xac3070` or the unit method `0xac2e00`. | `0xac2880` |
 | `0xac3070(id, town)` answers false, with nothing ordered, when: `0xac0be0` is nonzero (the shape of the check: some unit with an ability object in state 2 whose order target lacks flags `0x30000000`); a float at `+0x188` of the AI player is not zero; the player's tech check (`0x4c1020`, mode `0x12`) or the count limit (`0x4bd8d0`) fails. Otherwise it searches for a builder and a site with `0xac2b00`. | `0xac3070` |
 | `0xac2b00` walks the player's units. A unit is skipped when flag `0x20` bit 0 is set, when its state (`+0x3a0`) is neither 0, 5, 6 (state 3 is accepted only for types other than `hpea` and `nhew`), or when its ability object (`+0x400`) does not accept the id (vtable slot `0x270`). Candidates also appear to need a town object (the town argument, or one reached through the worker's order target). For `ugol` (haunted mine) it uses two handles in the town object. The site comes from `0xad4970`; a negative result means no site. With a site the order is built by `0x698f60` (`0x69f760` for `ugol`) and issued to the worker with `0x690590`, and the method returns true. With no builder it returns 0. | `0xac2b00` |
-| `0xad4970` initializes a search object, visits nearby objects through `0x68ea00` and `0xad4c10`, copies the object, and invokes `0xad41f0`. The caller supplies two coordinates from offsets `+0x3c` and `+0x44` of the selected town object. Their relationship to the start location or expansion mine is not established. | `0xac2c9a`, `0xad4970` |
+| `0xad4970` initializes a search object, visits nearby objects through `0x68ea00` and `0xad4c10`, copies the object, and invokes `0xad41f0`. The caller supplies two coordinates from offsets `+0x3c` and `+0x44` of the selected town object; the refresh rules are described below. | `0xac2c9a`, `0xad4970` |
 | When `0xac2b00` finds no builder and the request is not `ugol`, `0xac3070` falls back to an idle unit with the upgrade ability class (`0xb883e0`, counters `+0x3c` and `+0x40` zero, check slot `0x328` accepting) and issues the upgrade order (`0x698910`), returning true. | `0xac3070` |
 
 Consequence: with no unit of the player that builds the kind and no idle unit that upgrades
@@ -42,25 +42,79 @@ claim that the unknown checks have been matched:
   checks pass. For first-grid bytes 0 through 3 it retains the first accepted position of each
   class; if no immediate candidate succeeds, it chooses the highest available class, from 3
   down to 0. Other byte values do not enter these candidate paths. In both paths, value 7 in
-  the second grid excludes the inspected cell, and `0x67ecd0` must return zero. The meaning of
-  that check and the class bytes is not fully decoded (`0xad4424` through `0xad458a`,
+  the second grid excludes the inspected cell, and `0x67ecd0` must return zero. The shared check
+  and the full meaning of the class bytes remain partly decoded (`0xad4424` through `0xad458a`,
   `0xad4879` through `0xad4964`).
-- The first grid starts as 5 or a negative byte based on calls to `0x7044b0` and `0x7f6a00`.
-  Nearby objects modify it through `0xad4c10`, `0x4dfb40`, `0xad4b90` and `0xad4ac0`.
-  The latter marks a center and limits values in a square around it. The object categories,
-  footprint interpretation, blight and placement checks remain unresolved. The comparisons
-  for `hwtw`, `uzig`, `otrb` and `emow` in `0xad3f23` affect this initialization; their wider
-  implications are not established.
+- `0xad3de0` samples `0x7044b0` at the supplied center and each grid point. This is also the
+  routine used by the registered `GetTerrainCliffLevel` native (`0x496710`). A different result
+  assigns the cell -98. Otherwise it calls `0x7f6a00` with mask 2 and assigns -100 when the
+  result is nonzero, or 5 when it is zero. `IsTerrainPathable` (`0x4998a0`) calls that same
+  function after translating its pathing type; the selected image maps the walkability type to
+  mask 2. The exact edge normalization and dynamic pathing inputs still need qualification.
+  Nearby objects modify the first grid through `0xad4c10`, `0x4dfb40`, `0xad4b90` and
+  `0xad4ac0`; their category and radius rules are described below. The spatial enumeration
+  filter is not decoded.
 - The first search enables an additional check at `0x7fd6b0`. If no site is found and that
   check has failed for at least one candidate, `0xad4970` searches the copy again with that
   additional check disabled (`0xad4a38` through `0xad4aa2`). The result is a failure sentinel
   if neither immediate nor retained candidates succeed. The check's meaning and later AI-script
   retry timing remain unknown.
 
-For `ugol`, the caller resolves one of two town handles before searching; a successful order
+#### Town coordinates
+
+The registered AI natives `TownHasHall` and `TownHasMine` identify the references at town
+offsets `+0x48`, `+0x54` and `+0x60` (`0xab7b90`, `0xab7be0`, `0xac47a0`, `0xac4800`).
+The primary mine reference at `+0x54` is assigned to an object whose ability lookup accepts the
+gold-mine implementation class `Agmb` (`0xab4550`, `0xac7000`, `0xac7070`; see
+[unit resource amount](unit-resource-amount.md)). `+0x60` is the second mine reference; its
+selection and replacement rules need further tracing.
+
+`0xac80a0` refreshes the search coordinates from the primary mine and hall. If both references
+resolve, it takes their positions and computes the midpoint with the executable's float helpers
+and its half operand at `0x10db0a8`. If only one resolves, it copies that object's position. If
+neither resolves, it leaves the previous coordinates in place. A newly allocated record is
+initialized from supplied coordinates by `0xac7e90`; `CreateCaptains` can supply the selected
+player start coordinates when it creates a record (`0xabd160` through `0xabd1e0`). These paths
+do not prove which record the Human05 builder selects, or when its mine and hall are associated.
+
+For `ugol`, the caller resolves one of the town's two mine references before searching; a successful order
 passes that resolved handle to `0x69f760`, whereas an ordinary build order passes the selected
 coordinates to `0x698f60` (`0xac2c3d` through `0xac2c89`, `0xac2d92` through `0xac2de1`).
-The handles are believed to refer to mines, but their creation and selection are not decoded.
+
+#### Nearby-object score
+
+The client's unit-data constructor binds `buffType` and `buffRadius` to the fields later read by
+`0x67c350` and `0x67c310` (`0x6b3e7f`, `0x6b3e9a`, `0x67cf1e` through `0x67cf3e`).
+The `buffType` decoder maps `townhall`, `resource`, `factory` and `buffer` to distinct values
+(`0x6accf0`). For each object returned by the region enumeration, the callback `0xad4c10` maps
+these types to score caps 0, 1, 2 and 3 respectively. Other types use cap 3 and a fallback radius
+of 6 grid cells. The four named types use the object's integer-converted `buffRadius`, except
+that buffer objects use radius 5 or 15 when the requested building is `hwtw` or `uzig`; which
+one applies depends on whether the sum computed at `0xad49c4` is at least 2. The semantics of
+both counts in that sum are not yet established.
+
+The callback selects the object's pathing texture and facing, then `0x4dfb40` visits the texture
+rectangle and invokes `0xad4b90` for each cell. That callback does not inspect the passed texture
+byte. For each converted cell, `0xad4ac0` limits its score to at most -99 and limits the square
+of the selected radius in cells around it to at most the category cap. It clips the writes to the
+search grid. Thus these scores are an AI-specific preference and exclusion layer around texture
+rectangles; they do not by themselves establish the general construction validity test.
+
+#### Shared placement validator
+
+Both AI candidate paths call `0x67ecd0` and accept only a zero result. The registered public
+`IssueBuildOrderById` wrapper (`0x49a550`) calls the same routine before issuing its build order
+through `0x698f60` (`0x49a5ab` through `0x49a5ea`). It passes a worker and different flags, and
+continues for result 0 or `0x45`, subject to another check at `0x6a1790`. The AI call passes a
+null worker and requires result 0. This establishes a shared validator, not equivalent inputs or
+complete parity with the recreation's player preview.
+
+`0x67ecd0` consults the building's pathing-texture object, transforms coordinates through
+`0x4e00f0`, and uses masks and further callbacks. `0x4e00f0` depends on texture dimensions,
+orientation and coordinate sign, including 64-unit alignment and parity adjustments. The
+recreation's current `construction_position` explicitly uses a source-grid anchor as an
+unqualified snap, and its construction host supports only the Human worker style and a subset of
+placement tokens. Those limitations preclude treating it as a complete port of `0x67ecd0`.
 
 ## Recreation
 
@@ -125,9 +179,9 @@ comparison against it is available.
 
 ## Not established
 
-- The source and meaning of the town coordinates and mine handles; the grid classification,
-  candidate snapping, footprint, buffer, blight and placement checks; and the two-pass check's
-  meaning. The queue order alone cannot reproduce a site.
+- Town association and the search record selected by the Human05 worker; the initial grid's
+  edge normalization and object enumeration; candidate snapping, blight and the shared validator's detailed
+  checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
 - Cost charging for AI construction (the human construction path charges when the structure is

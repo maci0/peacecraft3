@@ -127,8 +127,10 @@ details in [AI construction](ai-construction.md).
 
 ## Open
 
-- AI structure placement. The search's grid and visitation order are decoded, but its candidate
-  classification and checks are not; cost charging, worker choice and retries are also open
+- AI structure placement. The grid, visitation order, terrain classification and nearby-object
+  score caps are partly decoded, as are town-coordinate refresh and the shared validator call.
+  Town association, snapping and the validator's detailed checks remain open; cost charging,
+  worker choice and retries are also open
   ([AI construction](ai-construction.md)). The recreation's human construction path
   (`unit_construction_host.rs`) is human-only and cannot take an undead worker.
 - The 1800 s survival timer and the ending are not reached; refusals after 1223 s are unknown.

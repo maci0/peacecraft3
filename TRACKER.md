@@ -5088,3 +5088,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   text match each other and `r14`; the victory path remains unverified.
 - Gate: `cargo test -p pcx-play --lib` 2165 passed and 83 ignored; native and WASM Clippy with
   `-D warnings` passed. These checks do not validate the undecoded placement behavior.
+
+### 2026-10-28: AI placement validity and town refresh investigated
+
+- [~] The AI search and public `IssueBuildOrderById` call the same placement validator, but
+  pass different worker and flags; the public order also accepts one return code that the AI
+  search rejects. The current player placement implementation does not yet qualify the native
+  snap, all placement checks, or undead construction. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] The selected client initializes search cells using cliff level and walkability, and scores
+  nearby texture rectangles by each unit's `buffType` and `buffRadius`. Town refresh uses the
+  midpoint of its primary mine and hall when both exist, the surviving position when only one
+  exists, and the previous coordinate otherwise. Town association and which record is selected
+  in Human05 remain open. No placement behavior or oracle comparison was admitted.
+- [ ] Human05 remains at the previously verified 1223 s refusal; no new route runs were made
+  because neither oracle position was reproduced. The 1800 s victory path is unverified.
+- Gate: headless, muted `cargo test -p pcx-play --lib` 2165 passed and 83 ignored; native and
+  WASM Clippy with `-D warnings` passed. These gates do not validate the research findings.
