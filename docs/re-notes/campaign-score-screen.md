@@ -1,7 +1,7 @@
 # Campaign score screen
 
 Status: `EndGame(true)` retains an exit snapshot for the source-backed score
-layout and background-model consumer. OK dismisses the screen; Save Replay
+layout, background-model and race-art consumer. OK dismisses the screen; Save Replay
 refuses because no production replay writer exists. Player-score admission
 retains the selected constants, but every counter remains unqualified and absent.
 Rendered placement and original-client parity remain open.
@@ -23,10 +23,12 @@ Rendered placement and original-client parity remain open.
 - Strings for the frames exist in `Warcraft III.exe` (for example
   `ScoreScreenBannerWin`, `ScoreScreenBannerLoss`, `ScoreScreenDefeat`,
   `ScoreScreenOkButton`).
-- Skin: `UI\war3skins.txt` is listed in the archives. Its `[Default]` section
-  names the defeat model (`ScoreScreenDefeat=UI\Glues\ScoreScreen\ScoreScreen-Defeat\ScoreScreen-Defeat.mdl`).
-  Race sections name victory models. The campaign skin choice is not yet
-  established.
+- Skin: `UI\war3skins.txt` (`War3.mpq`). `[Default]` names `ScoreScreenDefeat`,
+  `ScoreScreenVictory` (the Human model), `ScoreScreenBannerWin/Loss` and
+  `ScoreScreenPlayer<Race>` textures. Each race section names
+  `ScoreScreenVictory_V0`, `_V1` and `_V1Beta`. The `_V1` models are in `War3x.mpq`.
+  The executable carries the key strings `ScoreScreenVictory`, `ScoreScreenDefeat`,
+  `ScoreScreenBannerWin`, `ScoreScreenBannerLoss` and `ScoreScreenPlayer%s`.
 - Textures and models named by the FDF and skin are listed in `War3.mpq`. The
   `show` subcommand returned identical size and hash for both `War3.mpq` and
   `War3x.mpq` when queried individually, so the archive that supplies each
@@ -47,3 +49,39 @@ The exit consumer retains the request, local result, logical game time and sourc
 context before clearing the session. The score consumer takes each snapshot once.
 Source replacement and dismissal release the prior scene. Unsupported score
 values remain absent; they are not zero-filled.
+
+## Skin and model art
+
+Source: `src/campaign_score_model.rs`, `src/campaign_score_art.rs`.
+
+- Art reads through the exiting session's selected resolver, never the install
+  directory. The screen root carries the resolver as `ArtSource`, so FDF textures
+  (backdrop and highlight files) and the model textures decode from it. Decodes
+  are dropped when the screen is replaced or dismissed.
+- Three `MODEL` frames name `BackgroundArt` in the FDF: `ScoreScreenBackground`,
+  `ScoreScreenPageTab` and `ScoreScreenBarTop`. Placement comes from the frame
+  geometry; `LayerStyle` `NOSHADING` makes the geosets unlit.
+- `ScoreScreenRaceArt` is a `MODEL` frame with `SetAllPoints` and no
+  `BackgroundArt`. Its model is not in the FDF. Recreation choice, not proven
+  against the executable: it shows the skin's `ScoreScreenVictory` or
+  `ScoreScreenDefeat` model by the local game result, drawn in this frame's
+  rectangle and draw order (after the tabs, before the top bar).
+- Skin lookup, shared with the HUD and menus and equally unproven against the
+  executable: the local player's race section (from the executed
+  `SetPlayerRacePreference`, captured at exit), then `[Default]`. Within a
+  section the edition key is tried first (`_V1` Frozen Throne, `_V0` Reign of
+  Chaos), then the unsuffixed key. Victory finds the race section's model;
+  defeat finds the `[Default]` model. A duplicate or empty entry refuses.
+- Not drawn, each logged: a tie, neutral or absent local result (the skin has no
+  key for it), an unset or ambiguous race preference, and any model or texture
+  the resolver cannot supply. The other backgrounds are unaffected.
+- Archive models `ScoreScreen-BottomBar`, `ScoreScreen-CenterBar` and the
+  banner and player-race textures are not named by `ScoreScreen.fdf`. They belong
+  to the score rows, which need counters that are not available, so they are
+  not drawn.
+- `_V1Beta` entries are ignored: no beta edition is selected.
+- Tests: synthetic skin tables for selection (edition, race fallback, duplicate,
+  missing, tie); synthetic FDFs for frame order and the race art frame. Original
+  gate `PCX_SCORE_ART_DIR` (local directory with `UI\war3skins.txt` and the
+  victory and defeat models plus textures, archive layout) prepares every race
+  and edition for drawing. Rendered output has not been compared.

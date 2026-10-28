@@ -78,7 +78,7 @@ forced-base-level sampler mutant fails the minification pixel assertion; the
 source is restored afterward. This validates the Bevy pipeline on that
 adapter. It does not establish native terrain appearance.
 
-Cliffs, blight, water, terrain lighting, shadows, fog, gameplay camera activation,
+Cliffs, blight, water, terrain lighting, dynamic unit/building shadows, fog, gameplay camera activation,
 world/session synchronization and complete terrain fidelity remain open.
 Automatic ground preparation does not supply the other required campaign Host
 inputs or make a refused initialization playable. The existing `--tile` viewer remains a
@@ -99,3 +99,62 @@ native and the actual Cargo WASM artifact. Native application suites (550 tests,
 30 explicit skips), seventeen targeted WASM cases, strict native/WASM lint/builds
 and formatting pass. Evidence: `.scratch/campaign-ground-budget-root-20261019/`.
 This caller check adds no original-game or rendered campaign comparison.
+
+## Shadow and colour comparison work (2026-10-27)
+
+The ground publisher now reads `war3map.shd` from the admitted map receipt and
+`FogOfWar/ShadowImageColor` from the selected `UI\MiscData.txt`. The grid retains
+source row order and derives world bounds from the admitted W3E geometry. A
+missing or malformed optional shadow input is reported separately through
+`GroundPublication.shadow_error`; it does not invalidate an independently
+admitted ground sheet. This does not supply dynamic unit or building shadows.
+
+The scene and sky cameras now use the existing numeric-channel composition path
+with tonemapping disabled. This addresses an unwanted colour conversion; it is
+not a replacement for source terrain lighting or a claim of matching colours.
+
+Comparison acceptance requires equal effective settings, not equal labels.
+Low must match stock Low, High must match stock High, and enabled effects must
+remain enabled in stock. Unsupported recreation settings remain reported as
+unsupported; turning off the stock effect is not a fidelity fix. Pair captures
+must identify the client/edition, map bytes, resolution, aspect, render scale,
+gamma, quality controls, shadows, occlusion, camera, time of day and scene state.
+A source-fallback preview is not an effective runtime setting.
+
+The isolated stock baseline was saved at 1280×960, gamma 1.0, all five quality
+controls High, unit shadows On and occlusion On. Public UI and saved registry
+were both observed in `.scratch/shadow-fix-20261027/settings-original-3/`.
+This is an observed baseline, not a production default. The original client ran
+under isolated Wine/software rendering; native Windows parity is unmeasured.
+Earlier captures with different settings or scene framing are diagnostic only.
+
+Removing model draws from a diagnostic recreation capture removed the black
+building patches while retaining the baked mask, isolating them to model
+rendering. Under the previous JPEG rule every lower mip of `Textures\Base.blp`
+decoded black (see `003-blp.md`, which also counts the other textures the
+changed rule touches). A rendered capture after the decoder change was not
+rerun in the verification below. Gameplay projection scale is covered by
+`campaign-camera-projection.md`. Dynamic unit and building shadows,
+ubersplats and terrain lighting remain open.
+
+## Rerun on 2026-10-27
+
+Headless, no display, one shared cargo lock, logs in `.scratch/verify/`:
+
+- `cargo test -p pcx-tera`: 24 passed, 2 ignored. Ignored
+  `human01_mesh_matches_its_terrain` (`PEACECRAFT3_FORMAT_INSTALL` set to the
+  Legacy install): passed; it now compares every mesh position with
+  `corner_world`, so it covers the elevation-layer term. Ignored
+  `sweep_every_shipped_terrain`: 132 maps, 132 clean manifolds, 0 failures.
+- `cargo test -p pcx-map`: 55 unit tests and the integration tests passed. The
+  ignored original-input tests passed (`grid_alignment`, `local_pathing_regions`,
+  both sweeps) except `campaign_item_sets`, which needs two extracted files
+  (`PEACECRAFT3_CAMPAIGN_UNITS`, `PEACECRAFT3_CAMPAIGN_SCRIPT`) and was not run.
+- `cargo test -p peacecraft3 --lib --features test-fixtures map_ground`: 5 passed,
+  including the shadow grid orientation, value and device-limit test.
+- `cargo test -p pcx-gfx -p pcx-objects -p pcx-play --lib`: 69, 73 and 2070 passed.
+
+Not rerun: the GPU readback and capture tests, the WASM builds, the full
+application suite quoted above, and any comparison with the original client.
+The terrain layer term and the shadow-mask composition therefore have unit and
+original-map mesh coverage here but no new rendered comparison.

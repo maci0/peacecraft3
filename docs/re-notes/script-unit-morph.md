@@ -84,6 +84,28 @@ that the actual cast succeeded. The missing transition needs cast-admission
 analysis; widening grounded height support would not establish that behavior.
 The diagnostic preserves the original earned cache and makes no state changes.
 
+## Unreal height overrides and the next frontier (2026-10-27)
+
+Object-data overrides carry `moveHeight` as an unreal value (the interlude's
+`nmdm` record stores `umvh` as type 2). `morph_height` and the actor `scalar`
+reader accepted only real overrides for a real-kind field, so the Raven Form
+order failed with "unsupported source movement height value" once the
+earlier silent refusal was cleared. Both now accept either type for real and
+unreal fields. With that, the Medivh Raven Form order and `SetUnitFlyHeight` pass
+and the interlude reaches tick 4350.
+
+`AddSpecialEffectLoc` (used by the mage and Jaina teleport triggers) is
+implemented as a point effect that copies the location at creation and ends at
+`DestroyEffect`; see `effect_host.rs`. Rendering of point effects is not wired.
+
+The interlude then stops at `IssueTargetOrder` with the Sorceress `slow` and
+`polymorph` orders (`war3map.j` lines 1584 and 1591; both Sorceress units carry
+`Aslo` and `Aply`, and the map researches `Rhst` level 2 for players 0 to 2).
+Neither spell is implemented. Polymorph cannot reuse the form path: the sheep
+form changes the model, ability list and pools, all of which `prepare_morph_form`
+refuses. Slow needs movement and attack speed modifiers that the activity and
+combat models do not have.
+
 ## Remaining fidelity questions
 
 The probes cover uninterrupted ordinary forms, not manual interruption, pause,
@@ -91,3 +113,12 @@ death, damage, every morph flag or external duration modifiers. Native timer
 rounding and visual animation/altitude parity remain unverified. Unsupported
 source combinations must fail before mutation; they must not borrow values or
 success behavior from the selected campaign example.
+
+## Replacement forms
+
+Ordinary forms keep the model, ability association and pool rules, and refuse any
+change. Polymorph needs the opposite, so `prepare_form` takes `FormChange::Replacement`:
+it skips those three checks and the caller commits with `commit_replacement_form`, which
+also swaps the model animation and owned abilities and keeps the unit's life, mana, armor
+and defense type. Only Polymorph uses it; see
+[slow and polymorph](slow-polymorph-abilities.md) for what it does not model.

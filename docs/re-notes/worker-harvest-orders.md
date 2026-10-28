@@ -311,8 +311,9 @@ from the map-selected unit definition, `Ahar`, the worker's tree weapon slot,
 a missing depot or malformed authored values produce a contextual error; the
 runtime does not substitute stock numbers.
 
-Selection is bounded by `Ahar.Area` and deterministic: nearest candidate wins,
-and equal squared distance breaks on the lower handle. Tree reach is
+Tree selection is bounded by `Ahar.Area` and deterministic: nearest candidate wins,
+and equal squared distance breaks on the lower handle. Lumber depot selection is not bounded
+by `Ahar.Area` (see [Distant depot](#distant-depot)); gold depot selection still is. Tree reach is
 `Ahar.Rng`; the tree weapon's own range does not extend it. Depot reach is the
 depot's admitted collision radius plus `Ahar.Rng`; it is not a copied world
 distance.
@@ -397,3 +398,30 @@ A gold task already admits a return depot before the worker enters its mine. Min
 The prior exit path always acquired from the revealed position. A synthetic task with a depot initially inside its acquisition radius and a mining exit outside that radius reproduced the resulting inconsistency. It now exits, travels and deposits the real load. Hidden, wrong-owner and removed targets reacquire a usable replacement; genuine absence still refuses before revealing the worker, consuming mine resources or crediting a bank. The error includes worker, exit position, acquisition radius and prior depot for diagnosis. Malformed source errors and unreachable-route errors remain distinct and propagate.
 
 The Human02 failure showed a live town hall while mine exit reported no depot. A reveal relocation crossing acquisition distance is an inference from that receipt, not a measured displacement. This is a faithful recreation correction consistent with the already-admitted return walk, not a claim about native internal depot storage or search policy.
+
+## Distant depot
+
+Two isolated original-client probes (Legacy 1.29.2.9231, SHA-256 `3f2ed012...`, `-classic`,
+private Docker with no network and a null audio sink, run through
+`tools/original-game-reference/reference.py`; scripts `.scratch/depot-probe/`) put a Human01-derived
+map's player 1 on open ground with one town hall (`htow` at (-4100, 3000)), a tree (`LTlt`) and
+one peasant (`hpea`) beside the tree, then issued `harvest` on the tree and sampled once per
+game second (position, current order, lumber bank, tree life). No other depot existed. Maps:
+`PCX-DEPOT.w3m` (tree 2400 from the hall, SHA-256 `409c1956...`) and `PCX-DEPOT2.w3m` (tree
+4400 from the hall, `0e7df916...`). The straight line between hall and tree was walkable
+terrain; the worker's path bent around the terrain in the second probe.
+
+| Probe | Observed |
+| --- | --- |
+| 2400 | Order 852018 held at the tree. After 10 lumber (11 s of chopping) the order became 852017 (`resumeharvesting`), the peasant walked to the hall (14 s), the bank rose by 10 at the hall, and the order returned to 852018 as it walked back to the same tree. The bank rose again at 64 s and 103 s (20 and 30), and the run ended at 108 s. |
+| 4400 | The same: 852018 for 11 chops, 852017 on a 25 s walk to the hall, the bank rose by 10, 852018 on the walk back, and chopping resumed. |
+
+Established for lumber on this image: a worker with a full load returns to the only town hall
+when it is 2400 or 4400 away, with no search-radius limit (the probe map's own `Ahar.Area` was not read; the Human05 value used by the
+recreation is 900, far below both distances), and starts an explicit `harvest` on a tree that far from every depot. The recreation
+(`harvest_runtime.rs`, `select_depot`) no longer bounds lumber depot choice by `Ahar.Area`.
+
+Not established, so unchanged or refused: gold return distance (no gold probe; the bound stays),
+the choice among several depots (nearest by straight distance, ties by handle, is the recreation's),
+whether the nearest means path or straight distance, a worker with no depot at all (refused
+loudly), and behavior past 4400.

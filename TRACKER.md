@@ -1385,7 +1385,7 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
 - [x] `pcx-blp`: BLP1 header, 16-entry mip offset/size tables, palette
 - [x] `pcx-blp`: BLP1 direct/palettised mips — planar index + planar alpha
 - [x] `pcx-blp`: BLP1 JPEG mips — shared header at `0x9C` + per-mip scan data
-- [x] `pcx-blp`: inverted-CMYK → RGB, verified against an independent decoder
+- [x] `pcx-blp`: JPEG mips are inverted BGRA → RGBA; the fourth component is alpha even when `alpha_bits` is 0
 - [x] `pcx-blp`: sweep gate — **6,273 / 6,273** shipped textures decode
 - [x] `pcx-blp`: `blpx` inspector (`info` / `dump` / `pixels` / `hash` / `export`)
 - [x] `pcx-blp`: BLP0 (external `.b00`–`.b15` mips) — **does not exist in either build**;
@@ -4682,8 +4682,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - [~] Score counters and replay: `GetPlayerScore` is declared by the selected `common.j`
   but no native implements it, so rows stay refused. Save Replay has no replay writer.
   No values are zero-filled.
-- [ ] Score skin and model art: not implemented. The glue texture loader reads from the
-  install directory, not the selected resolver, and `MODEL` frames are not drawn.
+- [~] Score skin and model art: FDF textures and model textures read through the
+  exiting session's selected resolver (`ArtSource`). The three `BackgroundArt` `MODEL`
+  frames are drawn from their FDF geometry. `ScoreScreenRaceArt` has no
+  `BackgroundArt`; it shows the `war3skins.txt` `ScoreScreenVictory` or
+  `ScoreScreenDefeat` model for the local result, from the local race section then
+  `[Default]`, `_V1` for Frozen Throne and `_V0` otherwise (recreation choices, not
+  checked against the executable). Tie, neutral and unset-race exits draw no race art.
+  Row art (bars, banners, player icons) waits on counters. Rendered output is not
+  compared. See [score screen](docs/re-notes/campaign-score-screen.md).
 - [x] Items: `SetItemDropID` is retained setter state for the drop origin. It is not a
   drop-origin query, and no drop behavior is implemented. `GetItemLevel` reads `ilev`.
   `GetItemType` maps `icla` through the class compare chain of the selected executable
@@ -4781,3 +4788,303 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   death presentation, rendered/collision parity and the original baseline remain
   open. See
   [destructable death delivery](docs/re-notes/destructable-death-delivery.md).
+
+### 2026-10-27: Equal-settings campaign visual comparison
+
+- [~] Prologue02 at 1280x960 against an isolated original-client capture with
+  saved High settings (`.scratch/shadow-fix-20261027/projection-original/`):
+  - Gameplay projection uses the source angle normalized by viewport aspect,
+    matching the Wine D3D trace; see
+    [campaign camera projection](docs/re-notes/campaign-camera-projection.md).
+  - Terrain elevation adds the W3E layer height; baked `war3map.shd` shadows draw
+    with `ShadowImageColor`; scene/sky composition uses raw source channels; see
+    [admitted ground rendering](docs/re-notes/admitted-ground-rendering.md).
+  - Canonical destructables (trees) render; an authored `-` `texID` is an absent
+    replacement.
+  - JPEG BLP mips decode as inverted BGRA with alpha regardless of `alpha_bits`,
+    fixing black building foundations; see [BLP](docs/re-notes/003-blp.md).
+  - Rotation tracks interpolate as unit quaternions (slerp/squad), fixing the
+    time-of-day sphere; see [MDX](docs/re-notes/004-mdx.md).
+  - Ubersplats with birth/decay, unit and building shadow decals, Allies/Log
+    upper buttons, the time-of-day indicator, hero bar and display-only learned
+    ability buttons; see [ubersplats](docs/re-notes/campaign-ubersplats.md),
+    [unit shadows](docs/re-notes/campaign-unit-shadows.md),
+    [top bar](docs/re-notes/campaign-hud-top-bar.md) and
+    [HUD panels](docs/re-notes/campaign-hud-panels.md).
+  Evidence: `.scratch/integration-20261027/` strict native/WASM Clippy, builds,
+  fmt and diff checks exit 0; the ignored `mounted_campaign_rendering_state`
+  capture passes with frozen sources (`captures-14`). Open: scene clock and
+  time-of-day pairing between the two captures, minimap content and side
+  buttons, idle-worker button, the Allies enable rule, shadow offset and
+  orientation readings, and pixel-level parity, which is not claimed.
+
+### 2026-10-27: Human02 interlude to tick 4350, Human03 to 600 s
+
+- [x] Raven Form passes for Medivh: `moveHeight` overrides may be unreal
+  (`unit_morph_host.rs`, `campaign_actors::scalar`). `AddSpecialEffectLoc` creates a
+  point effect (`effect_host.rs`). Synthetic tests cover each.
+- [x] An unassigned player's XP handicap is the source reset factor (client
+  `0x4bdf74`, bound and shape-checked in `player_handicap.rs`), which removed
+  Human03's tick 1254 refusal. Selected Human03 now runs 600 s (38,400 ticks) with no
+  player input and no refusal.
+- [ ] The interlude stops at tick 4350 on `IssueTargetOrder` `slow` (then
+  `polymorph`) between the two Sorceresses. Neither spell exists; Polymorph needs a
+  model, ability and pool changing form path and Slow needs speed modifiers. See
+  [unit morph](docs/re-notes/script-unit-morph.md) and
+  [hero experience](docs/re-notes/hero-experience.md).
+
+### 2026-10-27: Paired-time comparison and HUD gaps
+
+- [~] The recreation capture can step the script clock to the original client's
+  schedule (skip at 11.361 s, capture at 23.743 s from the Return that starts the
+  map; `PCX_PAIRED_SKIP_AT`, `PCX_PAIRED_CAPTURE_AT`). Against the original
+  capture: map-string CR LF breaks and the authored line pitch now match for the
+  quest message (24 px rows, `captures-18`); the minimap side buttons, idle-worker
+  button, hero bar, Allies/Log buttons and time-of-day indicator are present.
+  Not matched: glyph size (about 1.1x), minimap content (markers, camera outline,
+  icons), the narrator transmission appearing earlier than in the original, and the
+  clock pairing itself, which assumes the Wine client's game clock tracked real
+  time. Interlude frontier moved to tick 4350 (`IssueTargetOrder` slow, then
+  polymorph); Human03 runs 600 s without refusal. Strict native/WASM Clippy,
+  builds, fmt and diff checks exit 0 on the final tree
+  (`.scratch/integration-20261027/`). Pixel parity is not claimed. See
+  [text messages](docs/re-notes/script-text-messages.md).
+
+### 2026-10-27: Slow and Polymorph
+
+- [x] `Aslo` and `Aply` exist in `pcx-play` (`unit_curse_host.rs`, admitted by
+  `admit_unit_curses` after chain lightning). Orders resolve through the selected
+  registry; cost, cooldown, range, `targs`, `Dur`/`HeroDur`, `BuffID`, `Requires` and
+  the effect columns (chosen by the `Slo1`/`Slo2`/`Ply1`..`Ply5` metadata ordinals) come
+  from AbilityData and W3A edits; the cast point is the caster's `castpt`. Slow scales
+  move speed by `1 - DataA` and subtracts `DataB` from the attack speed multiplier for
+  the data duration, through the unit buff host (`Bslo`), and restores on expiry,
+  `UnitRemoveBuffs` or death. Polymorph swaps the target to the ground form
+  (`nshe`) with its model, weapon and abilities, keeps life and armor, and restores
+  them. The buff host's producer hooks are no longer test-only. 17 synthetic cases
+  in `unit_curse_tests.rs`; `curse_original.rs` gates the install rows. See
+  [slow and polymorph](docs/re-notes/slow-polymorph-abilities.md).
+- [~] The Human02 interlude no longer stops at tick 4350: the Slow order is accepted
+  and the run publishes Human03 with the earned carryover. The Polymorph order returns
+  false: the Sorceress has 200 of 200 mana and the cost is 220, because the maximum mana
+  of `Rhst` level 2 (`rmnx`) is an upgrade effect the host does not apply. Open: upgrade
+  effects, automatic Slow, air/amphibious/water Polymorph forms and hero targets
+  (refused with errors), spell art, backswing, and the Polymorph restore path on real
+  assets (the interlude ends before the 60 s expiry). No original-client comparison;
+  the speed and attack formulas are recreation readings of the tooltip.
+
+### 2026-10-27: Merged-tree verification
+
+- [~] Final tree (Slow/Polymorph, minimap border lines, decoded marker blocks and
+  camera outline, message line pitch, projection-aware picking): strict native and
+  WASM Clippy, both builds, fmt and diff checks exit 0; `cargo test --workspace
+  --features peacecraft3/test-fixtures` passes 4,646 tests with 0 failures and 281
+  ignored (local-asset and GPU gates). The paired-time capture (`captures-19`,
+  sources unchanged during the run) shows the minimap border lines, 7x7 owner
+  markers and white camera outline in the original's layout. The first workspace
+  run found a real regression, since fixed: world-click picking ignored the custom
+  source projection. Open against the original capture: sight shape, the gold-mine
+  icon, marker colours for non-allied owners (teal and red against all white),
+  glyph size, the narrator transmission timing, and the Polymorph cast, which the
+  Human02 interlude refuses for lack of mana until upgrade effects (`Rhst`) exist.
+  Pixel parity is not claimed. Nothing is committed.
+
+### 2026-10-27: Upgrade effects
+
+- [x] `crates/pcx-play/src/upgrade_effects.rs` and `unit_upgrade_effects_host.rs`: effect
+  slots are read from the `UpgradeData` columns that `UpgradeMetaData` marks with an
+  `effectType` (layout, `w3q` field ids), with the effect ids of `UpgradeEffectMetaData`.
+  Level value is `base + mod * (level - 1)` (`0x6acc50`). A research level change applies
+  to the owner's units whose type lists the upgrade, and a created unit applies the
+  current levels to its creation pools. Applied: `rmnx` (maximum mana) and `rhpx` (maximum
+  life, scaled by the owner's health factor), both with the native mode-1 rule (rounded
+  change, current/maximum ratio kept, living life floor of 1; a mana decrease on a unit
+  without maximum mana is skipped). The routines are pinned by SHA-256 against the
+  reviewed image. A refused projection leaves level and pools unchanged.
+- [x] Every other nonzero effect (`ratd`, `ratx`, `rarm`, `rmvx`, `rmov`, `rmnr`, `rhpo`,
+  `rman` and the undecoded ids) is listed by `unapplied_upgrade_effects()` with a reason;
+  nothing is approximated. 14 synthetic cases (`upgrade_effects::tests`,
+  `unit_upgrade_effects_tests.rs`) and an ignored install gate
+  (`tests/upgrade_effects_original.rs`). See [upgrade effects](docs/re-notes/upgrade-effects.md).
+- [~] Human02 interlude: the campaign reads the `Custom_V0` data set, where `Rhst` has
+  `rmnx` 100/100, so the Sorceress maximum mana is 400. Slow is ordered at 67.97 s and
+  Polymorph at 68.97 s (mana 234 of 400, cost 220); both reach their cast point and the
+  fixture passes (receipts `upg1` to `upg3`). Not reached: the sheep restore at about
+  129 s (the interlude publishes Human03 first), so it rests on synthetic tests. Open:
+  `rmnr`/`ratd` and the other unapplied effects, ownership transfer and form changes
+  (not re-applied), cached units (pools kept), the native unit-enumeration filter for dead
+  units, upgrade record order at creation. No original-client comparison.
+- Gate: `cargo test -p pcx-play --lib` 2115 pass; native and WASM Clippy with
+  `-D warnings` exit 0.
+
+### 2026-10-27: Human03 route harness
+
+- [~] `campaign_human_route/human03.rs` drives Human03 through public commands
+  (attack-move along authored trigger rectangles, Holy Light, cinematic skip) from the
+  earned Human02 profile; runner `.scratch/human03/run.py`. Two runs from identical
+  inputs stop at the same tick (13381, about 209 s) with the same RNG checkpoint. Two
+  refusals fixed: `SetSoundPosition` on a 2D sound (the native wrapper has no 3D guard;
+  other spatial setters keep theirs) and `GetCameraField` /
+  `GetCameraTargetPositionX` / `GetCameraTargetPositionY` (angles returned in radians as
+  `Blizzard.j` expects; roll from `bj_CAMERA_DEFAULT_ROLL`). Current refusal: the
+  `attackground` point order issued to the mortar team (`war3map.j:6334`). No quest is
+  complete and the victory path has not fired; no win is claimed. Open: attackground
+  with splash damage, the route search budget on long detours (a single order across the
+  east detour stops short), the Encounter and ending scenes, the Human04 hand-off. See
+  [Human03](docs/re-notes/campaign-human03.md).
+- Gate: `cargo test -p pcx-play --lib` 2116 pass; native and WASM Clippy with
+  `-D warnings` exit 0.
+
+### 2026-10-28: Human03 won through its own victory path
+
+- [~] `attackground` exists (`attack_ground_host.rs`): the order resolves through the
+  selected registry, the caster walks into range, and the weapon's `Farea1`/`Harea1`/
+  `Qarea1`, `Hfact1`/`Qfact1`, `splashTargs1`, `minRange` and missile speed (all read from
+  the tables and map edits) drive one dice roll per shot with per-victim armor. Refused
+  loudly: missing splash numbers, unrecognised `splashTargs1` tokens, a non-hostile unit
+  in the area, a target inside `minRange`. Five synthetic nonstock tests. With it the
+  Human03 harness plays to the end: game time 279.02 s, quests Investigate Villages and
+  Grain Warehouse complete, `udg_GameOver` true, `CustomVictoryBJ` victory with the exit
+  request for Human04, identical across two runs (same checkpoints, RNG
+  `4e896439e80dab1c`). Policy and recreation-choice limits are in
+  [Human03](docs/re-notes/campaign-human03.md); no original-client comparison. The next
+  frontier is Human04 startup (`CreateBlightedGoldmine`). Open: splash on ordinary
+  attacks, damage to destructables, whether splash spares allies.
+- Gate: `cargo test -p pcx-play --lib` 2121 pass; native and WASM Clippy with
+  `-D warnings` exit 0.
+
+### 2026-10-28: Upgrade regeneration and client observations
+
+- [~] `rmnr` now changes the mana regeneration rate for existing and newly created
+  units, with old regeneration integrated before research and invalid rates refused.
+  Existing-unit level jumps project each level separately, preserving intermediate
+  pool rounding. The isolated Wine client showed 73/200 mana becoming 147/400 on
+  `Rhst` level 2; a ten-second comparison showed a 6.499 mana difference with that
+  upgrade. Synthetic tests cover regeneration, removal, rounding and bounded work.
+- [~] The client also applied research to live, hidden, dead and immediately removed
+  units in a synchronous probe. Ownership transfer raised the receiving player's
+  `Rhst` level from 0 to 2 in the observed inheritance case. The native `inherit`
+  and `global` dispatch paths are described in [upgrade effects](docs/re-notes/upgrade-effects.md).
+  Equal-handicap transfers and admitted ordinary morphs now stage supported effects;
+  Polymorph, later removal, global effects and attack effects remain open. The numeric
+  attack selector lacks verified asset-field mappings.
+- Gate: `cargo test -p pcx-play --lib` 2142 pass, 83 ignored; the selected-install
+  upgrade tests pass. The Human02 interlude passes, with Sorceress mana at 267.9731/400
+  on Slow and 268.9731/400 on Polymorph, compared with 233.99 and 234.49 before `rmnr`.
+  Native and WASM builds and Clippy with `-D warnings` pass.
+
+### 2026-10-28: Human04 won through its own victory path
+
+- [~] Human03's score-screen Continue now publishes Human04 (Arthas restored from the
+  carryover). Eight refusals fixed on the way, each with a synthetic test: `CreateBlightedGoldmine`
+  (type read from `Blizzard.j`'s `CreateUnitAtLocSaveLast`; no blight painted),
+  `GetUnitDefaultAcquireRange`, `CommandAI` with the AI-side command queue, explicit `harvest`
+  on a tree, an explicit gold harvest whose depot is near the mine, `IssueBuildOrderById`,
+  a non-attack target order at a removed unit (false), and revealing a structure whose model
+  had turned (the footprint keeps its placement facing). The Human04 harness
+  (`campaign_human_route/human04.rs`, runner `.scratch/human04/run.py`) trains eight footmen,
+  builds a farm when supply blocks, then attack-moves onto Kel'Thuzad: game time 449.02 s,
+  `udg_GAMEOVER` true, victory with the exit request for Human05, "Investigate Andorhal"
+  complete, identical across two runs (same checkpoints, RNG `4114b672250360a2`, earned cache
+  `0ff12705...`). Open: the AI target scorer's refusal of units that ever carried an effect (the
+  party must not cast Holy Light), the unestablished choices listed in
+  [Human04](docs/re-notes/campaign-human04.md), and the Human05 chapter. No original-client
+  comparison.
+- Gate: `cargo test -p pcx-play --lib` 2142 pass, 83 ignored; native and WASM Clippy with
+  `-D warnings` exit 0.
+
+### 2026-10-28: Human05 runs 549 s, stops at campaign AI research
+
+- [~] Human05 (March of the Scourge) starts from the earned Human04 profile and runs under
+  public player commands (`campaign_human_route/human05.rs`, runner `.scratch/human05/run.py`,
+  release build) to 549 s of game time with both heroes alive and 25 party units. Refusals
+  fixed on the way, each with a synthetic test: `Sin`/`Cos`, `IsUnitEnemy`, `attackground`
+  area filtering by the row's `enemy`/`notself` tokens, `SetItemPosition`, `SetUnitPathing` on
+  a removed unit, state-only timer dialogs, `RemoveAllGuardPositions`, the default training
+  replacement (exe 0xabf960/0xabfa00), unknown tech ids in research setters, Dark Conversion
+  (`ANdc`/`SNdc` in the curse host: buff for `Dur`, then the target is replaced by `UnitID`
+  for the caster's owner with `EVENT_UNIT_SUMMON`; works from a hidden caster), and
+  `GetUnitX`/`GetUnitY` of a removed unit (removal-tick point, then 0.0 from exe 0x497d70).
+  That `Dur` is the conversion delay, the new unit's owner and alliance-less `targs` are recreation readings.
+- [ ] The stop is the undead campaign AI: `StartUpgrade` calls `GetUpgradeGoldCost`,
+  `GetUpgradeWoodCost` and `SetUpgrade`, which have no world behavior, and no building
+  research exists for any player. The 1800 s survival timer and the victory path are not
+  reached. Two runs from the same inputs have identical checkpoints and the same refusal.
+  Details: [Human05](docs/re-notes/campaign-human05.md); the Human03 `attackground` notes
+  changed (siege rows without `enemy` hit allies).
+- Gate: `cargo test -p pcx-play --lib` 2156 pass, 83 ignored; native Clippy with
+  `-D warnings` and WASM Clippy exit 0. No original-client comparison.
+
+### 2026-10-28: Campaign AI research; Human05 runs 1171 s
+
+- [~] `GetUpgradeGoldCost`, `GetUpgradeWoodCost` and `SetUpgrade` for the campaign AI, from
+  the executable (wrappers 0xab5550, 0xab5620, 0xab7680; cost routines 0x6df7e0 and 0x6e0a30;
+  the AI player's method 0xac3ac0). The cost of level `n` is `base + mod * (n - 1)` from the
+  selected `UpgradeData` with `w3q` edits, priced at the AI's level plus one; `GetUpgradeLevel`
+  counts a running research; `SetUpgrade` orders the first idle building that lists the
+  upgrade in `Researches` when requirements and funds allow, and returns false either way. The
+  job reuses the training queue (cost at order, refund on cancel or death, completion through
+  `set_researched_with_effects` after the tick's regeneration). Recreation readings, recorded
+  in [AI research](docs/re-notes/ai-research.md): the idle test, unit order, time shape and the
+  `Requires<n>` level mapping; the vtable checks at 0xac3ac0 are not decoded.
+- [~] Human05 now runs to 1171 s with identical logs across two runs (`r9`, `r10`). Stop: a
+  player-1 peasant on an explicit `harvest` of a tree about 2077 from the only town hall
+  refuses `no resource-accepting depot within Ahar Area`; the original's depot choice for a
+  loaded worker beyond `Area` is not established. The 1800 s victory path is not reached. The
+  `PCX_HUMAN04_CONTINUE=1` path was run once and publishes Human05 with the earned cache
+  `0ff12705...`. Details: [Human05](docs/re-notes/campaign-human05.md).
+- Gate: `cargo test -p pcx-play --lib` 2162 pass, 83 ignored; native and WASM Clippy with
+  `-D warnings` exit 0. No original-client comparison.
+
+### 2026-10-28: Lumber depot distance measured; Human05 runs 1223 s
+
+- [~] Two isolated original-client probes (Legacy 1.29.2.9231, `-classic`, private Docker,
+  `.scratch/depot-probe/`) measured a loaded lumber worker 2400 and 4400 from the only town
+  hall: it walks the whole way, deposits and returns to its tree, and an explicit `harvest` on
+  such a tree is accepted. Lumber depot choice in `harvest_runtime.rs` is no longer bounded by
+  `Ahar.Area`; gold keeps the bound (no gold probe), and a worker with no owned depot still
+  refuses. Multiple-depot choice and path-versus-line distance stay the recreation's. Details:
+  [worker harvest orders](docs/re-notes/worker-harvest-orders.md#distant-depot).
+- [~] Human05 runs to 1223 s with identical logs across two runs (`r11`, `r12`). Stop: the
+  orange AI (player 5, `h05_orange.ai`) asks `SetProduce` for a Necropolis and the recreation
+  refuses AI construction by design. The 1800 s victory path is not reached. Details:
+  [Human05](docs/re-notes/campaign-human05.md).
+- Gate: `cargo test -p pcx-play --lib` 2164 pass, 83 ignored; native and WASM Clippy with
+  `-D warnings` exit 0. No original-client comparison beyond the two depot probes.
+
+### 2026-10-28: AI construction read from the executable; orange AI probed
+
+- [~] `SetProduce` for a structure, from the executable (wrapper 0xab7370, methods 0xac2880,
+  0xac3070, 0xac2b00): with no unit of the player that builds the kind and no idle unit that
+  upgrades into it, the request answers false and orders nothing. The recreation now does that;
+  a unit listing the kind in `Builds` or `Upgrade` still refuses loudly. The placement search
+  (0xad4970, about 2000 instructions) is not decoded, nor are AI construction's cost charge,
+  worker choice among equals and retry cadence. Details: [AI construction](docs/re-notes/ai-construction.md).
+- [~] One original-client probe on a patched Human05 (the four acolytes, `Trig_ResourcesOrange`,
+  `Trig_OrangeTown`, sampled once per game second for 190 s) recorded the orange AI building its
+  base: Necropolis (6208, 2752) at 12 s, ziggurats from 15 s, a mine at 24 s, altar, graveyard and
+  crypts by 47 s. It is the target an implementation must match.
+- [ ] Human05 still stops at 1223 s, now with the builder named (a shipped acolyte at
+  (6329, 2320)): identical logs across two runs (`r14`, `r15`). The 1800 s victory path is not
+  reached. Details: [Human05](docs/re-notes/campaign-human05.md).
+- Gate: `cargo test -p pcx-play --lib` 2165 pass, 83 ignored; native and WASM Clippy with
+  `-D warnings` exit 0.
+
+### 2026-10-28: AI placement grid and blocker probe
+
+- [~] The Legacy placement search uses a 101 by 101 grid at 32-unit intervals around
+  coordinates from the chosen town object, a fixed breadth-first queue order, immediate and
+  retained candidate classes, and a conditional second search. The meaning of the candidate
+  checks, object classes, footprints, blight and town coordinates remains unresolved. No new
+  placement behavior is admitted. Native addresses and limits are in
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] Two isolated, muted original-client runs with a neutral farm at the former Necropolis
+  position produced a Necropolis at (5952, 2432), ziggurats at (5408, 2912) and (5408, 2592),
+  and the haunted mine at (5696, 3456). These differ from the prior unblocked layout except for
+  the mine. The added unit may also affect handles or random state, so the comparison does not
+  establish a blocking formula. The recreation still refuses at 1223 s and has no site to compare.
+- [ ] Fresh Human05 release runs `placement-evidence-1` and `placement-evidence-2` both exit
+  101 at the same 1223 s placement refusal. Their checkpoints, RNG checkpoints and refusal
+  text match each other and `r14`; the victory path remains unverified.
+- Gate: `cargo test -p pcx-play --lib` 2165 passed and 83 ignored; native and WASM Clippy with
+  `-D warnings` passed. These checks do not validate the undecoded placement behavior.

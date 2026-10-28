@@ -477,3 +477,10 @@ evidence. Private receipts are under `.scratch/player-production/`.
 
 Disabled/readiness art, resource and prerequisite presentation, queue progress,
 cancellation controls and rendered comparison remain open.
+
+## Learned abilities without a command
+
+Learned, player-available abilities that author both `Buttonpos` and `Art` but
+have no implemented command (Far Sight on the Prologue02 hero, peon gather) are
+drawn in their authored slot as display-only buttons that issue no order. See
+[hero bar and learned-ability buttons](campaign-hud-panels.md).

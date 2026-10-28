@@ -99,3 +99,90 @@ explicit Vulkan test covers colors and clearing through 4K. Native/WASM builds
 and actual WASI/Cargo-WASM execution are recorded separately in the private
 verification receipt. These checks do not establish chapter playability,
 original/native/WASM visual parity or complete game determinism.
+
+## Line endings in map strings (2026-10-27)
+
+`war3map.wts` stores multi-line strings with CR LF (Prologue02 `TRIGSTR_030`, the
+MAIN QUEST message: five lines, 0x0D 0x0A between them). `paint` in
+`campaign_messages.rs` replaces `\r\n` with `\n` before the rich-text parse. Before
+the change each break rendered twice, so the quest text was spaced two lines apart
+(58 px against the original client's 24 px at 1280x960). Pinned by
+`crlf_in_message_text_is_one_line_break`. A lone CR is not touched.
+
+## Paired comparison, Prologue02 (2026-10-27)
+
+The recreation capture steps the script clock to the original client's schedule,
+derived from its action log: Escape skip at 11.361 s and capture at 23.743 s after
+the Return that started the map (`PCX_PAIRED_SKIP_AT`, `PCX_PAIRED_CAPTURE_AT`
+read by `mounted_campaign_rendering_state`; runner and receipts in
+`.scratch/integration-20261027/`). That treats the Wine client's game clock as real
+time from the Return, which was not measured.
+
+Observed in `captures-15` against `matched-skip-control.png`:
+
+- The quest message block sits in the same screen area; text height differs by
+  about 1.1x in glyph width (`Establish a Base`: 157 px stock, 175 px recreation).
+  Glyph metrics, margins and wrapping are not qualified (line pitch is now equal).
+- The recreation already shows the narrator transmission over the console; the
+  original does not yet at the same nominal time, so the two clocks or the
+  trigger wait are not aligned. This is a timing difference, not a layout claim.
+
+Line pitch: the authored `WorldFrameUnitMessage` height (0.015 frame units, 24 px
+at 1280x960) is the line pitch, as for the other HUD fonts, so the line and each
+span carry `LineHeight::RelativeToFont(1.0)`. Bevy's default of 1.2 had spaced the
+lines 28.7 px apart. Measured in `captures-18`: five rows at 150, 174, 198, 222
+and 246 px, 24 px apart, equal to the original capture's pitch. Glyph width is
+still about 1.1x the original (the em size is taken as the height; see
+"Glyph size" below), and the block sits lower than the
+original's.
+
+## Glyph size: what the executable and font establish (2026-10-27)
+
+Stock `Establish a Base` is 155 px wide at 1280x960 (white-pixel ink bounds; the
+recreation measures 171 px by the same method), so the stock glyphs are about 0.9x
+the recreation's. Linear scaling of the font's advances puts the stock em near
+21.5 to 22 px, not 24.
+
+Font metrics (`Fonts\FRIZQT__.TTF`, 62,316 bytes, from `War3.mpq`): `head`
+unitsPerEm 1000; `hhea` ascent 965, descent -250, lineGap 0; `OS/2` typo and win
+values equal those. Cell height is 1.215 em. Neither 1/1.215 (0.823) nor
+ascent/(ascent+descent) (0.794) is 0.9, so a cell-height versus em conversion does
+not explain the difference. The recreation's em of 24 px (Bevy `font_size` is the
+em) already equals the authored height at this resolution.
+
+Static reading of the selected image (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`) gives the size
+path for this font:
+
+- `0x5e85ac..0x5e85ef`: `FontHeights/WorldFrameUnitMessage` and `MessageFont` go to
+  `0x88c210(file, height, flags)` with the literal flags `1` (`push 1` at `0x5e85d1`).
+  `0x88c210` stores them at string-object `+0x130/+0x134/+0x138`.
+- `0x887470` multiplies the height by the object's scale (`+0x60`, set to 1.0 in the
+  frame constructor at `0x872234`) and calls `0x9600c0`, which divides by 0.6
+  (`.rdata 0xe84160`, the UI height), clamps to at most 1.0 and passes the screen
+  fraction on.
+- `0x7f0be0`: the fraction is raised to at least 2 px, converted by `0x7e3de0` to
+  `round(fraction * H)` (`H` is `[0x114e934]`, written at `0x7e3a0f` from the
+  device viewport rect; its runtime value was not read) and capped at 64 (`0x40`).
+  The result goes to `FT_Set_Pixel_Sizes` (`0x9f9460` scales by 64 and requests the
+  size), so FreeType's em is that integer. The ascent and descent from the face
+  record (`+0x46`, `+0x48`) only give the baseline fraction `ascent/(ascent+descent)`
+  at `+0x1c0`.
+- `0x7f0c47..0x7f0c64`: when flag bit 0 is set and the size exceeds 2, a second size
+  `+0xb4 = size - 2` is stored. `0x7eac90` sets the face to `+0xb4` before the glyph
+  render call `0x7f1cc0`.
+
+Reading: with `H = 960` the string size is 24, and a flag-1 font rasterizes glyphs at
+22 px, 0.917 of 24. That is close to the measured 0.9 and to the 21.5 to 22 px
+estimate. Not applied, because:
+
+- the `-2` is absolute pixels and the recreation sizes every HUD font in `Vh`, so the
+  rule needs the output pixel height at paint and a resize path; the other HUD fonts
+  would need their own flags read first (the FDF `FontFlags` to this argument
+  mapping is not decoded);
+- `H` at run time and whether the layout advances use 22 or 24 (the advance scale
+  at `+0x1d0` is read while the face is at 24) are not read;
+- it is a static reading of one image, not an original-client run.
+
+No code or constant changed for glyph size. A debugger read of `+0xb0`, `+0xb4` and
+`[0x114e934]` for this string in the original client would settle it.

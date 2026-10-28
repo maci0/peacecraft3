@@ -31,9 +31,16 @@ allied sharing, suspended/max-level draining, buildings, summoned victims,
 boundary geometry and exact event interleaving are recreation choices with
 native qualification still open. Automatic level-up effect art is not rendered.
 
-No default handicap is invented: a nonzero award for a player whose factor has
-not been assigned refuses with that context. The existing setter/getter model
-does not yet qualify the final native initial factor. Older caches without XP
+An unassigned player holds the factor the selected client's player reset
+installs (2026-10-27): the reset statement at `0x4bdf74` stores the real at
+`0x112d810` into the setter's property cell at player offset `0x360`. That is the
+same source real the getter returns for a null player, and the reset sits beside
+the health-handicap reset already bound. `player_handicap::Rules::read` checks the
+21-byte statement shape, the field offset against the setter and the value
+address against the null initializer, so a changed client refuses. Players
+created before or after admission both receive it. The reset runs at player
+setup; whether another path (lobby, save load) changes it before a campaign map
+starts is not established. Older caches without XP
 also refuse an award requiring that missing counter. Preflight computes award
 counters before death housekeeping, but earlier damage is not rolled back on
 failure; the owning session stops, as for other failed world projections.

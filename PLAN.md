@@ -972,8 +972,8 @@ below as open follow-on work, not folded into this gate.)*
 > `pcx-blp` is done for 1.28c: **6,273 / 6,273** shipped textures decode, header and
 > mip chain asserted, JPEG and direct paths both covered. See
 > `docs/re-notes/003-blp.md`. Two things did not survive contact with the bytes — the
-> palettised alpha plane is planar rather than interleaved, and the JPEG mips are CMYK
-> that subtracts from white rather than multiplies. BLP0/BLP2 do not occur in 1.28c and
+> palettised alpha plane is planar rather than interleaved, and the JPEG mips are inverted
+> BGRA whose fourth component is not black ink. BLP0/BLP2 do not occur in 1.28c and
 > stay open for Reforged.
 
 #### The render is now checked by a pixel test, not by an eye

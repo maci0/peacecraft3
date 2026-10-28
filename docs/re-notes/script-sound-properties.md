@@ -22,12 +22,25 @@ field changes. Null, unknown and incorrect-family handles refuse in the same
 arena; no replacement sound or handle pool is created.
 
 The selected `common.j` comments mark distances, cone angles/orientation,
-position and velocity as valid only for sounds created with 3D enabled. These
-calls require an explicit true `is_3d` input from `CreateSound` or
-`CreateSoundFromLabel`. Two-dimensional sounds and MIDI creation, whose interface
-supplies no such boolean, refuse spatial assignment. This does not guess a bit
-in a label table or claim native behavior for invalid calls. See
+position and velocity as valid only for sounds created with 3D enabled. Distances,
+cone angles, cone orientation and velocity require an explicit true `is_3d`
+input from `CreateSound` or `CreateSoundFromLabel`. Two-dimensional sounds and
+MIDI creation, whose interface supplies no such boolean, refuse those four. This
+does not guess a bit in a label table or claim native behavior for invalid
+calls. See
 [explicit label-constructor resources](script-label-sounds.md#explicit-label-constructor-resources).
+
+`SetSoundPosition` is the exception. The shipped Human03 script calls
+`SetSoundPositionLocBJ` on `gg_snd_H01VillagerC38`, created with
+`is3D=false` (`war3map.j:707`, `:4570`), and the trigger is reachable in normal
+play. In the Legacy executable (SHA-256 `3f2ed012...`, `objdump` windows) the
+native wrapper `0x4a9d70` resolves the handle through `0x482fc0`, skips a null
+sound and calls `0x4f70a0`. That function calls the backend routine
+`0x5da7a0` (voice at `[+0x24]`) or `0x5da4f0` (voice at `[+0x28]`; body not decoded). No window
+reads a creation flag, and the wrapper has no error return. The recreation
+therefore accepts and stores the position for 2D sounds too. Not established:
+whether the backend ignores it for a 2D voice. `script_audio.rs` still reports a
+sound with a stored position as unplayed.
 
 ## Checks and original execution
 
