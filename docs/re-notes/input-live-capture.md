@@ -129,7 +129,7 @@ and discarded (correlation 0.4 to 0.66).
 
 ### Hover and armed cursors (D1, D3)
 
-Cursor art observed at the pointer, 1280x960. Mode-to-sequence names are not recovered.
+Cursor art observed at the pointer, 1280x960. The mode-to-sequence mapping is decoded in [input cursor](input-cursor.md).
 
 | State | Cursor |
 | --- | --- |
@@ -147,8 +147,8 @@ Cursor art observed at the pointer, 1280x960. Mode-to-sequence names are not rec
 
 ## Not measured
 
-- Shift+Tab direction with three or more subgroups; the cursor mode value to MDX sequence
-  mapping; the invalid-target and hold-item cursors; why the melee gold mine is green.
+- Shift+Tab direction with three or more subgroups; the invalid-target and hold-item cursors (the setter never selects them,
+  see [input cursor](input-cursor.md)); why the melee gold mine is green.
 - Edge-scroll speed in world units and its dependence on `mousescroll`; the bottom margin at
   1920x1080; whether the margin constant lives in the exe or the data.
 - Backspace with several halls and its 1.0 s restart window; the exact definition of an idle

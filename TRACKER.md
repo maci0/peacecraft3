@@ -5722,3 +5722,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   with reach enabled. The simulation budget check passed with lower Human03 allocations and
   bytes. Human03 and Human04 reached victory and matched their `g1` checkpoint and RNG lines;
   both Human05 runs stopped at 1223 s with matching checkpoints and the named refusal.
+
+### 2026-10-29: In-game cursor
+
+- [~] The campaign view draws the local race's cursor model (`Cursor` in `war3skins.txt`) at the pointer and hides
+  the system cursor while it is drawn. Mode to sequence and tint come from the client's cursor setter
+  (`0x616660`, tint table `0xe94210`, tag names `0x5d1d30`), read at runtime from the reviewed image. Gauntlet
+  over own, neutral and enemy units, the target crosshair (coloured by relation under an armed attack,
+  plain for spells, move and patrol) and the eight scroll arrows are driven. One isolated original-client run
+  fixed the hotspot at the model origin. Evidence and decisions: [input cursor](docs/re-notes/input-cursor.md).
+- [ ] Open: the cursor during building placement (shows the normal cursor with a typed diagnostic), over
+  items and destructables, the neutral house under an armed attack, `InvalidTarget` and `HoldItem` producers,
+  the signal cursor, in-game tone against the original, and a live check of the interface and viewport gating.
+  The hover picker copies the click picker and should be unified once the smart right-click change lands.

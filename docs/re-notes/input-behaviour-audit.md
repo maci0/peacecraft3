@@ -79,7 +79,7 @@ Facts every later row relies on.
 | A16 | Middle button drag | `CDragScrollMode`: press (code 2) on world starts a drag scroll (`0x5fd0d0` to `0x5f9ed0`), release ends it. Scroll ratio not read. | EX `0x63bd00`, `0x5fd0d0` | exe | OK (ground-grab drag, INF; see [camera input](input-camera.md)) | `campaign_camera_input.rs` |
 | A17 | X1/X2 mouse buttons | Delivered as button codes 8 and 0x10; no game binding located. | EX platform; binding UNK | exe | MISS | none |
 | A18 | Mouse wheel | One zoom step per 120 units of delta (`delta / 0x78`, toward zero); positive zooms in (level + 1), negative zooms out. See C1. | EX `0x5e12f0` | exe | OK | `campaign_camera_input.rs` |
-| A19 | Edge scroll | Eight direction masks (1 up, 2 down, 4 left, 8 right and sums) run the same scroll helpers as arrow keys with the mouse multiplier. Measured live: the pointer scrolls when within 0.004 of an edge in the 0.8 x 0.6 UI space (strict; 6.4 px horizontal and vertical at 1280x960), with no trigger delay, constant speed equal to arrow-key scroll, and a directional arrow cursor. The producer's address was not located. | EX `0x5dfd50`, `0x5e12f0`; RO ([live capture](input-live-capture.md)) | exe; `mousescroll`/`mousescrolldisable` options | DIFF: margin from the live fit, options from the descriptor fallbacks; no arrow cursor | `campaign_camera_input.rs` |
+| A19 | Edge scroll | Eight direction masks (1 up, 2 down, 4 left, 8 right and sums) run the same scroll helpers as arrow keys with the mouse multiplier. Measured live: the pointer scrolls when within 0.004 of an edge in the 0.8 x 0.6 UI space (strict; 6.4 px horizontal and vertical at 1280x960), with no trigger delay, constant speed equal to arrow-key scroll, and a directional arrow cursor. The producer's address was not located. | EX `0x5dfd50`, `0x5e12f0`; RO ([live capture](input-live-capture.md)) | exe; `mousescroll`/`mousescrolldisable` options | DIFF: margin from the live fit, options from the descriptor fallbacks. The arrow cursor is drawn ([input cursor](input-cursor.md)) | `campaign_camera_input.rs`, `campaign_cursor.rs` |
 | A20 | Click on minimap | Left: camera jump with held-drag follow. Right: move/smart order at the point. Both gated like world input. | DOC; recreation per `campaign-minimap.md` | exe | OK (camera, drag, point order); right click is Move not smart | `campaign_minimap.rs:138`, `campaign_input.rs:753` |
 | A21 | Alt+click world or minimap | Minimap signal ("ping") to allies, same as the signal button. Text states Alt+left-click. Alt-G arms the signal. | SS `MINIMAPSIGNALTOOLTIP_UBER`, MiscUI `MinimapSignal='G'`; net command `CNetCommandAllyPing` RTTI | data | MISS | none |
 | A22 | Click command-card buttons | Press consumes the pointer; the button issues its command. | OK | | OK | `campaign_command_card.rs:373`, `campaign_input.rs:107` |
@@ -133,9 +133,9 @@ Facts every later row relies on.
 
 | # | Behaviour | Original | Evidence | Recreation |
 | --- | --- | --- | --- | --- |
-| D1 | Cursor art | A per-race MDX model, `Cursor=UI\Cursor\<Race>Cursor.mdl` in `war3skins.txt`. Sequences in the Human cursor: Target, Normal, Select, TargetSelect, InvalidTarget, HoldItem, Scroll Left, Scroll Right, Scroll Up, Scroll Down, Scroll Up Left, Scroll Up Right, Scroll Down Left, Scroll Down Right. | SB | MISS: system cursor |
-| D2 | Scroll arrows | Cursor mode values `0xa`..`0x11` map left, right, up, down, up-left, up-right, down-left, down-right (mask 1 up, 2 down, 4 left, 8 right) and align with the MDX scroll sequences when offset by 4. | EX `0x5dfd50`; alignment INF | MISS |
-| D3 | Hover states | `0x5fbdf0` and `0x5fda30` set modes 0-3 (`0x5fbdf0`) and 4, 6, 7 (`0x5fda30`) from the unit under the cursor and the armed command. Live: the gauntlet is green over own units and buildings, yellow over neutral, red over enemies, grey-blue elsewhere; with attack armed the crosshair is cyan over ground, green own, yellow neutral, red enemy; with a spell armed it stayed cyan over every target. The mapping of mode values to sequence names is UNK for modes below 10. | EX; RO ([live capture](input-live-capture.md)) | MISS |
+| D1 | Cursor art | A per-race MDX model, `Cursor=UI\Cursor\<Race>Cursor.mdl` in `war3skins.txt`. Sequences in the Human cursor: Target, Normal, Select, TargetSelect, InvalidTarget, HoldItem, Scroll Left, Scroll Right, Scroll Up, Scroll Down, Scroll Up Left, Scroll Up Right, Scroll Down Left, Scroll Down Right. | SB | DONE: the model is drawn at the pointer ([input cursor](input-cursor.md)) |
+| D2 | Scroll arrows | Cursor mode values `0xa`..`0x11` map left, right, up, down, up-left, up-right, down-left, down-right (mask 1 up, 2 down, 4 left, 8 right) and select the MDX scroll sequences through tag lists (decoded in [input cursor](input-cursor.md)). | EX `0x5dfd50`, `0x616660` | DONE |
+| D3 | Hover states | `0x5fbdf0` and `0x5fda30` set modes 0-3 (`0x5fbdf0`) and 4, 6, 7 (`0x5fda30`) from the unit under the cursor and the armed command. Live: the gauntlet is green over own units and buildings, yellow over neutral, red over enemies, grey-blue elsewhere; with attack armed the crosshair is cyan over ground, green own, yellow neutral, red enemy; with a spell armed it stayed cyan over every target. Mode values map to sequence names and tints through the setter `0x616660` and the table at `0xe94210` ([input cursor](input-cursor.md)). | EX; RO ([live capture](input-live-capture.md)) | DONE for the pointer states the recreation has; build placement, items and the neutral house under attack are open |
 | D4 | Placement and area cursors | `PlacementCursor` texture per race in `war3skins.txt`; building placement colours `[Placement]` (SB). | SB | DIFF: `campaign_build_ui` handles building placement; spell area cursor MISS |
 | D5 | Selection circle colours | `[SelectionCircle]` friend/neutral/enemy colours and `[TargetingColors]`. | SB | other agent / selection circle note |
 | D6 | Error line | Order failures post `[Errors]` strings above the console. | SB, EX `0x5ecc20` | DIFF: `last_error` is a log field, not a world message |
@@ -214,8 +214,8 @@ copied constants; read keys, rates and tables from the data and the supplied exe
    edge-scroll margin, trigger and speed, drag threshold (none), double-click window
    (500 ms), control-group double tap, Tab, hover and armed cursors, Shift+digit,
    Backspace list, F8 and `` ` `` (idle worker), and the zoom table (C3, literals
-   win). Still open: Shift+Tab with three or more subgroups, cursor mode to sequence
-   names, invalid-target and hold-item cursors, edge-scroll speed in world units and
+   win). Still open: Shift+Tab with three or more subgroups,
+   edge-scroll speed in world units and
    its option dependence, multi-hall Backspace, selection cap 12.
 2. **Modifier and gate foundation.** One input-state resource for Shift, Ctrl,
    Alt (left and right) and a single "game input open" gate reused by `click`,
@@ -236,8 +236,8 @@ copied constants; read keys, rates and tables from the data and the supplied exe
 8. **Edge scroll and drag scroll. Done**, see [camera input](input-camera.md). Margin 0.004 of the 0.8 x 0.6 UI space (strict,
    per axis) from the live capture, `mousescroll` multiplier,
    disable flag, middle-button drag.
-9. **Cursor.** Load the per-race cursor MDX from `war3skins.txt`, drive sequences
-   from hover state, armed state and scroll direction.
+9. **Cursor. Done**, see [input cursor](input-cursor.md). The per-race cursor MDX from `war3skins.txt` drives its sequences
+   and tint from hover state, armed state and scroll direction.
 10. **Camera jump keys. Space, Backspace, F8 and backtick done** (Ctrl/Alt+`UnitCenter` open), see [camera input](input-camera.md). Space (alert history, 1.0 s), Backspace (list cycling,
     1.0 s, own Town Hall), F8 and `` ` `` (idle worker, 1.0 s cycle; the recreation's
     F8 debug overlay must move), Ctrl/Alt+`UnitCenter`.
@@ -266,8 +266,8 @@ zoom level (C3), Shift+digit and Ctrl+Shift+digit (B4).
   hold keys not seen in `CSelectMode` and `CCameraWar3`.
 - The hero-bar index semantics of F1-F5 (B7), and several-hall Backspace cycling (B16).
 - What `Smoothing` does (C7).
-- Mapping from cursor mode values below 10 to sequence names, and the invalid-target
-  and hold-item cursors (D3).
+- The cursor of building placement, items and the neutral house under attack, and the
+  invalid-target and hold-item producers (D3, see [input cursor](input-cursor.md)).
 - X1/X2, PrintScreen and Alt+Tab handling (A17, B25).
 - Observer, replay and multiplayer-only input paths were not read.
 
