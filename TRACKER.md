@@ -5394,3 +5394,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2187 tests with 84 ignored. Native and
   WASM Clippy passed with `-D warnings` after refreshing stale shared-target metadata. The
   locked, offline simulation budget check passed with unchanged allocation counts and digests.
+### 2026-10-28: Campaign in-game audio
+
+- [~] Campaign play had no music, unit voices or interface sounds; only script-started
+  voices reached Bevy audio. Map and thematic music (`SetMapMusic`, `PlayThematicMusic`)
+  now play from the race section of `UI\war3skins.txt`, and unit selection and move/attack
+  orders speak `UnitAckSounds.slk` rows named by the unit's `unitSound`. Verified on the
+  local Human01 chapter through audio entities (music also on a playing null ALSA sink), with synthetic unit
+  tests. Still open: combat, footstep, spell and ambience sounds (need `SNDX` model
+  events and positional attenuation), `CreateMIDISound` ambients, 3D and EAX script
+  sounds, `Pissed`/`Ready`/error/alert voices, the other music natives, fades. Findings
+  table and evidence classes: [campaign audio](docs/re-notes/campaign-audio.md).

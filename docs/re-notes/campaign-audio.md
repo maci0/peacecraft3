@@ -141,9 +141,40 @@ bound) and `campaign_ack::tests` cover the command-to-row mapping. The Human01
 probe selects Arthas and orders a move through the command log and asserts the
 `ArthasWhat` and `ArthasYes` rows become entities with their source bytes.
 
-## Status
+
+## Sink check
+
+`human01_music_reaches_a_null_audio_sink` adds Bevy's `AudioPlugin` after
+`assert_null_audio_environment` shows no `DISPLAY`/`WAYLAND_DISPLAY`, an absent
+PulseAudio socket under `.scratch`, and an ALSA configuration that maps only the
+default device to the null plugin. The `Comradeship.mp3` track gets an `AudioSink`
+that is neither paused nor empty, at the user's music volume. This shows the track
+reaches a playing sink on the null device. It says nothing about audibility, levels
+or timing against the original.
+
+## Status after the fixes
 
 | Category | State |
 |---|---|
-| Map and thematic music | connected (music section) |
-| Unit selection and order acknowledgement | connected for `What`, `Yes`, `YesAttack` (unit voices section) |
+| Script voices | unchanged: connected |
+| Map and thematic music | connected |
+| Unit selection, move and attack acknowledgement | connected (`What`, `Yes`, `YesAttack`) |
+| `Pissed`, `Ready`, `Warcry`, spell acknowledgements | not implemented |
+| Race alert and error voices (`NoGold`, `UnderAttack`, `NoFood`, ...) | not implemented: the order path reports a boolean, not a reason, and attacks on the player's units are not observed; the race keys exist in `war3skins.txt` |
+| Interface click sounds in the HUD | not implemented: no FDF names a click sound (`rg -i sound` over the 88 FDF members finds only option labels), so the mapping from control to `UISounds` row is native |
+| Day/night ambient (`CreateMIDISound`) | still refused; rows in `AmbientMusic.slk` have `Volume` 5 on the 127 range and need an explicit loop decision plus the label row's volume for the fade path |
+| 3D, EAX, stop-when-out-of-range script sounds | still refused |
+| Stacked ambient sounds | queue has no consumer |
+| Combat, birth, death, footstep (`SNDX` events), ability and ambience sounds | not implemented: needs model event playback in the actor animation path and a positional attenuation rule; `MiscData.txt [Sound]` supplies `Attenuation=3.0`, `MinDist=1200`, `MaxDist=20000`, but the listener and curve are unread |
+| Other music natives, music fades | not implemented |
+
+## Unverified
+
+- Audibility, levels and timing of every category against the original game; no
+  original runtime was launched.
+- The skin-key resolver for `SetMapMusic` names, the thematic one-shot behaviour,
+  the order-to-suffix map, the `RANDOMPITCH` band and the playlist order policy are
+  inferences from names and data.
+- Music and unit voices were checked on Human01 (Reign of Chaos mode) only.
+- Browser (`wasm32`) builds compile and pass Clippy; no browser playback of these
+  categories was run.
