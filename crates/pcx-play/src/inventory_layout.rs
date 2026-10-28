@@ -68,7 +68,67 @@ pub struct Rules {
     slot_step: [f32; 2],
     column_mask: usize,
     row_shift: u32,
+    slot_keys: Vec<u32>,
 }
+/// Reads the instruction at `va`, checks its opcode bytes and returns the `size` operand
+/// bytes after them.
+fn operand(
+    read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    va: u32,
+    prefix: &[u8],
+    size: usize,
+) -> Result<Vec<u8>, String> {
+    let b = read(va, prefix.len() + size, true)?;
+    if b.get(..prefix.len()) != Some(prefix) {
+        return Err(format!("unsupported inventory instruction at {va:#x}"));
+    }
+    Ok(b[prefix.len()..].to_vec())
+}
+fn word(b: Vec<u8>) -> Result<u32, String> {
+    Ok(u32::from_le_bytes(
+        b.try_into().map_err(|_| "truncated inventory operand")?,
+    ))
+}
+
+/// The windows virtual-key code of NumPad 0. The client labels slot keys by NumPad digit
+/// and stores virtual-key codes; the two agree through this base (`VK_NUMPAD0`).
+const NUMPAD_0: u32 = 0x60;
+
+/// The virtual-key code each inventory slot button stores as its hotkey.
+///
+/// Evidence, all read from the image: the button update stores `table[slot]` in the button's
+/// hotkey field (`0x649448` to `0x649455`), the key matcher compares that field with the
+/// pressed key (`0x63919e`), and the tooltip builder labels the same slots through a jump
+/// table of NumPad digits (`0x64927c`, one `mov ebx, digit` per slot). The reader refuses
+/// unless the three agree on the field and on every slot: key = `VK_NUMPAD0` + label.
+fn slot_keys(
+    read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    count: usize,
+) -> Result<Vec<u32>, String> {
+    let field = operand(read, 0x649455, &[0x89, 0x88], 4)?;
+    if operand(read, 0x63919e, &[0x39, 0x98], 4)? != field {
+        return Err("inventory hotkey field relation".into());
+    }
+    let table = word(operand(read, 0x64944e, &[0x8b, 0x0c, 0x8d], 4)?)?;
+    let labels = word(operand(read, 0x64927c, &[0xff, 0x24, 0x85], 4)?)?;
+    let last = usize::from(operand(read, 0x649277, &[0x83, 0xf8], 1)?[0]);
+    if last + 1 != count {
+        return Err("inventory hotkey label count".into());
+    }
+    (0..count)
+        .map(|slot| {
+            let offset = u32::try_from(slot * 4).map_err(|_| "inventory hotkey slot")?;
+            let key = word(read(table.wrapping_add(offset), 4, false)?)?;
+            let target = word(read(labels.wrapping_add(offset), 4, false)?)?;
+            let label = word(operand(read, target, &[0xbb], 4)?)?;
+            if key != NUMPAD_0 + label {
+                return Err(format!("inventory slot {slot} key and label disagree"));
+            }
+            Ok(key)
+        })
+        .collect()
+}
+
 impl Rules {
     /// Shared selected-unit information frame in the logical ConsoleUI surface.
     pub fn info_panel(&self) -> Rect {
@@ -108,23 +168,6 @@ impl Rules {
         image_sha256: Sha256Digest,
         mut read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
-        fn operand(
-            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
-            va: u32,
-            prefix: &[u8],
-            size: usize,
-        ) -> Result<Vec<u8>, String> {
-            let b = read(va, prefix.len() + size, true)?;
-            if b.get(..prefix.len()) != Some(prefix) {
-                return Err(format!("unsupported inventory instruction at {va:#x}"));
-            }
-            Ok(b[prefix.len()..].to_vec())
-        }
-        fn word(b: Vec<u8>) -> Result<u32, String> {
-            Ok(u32::from_le_bytes(
-                b.try_into().map_err(|_| "truncated inventory operand")?,
-            ))
-        }
         fn string(
             read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
             pointer: u32,
@@ -326,6 +369,7 @@ impl Rules {
         if count == 0 || operand(&mut read, 0x61f4d8, &[0x6a], 1)?[0] as usize != count {
             return Err("inconsistent inventory button count".into());
         }
+        let slot_keys = slot_keys(&mut read, count)?;
         if operand(&mut read, 0x61f60e, &[0x6a], 1)? != [0]
             || operand(&mut read, 0x61f609, &[0x6a], 1)? != [2]
         {
@@ -427,7 +471,12 @@ impl Rules {
             slot_step,
             column_mask,
             row_shift,
+            slot_keys,
         })
+    }
+    /// The virtual-key code that uses the item in `slot`, from the client image.
+    pub fn slot_key(&self, slot: usize) -> Option<u32> {
+        self.slot_keys.get(slot).copied()
     }
     pub fn slot(&self, index: usize) -> Result<Rect, String> {
         if index >= self.count {
@@ -566,6 +615,7 @@ pub mod fixtures {
             slot_step: [0.05, 0.06],
             column_mask: 1,
             row_shift: 1,
+            slot_keys: vec![0x41, 0x42, 0x43, 0x44],
             tooltip: Tooltip {
                 background_key: "Background".into(),
                 edge_key: "Edge".into(),
@@ -654,6 +704,61 @@ mod tests {
                 .contains("instruction")
         );
     }
+    /// A synthetic image slice for `slot_keys`: the same instruction shapes at the reviewed
+    /// addresses, with nonstock labels and a relocated hotkey field and tables.
+    fn key_image(
+        labels: &[u32],
+        keys: &[u32],
+        field: [u32; 2],
+        last: u8,
+    ) -> impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String> {
+        const KEYS: u32 = 0x2000;
+        const JUMPS: u32 = 0x3000;
+        const TARGETS: u32 = 0x4000;
+        let (labels, keys) = (labels.to_vec(), keys.to_vec());
+        move |va, n, _| {
+            let word = |value: u32| value.to_le_bytes().to_vec();
+            let mut bytes = match va {
+                0x649455 => [vec![0x89, 0x88], word(field[0])].concat(),
+                0x63919e => [vec![0x39, 0x98], word(field[1])].concat(),
+                0x64944e => [vec![0x8b, 0x0c, 0x8d], word(KEYS)].concat(),
+                0x64927c => [vec![0xff, 0x24, 0x85], word(JUMPS)].concat(),
+                0x649277 => vec![0x83, 0xf8, last],
+                _ if (KEYS..KEYS + 4 * keys.len() as u32).contains(&va) => {
+                    word(keys[((va - KEYS) / 4) as usize])
+                }
+                _ if (JUMPS..JUMPS + 4 * labels.len() as u32).contains(&va) => {
+                    word(TARGETS + 0x10 * ((va - JUMPS) / 4))
+                }
+                _ if (TARGETS..TARGETS + 0x10 * labels.len() as u32).contains(&va) => {
+                    [vec![0xbb], word(labels[((va - TARGETS) / 0x10) as usize])].concat()
+                }
+                _ => return Err(format!("stopped at {va:#x}")),
+            };
+            bytes.resize(n.max(bytes.len()), 0);
+            Ok(bytes)
+        }
+    }
+    #[test]
+    fn slot_keys_are_the_stored_codes_when_table_labels_and_matcher_agree() {
+        let labels = [3, 9, 0, 1];
+        let keys = [0x63, 0x69, 0x60, 0x61];
+        assert_eq!(
+            slot_keys(&mut key_image(&labels, &keys, [0x5ac, 0x5ac], 3), 4).unwrap(),
+            keys
+        );
+        let run = |labels: &[u32], keys: &[u32], field: [u32; 2], last: u8, count| {
+            slot_keys(&mut key_image(labels, keys, field, last), count).unwrap_err()
+        };
+        assert!(run(&labels, &keys, [0x5ac, 0x5b0], 3, 4).contains("field relation"));
+        assert!(run(&labels, &keys, [0x5ac, 0x5ac], 4, 4).contains("label count"));
+        assert!(run(&labels, &keys, [0x5ac, 0x5ac], 3, 5).contains("label count"));
+        assert!(
+            run(&labels, &[0x63, 0x69, 0x60, 0x62], [0x5ac, 0x5ac], 3, 4)
+                .contains("slot 3 key and label disagree")
+        );
+        assert!(run(&labels, &keys[..3], [0x5ac, 0x5ac], 3, 4).contains("stopped at"));
+    }
     #[test]
     fn cover_source_rectangle_is_admitted_only_as_ordered_unit_uv() {
         let decode = |uv: [f32; 4]| {
@@ -694,6 +799,14 @@ mod tests {
         .unwrap();
         assert!(!rules.console_key.is_empty());
         assert!(!rules.font_height_key.is_empty());
+        let keys: Vec<_> = (0..rules.count)
+            .map(|i| rules.slot_key(i).unwrap())
+            .collect();
+        assert_eq!(rules.slot_key(rules.count), None);
+        let mut distinct = keys.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), keys.len(), "{keys:?}");
         for index in 0..rules.count {
             let slot = rules.slot(index).unwrap();
             assert!(slot.width > 0. && slot.height > 0.);

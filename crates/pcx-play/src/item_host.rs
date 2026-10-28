@@ -485,3 +485,4 @@ mod tests;
 
 #[path = "inventory_host.rs"]
 mod inventory;
+pub use inventory::{ItemCommand, ItemDrop};

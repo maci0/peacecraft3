@@ -41,7 +41,45 @@ pub(super) struct State {
     pickup: i32,
     drop: i32,
     pending: Vec<(HandleId, HandleId, i32)>,
+    /// Drops and gives that wait for the holder to arrive.
+    transfers: Vec<PendingTransfer>,
     attributes: Option<PowerupRules>,
+}
+
+/// Where a held item goes when its holder arrives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Destination {
+    Ground([f32; 2]),
+    Unit(HandleId),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingTransfer {
+    holder: HandleId,
+    item: HandleId,
+    to: Destination,
+}
+
+/// Where the player released an item dragged from an inventory slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ItemDrop {
+    /// Another slot of the same inventory: the items trade places.
+    Slot(usize),
+    /// A ground point: the holder walks there and drops the item.
+    Ground([f32; 2]),
+    /// Another unit: the holder walks to it and gives the item.
+    Unit(HandleId),
+}
+
+/// What the host did with a player's inventory command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemCommand {
+    /// Done at once.
+    Done,
+    /// The holder is walking to the destination and acts on arrival.
+    Walking,
+    /// Not done. The text says why, for the player.
+    Refused(&'static str),
 }
 const CALLS: &[(&str, &[&str], &str, bool)] = &[
     ("UnitHasItem", &["unit", "item"], "boolean", false),
@@ -82,6 +120,9 @@ const CALLS: &[(&str, &[&str], &str, bool)] = &[
         false,
     ),
 ];
+fn gap(a: [f32; 2], b: [f32; 2]) -> f32 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
 /// Trigger, filter and registered event of each use-event registration of a player.
 type UseEventPlan = Vec<(HandleId, Option<HandleId>, HandleId)>;
 impl ObjectHost {
@@ -146,6 +187,7 @@ impl ObjectHost {
             pickup,
             drop,
             pending: Vec::new(),
+            transfers: Vec::new(),
             attributes: None,
         });
         Ok(self)
@@ -224,6 +266,7 @@ impl ObjectHost {
     pub(crate) fn cancel_inventory_order(&mut self, unit: HandleId) {
         if let Some(state) = self.items.as_mut().and_then(|s| s.inventory.as_mut()) {
             state.pending.retain(|(u, _, _)| *u != unit);
+            state.transfers.retain(|t| t.holder != unit);
         }
     }
     pub(crate) fn inventory_order(&self, unit: HandleId) -> Option<i32> {
@@ -855,10 +898,20 @@ impl ObjectHost {
         Ok(true)
     }
     fn drop_inventory_item(&mut self, unit: HandleId, item: HandleId) -> Result<(), Error> {
+        self.drop_inventory_item_at(unit, item, None)
+    }
+    /// Drops `item` from `unit` onto `at`, or at the unit's own position without one.
+    fn drop_inventory_item_at(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+        at: Option<[f32; 2]>,
+    ) -> Result<(), Error> {
         let position = self.executed_unit(unit)?.position.ok_or_else(|| {
             self.inner
                 .error("inventory", Failure::ItemState("unit position missing"))
         })?;
+        let position = at.unwrap_or(position);
         if !self
             .live_item(item)?
             .is_some_and(|r| r.held_by.is_some_and(|(u, _)| u == unit))
@@ -1316,6 +1369,188 @@ impl ObjectHost {
         self.activate_held_item(unit, item)
     }
 
+    /// Input command from an inventory drag: the item in `slot` of `unit` is released on `to`.
+    /// The local player must own the unit. Two slots trade places at once and fire no event. A
+    /// ground point or another unit sends the holder walking, and it drops or gives the item
+    /// once within `DropItemRange` or `GiveItemRange` of the destination (distances between
+    /// unit centres and the point). A dropped item lands on the clicked point. The client's
+    /// drag orders were not decoded; these rules are the recreation's reading of the source
+    /// ranges and `docs/re-notes/input-command-keys.md`. Control, dialog and HUD ownership are
+    /// checked by the input layer.
+    pub fn player_move_item(
+        &mut self,
+        local_player: i32,
+        unit: HandleId,
+        slot: usize,
+        to: ItemDrop,
+    ) -> Result<ItemCommand, Error> {
+        use ItemCommand::Refused;
+        let owner = self.executed_unit(unit)?.owner;
+        if self.player_settings(owner)?.number != local_player {
+            return Ok(Refused("that unit is not yours"));
+        }
+        let slots = self.inventory_policy(unit)?.slots;
+        let Some(item) = (slot < slots).then(|| self.held_slot(unit, slot)).flatten() else {
+            return Ok(Refused("there is no item in that slot"));
+        };
+        let record = self.executed_unit(unit)?;
+        if record.combat.as_ref().is_some_and(|c| c.dead) || record.paused_since.is_some() {
+            return Ok(Refused("the unit cannot act now"));
+        }
+        match to {
+            ItemDrop::Slot(target) => self.trade_slots(unit, item, (slot, target), slots),
+            ItemDrop::Ground(point) if !point.iter().all(|c| c.is_finite()) => {
+                Ok(Refused("that is not a point on the map"))
+            }
+            ItemDrop::Ground(point) => self.start_transfer(unit, item, Destination::Ground(point)),
+            ItemDrop::Unit(target) => self.start_transfer(unit, item, Destination::Unit(target)),
+        }
+    }
+
+    /// Moves the item of `from` into `to`; an item already there takes `from`.
+    fn trade_slots(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+        (from, to): (usize, usize),
+        slots: usize,
+    ) -> Result<ItemCommand, Error> {
+        if to >= slots {
+            return Ok(ItemCommand::Refused("that slot does not exist"));
+        }
+        if to != from {
+            let other = self.held_slot(unit, to);
+            for (held, slot) in [(Some(item), to), (other, from)] {
+                if let Some(held) = held
+                    && let Entry::Item { record } = self.inner.entry_mut(held)?
+                {
+                    record.held_by = Some((unit, slot));
+                }
+            }
+        }
+        Ok(ItemCommand::Done)
+    }
+
+    /// Why `unit` cannot give an item to `target`, if it cannot.
+    fn give_refusal(
+        &self,
+        unit: HandleId,
+        target: HandleId,
+    ) -> Result<Option<&'static str>, Error> {
+        if target == unit {
+            return Ok(Some("the unit already holds that item"));
+        }
+        let record = self.executed_unit(target)?;
+        if record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(Some("that unit is dead"));
+        }
+        if record.owner != self.executed_unit(unit)?.owner && !self.is_ally(unit, target) {
+            return Ok(Some("only allies can be given items"));
+        }
+        let policy = self.inventory_policy(target)?;
+        if !policy.get_items {
+            return Ok(Some("that unit cannot carry items"));
+        }
+        if (0..policy.slots).all(|slot| self.held_slot(target, slot).is_some()) {
+            return Ok(Some("that unit's inventory is full"));
+        }
+        Ok(None)
+    }
+
+    /// Drops or gives now when the holder is in range, else sends it walking.
+    fn start_transfer(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+        to: Destination,
+    ) -> Result<ItemCommand, Error> {
+        let name = "inventory transfer";
+        use ItemCommand::{Done, Refused, Walking};
+        if !self.can_drop_inventory_item(unit, item)? {
+            return Ok(Refused("that item cannot be dropped"));
+        }
+        let (goal, range) = match to {
+            Destination::Ground(point) => (point, self.inventory_state()?.rules.drop_range),
+            Destination::Unit(target) => {
+                if let Some(why) = self.give_refusal(unit, target)? {
+                    return Ok(Refused(why));
+                }
+                let goal = self.executed_unit(target)?.position.ok_or_else(|| {
+                    self.inner
+                        .error(name, Failure::ItemState("target position missing"))
+                })?;
+                (goal, self.inventory_state()?.rules.give_range)
+            }
+        };
+        let position = self.executed_unit(unit)?.position.ok_or_else(|| {
+            self.inner
+                .error(name, Failure::ItemState("unit position missing"))
+        })?;
+        if gap(position, goal) <= range {
+            self.steer_unit(unit, None, name)?;
+            self.unit_ordered(unit);
+            self.cancel_inventory_order(unit);
+            self.clear_combat_target(unit);
+            return Ok(if self.finish_transfer(unit, item, to)? {
+                Done
+            } else {
+                Refused("the item could not be moved")
+            });
+        }
+        let state = self.inventory_state()?;
+        if state.pending.len() + state.transfers.len() >= state.budget.max_pending_orders
+            && !state.transfers.iter().any(|t| t.holder == unit)
+        {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("pending item orders")));
+        }
+        self.items
+            .as_mut()
+            .expect("items")
+            .inventory
+            .as_mut()
+            .expect("inventory")
+            .transfers
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        if !self.steer_unit(unit, Some(goal), name)? {
+            return Ok(Refused("the unit cannot walk there"));
+        }
+        self.unit_ordered(unit);
+        self.cancel_inventory_order(unit);
+        self.clear_combat_target(unit);
+        self.items
+            .as_mut()
+            .expect("items")
+            .inventory
+            .as_mut()
+            .expect("inventory")
+            .transfers
+            .push(PendingTransfer {
+                holder: unit,
+                item,
+                to,
+            });
+        Ok(Walking)
+    }
+
+    /// Performs the drop or give. False when the target could not take the item.
+    fn finish_transfer(
+        &mut self,
+        unit: HandleId,
+        item: HandleId,
+        to: Destination,
+    ) -> Result<bool, Error> {
+        match to {
+            Destination::Ground(point) => {
+                self.drop_inventory_item_at(unit, item, Some(point))?;
+                Ok(true)
+            }
+            Destination::Unit(target) => self.add_inventory_item(target, item),
+        }
+    }
+
     /// Player activation of a held item on its holder. The command boundary is recreated here: the
     /// authored order id for inventory item use is not yet qualified from the client, so an input
     /// layer calls this directly rather than through an order. It shares the `UnitUseItem` path.
@@ -1754,6 +1989,69 @@ impl ObjectHost {
                 self.cancel_inventory_order(unit);
                 self.steer_unit(unit, None, "pickup")?;
                 self.add_inventory_item(unit, item)?;
+            }
+        }
+        self.advance_transfers(work)
+    }
+
+    /// Drops and gives of walking holders: acts on arrival, follows a target that moved, and
+    /// forgets the transfer when the holder, the item or the target is no longer valid.
+    fn advance_transfers(&mut self, work: &mut usize) -> Result<(), Error> {
+        let name = "inventory transfer";
+        let Some(state) = self.items.as_ref().and_then(|s| s.inventory.as_ref()) else {
+            return Ok(());
+        };
+        let (drop_range, give_range) = (state.rules.drop_range, state.rules.give_range);
+        let mut transfers = Vec::new();
+        transfers
+            .try_reserve_exact(state.transfers.len())
+            .map_err(|_| self.inner.error("inventory", Failure::Capacity))?;
+        transfers.extend_from_slice(&state.transfers);
+        for PendingTransfer {
+            holder: unit,
+            item,
+            to,
+        } in transfers
+        {
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner
+                    .error("inventory", Failure::Budget("transfer tick work"))
+            })?;
+            let Ok(holder) = self.executed_unit(unit) else {
+                self.cancel_inventory_order(unit);
+                continue;
+            };
+            if holder.paused_since.is_some() {
+                continue;
+            }
+            let position = holder
+                .position
+                .filter(|_| holder.combat.as_ref().is_none_or(|c| !c.dead));
+            let held = self
+                .live_item(item)?
+                .is_some_and(|r| r.held_by.is_some_and(|(owner, _)| owner == unit));
+            let goal = match to {
+                Destination::Ground(point) => Some((point, drop_range)),
+                Destination::Unit(target) => self
+                    .executed_unit(target)
+                    .ok()
+                    .filter(|t| t.combat.as_ref().is_none_or(|c| !c.dead))
+                    .and_then(|t| t.position)
+                    .map(|goal| (goal, give_range)),
+            };
+            let (Some(position), true, Some((goal, range))) = (position, held, goal) else {
+                self.cancel_inventory_order(unit);
+                continue;
+            };
+            if gap(position, goal) <= range {
+                self.cancel_inventory_order(unit);
+                self.steer_unit(unit, None, name)?;
+                self.finish_transfer(unit, item, to)?;
+            } else if matches!(to, Destination::Unit(_))
+                && !self.activity_moving(unit)?
+                && !self.steer_unit(unit, Some(goal), name)?
+            {
+                self.cancel_inventory_order(unit);
             }
         }
         Ok(())

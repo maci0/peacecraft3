@@ -1330,7 +1330,7 @@ mod unit_positions;
 mod item_creation;
 #[path = "widget_enumeration_host.rs"]
 mod widget_enumeration;
-pub use item_creation::{ExecutedItem, ItemBudget};
+pub use item_creation::{ExecutedItem, ItemBudget, ItemCommand, ItemDrop};
 
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;

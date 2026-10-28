@@ -2,7 +2,7 @@ use super::*;
 use crate::camera_margins::SourceWindow;
 use crate::inventory::{InventoryBudget, Rules};
 use crate::neutral_player::sha256;
-use crate::playercolor_host::{UseCheck, UseCommit, UseGrant};
+use crate::playercolor_host::{ItemCommand, ItemDrop, UseCheck, UseCommit, UseGrant};
 use pcx_objects::editor::Overlay;
 use pcx_script::HandleId;
 
@@ -491,6 +491,249 @@ fn inventory_slots_transfer_drop_remove_and_null_lifetimes_are_canonical() {
         Value::Bool(false)
     );
 }
+const LOCAL: i32 = 4;
+
+fn in_slot(h: &mut ObjectHost, unit: &Value, slot: i32) -> Value {
+    h.native("UnitItemInSlot", &[unit.clone(), Value::Int(slot)])
+        .unwrap()
+}
+fn hold(h: &mut ObjectHost, unit: &Value, item: &Value) {
+    assert_eq!(
+        h.native("UnitAddItem", &[unit.clone(), item.clone()])
+            .unwrap(),
+        Value::Bool(true)
+    );
+}
+/// Runs the simulation to `until` seconds so walking holders arrive.
+fn walk(h: &mut ObjectHost, until: f64) {
+    h.next_timer_expiry(until, &mut 1000).unwrap();
+    h.advance_unit_activity(until, &mut 65536).unwrap();
+}
+fn watch_item_events(h: &mut ObjectHost) {
+    let t = h.native("CreateTrigger", &[]).unwrap();
+    let player = h.native("Player", &[Value::Int(LOCAL)]).unwrap();
+    for code in [-71, 99] {
+        let event = h
+            .native("ConvertPlayerUnitEvent", &[Value::Int(code)])
+            .unwrap();
+        h.native(
+            "TriggerRegisterPlayerUnitEvent",
+            &[t.clone(), player.clone(), event, Value::Null],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn dragging_between_slots_moves_or_trades_and_fires_no_event() {
+    let mut h = open();
+    watch_item_events(&mut h);
+    let a = unit(&mut h, 16.);
+    let (first, second) = (item(&mut h, 48.), item(&mut h, 64.));
+    hold(&mut h, &a, &first);
+    while h.take_fired_event().is_some() {}
+    let moved = |h: &mut ObjectHost, from, to| {
+        h.player_move_item(LOCAL, id(&a), from, ItemDrop::Slot(to))
+            .unwrap()
+    };
+    assert_eq!(moved(&mut h, 0, 1), ItemCommand::Done);
+    assert_eq!(in_slot(&mut h, &a, 0), Value::Null);
+    assert_eq!(in_slot(&mut h, &a, 1), first);
+    hold(&mut h, &a, &second);
+    while h.take_fired_event().is_some() {}
+    assert_eq!(in_slot(&mut h, &a, 0), second);
+    assert_eq!(moved(&mut h, 0, 1), ItemCommand::Done);
+    assert_eq!(
+        (in_slot(&mut h, &a, 0), in_slot(&mut h, &a, 1)),
+        (first.clone(), second.clone())
+    );
+    // Released on its own slot: nothing changes.
+    assert_eq!(moved(&mut h, 1, 1), ItemCommand::Done);
+    assert_eq!(in_slot(&mut h, &a, 1), second);
+    assert_eq!(
+        h.executed_item(id(&first)).unwrap().held_by,
+        Some((id(&a), 0))
+    );
+    // Refusals say why and change nothing.
+    assert_eq!(
+        moved(&mut h, 0, 2),
+        ItemCommand::Refused("that slot does not exist")
+    );
+    assert_eq!(
+        h.player_move_item(LOCAL + 1, id(&a), 0, ItemDrop::Slot(1))
+            .unwrap(),
+        ItemCommand::Refused("that unit is not yours")
+    );
+    assert_eq!(
+        moved(&mut h, 5, 0),
+        ItemCommand::Refused("there is no item in that slot")
+    );
+    assert_eq!(in_slot(&mut h, &a, 0), first);
+    assert!(h.take_fired_event().is_none(), "trades fire no event");
+}
+
+#[test]
+fn a_drop_in_range_lands_on_the_point_and_a_far_one_walks_there_first() {
+    let mut h = open();
+    watch_item_events(&mut h);
+    let a = unit(&mut h, 16.);
+    let (near, far) = (item(&mut h, 48.), item(&mut h, 64.));
+    hold(&mut h, &a, &near);
+    hold(&mut h, &a, &far);
+    let drop_at = |h: &mut ObjectHost, slot, x: f32| {
+        h.player_move_item(LOCAL, id(&a), slot, ItemDrop::Ground([x, 16.]))
+            .unwrap()
+    };
+    // The source drop range is 7: 4 away drops now, onto the clicked point.
+    assert_eq!(drop_at(&mut h, 0, 20.), ItemCommand::Done);
+    let dropped = h.executed_item(id(&near)).unwrap();
+    assert_eq!((dropped.held_by, dropped.x, dropped.y), (None, 20., 16.));
+    let fired = h.take_fired_event().unwrap();
+    h.begin_fired_event(&fired).unwrap().unwrap();
+    assert_eq!(h.native("GetManipulatedItem", &[]).unwrap(), near);
+    h.finish_fired_event();
+    // 44 away: the holder walks, keeps the item meanwhile, then drops it at the point.
+    assert_eq!(drop_at(&mut h, 1, 60.), ItemCommand::Walking);
+    assert_eq!(in_slot(&mut h, &a, 1), far);
+    walk(&mut h, 9.);
+    let dropped = h.executed_item(id(&far)).unwrap();
+    assert_eq!((dropped.held_by, dropped.x, dropped.y), (None, 60., 16.));
+    let position = h.executed_unit(id(&a)).unwrap().position.unwrap();
+    assert!((position[0] - 60.).abs() <= 7.0, "{position:?}");
+    assert!(h.take_fired_event().is_some());
+}
+
+#[test]
+fn another_order_cancels_a_walking_drop() {
+    let mut h = open();
+    let a = unit(&mut h, 16.);
+    let held = item(&mut h, 48.);
+    hold(&mut h, &a, &held);
+    assert_eq!(
+        h.player_move_item(LOCAL, id(&a), 0, ItemDrop::Ground([80., 16.]))
+            .unwrap(),
+        ItemCommand::Walking
+    );
+    // Any other order replaces it; here a pickup of an item on the other side.
+    let elsewhere = item(&mut h, 4.);
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[a.clone(), Value::Str("getitem".into()), elsewhere]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    walk(&mut h, 9.);
+    assert_eq!(in_slot(&mut h, &a, 0), held);
+    assert_eq!(h.executed_item(id(&held)).unwrap().x, 48.);
+}
+
+#[test]
+fn giving_walks_to_an_ally_and_moves_the_item_into_its_inventory() {
+    let mut h = open();
+    watch_item_events(&mut h);
+    let (a, b) = (unit(&mut h, 16.), unit(&mut h, 40.));
+    let held = item(&mut h, 48.);
+    hold(&mut h, &a, &held);
+    // 24 away with a source give range of 9.
+    assert_eq!(
+        h.player_move_item(LOCAL, id(&a), 0, ItemDrop::Unit(id(&b)))
+            .unwrap(),
+        ItemCommand::Walking
+    );
+    assert_eq!(in_slot(&mut h, &a, 0), held);
+    walk(&mut h, 9.);
+    assert_eq!(in_slot(&mut h, &a, 0), Value::Null);
+    assert_eq!(in_slot(&mut h, &b, 0), held);
+    // A drop event for the giver and a pickup for the receiver.
+    assert!(h.take_fired_event().is_some());
+}
+
+#[test]
+fn a_give_within_the_source_range_is_immediate() {
+    let mut h = open();
+    let (a, b) = (unit(&mut h, 16.), unit(&mut h, 24.));
+    let (held, other) = (item(&mut h, 48.), item(&mut h, 52.));
+    hold(&mut h, &a, &held);
+    hold(&mut h, &b, &other);
+    for unit in [&a, &b] {
+        let at = h.executed_unit(id(unit)).unwrap().position.unwrap();
+        assert!(
+            at[0] <= 24.0 + 1.0,
+            "fixture spread the units apart: {at:?}"
+        );
+    }
+    assert_eq!(
+        h.player_move_item(LOCAL, id(&a), 0, ItemDrop::Unit(id(&b)))
+            .unwrap(),
+        ItemCommand::Done
+    );
+    assert_eq!(in_slot(&mut h, &a, 0), Value::Null);
+    // The receiver puts it in its first free slot.
+    assert_eq!(in_slot(&mut h, &b, 1), held);
+    assert_eq!(in_slot(&mut h, &b, 0), other);
+}
+
+#[test]
+fn a_give_is_refused_with_its_reason() {
+    let mut h = open();
+    let (a, b) = (unit(&mut h, 16.), unit(&mut h, 20.));
+    let (first, second, third) = (item(&mut h, 48.), item(&mut h, 52.), item(&mut h, 56.));
+    hold(&mut h, &a, &first);
+    let give = |h: &mut ObjectHost, to: &Value| {
+        h.player_move_item(LOCAL, id(&a), 0, ItemDrop::Unit(id(to)))
+            .unwrap()
+    };
+    assert_eq!(
+        give(&mut h, &a),
+        ItemCommand::Refused("the unit already holds that item")
+    );
+    let enemy_player = h.native("Player", &[Value::Int(LOCAL + 1)]).unwrap();
+    let Value::Handle(_) = h
+        .native(
+            "CreateUnit",
+            &[
+                enemy_player,
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(24.),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    let stranger = h
+        .executed_units()
+        .map(|(handle, _)| handle)
+        .find(|handle| *handle != id(&a) && *handle != id(&b))
+        .unwrap();
+    assert_eq!(
+        give(&mut h, &Value::Handle(stranger)),
+        ItemCommand::Refused("only allies can be given items")
+    );
+    hold(&mut h, &b, &second);
+    hold(&mut h, &b, &third);
+    assert_eq!(
+        give(&mut h, &b),
+        ItemCommand::Refused("that unit's inventory is full")
+    );
+    h.native("SetItemDroppable", &[first.clone(), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(
+        give(&mut h, &b),
+        ItemCommand::Refused("that item cannot be dropped")
+    );
+    assert_eq!(
+        h.player_move_item(LOCAL, id(&a), 0, ItemDrop::Ground([17., 16.]))
+            .unwrap(),
+        ItemCommand::Refused("that item cannot be dropped")
+    );
+    assert_eq!(in_slot(&mut h, &a, 0), first);
+}
+
 #[test]
 fn pickup_routes_then_delivers_real_item_unit_player_context() {
     let mut h = open();

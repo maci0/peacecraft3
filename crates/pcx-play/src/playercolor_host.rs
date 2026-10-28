@@ -970,6 +970,7 @@ pub use objects::{
     SummonContext, VisionCapability, VisionCell, VisionOrigin, VisionSampleStats, VisionShape,
     VisionSource, VisionState, Vitals, Weapon, present_vision,
 };
+pub use objects::{ItemCommand, ItemDrop};
 pub use objects::{OrderForm, QueueBudget, QueueOutcome, QueueRefusal, SmartRefusal, SmartTarget};
 pub use objects::{UseCheck, UseCommit, UseGrant};
 
