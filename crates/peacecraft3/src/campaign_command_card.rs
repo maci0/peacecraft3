@@ -348,6 +348,7 @@ pub(crate) struct CommandCard {
     shown: SkillPage,
     signature: Option<Signature>,
     pending_pointer: bool,
+    custom_keys_settled: bool,
     pub last_error: Option<String>,
     hero_root: Option<Entity>,
     hero_parent: Option<Entity>,
@@ -406,6 +407,20 @@ impl CommandCard {
     #[cfg(test)]
     pub(crate) fn skill_page_open(&self) -> bool {
         self.page == SkillPage::Skills
+    }
+
+    /// The source is built and its `CustomKeys.txt` overrides are not settled yet.
+    pub(crate) fn wants_custom_keys(&self) -> bool {
+        !self.custom_keys_settled && self.source.is_some()
+    }
+
+    /// Settles the overrides (possibly none) and rebuilds the shown buttons with them.
+    pub(crate) fn set_custom_keys(&mut self, keys: CustomKeys) {
+        self.custom_keys_settled = true;
+        if let Some(source) = &mut self.source {
+            source.custom_keys = keys;
+        }
+        self.signature = None;
     }
 
     /// Shows `buttons` for `unit` without a mounted console, for input tests.
@@ -473,6 +488,10 @@ pub(crate) fn install(app: &mut App) {
                 .after(CampaignCameraSet)
                 .after(crate::campaign_hud::CampaignHudSet)
                 .before(CampaignPresentationSet),
+        )
+        .add_systems(
+            Update,
+            crate::campaign_custom_keys::load.after(CommandCardSet),
         )
         .add_systems(
             Update,

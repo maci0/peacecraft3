@@ -31,7 +31,7 @@ const MOUSE_SCROLL_SLIDER: &str = "MouseScrollSlider";
 const KEY_SCROLL_SLIDER: &str = "KeyScrollSlider";
 const MOUSE_SCROLL_DISABLE_CHECKBOX: &str = "MouseScrollDisable";
 // Application budgets, unrelated to the client's table sizes.
-const DISCOVERY: DiscoveryBudget = DiscoveryBudget {
+pub(crate) const DISCOVERY: DiscoveryBudget = DiscoveryBudget {
     image: RuleInputBudget {
         image_bytes: 32 << 20,
         profile_bytes: 128 << 10,
