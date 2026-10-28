@@ -87,6 +87,35 @@ fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
     assert!(p.prepare_motion(id(3), [32., 32.], 2.).is_err());
 }
 
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn reach_cell_excludes_only_requested_ground_stamps() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "reach".into(),
+        },
+        10000,
+    );
+    let first = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), first);
+    let second = p.prepare([48., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(2), second);
+    assert_eq!(p.diagnostic_cell_excluding([32., 32.], &[]).unwrap().1, 1);
+    assert_eq!(
+        p.diagnostic_cell_excluding([32., 32.], &[id(1)]).unwrap().1,
+        0
+    );
+    assert_eq!(
+        p.diagnostic_cell_excluding([48., 32.], &[id(1)]).unwrap().1,
+        1
+    );
+    let rectangle = p.diagnostic_unit_rectangle(id(1)).unwrap();
+    assert!(rectangle[0][0] < rectangle[1][0] && rectangle[0][1] < rectangle[1][1]);
+    assert!(p.diagnostic_unit_rectangle(id(3)).is_err());
+}
+
 #[test]
 fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_each_other() {
     let mut base = Pathing {

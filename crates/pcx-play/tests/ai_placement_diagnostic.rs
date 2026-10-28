@@ -35,7 +35,10 @@ fn building_facing(angle: f32) -> f32 {
 
 fn probe_point(value: &str) -> [f32; 2] {
     let (x, y) = value.split_once(',').expect("probe coordinates");
-    [x.parse().expect("probe x"), y.parse().expect("probe y")]
+    [
+        x.trim().parse().expect("probe x"),
+        y.trim().parse().expect("probe y"),
+    ]
 }
 
 fn scripted_spawns(script: &str, kind: &str) -> Vec<[f32; 2]> {
@@ -288,6 +291,59 @@ fn probe_sample_workers(log: &str) -> Vec<[f32; 2]> {
         .collect()
 }
 
+fn probe_spawn(script: &str, map_script: &str) -> ([f32; 2], f32, usize) {
+    let line = script
+        .lines()
+        .find(|line| line.contains("CreateNUnitsAtLoc(1, 'uaco', Player(5), "))
+        .expect("probe spawn");
+    let point = if let Some(location) = line.split_once("Location(") {
+        probe_point(location.1.split_once(')').unwrap().0)
+    } else {
+        let rect = map_script
+            .lines()
+            .find(|line| line.contains("set gg_rct_Acolyte_Appear = Rect("))
+            .expect("probe spawn rectangle");
+        let values: Vec<f32> = rect
+            .split_once("Rect(")
+            .unwrap()
+            .1
+            .split_once(')')
+            .unwrap()
+            .0
+            .split(',')
+            .map(|s| s.trim().parse().unwrap())
+            .collect();
+        [(values[0] + values[2]) / 2., (values[1] + values[3]) / 2.]
+    };
+    let facing = line
+        .rsplit_once(',')
+        .unwrap()
+        .1
+        .trim()
+        .trim_end_matches(')')
+        .parse()
+        .unwrap();
+    let count = script
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("exitwhen i >= ")
+                .map(|value| value.parse().unwrap())
+        })
+        .expect("probe worker count");
+    (point, facing, count)
+}
+
+#[test]
+fn probe_spawn_reads_location_or_rectangle_from_source() {
+    let location =
+        "exitwhen i >= 3\ncall CreateNUnitsAtLoc(1, 'uaco', Player(5), Location(12., 24.), 70.)";
+    assert_eq!(probe_spawn(location, ""), ([12., 24.], 70., 3));
+    let region = "exitwhen i >= 2\ncall CreateNUnitsAtLoc(1, 'uaco', Player(5), GetRectCenter(gg_rct_Acolyte_Appear), 90.)";
+    let map = "set gg_rct_Acolyte_Appear = Rect( 10., 20., 30., 40. )";
+    assert_eq!(probe_spawn(region, map), ([20., 30.], 90., 2));
+}
+
 #[test]
 fn buff_source_scan_uses_all_ranked_columns() {
     let data = b"ID;PWXL;N;E\r\nB;X3;Y3;D0\r\nC;X1;Y1;K\"alias\"\r\nC;X2;K\"BuffID1\"\r\nC;X3;K\"BuffID2\"\r\nC;X1;Y2;K\"A001\"\r\nC;X2;K\"B001\"\r\nC;X1;Y3;K\"A002\"\r\nC;X3;K\"B002, B003\"\r\nE\r\n";
@@ -434,7 +490,19 @@ fn variant_ranks(
 #[test]
 #[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP, PCX_HUMAN05_DECISION_LOG, PCX_HUMAN05_ORDER_PROBE and PCX_HUMAN05_PROBE_SCRIPT"]
 fn human05_placement_diagnostic() {
-    println!("native reach is bypassed in the exclusion scan");
+    let full_reach = std::env::var_os("PCX_REACH_FULL_ORACLE").is_some()
+        || (std::env::var_os("PCX_HUMAN05_TRACE_ORIGIN").is_some()
+            && std::env::var_os("PCX_REACH_TRACE").is_none()
+            && std::env::var_os("PCX_TOWN_EXPECT").is_none());
+    if full_reach {
+        assert!(std::env::var_os("PCX_HUMAN05_TRACE_ORIGIN").is_some());
+    }
+    if !full_reach
+        && std::env::var_os("PCX_REACH_TRACE").is_none()
+        && std::env::var_os("PCX_TOWN_EXPECT").is_none()
+    {
+        println!("native reach is bypassed in the exclusion scan");
+    }
     let install = PathBuf::from(std::env::var("PCX_STARTUP_INSTALL").unwrap());
     let map = PathBuf::from(std::env::var("PCX_STARTUP_MAP").unwrap());
     let bytes = std::fs::read(&map).unwrap();
@@ -453,14 +521,17 @@ fn human05_placement_diagnostic() {
         y.trim().parse::<f32>().unwrap(),
     ];
     let probe = PathBuf::from(std::env::var("PCX_HUMAN05_ORDER_PROBE").unwrap());
-    let order_log = std::fs::read_to_string(probe.join("PCXO-11.txt")).unwrap();
+    let order_file = std::env::var("PCX_REACH_ORDER_FILE").unwrap_or_else(|_| "PCXO-11.txt".into());
+    let sample_file =
+        std::env::var("PCX_REACH_SAMPLE_FILE").unwrap_or_else(|_| "PCXO-10.txt".into());
+    let order_log = std::fs::read_to_string(probe.join(order_file)).unwrap();
     let probe_script =
         std::fs::read_to_string(std::env::var("PCX_HUMAN05_PROBE_SCRIPT").unwrap()).unwrap();
     let nominal_time =
         probe_clock_delay(&probe_script) + probe_order_elapsed(&order_log, *b"unpl", 5);
-    let sample_log = std::fs::read_to_string(probe.join("PCXO-10.txt")).unwrap();
+    let sample_log = std::fs::read_to_string(probe.join(sample_file)).unwrap();
     let order_worker = probe_order_worker(&order_log, *b"unpl", 5);
-    let sample_workers = probe_sample_workers(&sample_log);
+    let mut sample_workers = probe_sample_workers(&sample_log);
     assert_eq!(sample_workers.len(), 4);
     let image_path = install.join("Warcraft III.exe");
     let image = std::fs::read(&image_path).unwrap();
@@ -521,6 +592,65 @@ fn human05_placement_diagnostic() {
     let Value::Handle(player_handle) = player else {
         panic!("player handle")
     };
+    if let Ok(expected) = std::env::var("PCX_TOWN_EXPECT") {
+        use pcx_play::ai_placement::{TownUnitClass, select_town_reference};
+        let map_script = pcx_map::Map::parse(&bytes)
+            .unwrap()
+            .extract_checked(&map.display().to_string(), "war3map.j", map_budget)
+            .unwrap()
+            .unwrap();
+        let (spawn, face, count) =
+            probe_spawn(&probe_script, std::str::from_utf8(&map_script).unwrap());
+        let mine = objects
+            .executed_units()
+            .find(|(_, unit)| {
+                unit.definition.rawcode == *b"ngol" && unit.position == Some([5696., 3456.])
+            })
+            .unwrap()
+            .1
+            .position
+            .unwrap();
+        let mut units = Vec::new();
+        for _ in 0..count {
+            let Value::Handle(id) = objects
+                .native(
+                    "CreateUnit",
+                    &[
+                        Value::Handle(player_handle),
+                        Value::Int(i32::from_be_bytes(*b"uaco")),
+                        Value::Real(spawn[0]),
+                        Value::Real(spawn[1]),
+                        Value::Real(face),
+                    ],
+                )
+                .unwrap()
+            else {
+                panic!("town fixture worker")
+            };
+            let unit = objects.executed_unit(id).unwrap();
+            let class = if text(&unit.definition, "type")
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("peon"))
+            {
+                TownUnitClass::Peon
+            } else {
+                TownUnitClass::Other
+            };
+            units.push((id, unit.position.unwrap(), class));
+        }
+        let selected =
+            select_town_reference(units.iter().rev().map(|(id, _, class)| (*id, true, *class)))
+                .unwrap();
+        let position = units.iter().find(|(id, _, _)| *id == selected).unwrap().1;
+        let center = rules
+            .town_center(spawn, Some(mine), Some(position))
+            .unwrap();
+        println!(
+            "town snapshot spawn={spawn:?} candidates={units:?} selected={position:?} center={center:?} (reverse creation order hypothesis)"
+        );
+        assert_eq!(center, probe_point(&expected));
+        return;
+    }
     let start_index = objects
         .player_settings(player_handle)
         .unwrap()
@@ -627,7 +757,11 @@ fn human05_placement_diagnostic() {
                 println!(
                     "{layout} observed-start cast bound source={origin:?} target={initial:?} outside={outside:?}"
                 );
-                assert_eq!(outside, Ok(true));
+                if std::env::var_os("PCX_REACH_TRACE").is_none()
+                    && std::env::var_os("PCX_REACH_ORACLE_SITE").is_none()
+                {
+                    assert_eq!(outside, Ok(true));
+                }
             }
         }
     }
@@ -653,6 +787,21 @@ fn human05_placement_diagnostic() {
         let index = blocked_sample.iter().position(|p| *p == issuer).unwrap();
         blocked_sample.swap(0, index);
     }
+    if std::env::var_os("PCX_REACH_TRACE").is_some()
+        || std::env::var_os("PCX_REACH_ORACLE_SITE").is_some()
+    {
+        let closest = sample_workers
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                let distance =
+                    |p: &&[f32; 2]| (p[0] - order_worker[0]).hypot(p[1] - order_worker[1]);
+                distance(a).total_cmp(&distance(b))
+            })
+            .unwrap()
+            .0;
+        sample_workers.remove(closest);
+    }
     let mut workers = Vec::new();
     for point in std::iter::once(order_worker).chain(sample_workers.into_iter().take(3)) {
         let created = objects
@@ -673,6 +822,23 @@ fn human05_placement_diagnostic() {
         workers.push(handle);
     }
     let worker = workers[0];
+    if let Ok(trace) = std::env::var("PCX_REACH_TRACE") {
+        let center = probe_point(&std::env::var("PCX_HUMAN05_TRACE_ORIGIN").unwrap());
+        let mobile: Vec<_> = objects
+            .executed_units()
+            .filter(|(_, unit)| text(&unit.definition, "isbldg") == "0")
+            .map(|(id, _)| id)
+            .collect();
+        let snapshot = reach_snapshot(
+            objects.diagnostic_placement().unwrap(),
+            worker,
+            &mobile,
+            &image,
+            &rules,
+        );
+        compare_reach_snapshot(&snapshot, center, &trace);
+        return;
+    }
     let necropolis = catalog.resolve(*b"unpl").unwrap();
     let path = text(&necropolis, "pathTex");
     let dims = dimensions(&resolver, path);
@@ -696,6 +862,12 @@ fn human05_placement_diagnostic() {
 
     let mut refusals = Vec::new();
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
+        if blocked && std::env::var_os("PCX_REACH_ORACLE_SITE").is_some() {
+            continue;
+        }
+        let oracle = std::env::var("PCX_REACH_ORACLE_SITE")
+            .map(|value| probe_point(&value))
+            .unwrap_or(oracle);
         if blocked {
             for &handle in &workers {
                 objects
@@ -855,8 +1027,14 @@ fn human05_placement_diagnostic() {
             })
             .collect::<Result<Vec<_>, ExclusionError>>()
             .unwrap();
+        let mobile: Vec<_> = objects
+            .executed_units()
+            .filter(|(_, unit)| text(&unit.definition, "isbldg") == "0")
+            .map(|(id, _)| id)
+            .collect();
         let placement = objects.diagnostic_placement().unwrap();
         let bounds = placement.world_bounds();
+        let reach = full_reach.then(|| reach_snapshot(placement, worker, &mobile, &image, &rules));
         if let Ok(point) = std::env::var("PCX_HUMAN05_TRACE_CELL") {
             let point = probe_point(&point);
             println!(
@@ -884,6 +1062,9 @@ fn human05_placement_diagnostic() {
             }
         }
         for (origin_name, center) in origins {
+            if full_reach && origin_name != "native-trace" {
+                continue;
+            }
             for swap in [false, true] {
                 let mut grid = Grid::sample(&rules, center, |p| {
                     placement.diagnostic_sample(p).map_err(|e| e.to_string())
@@ -966,7 +1147,10 @@ fn human05_placement_diagnostic() {
                         }
                         Ok((p, grid.diagnostic_indices(p)))
                     },
-                    |_| Ok(true), // The native reach search is not yet implemented.
+                    |p| match &reach {
+                        Some(snapshot) => snapshot.query(center, p).map(|(value, _)| value != -1),
+                        None => Ok(true),
+                    },
                     |p| {
                         let valid = validate(p)?;
                         if valid && first_valid.get().is_none() {
@@ -978,7 +1162,7 @@ fn human05_placement_diagnostic() {
                         {
                             first_same_score_valid.set(Some((p, rank.get())));
                         }
-                        Ok(false)
+                        Ok(full_reach && valid)
                     },
                 );
                 if let Err(error) = scan {
@@ -986,6 +1170,19 @@ fn human05_placement_diagnostic() {
                         "blocked={blocked} origin={origin_name} axis_swap={swap} unresolved={error}"
                     );
                     refusals.push(error);
+                    continue;
+                }
+                if full_reach {
+                    let chosen = scan.unwrap();
+                    println!(
+                        "full reach blocked={blocked} axis_swap={swap} chosen={chosen:?} dequeues={}",
+                        rank.get()
+                    );
+                    assert_eq!(chosen, Some(oracle));
+                    let expected_rank = std::env::var("PCX_REACH_ORACLE_RANK")
+                        .map(|value| value.parse().unwrap())
+                        .unwrap_or(if blocked { 280 } else { 1 });
+                    assert_eq!(rank.get(), expected_rank);
                     continue;
                 }
                 if exact_farm.is_some() && origin_name == "native-trace" {
@@ -1059,5 +1256,333 @@ fn human05_placement_diagnostic() {
         refusals.is_empty(),
         "AI placement exclusions unresolved: {}",
         refusals.join("; ")
+    );
+}
+
+struct ReachSnapshot {
+    levels: Vec<([usize; 2], Vec<pcx_play::native_path_hierarchy::Cell>)>,
+    bounds: [[f32; 2]; 2],
+    cell_size: f32,
+    group: usize,
+    priority: u32,
+    result_scale: u32,
+    removal_limit: usize,
+    movement: i32,
+    count: u32,
+}
+
+fn reach_snapshot(
+    placement: &pcx_play::unit_placement::Placement,
+    worker: pcx_script::HandleId,
+    mobile: &[pcx_script::HandleId],
+    image: &[u8],
+    rules: &Rules,
+) -> ReachSnapshot {
+    use pcx_play::native_path_hierarchy::{base, diagnostic_operands, parent};
+    let (mask, priority, result_scale, removal_limit, movement, count) =
+        diagnostic_operands(image, rules).unwrap();
+    let bounds = placement.world_bounds();
+    let cell_size = placement.rules().cell_size();
+    let dimensions = std::array::from_fn::<_, 2, _>(|axis| {
+        ((bounds[1][axis] - bounds[0][axis]) / cell_size) as usize
+    });
+    let rectangle = placement.diagnostic_unit_rectangle(worker).unwrap();
+    let group = result_scale as usize;
+    assert_eq!(group, 2, "unrecognized spatial sample grouping");
+    if let Ok(value) = std::env::var("PCX_REACH_INSPECT_CELL") {
+        let point = probe_point(&value).map(|v| v as usize);
+        let span = 1_usize << (count - 1);
+        let lower = point.map(|v| v / span * span * group);
+        for y in lower[1]..lower[1] + span * group {
+            for x in lower[0]..lower[0] + span * group {
+                let world = [
+                    bounds[0][0] + (x as f32 + 0.5) * cell_size,
+                    bounds[0][1] + (y as f32 + 0.5) * cell_size,
+                ];
+                let state = placement.diagnostic_cell_state(world).unwrap();
+                if state.0 & mask != 0 || state.1 != 0 || state.2 != 0 {
+                    println!("reach inspect point={world:?} state={state:?}");
+                }
+            }
+        }
+    }
+    let mut levels = Vec::new();
+    let size = [dimensions[0].div_ceil(group), dimensions[1].div_ceil(group)];
+    let mut cells = Vec::with_capacity(size[0] * size[1]);
+    for y in 0..size[1] {
+        for x in 0..size[0] {
+            let mut samples = [true; 4];
+            for (i, sample) in samples.iter_mut().enumerate() {
+                let p = [x * group + i % group, y * group + i / group];
+                if p[0] < dimensions[0] && p[1] < dimensions[1] {
+                    let point = std::array::from_fn(|axis| {
+                        bounds[0][axis] + (p[axis] as f32 + 0.5) * cell_size
+                    });
+                    let (flags, units, footprints) =
+                        placement.diagnostic_cell_excluding(point, mobile).unwrap();
+                    *sample = flags & mask != 0 || units != 0 || footprints != 0;
+                }
+            }
+            let cleared = (0..2).all(|axis| {
+                let coordinate = [x, y][axis] * group;
+                coordinate < rectangle[1][axis] as usize
+                    && coordinate + group > rectangle[0][axis] as usize
+            });
+            cells.push(base(samples, false, cleared));
+        }
+    }
+    levels.push((size, cells));
+    while levels.len() < count as usize {
+        let (size, previous) = levels.last().unwrap();
+        let next_size = size.map(|v| v.div_ceil(2));
+        let mut next = Vec::with_capacity(next_size[0] * next_size[1]);
+        for y in 0..next_size[1] {
+            for x in 0..next_size[0] {
+                let children = std::array::from_fn(|i| {
+                    let p = [x * 2 + i % 2, y * 2 + i / 2];
+                    (p[0] < size[0] && p[1] < size[1]).then(|| previous[p[1] * size[0] + p[0]])
+                });
+                next.push(parent(children));
+            }
+        }
+        levels.push((next_size, next));
+    }
+    println!(
+        "reach snapshot bounds={bounds:?} builder={rectangle:?}; link and per-entry state unqualified"
+    );
+    ReachSnapshot {
+        levels,
+        bounds,
+        cell_size,
+        group,
+        priority,
+        result_scale,
+        removal_limit,
+        movement,
+        count,
+    }
+}
+
+impl ReachSnapshot {
+    fn query(&self, center: [f32; 2], point: [f32; 2]) -> Result<(i32, usize), String> {
+        self.query_observed(center, point, |_, _, _| {})
+    }
+
+    fn query_observed(
+        &self,
+        center: [f32; 2],
+        point: [f32; 2],
+        observe: impl FnMut(
+            pcx_play::native_path_hierarchy::Node,
+            pcx_play::native_path_queue::Entry,
+            u32,
+        ),
+    ) -> Result<(i32, usize), String> {
+        use pcx_play::native_path_hierarchy::{
+            BaseLink, BaseNeighbor, Cell, CoarseInput, Lookup, Node, SearchInput, distance,
+            expand_base, expand_coarse, lookup, search_observed,
+        };
+        let cell = |level: u32, point: [i32; 2]| -> Option<Cell> {
+            let (size, cells) = self.levels.get(level as usize)?;
+            let [x, y] = point.map(|v| usize::try_from(v).ok());
+            let (x, y) = (x?, y?);
+            (x < size[0] && y < size[1]).then(|| cells[y * size[0] + x])
+        };
+        let coordinates = |point: [f32; 2]| -> [i32; 2] {
+            std::array::from_fn(|axis| {
+                ((point[axis] - self.bounds[0][axis]) / (self.cell_size * self.group as f32))
+                    .floor() as i32
+            })
+        };
+        let start = coordinates(center);
+        let goal = coordinates(point);
+        if cell(0, start).is_none() {
+            return Err("reach start is outside the snapshot".into());
+        }
+        let resolve = |level, position| lookup(level, self.count, position, cell);
+        let open = |position| Some(matches!(cell(0, position), Some(Cell::Open { .. })));
+        let start_node = resolve(0, start).unwrap();
+        let goal_node = match resolve(0, goal).unwrap() {
+            // A blocked goal has no native node, but still supplies the heuristic coordinate.
+            Lookup::Blocked => Lookup::Open {
+                level: 0,
+                position: goal,
+            },
+            value => value,
+        };
+        if start == goal || matches!(start_node, Lookup::Blocked) {
+            Ok((
+                distance(start, goal, self.result_scale)
+                    .map(|value| value as i32)
+                    .unwrap(),
+                0,
+            ))
+        } else if let (
+            Lookup::Open {
+                level: a,
+                position: s,
+            },
+            Lookup::Open {
+                level: b,
+                position: g,
+            },
+        ) = (start_node, goal_node)
+        {
+            let input = SearchInput {
+                start: Node {
+                    level: a,
+                    position: s,
+                },
+                goal: Node {
+                    level: b,
+                    position: g,
+                },
+                priority_scale: self.priority,
+                result_scale: self.result_scale,
+                link_priority_cost: 0,
+                link_result_cost: 0,
+                removal_limit: self.removal_limit,
+                node_limit: self.levels.iter().map(|(_, cells)| cells.len()).sum(),
+            };
+            search_observed(
+                input,
+                |node| {
+                    if node.level == 0 {
+                        expand_base(
+                            node.position,
+                            self.movement,
+                            self.movement,
+                            BaseLink::Absent,
+                            resolve,
+                            open,
+                        )
+                    } else {
+                        expand_coarse(
+                            CoarseInput {
+                                node,
+                                movement_width: self.movement,
+                                clearance_width: self.movement,
+                                max_visits: input.node_limit,
+                            },
+                            resolve,
+                            open,
+                        )
+                        .map(|nodes| {
+                            nodes
+                                .into_iter()
+                                .map(|node| BaseNeighbor {
+                                    node,
+                                    via_link: false,
+                                })
+                                .collect()
+                        })
+                    }
+                },
+                observe,
+            )
+            .map(|result| {
+                (
+                    result.distance.map(|value| value as i32).unwrap_or(-1),
+                    result.removals,
+                )
+            })
+            .map_err(|e| e.to_string())
+        } else {
+            Err("unresolved base lookup".to_owned())
+        }
+    }
+}
+
+fn compare_reach_snapshot(snapshot: &ReachSnapshot, center: [f32; 2], trace: &str) {
+    let mut mismatches = 0;
+    let mut queries = 0;
+    for line in std::fs::read_to_string(trace).unwrap().lines().skip(1) {
+        let values: Vec<_> = line.split(',').collect();
+        if values.len() < 7 || values[5].is_empty() {
+            continue;
+        }
+        queries += 1;
+        let rank = values[0].parse::<usize>().unwrap();
+        let point = [
+            values[3].parse::<f32>().unwrap(),
+            values[4].parse::<f32>().unwrap(),
+        ];
+        let expected = values[5].parse::<i32>().unwrap();
+        let actual = snapshot.query(center, point);
+        if let Ok(node_rank) = std::env::var("PCX_REACH_NODE_RANK")
+            && rank == node_rank.parse::<usize>().unwrap()
+        {
+            let log =
+                std::fs::read_to_string(std::env::var("PCX_REACH_NODE_LOG").unwrap()).unwrap();
+            let first_query = log.split_once("Stopped on breakpoint 4 at").unwrap().0;
+            let removals = first_query
+                .matches("Stopped on breakpoint 3 at 0x000000008a3c45")
+                .count();
+            let mut recorded = Vec::new();
+            for block in first_query.split("Stopped on breakpoint 3 at").skip(1) {
+                let rows: Vec<Vec<u32>> = block
+                    .lines()
+                    .filter_map(|line| {
+                        let (address, words) = line.split_once(':')?;
+                        if !address.starts_with("0x") {
+                            return None;
+                        }
+                        Some(
+                            words
+                                .split_whitespace()
+                                .map(|word| u32::from_str_radix(word, 16).unwrap())
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let first = &rows[0];
+                let level = (rows[2][0] >> 16) & 0xff;
+                let queue = &rows[3];
+                recorded.push((
+                    pcx_play::native_path_hierarchy::Node {
+                        position: [first[0] as i32, first[1] as i32],
+                        level,
+                    },
+                    queue[0],
+                    queue[2],
+                    first[2],
+                ));
+            }
+            let mut observed = Vec::new();
+            snapshot
+                .query_observed(center, point, |node, entry, current| {
+                    observed.push((node, entry.priority, entry.generation, current))
+                })
+                .unwrap();
+            for (i, (original, recreated)) in recorded.iter().zip(&observed).enumerate() {
+                if original != recreated {
+                    println!(
+                        "reach rank={rank} removal={} original={original:?} recreation={recreated:?}",
+                        i + 1
+                    );
+                }
+            }
+            assert_eq!(observed, recorded, "reach queue removal trace differs");
+            println!(
+                "reach rank={rank} removals original={removals} recreation={:?}",
+                actual.as_ref().map(|v| v.1)
+            );
+            assert_eq!(actual.as_ref().unwrap().1, removals);
+        }
+        if actual.as_ref().map(|v| v.0).ok() != Some(expected) {
+            mismatches += 1;
+            println!(
+                "reach mismatch rank={rank} point={point:?} expected={expected} actual={actual:?}"
+            );
+        }
+    }
+    println!("reach comparison queries={queries} mismatches={mismatches}");
+    assert_ne!(queries, 0, "reach table has no queries");
+    if let Ok(expected) = std::env::var("PCX_REACH_EXPECT_QUERIES") {
+        assert_eq!(queries, expected.parse::<usize>().unwrap());
+    }
+    assert_eq!(
+        mismatches, 0,
+        "reach snapshot differs from the native table"
     );
 }

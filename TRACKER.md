@@ -5610,3 +5610,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   The refusal text is held in state; the error line that draws it is not built. No saved
   Gameplay option value exists to override the executable fallbacks (the settings store
   binds audio only), and the camera does not apply the scroll values yet.
+
+### 2026-10-28: Reach snapshots and queue trace
+
+- [~] The ignored local-input diagnostic derives a reach hierarchy from the recreation's
+  snapshot stamps, excludes the movement entries identified by the reach state test and
+  clears the builder rectangle. It matches all 100 at-start and 12 near-mine reach results,
+  and the recorded 15-removal trace including its stale entry. With reach enabled it selects
+  the baseline, at-start, near-mine and farm sites at dequeues 1, 355, 419 and 280.
+- Worker positions other than the issuer are sampled, town origins are supplied from the
+  reference capture, and general live entry state and auxiliary links remain unqualified.
+  Production placement remains refused; Human05 was not rerun. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- The initial town snapshot creates the probe workers from script inputs and reproduces all
+  three captured mine/worker midpoints when supplied in reverse creation order. General list
+  mutation and eligibility remain unqualified; the ordering is not connected to live towns.
+- Checks: 2,254 `pcx-play` library tests passed; the reach-stamp fixture and four diagnostic
+  parser tests passed; native and WASM Clippy passed with warnings denied. The simulation budget
+  check passed without raising budgets.

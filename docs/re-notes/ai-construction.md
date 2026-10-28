@@ -490,18 +490,19 @@ or the conversion of its live rectangle to recreation cache cells. The first rea
 selected image mask contains both low bits 2 and 4 as well as their corresponding high-byte
 cell bits (`0x10e92a8`). The recreation's aggregate ground occupancy alone does not expose
 the native per-entry state filter, so this mask cannot yet be mapped by counting all mobile
-or footprint stamps as blockers. The test-only hierarchy module now classifies four supplied
-spatial results and models clearing without dropping the auxiliary link; it does not derive
-the four results from live objects.
+or footprint stamps as blockers. The ignored snapshot diagnostic now builds a hierarchy from
+the recreation's terrain and object stamps and clears the builder stamp's rectangle. In the
+at-start and near-mine snapshots its rectangle agrees with the captured native rectangle after
+accounting for the coordinate order. This is not yet a general live-state implementation.
 
-The unresolved input to replay the two recorded reach tables is the order-time result of
-`0x8be420` for each underlying spatial cell consulted by the hierarchy. Its result depends on
-each intersecting entry's active flag, visit state, `+0x34` pathing mask and `+0x44` state,
-as well as the terrain cell flags. The recreation's `diagnostic_cell_state` exposes aggregate
-occupancy counts, not those entry attributes, and the recorded candidate and removal tables
-do not contain the missing cache cells. The builder-owner capture alone does not establish
-which other entries pass that filter or their order-time geometry. Neither the 100 at-start
-nor the 12 near-mine results have therefore been compared against the hierarchical search.
+The reach query at `0x8be420` requires state bit `0x10000000` on an entry in addition to its
+active and pathing-mask tests. The movement-object constructor `0x8baf10` creates its entries
+through `0x8c1950`, which initializes their state to zero; the separate `0x8c19e0` wrapper sets
+that bit on entries it creates. The diagnostic applies this distinction to units whose selected
+data says they are not structures, while retaining structure footprint and terrain stamps.
+This class-to-entry association, absent auxiliary links and complete order-time object state
+are not yet established for arbitrary games. The fixture uses the exact issuing worker position
+and other workers sampled at the preceding whole second; it does not replay movement or timers.
 
 The blocked-start early result is an acceptance, not a route: when an in-bounds starting-cell
 lookup returns -1, the initializer returns its immediate-result status and `0x8a2270` returns a
@@ -604,6 +605,15 @@ eligibility; synthetic tests cover each branch. It is not wired to live towns. G
 observed fourth-created worker into a selection rule would be unsupported. Other refresh
 triggers also remain open.
 
+An ignored recreation snapshot now reads each probe's spawn point, facing and worker count
+from its script, creates those workers, reads their peon class from selected unit data and
+supplies them in reverse creation order to that selector. The resulting selected positions and
+mine midpoints are (6832, 2096) and (6264, 2776) for baseline, (7568, 2768) and (6632, 3112)
+for workers at start, and (5488, 3216) and (5592, 3336) for workers near the mine. These
+match the three captures. Reverse creation order is a hypothesis for these initial lists, not
+a decoded rule for ownership changes, removals or later type and eligibility updates; the
+diagnostic supplies eligibility as true and does not attach a town to the live AI host.
+
 The isolated bounded breakpoint logs capture every dequeue through the selected candidate and
 the result of every reach query that actually occurred. Empty reach fields in the local trace
 mean the candidate did not reach that check, not that it failed it.
@@ -615,19 +625,29 @@ mean the candidate did not reach that check, not that it failed it.
 
 For example, at-start dequeue 1 returns 0 then validator `0x44`; dequeue 35 at (6528, 3200)
 returns the failure sentinel and does not enter the validator. Near-mine dequeue 406 returns 12
-then validator `0x44`. These are ground-truth inputs and outputs, not validation of
-an implemented native pathfinder. The hierarchy's edge expansion, queue tie behavior and mapping
-of spatial object-state masks remain unresolved, so the recreation does not yet reproduce those
-100 and 12 reach decisions.
+then validator `0x44`. With the snapshot inputs and qualifications above, the test-only
+hierarchy returns the same finite value or failure sentinel for all 100 at-start and 12
+near-mine queries. The executable operands, including mask and work budget, are read from the
+verified image. This does not establish the missing live-state mapping in other situations.
 
 An additional breakpoint trace of the at-start dequeue 35 shows 15 queue removals before
 the failure sentinel. The removed nodes include all four hierarchy levels. Removal 10 is a
 stale entry: its recorded generation is 1 while the node's current generation is 5. It still
-consumes a removal, as the control flow at `0x8a3c10` through `0x8a3c4b` predicts. The trace
-does not establish the missing edge expansion or occupancy mapping, and it has not been
-reproduced by a recreation search.
+consumes a removal, as the control flow at `0x8a3c10` through `0x8a3c4b` predicts. The
+snapshot diagnostic matches all 15 recorded nodes, priorities and generations. An earlier
+attempt counted every mobile stamp and diverged at removal 13; applying the entry-state
+distinction above made that recorded trace match. A blocked goal still performs the bounded
+search (`0x8a4a60`), even when its eventual result is the failure sentinel.
 
-With the captured baseline center and the updated construction raster, the diagnostic still
+With reach enabled, the same snapshot diagnostic selects the baseline site (6208, 2752) at
+dequeue 1, the workers-at-start site (6336, 2752) at 355, the workers-near-mine site
+(5248, 2944) at 419, and the farm site (5952, 2432) at 280, in both tested texture-axis
+readings. The worker snapshots and town origins are supplied from local reference logs.
+The at-start source-distance bound for unsupported counter effects does not pass, so this
+comparison does not prove the live exclusion rule for that layout. These checks do not connect
+the diagnostic search to `SetProduce`.
+
+In an earlier diagnostic with the captured baseline center and updated construction raster, the search
 chooses the unblocked site (6208, 2752), rank 1. In the farm layout it rejects the formerly
 accepted (6464, 2752), but chooses (6080, 2432), rank 282, instead of native (5952, 2432),
 rank 280, a difference of 128 units. Both axis readings give the same result. The diagnostic

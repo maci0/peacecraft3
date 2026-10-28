@@ -1,6 +1,68 @@
 //! Cell aggregation and lookup for the selected client's reach hierarchy.
 //!
-//! Callers must supply the native occupancy classes; this does not perform a reach search.
+//! Callers must supply source-qualified occupancy classes and search inputs.
+
+/// Reach operands from the same verified image used by the placement diagnostic.
+#[cfg(feature = "test-fixtures")]
+pub fn diagnostic_operands(
+    image: &[u8],
+    rules: &crate::ai_placement::Rules,
+) -> Result<(u8, u32, u32, usize, i32, u32), String> {
+    use crate::neutral_player::{RuleInputBudget, sha256};
+    use crate::neutral_rule_input::Pe;
+
+    if rules.image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
+        || sha256(image) != rules.image_sha256
+    {
+        return Err("reach image identity mismatch".into());
+    }
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let read = |address, count, code| -> Result<&[u8], String> {
+        pe.read_from(address, code)
+            .map_err(|e| e.to_string())?
+            .get(..count)
+            .ok_or_else(|| format!("truncated reach operand at {address:#x}"))
+    };
+    let mask = u32::from_le_bytes(read(0x10e92a8, 4, false)?.try_into().unwrap());
+    let work = read(0xad444c, 2, true)?;
+    let width = read(0xad444e, 2, true)?;
+    let scale = read(0x8a3d33, 15, true)?;
+    let result = read(0x8a317b, 6, true)?;
+    let levels = read(0x8b7bca, 5, true)?;
+    if work[0] != 0x6a
+        || width[0] != 0x6a
+        || scale[..3] != [0x8d, 0x34, 0x40]
+        || scale[12..14] != [0xc1, 0xe6]
+        || result != [0x2b, 0xfa, 0x03, 0xff, 0x0f, 0xaf]
+        || levels[0] != 0xbb
+        || mask >> 24 != mask & 0xff
+    {
+        return Err("unrecognized reach operand instructions".into());
+    }
+    let priority = 3_u32
+        .checked_shl(u32::from(scale[14]))
+        .ok_or("reach scale")?;
+    let movement = 1_i32
+        .checked_shl(u32::from(width[1]))
+        .ok_or("reach width")?;
+    let parents = u32::from_le_bytes(levels[1..].try_into().unwrap());
+    Ok((
+        mask as u8,
+        priority,
+        1 + 1,
+        usize::from(work[1]),
+        movement,
+        parents + 1,
+    ))
+}
 
 /// The classification of a cell for one selected occupancy mask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -708,7 +770,16 @@ pub enum SearchError {
 /// Search a caller-supplied, source-qualified hierarchy using native queue accounting.
 pub fn search(
     input: SearchInput,
+    expand: impl FnMut(Node) -> Result<Vec<BaseNeighbor>, EdgeError>,
+) -> Result<SearchResult, SearchError> {
+    search_observed(input, expand, |_, _, _| {})
+}
+
+/// Search while reporting each removal before stale-entry filtering.
+pub fn search_observed(
+    input: SearchInput,
     mut expand: impl FnMut(Node) -> Result<Vec<BaseNeighbor>, EdgeError>,
+    mut observe: impl FnMut(Node, crate::native_path_queue::Entry, u32),
 ) -> Result<SearchResult, SearchError> {
     use crate::native_path_queue::{Entry, Queue};
 
@@ -764,6 +835,11 @@ pub fn search(
     let mut remaining = input.removal_limit;
     while let Some(entry) = queue.pop(&mut remaining) {
         let current = usize::try_from(entry.node).map_err(|_| SearchError::Invalid)?;
+        observe(
+            nodes.get(entry.node).ok_or(SearchError::Invalid)?,
+            entry,
+            states[current].generation,
+        );
         if states[current].generation != entry.generation {
             continue;
         }
@@ -1292,7 +1368,13 @@ mod tests {
                 removals: 2
             }
         );
-        assert!(matches!(search(input, |node| Ok(vec![BaseNeighbor { node, via_link: true }])), Err(SearchError::SelfEdge)));
+        assert!(matches!(
+            search(input, |node| Ok(vec![BaseNeighbor {
+                node,
+                via_link: true
+            }])),
+            Err(SearchError::SelfEdge)
+        ));
     }
 
     #[test]

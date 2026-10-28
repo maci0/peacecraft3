@@ -140,10 +140,11 @@ details in [AI construction](ai-construction.md).
 
 ## Open
 
-- The snapshot exclusion diagnostic selects both recorded Necropolis sites at their recorded
-  dequeue counts, using source-derived fixture evidence and a checkpoint after snapshot setup.
-  The native reach check is bypassed. The snapshot does not replay movement or timer callbacks;
-  production effect-source qualification, reach and town selection remain open.
+- The snapshot diagnostic now selects the baseline, farm and two worker-layout Necropolis
+  sites at their recorded dequeue counts with the hierarchical reach check enabled. Its
+  sampled workers and supplied town origins do not replay movement or timer callbacks;
+  general live reach inputs, effect-source qualification and town selection remain open.
+  The 1223 s Human05 refusal has not been rerun or removed by this diagnostic work.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

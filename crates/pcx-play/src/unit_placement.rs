@@ -604,6 +604,66 @@ impl Placement {
         ))
     }
 
+    /// Exclude the supplied unit stamps when inspecting reach occupancy.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_cell_excluding(
+        &self,
+        point: [f32; 2],
+        excluded: &[HandleId],
+    ) -> Result<(u8, u32, u32), Error> {
+        let [x, y] = self.cell(point)?;
+        let i = self
+            .index(i64::from(x), i64::from(y))
+            .ok_or_else(|| fail("diagnostic cell outside map"))?;
+        if self.occupied[i] == 0 {
+            return Ok((self.grid.pathing.cells[i], 0, self.footprint_occupied[i]));
+        }
+        let removed = self
+            .stamps
+            .iter()
+            .filter(|(id, stamp)| {
+                stamp.active
+                    && stamp.movement.ground()
+                    && stamp.cells.binary_search(&i).is_ok()
+                    && excluded.contains(id)
+            })
+            .count();
+        let units = self.occupied[i]
+            .checked_sub(
+                u32::try_from(removed).map_err(|_| fail("diagnostic unit count overflow"))?,
+            )
+            .ok_or_else(|| fail("diagnostic unit occupancy mismatch"))?;
+        Ok((
+            self.grid.pathing.cells[i],
+            units,
+            self.footprint_occupied[i],
+        ))
+    }
+
+    /// The recreation's unit-stamp bounds, in underlying pathing cells.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_unit_rectangle(&self, unit: HandleId) -> Result<[[i32; 2]; 2], Error> {
+        let stamp = self
+            .stamps
+            .iter()
+            .find(|(id, _)| *id == unit)
+            .ok_or_else(|| fail("diagnostic unit stamp missing"))?;
+        let width = self.grid.pathing.width as usize;
+        let mut lower = [i32::MAX; 2];
+        let mut upper = [i32::MIN; 2];
+        for &index in &stamp.1.cells {
+            let point = [(index % width) as i32, (index / width) as i32];
+            for axis in 0..2 {
+                lower[axis] = lower[axis].min(point[axis]);
+                upper[axis] = upper[axis].max(point[axis] + 1);
+            }
+        }
+        if lower[0] == i32::MAX {
+            return Err(fail("diagnostic unit stamp empty"));
+        }
+        Ok([lower, upper])
+    }
+
     #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_construction_position(
         &mut self,
