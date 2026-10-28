@@ -68,6 +68,61 @@ pub enum ExclusionError {
     },
 }
 
+/// A qualified movement interval with no unbounded relocation or speed changes.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Copy, Debug)]
+pub struct KinematicWindow {
+    pub origin: [f32; 2],
+    pub maximum_speed: f32,
+    pub elapsed: f64,
+}
+
+/// Prove that a targeted effect cannot reach the other unit during the interval.
+/// Both origins must describe the same instant and both windows must cover the
+/// entire interval, including scripted displacement and speed changes.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn beyond_cast_reach(
+    source: Option<KinematicWindow>,
+    target: Option<KinematicWindow>,
+    range: f32,
+    collision_radii: [f32; 2],
+) -> Result<bool, &'static str> {
+    let (Some(source), Some(target)) = (source, target) else {
+        return Err("incomplete movement history");
+    };
+    if source.elapsed != target.elapsed
+        || !source.elapsed.is_finite()
+        || source.elapsed < 0.
+        || !source
+            .origin
+            .iter()
+            .chain(&target.origin)
+            .all(|v| v.is_finite())
+        || ![source.maximum_speed, target.maximum_speed, range]
+            .iter()
+            .chain(&collision_radii)
+            .all(|v| v.is_finite() && *v >= 0.)
+    {
+        return Err("invalid movement or effect bounds");
+    }
+    let lower_distance = (0..2)
+        .map(|axis| (f64::from(source.origin[axis]) - f64::from(target.origin[axis])).abs())
+        .fold(0., f64::max)
+        .next_down();
+    let mut upper_distance = f64::from(range);
+    for radius in collision_radii {
+        upper_distance = (upper_distance + f64::from(radius)).next_up();
+    }
+    for speed in [source.maximum_speed, target.maximum_speed] {
+        let displacement = (f64::from(speed) * source.elapsed).next_up();
+        upper_distance = (upper_distance + displacement).next_up();
+    }
+    if !upper_distance.is_finite() {
+        return Err("movement bound overflow");
+    }
+    Ok(lower_distance > upper_distance)
+}
+
 /// Apply the tests for the observed AI branch with nonzero context fields `+0` and `+0x58`.
 pub fn exclude_unit(
     unit: HandleId,
@@ -165,6 +220,8 @@ impl crate::playercolor_host::ObjectHost {
         }
         let source_name = if record.paused_since.is_some() {
             "explicit pause and its native movement-counter contribution"
+        } else if record.pause_requested {
+            "prior PauseUnit request and its native movement-counter contribution"
         } else if record.is_sleeping() {
             "sleep and its native movement-counter contribution"
         } else {
@@ -682,6 +739,38 @@ impl<'a> Grid<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cast_reach_bound_requires_complete_motion_for_both_units() {
+        let source = KinematicWindow {
+            origin: [0., 0.],
+            maximum_speed: 3.,
+            elapsed: 2.,
+        };
+        let mut target = KinematicWindow {
+            origin: [20., 0.],
+            maximum_speed: 1.,
+            elapsed: 2.,
+        };
+        assert_eq!(
+            beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
+            Ok(true)
+        );
+        target.origin = [14., 0.];
+        assert_eq!(
+            beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
+            Ok(false)
+        );
+        assert_eq!(
+            beyond_cast_reach(Some(source), None, 4., [1., 1.]),
+            Err("incomplete movement history")
+        );
+        target.elapsed = 1.;
+        assert_eq!(
+            beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
+            Err("invalid movement or effect bounds")
+        );
+    }
 
     #[test]
     fn exclusion_checks_center_directed_control_and_missing_state() {

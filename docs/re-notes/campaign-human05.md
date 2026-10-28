@@ -144,7 +144,8 @@ details in [AI construction](ai-construction.md).
   oracle site. Unit-wide ability-disable counts and effect writers are not yet reconstructed;
   the separate diagnostic reach check is bypassed and does not validate native reach behavior.
   Its directly created fixture workers are unpaused, awake and have no retained buffs; the
-  recorded Human05 route does not include per-handle pause or buff history.
+  recorded Human05 route does not include per-handle pause or buff history. The fixture does
+  not replay the original probe's movement histories or order-time clock.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

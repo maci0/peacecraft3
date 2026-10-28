@@ -58,6 +58,10 @@ impl ObjectHost {
                 return Ok(Value::Bool(since.is_some()));
             };
             if pause == since.is_some() {
+                #[cfg(any(test, feature = "test-fixtures"))]
+                if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+                    record.pause_requested = true;
+                }
                 return Ok(Value::Null);
             }
             self.require_morph_interruption(unit, "PauseUnit")?;
@@ -82,6 +86,10 @@ impl ObjectHost {
                     }
                 }
                 record.paused_since = pause.then_some(now);
+                #[cfg(any(test, feature = "test-fixtures"))]
+                {
+                    record.pause_requested = true;
+                }
             }
             if let Some(since) = since {
                 self.resume_summon_cast(unit, now - since);

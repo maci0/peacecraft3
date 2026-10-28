@@ -5442,3 +5442,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: the new synthetic buff-query test passed; headless `cargo test -p pcx-play --lib`
   passed 2187 tests with 84 ignored. Native and WASM Clippy passed with `-D warnings`, and
   the locked, offline simulation budget check passed with unchanged allocation counts.
+
+### 2026-10-28: Placement kinematic preconditions
+
+- [~] Added a diagnostic kinematic bound that requires qualified movement intervals for both
+  units and refuses missing evidence. Added fixture-only per-unit `PauseUnit` request history and
+  a diagnostic refusal for that history. The selected-table effect inventory and its limits are
+  in [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The current fixture does not replay the probe's clock or retain complete relocation and
+  speed histories; the live inventory of ability, item and other native counter sources is not
+  complete. The bound therefore does not qualify the oracle comparison or admit production
+  placement. Native reach and town selection remain open.
+- The ignored comparison reports recreation clock 0, then still refuses baseline candidate
+  (6208, 2752) at dequeue 1 and farm candidate (6272, 2752) at dequeue 5. Its native reach
+  check is bypassed. No campaign route was rerun.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2201 tests with 85 ignored, including
+  the new bound and pause-history tests. Native and WASM Clippy passed with `-D warnings`;
+  the locked, offline simulation check passed with the previous counts, bytes and digests.

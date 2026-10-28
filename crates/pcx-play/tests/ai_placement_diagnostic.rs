@@ -253,6 +253,10 @@ fn human05_placement_diagnostic() {
     let facing = building_facing(angle);
     let mut startup = start(&install, mode, &map.display().to_string(), &bytes, 1, None).unwrap();
     let objects = startup.session.host().unwrap().objects_mut();
+    println!(
+        "fixture recreation game clock {:?}",
+        objects.timer_game_time()
+    );
     let player = objects.native("Player", &[Value::Int(5)]).unwrap();
     let Value::Handle(player_handle) = player else {
         panic!("player handle")
@@ -415,8 +419,9 @@ fn human05_placement_diagnostic() {
             let record = objects.executed_unit(handle).unwrap();
             let buffs = objects.diagnostic_ai_buffs(handle).unwrap();
             println!(
-                "fixture blocked={blocked} unit={handle:?} paused={} sleeping={} buffs={buffs:?}",
+                "fixture blocked={blocked} unit={handle:?} paused={} pause_requested={} sleeping={} buffs={buffs:?}",
                 record.paused_since.is_some(),
+                record.pause_requested,
                 record.is_sleeping(),
             );
         }

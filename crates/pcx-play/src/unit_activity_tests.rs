@@ -457,6 +457,32 @@ fn queued_animation_advances_on_the_simulation_clock_with_one_work_unit() {
 }
 
 #[test]
+fn pause_request_history_tracks_only_successful_requests() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    let host = &mut vm.host().inner;
+    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    host.native("IsUnitPaused", &[Value::Handle(a)]).unwrap();
+    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    assert!(
+        host.native("PauseUnit", &[Value::Handle(a), Value::Int(1)])
+            .is_err()
+    );
+    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    host.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert!(host.executed_unit(a).unwrap().pause_requested);
+    assert!(!host.executed_unit(b).unwrap().pause_requested);
+    host.native("PauseUnit", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    host.native("PauseUnit", &[Value::Handle(b), Value::Bool(false)])
+        .unwrap();
+    assert!(host.executed_unit(b).unwrap().pause_requested);
+    assert!(host.executed_unit(b).unwrap().paused_since.is_none());
+}
+
+#[test]
 fn pause_preserves_the_route_and_repeated_pause_does_not_stack_or_catch_up() {
     let mut vm = open();
     let a = unit(&vm, "A");

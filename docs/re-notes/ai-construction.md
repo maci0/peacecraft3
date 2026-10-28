@@ -864,6 +864,37 @@ zero-counter conclusion. The qualified scan still refuses handle 4612 at (6208, 
 1, without the farm and at (6272, 2752), dequeue 5, with it. Native reach is bypassed in that
 scan; neither site is a successful oracle comparison.
 
+### Kinematic and pause-history preconditions, 2026-10-28
+
+The selected ability table lists `AEer`, `Aenr` and `Aenw` with the roots buff; `ANen`,
+`Aens` and `ACen` with ensnare buffs; and `Aprg`, `Apg2`, `ACpu`, `AIlp`, `AIpg` and
+`AIps` with the Purge buff. Joining these rows to literal unit and item identifiers in the
+probe map script finds `nmrr` with `ACen`. That join does not enumerate runtime-created
+identifiers, restored hero inventories, map overrides or all native paths to `Bchd`, and is
+not a proof that no other source exists.
+
+A fixture-only kinematic calculation accepts qualified origins, maximum speeds and elapsed
+time for both the caster and target, together with range and collision radii. It uses an
+axis-distance lower bound and outward-rounded travel and range bounds. A passing result proves
+that the supplied two movement windows could not reach cast range; a failed or unavailable
+bound proves no exclusion. Both histories must cover scripted relocation and speed changes.
+Bounding only the caster against the target's final position would miss a cast earlier in the
+target's own movement. The calculation is not connected to placement: the current host does not
+retain a complete movement and relocation history or enumerate every relevant effect source.
+The fixture creates workers directly at recorded positions with its recreation game clock at
+zero, rather than replaying the probe's clock and unit histories. The recorded 8.211-second
+order timestamp is measured from the probe's own clock, which starts in a callback scheduled
+three seconds after initialization;
+the map's initial neutral units existed before that clock started. It is therefore not their
+full movement interval since map startup.
+
+In fixture builds, each executed unit now records successful `PauseUnit` requests, including
+idempotent requests; queries and rejected calls do not set the flag. The placement diagnostic
+refuses a unit with such a history because the corresponding native counter adjustment is not
+yet represented. This flag is not present in production builds and does not record other native
+disable paths or unmodelled effects. A production placement integration needs its own qualified
+history without increasing the simulation budgets.
+
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open
 cell it climbs through open parents before resolving or creating the search node. The edge
