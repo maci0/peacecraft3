@@ -174,6 +174,8 @@ pub fn placement_rules(
             amphibious_mask: window(0x67ced5, 5)?,
             terrain_xy: window(0x735a87, 8)?,
             terrain_height: window(0x7361b4, 19)?,
+            texture_channels: window(0x4deb57, 48)?,
+            texture_build_mask: window(0x690375, 4)?,
         },
         BUDGET,
     )

@@ -8,7 +8,10 @@ use pcx_assets::AssetPath;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
 use pcx_sim::world::Source;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 #[derive(Clone, Debug)]
 pub struct Binding {
@@ -26,6 +29,37 @@ pub struct Binding {
     pub amphibious_mask: SourceWindow,
     pub terrain_xy: SourceWindow,
     pub terrain_height: SourceWindow,
+    pub texture_channels: SourceWindow,
+    pub texture_build_mask: SourceWindow,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TexturePolicy {
+    red_test: u8,
+    red_flags: u8,
+    green_flags: u8,
+    blue_test: u8,
+    blue_flags: u8,
+    build_mask: u8,
+}
+
+impl TexturePolicy {
+    pub(crate) fn flags(self, [red, green, blue, _alpha]: [u8; 4]) -> u8 {
+        (if red & self.red_test != 0 {
+            self.red_flags
+        } else {
+            0
+        }) | (if green != 0 { self.green_flags } else { 0 })
+            | (if blue & self.blue_test != 0 {
+                self.blue_flags
+            } else {
+                0
+            })
+    }
+
+    pub(crate) fn checks_construction(self, pixel: [u8; 4]) -> bool {
+        self.flags(pixel) & self.build_mask != 0
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +90,7 @@ pub(crate) enum RouteOutcome {
 
 #[derive(Clone, Debug)]
 pub struct Rules {
-    binding: Binding,
+    binding: Arc<Binding>,
     exponent: i32,
     initial: u32,
     thresholds: [f32; 3],
@@ -69,6 +103,7 @@ pub struct Rules {
     terrain_xy: f32,
     height_bias: f32,
     height_factor: f32,
+    texture_policy: TexturePolicy,
 }
 
 impl Rules {
@@ -97,6 +132,8 @@ impl Rules {
             binding.amphibious_mask,
             binding.terrain_xy,
             binding.terrain_height,
+            binding.texture_channels,
+            binding.texture_build_mask,
         ];
         if image.len() > budget.image_bytes
             || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 24
@@ -204,6 +241,30 @@ impl Rules {
         let fly = mask(&binding.fly_mask, "fly mask")?;
         let float = mask(&binding.float_mask, "float mask")?;
         let amphibious = mask(&binding.amphibious_mask, "amphibious mask")?;
+        let operand = |bytes: &[u8], prefix: &[u8]| -> Result<u8, Error> {
+            if bytes.len() != prefix.len() + 1 || !bytes.starts_with(prefix) {
+                return Err(fail("texture channel instruction"));
+            }
+            Ok(bytes[prefix.len()])
+        };
+        let channels = code(&binding.texture_channels)?;
+        if channels.len() != 48 || channels.get(16..20) != Some(&[0x80, 0x79, 0x01, 0x00]) {
+            return Err(fail("texture channel instructions"));
+        }
+        let texture_policy = TexturePolicy {
+            red_test: operand(&channels[0..4], &[0xf6, 0x41, 0x02])?,
+            red_flags: operand(&channels[9..13], &[0x80, 0x0c, 0x03])?,
+            green_flags: operand(&channels[25..29], &[0x80, 0x0c, 0x03])?,
+            blue_test: operand(&channels[36..39], &[0xf6, 0x01])?,
+            blue_flags: operand(&channels[44..48], &[0x80, 0x0c, 0x01])?,
+            build_mask: operand(code(&binding.texture_build_mask)?, &[0xf6, 0x45, 0x18])?,
+        };
+        if texture_policy.red_test == 0
+            || texture_policy.blue_test == 0
+            || texture_policy.build_mask == 0
+        {
+            return Err(fail("empty texture channel mask"));
+        }
         let masks = [ground, fly, float, amphibious];
         if masks.iter().any(|m| !m.is_power_of_two())
             || masks
@@ -236,7 +297,7 @@ impl Rules {
             return Err(fail("finite positive terrain coordinate encoding required"));
         }
         Ok(Self {
-            binding,
+            binding: Arc::new(binding),
             exponent,
             initial,
             thresholds,
@@ -249,12 +310,17 @@ impl Rules {
             terrain_xy,
             height_bias,
             height_factor,
+            texture_policy,
         })
     }
 
     /// (tile edge, world-height bias, raw indices per world-height unit).
     pub fn terrain_encoding(&self) -> [f32; 3] {
         [self.terrain_xy, self.height_bias, self.height_factor]
+    }
+
+    pub(crate) fn texture_policy(&self) -> TexturePolicy {
+        self.texture_policy
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -408,6 +474,7 @@ pub struct Placement {
     grid: Grid,
     rules: Rules,
     footprints: BTreeMap<String, Footprint>,
+    building_footprints: BTreeMap<String, Footprint>,
     footprint_loader: Option<FootprintLoaderBox>,
     script_paths: Option<ScriptPathsLoader>,
     occupied: Vec<u32>,
@@ -429,6 +496,9 @@ pub struct Placement {
 /// Ordinary unit footprints commit as soon as their source load succeeds.
 pub trait FootprintLoader: Send + Sync {
     fn load(&mut self, path: &str) -> Result<Footprint, String>;
+    fn load_building(&mut self, _path: &str) -> Result<Option<Footprint>, String> {
+        Ok(None)
+    }
     fn commit(&mut self, _paths: &[String]) {}
     fn rollback(&mut self, _paths: &[String]) {}
 }
@@ -650,6 +720,7 @@ impl Placement {
             grid,
             rules,
             footprints,
+            building_footprints: BTreeMap::new(),
             footprint_loader: None,
             script_paths: None,
             occupied,
@@ -1206,9 +1277,32 @@ impl Placement {
         }
         self.ensure_footprint(path)?;
         let key = Self::footprint_key(path)?;
+        if !self.building_footprints.contains_key(&key)
+            && let Some(loader) = self.footprint_loader.as_mut()
+            && let Some(building) = loader.load_building(&key).map_err(fail)?
+        {
+            let count = self
+                .building_footprints
+                .values()
+                .try_fold(building.cells.len(), |n, f| n.checked_add(f.cells.len()))
+                .ok_or_else(|| fail("building footprint count overflow"))?;
+            if count > self.budget.footprint_cells
+                || [
+                    &building.origin.source,
+                    &building.origin.edition,
+                    &building.origin.version,
+                ]
+                .iter()
+                .any(|value| value.trim().is_empty())
+            {
+                return Err(fail("building footprint budget or provenance"));
+            }
+            self.building_footprints.insert(key.clone(), building);
+        }
         let input = self
-            .footprints
+            .building_footprints
             .get(&key)
+            .or_else(|| self.footprints.get(&key))
             .ok_or_else(|| fail("construction footprint is not admitted"))?;
         if input.cells.is_empty() {
             return Err(fail("construction requires an authored footprint"));

@@ -184,6 +184,15 @@ pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
         ]
         .concat(),
     );
+    let mut channels = [0; 48];
+    channels[0..4].copy_from_slice(&[0xf6, 0x41, 0x02, 0x02]);
+    channels[9..13].copy_from_slice(&[0x80, 0x0c, 0x03, 0x40]);
+    channels[16..20].copy_from_slice(&[0x80, 0x79, 0x01, 0x00]);
+    channels[25..29].copy_from_slice(&[0x80, 0x0c, 0x03, 0x04]);
+    channels[36..39].copy_from_slice(&[0xf6, 0x01, 0x08]);
+    channels[44..48].copy_from_slice(&[0x80, 0x0c, 0x01, 0x10]);
+    let texture_channels = put(0x380, &channels);
+    let texture_build_mask = put(0x3d0, &[0xf6, 0x45, 0x18, 0x50]);
     for (at, value) in [
         (0x720, 20_f32),
         (0x724, 123_f32),
@@ -211,6 +220,8 @@ pub(super) fn placement(source: Source) -> pcx_play::unit_placement::Placement {
             amphibious_mask,
             terrain_xy,
             terrain_height,
+            texture_channels,
+            texture_build_mask,
         },
         RuleInputBudget {
             image_bytes: 4096,

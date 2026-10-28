@@ -5261,3 +5261,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored. The ignored
   local-input diagnostic, native and WASM Clippy with `-D warnings`, and
   `python3 tools/perf/sim_run.py --check` passed; budgets were unchanged.
+
+### 2026-10-28: Construction texture and reach traces
+
+- [~] Construction footprints now derive the native texture channel flags and validator mask
+  from the selected executable. Synthetic nonstock channel and rotated-footprint tests cover the
+  shared player-placement raster. Native required-mask, blight and dynamic occupancy details are
+  still incomplete: [AI construction](docs/re-notes/ai-construction.md).
+- [~] Three town-selection traces select the first visited eligible orange acolyte with the native
+  preferred state bit. The native list and state need mapping to recreation units. Bounded reach
+  traces captured 100 queries in the workers-at-start run and 12 in the near-mine run; the
+  native hierarchical search is not implemented or validated against them.
+- [ ] The recorded baseline origin reproduces (6208, 2752), but the farm diagnostic selects
+  (6080, 2432) rather than (5952, 2432). Production remains disconnected and refuses; the last
+  reproducible Human05 pair stops at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; the ignored
+  local-input diagnostic, native and WASM Clippy with `-D warnings`, and
+  `python3 tools/perf/sim_run.py --check` passed without raised budgets. Human03 and Human04
+  checkpoint and RNG lines match `g1`, with victories at 279.02 s and 449.02 s.

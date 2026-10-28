@@ -509,8 +509,8 @@ In the baseline and farm traces the resolved `+0x48` object is an orange `uaco`,
 the neutral gold mine. The initial samples show an acolyte at (6832, 2096); its midpoint
 with the mine at (5696, 3456) is the captured town coordinate. The same calculation with
 initial acolyte positions (7568, 2768) and (5488, 3216) gives the captured worker-spawn
-variant coordinates. This matches the existing midpoint code, but which acolyte is associated,
-when the record refreshes, and how to reproduce its selection remain open. The result corrects
+variant coordinates. This matches the existing midpoint code. The selection trace below narrows
+which acolyte is associated. The result corrects
 the earlier inference that the absence of a completed hall implies a mine-centered town.
 
 The first reach call in all five traces used a
@@ -532,17 +532,75 @@ queries pathing at (6224, 2800) with mask `0x08` and reports a blocked cell (`0x
 `0x69039f`, `0x7f69d0`). The diagnostic reports an occupied structure footprint at that exact
 cell, but its construction validator still accepts the candidate. A further trace identifies
 the native texture index as (6, 0), with texture flag `0x08`; that selected Necropolis pixel is
-blue-only. The current footprint raster retains red pixels only, so this border cell is absent
-from its construction check. This establishes the discrepancy for that cell, not the full
-mapping of texture channels to native flags or every validator branch.
+blue-only. The construction raster at the time retained red pixels only, so this border cell was
+absent from its check. The subsequent channel decode and diagnostic are below.
 
 The native hierarchical queue and its occupancy mapping remain incomplete. The diagnostic
 surrogate is not that search, and the strict production refusal remains. Human05 was not rerun
 because both layouts are not reproduced by the recreation.
 
+### Texture channels, town selection and reach traces, 2026-10-28
+
+The pathing-texture constructor at `0x4de9f0` tests the low bit of the red channel and adds
+native flags `0xd2` when set; any nonzero green adds `0x04`; the low bit of blue adds `0x08`.
+The constructor does not inspect alpha. Its source indexing and the texture traversal at
+`0x4dfb40` account for the texture axes and quarter turns. The shared construction callback
+`0x6902d0` tests the resulting flags against `0x4a` before its per-cell pathing and required-mask
+checks. Thus red and blue pixels can participate in this construction check, while green alone
+does not. The check at `0x690386` uses the supplied prevented mask; the required-mask and special
+`0x20` branches have further conditions, including visibility and spatial rectangles. Their full
+blight, water and object-state behavior is not established by the channel mapping alone.
+
+The shared recreation construction raster now derives the channel operands and mask from reviewed
+windows of the fingerprinted executable and includes all cells selected by that mask. Movement
+occupancy continues to use its existing red-channel footprint. Non-binary movement red values,
+odd texture dimensions and unqualified facing still refuse rather than gaining invented behavior.
+Synthetic nonstock channel and rotated-footprint tests exercise the new raster. Human03 and
+Human04 route checkpoints and RNG fingerprints match their `g1` logs, including victories at
+279.02 s and 449.02 s respectively.
+
+The selector at `0xac3f50` walks the player's native unit list, skips entries with the tested
+state bit at `+0x20`, and immediately chooses the first eligible entry with bit `0x10` at
+`+0x454`. Otherwise it remembers the last structure and last other eligible unit, preferring
+the structure after the list ends. It passes the chosen unit to `0xac8290`; `0xac8010` assigns
+the town reference and calls `0xac80a0` to refresh the coordinates. Breakpoints in baseline,
+workers-at-start and workers-near-mine runs show the first visited orange unit is an acolyte
+with that preferred bit and is the chosen object. Its creation positions are respectively
+(6832, 2096), (7568, 2768) and (5488, 3216), the fourth created acolyte in each scenario.
+The selected reference is not the worker that issues the first order. Native list ordering and
+the meaning of the state bit have not been mapped to recreation units; generalizing this to
+fourth-created workers would be an unsupported rule. Other refresh triggers also remain open.
+
+The isolated bounded breakpoint logs capture every dequeue through the selected candidate and
+the result of every reach query that actually occurred. Empty reach fields in the local trace
+mean the candidate did not reach that check, not that it failed it.
+
+| Worker layout | Dequeues | Reach queries | Finite | Failure sentinel | Chosen point, reach value, validator |
+| --- | ---: | ---: | ---: | ---: | --- |
+| At start | 355 | 100 | 62 | 38 | (6336, 2752), 12, 0 |
+| Near mine | 419 | 12 | 12 | 0 | (5248, 2944), 15, 0 |
+
+For example, at-start dequeue 1 returns 0 then validator `0x44`; dequeue 35 at (6528, 3200)
+returns the failure sentinel and does not enter the validator. Near-mine dequeue 406 returns 12
+then validator `0x44`. These are ground-truth inputs and outputs, not validation of
+an implemented native pathfinder. The hierarchy's edge expansion, queue tie behavior and mapping
+of spatial object-state masks remain unresolved, so the recreation does not yet reproduce those
+100 and 12 reach decisions.
+
+With the captured baseline center and the updated construction raster, the diagnostic still
+chooses the unblocked site (6208, 2752), rank 1. In the farm layout it rejects the formerly
+accepted (6464, 2752), but chooses (6080, 2432), rank 282, instead of native (5952, 2432),
+rank 280, a difference of 128 units. Both axis readings give the same result. The diagnostic
+reports mobile occupancy at cells around (5728, 2560) and (5760, 2592), and rejects the oracle
+site using its sampled worker state. The sample is at whole seconds rather than the native
+order instant, and the client's treatment of mobile occupancy in this check is not yet mapped;
+the evidence does not distinguish those causes. The route surrogate also exhausts its own work
+bound for the farm case. Neither observation licenses changing the result to fit the oracle.
+
 ## Not established
 
-- The acolyte association and refresh timing, and the route metric used to select among towns;
+- The recreation mapping of the native acolyte list and state bit, other refresh triggers, and
+  the route metric used to select among towns;
   terrain sampling at grid edges and the enumerator's boundary/state behavior;
   live texture dimension mapping, blight and the shared validator's detailed
   checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
@@ -552,6 +610,6 @@ because both layouts are not reproduced by the recreation.
   placed), refund on cancel, and retry cadence when a site or the builder is not ready.
 - The early false answers listed above, and the upgrade fallback.
 
-What would settle placement: decode the texture-channel validation difference, town association,
-and the hierarchical reach search, then rerun the layouts at exact order-time state. Until then
+What would settle placement: map the remaining validator and town state and the hierarchical
+reach search, then rerun the layouts at exact order-time state. Until then
 Human05's orange AI refuses at its first structure, which is the 1223 s stop.

@@ -112,26 +112,14 @@ checkpoint `fnv64=d42949ae424eb960`. At 1218 s the party holds 26 units (18 foot
 Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reached the same
 1223 s refusal. Their Human05 checkpoints, RNG checkpoints and refusal text match each other
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
-changed by those runs. The subsequent placement search implementation is not connected to
-orders, and the refusal names its unresolved town, texture, enumeration and reach inputs. No new route
-runs were made because the original-map oracle has not been reproduced. A feature-gated,
-local-input diagnostic now runs the search against both layouts with mine, start and worker
-origins. None of the completed variants selects either recorded Necropolis position; several
-town-origin route variants exhaust their diagnostic work bound. The native search returns the
-first accepted immediate-score candidate, and a refreshed diagnostic using the selected building
-angle did not change these results. Its inputs and limitations are
-recorded in [AI construction](ai-construction.md). Further tracing established the native reach
-search's bounded priority queue and temporary occupancy-cache clearing, but the diagnostic still
-does not implement the complete check. An isolated order-event probe now identifies the first
-builder's original order-time position and confirms the haunted mine's target, but the refreshed
-diagnostic still misses both sites. Controlled worker, start and mine variations rule out the
-assigned start as the search center in one run but do not yet identify the town or reproduce the
-native reach check. A subsequent live debugger trace found the actual town center and identifies
-an acolyte and the primary mine as its two references in the baseline and blocked probes. With the recorded
-center, the diagnostic matches the unblocked Necropolis site but still chooses an earlier site
-in the farm layout. The client rejects that earlier site because of a blocked texture cell; the
-diagnostic records the same occupancy yet accepts it. Town association, texture validation and
-the native reach search remain open. No later Human05 state has been verified.
+changed by those runs. The placement search remains disconnected from orders, so Human05 was
+not rerun before the original-map oracles were reproduced. A local-input diagnostic uses captured
+town coordinates and sampled workers. It selects the unblocked site but selects (6080, 2432)
+in the farm layout, while the client selects (5952, 2432). The native town selection and
+reach-query traces narrow the remaining differences, but the recreation still lacks the native
+list and occupancy mapping and hierarchical reach search. See
+[AI construction](ai-construction.md) for the evidence and limitations. No later Human05 state
+has been verified.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
@@ -150,7 +138,8 @@ details in [AI construction](ai-construction.md).
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI
   search and player orders share a validator, for which the existing player-placement code is
-  the current implementation, with the blocked-cell discrepancy above. Live town association, texture dimensions, the additional reach check and
+  the current implementation, with the sampled-state discrepancy above. Native town list and
+  state mapping, texture dimensions, the additional reach check and
   complete texture-rectangle enumeration remain open; undead construction, cost charging,
   worker choice and script retry timing are also open
   ([AI construction](ai-construction.md)). The recreation's human construction path

@@ -694,6 +694,15 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
         ]
         .concat(),
     );
+    let mut channels = [0; 48];
+    channels[0..4].copy_from_slice(&[0xf6, 0x41, 0x02, 0x02]);
+    channels[9..13].copy_from_slice(&[0x80, 0x0c, 0x03, 0x40]);
+    channels[16..20].copy_from_slice(&[0x80, 0x79, 0x01, 0x00]);
+    channels[25..29].copy_from_slice(&[0x80, 0x0c, 0x03, 0x04]);
+    channels[36..39].copy_from_slice(&[0xf6, 0x01, 0x08]);
+    channels[44..48].copy_from_slice(&[0x80, 0x0c, 0x01, 0x10]);
+    let texture_channels = put(0x420, &channels);
+    let texture_build_mask = put(0x470, &[0xf6, 0x45, 0x18, 0x50]);
     for (offset, value) in [
         (0x520, 20_f32),
         (0x524, 123_f32),
@@ -720,8 +729,20 @@ pub(crate) fn fixture(exponent: u32, initial: f32) -> (Vec<u8>, Binding, RuleInp
         amphibious_mask,
         terrain_xy,
         terrain_height,
+        texture_channels,
+        texture_build_mask,
     };
     (bytes, binding, budget)
+}
+
+#[test]
+fn texture_channel_operands_control_construction_flags() {
+    let policy = rules(2, 0.0).texture_policy();
+    assert_eq!(policy.flags([2, 7, 8, 0]), 0x54);
+    assert_eq!(policy.flags([1, 0, 4, 255]), 0);
+    assert!(policy.checks_construction([2, 0, 0, 0]));
+    assert!(policy.checks_construction([0, 0, 8, 0]));
+    assert!(!policy.checks_construction([0, 1, 0, 255]));
 }
 
 pub(crate) fn rules(exponent: u32, initial: f32) -> Rules {
@@ -785,7 +806,7 @@ fn operands_not_selected_image_values_drive_normalization_and_geometry() {
 
 #[test]
 fn malformed_source_windows_and_budgets_are_refused() {
-    for mutation in 0..10 {
+    for mutation in 0..12 {
         let (mut bytes, mut binding, mut budget) = fixture(2, -8192.25);
         match mutation {
             0 => bytes[0x500] ^= 1,
@@ -810,6 +831,16 @@ fn malformed_source_windows_and_budgets_are_refused() {
             9 => {
                 bytes[0x3a0] = 0xb8;
                 binding.fly_mask.digest = sha256(&bytes[0x3a0..0x3a5]);
+                binding.image_sha256 = sha256(&bytes);
+            }
+            10 => {
+                bytes[0x430] = 0x90;
+                binding.texture_channels.digest = sha256(&bytes[0x420..0x450]);
+                binding.image_sha256 = sha256(&bytes);
+            }
+            11 => {
+                bytes[0x473] = 0;
+                binding.texture_build_mask.digest = sha256(&bytes[0x470..0x474]);
                 binding.image_sha256 = sha256(&bytes);
             }
             _ => {
@@ -1248,6 +1279,54 @@ fn construction_uses_full_authored_footprint_without_relocating_blocked_cells() 
     assert!(
         p.construction_position(None, [f32::NAN, 0.], 0., "build.tga", 8, 0)
             .is_err()
+    );
+}
+
+#[test]
+fn construction_uses_its_own_rotated_footprint() {
+    let mut p = placement(
+        Source {
+            install: "fixture".into(),
+            edition: "test".into(),
+            map: "map".into(),
+        },
+        100,
+    );
+    let origin = AssetIdentity {
+        source: "fixture texture".into(),
+        edition: "test".into(),
+        version: "test".into(),
+    };
+    p.footprints.insert(
+        "build.tga".into(),
+        Footprint {
+            origin: origin.clone(),
+            cells: vec![[0, 0]],
+        },
+    );
+    p.building_footprints.insert(
+        "build.tga".into(),
+        Footprint {
+            origin,
+            cells: vec![[-2, 0]],
+        },
+    );
+    p.footprint_occupied[8 * 32 + 6] = 1;
+    assert_eq!(
+        p.construction_position(None, [32., 32.], 0., "build.tga", 8, 0)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        p.construction_position(None, [32., 32.], 90., "build.tga", 8, 0)
+            .unwrap(),
+        Some([32., 32.])
+    );
+    p.footprint_occupied[6 * 32 + 7] = 1;
+    assert_eq!(
+        p.construction_position(None, [32., 32.], 90., "build.tga", 8, 0)
+            .unwrap(),
+        None
     );
 }
 

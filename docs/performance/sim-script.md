@@ -199,6 +199,12 @@ reviewed behaviour change that also changes a digest, with the reason written he
 refuses a raise relative to HEAD, so a deliberate raise needs the reviewer to commit the new
 file first. A new workload gets its budget from a measured run of the commit that adds it.
 
+The construction texture-channel change shares the immutable placement-rule binding across rule
+clones, retaining its selected source windows while avoiding repeated metadata copies. With the
+same Human03 inputs, `python3 tools/perf/sim_run.py --check` reports 5 fewer allocations and
+1,392 fewer requested bytes in both the startup and 4,096-tick workloads. Their digests and vision
+work are unchanged; the recorded budgets were not raised.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

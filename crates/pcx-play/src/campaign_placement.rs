@@ -7,6 +7,7 @@ use crate::{
     },
     unit_placement::{
         Budget, Footprint, FootprintLoader, Grid, Placement, Rules, StationaryKey, StationaryStamp,
+        TexturePolicy,
     },
 };
 use pcx_assets::{AssetPath, Resolver};
@@ -262,6 +263,7 @@ pub fn assemble(
     let mut textures = Textures {
         reader,
         edition: context.sources.map.edition.clone(),
+        policy: rules.texture_policy(),
         cache: BTreeMap::new(),
         staged: BTreeMap::new(),
         remaining_bytes: 16 << 20,
@@ -477,6 +479,7 @@ struct Staged {
 struct Textures {
     reader: Arc<Resolver>,
     edition: String,
+    policy: TexturePolicy,
     cache: BTreeMap<String, Arc<Footprint>>,
     staged: BTreeMap<String, Staged>,
     /// Retained-cache capacity. A rolled-back staged load returns its share.
@@ -553,6 +556,14 @@ impl Textures {
     }
 
     fn decode(&mut self, path: &str) -> Result<(Arc<Footprint>, usize, usize), String> {
+        self.decode_kind(path, false)
+    }
+
+    fn decode_kind(
+        &mut self,
+        path: &str,
+        building: bool,
+    ) -> Result<(Arc<Footprint>, usize, usize), String> {
         if self.cache.len() + self.staged.len() >= FOOTPRINT_SOURCES {
             return Err("footprint source count budget".into());
         }
@@ -579,7 +590,11 @@ impl Textures {
             ));
         }
         let rgba = pcx_tga::decode_with(&asset.bytes, &header).map_err(|e| e.to_string())?;
-        let cells = raster(header.width, header.height, &rgba)?;
+        let cells = if building {
+            building_raster(header.width, header.height, &rgba, self.policy)?
+        } else {
+            raster(header.width, header.height, &rgba)?
+        };
         let cell_count = cells.len();
         let remaining_cells = self
             .remaining_cells
@@ -605,6 +620,12 @@ impl FootprintLoader for TextureLoader {
         self.textures.stage(path).map(|f| f.as_ref().clone())
     }
 
+    fn load_building(&mut self, path: &str) -> Result<Option<Footprint>, String> {
+        self.textures
+            .decode_kind(path, true)
+            .map(|(f, _, _)| Some(f.as_ref().clone()))
+    }
+
     fn commit(&mut self, paths: &[String]) {
         self.textures.commit(paths);
     }
@@ -612,6 +633,31 @@ impl FootprintLoader for TextureLoader {
     fn rollback(&mut self, paths: &[String]) {
         self.textures.rollback(paths);
     }
+}
+
+fn building_raster(
+    width: u16,
+    height: u16,
+    rgba: &[u8],
+    policy: TexturePolicy,
+) -> Result<Vec<[i32; 2]>, String> {
+    let count = usize::from(width) * usize::from(height);
+    if width == 0 || height == 0 || count > FOOTPRINT_CELLS || rgba.len() != count * 4 {
+        return Err("building footprint raster size".into());
+    }
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(count)
+        .map_err(|_| "building footprint allocation")?;
+    for (i, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
+        if policy.checks_construction(*pixel) {
+            result.push([
+                (i / usize::from(width)) as i32 - i32::from(height) / 2,
+                (i % usize::from(width)) as i32 - i32::from(width) / 2,
+            ]);
+        }
+    }
+    Ok(result)
 }
 
 fn raster(width: u16, height: u16, rgba: &[u8]) -> Result<Vec<[i32; 2]>, String> {
@@ -1194,6 +1240,7 @@ mod tests {
                 .unwrap(),
             ),
             edition: "synthetic".into(),
+            policy: crate::unit_placement::tests::rules(2, 0.0).texture_policy(),
             cache: BTreeMap::new(),
             staged: BTreeMap::new(),
             remaining_bytes: 4096,
@@ -1357,5 +1404,16 @@ mod tests {
         assert!(raster(2, 2, &rgba).is_err());
         assert!(raster(2, 2, &rgba[..12]).is_err());
         assert!(raster(0, 2, &[]).is_err());
+    }
+
+    #[test]
+    fn building_raster_uses_decoded_channel_flags_and_preserves_axes() {
+        let policy = crate::unit_placement::tests::rules(2, 0.0).texture_policy();
+        let rgba = [2, 0, 0, 0, 0, 1, 0, 255, 0, 0, 8, 0, 0, 0, 0, 255];
+        assert_eq!(
+            building_raster(2, 2, &rgba, policy).unwrap(),
+            [[-1, -1], [0, -1]]
+        );
+        assert!(building_raster(2, 2, &rgba[..12], policy).is_err());
     }
 }
