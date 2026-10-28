@@ -162,7 +162,11 @@ fn command_button(
             continue;
         }
         let objects = host.objects();
-        if objects.selection().first() != Some(&button.unit)
+        let active = objects.active_unit().unwrap_or_else(|error| {
+            input.last_error = Some(error);
+            None
+        });
+        if active != Some(button.unit)
             || objects
                 .executed_unit(button.unit)
                 .ok()
@@ -868,7 +872,11 @@ fn command_hotkey(
     }
     let objects = host.objects();
     let local = objects.local_player_number();
-    let primary = objects.selection().first().copied().filter(|&unit| {
+    let active = objects.active_unit().unwrap_or_else(|error| {
+        input.last_error = Some(error);
+        None
+    });
+    let primary = active.filter(|&unit| {
         objects
             .executed_unit(unit)
             .ok()
@@ -1235,7 +1243,7 @@ fn click(
     }
     if select {
         if let Some(unit) = picked {
-            if finished.is_some_and(|click| click.double)
+            if finished.is_some_and(|click| click.double || game_input.ctrl.held())
                 && let Some(cap) = boxes.cap()
             {
                 let view = crate::campaign_box_select::Projector {
@@ -1250,13 +1258,15 @@ fn click(
                     Err(error) => input.last_error = Some(error),
                 }
             }
-            objects.select_units(&[unit], !additive);
-            let clock = objects.timer_game_time();
-            let command = PlayerCommand::Select {
-                units: vec![unit],
-                replace: !additive,
-            };
-            record_command(&mut input, clock, command);
+            if let Err(error) = crate::campaign_selection_rules::click_unit(
+                objects,
+                &mut input,
+                unit,
+                additive,
+                boxes.cap(),
+            ) {
+                input.last_error = Some(error);
+            }
         }
         return;
     }
@@ -2221,4 +2231,4 @@ endglobals
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_box_select_tests.rs"]
-mod box_select_tests;
+pub(crate) mod box_select_tests;

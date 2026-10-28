@@ -187,10 +187,10 @@ fn project(
         return;
     }
     let desired = (|| {
-        let [id] = objects.selection() else {
+        let Some(id) = objects.active_unit()? else {
             return Ok(None);
         };
-        let unit = objects.executed_unit(*id).map_err(|e| e.to_string())?;
+        let unit = objects.executed_unit(id).map_err(|e| e.to_string())?;
         if !unit.shown || unit.combat.as_ref().is_some_and(|c| c.dead) {
             return Ok(None);
         }
@@ -200,7 +200,7 @@ fn project(
             .ok_or("portrait: unit model unavailable")?;
         Ok::<_, String>(Some((
             Key {
-                unit: *id,
+                unit: id,
                 model: animation.model.member.clone(),
                 color: campaign_actors::team_color(objects, unit)?,
             },

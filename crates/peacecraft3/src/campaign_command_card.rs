@@ -21,6 +21,8 @@ use std::{
     sync::{Arc, Weak},
 };
 
+mod group_panel;
+
 const SKIN: &str = r"UI\war3skins.txt";
 const CONSOLE: &str = r"UI\FrameDef\UI\ConsoleUI.fdf";
 // Application read/cache ceilings, not authored icon dimensions or slot counts.
@@ -109,7 +111,7 @@ struct Signature {
 }
 
 fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
-    let Some(&unit) = objects.selection().first() else {
+    let Some(unit) = objects.active_unit()? else {
         return Ok(None);
     };
     let record = objects
@@ -235,6 +237,8 @@ struct Source {
     cancel_build: (pcx_play::standard_command::MenuButton, String),
     /// Independent of the command grid: a failure here leaves the card mounted.
     hero_bar: Result<HeroBarSource, String>,
+    /// Independent of the grid and the hero rows; draws its bars in the hero bar's styling.
+    group_panel: Result<group_panel::Source, String>,
     images: HashMap<String, Handle<Image>>,
     failed: HashMap<String, String>,
     retained: usize,
@@ -288,6 +292,7 @@ pub(crate) struct CommandCard {
     hero_rows: Vec<HeroRow>,
     hero_fills: Vec<HeroFill>,
     pub hero_error: Option<String>,
+    group: group_panel::State,
 }
 
 impl CommandCard {
@@ -411,11 +416,21 @@ pub(crate) fn install(app: &mut App) {
             select_hero
                 .after(CommandCardSet)
                 .before(crate::button_actions::clear),
+        )
+        .add_systems(
+            Update,
+            group_panel::click
+                .after(CommandCardSet)
+                .before(crate::button_actions::clear),
         );
 }
 
 // Presses the card owns: command buttons and hero-bar buttons.
-type PressTarget = Or<(With<ButtonOrder>, With<HeroBarButton>)>;
+type PressTarget = Or<(
+    With<ButtonOrder>,
+    With<HeroBarButton>,
+    With<group_panel::GroupButton>,
+)>;
 
 fn capture_press(
     event: On<PointerPress>,
@@ -433,7 +448,7 @@ fn capture(mut card: ResMut<CommandCard>, mut hud: ResMut<crate::campaign_hud::C
 }
 
 fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Option<View>, String> {
-    let Some(&unit) = objects.selection().first() else {
+    let Some(unit) = objects.active_unit()? else {
         return Ok(None);
     };
     let record = objects
@@ -875,12 +890,18 @@ fn reset(
     materials: &mut Assets<crate::glue_menu::AdditiveImage>,
     witness: Option<Weak<()>>,
 ) {
-    for root in [card.root, card.hero_root].into_iter().flatten() {
+    for root in [card.root, card.hero_root, card.group.root()]
+        .into_iter()
+        .flatten()
+    {
         commands.entity(root).try_despawn();
     }
     if let Some(source) = card.source.take() {
         if let Some(material) = source.active_material {
             materials.remove(material.id());
+        }
+        if let Ok(mut group) = source.group_panel {
+            group.release(materials);
         }
         if let Some(font) = source.badge_font {
             fonts.remove(font.id());
@@ -1193,12 +1214,13 @@ fn project(
                 .launcher
                 .as_deref()
                 .and_then(crate::launch_gui::selected_install);
-            let (rules, hero_rules) =
+            let (rules, hero_rules, group_layout) =
                 crate::menu_lighting::with_client_image(install.as_deref(), |label, image| {
                     let identity = pcx_play::campaign_inputs::client_identity(image, label);
                     Ok((
                         Rules::reviewed_legacy(image, identity.clone())?,
-                        hero_bar_layout::Rules::reviewed_legacy(image, identity),
+                        hero_bar_layout::Rules::reviewed_legacy(image, identity.clone()),
+                        group_panel::Layout::read(image, identity),
                     ))
                 })?;
             let mut receipts = Vec::new();
@@ -1247,6 +1269,10 @@ fn project(
                     mana_art,
                 })
             });
+            let group_panel = group_layout.and_then(|layout| {
+                let art = skin_file(&skin, &sections, layout.highlight_key())?;
+                Ok(group_panel::Source::new(layout, art))
+            });
             let active_art = skin_file(&skin, &sections, &rules.active_key)?;
             let badge_art = skin_file(&skin, &sections, &rules.badge.art_key)?;
             let font_path = skin_file(&skin, &sections, &rules.badge.font_key)?;
@@ -1292,6 +1318,7 @@ fn project(
                 cancel,
                 cancel_build,
                 hero_bar,
+                group_panel,
                 receipts,
                 images: HashMap::new(),
                 failed: HashMap::new(),
@@ -1419,6 +1446,21 @@ fn project(
             images: &mut images,
             nodes: &mut nodes,
         },
+        &mut card,
+        &mut source,
+        &reader,
+        host.objects(),
+        &witness,
+        inputs.camera.active(),
+    )
+    .err();
+    card.group.error = group_panel::sync(
+        &mut HeroFrame {
+            commands: &mut commands,
+            images: &mut images,
+            nodes: &mut nodes,
+        },
+        &mut inputs.materials,
         &mut card,
         &mut source,
         &reader,
@@ -1808,6 +1850,7 @@ mod tests {
                 cancel: fixture_menu(),
                 cancel_build: fixture_menu(),
                 hero_bar: Err("fixture".into()),
+                group_panel: Err("fixture".into()),
                 images: HashMap::new(),
                 failed: HashMap::new(),
                 retained: 0,
@@ -2447,6 +2490,7 @@ mod tests {
             cancel: fixture_menu(),
             cancel_build: fixture_menu(),
             hero_bar: Err("fixture".into()),
+            group_panel: Err("fixture".into()),
             images: HashMap::from([("fixture".into(), owned.clone())]),
             failed: HashMap::new(),
             retained: 0,

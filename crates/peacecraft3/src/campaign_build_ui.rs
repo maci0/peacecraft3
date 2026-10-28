@@ -75,7 +75,7 @@ impl Intent {
         objects: &ObjectHost,
         session: Option<&Weak<()>>,
     ) -> Result<bool, String> {
-        if !self.bound_to(session, objects.selection().first().copied()) {
+        if !self.bound_to(session, objects.active_unit()?) {
             return Ok(false);
         }
         let record = objects

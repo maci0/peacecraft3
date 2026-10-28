@@ -30,6 +30,16 @@ impl ObjectCatalog for Units {
                 if name == HALL { "1" } else { "0" },
             ),
             (SlkId::UnitUi, "scale", FieldKind::Real, "0.2"),
+            (
+                SlkId::UnitData,
+                "prio",
+                FieldKind::Int,
+                match name.as_str() {
+                    PEON => "1",
+                    FOOTMAN => "6",
+                    _ => "3",
+                },
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -44,10 +54,10 @@ impl ObjectCatalog for Units {
                         field: column.into(),
                         slk: slk.name().into(),
                         index: -1,
-                        declared: if kind == FieldKind::Bool {
-                            "bool"
-                        } else {
-                            "real"
+                        declared: match kind {
+                            FieldKind::Bool => "bool",
+                            FieldKind::Int => "int",
+                            _ => "real",
                         }
                         .into(),
                         kind,

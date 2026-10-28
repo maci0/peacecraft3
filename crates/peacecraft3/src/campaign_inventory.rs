@@ -383,16 +383,16 @@ fn field(definition: &pcx_sim::world::Definition, key: &str) -> Result<String, S
     Ok(value)
 }
 fn wanted(objects: &ObjectHost, count: usize) -> Result<Option<View>, String> {
-    let [unit] = objects.selection() else {
+    let Some(unit) = objects.active_unit()? else {
         return Ok(None);
     };
-    let policy = objects.inventory_policy(*unit).map_err(|e| e.to_string())?;
+    let policy = objects.inventory_policy(unit).map_err(|e| e.to_string())?;
     if policy.slots > count {
         return Err("inventory capacity exceeds source HUD button count".into());
     }
     let mut items = vec![None; count];
     for (id, item) in objects.executed_items() {
-        let Some((holder, slot)) = item.held_by.filter(|(holder, _)| holder == unit) else {
+        let Some((holder, slot)) = item.held_by.filter(|(holder, _)| *holder == unit) else {
             continue;
         };
         let _ = holder;
@@ -409,7 +409,7 @@ fn wanted(objects: &ObjectHost, count: usize) -> Result<Option<View>, String> {
         });
     }
     Ok(Some(View {
-        unit: *unit,
+        unit,
         capacity: policy.slots,
         items,
     }))

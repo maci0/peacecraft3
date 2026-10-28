@@ -45,17 +45,17 @@ fn parameters() -> Parameters {
 }
 
 /// One unit of the synthetic scene: owner player number, type and game position.
-type Spec = (u8, &'static str, [f32; 2]);
+pub(crate) type Spec = (u8, &'static str, [f32; 2]);
 
-struct Rig {
-    app: App,
-    window: Entity,
-    units: Vec<HandleId>,
-    ground: f32,
+pub(crate) struct Rig {
+    pub(crate) app: App,
+    pub(crate) window: Entity,
+    pub(crate) units: Vec<HandleId>,
+    pub(crate) ground: f32,
 }
 
 impl Rig {
-    fn new(specs: &[Spec], size: [f32; 2]) -> Self {
+    pub(crate) fn new(specs: &[Spec], size: [f32; 2]) -> Self {
         let creates: String = specs
             .iter()
             .map(|(player, kind, [x, y])| {
@@ -171,11 +171,11 @@ impl Rig {
         rig
     }
 
-    fn frame(&mut self) {
+    pub(crate) fn frame(&mut self) {
         self.app.update();
     }
 
-    fn cursor(&mut self, at: [f32; 2]) {
+    pub(crate) fn cursor(&mut self, at: [f32; 2]) {
         self.app
             .world_mut()
             .get_mut::<Window>(self.window)
@@ -183,7 +183,7 @@ impl Rig {
             .set_physical_cursor_position(Some(DVec2::new(f64::from(at[0]), f64::from(at[1]))));
     }
 
-    fn button(&mut self, button: MouseButton, state: ButtonState) {
+    pub(crate) fn button(&mut self, button: MouseButton, state: ButtonState) {
         let window = self.window;
         self.app.world_mut().write_message(MouseButtonInput {
             button,
@@ -192,35 +192,35 @@ impl Rig {
         });
     }
 
-    fn press(&mut self, at: [f32; 2]) {
+    pub(crate) fn press(&mut self, at: [f32; 2]) {
         self.cursor(at);
         self.button(MouseButton::Left, ButtonState::Pressed);
         self.frame();
     }
 
-    fn drag(&mut self, to: [f32; 2]) {
+    pub(crate) fn drag(&mut self, to: [f32; 2]) {
         self.cursor(to);
         self.frame();
     }
 
-    fn release(&mut self, at: [f32; 2]) {
+    pub(crate) fn release(&mut self, at: [f32; 2]) {
         self.cursor(at);
         self.button(MouseButton::Left, ButtonState::Released);
         self.frame();
     }
 
-    fn sweep(&mut self, from: [f32; 2], to: [f32; 2]) {
+    pub(crate) fn sweep(&mut self, from: [f32; 2], to: [f32; 2]) {
         self.press(from);
         self.drag([(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0]);
         self.release(to);
     }
 
-    fn click(&mut self, at: [f32; 2]) {
+    pub(crate) fn click(&mut self, at: [f32; 2]) {
         self.press(at);
         self.release(at);
     }
 
-    fn hold(&mut self, key: KeyCode, held: bool) {
+    pub(crate) fn hold(&mut self, key: KeyCode, held: bool) {
         let mut keys = self.app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         if held {
             keys.press(key);
@@ -230,7 +230,7 @@ impl Rig {
     }
 
     /// Screen position of a game point on the scene ground, through the scene camera.
-    fn screen(&mut self, game: [f32; 2]) -> [f32; 2] {
+    pub(crate) fn screen(&mut self, game: [f32; 2]) -> [f32; 2] {
         let ground = self.ground;
         let mut cameras = self
             .app
@@ -244,7 +244,7 @@ impl Rig {
     }
 
     /// Screen rectangle around two game points, padded by `pad` pixels.
-    fn around(&mut self, a: [f32; 2], b: [f32; 2], pad: f32) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn around(&mut self, a: [f32; 2], b: [f32; 2], pad: f32) -> ([f32; 2], [f32; 2]) {
         let (a, b) = (self.screen(a), self.screen(b));
         (
             [a[0].min(b[0]) - pad, a[1].min(b[1]) - pad],
@@ -252,7 +252,7 @@ impl Rig {
         )
     }
 
-    fn selection(&mut self) -> Vec<HandleId> {
+    pub(crate) fn selection(&mut self) -> Vec<HandleId> {
         self.app
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>()
@@ -263,7 +263,7 @@ impl Rig {
             .to_vec()
     }
 
-    fn select(&mut self, units: &[HandleId]) {
+    pub(crate) fn select(&mut self, units: &[HandleId]) {
         self.app
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>()
@@ -273,7 +273,7 @@ impl Rig {
             .select_units(units, true);
     }
 
-    fn error(&self) -> Option<String> {
+    pub(crate) fn error(&self) -> Option<String> {
         self.app
             .world()
             .resource::<CampaignInput>()
@@ -281,7 +281,7 @@ impl Rig {
             .clone()
     }
 
-    fn outlines(&mut self) -> Vec<(Node, BorderColor)> {
+    pub(crate) fn outlines(&mut self) -> Vec<(Node, BorderColor)> {
         self.app
             .world_mut()
             .query_filtered::<(&Node, &BorderColor), With<Outline>>()
@@ -290,7 +290,7 @@ impl Rig {
             .collect()
     }
 
-    fn selects_journaled(&self) -> usize {
+    pub(crate) fn selects_journaled(&self) -> usize {
         self.app
             .world()
             .resource::<CampaignInput>()
@@ -303,7 +303,7 @@ impl Rig {
 }
 
 /// Five own peons in a row, an own hall behind them and a hall of player 1.
-fn row() -> Vec<Spec> {
+pub(crate) fn row() -> Vec<Spec> {
     vec![
         (0, PEON, [24.0, 40.0]),
         (0, PEON, [40.0, 40.0]),
@@ -315,7 +315,7 @@ fn row() -> Vec<Spec> {
     ]
 }
 
-const SCREEN: [f32; 2] = [1024.0, 768.0];
+pub(crate) const SCREEN: [f32; 2] = [1024.0, 768.0];
 
 #[test]
 fn a_sweep_selects_own_units_over_structures_and_other_players() {

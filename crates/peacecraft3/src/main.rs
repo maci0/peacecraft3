@@ -34,6 +34,7 @@ mod campaign_score_model;
 mod campaign_score_view;
 mod campaign_script_dialogs;
 mod campaign_selection;
+mod campaign_selection_rules;
 mod campaign_uber_splats;
 mod campaign_unit_panel;
 mod campaign_unit_shadows;
