@@ -505,6 +505,63 @@ impl Prepared {
 pub(crate) mod tests;
 
 impl Placement {
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_sample(&self, point: [f32; 2]) -> Result<(i32, bool), Error> {
+        let bounds = self.world_bounds();
+        let point = std::array::from_fn(|axis| {
+            point[axis].clamp(bounds[0][axis], bounds[1][axis] - self.rules.cell_size())
+        });
+        let [x, y] = self.cell(point)?;
+        let i = self
+            .index(i64::from(x), i64::from(y))
+            .ok_or_else(|| fail("diagnostic sample outside map"))?;
+        Ok((
+            i32::from(self.grid.domains[i]),
+            self.grid.pathing.cells[i] & self.rules.ground_mask() != 0,
+        ))
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_cell_state(&self, point: [f32; 2]) -> Result<(u8, u32, u32), Error> {
+        let [x, y] = self.cell(point)?;
+        let i = self
+            .index(i64::from(x), i64::from(y))
+            .ok_or_else(|| fail("diagnostic cell outside map"))?;
+        Ok((
+            self.grid.pathing.cells[i],
+            self.occupied[i],
+            self.footprint_occupied[i],
+        ))
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_construction_position(
+        &mut self,
+        point: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+    ) -> Result<Option<[f32; 2]>, Error> {
+        self.construction_position(None, point, face, path, prevent, require)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_reach(
+        &self,
+        excluded: HandleId,
+        start: [f32; 2],
+        target: [f32; 2],
+        radius: f32,
+    ) -> Result<bool, Error> {
+        let mut work = 4 << 20;
+        match self.route_outcome(excluded, start, target, radius, 0., &mut work)? {
+            RouteOutcome::Reached(_) => Ok(true),
+            RouteOutcome::Blocked(_) => Ok(false),
+            RouteOutcome::PartialBudget(_) => Err(fail("diagnostic reach work budget exhausted")),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn test_cell(&self, cell: usize) -> u8 {
         self.grid.pathing.cells[cell]

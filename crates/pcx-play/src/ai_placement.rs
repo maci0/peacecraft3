@@ -37,6 +37,11 @@ pub struct Rules {
 }
 
 impl Rules {
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_radius(&self) -> f32 {
+        self.margin
+    }
+
     pub fn reviewed_legacy(image: &[u8], origin: AssetIdentity) -> Result<Self, String> {
         let fail = |s: String| format!("AI placement {}: {s}", origin.source);
         if image.len() > 32 << 20
@@ -269,6 +274,55 @@ pub struct Grid<'a> {
 }
 
 impl<'a> Grid<'a> {
+    /// Diagnostic lookup in the search raster, using the decoded coordinate conversion.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_cell(&self, point: [f32; 2]) -> Option<([i32; 2], i8)> {
+        let cell = std::array::from_fn(|axis| {
+            ((point[axis] - self.origin[axis]) / self.rules.step) as i32
+        });
+        let width = self.rules.width as i32;
+        if point.iter().any(|v| !v.is_finite())
+            || !(0..width).contains(&cell[0])
+            || !(0..width).contains(&cell[1])
+        {
+            return None;
+        }
+        Some((
+            cell,
+            self.scores[cell[1] as usize * self.rules.width + cell[0] as usize],
+        ))
+    }
+
+    /// Convert a snapped candidate point without clipping it to the search raster.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_indices(&self, point: [f32; 2]) -> [i32; 2] {
+        std::array::from_fn(|axis| ((point[axis] - self.origin[axis]) / self.rules.step) as i32)
+    }
+
+    /// The object callback scales each coordinate before subtracting the scaled origin.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_object_indices(&self, point: [f32; 2]) -> Result<[i32; 2], String> {
+        use crate::script_random::real;
+        let scale = real::from_f32(self.rules.step.recip()).map_err(|e| e.to_string())?;
+        let mut indices = [0; 2];
+        for axis in 0..2 {
+            let scaled = |value| real::mul(real::from_f32(value)?, scale);
+            let point = scaled(point[axis]).map_err(|e| e.to_string())?;
+            let origin = scaled(self.origin[axis]).map_err(|e| e.to_string())?;
+            let value = f32::from_bits(real::sub(point, origin).map_err(|e| e.to_string())?);
+            if value <= i32::MIN as f32 || value >= i32::MAX as f32 {
+                return Err("object coordinate exceeds diagnostic index range".into());
+            }
+            indices[axis] = value as i32;
+        }
+        Ok(indices)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_step(&self) -> f32 {
+        self.rules.step
+    }
+
     /// Sampling must implement the client's cliff and walkability lookup, including edges.
     pub fn sample(
         rules: &'a Rules,
@@ -546,6 +600,31 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_traversal_can_measure_rank_after_a_valid_candidate() {
+        let r = rules();
+        let grid = Grid::sample(&r, [14., 14.], |_| Ok((0, false))).unwrap();
+        let mut rank = 0;
+        let mut target = None;
+        assert_eq!(
+            grid.search(
+                |p| {
+                    rank += 1;
+                    if p == [7., 7.] && target.is_none() {
+                        target = Some(rank);
+                    }
+                    snap(p)
+                },
+                |_| Ok(true),
+                |_| Ok(false),
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(target, Some(3));
+        assert_eq!(rank, 25);
+    }
+
+    #[test]
     fn retry_occurs_only_after_reach_rejection_and_failure() {
         let r = rules();
         let mut grid = Grid::sample(&r, [14., 14.], |_| Ok((0, false))).unwrap();
@@ -606,6 +685,20 @@ mod tests {
     #[test]
     fn unknown_client_is_rejected() {
         assert!(Rules::reviewed_legacy(&[], rules().origin).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn diagnostic_reports_the_scored_cell_and_clips_outside_points() {
+        let r = rules();
+        let mut grid = Grid::sample(&r, [14., 14.], |_| Ok((0, false))).unwrap();
+        grid.score_rectangle([[1, 2]], BuffType::Resource, 1)
+            .unwrap();
+        assert_eq!(grid.diagnostic_cell([7., 14.]), Some(([1, 2], -50)));
+        assert_eq!(grid.diagnostic_cell([35., 14.]), None);
+        assert_eq!(grid.diagnostic_indices([7., 14.]), [1, 2]);
+        assert_eq!(grid.diagnostic_object_indices([7., 14.]).unwrap(), [1, 2]);
+        assert!(grid.diagnostic_object_indices([f32::NAN, 0.]).is_err());
     }
 
     #[test]

@@ -7,8 +7,8 @@ every other structure request loudly. This note records what the Legacy executab
 
 ## Executable evidence
 
-Disassembled with `objdump` (virtual addresses of the Legacy image). The Kuna decompiler did not
-build an architecture for this PE image here, so no decompiler output is used.
+Disassembled with `objdump` and cross-checked with the Rizin Ghidra plugin. Addresses refer to
+the selected Legacy image; local decompiler output stays under `.scratch/`.
 
 | Fact | Routine |
 | --- | --- |
@@ -26,6 +26,19 @@ into it, `SetProduce` returns false and orders nothing.
 
 These are native-code observations for the fingerprinted executable, not a recreation or a
 claim that the unknown checks have been matched:
+
+- The driver `0xad4970` builds and scores a search object, invokes `0x68ea00` with the
+  `0xad4c10` callback, copies that object using `0xad3c00`, then searches. `0x68ea00` enumerates
+  objects and invokes the callback after its filters; it is not a sort or just cleanup
+  registration (`0xad4a07` through `0xad4a60`, `0x68f599` through `0x68f61d`). `0xad3c00`
+  copies both row-based byte grids, retained candidates, ring-buffer indices and coordinate
+  arrays; `0xad4db0` copies each grid row. It does not order candidates (`0xad3c00` through
+  `0xad3dbe`).
+- The search object holds byte grids at `+0x24` and `+0x2ac4`, four retained x and y pairs at
+  `+0x5580` and `+0x5594`, queue read and write indices at `+0x55a4` and `+0x55a8`, and
+  parallel queued x and y arrays at `+0x55b0` and `+0xf518`. The rows include stride padding.
+  The queue and state grid, not a separate candidate sort, determine visit order
+  (`0xad3c00`, `0xad3de0`, `0xad41f0`).
 
 - The search constructor (`0xad3de0`) initializes two 101 by 101 byte grids. Their origin is
   each supplied town coordinate minus 1600, with a 32-unit step on each axis. The constants are
@@ -54,6 +67,10 @@ claim that the unknown checks have been matched:
   Nearby objects modify the first grid through `0xad4c10`, `0x4dfb40`, `0xad4b90` and
   `0xad4ac0`; their structure selector and category rules are described below. Exact spatial
   boundary and dynamic-state behavior remain unqualified.
+  The cliff lookup combines the terrain corner value with the maximum value from any matching
+  separately stored spatial rectangles (`0x7044b0`, `0x7411b0`, `0x6fd140`). The diagnostic
+  samples the admitted terrain domains; it does not yet establish whether the separate layer
+  is populated in either original probe.
 - The first search enables an additional check at `0x7fd6b0`. If no site is found and that
   check has failed for at least one candidate, `0xad4970` searches the copy again with that
   additional check disabled (`0xad4a38` through `0xad4aa2`). The result is a failure sentinel
@@ -79,6 +96,18 @@ neither resolves, it leaves the previous coordinates in place. A newly allocated
 initialized from supplied coordinates by `0xac7e90`; `CreateCaptains` can supply the selected
 player start coordinates when it creates a record (`0xabd160` through `0xabd1e0`). These paths
 do not prove which record the Human05 builder selects, or when its mine and hall are associated.
+
+The start-location path first calls `0xac8290` with no hall and the selected start coordinate.
+That calls `0xac7450`, which considers existing global town records only when their primary
+mine reference resolves and compares the start to that mine with `0x7fd610`. If one passes the
+selection, it can be reused. Otherwise `0xac7e90` creates a record from the supplied coordinate
+and initializes both mine references to invalid (`0xac8290` through `0xac82f7`, `0xac7f10`
+through `0xac7f27`). A mine is associated separately: `0xab4550` checks the unit's mine ability
+and calls `0xac7000`, which selects or creates a record and invokes `0xac7070`; the latter stores
+the primary mine reference and calls refresh (`0xab45a2` through `0xab45c4`, `0xac7000` through
+`0xac7057`, `0xac70d0` through `0xac70ee`). Thus a mine being nearby is not itself a reference
+in a newly created start town. The unit registration path can register a mine separately
+(`0x687f68`); this trace does not establish the order and chosen town in the original probe.
 
 The worker search also resolves a reference held by the worker at `+0x510` using `0x6933c0`,
 then resolves the reference at `+0x48` of that associated object (`0xac2bd8` through
@@ -142,6 +171,14 @@ of the selected radius in cells around it to at most the category cap. It clips 
 search grid. Thus these scores are an AI-specific preference and exclusion layer around texture
 rectangles; they do not by themselves establish the general construction validity test.
 
+The facing for candidate snapping and the nearby-object texture walk comes from the selected
+`Misc/BuildingAngle` configuration, normalized to a quarter turn by `0x46dea0`; `0xad4c10`
+does not read the object's individual facing for this operation (`0xad41f0`, `0xad4cc4` through
+`0xad4d6f`). The rectangle callback scales a world coordinate and the grid origin separately
+before subtracting and truncating (`0xad4b90`); candidate indexing subtracts first and then scales
+(`0xad438a` through `0xad43cb`). Their real-number operation ordering can matter for fractional
+values.
+
 #### Shared placement validator
 
 Both AI candidate paths call `0x67ecd0` and accept only a zero result. The registered public
@@ -176,8 +213,8 @@ and the snap arithmetic. It reads grid, score and snap operands from the fingerp
 and uses the reviewed client real-number helpers for the snap's addition and subtraction.
 Its caller must supply terrain samples, texture dimensions, complete texture-rectangle cells,
 the extra check and the shared build validator; it propagates errors from those inputs. Synthetic
-tests exercise these pieces. The module does not yet obtain those inputs from a live map or issue a build order, and
-there is no original-map placement comparison. In particular, the caller must resolve the
+tests exercise these pieces. Production does not yet obtain those inputs or issue a build order.
+The diagnostic below supplies provisional inputs from the local map. The caller must resolve the
 special buffer-radius branch before scoring, and the `0x7fd6b0` check is still unidentified.
 
 The ignored local-input test `ai_placement_original.rs` reads the selected executable, the
@@ -243,7 +280,82 @@ same setup without the position recording. Scripts, map, run receipts and sample
 This differs from the unblocked probe, while the mine stays at the same coordinates. Creating a
 unit can also affect handles or random state, so the comparison does not isolate a footprint or
 prove a specific blocking rule. The recreation refuses before selecting a site, so no placement
-comparison against it is available.
+comparison from production orders is available.
+
+### Local-input search diagnostic
+
+The ignored `ai_placement_diagnostic.rs` test starts the selected Human05 map headlessly,
+reads the selected texture headers and unit definitions, and runs the search with the existing
+construction validator. It uses player 5's assigned start (7488, 2752), the map mine at
+(5696, 3456), no hall, and the decoded refresh rule, giving a provisional center at the mine.
+It creates the four observed acolytes at the probe's 9 s positions, which are sampled after the
+order and therefore are not guaranteed to be the exact order-time positions. The blocked case
+also creates the observed neutral farm. Terrain domains and pathing come from the live placement
+cache; its static pathing sample does not prove native dynamic pathing parity.
+Set `PCX_STARTUP_INSTALL`, `PCX_STARTUP_MAP` and `PCX_HUMAN05_DECISION_LOG` to the selected
+install, Human05 map and recorded route log, respectively, and run the ignored test with
+`--features test-fixtures`. This comparison used `.scratch/human05/placement-evidence-1.log`.
+
+The diagnostic now tries four origins: mine; assigned player start; the 9 s original-probe
+worker; and the worker at the recreation's 1223 s refusal, read from the saved route log. The
+last is a cross-scenario hypothesis, not an observed original town or probe worker coordinate.
+For each it enumerates structures around that origin. Both texture-axis mappings give the same
+results because these structures' textures are square. The table gives the chosen site when the
+extra check is accepted or replaced by the worker-route surrogate. The one-based ranks count
+dequeued grid points up to the first occurrence of the snapped site in a complete traversal;
+they are not counts of valid cells. Both oracle and chosen scores are 5. The validator accepts
+both oracle sites with the sampled worker positions. The first valid score-5 rank is also shown,
+so no oracle is the first accepted site under these inputs. The diagnostic now reads the selected
+building angle and uses the separate object-coordinate conversion described above. Repeating the
+comparison after those corrections produced the same table. The ranks do not establish which
+earlier candidates the native reach check would reject.
+
+| Layout | Origin | Chosen point, cell | First valid score-5 rank | Oracle rank | Distance |
+| --- | --- | --- | --- | --- | --- |
+| No farm | Mine | (5184, 3008), (34, 36) | 867 | 1760 | 1055.515 |
+| No farm | Start | (7168, 2432), (40, 40) | 307 | 5930 | 1011.929 |
+| No farm | Probe worker | (5440, 2624), (44, 44) | 84 | 1328 | 778.594 |
+| No farm | Route worker | (6272, 2304), (48, 49) | 1 | 705 | 452.548 |
+| Farm | Mine | (5184, 3008), (34, 36) | 867 | 3822 | 960 |
+| Farm | Start | (7168, 2432), (40, 40) | 307 | 8667 | 1216 |
+| Farm | Probe worker | (5376, 2624), (43, 47) | 80 | 557 | 607.157 |
+| Farm | Route worker | (6272, 2304), (48, 49) | 1 | 331 | 344.651 |
+
+The town-origin route surrogate exhausts its eight-check work bound for mine, start and
+probe-worker origins, and selects the same route-worker site shown above. Neither route
+surrogate implements the native check. The mine-origin traversal also finds a valid retained
+class candidate at rank 280; the later immediate score-5 candidate takes precedence.
+
+The mine is present at the expected location, but the diagnostic does not issue or compare a
+haunted-mine build. The two original ziggurat sites in each layout are recorded above; no
+ziggurat comparison is available because the current construction host refuses its `blighted`
+requirement. A first attempt using 8 s worker positions rejected the blocked oracle due to a
+mobile occupancy cell. Using the 9 s samples instead admits it. This shows the importance of
+the exact order-time state, not a proven validator error.
+
+Further native tracing narrows the missing reach input. The construction caller passes the
+selected builder to `0xad4970`, and `0xad41f0` uses references at builder offsets `+0x26c` and
+`+0x13c` in its `0x7fd6b0` call (`0xac2cb0`, `0xad49dd`, `0xad42bf`, `0xad4442`). The
+two coordinates supplied to that check are the town coordinate and the snapped candidate
+(`0xad43ee` through `0xad4458`). Before calling `0x8a2270`, `0x7fd6b0` resolves each of those
+two reference lists and changes associated spatial rectangles via `0x8b7b30` with argument 1;
+afterward it calls the same routine with argument 0 (`0x7fd832` through `0x7fd8cb`,
+`0x7fd95f` through `0x7fd9ab`). The meaning and contents of those worker-associated references,
+the search's treatment of a town center inside the mine footprint and the state of the actual
+worker references are not yet established. `0x8b7b30` clips each rectangle and dispatches updates
+at several spatial levels. At the base level, `0x8b7740` clears byte 7 of every covered entry for
+either argument. With argument 0 it also recomputes four two-bit fields from four underlying
+spatial queries apiece (`0x8b781e` through `0x8b7877`, `0x8b78b0` through `0x8b7978`). Those
+queries consult a masked spatial cell and, when present, a bounded object chain (`0x8be420`
+through `0x8be50e`). Their full state and exclusion meanings are not yet mapped to the recreation.
+The inner initializer `0x8a4a60` also has an early result when the two
+coordinates map to the same cell or its starting-cell lookup returns -1; `0x8a2270` treats that
+result as a finite coordinate-based value (`0x8a4b59` through `0x8a4b9e`, `0x8a22a3` through
+`0x8a232d`). At the base spatial level `0x8a20a0` returns -1 for out-of-range cells or either of
+two individual masked high-bit states (`0x8a20c4` through `0x8a211d`). Mapping those states and
+the temporary rectangle operations to live placement data remains open, so ordinary reachability is not
+an equivalent replacement. The recreation's route cannot substitute a stationary mine as its moving
+unit: it refuses moving pathing textures. No production placement is admitted on these results.
 
 ## Not established
 
@@ -257,6 +369,6 @@ comparison against it is available.
   placed), refund on cancel, and retry cadence when a site or the builder is not ready.
 - The early false answers listed above, and the upgrade fallback.
 
-What would settle placement: decode the remaining calls and the town-object initialization,
-then compare against several original-client layouts. Until then Human05's orange AI refuses
+What would settle placement: decode the builder-associated route inputs and the town-object
+initialization, then rerun both layouts at exact order-time state. Until then Human05's orange AI refuses
 at its first structure, which is the 1223 s stop.

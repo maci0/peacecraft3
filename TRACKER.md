@@ -5145,3 +5145,56 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless, muted `cargo test -p pcx-play --lib` passed 2181 tests with 84 ignored; the
   local-input snap test, native and WASM Clippy with `-D warnings`, and
   `python3 tools/perf/sim_run.py --check` passed. Budgets were unchanged.
+
+### 2026-10-28: Human05 placement diagnostic
+
+- [~] Added a feature-gated, ignored local-input search diagnostic using Human05's placement
+  cache, selected unit definitions and the player-build validator. Both texture-axis readings,
+  with the extra check accepted or replaced by a worker-route surrogate, select (5184, 3008)
+  for both layouts. The recorded sites are (6208, 2752) without a farm and (5952, 2432) with
+  one. Both oracle cells and the chosen cell have score 5; both oracle sites pass the validator
+  at the sampled 9 s worker positions. The town-origin route surrogate exhausts its bounded
+  diagnostic work. Full inputs and limits: [AI construction](docs/re-notes/ai-construction.md).
+- [~] Traced the native check's town and candidate coordinates, its builder-associated
+  references and temporary spatial rectangle updates. Its blocked-start handling and reference
+  semantics remain open; neither surrogate establishes the native check. The mine-target order
+  and ziggurat placement are not compared by the diagnostic.
+- [ ] AI construction remains disconnected and refuses; no Human05 route was rerun. The last
+  matching pair still reaches the 1223 s refusal, before the 1800 s victory path:
+  [Human05](docs/re-notes/campaign-human05.md).
+- Gate: headless `cargo test -p pcx-play --lib` passed 2181 tests with 84 ignored; the
+  feature-gated synthetic placement tests and local-input diagnostic passed. Native and WASM
+  Clippy passed with `-D warnings`. `python3 tools/perf/sim_run.py --check` passed every
+  deterministic budget without budget changes. Diagnostic completion is not oracle parity.
+
+### 2026-10-28: Human05 placement origins and traversal ranks
+
+- [~] Compared mine, assigned start, probe-worker and recorded route-worker origins in both
+  layouts. No completed search matches either oracle. Both texture-axis readings agree; the
+  first valid score-5 cell precedes the oracle for every tested origin. The town-origin route
+  surrogate exhausts its diagnostic bound for three origins. Results and one-based dequeue
+  ranks: [AI construction](docs/re-notes/ai-construction.md).
+- [~] Traced start-town lookup and creation, the separate mine-association path, the native
+  route's base rectangle updates and the early starting-cell result. Which town and spatial
+  states the original uses at the first order remain unobserved, so production still refuses.
+- [ ] No Human05 route was rerun. The last reproducible pair reaches the 1223 s refusal:
+  [Human05](docs/re-notes/campaign-human05.md).
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the ignored
+  local-input diagnostic, native and WASM Clippy with `-D warnings`, and
+  `python3 tools/perf/sim_run.py --check` passed. No performance budget was raised.
+
+### 2026-10-28: Native placement selection cross-check
+
+- [~] Cross-checked the placement driver, copied search state, queue, retained candidates and
+  callback enumeration against native code. The copy does not sort candidates; the search
+  returns the first accepted immediate-score cell and otherwise selects the highest retained
+  class. Candidate layout and addresses: [AI construction](docs/re-notes/ai-construction.md).
+- [~] The diagnostic now reads the selected `Misc/BuildingAngle` and uses the native object-cell
+  operation ordering. The two oracle comparisons and origin ranks remain unchanged. The native
+  cliff query also consults a separate spatial layer whose state in the probes remains unknown.
+  Neither diagnostic reach surrogate establishes the native check.
+- [ ] Production remains disconnected and refuses; no new Human05 route was run. The last
+  reproducible pair reaches 1223 s: [Human05](docs/re-notes/campaign-human05.md).
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored. The synthetic
+  facing and grid tests, ignored local-input diagnostic, native and WASM Clippy with
+  `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed; budgets were unchanged.

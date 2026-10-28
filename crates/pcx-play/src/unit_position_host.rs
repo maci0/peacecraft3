@@ -26,6 +26,11 @@ impl ExecutedUnit {
 }
 
 impl ObjectHost {
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_placement(&mut self) -> Option<&mut Placement> {
+        self.unit_placement.as_mut()
+    }
+
     pub fn unit_placement_rules(&self) -> Option<&crate::unit_placement::Rules> {
         self.unit_placement.as_ref().map(Placement::rules)
     }

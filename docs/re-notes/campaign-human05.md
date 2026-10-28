@@ -114,7 +114,13 @@ Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reach
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
 changed by those runs. The subsequent placement search implementation is not connected to
 orders, and the refusal names its unresolved town, texture, enumeration and reach inputs. No new route
-runs were made because the original-map oracle has not been reproduced.
+runs were made because the original-map oracle has not been reproduced. A feature-gated,
+local-input diagnostic now runs the search against both layouts with mine, start and worker
+origins. None of the completed variants selects either recorded Necropolis position; several
+town-origin route variants exhaust their diagnostic work bound. The native search returns the
+first accepted immediate-score candidate, and a refreshed diagnostic using the selected building
+angle did not change these results. Its inputs and limitations are
+recorded in [AI construction](ai-construction.md).
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
