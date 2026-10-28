@@ -215,3 +215,56 @@ fn unestablished_weapon_rows_refuse_the_order_or_the_shot() {
     let error = step_refused(&mut vm, start + 1.0);
     assert!(error.contains("minRange 90"), "{error}");
 }
+
+#[test]
+fn the_standard_attack_ground_order_exists_only_where_the_native_accepts_one() {
+    use crate::standard_command::Kind;
+    let (mut vm, a, _) = open(&fields("100", "normal", &[]));
+    let ground = vm
+        .host()
+        .inner
+        .standard_command_order(a, Kind::AttackGround)
+        .unwrap()
+        .expect("a splash weapon offers attack ground");
+    assert_eq!(
+        vm.host()
+            .inner
+            .native("OrderId", &[Value::Str("attackground".into())]),
+        Ok(Value::Int(ground))
+    );
+    assert_eq!(
+        vm.host().inner.native(
+            "IssuePointOrderById",
+            &[
+                Value::Handle(a),
+                Value::Int(ground),
+                Value::Real(90.0),
+                Value::Real(60.0)
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    let mut plain = fields("100", "normal", &[]);
+    plain.retain(|(id, _)| id != b"S000");
+    plain.push(column(b"S000", W, "Farea1", Real, "-"));
+    let (mut vm, a, _) = open(&plain);
+    assert_eq!(
+        vm.host()
+            .inner
+            .standard_command_order(a, Kind::AttackGround)
+            .unwrap(),
+        None
+    );
+    let (mut vm, a, _) = open(&fields(
+        "100",
+        "normal",
+        &[("splashTargs1", "ground,enemies")],
+    ));
+    assert_eq!(
+        vm.host()
+            .inner
+            .standard_command_order(a, Kind::AttackGround)
+            .unwrap(),
+        None
+    );
+}

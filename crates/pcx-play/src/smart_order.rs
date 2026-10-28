@@ -310,6 +310,18 @@ impl ObjectHost {
         Ok(found)
     }
 
+    /// The `setrally` order of a unit that trains or has the rally ability, which is the
+    /// condition the smart order uses to give a ground click the rally meaning.
+    pub(super) fn standard_rally_order(&self, unit: HandleId) -> Result<Option<i32>, Error> {
+        let caps = self.smart_capabilities(unit).map_err(|refusal| {
+            self.inner.error(
+                "standard command",
+                super::Failure::UnitActivity(refusal.to_string()),
+            )
+        })?;
+        Ok(caps.rally.then(|| self.smart_ids().set_rally).flatten())
+    }
+
     fn smart_relation(&self, unit: HandleId, target: HandleId) -> Result<Relation, SmartRefusal> {
         let data = |e: Error| SmartRefusal::Data(e.to_string());
         let (a, b) = (

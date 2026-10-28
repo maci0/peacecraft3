@@ -46,6 +46,17 @@ impl ObjectHost {
             .is_some_and(|rules| rules.ground_order == Some(order))
     }
 
+    /// The `attackground` order for a unit whose weapon has the splash columns the order
+    /// needs, the same condition [`Self::attack_ground_native`] accepts. Whether the client
+    /// shows its Attack Ground button on exactly these units is not established.
+    pub(super) fn standard_attack_ground_order(&self, unit: HandleId) -> Option<i32> {
+        let splash = self.live(unit)?.combat.as_ref()?.weapon?.splash?;
+        if splash.targets.unsupported {
+            return None;
+        }
+        self.combat.as_ref()?.ground_order
+    }
+
     fn ground_fail(&self, reason: impl Into<String>) -> Error {
         self.inner.error(NAME, Failure::UnitActivity(reason.into()))
     }

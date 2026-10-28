@@ -342,6 +342,8 @@ impl ObjectHost {
             Kind::Hold if movable => Some(state.rules.hold),
             Kind::Stop if movable || attack.is_some() => Some(state.rules.stop),
             Kind::Attack => attack,
+            Kind::AttackGround => self.standard_attack_ground_order(unit),
+            Kind::Rally => self.standard_rally_order(unit)?,
             _ => None,
         })
     }

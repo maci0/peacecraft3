@@ -1,5 +1,6 @@
 //! Standard command presentation from the selected CommandFunc/CommandStrings profiles.
 use crate::ability_profile::Tooltip;
+use crate::command_hotkey::{Hotkey, parse_ranked};
 use pcx_objects::editor::Editor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,17 +10,22 @@ pub enum Kind {
     Hold,
     Patrol,
     Attack,
+    AttackGround,
+    Rally,
 }
 
 impl Kind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Move,
         Self::Stop,
         Self::Hold,
         Self::Patrol,
         Self::Attack,
+        Self::AttackGround,
+        Self::Rally,
     ];
 
+    /// The `CommandFunc`/`CommandStrings` section. It is also the `CustomKeys.txt` section.
     pub fn profile(self) -> &'static str {
         match self {
             Self::Move => "CmdMove",
@@ -27,6 +33,8 @@ impl Kind {
             Self::Hold => "CmdHoldPos",
             Self::Patrol => "CmdPatrol",
             Self::Attack => "CmdAttack",
+            Self::AttackGround => "CmdAttackGround",
+            Self::Rally => "CmdRally",
         }
     }
 
@@ -41,8 +49,19 @@ pub struct Command {
     /// A skin key, not a texture path. Resolve it in the selected race's skin chain.
     pub art_key: String,
     pub position: [usize; 2],
-    pub hotkey: char,
+    pub hotkey: Hotkey,
     pub tooltip: Tooltip,
+}
+
+/// The single hotkey of a command profile.
+fn single_hotkey(name: &str, text: &str) -> Result<Hotkey, String> {
+    match parse_ranked(text)
+        .map_err(|error| format!("{name}.Hotkey: {error}"))?
+        .as_slice()
+    {
+        [Some(hotkey)] => Ok(*hotkey),
+        _ => Err(format!("{name}.Hotkey: one key code required")),
+    }
 }
 
 impl Command {
@@ -66,11 +85,7 @@ impl Command {
             .map_err(|e| format!("{name}.Buttonpos: {e}"))?
             .try_into()
             .map_err(|_| format!("{name}.Buttonpos requires two coordinates"))?;
-        let mut hotkey = value("Hotkey")?.chars();
-        let key = hotkey.next().expect("nonempty");
-        if hotkey.next().is_some() || !key.is_ascii_alphabetic() {
-            return Err(format!("{name}.Hotkey: unsupported non-letter binding"));
-        }
+        let hotkey = single_hotkey(name, value("Hotkey")?)?;
         let title = value("Tip")?;
         let description = value("Ubertip")?;
         if [title, description]
@@ -83,7 +98,7 @@ impl Command {
             kind,
             art_key: value("Art")?.into(),
             position,
-            hotkey: key,
+            hotkey,
             tooltip: Tooltip {
                 title: title.into(),
                 description: description.into(),
@@ -98,14 +113,8 @@ impl Command {
 pub struct MenuButton {
     pub art_key: String,
     pub position: [usize; 2],
-    pub hotkey: MenuHotkey,
+    pub hotkey: Hotkey,
     pub tooltip: Tooltip,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuHotkey {
-    Letter(char),
-    Code(i32),
 }
 
 impl MenuButton {
@@ -128,22 +137,7 @@ impl MenuButton {
             .map_err(|error| format!("{name}.Buttonpos: {error}"))?
             .try_into()
             .map_err(|_| format!("{name}.Buttonpos requires two coordinates"))?;
-        let raw_hotkey = value("Hotkey")?;
-        let hotkey = if raw_hotkey.chars().count() == 1
-            && raw_hotkey
-                .chars()
-                .next()
-                .is_some_and(|key| key.is_ascii_alphabetic())
-        {
-            MenuHotkey::Letter(raw_hotkey.chars().next().expect("one char"))
-        } else if let Ok(code) = raw_hotkey.parse::<i32>() {
-            if code < 0 {
-                return Err(format!("{name}.Hotkey: negative code"));
-            }
-            MenuHotkey::Code(code)
-        } else {
-            return Err(format!("{name}.Hotkey: unsupported binding"));
-        };
+        let hotkey = single_hotkey(name, value("Hotkey")?)?;
         let title = value("Tip")?;
         let description = value("Ubertip")?;
         if [title, description]
@@ -189,18 +183,18 @@ mod tests {
 
     #[test]
     fn reads_authored_fields_and_refuses_missing_ambiguous_or_unhandled_values() {
-        let profile = "[CmdMove]\nArt=FixtureMove\nButtonpos=2,1\nHotkey=z\nTip=Walk\nUbertip=Go to the indicated point.\n";
+        let profile = "[CmdMove]\nArt=FixtureMove\nButtonpos=2,1\nHotkey=Z\nTip=Walk\nUbertip=Go to the indicated point.\n";
         let source = tables(profile);
         let command = Command::read(&source, Kind::Move).unwrap();
         assert_eq!(command.art_key, "FixtureMove");
         assert_eq!(command.position, [2, 1]);
-        assert_eq!(command.hotkey, 'z');
+        assert_eq!(command.hotkey, Hotkey::letter('Z').unwrap());
         assert_eq!(command.tooltip.title, "Walk");
         for (old, replacement) in [
             ("Art=FixtureMove", "Art="),
             ("Buttonpos=2,1", "Buttonpos=2"),
             ("Buttonpos=2,1", "Buttonpos=-1,0"),
-            ("Hotkey=z", "Hotkey=27"),
+            ("Hotkey=Z", "Hotkey=ZZ"),
             ("Tip=Walk", "Tip=TRIGSTR_2"),
             ("Art=FixtureMove", "Art=FixtureMove\nArt=Other"),
         ] {
