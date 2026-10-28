@@ -16,7 +16,9 @@ use pcx_objects::editor::selection::SelectionCircles;
 use pcx_play::{
     map_startup_host::MapStartupHost,
     player_command_log::{PlayerCommand, PlayerCommandLog},
-    playercolor_host::{VisionCapability, VisionState},
+    playercolor_host::{
+        ObjectHost, OrderForm, QueueOutcome, SmartTarget, VisionCapability, VisionState,
+    },
 };
 use pcx_script::{HandleId, Host, Value};
 use peacecraft3::{
@@ -49,6 +51,14 @@ pub(crate) struct CampaignInput {
     pub commands: PlayerCommandLog,
     /// This frame's Escape cancelled a selection drag and is not an end-cinematic request.
     pub escape_cancelled_drag: bool,
+    /// Shift is held, so the orders issued this frame wait behind each unit's current
+    /// order. The client reads Shift when it sends the order (`0x5fd2f0`).
+    pub queue_orders: bool,
+}
+
+/// Copies the Shift state onto the orders of this frame.
+fn sync_queue_flag(game_input: Res<GameInput>, mut input: ResMut<CampaignInput>) {
+    input.queue_orders = game_input.open() && game_input.shift.held();
 }
 
 /// Mouse and keyboard button state, absent until the input plugin has run.
@@ -77,7 +87,7 @@ pub(crate) fn install(app: &mut App) {
             Update,
             (
                 (
-                    (command_hotkey, load_circles)
+                    (sync_queue_flag, command_hotkey, load_circles)
                         .chain()
                         .before(crate::campaign_minimap::MinimapInputSet),
                     (
@@ -222,7 +232,7 @@ fn command_button(
             }
             crate::campaign_command_card::Kind::Train(kind) => {
                 input.command = None;
-                immediate_command(host, &mut input, button.unit, kind);
+                immediate_command(host, &mut input, button.unit, kind, false);
                 continue;
             }
             crate::campaign_command_card::Kind::Standard(kind) => {
@@ -262,7 +272,7 @@ fn command_button(
                 }
                 crate::campaign_command_card::Kind::Immediate => {
                     input.command = None;
-                    immediate_command(host, &mut input, button.unit, command.order);
+                    immediate_command(host, &mut input, button.unit, command.order, true);
                 }
                 crate::campaign_command_card::Kind::Standard(_)
                 | crate::campaign_command_card::Kind::Train(_)
@@ -359,24 +369,82 @@ pub(crate) fn place_build(
     }
 }
 
+/// `queueable` orders wait behind the unit's current order while Shift is held;
+/// training, learning and the like are not orders a unit queues.
 fn immediate_command(
     host: &mut MapStartupHost,
     input: &mut CampaignInput,
     unit: HandleId,
     order: i32,
+    queueable: bool,
 ) {
-    let objects = host.objects_mut();
-    let clock = objects.timer_game_time();
-    let result = objects.native(
-        "IssueImmediateOrderById",
-        &[Value::Handle(unit), Value::Int(order)],
-    );
-    record_order_result(
+    issue_form(
+        host.objects_mut(),
         input,
-        clock,
-        result,
-        PlayerCommand::Immediate { unit, order },
+        unit,
+        OrderForm::Immediate { order },
+        queueable,
     );
+}
+
+/// The command log entry of an order form.
+fn command_for(
+    objects: &mut ObjectHost,
+    unit: HandleId,
+    form: OrderForm,
+) -> Result<PlayerCommand, String> {
+    let mut name = |order: i32| match objects.native("OrderId2String", &[Value::Int(order)]) {
+        Ok(Value::Str(name)) => Ok(name),
+        Ok(_) => Err("order has no admitted name".to_string()),
+        Err(error) => Err(error),
+    };
+    Ok(match form {
+        OrderForm::Immediate { order } => PlayerCommand::Immediate { unit, order },
+        OrderForm::Point { order, at } => PlayerCommand::Point {
+            unit,
+            order: name(order)?,
+            x: at[0],
+            y: at[1],
+        },
+        OrderForm::Target { order, target } => PlayerCommand::Target {
+            unit,
+            order: name(order)?,
+            target,
+        },
+    })
+}
+
+/// Issues `form` to `unit` and logs it once the host accepts. A `queueable` order issued
+/// with Shift held waits behind the unit's current order instead of replacing it; the
+/// order is logged as queued whether the unit was idle or not, because the client sets
+/// the queue flag from Shift alone (`0x5fd2f0`).
+pub(crate) fn issue_form(
+    objects: &mut ObjectHost,
+    input: &mut CampaignInput,
+    unit: HandleId,
+    form: OrderForm,
+    queueable: bool,
+) {
+    let command = match command_for(objects, unit, form) {
+        Ok(command) => command,
+        Err(error) => {
+            input.last_error = Some(error);
+            return;
+        }
+    };
+    let clock = objects.timer_game_time();
+    if queueable && input.queue_orders {
+        match objects.queue_order(unit, form) {
+            Ok(QueueOutcome::Issued(false)) => {}
+            Ok(QueueOutcome::Issued(true) | QueueOutcome::Queued(_)) => {
+                record_command(input, clock, PlayerCommand::Queued(Box::new(command)));
+            }
+            Err(error) => input.last_error = Some(error.to_string()),
+        }
+        return;
+    }
+    let result = objects.issue_order_form(unit, form).map(Value::Bool);
+    record_order_result(input, clock, result, command);
 }
 
 fn owned_standard_orders(
@@ -425,7 +493,7 @@ pub(crate) fn activate_standard(
     if kind.immediate() {
         input.command = None;
         for (unit, order) in owned_standard_orders(host.objects(), kind)? {
-            immediate_command(host, input, unit, order);
+            immediate_command(host, input, unit, order, true);
         }
     } else {
         input.command = Some(ArmedCommand {
@@ -466,6 +534,37 @@ fn learn_skill(host: &mut MapStartupHost, input: &mut CampaignInput, unit: Handl
     }
 }
 
+/// The player's right click: every selected unit of the local player gets the order its
+/// abilities give for what is under the cursor (`SmartTarget`). A unit with nothing to do
+/// and a click on the unit itself pass silently, as in the client; classes the recreation
+/// does not simulate are reported.
+pub(crate) fn issue_smart_orders(
+    objects: &mut ObjectHost,
+    input: &mut CampaignInput,
+    target: SmartTarget,
+) {
+    let local = objects.local_player_number();
+    let owned: Vec<HandleId> = objects
+        .selection()
+        .iter()
+        .copied()
+        .filter(|&u| {
+            objects
+                .executed_unit(u)
+                .ok()
+                .and_then(|r| objects.player_settings(r.owner).ok())
+                .is_some_and(|p| Some(p.number) == local)
+        })
+        .collect();
+    for unit in owned {
+        match objects.resolve_smart_order(unit, target) {
+            Ok(form) => issue_form(objects, input, unit, form, true),
+            Err(refusal) if refusal.shown() => input.last_error = Some(refusal.to_string()),
+            Err(_) => {}
+        }
+    }
+}
+
 fn record_order_result(
     input: &mut CampaignInput,
     clock: Option<f64>,
@@ -491,47 +590,11 @@ pub(crate) fn standard_target(
         return Err("Patrol imitation is not supported yet. Choose a ground point.".into());
     }
     for (unit, order) in owned_standard_orders(objects, kind)? {
-        let Value::Str(name) = objects.native("OrderId2String", &[Value::Int(order)])? else {
-            return Err("standard command has no admitted order name".into());
+        let form = match target.filter(|_| matches!(kind, Kind::Attack | Kind::Move)) {
+            Some(target) => OrderForm::Target { order, target },
+            None => OrderForm::Point { order, at: point },
         };
-        let clock = objects.timer_game_time();
-        let (result, command) =
-            if let Some(target) = target.filter(|_| matches!(kind, Kind::Attack | Kind::Move)) {
-                (
-                    objects.native(
-                        "IssueTargetOrderById",
-                        &[
-                            Value::Handle(unit),
-                            Value::Int(order),
-                            Value::Handle(target),
-                        ],
-                    ),
-                    PlayerCommand::Target {
-                        unit,
-                        order: name,
-                        target,
-                    },
-                )
-            } else {
-                (
-                    objects.native(
-                        "IssuePointOrderById",
-                        &[
-                            Value::Handle(unit),
-                            Value::Int(order),
-                            Value::Real(point[0]),
-                            Value::Real(point[1]),
-                        ],
-                    ),
-                    PlayerCommand::Point {
-                        unit,
-                        order: name,
-                        x: point[0],
-                        y: point[1],
-                    },
-                )
-            };
-        record_order_result(input, clock, result, command);
+        issue_form(objects, input, unit, form, true);
     }
     Ok(())
 }
@@ -915,7 +978,7 @@ fn command_hotkey(
             if letter_key(hotkey).is_some_and(|key| keys.just_pressed(key)) {
                 input.command = None;
                 input.build = None;
-                immediate_command(host, &mut input, unit, kind);
+                immediate_command(host, &mut input, unit, kind, false);
                 return;
             }
         }
@@ -945,7 +1008,7 @@ fn command_hotkey(
             {
                 input.command = None;
                 input.build = None;
-                immediate_command(host, &mut input, unit, command.order);
+                immediate_command(host, &mut input, unit, command.order, true);
                 return;
             }
             Err(error) => input.last_error = Some(error.to_string()),
@@ -1111,6 +1174,9 @@ fn click(
     let item_hit = witness
         .as_ref()
         .and_then(|witness| actors.item_hit(ray, far, witness, objects));
+    let tree_hit = witness
+        .as_ref()
+        .and_then(|witness| actors.destructable_hit(ray, far, witness, objects));
     if input.build.is_some() {
         if order {
             input.build = None;
@@ -1165,9 +1231,11 @@ fn click(
             _ => None,
         });
     if let Some(kind) = standard {
-        input.command = None;
-        if select
-            && !order
+        let issuing = select && !order;
+        if !(issuing && input.queue_orders) {
+            input.command = None;
+        }
+        if issuing
             && let Err(error) =
                 standard_target(objects, &mut input, kind, point, picked.or(item_hit))
         {
@@ -1188,7 +1256,9 @@ fn click(
             return;
         }
         ArmedPointer::Issue(command) => {
-            input.command = None;
+            if !input.queue_orders {
+                input.command = None;
+            }
             let Some(target) = picked else {
                 return;
             };
@@ -1210,33 +1280,12 @@ fn click(
                             .is_some_and(|p| Some(p.number) == local)
                 })
                 .collect();
+            let form = OrderForm::Target {
+                order: command,
+                target,
+            };
             for unit in casters {
-                let order = match objects.native("OrderId2String", &[Value::Int(command)]) {
-                    Ok(Value::Str(order)) => order,
-                    _ => {
-                        input.last_error = Some("command has no source order name".into());
-                        continue;
-                    }
-                };
-                let clock = objects.timer_game_time();
-                let result = objects.native(
-                    "IssueTargetOrderById",
-                    &[
-                        Value::Handle(unit),
-                        Value::Int(command),
-                        Value::Handle(target),
-                    ],
-                );
-                record_order_result(
-                    &mut input,
-                    clock,
-                    result,
-                    PlayerCommand::Target {
-                        unit,
-                        order,
-                        target,
-                    },
-                );
+                issue_form(objects, &mut input, unit, form, true);
             }
             return;
         }
@@ -1270,104 +1319,20 @@ fn click(
         }
         return;
     }
-    let local = objects.local_player_number();
-    let owned: Vec<HandleId> = objects
-        .selection()
-        .iter()
-        .copied()
-        .filter(|&u| {
-            objects
-                .executed_unit(u)
-                .ok()
-                .and_then(|r| objects.player_settings(r.owner).ok())
-                .is_some_and(|p| Some(p.number) == local)
-        })
-        .collect();
-    for unit in owned {
-        let (result, command) = if let Some(item) = item_hit.filter(|&id| {
-            objects
-                .executed_item(id)
-                .is_ok_and(|item| item.visible() == Some(true))
-        }) {
-            let result = objects.native(
-                "IssueTargetOrder",
-                &[
-                    Value::Handle(unit),
-                    Value::Str("smart".into()),
-                    Value::Handle(item),
-                ],
-            );
-            let command = PlayerCommand::Target {
-                unit,
-                order: "smart".into(),
-                target: item,
-            };
-            (result, command)
-        } else {
-            use pcx_play::standard_command::Kind;
-            let kind = if picked.is_some_and(|target| objects.is_enemy(unit, target)) {
-                Kind::Attack
-            } else {
-                Kind::Move
-            };
-            let order = match objects.standard_command_order(unit, kind) {
-                Ok(Some(order)) => order,
-                Ok(None) => continue,
-                Err(error) => {
-                    input.last_error = Some(error.to_string());
-                    continue;
-                }
-            };
-            let name = match objects.native("OrderId2String", &[Value::Int(order)]) {
-                Ok(Value::Str(name)) => name,
-                Err(error) => {
-                    input.last_error = Some(error);
-                    continue;
-                }
-                _ => {
-                    input.last_error = Some("standard command has no admitted order name".into());
-                    continue;
-                }
-            };
-            match picked {
-                Some(target) => {
-                    let result = objects.native(
-                        "IssueTargetOrderById",
-                        &[
-                            Value::Handle(unit),
-                            Value::Int(order),
-                            Value::Handle(target),
-                        ],
-                    );
-                    let command = PlayerCommand::Target {
-                        unit,
-                        order: name,
-                        target,
-                    };
-                    (result, command)
-                }
-                None => {
-                    let result = objects.native(
-                        "IssuePointOrderById",
-                        &[
-                            Value::Handle(unit),
-                            Value::Int(order),
-                            Value::Real(point[0]),
-                            Value::Real(point[1]),
-                        ],
-                    );
-                    let command = PlayerCommand::Point {
-                        unit,
-                        order: name,
-                        x: point[0],
-                        y: point[1],
-                    };
-                    (result, command)
-                }
-            }
-        };
-        record_order_result(&mut input, objects.timer_game_time(), result, command);
-    }
+    let target = if let Some(item) = item_hit.filter(|&id| {
+        objects
+            .executed_item(id)
+            .is_ok_and(|item| item.visible() == Some(true))
+    }) {
+        SmartTarget::Item { target: item, at: point }
+    } else if let Some(unit) = picked {
+        SmartTarget::Unit(unit)
+    } else if let Some(target) = tree_hit {
+        SmartTarget::Destructable { target, at: point }
+    } else {
+        SmartTarget::Ground(point)
+    };
+    issue_smart_orders(objects, &mut input, target);
 }
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
@@ -2232,3 +2197,7 @@ endglobals
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_box_select_tests.rs"]
 pub(crate) mod box_select_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "campaign_smart_order_tests.rs"]
+mod smart_order_tests;

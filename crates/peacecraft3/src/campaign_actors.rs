@@ -154,6 +154,41 @@ impl UnitActors {
         ))
     }
 
+    /// The nearest living, shown destructable whose model bounds the ray enters.
+    pub(crate) fn destructable_hit(
+        &self,
+        ray: Ray3d,
+        far: f32,
+        session: &Weak<()>,
+        objects: &pcx_play::playercolor_host::ObjectHost,
+    ) -> Option<HandleId> {
+        if !self
+            .session
+            .as_ref()
+            .is_some_and(|current| Weak::ptr_eq(current, session))
+        {
+            return None;
+        }
+        objects
+            .destructables_with_handles()
+            .filter(|(_, _, state)| !state.dead && !state.hidden)
+            .filter_map(|(id, _, _)| {
+                self.destructables.instances.get(&id)?;
+                let actor = self.actors.get(&id)?;
+                let inverse = actor.world_transform.to_matrix().inverse();
+                let distance = bounds_hit(
+                    inverse.transform_point3(ray.origin),
+                    inverse.transform_vector3(*ray.direction),
+                    Vec3::from_array(actor.model.minimum_extent),
+                    Vec3::from_array(actor.model.maximum_extent),
+                    far,
+                )?;
+                Some((id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+
     pub(crate) fn item_hit(
         &self,
         ray: Ray3d,
