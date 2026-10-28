@@ -7,7 +7,7 @@ use pcx_sim::world::{
 };
 use std::collections::BTreeMap;
 
-const EXTRA: &str = "native ShowUnit takes unit u, boolean shown returns nothing\nconstant native IsUnitHidden takes unit u returns boolean\nconstant native GetTriggerUnit takes nothing returns unit\nconstant native GetEnteringUnit takes nothing returns unit\nconstant native GetFilterUnit takes nothing returns unit\nconstant native GetUnitX takes unit u returns real\nconstant native GetUnitY takes unit u returns real\nnative GroupEnumUnitsInRect takes group g, rect r, boolexpr f returns nothing\nnative TriggerRegisterUnitInRange takes trigger t, unit u, real r, boolexpr f returns event\nglobals\nconstant unitevent TEST_RANGE=ConvertUnitEvent(-47)\nendglobals\n";
+pub(super) const EXTRA: &str = "native ShowUnit takes unit u, boolean shown returns nothing\nconstant native IsUnitHidden takes unit u returns boolean\nconstant native GetTriggerUnit takes nothing returns unit\nconstant native GetEnteringUnit takes nothing returns unit\nconstant native GetFilterUnit takes nothing returns unit\nconstant native GetUnitX takes unit u returns real\nconstant native GetUnitY takes unit u returns real\nnative GroupEnumUnitsInRect takes group g, rect r, boolexpr f returns nothing\nnative TriggerRegisterUnitInRange takes trigger t, unit u, real r, boolexpr f returns event\nglobals\nconstant unitevent TEST_RANGE=ConvertUnitEvent(-47)\nendglobals\n";
 const SCENE: &str = r#"
 globals
 unit A=null

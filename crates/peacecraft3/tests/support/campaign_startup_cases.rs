@@ -1937,6 +1937,8 @@ fn post_config_slot_input_reaches_players_created_in_main_without_minting_them_e
 
 #[path = "campaign_targeting_cases.rs"]
 mod campaign_targeting_cases;
+#[path = "control_group_cases.rs"]
+mod control_group_cases;
 #[path = "script_preload_cases.rs"]
 mod script_preload_cases;
 #[path = "unit_range_cases.rs"]
