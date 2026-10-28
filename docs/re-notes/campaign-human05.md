@@ -149,6 +149,10 @@ Release runs `bounded-set-20261029-a` and `bounded-set-20261029-b` both reach th
 `r14`. The bounded set evaluator is not connected to production placement, so these runs
 do not validate live reach inputs.
 
+Release runs `crossing-bound-20261029-a` and `crossing-bound-20261029-b` stopped at the same
+1223 s refusal; their 98 checkpoint and RNG lines match each other and `r14`. The indexed
+chain component is not connected to the simulation, so these runs do not validate it.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

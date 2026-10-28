@@ -563,6 +563,28 @@ additions (`0x801a50` and `0x8c23f0`) and removal links (`0x8c25d0`), not just m
 objects. The cleanup ordering and the mapping of live stamps to native entry state remain
 unqualified, so the helper is not connected to production placement.
 
+The link allocator at `0x8c2470` uses a free list before growing its node array. Its index
+sentinel is read from the selected executable at `0x8c24b8`; the visit limit is a separate
+query rule, not the pool capacity. A preallocated indexed pool now records object and removal
+links, rectangle changes, and dirty-cell cleanup for caller-supplied entry identities. Pool
+exhaustion refuses before changing a rectangle. Entry state is resolved at query time, because
+multiple links reference the same changing object. This component does not yet receive live
+collision or region registration. A reader checks the interval initializer and minimum against
+the selected executable and uses the selected real-number arithmetic; the cleanup is not yet
+scheduled. The movement updater at `0x8bc810` supplies its position and radius fields to
+`0x8bc840`; that routine forms position minus and plus radius, scales the bounds, floors
+them and makes the upper bounds exclusive (`0x808f40`, `0x801930`). The position getter
+`0x7fe810` scales the stored spatial position and adds map-owned origin fields to obtain the
+world position. The mapping of that origin and scale to the live placement stamp, and the
+event ordering, remain unqualified.
+For a unit, `0x66e920` obtains the radius through its virtual method at offset `0x168`,
+applies the minimum at `0x112d810`, and passes it to `0x800340` for conversion before the
+movement object stores it. The captured acolyte's virtual target `0x66ec60` reads a field at
+offset `0x19c` from its resolved unit-type record. The native registered as
+`BlzGetUnitCollisionSize` calls the same virtual slot (`0x4a17f6`, `0x497370`). The
+recreation's collision-size getter reads the selected unit's `UnitBalance` collision field,
+including object overrides. Other object classes still need qualification.
+
 The selected Human05 `war3map.w3r` contains 311 authored rectangles. Comparing their bounds
 with the 1600-unit search half-width gives 24, 18 and 23 intersections for the baseline,
 workers-at-start and workers-near-mine captured origins. The map script registers one of the

@@ -227,6 +227,11 @@ bytes in each Human03 workload, with allocation counts, reallocations, digests a
 unchanged. That leaves 24 bytes above the earlier pre-input placement measurement; the budget
 was not raised.
 
+The eight inline placement events now encode their handle and event kind compactly, retaining
+the full-width overflow path. The locked offline check reports 64 fewer requested bytes in each
+Human03 workload than the queued-order run, placing both 40 bytes below the earlier pre-input
+measurement. Allocation and reallocation counts are unchanged; no budget was raised.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

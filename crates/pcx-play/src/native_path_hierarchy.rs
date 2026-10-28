@@ -2,6 +2,9 @@
 //!
 //! Callers must supply source-qualified occupancy classes and search inputs.
 
+#[path = "native_spatial_chains.rs"]
+pub mod spatial_chains;
+
 /// Entry tests for a cell in the selected client's full-mask reach query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntryRules {

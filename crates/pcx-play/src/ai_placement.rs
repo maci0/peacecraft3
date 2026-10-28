@@ -1395,6 +1395,16 @@ mod tests {
         let path = std::env::var_os("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
         let image = std::fs::read(path).unwrap();
         let rules = Rules::reviewed_legacy(&image, rules().origin).unwrap();
-        crate::native_path_hierarchy::EntryRules::reviewed_legacy(&image, &rules).unwrap();
+        let entries =
+            crate::native_path_hierarchy::EntryRules::reviewed_legacy(&image, &rules).unwrap();
+        assert!(
+            crate::native_path_hierarchy::spatial_chains::Chains::reviewed_limit(&image, &rules)
+                .unwrap()
+                > 0
+        );
+        crate::native_path_hierarchy::spatial_chains::Chains::reviewed_classes(
+            &image, &rules, entries,
+        )
+        .unwrap();
     }
 }

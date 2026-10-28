@@ -5840,3 +5840,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Standalone tests for its round trip, the crossing counter and the ordering refusal pass.
   The requested Cargo, campaign and allocation checks are waiting for the shared Cargo lock; the memory change
   has not yet been measured against the Human03 budget.
+
+### 2026-10-29: Indexed spatial chains
+
+- [~] A bounded index-linked node pool implements supplied rectangle registration, movement,
+  query and dirty-cell compaction. The selected executable supplies its index sentinel; pool
+  exhaustion refuses without changing the requested rectangle. The pool is not yet attached
+  to live registrations or the cleanup clock, so AI placement remains refused. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Five synthetic pool tests and the selected-executable index and link-class reader test
+  pass under Cargo. A separate interval source-window check uses a local PE stub and stub
+  arithmetic. The `pcx-play` library suite passed 2,331 tests with 90 ignored; native and
+  WASM Clippy passed with warnings denied.
+- With the pool inactive, the simulation budget check passes: Human03
+  allocated bytes are 1,039,365,913 and 1,756,596,685 for the two workloads, 40 below the
+  pre-input measurements, with allocation and reallocation counts unchanged. Human03 and
+  Human04 reached victory at 279.02 s and 449.02 s, with checkpoint and RNG lines matching
+  `g1`. Two Human05 runs stopped at the existing 1223 s refusal with matching checkpoint and
+  RNG lines. These results do not exercise a live chain pool.
