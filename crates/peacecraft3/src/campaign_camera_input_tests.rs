@@ -59,8 +59,18 @@ impl Rig {
             .init_resource::<crate::campaign_actors::UnitActors>()
             .init_resource::<GroundPublication>()
             .init_resource::<CampaignInput>()
+            .init_resource::<peacecraft3::game_input::GameInput>()
             .insert_resource(rules.map_or_else(CameraInput::default, CameraInput::with_rules))
-            .add_systems(Update, (session_state, camera_keys, scroll).chain());
+            .add_systems(
+                Update,
+                (
+                    crate::campaign_game_input::refresh_gate,
+                    session_state,
+                    camera_keys,
+                    scroll,
+                )
+                    .chain(),
+            );
         app.world_mut().resource_mut::<GroundPublication>().context = Some(context);
         let window = app
             .world_mut()
