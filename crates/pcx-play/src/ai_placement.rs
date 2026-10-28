@@ -171,7 +171,7 @@ impl crate::playercolor_host::ObjectHost {
                     rawcode: buff.rawcode(),
                 });
             }
-            "untracked native movement-counter writers"
+            "unit-wide ability-disable counts and native effect writers"
         };
         Err(ExclusionError::UnknownMovement { unit, source_name })
     }

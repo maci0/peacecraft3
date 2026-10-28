@@ -784,7 +784,7 @@ This is a preconditioned diagnostic, not an admitted production search. For a un
 rectangle with shared control, live explicit pause, sleep or an active buff cannot yet be mapped
 to the native movement counters and cause a typed refusal naming the unit and source. Even when
 those records are absent, the host does not track all writers of the counters, so it refuses
-with `untracked native movement-counter writers`. The known write paths are `0x46ca26`,
+with `unit-wide ability-disable counts and native effect writers`. The known write paths are `0x46ca26`,
 `0x46e0d9`, `0x46e651`, `0xb666bc` and `0xb665f9`; identified effect calls include
 `0xb8ec16`, `0xb8ec2b`, `0xb8f2e6`, `0xb8f2fb`, `0xb9d839`, `0xb9d844`, `0xb9dc0c`,
 `0xb9dc17`, `0xb9dd66`, `0xb9dd71`, `0xba0f79`, `0xba0f84`, `0xc1a019`, `0xc1a656`,
@@ -798,6 +798,40 @@ writers. Thus neither selected site has been reproduced under the qualified rule
 The complete hierarchy edge expansion and its occupancy mapping remain open for the two
 recorded reach tables; neither the recreation's ordinary router nor the historical no-reach
 diagnostic is a validation of those tables.
+
+### Movement-counter callers, 2026-10-28
+
+The common ability attachment path `0x6d4560` records the movement component at unit offset
+`+0x3f8` and applies existing unit-wide disable counts to the attached ability. The unit-wide
+update at `0x6d60f0` maintains six counts at offsets `+0x3c4` through `+0x3d8` and walks
+the unit's ability list, incrementing or decrementing eligible abilities. Its callers must be
+qualified as well as direct movement-effect callers. The `PauseUnit` registration at `0x49d8f1`
+selects `0x4a3f00`, which reaches that update through `0x69c6e0` and `0x69c750` under the
+native flag conditions. The recreation records the explicit pause interval, but that alone does
+not represent the other unit-wide disable counts.
+
+The native virtual tables at `0xf3c528` and `0xf3d130` identify two effect classes as `Bprg`
+and `Bchd` via their class getters `0xb9d5e0` and `0xb9e8c0`. Both tables use the methods
+containing the calls at `0xb8ec16`, `0xb9d839` and `0xb9dc0c`. The selected ability table
+associates `Bprg` with the `Aprg` Purge record, as well as other records; this establishes
+another effect family to investigate, not that a particular Purge occurred in the probe.
+The class identity alone does not establish all callers or when those methods run.
+
+A scan of direct calls and jumps in the retained disassembly found five calls each to the
+movement-specific increment and decrement helpers, and 107 and 99 calls to the generic add
+and subtract helpers. There are also 90 direct calls to the unit-wide update. The generic
+helpers also operate on ability classes other than movement, so these counts are a work
+inventory, not a count of established movement triggers. Indirect calls and unit-wide dispatcher
+callers still require classification. The probe retains the
+original map initialization and other players; its added script creates four orange acolytes
+and the farm and starts the orange AI. The map also contains a global pause in an ending
+trigger, which does not establish that it ran before this order. The selected unit-ability table
+gives `ACen` to `nmrr`, and the original map creates two neutral-hostile units of that type.
+Their creation locations are far from the workers, but their entire movement and targeting
+history has not been bounded for the order time. The orange AI script does not by itself rule
+out an effect from another unit or a unit-wide engine transition. Consequently neither this
+script search nor the absence of a recreation buff proves zero for every writer at the order
+instant. The previously captured zero values remain observations for the sampled native unit only.
 
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open

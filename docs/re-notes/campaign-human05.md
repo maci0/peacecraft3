@@ -140,6 +140,9 @@ details in [AI construction](ai-construction.md).
 
 ## Open
 
+- The placement exclusion diagnostic still refuses the orange acolyte before selecting either
+  oracle site. Unit-wide ability-disable counts and effect writers are not yet reconstructed;
+  the separate diagnostic reach check is bypassed and does not validate native reach behavior.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

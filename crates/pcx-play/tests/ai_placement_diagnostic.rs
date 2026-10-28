@@ -179,6 +179,7 @@ fn variant_ranks(
 #[test]
 #[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP, PCX_HUMAN05_DECISION_LOG and PCX_HUMAN05_ORDER_PROBE"]
 fn human05_placement_diagnostic() {
+    println!("native reach is bypassed in the exclusion scan");
     let install = PathBuf::from(std::env::var("PCX_STARTUP_INSTALL").unwrap());
     let map = PathBuf::from(std::env::var("PCX_STARTUP_MAP").unwrap());
     let bytes = std::fs::read(&map).unwrap();
@@ -597,7 +598,7 @@ fn human05_placement_diagnostic() {
                         }
                         Ok((p, grid.diagnostic_indices(p)))
                     },
-                    |_| Ok(true),
+                    |_| Ok(true), // The native reach search is not yet implemented.
                     |p| {
                         let valid = validate(p)?;
                         if valid && first_valid.get().is_none() {

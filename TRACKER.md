@@ -5378,3 +5378,19 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   WASM Clippy passed with `-D warnings` after rebuilding stale dependency metadata. The locked,
   offline simulation check passed with 8 fewer allocations and 50 fewer requested bytes in both
   Human03 workloads; digests and budgets are unchanged.
+
+### 2026-10-28: Movement-counter caller inventory
+
+- [~] Traced unit-wide ability-disable count propagation and the explicit pause path, and
+  associated shared movement-counter methods with two additional native effect classes. The
+  direct-call inventory and limits are recorded in [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The remaining unit-wide and effect triggers are not classified or proven absent in the
+  probe. The placement diagnostic continues to refuse the acolyte; its reach check remains
+  bypassed. Production placement, the two oracle sites, reach tables and town selection remain
+  unverified. No campaign route was rerun.
+- The local-input diagnostic still refuses `uaco` handle 4612 at baseline candidate
+  (6208, 2752), dequeue 1, and farm candidate (6272, 2752), dequeue 5. It explicitly reports
+  the reach bypass and exits with a failing test result.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2187 tests with 84 ignored. Native and
+  WASM Clippy passed with `-D warnings` after refreshing stale shared-target metadata. The
+  locked, offline simulation budget check passed with unchanged allocation counts and digests.
