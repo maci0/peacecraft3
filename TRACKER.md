@@ -33,6 +33,22 @@
   parity remain open.
   Implementation is paused at the user's request after publication.
 
+- [~] Drag-box selection: a left press with no armed command starts a gesture;
+  the swept rectangle is outlined in `[SelectionCircle] ColorFriend` and selects
+  on release the own units whose projected selection circle it touches (own
+  units, then own structures, then a single other-player unit; Shift adds; cap,
+  double-click window and tolerance read from the selected client image;
+  Escape cancels; double click groups own units of one type on screen). A
+  zero-width or zero-height release is the old click. Evidence, observations from
+  the private Wine reference and the gaps are in
+  [campaign box selection](docs/re-notes/campaign-box-selection.md). Open: which
+  12 units the original keeps past the cap, rules for several other-player
+  units and Shift mixes, hero/`prio` order, unit selectability flag,
+  `EnableDragSelect`/`EnableSelect` natives, live preselect circles during the
+  drag, outline width at other resolutions, native pick geometry (the
+  recreation tests projected selection circles) and the multi-unit group HUD
+  (the unit panel and command card still read a single selection).
+
 - [x] Release 0.6.0: Human01 and Human02 earned Victory verified at pinned
   gameplay snapshots; construction controls, campaign AI, Mirror Image,
   leaderboard and hidden-unit lifecycles, and source-qualified autocast OFF
