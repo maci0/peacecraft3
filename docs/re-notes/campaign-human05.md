@@ -112,20 +112,20 @@ checkpoint `fnv64=d42949ae424eb960`. At 1218 s the party holds 26 units (18 foot
 Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reached the same
 1223 s refusal. Their Human05 checkpoints, RNG checkpoints and refusal text match each other
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
-changed by those runs. The placement search remains disconnected from orders, so Human05 was
-not rerun before the original-map oracles were reproduced. With the native town coordinate and
-exact order-time workers, a local-input diagnostic selects the unblocked site but selects
-(6144, 2432) in the farm layout, while the client selects (5952, 2432). An experimental run
-that disables mobile occupancy matches the two sites and their dequeue ranks, but does not
-implement the native object-state mapping or reach check. The recreation also lacks the native
-town list and hierarchical reach search. See
+changed by those runs. The placement search remains disconnected from orders. The snapshot
+diagnostic now reproduces both Necropolis sites with the recorded town coordinate and
+source-derived exclusion evidence, while bypassing native reach. The recreation still lacks
+the live town list, complete hierarchical reach search and undead construction path. See
 [AI construction](ai-construction.md) for the evidence and limitations. No later Human05 state
 has been verified.
 
-The current diagnostic replaces the blanket mobile-occupancy experiment with the decoded
-per-unit exclusion predicate and the source-derived enumeration rectangle. It refuses when
-the live movement-counter sources cannot be qualified. The reach search and town association
-remain open, so this does not change the 1223 s production refusal or establish a later run.
+Release runs `snapshotproof-1` and `snapshotproof-2` also stop at 1223 s with exit 101.
+Their Human05 and RNG checkpoint lines match each other and `r14`, including the final RNG
+checkpoint `d42949ae424eb960`. Their refusal includes the remaining placement inputs.
+
+The diagnostic applies the per-unit exclusion predicate and source-derived enumeration
+rectangle with snapshot-specific effect evidence. This does not change the 1223 s production
+refusal or establish a later run.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
@@ -140,15 +140,10 @@ details in [AI construction](ai-construction.md).
 
 ## Open
 
-- The placement exclusion diagnostic still refuses the orange acolyte before selecting either
-  oracle site. Unit-wide ability-disable counts and effect writers are not yet reconstructed;
-  the separate diagnostic reach check is bypassed and does not validate native reach behavior.
-  Its directly created fixture workers are unpaused, awake and have no retained buffs; the
-  recorded Human05 route does not include per-handle pause or buff history. The host now records
-  such events during simulation, but the fixture seeds a nominal snapshot clock without replaying
-  timer callbacks or the original probe's movement histories. The recorded-start Ensnare bound
-  passes for both layouts, but the farm fixture's own position-setting calls are now recorded as
-  relocations and refuse the live-history check.
+- The snapshot exclusion diagnostic selects both recorded Necropolis sites at their recorded
+  dequeue counts, using source-derived fixture evidence and a checkpoint after snapshot setup.
+  The native reach check is bypassed. The snapshot does not replay movement or timer callbacks;
+  production effect-source qualification, reach and town selection remain open.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

@@ -541,6 +541,69 @@ fn placement_history_records_successful_relocation() {
     assert_eq!(host.placement_events(a).unwrap().count(), 1);
 }
 
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn placement_snapshot_checkpoint_excludes_only_prior_events() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    let host = &mut vm.host().inner;
+    host.native(
+        "SetUnitPosition",
+        &[Value::Handle(a), Value::Real(48.), Value::Real(16.)],
+    )
+    .unwrap();
+    let checkpoint = host.diagnostic_placement_checkpoint();
+    assert_eq!(host.placement_events(a).unwrap().count(), 1);
+    assert_eq!(
+        host.diagnostic_placement_events_since(a, checkpoint)
+            .unwrap()
+            .count(),
+        0
+    );
+    host.native("PauseUnit", &[Value::Handle(b), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(
+        host.diagnostic_placement_events_since(a, checkpoint)
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        host.diagnostic_placement_events_since(b, checkpoint)
+            .unwrap()
+            .count(),
+        1
+    );
+    host.native(
+        "SetUnitPosition",
+        &[Value::Handle(a), Value::Real(56.), Value::Real(16.)],
+    )
+    .unwrap();
+    assert_eq!(
+        host.diagnostic_placement_events_since(a, checkpoint)
+            .unwrap()
+            .count(),
+        1
+    );
+    for _ in 0..6 {
+        host.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+            .unwrap();
+    }
+    assert_eq!(host.diagnostic_placement_checkpoint(), 9);
+    assert_eq!(
+        host.diagnostic_placement_events_since(a, checkpoint)
+            .unwrap()
+            .count(),
+        7
+    );
+    assert_eq!(host.placement_events(a).unwrap().count(), 8);
+    assert!(
+        host.diagnostic_placement_events_since(a, usize::MAX)
+            .is_err()
+    );
+}
+
 #[test]
 fn pause_preserves_the_route_and_repeated_pause_does_not_stack_or_catch_up() {
     let mut vm = open();

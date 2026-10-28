@@ -5504,3 +5504,25 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   established: edge-scroll margin, drag threshold, double-click window, Tab
   handler, smart-order target table, cursor mode to sequence mapping, and which
   source drives the last zoom level. Drag-box selection is tracked separately.
+
+### 2026-10-28: Placement snapshot exclusions and reach queue
+
+- [~] The original-input diagnostic derives effect-source evidence from selected tables, map
+  overrides, script literals and the recorded-start Ensnare bound. A checkpoint separates its
+  setup relocations from later events. With native reach bypassed, the recorded town origin
+  selects the baseline Necropolis at (6208, 2752), dequeue 1, and the farm layout at
+  (5952, 2432), dequeue 280, for both tested texture-axis readings.
+- [~] Decoded the preferred town class as peon and implemented the selection rule for supplied
+  list order and eligibility. Added the native reach priority-queue ordering and stale-removal
+  accounting with synthetic tests. The live town list, eligibility, hierarchical reach graph,
+  occupancy mapping, reach tables and undead construction remain open; production placement
+  remains disconnected. See [AI construction](docs/re-notes/ai-construction.md).
+- Two Human05 release runs reached the same 1223 s refusal, with matching checkpoint and RNG
+  lines and final RNG checkpoint `d42949ae424eb960`.
+- The shared PE reader stores small section tables inline, with a bounded heap fallback, and
+  placement events use inline host storage before allocating overflow. The locked offline
+  simulation budget check passed with 56 fewer allocations and at least 10,536 fewer
+  requested bytes at both Human03 checkpoints versus the pre-history measurement; reallocations
+  and digests are unchanged. No budget was raised.
+- Checks: 2,207 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
+  denied; snapshot checkpoint and original-input diagnostics passed.

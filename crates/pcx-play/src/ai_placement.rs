@@ -24,6 +24,33 @@ pub enum MovementEvidence {
     UnknownBuff([u8; 4]),
 }
 
+/// Source-classified town candidates in the native selector's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TownUnitClass {
+    Peon,
+    Structure,
+    Other,
+}
+
+/// Select a reference from caller-supplied native list order and eligibility.
+pub fn select_town_reference(
+    units: impl IntoIterator<Item = (HandleId, bool, TownUnitClass)>,
+) -> Option<HandleId> {
+    let mut structure = None;
+    let mut other = None;
+    for (unit, eligible, class) in units {
+        if !eligible {
+            continue;
+        }
+        match class {
+            TownUnitClass::Peon => return Some(unit),
+            TownUnitClass::Structure => structure = Some(unit),
+            TownUnitClass::Other => other = Some(unit),
+        }
+    }
+    structure.or(other)
+}
+
 /// Result of the optional player-dependent visibility check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExclusionVisibility {
@@ -216,6 +243,8 @@ impl crate::playercolor_host::ObjectHost {
         viewer: HandleId,
         rectangle: [[f32; 2]; 2],
         visibility: ExclusionVisibility,
+        checkpoint: usize,
+        effect_evidence: MovementEvidence,
     ) -> Result<bool, ExclusionError> {
         let record = self
             .executed_unit(unit)
@@ -248,19 +277,19 @@ impl crate::playercolor_host::ObjectHost {
             return Ok(false);
         }
         let source_name = if record.paused_since.is_some() {
-            "explicit pause and its native movement-counter contribution"
+            Some("explicit pause and its native movement-counter contribution")
         } else if self
-            .placement_events(unit)?
+            .diagnostic_placement_events_since(unit, checkpoint)?
             .any(|event| matches!(event.kind, PlacementEventKind::PauseUnit(_)))
         {
-            "prior PauseUnit request and its native movement-counter contribution"
+            Some("prior PauseUnit request and its native movement-counter contribution")
         } else if self
-            .placement_events(unit)?
+            .diagnostic_placement_events_since(unit, checkpoint)?
             .any(|event| matches!(event.kind, PlacementEventKind::Relocated))
         {
-            "scripted relocation invalidates the movement bound"
+            Some("scripted relocation invalidates the movement bound")
         } else if record.is_sleeping() {
-            "sleep and its native movement-counter contribution"
+            Some("sleep and its native movement-counter contribution")
         } else {
             if let Some(buff) = self
                 .unit_buffs(unit)
@@ -275,9 +304,20 @@ impl crate::playercolor_host::ObjectHost {
                     rawcode: buff.rawcode(),
                 });
             }
-            "unit-wide ability-disable counts and native effect writers"
+            None
         };
-        Err(ExclusionError::UnknownMovement { unit, source_name })
+        if let Some(source_name) = source_name {
+            return Err(ExclusionError::UnknownMovement { unit, source_name });
+        }
+        exclude_unit(
+            unit,
+            center,
+            rectangle,
+            ExclusionContext::AiPlacement,
+            shared,
+            visibility,
+            effect_evidence,
+        )
     }
 }
 
@@ -776,6 +816,37 @@ impl<'a> Grid<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn town_reference_prefers_first_eligible_peon_then_last_structure() {
+        let id = |number| HandleId::new(std::num::NonZeroU64::new(number).unwrap());
+        let units = [
+            (id(1), true, TownUnitClass::Other),
+            (id(2), true, TownUnitClass::Structure),
+            (id(3), false, TownUnitClass::Peon),
+            (id(4), true, TownUnitClass::Other),
+            (id(5), true, TownUnitClass::Structure),
+        ];
+        assert_eq!(select_town_reference(units), Some(id(5)));
+        assert_eq!(
+            select_town_reference(units.into_iter().chain([
+                (id(6), true, TownUnitClass::Peon),
+                (id(7), true, TownUnitClass::Peon)
+            ])),
+            Some(id(6))
+        );
+        assert_eq!(
+            select_town_reference([
+                (id(1), true, TownUnitClass::Other),
+                (id(2), true, TownUnitClass::Other)
+            ]),
+            Some(id(2))
+        );
+        assert_eq!(
+            select_town_reference([(id(1), false, TownUnitClass::Peon)]),
+            None
+        );
+    }
 
     #[test]
     fn cast_reach_bound_requires_complete_motion_for_both_units() {

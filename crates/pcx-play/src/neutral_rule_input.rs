@@ -13,6 +13,55 @@ fn bytes(d: &[u8], at: usize, n: usize) -> Result<&[u8], NeutralError> {
     d.get(at..at.checked_add(n).ok_or_else(|| bad(RuleProblem::Range))?)
         .ok_or_else(|| bad(RuleProblem::Range))
 }
+
+#[cfg(test)]
+mod section_storage_tests {
+    use super::*;
+
+    fn image(count: u16) -> Vec<u8> {
+        let mut data = vec![0; 0x1000 + usize::from(count) * 16];
+        data[..2].copy_from_slice(b"MZ");
+        data[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        data[0x80..0x84].copy_from_slice(b"PE\0\0");
+        data[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        data[0x86..0x88].copy_from_slice(&count.to_le_bytes());
+        data[0x94..0x96].copy_from_slice(&0x60u16.to_le_bytes());
+        data[0x98..0x9a].copy_from_slice(&0x10bu16.to_le_bytes());
+        data[0xb4..0xb8].copy_from_slice(&0x300000u32.to_le_bytes());
+        data[0xd0..0xd4].copy_from_slice(&0x40000u32.to_le_bytes());
+        for i in 0..usize::from(count) {
+            let header = 0xf8 + i * 40;
+            let rva = u32::from(count) - i as u32;
+            let raw = 0x1000 + i * 16;
+            data[header + 8..header + 12].copy_from_slice(&16u32.to_le_bytes());
+            data[header + 12..header + 16].copy_from_slice(&(rva * 0x1000).to_le_bytes());
+            data[header + 16..header + 20].copy_from_slice(&16u32.to_le_bytes());
+            data[header + 20..header + 24].copy_from_slice(&(raw as u32).to_le_bytes());
+            data[header + 36..header + 40].copy_from_slice(&0x60000060u32.to_le_bytes());
+            data[raw] = i as u8;
+        }
+        data
+    }
+
+    #[test]
+    fn section_storage_preserves_order_and_validation_above_inline_capacity() {
+        let budget = RuleInputBudget {
+            image_bytes: 1 << 20,
+            profile_bytes: 1 << 10,
+            sections: 32,
+        };
+        for count in [16, 17] {
+            let data = image(count);
+            let pe = Pe::parse(&data, budget).unwrap();
+            assert_eq!(pe.code_ranges().count(), usize::from(count));
+            assert_eq!(pe.read_from(0x301000, true).unwrap()[0], (count - 1) as u8);
+            let mut overlap = data;
+            let first = overlap[0xf8 + 12..0xf8 + 16].to_vec();
+            overlap[0xf8 + 40 + 12..0xf8 + 40 + 16].copy_from_slice(&first);
+            assert!(Pe::parse(&overlap, budget).is_err());
+        }
+    }
+}
 fn word(d: &[u8], at: usize) -> Result<u16, NeutralError> {
     Ok(u16::from_le_bytes(bytes(d, at, 2)?.try_into().unwrap()))
 }
@@ -60,6 +109,7 @@ pub struct Window {
     pub len: u32,
     pub digest: Sha256Digest,
 }
+#[derive(Clone, Copy, Default)]
 struct Section {
     rva: u32,
     mapped: u32,
@@ -70,9 +120,19 @@ struct Section {
 pub(crate) struct Pe<'a> {
     d: &'a [u8],
     base: u32,
-    sections: Vec<Section>,
+    inline_sections: [Section; 16],
+    heap_sections: Vec<Section>,
+    section_count: usize,
 }
 impl<'a> Pe<'a> {
+    fn sections(&self) -> &[Section] {
+        if self.section_count <= self.inline_sections.len() {
+            &self.inline_sections[..self.section_count]
+        } else {
+            &self.heap_sections
+        }
+    }
+
     pub(crate) fn parse(d: &'a [u8], budget: RuleInputBudget) -> Result<Self, NeutralError> {
         if bytes(d, 0, 2)? != b"MZ" {
             return Err(bad(RuleProblem::PeFormat));
@@ -122,11 +182,14 @@ impl<'a> Pe<'a> {
                 .checked_mul(40)
                 .ok_or_else(|| bad(RuleProblem::PeFormat))?,
         )?;
-        let mut sections = Vec::new();
-        sections
-            .try_reserve_exact(count)
-            .map_err(|_| bad(RuleProblem::Budget))?;
-        for h in table.as_chunks::<40>().0 {
+        let mut inline_sections = [Section::default(); 16];
+        let mut heap_sections = Vec::new();
+        if count > inline_sections.len() {
+            heap_sections
+                .try_reserve_exact(count)
+                .map_err(|_| bad(RuleProblem::Budget))?;
+        }
+        for (index, h) in table.as_chunks::<40>().0.iter().enumerate() {
             let virtual_size = dword(h, 8)?;
             let rva = dword(h, 12)?;
             let raw_size = dword(h, 16)?;
@@ -136,14 +199,24 @@ impl<'a> Pe<'a> {
                 return Err(bad(RuleProblem::PeFormat));
             }
             bytes(d, raw, raw_size as usize)?;
-            sections.push(Section {
+            let section = Section {
                 rva,
                 mapped,
                 raw,
                 raw_size,
                 flags: dword(h, 36)?,
-            });
+            };
+            if count <= inline_sections.len() {
+                inline_sections[index] = section;
+            } else {
+                heap_sections.push(section);
+            }
         }
+        let sections = if count <= inline_sections.len() {
+            &mut inline_sections[..count]
+        } else {
+            heap_sections.as_mut_slice()
+        };
         sections.sort_by_key(|s| s.rva);
         if sections
             .windows(2)
@@ -162,7 +235,13 @@ impl<'a> Pe<'a> {
                 }
             }
         }
-        Ok(Self { d, base, sections })
+        Ok(Self {
+            d,
+            base,
+            inline_sections,
+            heap_sections,
+            section_count: count,
+        })
     }
     pub(crate) fn window(&self, w: &Window, code: bool) -> Result<&'a [u8], NeutralError> {
         if w.len == 0 {
@@ -178,7 +257,7 @@ impl<'a> Pe<'a> {
         Ok(data)
     }
     pub(crate) fn code_ranges(&self) -> impl Iterator<Item = (u32, &'a [u8])> + '_ {
-        self.sections
+        self.sections()
             .iter()
             .filter(|s| Self::initialized(s, true) && s.raw_size != 0)
             .map(|s| {
@@ -190,7 +269,7 @@ impl<'a> Pe<'a> {
     }
     /// Initialized readable bytes, excluding virtual padding; callers bound their scans.
     pub(crate) fn initialized_ranges(&self) -> impl Iterator<Item = (u32, &'a [u8])> + '_ {
-        self.sections
+        self.sections()
             .iter()
             .filter(|s| Self::initialized(s, false) && s.raw_size != 0)
             .map(|s| {
@@ -212,7 +291,7 @@ impl<'a> Pe<'a> {
             .checked_sub(self.base)
             .ok_or_else(|| bad(RuleProblem::Range))?;
         let mut found = self
-            .sections
+            .sections()
             .iter()
             .filter(|s| rva >= s.rva && rva < s.rva + s.mapped);
         let s = found.next().ok_or_else(|| bad(RuleProblem::Range))?;

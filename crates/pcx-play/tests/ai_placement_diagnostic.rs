@@ -9,6 +9,7 @@ use pcx_play::ai_placement::{
 use pcx_play::headless_startup::start;
 use pcx_script::{Host, Value};
 use pcx_sim::world::{Definition, FieldValue};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn text<'a>(definition: &'a Definition, column: &str) -> &'a str {
@@ -51,6 +52,179 @@ fn scripted_spawns(script: &str, kind: &str) -> Vec<[f32; 2]> {
             ])
         })
         .collect()
+}
+
+fn aliases_using_buffs(
+    abilities: &pcx_slq::Table,
+    buffs: &[&str],
+) -> Result<BTreeSet<String>, String> {
+    let columns: Vec<_> = abilities
+        .headers()
+        .filter_map(|(column, name)| name.starts_with("BuffID").then_some(column))
+        .collect();
+    if columns.is_empty() {
+        return Err("ability buff columns missing".into());
+    }
+    let mut aliases = BTreeSet::new();
+    for row in abilities.data_rows() {
+        if columns
+            .iter()
+            .filter_map(|&column| row.get(column))
+            .any(|value| value.split(',').any(|id| buffs.contains(&id.trim())))
+        {
+            aliases.insert(
+                row.by_name("alias")
+                    .ok_or("ability alias missing")?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(aliases)
+}
+
+fn override_mentions(
+    record: &pcx_objects::Record,
+    matches: impl Fn(&str) -> bool,
+) -> Result<bool, String> {
+    for entry in &record.mods {
+        if let pcx_objects::Value::Str(value) = &entry.value {
+            let value = std::str::from_utf8(value).map_err(|_| "non-UTF8 object override")?;
+            if value.split(',').any(|token| matches(token.trim())) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn counter_source_scan(
+    resolver: &Resolver,
+    script: &str,
+    map: &pcx_map::Map<'_>,
+    label: &str,
+    budget: pcx_mpq::checked::ReadBudget,
+) -> Result<(), String> {
+    let read = |name| -> Result<pcx_slq::Table, String> {
+        let asset = resolver
+            .resolve_bounded(name, 8 << 20)
+            .map_err(|error| error.to_string())?;
+        pcx_slq::Table::parse(&asset.bytes).map_err(|error| error.to_string())
+    };
+    let abilities = read("Units/AbilityData.slk")?;
+    let buffs = ["Bprg", "Bchd", "BEer", "Bena", "Beng"];
+    let mut aliases = aliases_using_buffs(&abilities, &buffs)?;
+    aliases.extend(["Achd".to_owned(), "Aloa".to_owned()]);
+    let extract = |name| -> Result<Option<Vec<u8>>, String> {
+        map.extract_checked(label, name, budget)
+            .map_err(|error| error.to_string())
+    };
+    if let Some(bytes) = extract("war3map.w3a")? {
+        let overlay = pcx_objects::ObjectFile::parse("war3map.w3a", &bytes)
+            .map_err(|error| error.to_string())?;
+        for record in overlay.records() {
+            let original = pcx_objects::fourcc_text(record.original);
+            let affected = aliases.contains(&original)
+                || override_mentions(record, |token| buffs.contains(&token))?;
+            if affected {
+                aliases.insert(if record.modified == [0; 4] {
+                    original
+                } else {
+                    pcx_objects::fourcc_text(record.modified)
+                });
+            }
+        }
+    }
+    for alias in &aliases {
+        if script.contains(&format!("'{alias}'")) {
+            return Err(format!(
+                "map script directly references counter effect ability {alias}"
+            ));
+        }
+    }
+    let mut carriers = BTreeSet::new();
+    for (path, id_column, ability_columns, overlay_name) in [
+        (
+            "Units/UnitAbilities.slk",
+            "unitAbilID",
+            &["abilList", "heroAbilList"][..],
+            "war3map.w3u",
+        ),
+        (
+            "Units/ItemData.slk",
+            "itemID",
+            &["abilList"][..],
+            "war3map.w3t",
+        ),
+    ] {
+        let table = read(path)?;
+        for row in table.data_rows() {
+            let Some(id) = row.by_name(id_column) else {
+                continue;
+            };
+            let found: BTreeSet<_> = ability_columns
+                .iter()
+                .filter_map(|name| row.by_name(name))
+                .flat_map(|value| value.split(',').map(str::trim))
+                .filter(|alias| aliases.contains(*alias))
+                .collect();
+            if !found.is_empty() {
+                carriers.insert(id.to_owned());
+                if script.contains(&format!("'{id}'"))
+                    && !(id == "nmrr" && found == BTreeSet::from(["ACen"]))
+                {
+                    return Err(format!(
+                        "map script can create counter-effect carrier {id}: {found:?}"
+                    ));
+                }
+            }
+        }
+        if let Some(bytes) = extract(overlay_name)? {
+            let overlay = pcx_objects::ObjectFile::parse(overlay_name, &bytes)
+                .map_err(|error| error.to_string())?;
+            for record in overlay.records() {
+                let original = pcx_objects::fourcc_text(record.original);
+                let id = if record.modified == [0; 4] {
+                    original.clone()
+                } else {
+                    pcx_objects::fourcc_text(record.modified)
+                };
+                let modified = override_mentions(record, |token| aliases.contains(token))?;
+                if script.contains(&format!("'{id}'"))
+                    && (modified || (id != original && carriers.contains(&original)))
+                {
+                    return Err(format!(
+                        "map object {id} has an unresolved counter-effect override"
+                    ));
+                }
+            }
+        }
+    }
+    if script.contains("ChooseRandomItem(")
+        || script.contains("ChooseRandomCreep(")
+        || script.contains("UnitAddAbility(")
+    {
+        return Err("map script can choose an unenumerated counter-effect carrier".into());
+    }
+    for line in script.lines() {
+        if [
+            "CreateUnit(",
+            "CreateNUnitsAtLoc(",
+            "CreateItem(",
+            "CreateItemLoc(",
+            "RandomDistAddItem(",
+            "UnitAddItemToSlotById(",
+        ]
+        .iter()
+        .any(|name| line.contains(name))
+            && !line.contains('\'')
+        {
+            return Err("map script creates a unit or item without a literal rawcode".into());
+        }
+    }
+    println!(
+        "selected counter-effect ability and carrier scan passed; item drops and object overrides included"
+    );
+    Ok(())
 }
 
 fn probe_order_worker(log: &str, kind: [u8; 4], owner: i32) -> [f32; 2] {
@@ -112,6 +286,31 @@ fn probe_sample_workers(log: &str) -> Vec<[f32; 2]> {
         .skip(1)
         .map(|worker| probe_point(worker.split_once("/o").expect("probe worker order").0))
         .collect()
+}
+
+#[test]
+fn buff_source_scan_uses_all_ranked_columns() {
+    let data = b"ID;PWXL;N;E\r\nB;X3;Y3;D0\r\nC;X1;Y1;K\"alias\"\r\nC;X2;K\"BuffID1\"\r\nC;X3;K\"BuffID2\"\r\nC;X1;Y2;K\"A001\"\r\nC;X2;K\"B001\"\r\nC;X1;Y3;K\"A002\"\r\nC;X3;K\"B002, B003\"\r\nE\r\n";
+    let table = pcx_slq::Table::parse(data).unwrap();
+    assert_eq!(
+        aliases_using_buffs(&table, &["B003"]).unwrap(),
+        BTreeSet::from(["A002".into()])
+    );
+    assert!(aliases_using_buffs(&table, &["B999"]).unwrap().is_empty());
+    let mut record = pcx_objects::Record {
+        original: *b"A001",
+        modified: [0; 4],
+        mods: vec![pcx_objects::Mod {
+            field: *b"X001",
+            value_type: pcx_objects::ValueType::Str,
+            selectors: None,
+            value: pcx_objects::Value::Str(b"B002, B003".to_vec()),
+            end_word: 0,
+        }],
+    };
+    assert_eq!(override_mentions(&record, |id| id == "B003"), Ok(true));
+    record.mods[0].value = pcx_objects::Value::Str(vec![0xff]);
+    assert!(override_mentions(&record, |_| false).is_err());
 }
 
 #[test]
@@ -371,6 +570,14 @@ fn human05_placement_diagnostic() {
         .extract_checked(&map.display().to_string(), "war3map.j", map_budget)
         .unwrap()
         .unwrap();
+    counter_source_scan(
+        &resolver,
+        std::str::from_utf8(&map_script).unwrap(),
+        &pcx_map::Map::parse(&bytes).unwrap(),
+        &map.display().to_string(),
+        map_budget,
+    )
+    .unwrap();
     let spawns = scripted_spawns(std::str::from_utf8(&map_script).unwrap(), "nmrr");
     assert_eq!(spawns.len(), 2);
     let mut observed_starts = vec![(
@@ -553,6 +760,7 @@ fn human05_placement_diagnostic() {
             }
             println!("farm recreated worker positions {actual:?}");
         }
+        let checkpoint = objects.diagnostic_placement_checkpoint();
         for &handle in &workers {
             let record = objects.executed_unit(handle).unwrap();
             let buffs = objects.diagnostic_ai_buffs(handle).unwrap();
@@ -630,6 +838,8 @@ fn human05_placement_diagnostic() {
                     player_handle,
                     evidence_rectangle,
                     ExclusionVisibility::NotChecked,
+                    checkpoint,
+                    MovementEvidence::CountersZero,
                 ) {
                     Ok(true) => (true, MovementEvidence::CountersZero),
                     Ok(false) => (false, MovementEvidence::UnknownSource("movement ability")),

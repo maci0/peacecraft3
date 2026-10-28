@@ -213,6 +213,14 @@ and vision work are unchanged; no budget was raised. The shared-control default 
 selected client's self relationship to startup state. The placement search remains diagnostic;
 the Human03 and Human04 route harnesses were not rerun.
 
+The shared PE reader now holds up to 16 section descriptors inline and retains its bounded heap
+path for larger files. This reduces startup allocations while preserving section order and input
+validation. The placement event history stores its first eight events in the existing host and
+allocates a bounded overflow only when needed. With both changes, the locked offline
+`sim_run.py --check` measured 56 fewer allocations and at least 10,536 fewer requested bytes than the
+pre-history Human03 measurements at both checkpoints; reallocations and digests were unchanged.
+No budget was raised.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

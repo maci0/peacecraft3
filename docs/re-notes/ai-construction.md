@@ -567,9 +567,16 @@ the town reference and calls `0xac80a0` to refresh the coordinates. Breakpoints 
 workers-at-start and workers-near-mine runs show the first visited orange unit is an acolyte
 with that preferred bit and is the chosen object. Its creation positions are respectively
 (6832, 2096), (7568, 2768) and (5488, 3216), the fourth created acolyte in each scenario.
-The selected reference is not the worker that issues the first order. Native list ordering and
-the meaning of the state bit have not been mapped to recreation units; generalizing this to
-fourth-created workers would be an unsupported rule. Other refresh triggers also remain open.
+The selected reference is not the worker that issues the first order. The preferred bit is the
+native peon class: `UnitAddType` and `UnitRemoveType` use the type-to-mask table through
+`0x48a660` and write the field at `0x4aed27` and `0x4af739`. The table at `0xe6eb00` maps
+the selected script's `UNIT_TYPE_PEON` enumerand to that bit. The recreation can read the
+initial peon class from `UnitBalance/type`; runtime type changes and native list ordering still
+need qualification. The standalone town-reference selector implements the first eligible peon,
+then last eligible structure, then last eligible other unit rule for a caller-supplied list and
+eligibility; synthetic tests cover each branch. It is not wired to live towns. Generalizing the
+observed fourth-created worker into a selection rule would be unsupported. Other refresh
+triggers also remain open.
 
 The isolated bounded breakpoint logs capture every dequeue through the selected candidate and
 the result of every reach query that actually occurred. Empty reach fields in the local trace
@@ -896,8 +903,8 @@ and rejected calls do not add pause events. History allocates lazily and is boun
 missing game time, allocation failure or exhaustion of the handle-derived budget marks the
 history incomplete, and a placement query refuses rather than treating it as empty. This records
 all implemented buff transitions, not an established classification of counter-raising buffs.
-Other unit-wide disable sources and unimplemented effects are not yet covered. The exclusion
-diagnostic still refuses their unknown contribution.
+The snapshot diagnostic supplies separate evidence for the known effect sources; production
+placement does not yet have that source qualification.
 
 The local fixture sets a snapshot clock from the probe script's scheduled clock-start delay
 and its printed order elapsed time. The sum, 11.211 seconds for this probe, is nominal: callback
@@ -920,15 +927,33 @@ of unbounded relocation, not the missing live-world history.
 
 The selected unit ability table assigns Purge aliases to `oshm`, `nfor`, `ngnw`, `nltl`, `nrvl`,
 `nsat`, `nsrh` and `nwzg`, and the transport abilities to `nzep` and `uarb`. None of those unit
-identifiers occurs as a literal in the map script. The existing ability and item literal scan
-finds `nmrr` with `ACen` as the only listed carrier of the selected movement-effect buffs. This
-scan does not establish dynamic identifiers, all item paths or map ability overrides.
+identifiers occurs as a literal in the map script. The local diagnostic joins the selected
+ability buff rows to unit and item ability lists, checks map object overrides and the script's
+literal identifiers, and refuses unenumerated unit creation or random-item natives. It finds
+`nmrr` with `ACen` as the only listed carrier among the map-script literals. It examines the
+literal item distribution and item-creation paths as well as direct unit creation.
 
 The host now records successful position changes from the position natives, and any placement
 adjustment when showing a unit or re-enabling pathing. The exclusion diagnostic refuses a unit
-with such a relocation in its history. The farm fixture itself calls position natives to place
-sampled workers; it therefore refuses that recorded setup relocation, separately from the
-unqualified baseline effect sources. Native reach is still bypassed in both scans.
+with such a relocation after the diagnostic snapshot checkpoint. The farm fixture's own
+position-setting calls precede that checkpoint; the full log is retained and later events still
+refuse. With the recorded origin and the snapshot-specific source evidence, both texture-axis
+variants select (6208, 2752) at dequeue 1 without the farm and (5952, 2432) at dequeue 280 with
+the farm. Native reach is bypassed. The evidence is supplied by this local-input fixture; it is
+not yet derived for an arbitrary live game or connected to production placement.
+
+The source scan can be repeated with `rg -n 'CreateItem|RandomDistAddItem|UnitDropItem|UnitAddItem|UnitAddAbility|ChooseRandomItem|ChooseRandomCreep' .scratch/human05/war3map.j`
+and by running the ignored diagnostic. The three item-drop triggers list literal item IDs,
+and the selected item table and map item overrides contain no matching counter-effect carrier
+among the map-script literals. `common.ai` declares several carrier constants, but the selected
+orange script does not reference those constants. The snapshot clock and observed positions do
+not replay original movement or timer callbacks.
+
+The isolated reach-queue implementation follows the selected client's equal-key insertion and
+removal rules (`0x8a3090`, `0x8a2d20`), and charges removals before a caller checks generation
+(`0x8a3bf0`). Synthetic tests cover equal keys and a stale entry. It does not implement the
+hierarchical graph, occupancy mapping, temporary rectangles or the recorded reach tables, and
+does not control production placement.
 
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open
@@ -953,7 +978,7 @@ rounding.
 
 ## Not established
 
-- The recreation mapping of the native acolyte list and state bit, other refresh triggers, and
+- The recreation mapping of native acolyte list order, eligibility and live type changes, other refresh triggers, and
   the route metric used to select among towns;
   terrain sampling at grid edges and the enumerator's boundary/state behavior;
   live texture dimension mapping, blight and the shared validator's detailed
