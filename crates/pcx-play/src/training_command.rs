@@ -123,6 +123,16 @@ fn cell(
     value(&field.value).map_err(|why| format!("{key}: {why}"))
 }
 
+/// The unit's authored command-button icon path (`UnitUI` `Art`), with any map override.
+pub fn icon(definition: &Definition) -> Result<String, String> {
+    if definition.kind != pcx_objects::editor::ObjectKind::Unit {
+        return Err("unit icon requires a unit definition".into());
+    }
+    let art = cell(definition, *b"uico", "Art", 0, 1, FieldKind::Token)?;
+    pcx_assets::AssetPath::new(&art).map_err(|e| e.to_string())?;
+    Ok(art)
+}
+
 impl Command {
     pub fn read(definition: &Definition) -> Result<Self, String> {
         if definition.kind != pcx_objects::editor::ObjectKind::Unit {

@@ -38,6 +38,37 @@ impl MinimapFogAlpha {
     }
 }
 
+/// One packed `A,R,G,B` profile value as RGBA, for a section and key the caller names.
+pub fn read_argb(
+    bytes: &[u8],
+    max_bytes: usize,
+    section: &str,
+    key: &str,
+) -> Result<[u8; 4], String> {
+    if bytes.len() > max_bytes {
+        return Err("UI\\MiscData.txt: profile color byte budget".into());
+    }
+    let profile = parse_config_profile(bytes, "UI\\MiscData.txt").map_err(|e| e.to_string())?;
+    if let Some(error) = profile.unresolved().first() {
+        return Err(error.to_string());
+    }
+    let fields = profile.raw_fields(&section.to_ascii_lowercase(), &key.to_ascii_lowercase());
+    let [(_, raw)] = fields.as_slice() else {
+        return Err(format!("UI\\MiscData.txt: expected one {section}/{key}"));
+    };
+    let values = profile_elements(raw).map_err(|e| e.to_string())?;
+    let [a, r, g, b] = values.as_slice() else {
+        return Err(format!("UI\\MiscData.txt: ARGB {section}/{key} required"));
+    };
+    let mut color = [0; 4];
+    for (out, value) in color.iter_mut().zip([r, g, b, a]) {
+        *out = value
+            .parse()
+            .map_err(|_| format!("UI\\MiscData.txt: byte {section}/{key} required"))?;
+    }
+    Ok(color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +90,26 @@ mod tests {
         }
         let duplicate = [profile.as_slice(), b"FogColorVisibleAlpha=19\n"].concat();
         assert!(MinimapFogAlpha::read(&duplicate, 1024).is_err());
+    }
+
+    #[test]
+    fn argb_values_read_by_named_section_and_key_and_refuse_malformed() {
+        let profile =
+            b"[Frame]\nRimColor=9,200,31,77\nOther=1,2,3,4\n[Elsewhere]\nRimColor=1,1,1,1\n";
+        assert_eq!(
+            read_argb(profile, 1024, "frame", "RimColor").unwrap(),
+            [200, 31, 77, 9]
+        );
+        assert!(read_argb(profile, 1024, "Frame", "Missing").is_err());
+        assert!(read_argb(profile, 4, "Frame", "RimColor").is_err());
+        for bad in ["9,200,31", "9,200,31,256", "9,200,31,x", "9,200,31,77,1"] {
+            let text = String::from_utf8_lossy(profile).replace("9,200,31,77", bad);
+            assert!(
+                read_argb(text.as_bytes(), 1024, "Frame", "RimColor").is_err(),
+                "{bad}"
+            );
+        }
+        let twice = [profile.as_slice(), b"[Frame]\nRimColor=1,2,3,4\n"].concat();
+        assert!(read_argb(&twice, 1024, "Frame", "RimColor").is_err());
     }
 }

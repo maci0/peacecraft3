@@ -223,6 +223,12 @@ pub fn read(
         arctangent: window(0x9a0da0, 423, true)?,
         zero_initializer: window(0x401300, 16, true)?,
         one_initializer: window(0x401460, 16, true)?,
+        trig: Some(crate::script_math::TrigBinding {
+            sine_native: window(0x4ac180, 26, true)?,
+            cosine_native: window(0x48afc0, 26, true)?,
+            sine: window(0x9a1da0, 288, true)?,
+            cosine: window(0x9a0fe0, 289, true)?,
+        }),
     };
     let numeric = script_numeric::NumericPolicy::read(
         image,
@@ -324,6 +330,7 @@ pub fn read(
             getter: window(0x4945c0, 33, true)?,
             maximum_initializer: window(0x401350, 16, true)?,
             null_initializer: window(0x401460, 16, true)?,
+            reset: window(0x4bdf74, 21, true)?,
         },
         &numeric,
         BUDGET,

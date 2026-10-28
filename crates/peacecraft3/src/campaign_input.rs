@@ -219,6 +219,8 @@ fn command_button(
                 learn_skill(host, &mut input, button.unit, ability);
                 continue;
             }
+            // No order exists for this ability yet; the press only stays off the world.
+            crate::campaign_command_card::Kind::DisplayOnly => continue,
         };
         match result {
             Ok(Some(command)) => match button.kind {
@@ -238,6 +240,7 @@ fn command_button(
                 | crate::campaign_command_card::Kind::SkillMenu
                 | crate::campaign_command_card::Kind::SkillCancel
                 | crate::campaign_command_card::Kind::Learn(_)
+                | crate::campaign_command_card::Kind::DisplayOnly
                 | crate::campaign_command_card::Kind::BuildMenu
                 | crate::campaign_command_card::Kind::Build(_)
                 | crate::campaign_command_card::Kind::BuildCancel
@@ -808,7 +811,7 @@ fn commands_open(
         && commands_available(view, hud, dialogs, host)
 }
 
-fn commands_available(
+pub(crate) fn commands_available(
     view: &CampaignCamera,
     hud: &crate::campaign_hud::CampaignHud,
     dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
@@ -1077,10 +1080,7 @@ fn click(
     let Ok(ray) = camera.viewport_to_world(transform, cursor) else {
         return;
     };
-    let far = match projection {
-        Projection::Perspective(p) => p.far,
-        _ => return,
-    };
+    let far = projection.far();
     let Some(context) = ground.context.as_ref() else {
         return;
     };

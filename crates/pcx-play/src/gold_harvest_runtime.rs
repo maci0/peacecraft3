@@ -93,9 +93,15 @@ impl ObjectHost {
         let Some((mine_position, mine_rules)) = self.gold_mine(mine)? else {
             return Ok(None);
         };
-        let depot = self
-            .select_depot(unit, owner, position, &setup.rules, true)?
-            .ok_or_else(|| self.harvest_error("no gold-accepting depot within Ahar Area"))?;
+        // The worker's own area first; failing that, the mine's: the shipped Human04 opening
+        // orders a worker 1012 from its only town hall (800 from the mine) to harvest.
+        let depot = match self.select_depot(unit, owner, position, &setup.rules, true)? {
+            Some(depot) => Some(depot),
+            None => self.select_depot(unit, owner, mine_position, &setup.rules, true)?,
+        }
+        .ok_or_else(|| {
+            self.harvest_error("no gold-accepting depot within Ahar Area of the worker or the mine")
+        })?;
         let state = self.harvest.as_ref().expect("harvest admitted");
         let existing = state.workers.iter().find(|worker| worker.unit == unit);
         let cargo = state.cargo.get(&unit);
@@ -585,7 +591,7 @@ impl ObjectHost {
             }
             let mut prepared = match mine {
                 Some(mine) => self.prepare_gold_harvest(unit, mine)?,
-                None => self.prepare_lumber_harvest(unit)?,
+                None => self.prepare_lumber_harvest(unit, None)?,
             }
             .ok_or_else(|| {
                 self.inner.error(

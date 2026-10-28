@@ -487,6 +487,9 @@ pub(crate) struct Prepared {
     pub position: [f32; 2],
     cells: Vec<usize>,
     footprint: Vec<usize>,
+    /// Facing the footprint was oriented with; a later turn of the unit's model does not
+    /// rotate a standing footprint, so a reveal or relocation reuses it.
+    face: f32,
     active: bool,
     movement: Movement,
 }
@@ -1428,6 +1431,7 @@ impl Placement {
             position,
             cells,
             footprint,
+            face,
             active: exclude.is_none_or(|p| p.active),
             movement,
         }))
@@ -1471,6 +1475,14 @@ impl Placement {
         self.prepare_show_class(unit, request, radius, path, face, Movement::Ground)
     }
 
+    /// The facing a unit's standing footprint was oriented with, else `current`.
+    fn footprint_face(&self, unit: HandleId, current: f32) -> f32 {
+        self.stamps
+            .iter()
+            .find(|(id, stamp)| *id == unit && !stamp.footprint.is_empty())
+            .map_or(current, |(_, stamp)| stamp.face)
+    }
+
     pub(crate) fn prepare_show_class(
         &mut self,
         unit: HandleId,
@@ -1483,6 +1495,7 @@ impl Placement {
         if !self.stamps.iter().any(|(id, p)| *id == unit && !p.active) {
             return Err(fail("hidden unit occupancy required"));
         }
+        let face = self.footprint_face(unit, face);
         self.ensure_footprint(path)?;
         if let Some(prepared) = self.candidate(
             request,
@@ -1521,6 +1534,7 @@ impl Placement {
         movement: Movement,
     ) -> Result<Prepared, Error> {
         self.ensure_footprint(path)?;
+        let face = self.footprint_face(unit, face);
         let stamp = self
             .stamps
             .iter()

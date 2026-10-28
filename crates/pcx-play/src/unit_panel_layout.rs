@@ -194,16 +194,16 @@ impl Portrait {
     }
 }
 
-struct Reader<F>(F);
+pub(crate) struct Reader<F>(pub(crate) F);
 impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
-    fn bytes(&mut self, va: u32, n: usize, code: bool) -> Result<Vec<u8>, String> {
+    pub(crate) fn bytes(&mut self, va: u32, n: usize, code: bool) -> Result<Vec<u8>, String> {
         let bytes = (self.0)(va, n, code)?;
         if bytes.len() != n {
             return Err(format!("unit panel: truncated window {va:#x}"));
         }
         Ok(bytes)
     }
-    fn word(&mut self, va: u32, prefix: &[u8]) -> Result<u32, String> {
+    pub(crate) fn word(&mut self, va: u32, prefix: &[u8]) -> Result<u32, String> {
         let bytes = self.bytes(va, prefix.len() + 4, true)?;
         if !bytes.starts_with(prefix) {
             return Err(format!("unit panel: instruction {va:#x}"));
@@ -212,14 +212,14 @@ impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
             bytes[prefix.len()..].try_into().unwrap(),
         ))
     }
-    fn number(&mut self, va: u32, prefix: &[u8]) -> Result<f32, String> {
+    pub(crate) fn number(&mut self, va: u32, prefix: &[u8]) -> Result<f32, String> {
         let value = f32::from_bits(self.word(va, prefix)?);
         if !value.is_finite() {
             return Err(format!("unit panel: nonfinite number {va:#x}"));
         }
         Ok(value)
     }
-    fn referenced(&mut self, va: u32, prefix: &[u8]) -> Result<f32, String> {
+    pub(crate) fn referenced(&mut self, va: u32, prefix: &[u8]) -> Result<f32, String> {
         let pointer = self.word(va, prefix)?;
         let bytes = self.bytes(pointer, 4, false)?;
         let value = f32::from_le_bytes(bytes.try_into().unwrap());
@@ -228,7 +228,7 @@ impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
         }
         Ok(value)
     }
-    fn string_at(&mut self, pointer: u32) -> Result<String, String> {
+    pub(crate) fn string_at(&mut self, pointer: u32) -> Result<String, String> {
         let mut bytes = Vec::new();
         for offset in 0..4096 {
             let va = pointer
@@ -242,14 +242,14 @@ impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
         }
         Err("unit panel: string budget".into())
     }
-    fn string(&mut self, va: u32) -> Result<String, String> {
+    pub(crate) fn string(&mut self, va: u32) -> Result<String, String> {
         self.prefixed_string(va, &[0x68])
     }
     fn prefixed_string(&mut self, va: u32, prefix: &[u8]) -> Result<String, String> {
         let pointer = self.word(va, prefix)?;
         self.string_at(pointer)
     }
-    fn call_target(&mut self, va: u32) -> Result<u32, String> {
+    pub(crate) fn call_target(&mut self, va: u32) -> Result<u32, String> {
         let bytes = self.bytes(va, 5, true)?;
         if bytes[0] != 0xe8 {
             return Err(format!("unit panel: call {va:#x}"));

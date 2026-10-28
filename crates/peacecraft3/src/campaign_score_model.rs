@@ -1,8 +1,8 @@
 //! Authored `MODEL` frames of the selected score screen. Each frame with a `BackgroundArt`
 //! record names the model it draws, its geometry comes from the frame's authored placement
 //! in the viewport, and its `LayerStyle` decides shading. The defeat banner is not among
-//! these frames: its skin key names a model, but the screen names no frame to place it in,
-//! so it is not drawn.
+//! these frames. `ScoreScreenRaceArt` carries no `BackgroundArt`; the skin's victory or
+//! defeat model (see `campaign_score_art`) is placed in that frame, as a recreation choice.
 use crate::fdf::Rect;
 use crate::menu_material::MenuMaterial;
 use bevy::camera::visibility::RenderLayers;
@@ -19,18 +19,27 @@ pub struct AuthoredBackground {
     pub unlit: bool,
 }
 
-/// Every `MODEL` frame that names a `BackgroundArt`, in the screen's frame order.
+/// The `MODEL` frame whose model the skin names, not the FDF.
+pub const RACE_ART_FRAME: &str = "ScoreScreenRaceArt";
+
+/// Every `MODEL` frame that names a `BackgroundArt`, in the screen's frame order. The race
+/// art frame names none: it takes `race_art`, the skin's model, and is skipped without one.
 pub fn authored_backgrounds(
     layout: &ScoreScreenLayout,
     viewport: (f32, f32),
+    race_art: Option<&str>,
 ) -> Result<Vec<AuthoredBackground>, String> {
     let fdf = layout.fdf();
     fdf.frames()
         .iter()
         .filter(|frame| frame.kind == "MODEL")
         .filter_map(|frame| {
-            fdf.string(&frame.name, "BackgroundArt")
-                .map(|model| (frame.name.clone(), model))
+            let model = fdf.string(&frame.name, "BackgroundArt").or_else(|| {
+                (frame.name == RACE_ART_FRAME)
+                    .then(|| race_art.map(str::to_owned))
+                    .flatten()
+            })?;
+            Some((frame.name.clone(), model))
         })
         .map(|(frame, model)| {
             if !fdf.flag(&frame, "SetAllPoints")
@@ -73,7 +82,7 @@ mod tests {
              Frame \"MODEL\" \"ScoreScreenRaceArt\" {\n\tSetAllPoints,\n\tLayerStyle \"NOSHADING|IGNORETRACKEVENTS\",\n}\n\
              Frame \"MODEL\" \"ScoreScreenBarTop\" {\n\tBackgroundArt \"UI\\Glues\\Top.mdl\",\n\tWidth 0.2,\n\tHeight 0.03,\n\tLayerStyle \"SHADED\",\n}\n",
         );
-        let drawn = authored_backgrounds(&l, VIEWPORT).unwrap();
+        let drawn = authored_backgrounds(&l, VIEWPORT, None).unwrap();
         let names: Vec<&str> = drawn.iter().map(|b| b.frame.as_str()).collect();
         assert_eq!(names, ["ScoreScreenBackground", "ScoreScreenBarTop"]);
         assert_eq!(drawn[0].model, "UI\\Glues\\Back.mdl");
@@ -83,11 +92,44 @@ mod tests {
     }
 
     #[test]
+    fn the_race_art_frame_takes_the_skin_model_in_its_own_frame_order() {
+        let l = layout(
+            "Frame \"FRAME\" \"ScoreScreenFrame\" {\n\tWidth 0.8,\n\tHeight 0.6,\n}\n\
+             Frame \"MODEL\" \"ScoreScreenPageTab\" {\n\tBackgroundArt \"UI\\Glues\\Tabs.mdl\",\n\tSetAllPoints,\n}\n\
+             Frame \"MODEL\" \"ScoreScreenRaceArt\" {\n\tSetAllPoints,\n\tLayerStyle \"NOSHADING|IGNORETRACKEVENTS\",\n}\n\
+             Frame \"MODEL\" \"ScoreScreenBarTop\" {\n\tBackgroundArt \"UI\\Glues\\Top.mdl\",\n\tWidth 0.2,\n\tHeight 0.03,\n}\n",
+        );
+        let drawn = authored_backgrounds(&l, VIEWPORT, Some("UI\\Glues\\Victory.mdl")).unwrap();
+        let names: Vec<&str> = drawn.iter().map(|b| b.frame.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "ScoreScreenPageTab",
+                "ScoreScreenRaceArt",
+                "ScoreScreenBarTop"
+            ]
+        );
+        assert_eq!(drawn[1].model, "UI\\Glues\\Victory.mdl");
+        assert!(drawn[1].unlit);
+        assert_eq!(drawn[1].rect.width, 0.8);
+    }
+
+    #[test]
+    fn a_skin_model_does_not_replace_a_frames_authored_background_art() {
+        let l = layout(
+            "Frame \"MODEL\" \"ScoreScreenBarTop\" {\n\tBackgroundArt \"UI\\Glues\\Top.mdl\",\n\tWidth 0.2,\n\tHeight 0.03,\n}\n",
+        );
+        let drawn = authored_backgrounds(&l, VIEWPORT, Some("UI\\Glues\\Victory.mdl")).unwrap();
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn[0].model, "UI\\Glues\\Top.mdl");
+    }
+
+    #[test]
     fn a_background_frame_without_authored_geometry_refuses_instead_of_guessing() {
         let l = layout(
             "Frame \"MODEL\" \"ScoreScreenBackground\" {\n\tBackgroundArt \"UI\\Glues\\Back.mdl\",\n\tLayerStyle \"NOSHADING\",\n}\n",
         );
-        let err = authored_backgrounds(&l, VIEWPORT).unwrap_err();
+        let err = authored_backgrounds(&l, VIEWPORT, None).unwrap_err();
         assert!(err.starts_with("ScoreScreenBackground:"), "{err}");
     }
 }

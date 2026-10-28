@@ -1,43 +1,43 @@
-//! Ordinary unit markers over the same minimap image and visibility raster.
+//! Unit markers and the map-edge border written into the minimap image after its fog alpha.
 use super::*;
 use pcx_assets::Resolver;
-use pcx_play::playercolor_host::ObjectHost;
+use pcx_play::{minimap_draw_layout::Draw, playercolor_host::ObjectHost};
 use std::collections::BTreeMap;
+
+const MARKER_COUNT: usize = 16384;
 
 pub(super) struct Markers {
     reader: Arc<Resolver>,
     palette: crate::campaign_actors::TeamPalette,
-    size: [f32; 2],
-    offset: [f32; 2],
-    frame: [f32; 2],
-    alpha: f32,
+    draw: Draw,
+    border_color: [u8; 4],
     colors: BTreeMap<i32, [u8; 4]>,
 }
+/// One marker: its centre in image pixels, colour and size class.
+struct Marker {
+    centre: [f64; 2],
+    color: [u8; 4],
+    class: usize,
+}
 impl Markers {
-    pub(super) fn read(reader: Arc<Resolver>, rules: &Rules) -> Result<Self, String> {
+    pub(super) fn read(reader: Arc<Resolver>, draw: Draw) -> Result<Self, String> {
         let skins = reader
             .resolve_bounded("UI/war3skins.txt", PROFILE_BYTES as u64)
             .map_err(|e| e.to_string())?;
-        let skin = crate::menu_skin::SkinTable::parse(
-            std::str::from_utf8(&skins.bytes).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        let path = skin
-            .unique_file("MinimapSprite")
-            .map_err(|e| e.to_string())?
-            .file;
-        let path = pcx_mdl::binary_model_path(&path);
-        let model = reader
-            .resolve_bounded(&path, 1 << 20)
+        let profile = reader
+            .resolve_bounded("UI\\MiscData.txt", PROFILE_BYTES as u64)
             .map_err(|e| e.to_string())?;
-        let (size, offset, alpha) = sprite(&model.bytes)?;
+        let border_color = pcx_objects::editor::minimap_fog::read_argb(
+            &profile.bytes,
+            PROFILE_BYTES,
+            &draw.border.section,
+            &draw.border.key,
+        )?;
         Ok(Self {
             palette: crate::campaign_actors::TeamPalette::read(&skins.bytes)?,
             reader,
-            size,
-            offset,
-            frame: [rules.frame.width, rules.frame.height],
-            alpha,
+            draw,
+            border_color,
             colors: BTreeMap::new(),
         })
     }
@@ -86,7 +86,7 @@ impl Markers {
                 _ => return Err("unsupported hideOnMinimap value".into()),
             }
             let position = unit.position.ok_or("minimap marker position absent")?;
-            let Some(point) = fog.raster.point_at(bounds, position)? else {
+            let Some(centre) = fog.raster.point_at(bounds, position)? else {
                 continue;
             };
             if settings.fog_enabled || settings.fog_mask_enabled {
@@ -107,7 +107,7 @@ impl Markers {
                     continue;
                 }
             }
-            let mut color = match host.minimap_role_color(unit)? {
+            let color = match host.minimap_role_color(unit)? {
                 Some(color) => color,
                 None => {
                     let owner = host
@@ -121,152 +121,75 @@ impl Markers {
                     self.player_color(index)?
                 }
             };
-            color[3] = (f32::from(color[3]) * self.alpha).round() as u8;
-            if plan.len() >= 16384 {
+            // shortcut: the client's class is a unit-type flag set from a type record; isbldg is the matching UnitBalance column.
+            let class = match crate::campaign_actors::scalar(&unit.definition, "isbldg")? {
+                1. => 1,
+                0. => 0,
+                _ => return Err("unsupported isbldg value".into()),
+            };
+            if plan.len() >= MARKER_COUNT {
                 return Err("minimap marker count budget".into());
             }
             plan.try_reserve(1)
                 .map_err(|_| "minimap marker allocation")?;
-            let point = [
-                point[0] + f64::from(self.offset[0] / self.frame[0]) * f64::from(fog.width),
-                point[1] - f64::from(self.offset[1] / self.frame[1]) * f64::from(fog.height),
-            ];
-            plan.push((point, color));
+            plan.push(Marker {
+                centre,
+                color,
+                class,
+            });
         }
-        // shortcut: the common unit sprite is drawn here; hero/resource/camp and remembered-building layers remain separate work.
-        let size = [
-            f64::from(self.size[0] / self.frame[0]) * f64::from(fog.width),
-            f64::from(self.size[1] / self.frame[1]) * f64::from(fog.height),
-        ];
-        paint(pixels, [fog.width, fog.height], size, &plan, PIXEL_BYTES)
+        // shortcut: the client's image is fixed at its own edge; other sizes scale the block, the line widths stay.
+        let sides = self.draw.marker_sides.map(|side| {
+            ((f64::from(side) * f64::from(fog.width) / f64::from(self.draw.edge)).round() as u32)
+                .max(1)
+        });
+        let pads = fog.raster.pads(bounds)?;
+        let dimensions = [fog.width, fog.height];
+        paint(pixels, dimensions, pads, sides, &plan, PIXEL_BYTES)?;
+        paint_border(pixels, dimensions, pads, &self.draw, self.border_color)
     }
 }
 
-fn sprite(bytes: &[u8]) -> Result<([f32; 2], [f32; 2], f32), String> {
-    let model = pcx_mdl::Mdlx::parse(bytes).map_err(|e| e.to_string())?;
-    let geosets = model.geosets(bytes).map_err(|e| e.to_string())?;
-    let [geoset] = geosets.as_slice() else {
-        return Err("minimap unit sprite requires one geoset".into());
-    };
-    let mesh = model.mesh(bytes, geoset).map_err(|e| e.to_string())?;
-    let points = mesh.vertices.iter().collect::<Vec<_>>();
-    if points.len() != 4
-        || mesh.triangles.triangle_count() != 2
-        || !model
-            .geoset_anims(bytes)
-            .map_err(|e| e.to_string())?
-            .is_empty()
-        || model
-            .bones(bytes)
-            .map_err(|e| e.to_string())?
-            .iter()
-            .any(|b| !b.is_root() || !b.tracks.is_empty())
-    {
-        return Err("unsupported animated or non-quad minimap unit sprite".into());
-    }
-    let mut minimum = [f32::INFINITY; 2];
-    let mut maximum = [f32::NEG_INFINITY; 2];
-    for point in &points {
-        if point.iter().any(|n| !n.is_finite()) || point[2] != 0. {
-            return Err("non-planar minimap unit sprite".into());
-        }
-        for axis in 0..2 {
-            minimum[axis] = minimum[axis].min(point[axis]);
-            maximum[axis] = maximum[axis].max(point[axis]);
-        }
-    }
-    let size = [maximum[0] - minimum[0], maximum[1] - minimum[1]];
-    if size.iter().any(|v| !v.is_finite() || *v <= 0.)
-        || points
-            .iter()
-            .any(|p| (0..2).any(|a| p[a] != minimum[a] && p[a] != maximum[a]))
-    {
-        return Err("minimap sprite is not a finite rectangle".into());
-    }
-    let mut area = 0.;
-    for i in 0..mesh.triangles.triangle_count() {
-        let indices = mesh
-            .triangles
-            .triangle(i)
-            .ok_or("minimap sprite triangle")?;
-        let [a, b, c] = indices
-            .map(|i| points.get(i as usize).copied())
-            .map(|p| p.ok_or("minimap sprite index"))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .expect("three vertices");
-        area += ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5;
-    }
-    if (area - size[0] * size[1]).abs() > f32::EPSILON * size[0] * size[1] {
-        return Err("minimap sprite does not cover its rectangle".into());
-    }
-    let materials = model.materials(bytes).map_err(|e| e.to_string())?;
-    let layers = materials
-        .get(mesh.material_id as usize)
-        .ok_or("minimap sprite material")?
-        .tex_layers();
-    let [layer] = layers.as_slice() else {
-        return Err("minimap sprite needs one layer".into());
-    };
-    if layer.filter_mode != 0
-        || !layer.static_alpha.is_finite()
-        || !(0.0..=1.0).contains(&layer.static_alpha)
-    {
-        return Err("unsupported minimap sprite material".into());
-    }
-    let textures = model.textures(bytes).map_err(|e| e.to_string())?;
-    let texture = textures
-        .get(layer.texture_id as usize)
-        .ok_or("minimap sprite texture")?;
-    if texture.slot != 1 || !texture.path.is_empty() {
-        return Err("unsupported textured minimap unit sprite".into());
-    }
-    Ok((size, minimum, layer.static_alpha))
-}
-
+/// Square blocks of the marker's class, snapped to whole pixels as the client does: the block
+/// starts half its side before the floor of the centre, is kept inside the image, and its
+/// bottom stays above the map's bottom padding.
 fn paint(
     pixels: &mut [u8],
     dimensions: [u32; 2],
-    size: [f64; 2],
-    plan: &[([f64; 2], [u8; 4])],
+    pads: [u32; 2],
+    sides: [u32; 2],
+    plan: &[Marker],
     budget: usize,
 ) -> Result<(), String> {
     let [width, height] = dimensions.map(|v| v as usize);
-    if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(pixels.len())
-        || size.iter().any(|v| !v.is_finite() || *v <= 0.)
-    {
+    if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(pixels.len()) {
         return Err("invalid minimap marker raster".into());
     }
     let mut rectangles = Vec::new();
     let mut work = 0usize;
-    for &(point, color) in plan {
-        if point.iter().any(|v| !v.is_finite()) {
+    for marker in plan {
+        if marker.centre.iter().any(|v| !v.is_finite()) {
             return Err("nonfinite minimap marker".into());
         }
-        // shortcut: centre the authored quad on the canonical position; qualify native subpixel coverage with a paired render.
-        let lo = [point[0] - size[0] * 0.5, point[1] - size[1] * 0.5];
-        let hi = [lo[0] + size[0], lo[1] + size[1]];
-        let [x0, y0] = [
-            (lo[0] - 0.5).ceil().clamp(0., width as f64) as usize,
-            (lo[1] - 0.5).ceil().clamp(0., height as f64) as usize,
-        ];
-        let [x1, y1] = [
-            (hi[0] - 0.5).ceil().clamp(0., width as f64) as usize,
-            (hi[1] - 0.5).ceil().clamp(0., height as f64) as usize,
-        ];
+        let side = *sides
+            .get(marker.class)
+            .ok_or("unknown minimap marker class")? as usize;
+        let half = (side / 2) as i64;
+        let column = (marker.centre[0].floor() as i64 - half)
+            .clamp(0, width.saturating_sub(side) as i64) as usize;
+        let last_row = height
+            .saturating_sub(1 + pads[1] as usize)
+            .saturating_sub(side);
+        let row = (marker.centre[1].floor() as i64 - half).clamp(0, last_row as i64) as usize;
+        let (x1, y1) = ((column + side).min(width), (row + side).min(height));
         work = work
-            .checked_add(
-                (x1 - x0)
-                    .checked_mul(y1 - y0)
-                    .ok_or("minimap marker work overflow")?,
-            )
+            .checked_add((x1 - column) * (y1 - row))
             .filter(|n| *n <= budget)
             .ok_or("minimap marker work budget")?;
         rectangles
             .try_reserve(1)
             .map_err(|_| "minimap marker rectangle allocation")?;
-        rectangles.push(([x0, y0, x1, y1], color));
+        rectangles.push(([column, row, x1, y1], marker.color));
     }
     for ([x0, y0, x1, y1], color) in rectangles {
         for y in y0..y1 {
@@ -278,61 +201,216 @@ fn paint(
     Ok(())
 }
 
+/// The client draws the lines last, across the whole image and over the fog alpha, when the
+/// map's padding on the two axes differs enough. Wider maps get rows, taller maps columns.
+fn paint_border(
+    pixels: &mut [u8],
+    dimensions: [u32; 2],
+    pads: [u32; 2],
+    draw: &Draw,
+    color: [u8; 4],
+) -> Result<(), String> {
+    let [width, height] = dimensions;
+    if (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        != Some(pixels.len())
+    {
+        return Err("invalid minimap border raster".into());
+    }
+    if pads[0].abs_diff(pads[1]) <= draw.border.minimum_pad_difference {
+        return Ok(());
+    }
+    let width = width as usize;
+    if pads[1] > pads[0] {
+        for row in draw
+            .border
+            .rows
+            .iter()
+            .filter_map(|edge| edge.index(height, pads[1]))
+        {
+            let start = row as usize * width * 4;
+            for pixel in pixels[start..start + width * 4].as_chunks_mut::<4>().0 {
+                *pixel = color;
+            }
+        }
+    } else {
+        for column in draw
+            .border
+            .columns
+            .iter()
+            .filter_map(|edge| edge.index(width as u32, pads[0]))
+        {
+            for row in pixels.as_chunks_mut::<4>().0.chunks_mut(width) {
+                row[column as usize] = color;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn marker_pixels_are_source_colored_clipped_and_budgeted_before_any_write() {
-        let mut pixels = vec![0; 4 * 4 * 4];
-        let color = [7, 19, 41, 255];
-        paint(&mut pixels, [4, 4], [2., 2.], &[([2., 2.], color)], 16).unwrap();
-        for y in 0..4 {
-            for x in 0..4 {
-                assert_eq!(
-                    &pixels[(y * 4 + x) * 4..(y * 4 + x + 1) * 4],
-                    if (1..3).contains(&x) && (1..3).contains(&y) {
-                        &color
-                    } else {
-                        &[0; 4]
-                    }
-                );
+    use pcx_play::minimap_draw_layout::{Border, Edge};
+
+    fn draw(minimum_pad_difference: u32) -> Draw {
+        Draw {
+            origin: pcx_play::scripts::AssetIdentity {
+                source: "synthetic".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
+            image_sha256: [0; 32],
+            edge: 16,
+            border: Border {
+                section: "S".into(),
+                key: "K".into(),
+                minimum_pad_difference,
+                columns: vec![
+                    Edge::PadPlus(0),
+                    Edge::PadPlus(-1),
+                    Edge::EdgeMinusPad(1),
+                    Edge::EdgeMinusPad(2),
+                ],
+                rows: vec![
+                    Edge::PadPlus(-1),
+                    Edge::PadPlus(0),
+                    Edge::EdgeMinusPad(0),
+                    Edge::EdgeMinusPad(-1),
+                ],
+            },
+            marker_sides: [2, 4],
+            outline_rgb: [1, 2, 3],
+        }
+    }
+    fn marked(pixels: &[u8], width: usize, color: [u8; 4]) -> Vec<[usize; 2]> {
+        let mut found = Vec::new();
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            if *pixel == color {
+                found.push([index % width, index / width]);
             }
         }
+        found
+    }
+    fn marker(centre: [f64; 2], class: usize) -> Marker {
+        Marker {
+            centre,
+            color: [7, 19, 41, 255],
+            class,
+        }
+    }
+
+    #[test]
+    fn marker_blocks_follow_the_class_side_and_the_client_clamps() {
+        let color = [7, 19, 41, 255];
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint(
+            &mut pixels,
+            [16, 16],
+            [0, 3],
+            [2, 4],
+            &[marker([5.4, 6.7], 0)],
+            64,
+        )
+        .unwrap();
+        assert_eq!(marked(&pixels, 16, color), [[4, 5], [5, 5], [4, 6], [5, 6]]);
+        // The right edge clamps to the image, the top to row 0.
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint(
+            &mut pixels,
+            [16, 16],
+            [0, 3],
+            [2, 4],
+            &[marker([15.9, 0.2], 1)],
+            64,
+        )
+        .unwrap();
+        let found = marked(&pixels, 16, color);
+        assert_eq!(found.len(), 16);
+        assert_eq!(found[0], [12, 0]);
+        assert_eq!(found[15], [15, 3]);
+        // The bottom stops above the map's bottom padding: 16 - 1 - 3 - 4 = row 8.
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint(
+            &mut pixels,
+            [16, 16],
+            [0, 3],
+            [2, 4],
+            &[marker([8., 15.5], 1)],
+            64,
+        )
+        .unwrap();
+        let found = marked(&pixels, 16, color);
+        assert_eq!((found[0], found[15]), ([6, 8], [9, 11]));
+    }
+
+    #[test]
+    fn marker_refusals_leave_the_pixels_untouched() {
+        let mut pixels = vec![9; 16 * 16 * 4];
         let before = pixels.clone();
+        let two = [marker([4., 4.], 0), marker([9., 9.], 0)];
+        assert!(paint(&mut pixels, [16, 16], [0, 0], [2, 4], &two, 7).is_err());
         assert!(
             paint(
                 &mut pixels,
-                [4, 4],
-                [2., 2.],
-                &[([2., 2.], color), ([2., 2.], color)],
-                4
+                [16, 16],
+                [0, 0],
+                [2, 4],
+                &[marker([1., 1.], 2)],
+                64
             )
             .is_err()
         );
-        assert_eq!(pixels, before);
-        assert!(paint(&mut pixels, [4, 4], [f64::NAN, 2.], &[], 16).is_err());
-        paint(
-            &mut pixels,
-            [4, 4],
-            [2., 2.],
-            &[([0., 0.], [3, 5, 11, 255])],
-            16,
-        )
-        .unwrap();
-        assert_eq!(&pixels[..4], &[3, 5, 11, 255]);
-        assert!(sprite(b"MDLX").is_err());
-    }
-    #[test]
-    #[ignore = "requires PCX_MINIMAP_SPRITE from the selected local install"]
-    fn selected_original_unit_sprite_is_supported() {
-        let path = std::env::var("PCX_MINIMAP_SPRITE").expect("set PCX_MINIMAP_SPRITE");
-        let bytes = std::fs::read(&path).unwrap();
-        assert!(bytes.len() <= 1 << 20);
-        let (size, offset, alpha) = sprite(&bytes).unwrap();
-        assert!(size.iter().all(|v| *v > 0.));
-        println!(
-            "source={path} sha256={:02x?} dimensions={size:?} offset={offset:?} alpha={alpha}",
-            Sha256::digest(&bytes)
+        assert!(
+            paint(
+                &mut pixels,
+                [16, 16],
+                [0, 0],
+                [2, 4],
+                &[marker([f64::NAN, 1.], 0)],
+                64
+            )
+            .is_err()
         );
+        assert!(paint(&mut pixels, [15, 16], [0, 0], [2, 4], &[], 64).is_err());
+        assert_eq!(pixels, before);
+    }
+
+    #[test]
+    fn wider_maps_get_rows_and_taller_maps_get_columns_over_the_whole_image() {
+        let color = [60, 61, 70, 255];
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint_border(&mut pixels, [16, 16], [0, 5], &draw(2), color).unwrap();
+        let found = marked(&pixels, 16, color);
+        assert_eq!(found.len(), 4 * 16);
+        for row in [4, 5, 11, 12] {
+            assert!((0..16).all(|x| found.contains(&[x, row])));
+        }
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint_border(&mut pixels, [16, 16], [4, 1], &draw(2), color).unwrap();
+        let found = marked(&pixels, 16, color);
+        assert_eq!(found.len(), 4 * 16);
+        for column in [3, 4, 10, 11] {
+            assert!((0..16).all(|y| found.contains(&[column, y])));
+        }
+    }
+
+    #[test]
+    fn border_waits_for_a_padding_difference_above_the_threshold() {
+        let color = [60, 61, 70, 255];
+        for pads in [[0, 2], [2, 0], [3, 3]] {
+            let mut pixels = vec![0; 16 * 16 * 4];
+            paint_border(&mut pixels, [16, 16], pads, &draw(2), color).unwrap();
+            assert!(marked(&pixels, 16, color).is_empty(), "{pads:?}");
+        }
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint_border(&mut pixels, [16, 16], [0, 3], &draw(2), color).unwrap();
+        assert!(!marked(&pixels, 16, color).is_empty());
+        // Lines that fall outside the image are dropped, not wrapped.
+        let mut pixels = vec![0; 16 * 16 * 4];
+        paint_border(&mut pixels, [16, 16], [0, 16], &draw(2), color).unwrap();
+        assert_eq!(marked(&pixels, 16, color).len(), 16 * 3);
+        assert!(paint_border(&mut pixels, [15, 16], [0, 3], &draw(2), color).is_err());
     }
 }

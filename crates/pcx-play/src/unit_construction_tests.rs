@@ -404,6 +404,46 @@ fn public_fixture_configured(
 }
 
 #[test]
+fn the_build_order_native_makes_the_same_request_and_reports_acceptance() {
+    let (mut vm, worker, _) = public_fixture();
+    let host = &mut vm.host().inner;
+    let revision = host.construction_request_revision(worker).unwrap();
+    let args = [
+        Value::Handle(worker),
+        Value::Int(i32::from_be_bytes(*b"b001")),
+        Value::Real(80.),
+        Value::Real(16.),
+    ];
+    assert_eq!(
+        host.native("IssueBuildOrderById", &args).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        host.construction_request_revision(worker).unwrap(),
+        revision + 1
+    );
+    assert_eq!(
+        host.unit_construction_order(worker).unwrap().unwrap().site,
+        None
+    );
+    // The second request cannot pay: a refused request reports false and changes nothing.
+    let owner = host.executed_unit(worker).unwrap().owner;
+    let gold = host
+        .player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")
+        .unwrap();
+    assert_eq!(gold, Some(49));
+    assert_eq!(
+        host.native("IssueBuildOrderById", &args).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        host.player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")
+            .unwrap(),
+        gold
+    );
+}
+
+#[test]
 fn public_point_order_reserves_once_arrives_and_delivers_real_construction() {
     let (mut vm, worker, _) = public_fixture();
     let owner = vm.host().inner.executed_unit(worker).unwrap().owner;

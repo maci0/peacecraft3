@@ -283,13 +283,29 @@ fn label_spatial_assignments_require_the_executed_creation_flag() {
                 Value::Real(0.0),
             ],
         );
-        assert_eq!(result.is_ok(), sound == &spatial);
+        // The native wrapper has no creation-flag guard; other spatial setters keep theirs.
+        result.unwrap();
     }
-    assert_eq!(
-        h.sound_properties(id(&spatial)).unwrap().position,
-        Some([1.5, -3.0, 0.0])
+    for sound in [&spatial, &flat] {
+        assert_eq!(
+            h.sound_properties(id(sound)).unwrap().position,
+            Some([1.5, -3.0, 0.0])
+        );
+    }
+    assert!(
+        h.native(
+            "SetSoundVelocity",
+            &[
+                flat.clone(),
+                Value::Real(1.0),
+                Value::Real(2.0),
+                Value::Real(3.0),
+            ],
+        )
+        .unwrap_err()
+        .contains("explicit 3D creation required")
     );
-    assert_eq!(h.sound_properties(id(&flat)).unwrap().position, None);
+    assert_eq!(h.sound_properties(id(&flat)).unwrap().velocity, None);
     assert_eq!(
         h.sound_state(id(&spatial))
             .unwrap()

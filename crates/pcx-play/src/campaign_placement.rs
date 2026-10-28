@@ -18,6 +18,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[path = "placed_doodads.rs"]
 mod decorative;
+pub(crate) use decorative::model_member;
 pub use decorative::{DoodadAppearance, PlacedDoodad};
 
 const CELLS: usize = 4 << 20;

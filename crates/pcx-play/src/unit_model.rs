@@ -125,35 +125,51 @@ impl Model {
     }
 }
 
-/// Resolve the model through the selected metadata, including scalar map edits.
-pub fn model_path(definition: &Definition) -> Result<Option<String>, String> {
+/// The one scalar UnitUI field for `column`, checked against its selected
+/// metadata declaration and `kind`.
+pub(crate) fn unit_ui_field<'a>(
+    definition: &'a Definition,
+    column: &str,
+    kind: FieldKind,
+) -> Result<&'a pcx_sim::world::ObjectField, String> {
     let mut fields = definition.fields.iter().filter(|(_, f)| {
         f.metadata.as_ref().is_some_and(|m|
-        matches!(&m.source, FieldSource::Column {slk: SlkId::UnitUi,column} if column == "file"))
+        matches!(&m.source, FieldSource::Column {slk: SlkId::UnitUi,column: c} if c == column))
     });
-    let (id, field) = fields.next().ok_or("missing UnitUI/file metadata")?;
+    let (id, field) = fields
+        .next()
+        .ok_or_else(|| format!("missing UnitUI/{column} metadata"))?;
     if fields.next().is_some() {
-        return Err("ambiguous UnitUI/file metadata".into());
+        return Err(format!("ambiguous UnitUI/{column} metadata"));
     }
     let m = field.metadata.as_ref().expect("selected metadata");
-    if m.fourcc != *id
-        || m.from != SlkId::UnitMetaData
-        || m.index != -1
-        || m.kind != FieldKind::Token
-    {
-        return Err("unsupported UnitUI/file metadata".into());
+    if m.fourcc != *id || m.from != SlkId::UnitMetaData || m.index != -1 || m.kind != kind {
+        return Err(format!("unsupported UnitUI/{column} metadata"));
     }
-    let path = match &field.value {
+    Ok(field)
+}
+
+/// A scalar UnitUI token through the selected metadata, including map edits;
+/// `None` for an authored empty marker.
+pub fn unit_ui_text(definition: &Definition, column: &str) -> Result<Option<String>, String> {
+    let field = unit_ui_field(definition, column, FieldKind::Token)?;
+    let text = match &field.value {
         Ok(FieldValue::Cell(text)) => text.as_str(),
         Ok(FieldValue::Override(pcx_objects::Value::Str(text))) => {
-            std::str::from_utf8(text).map_err(|_| "model path is not UTF8")?
+            std::str::from_utf8(text).map_err(|_| format!("UnitUI/{column} is not UTF8"))?
         }
-        _ => return Err("unsupported UnitUI/file value".into()),
+        _ => return Err(format!("unsupported UnitUI/{column} value")),
     }
     .trim();
-    if matches!(path, "" | "_" | "-") {
+    Ok((!matches!(text, "" | "_" | "-")).then(|| text.to_owned()))
+}
+
+/// Resolve the model through the selected metadata, including scalar map edits.
+pub fn model_path(definition: &Definition) -> Result<Option<String>, String> {
+    let Some(path) = unit_ui_text(definition, "file")? else {
         return Ok(None);
-    }
+    };
+    let path = path.as_str();
     if path.len() > 16 << 10 || path.chars().any(char::is_control) || path.contains(',') {
         return Err("unsupported model path or model variation list".into());
     }

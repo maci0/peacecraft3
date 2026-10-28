@@ -6,6 +6,9 @@ use pcx_sim::world::{Definition, FieldProblem, FieldValue};
 
 const NATIVE: &str = "FillGuardPosts";
 
+/// A unit's rawcode and position.
+type ListingUnit = ([u8; 4], Option<[f32; 2]>);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GuardPost {
     kind: i32,
@@ -23,7 +26,10 @@ struct Training {
     duration: i32,
     gold: i32,
     lumber: i32,
+    /// Unit type, or the upgrade id of a research job.
     kind: i32,
+    /// The level a research job brings its owner to; `None` trains `kind`.
+    research: Option<i32>,
     food: i32,
     finish: f64,
     through: f64,
@@ -295,10 +301,7 @@ impl ObjectHost {
         else {
             return Ok(None);
         };
-        let limit = self
-            .campaign_ai
-            .replacement_count(player)
-            .ok_or_else(|| self.training_error("replacement limit is unset"))?;
+        let limit = self.replacement_limit(player, policy.default_replacement);
         if post.assignments > limit {
             return Ok(None);
         }
@@ -357,6 +360,13 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// The script's replacement count, else the context's initial one.
+    fn replacement_limit(&self, player: i32, default: i32) -> i32 {
+        self.campaign_ai
+            .replacement_count(player)
+            .unwrap_or(default)
+    }
+
     pub(crate) fn fill_ai_guard_posts(&mut self, player: i32) -> Result<(), Error> {
         self.require_active_campaign_ai_player(player, NATIVE)?;
         if self.campaign_mode.is_none() || self.guards.is_none() {
@@ -381,10 +391,12 @@ impl ObjectHost {
             {
                 continue;
             }
-            let limit = self
-                .campaign_ai
-                .replacement_count(player)
-                .ok_or_else(|| self.training_error("replacement limit is unset"))?;
+            let default = self
+                .campaign_mode
+                .as_ref()
+                .expect("checked above")
+                .default_replacement;
+            let limit = self.replacement_limit(player, default);
             if post.assignments > limit {
                 continue;
             }
@@ -503,7 +515,7 @@ impl ObjectHost {
             self.training_refund(job.gold)?,
             self.training_refund(job.lumber)?,
         ];
-        let cancel = self.prepare_training_events(producer, "CANCEL")?;
+        let cancel = self.prepare_job_events(&job, producer, "CANCEL")?;
         let mut next = None;
         let mut start = Vec::new();
         let released = if job.active { job.food } else { 0 };
@@ -539,7 +551,7 @@ impl ObjectHost {
                 if !head.finish.is_finite() || head.finish <= now {
                     return Err(self.training_error("replacement deadline cannot advance"));
                 }
-                start = self.prepare_training_events(producer, "START")?;
+                start = self.prepare_job_events(&head, producer, "START")?;
                 next = Some((next_index, head));
             }
         }
@@ -813,6 +825,45 @@ impl ObjectHost {
         Ok(selected)
     }
 
+    /// The first live unit of `owner` that lists `kind` in its `key` profile list.
+    fn ai_unit_lists(
+        &self,
+        owner: HandleId,
+        kind: [u8; 4],
+        key: &str,
+    ) -> Result<Option<ListingUnit>, Error> {
+        for (_, record) in self.executed_units() {
+            if record.owner != owner || !live(record) {
+                continue;
+            }
+            let lists_builds = record.definition.fields.values().any(|field| {
+                field.metadata.as_ref().is_some_and(|metadata| {
+                    matches!(&metadata.source, FieldSource::Profile { key: k, .. }
+                        if k.eq_ignore_ascii_case(key))
+                })
+            });
+            if !lists_builds {
+                continue;
+            }
+            let list =
+                profile(&record.definition, key, "unitList").map_err(|e| self.training_error(e))?;
+            let mut found = false;
+            for token in list.split(',').map(str::trim) {
+                if matches!(token, "" | "_" | "-") {
+                    continue;
+                }
+                if token.len() != 4 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+                    return Err(self.training_error(format!("malformed {key} rawcode")));
+                }
+                found |= token.as_bytes() == kind;
+            }
+            if found {
+                return Ok(Some((record.definition.rawcode, record.position)));
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) fn set_ai_produce(
         &mut self,
         player: i32,
@@ -848,9 +899,19 @@ impl ObjectHost {
             return Err(fail("AI production catalog identity differs".into()));
         }
         if super::unit_types::structure(&definition).map_err(fail)? {
-            return Err(fail(format!(
-                "AI construction is not admitted: player={player} kind={requested:?}"
-            )));
+            // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
+            // whose build ability lists the kind) and, failing that, for an idle unit that
+            // upgrades into the kind. With neither the request answers false and orders nothing.
+            // Placement (0xad4970) and the upgrade order are not decoded, so either route refuses.
+            for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
+                if let Some((rawcode, position)) = self.ai_unit_lists(owner, requested, key)? {
+                    return Err(fail(format!(
+                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}",
+                        String::from_utf8_lossy(&rawcode)
+                    )));
+                }
+            }
+            return Ok(false);
         }
         for _ in 0..quantity {
             let Some(producer) = self.select_training_producer(owner, requested, false)? else {
@@ -937,6 +998,7 @@ impl ObjectHost {
             gold,
             lumber,
             kind,
+            research: None,
             food,
             finish: completion,
             through: now,
@@ -945,6 +1007,186 @@ impl ObjectHost {
         self.commit_training_debit(debit);
         self.commit_training_events(events, producer, kind, None);
         Ok(true)
+    }
+
+    /// Whether `owner` has a research of `upgrade` queued or running.
+    pub(crate) fn has_pending_research(&self, owner: HandleId, upgrade: i32) -> bool {
+        self.pending_research(owner, upgrade)
+    }
+
+    fn pending_research(&self, owner: HandleId, upgrade: i32) -> bool {
+        self.training
+            .jobs
+            .iter()
+            .any(|job| job.owner == owner && job.research.is_some() && job.kind == upgrade)
+    }
+
+    fn research_error(&self, detail: impl Into<String>) -> Error {
+        self.inner
+            .error("SetUpgrade", Failure::UnitActivity(detail.into()))
+    }
+
+    /// The AI's view of an upgrade level: the researched level, plus one while a research of it
+    /// is queued or running (exe 0xab5570 adds one when the player's in-progress count for the
+    /// upgrade, flag 2 of 0x513620, is positive).
+    pub(crate) fn ai_upgrade_level(&self, owner: HandleId, upgrade: i32) -> Result<i32, Error> {
+        let Some(level) = self.stored_upgrade_level(owner, upgrade)? else {
+            return Err(self.research_error("upgrade levels are not admitted for this upgrade"));
+        };
+        Ok(level + i32::from(self.pending_research(owner, upgrade)))
+    }
+
+    /// `GetUpgradeGoldCost` and `GetUpgradeWoodCost`: the cost of the level after the AI's
+    /// level (exe 0xab5550 and 0xab5620 call 0x6df7e0 and 0x6e0a30 with that level).
+    pub(crate) fn ai_upgrade_cost(
+        &self,
+        owner: HandleId,
+        upgrade: i32,
+        lumber: bool,
+    ) -> Result<i32, Error> {
+        let level = self
+            .ai_upgrade_level(owner, upgrade)?
+            .checked_add(1)
+            .ok_or_else(|| self.research_error("upgrade level overflow"))?;
+        let research = self.research_rules(upgrade)?;
+        let prices = research.prices();
+        let cost = if lumber {
+            prices.lumber(level)
+        } else {
+            prices.gold(level)
+        };
+        cost.ok_or_else(|| self.research_error("upgrade cost overflow"))
+    }
+
+    fn research_rules(&self, upgrade: i32) -> Result<&crate::upgrade_research::Research, Error> {
+        self.active_upgrade_rules()
+            .ok_or_else(|| self.research_error("the upgrade model is not admitted"))?
+            .research(upgrade)
+            .map_err(|e| self.research_error(e))
+    }
+
+    /// `SetUpgrade`: the first idle building of the AI player that researches `upgrade` takes
+    /// the order when the player can afford it, as the executable's loop at 0xac3ac0 does over
+    /// the player's units. It orders nothing when no building qualifies. The native itself
+    /// returns false either way (0xab7680 zeroes the result after the call).
+    ///
+    /// Established: the cost levels, the loop shape, the order of the checks (can research,
+    /// idle, requirements and cost). Recreation readings: arena order for the unit order, "idle"
+    /// as an empty queue (the executable tests two counters at +0x3c and +0x40 of the queue
+    /// ability, not decoded), the `Researches` list for "can research", `Requires` keys for the
+    /// requirements, and the cost paid when the order is accepted, refunded on cancel and on
+    /// the producer's death like a training cost. Refused: a second research of an upgrade that
+    /// is already running, a level beyond `maxlevel`, and a producer under pause or transfer.
+    pub(crate) fn set_ai_upgrade(&mut self, player: i32, upgrade: i32) -> Result<(), Error> {
+        if !self.campaign_ai.is_active(player) {
+            return Err(self.research_error(format!("AI player {player} is not active")));
+        }
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| self.research_error(format!("AI player {player} is not admitted")))?;
+        if self.pending_research(owner, upgrade) {
+            return Err(self.research_error(
+                "a second research of an upgrade already running is not established",
+            ));
+        }
+        let level = self
+            .ai_upgrade_level(owner, upgrade)?
+            .checked_add(1)
+            .ok_or_else(|| self.research_error("upgrade level overflow"))?;
+        let (maximum, requires, seconds, gold, lumber) = {
+            let rules = self
+                .active_upgrade_rules()
+                .ok_or_else(|| self.research_error("the upgrade model is not admitted"))?;
+            let research = rules
+                .research(upgrade)
+                .map_err(|e| self.research_error(e))?;
+            let prices = research.prices();
+            let cost = |value: Option<i32>| {
+                value.ok_or_else(|| self.research_error("upgrade price overflow"))
+            };
+            (
+                rules.maximum(upgrade),
+                research.requires(level).to_vec(),
+                cost(prices.seconds(level))?,
+                cost(prices.gold(level))?,
+                cost(prices.lumber(level))?,
+            )
+        };
+        if maximum.is_none_or(|maximum| level > maximum) {
+            return Err(self.research_error(format!(
+                "research of level {level} is beyond the upgrade's levels"
+            )));
+        }
+        if seconds <= 0 {
+            return Err(self.research_error("research duration must be positive"));
+        }
+        for code in requires {
+            if !self.technology_requirement_met(owner, i32::from_be_bytes(code), None)? {
+                return Ok(());
+            }
+        }
+        let mut chosen = None;
+        for (id, record) in self.executed_units() {
+            if record.owner != owner
+                || !live(record)
+                || record.construction.is_some()
+                || self.training.jobs.iter().any(|job| job.producer == id)
+            {
+                continue;
+            }
+            let list = profile(&record.definition, "Researches", "upgradeList")
+                .map_err(|e| self.research_error(e))?;
+            let mut researches = false;
+            for token in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                if token.len() != 4 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+                    return Err(self.research_error("malformed Researches rawcode"));
+                }
+                researches |= token.as_bytes() == upgrade.to_be_bytes();
+            }
+            if researches {
+                if record.paused_since.is_some() {
+                    return Err(
+                        self.research_error("research at a paused building is not established")
+                    );
+                }
+                chosen = Some(id);
+                break;
+            }
+        }
+        let Some(producer) = chosen else {
+            return Ok(());
+        };
+        if self.training.jobs.len() >= self.inner.max_handles {
+            return Err(self.research_error("training job budget exhausted"));
+        }
+        self.training
+            .jobs
+            .try_reserve(1)
+            .map_err(|_| self.research_error("training job capacity"))?;
+        let now = self
+            .timer_game_time()
+            .filter(|n| n.is_finite() && *n >= 0.)
+            .ok_or_else(|| self.research_error("training clock is not admitted"))?;
+        let Some(debit) = self.prepare_training_debit(owner, gold, lumber, 0, 0)? else {
+            return Ok(());
+        };
+        self.training.jobs.push(Training {
+            producer,
+            owner,
+            guard: None,
+            active: true,
+            duration: seconds,
+            gold,
+            lumber,
+            kind: upgrade,
+            research: Some(level),
+            food: 0,
+            finish: now + f64::from(seconds),
+            through: now,
+            pause: None,
+        });
+        self.commit_training_debit(debit);
+        Ok(())
     }
 
     pub(super) fn pending_training_food(&self, owner: HandleId) -> Result<i32, Error> {
@@ -997,7 +1239,7 @@ impl ObjectHost {
                     index += 1;
                     continue;
                 }
-                let events = self.prepare_training_events(job.producer, "START")?;
+                let events = self.prepare_job_events(&job, job.producer, "START")?;
                 let Some(debit) =
                     self.prepare_training_debit(job.owner, 0, 0, job.food, events.len())?
                 else {
@@ -1029,6 +1271,12 @@ impl ObjectHost {
             }
             job.through = now;
             if producer.paused_since.is_some() || job.finish > now {
+                self.training.jobs[index] = job;
+                index += 1;
+                continue;
+            }
+            if job.research.is_some() {
+                // The level change runs after this tick's regeneration (`complete_research`).
                 self.training.jobs[index] = job;
                 index += 1;
                 continue;
@@ -1072,6 +1320,36 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Applies the research that finished by `now`. It runs once the tick's regeneration has
+    /// reached `now`, so the level change integrates no motion: an upgrade effect on a moving
+    /// unit rebases its regeneration clock.
+    pub(super) fn complete_research(&mut self, now: f64) -> Result<(), Error> {
+        let mut index = 0;
+        while index < self.training.jobs.len() {
+            let job = self.training.jobs[index];
+            let Some(level) = job.research else {
+                index += 1;
+                continue;
+            };
+            let paused = self
+                .executed_unit(job.producer)
+                .map_err(|e| self.inner.error(NATIVE, e.failure))?
+                .paused_since
+                .is_some();
+            if !job.active || paused || job.finish > now {
+                index += 1;
+                continue;
+            }
+            self.set_researched_with_effects(&[
+                Value::Handle(job.owner),
+                Value::Int(job.kind),
+                Value::Int(level),
+            ])?;
+            self.training.jobs.remove(index);
+        }
+        Ok(())
+    }
+
     pub(crate) fn next_training_completion(&self, until: f64) -> Option<f64> {
         self.training
             .jobs
@@ -1086,6 +1364,19 @@ impl ObjectHost {
                 (at.is_finite() && at <= until).then_some(at)
             })
             .min_by(f64::total_cmp)
+    }
+
+    /// Research jobs raise no training events: the research events are not admitted.
+    fn prepare_job_events(
+        &mut self,
+        job: &Training,
+        producer: HandleId,
+        phase: &str,
+    ) -> Result<Vec<TrainingEvent>, Error> {
+        if job.research.is_some() {
+            return Ok(Vec::new());
+        }
+        self.prepare_training_events(producer, phase)
     }
 
     fn prepare_training_events(

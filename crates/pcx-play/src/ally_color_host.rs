@@ -4,6 +4,7 @@ use pcx_script::Value;
 pub(super) struct State {
     input: Input,
     current: i32,
+    minimap_filtered: bool,
 }
 impl ObjectHost {
     pub fn admit_ally_colors(&mut self, input: Input) -> Result<(), Error> {
@@ -41,7 +42,12 @@ impl ObjectHost {
             }
         }
         let current = input.rules.initial;
-        self.ally_colors = Some(State { input, current });
+        let minimap_filtered = input.rules.minimap_filtered_at_start();
+        self.ally_colors = Some(State {
+            input,
+            current,
+            minimap_filtered,
+        });
         Ok(())
     }
     pub fn ally_color_filter_state(&self) -> Option<i32> {
@@ -61,7 +67,9 @@ impl ObjectHost {
                 self.ally_colors.as_ref().expect("admitted").current,
             )),
             ("SetAllyColorFilterState", [Value::Int(value)]) => {
-                self.ally_colors.as_mut().expect("admitted").current = *value;
+                let state = self.ally_colors.as_mut().expect("admitted");
+                state.current = *value;
+                state.minimap_filtered = state.input.rules.filters_minimap(*value);
                 Ok(Value::Null)
             }
             _ => Err(self.inner.error(
@@ -75,7 +83,7 @@ impl ObjectHost {
             return Ok(Role::Original);
         };
         let filtered = if minimap {
-            state.input.rules.filters_minimap(state.current)
+            state.minimap_filtered
         } else {
             state.input.rules.filters_units(state.current)
         };

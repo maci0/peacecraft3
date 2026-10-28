@@ -94,6 +94,19 @@ pub(crate) fn fixture() -> (
     let getter = put(0x1300, &getter);
     let maximum_initializer = put(0x1400, &init(37, loc(0x1400), loc(0x1580)));
     let null_initializer = put(0x1420, &init(3, loc(0x1420), loc(0x1584)));
+    let mut reset = vec![0; 21];
+    for (at, data) in [
+        (0, &[0x8b, 0x86][..]),
+        (6, &[0x8d, 0x8e]),
+        (12, &[0x6a, 0x01, 0x68]),
+        (19, &[0xff, 0x10]),
+    ] {
+        reset[at..at + data.len()].copy_from_slice(data);
+    }
+    for (at, value) in [(2, 0x180), (8, 0x180), (15, loc(0x1584))] {
+        reset[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let reset = put(0x1440, &reset);
     put(0x1500, &0.375_f32.to_le_bytes());
     numeric.image_sha256 = sha256(&image);
     budget.profile_bytes = 8192;
@@ -104,6 +117,7 @@ pub(crate) fn fixture() -> (
         getter,
         maximum_initializer,
         null_initializer,
+        reset,
     };
     (image, binding, numeric, budget)
 }
@@ -123,6 +137,7 @@ fn refresh(image: &[u8], binding: &mut Binding, numeric: &mut crate::script_nume
         &mut binding.getter,
         &mut binding.maximum_initializer,
         &mut binding.null_initializer,
+        &mut binding.reset,
     ] {
         let at = 0x200 + (w.va - 0x301000) as usize;
         w.digest = sha256(&image[at..at + w.len as usize]);
@@ -145,6 +160,7 @@ fn source_operands_drive_clamping_null_result_and_nonfinite_comparisons() {
         assert_eq!(r.clamp(f32::from_bits(bits)).to_bits(), bits);
     }
     assert_eq!(r.null_result(), 3.0);
+    assert_eq!(r.initial_result(), 3.0);
     let (mut image, mut binding, mut numeric, budget) = fixture();
     image[0x1700..0x1704].copy_from_slice(&2.25_f32.to_le_bytes());
     image[0x1601] = 17;
@@ -165,6 +181,7 @@ fn experience_budget_charges_one_data_operand() {
         &binding.getter,
         &binding.maximum_initializer,
         &binding.null_initializer,
+        &binding.reset,
     ];
     let needed = windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 4;
     let too_small = RuleInputBudget {
@@ -181,7 +198,7 @@ fn experience_budget_charges_one_data_operand() {
 
 #[test]
 fn changed_shapes_calls_destinations_limits_and_sources_refuse() {
-    for change in 0..10 {
+    for change in 0..13 {
         let (mut image, mut binding, mut numeric, mut budget) = fixture();
         match change {
             0 => image[0x1400 + 45] ^= 1,
@@ -194,6 +211,10 @@ fn changed_shapes_calls_destinations_limits_and_sources_refuse() {
             7 => binding.origin.source.clear(),
             8 => budget.profile_bytes = 1,
             9 => budget.sections = 0,
+            // Reset pushes another real, addresses another property, or loses its call.
+            10 => image[0x1640 + 15] ^= 4,
+            11 => image[0x1640 + 8] ^= 4,
+            12 => image[0x1640 + 19] ^= 1,
             _ => unreachable!(),
         }
         refresh(&image, &mut binding, &mut numeric);

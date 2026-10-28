@@ -5,6 +5,8 @@ struct GroundUniform {
     layer_base: array<vec4<u32>, 4>,
     boundary_color: vec4<f32>,
     boundary_bounds: vec4<f32>,
+    shadow_color: vec4<f32>,
+    shadow_bounds: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var ground_texture: texture_2d_array<f32>;
@@ -12,6 +14,9 @@ struct GroundUniform {
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var<uniform> ground: GroundUniform;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var boundary_texture: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var boundary_sampler: sampler;
+
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var shadow_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var shadow_sampler: sampler;
 
 struct VertexIn {
     @builtin(instance_index) instance_index: u32,
@@ -75,6 +80,11 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     color = over(color, sample_selector(in.selectors.z, uv));
     color = over(color, sample_selector(in.selectors.y, uv));
     color = over(color, sample_selector(in.selectors.x, uv));
+    if ground.shadow_color.a > 0.0 {
+        let uv = (in.world_xy - ground.shadow_bounds.xy) / ground.shadow_bounds.zw;
+        let coverage = textureSample(shadow_texture, shadow_sampler, uv).r;
+        color = vec4<f32>(mix(color.rgb, ground.shadow_color.rgb, coverage * ground.shadow_color.a), 1.0);
+    }
     if ground.boundary_color.a > 0.0 {
         let uv = (in.world_xy - ground.boundary_bounds.xy) / ground.boundary_bounds.zw;
         let coverage = textureSample(boundary_texture, boundary_sampler, uv).r;

@@ -40,6 +40,7 @@ impl ObjectHost {
             holy.ready_at.remove(&unit);
         }
         self.clear_chain_cooldown(unit);
+        self.clear_curse_cooldowns(unit);
         if let Some(mirror) = &mut self.mirror_image {
             mirror.ready.remove(&unit);
         }
@@ -100,6 +101,9 @@ impl ObjectHost {
             .is_none_or(|abilities| abilities.level(ability) <= 0)
         {
             return Ok(absent);
+        }
+        if let Some(answer) = self.curse_bound_cooldown(unit, ability, end)? {
+            return Ok(answer);
         }
         if let Some(answer) = self.chain_bound_cooldown(unit, ability, end)? {
             return Ok(answer);
@@ -181,6 +185,33 @@ impl ObjectHost {
         let input = self.heroes_admission()?;
         let (base, _) = crate::ability_profile::base(&input.tables, &input.overlay, alias)?;
         fourcc_text(base)
+    }
+
+    /// Whether the selected tables have a buff row with this rawcode.
+    pub(crate) fn ability_buff_exists(&self, buff: [u8; 4]) -> Result<bool, String> {
+        let input = self.heroes_admission()?;
+        let id = std::str::from_utf8(&buff).map_err(|_| "buff rawcode is not text")?;
+        Ok(input.tables.object(Family::Buff, id).is_ok())
+    }
+
+    /// Non-empty profile values of a buff row under `key`, in authored order.
+    pub(crate) fn buff_profiles(&self, buff: [u8; 4], key: &str) -> Result<Vec<String>, String> {
+        let input = self.heroes_admission()?;
+        let id = std::str::from_utf8(&buff).map_err(|_| "buff rawcode is not text")?;
+        let object = input
+            .tables
+            .object(Family::Buff, id)
+            .map_err(|e| e.to_string())?;
+        let mut values = Vec::new();
+        for cell in object.profile(key) {
+            if cell.parse_error.is_some() {
+                return Err(format!("{buff:?}: malformed {key} profile"));
+            }
+            if !matches!(cell.text.trim(), "" | "_" | "-") {
+                values.push(cell.text.trim().to_owned());
+            }
+        }
+        Ok(values)
     }
 
     pub(crate) fn ability_metadata_text(
@@ -418,6 +449,7 @@ impl ObjectHost {
             b"AHds" => self.divine_shield.rules.is_some(),
             _ => false,
         } && !self.chain_alias_is_bound(ability)
+            && !self.curse_alias_is_bound(ability)
             && !self.mirror_alias(ability)
         {
             return Err(fail(

@@ -9,7 +9,8 @@
 //! The layer numbering and the clamp/linear/mip filter follow the public
 //! Warsmash `GroundTexture` loader (commit `f9e0aeed4be372d6016519d0e97b384aa873f374`).
 //! That file is a labelled reconstruction, not a native trace. Lighting, cliffs,
-//! water, fog, and shadow are outside this draw.
+//! water and gameplay fog are outside this draw. The optional authored shadow mask
+//! and executed boundary overlay are composed in terrain world coordinates.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageSampler};
@@ -90,6 +91,8 @@ struct GroundUniform {
     layer_base: [UVec4; 4],
     boundary_color: Vec4,
     boundary_bounds: Vec4,
+    shadow_color: Vec4,
+    shadow_bounds: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -102,6 +105,9 @@ pub struct GroundMaterial {
     #[texture(3)]
     #[sampler(4)]
     boundary_texture: Option<Handle<Image>>,
+    #[texture(5)]
+    #[sampler(6)]
+    shadow_texture: Option<Handle<Image>>,
 }
 
 impl GroundMaterial {
@@ -112,9 +118,29 @@ impl GroundMaterial {
                 layer_base: pack_layer_base(layer_base),
                 boundary_color: Vec4::ZERO,
                 boundary_bounds: Vec4::ZERO,
+                shadow_color: Vec4::ZERO,
+                shadow_bounds: Vec4::ZERO,
             },
             boundary_texture: None,
+            shadow_texture: None,
         }
+    }
+
+    /// Baked map shadow cells, in map X/Y order; no camera-dependent projection.
+    pub fn set_shadow(
+        &mut self,
+        texture: Handle<Image>,
+        bounds: Vec4,
+        rgba: [u8; 4],
+    ) -> Result<(), &'static str> {
+        if !bounds.is_finite() || bounds.z <= 0.0 || bounds.w <= 0.0 {
+            return Err("invalid terrain shadow bounds");
+        }
+        self.shadow_texture = Some(texture);
+        self.params.shadow_bounds = bounds;
+        self.params.shadow_color =
+            Vec4::from_array(rgba.map(|c| f32::from(c) / f32::from(u8::MAX)));
+        Ok(())
     }
 
     /// Explicit source boundary input; the absent pass has no color contribution.

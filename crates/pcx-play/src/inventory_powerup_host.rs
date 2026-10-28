@@ -93,6 +93,27 @@ pub(crate) fn reprice_max_life(
         .map_err(|e| format!("max life change: {e}"))
 }
 
+/// Life pools after a flat signed maximum-life change scaled by the owner's health `factor`, keeping
+/// the current/maximum ratio (native mode 1, `0x6be8c0`). A zero scaled change stops before any
+/// write; otherwise the change is rounded, then the ratio.
+pub(crate) fn reprice_flat_life_scaled(
+    life: f32,
+    max_life: f32,
+    delta: f32,
+    factor: f32,
+    rounding: Option<LifeRounding>,
+) -> Result<(f32, f32), String> {
+    let fail = |why: &str| format!("flat life change: {why}");
+    if !delta.is_finite() || !factor.is_finite() {
+        return Err(fail("non-finite change"));
+    }
+    if delta * factor == 0.0 {
+        return Ok((life, max_life));
+    }
+    let change = round_scaled_life_delta(delta, factor, rounding);
+    change_life_pools_with(life, max_life, change, rounding).map_err(|e| fail(&e))
+}
+
 /// Mana pools after a signed intelligence change, keeping the current/max ratio rounded with
 /// half upward. `mana_per_intelligence` is the selected intelligence-to-mana coefficient.
 pub(crate) fn reprice_mana(

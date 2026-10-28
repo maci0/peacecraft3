@@ -148,7 +148,7 @@ pub fn blend_joint_pose(
     let rotation = if global(TrackKind::Rotation) {
         to.rotation
     } else {
-        blend_rotation(from.rotation, to.rotation, weight)?
+        slerp(from.rotation, to.rotation, weight)?
     };
     let pose = Pose {
         translation: vector(from.translation, to.translation, TrackKind::Translation),
@@ -166,7 +166,8 @@ pub fn blend_joint_pose(
     }
     Ok(pose)
 }
-fn blend_rotation(a: [f32; 4], b: [f32; 4], weight: f32) -> Result<[f32; 4], &'static str> {
+/// Normalized shortest-arc slerp; refuses zero or non-finite quaternions.
+pub(crate) fn slerp(a: [f32; 4], b: [f32; 4], weight: f32) -> Result<[f32; 4], &'static str> {
     if weight == 0. || a == b {
         return Ok(a);
     }

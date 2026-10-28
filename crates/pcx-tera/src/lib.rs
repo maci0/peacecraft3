@@ -9,7 +9,7 @@
 //! It does **not** re-parse `war3map.w3e`. The terrain arrives as
 //! [`pcx_map::Terrain`] and this crate reads
 //! [`pcx_map::Corner::height_index`], [`pcx_map::Corner::slot_nibble`] and
-//! [`pcx_map::Corner::corner_flags`] out of it, inventing nothing.
+//! [`pcx_map::Corner::corner_flags`] and elevation layer out of it, inventing nothing.
 //!
 //! # The corner → world mapping is measured, not assumed
 //!
@@ -24,13 +24,15 @@
 //! world_x = origin_x + corner_x * TILE_XY          TILE_XY           = 128.0
 //! world_y = origin_y + corner_y * TILE_XY          Z_PER_INDEX       =   0.25
 //! world_z = (height_index - Z_REFERENCE_INDEX)     Z_REFERENCE_INDEX = 8192.0
-//!           * Z_PER_INDEX
+//!           * Z_PER_INDEX + (layer_height - 2) * TILE_XY
 //! ```
 //!
-//! **`Z_PER_INDEX` / `Z_REFERENCE_INDEX`, proven exactly.** A doodad's stored
-//! world `z` is its terrain height, so a doodad standing on a *flat* tile (all
-//! four of that tile's corners equal) must satisfy
-//! `z == (index - 8192) * 0.25` exactly, in `f32`. Across the shipped set:
+//! **Raw-height calibration, corrected 2026-10-27.** The earlier calibration
+//! counted doodads matching the raw-height component below. Those matches do not
+//! establish the full world height on other elevation layers. W3E's low cliff-byte
+//! nibble contributes a separate tile-height offset relative to encoding layer 2.
+//! Native gameplay view matrices and the supplied placed-tree heights independently
+//! expose the previously omitted layer term. The historical raw-component counts are:
 //!
 //! | build | flat-tile doodads | exact matches | distinct indices |
 //! |---|---|---|---|

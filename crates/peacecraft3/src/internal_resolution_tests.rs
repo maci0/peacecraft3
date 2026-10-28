@@ -36,6 +36,7 @@ fn app() -> App {
             .disable::<bevy::audio::AudioPlugin>(),
     );
     install(&mut app);
+    app.add_plugins(crate::menu_composition::MenuCompositionPlugin);
     app.init_resource::<Capture>();
     app.finish();
     app.cleanup();
@@ -77,7 +78,7 @@ fn world_scales_but_display_ui_coordinates_and_lifecycle_do_not() {
             RenderLayers::none(),
             target.clone(),
             bevy::core_pipeline::tonemapping::Tonemapping::None,
-            Msaa::Off,
+            Msaa::Sample4,
         ))
         .id();
     let sky = app
@@ -91,7 +92,7 @@ fn world_scales_but_display_ui_coordinates_and_lifecycle_do_not() {
             },
             RenderLayers::none(),
             target.clone(),
-            Msaa::Off,
+            Msaa::Sample4,
         ))
         .id();
     let ui = app
@@ -107,6 +108,10 @@ fn world_scales_but_display_ui_coordinates_and_lifecycle_do_not() {
             RenderLayers::none(),
         ))
         .id();
+    app.world_mut().spawn((
+        peacecraft3::campaign_presentation::CampaignHud,
+        UiTargetCamera(ui),
+    ));
     let readback = app
         .world_mut()
         .spawn(Readback::texture(output.clone()))
@@ -162,12 +167,11 @@ fn world_scales_but_display_ui_coordinates_and_lifecycle_do_not() {
             world.get::<RenderTarget>(ui).unwrap().as_image().unwrap(),
             &output
         );
-        if factor > 1 {
-            assert_eq!(
-                world.get::<RenderTarget>(sky).unwrap().as_image().unwrap(),
-                scene_target
-            );
-        }
+        assert_eq!(
+            world.get::<RenderTarget>(sky).unwrap().as_image().unwrap(),
+            scene_target
+        );
+        assert!(world.resource::<InternalResolution>().pass.is_some());
         let pixels = &world.resource::<Capture>().0;
         assert!(!pixels.is_empty());
         let at = (pixels.len() / 32) * 16 + 32 * 4;

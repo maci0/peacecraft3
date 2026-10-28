@@ -2,8 +2,8 @@ use super::{Error, Failure, ObjectHost};
 use pcx_script::{RealOps, Value};
 
 impl ObjectHost {
-    /// Admit source-qualified factor limits on this session's existing player rows.
-    /// Initial factors and experience awards are not inferred from a setter.
+    /// Admit source-qualified factor limits and the reset-installed initial factor on this
+    /// session's player rows. Experience awards are not inferred from a setter.
     pub fn with_player_experience_handicap(
         mut self,
         rules: crate::player_handicap::Rules,
@@ -53,10 +53,14 @@ impl ObjectHost {
                 return Err(self.inner.error(native, Failure::Source));
             }
         }
-        self.players
-            .as_mut()
-            .expect("checked players")
-            .experience_handicap = Some(rules);
+        let players = self.players.as_mut().expect("checked players");
+        let initial = rules.initial_result();
+        for row in &mut players.rows {
+            if row.experience_handicap.is_none() {
+                row.experience_handicap = Some(initial);
+            }
+        }
+        players.experience_handicap = Some(rules);
         Ok(self)
     }
 

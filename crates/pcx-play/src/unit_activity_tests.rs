@@ -33,6 +33,7 @@ native IssueImmediateOrder takes unit u, string s returns boolean
 native IssueImmediateOrderById takes unit u, integer n returns boolean
 native IssuePointOrder takes unit u, string s, real x, real y returns boolean
 native IssuePointOrderById takes unit u, integer n, real x, real y returns boolean
+native IssueBuildOrderById takes unit u, integer n, real x, real y returns boolean
 native GetUnitCurrentOrder takes unit u returns integer
 constant native GetUnitMoveSpeed takes unit u returns real
 constant native GetUnitDefaultMoveSpeed takes unit u returns real
@@ -182,11 +183,37 @@ pub(super) fn rules_with_setrally() -> (
     rules_with_extra_order("setrally")
 }
 
+/// The fixture registry with a fifth order, `darkconversion`.
+pub(super) fn rules_with_darkconversion() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    rules_with_extra_order("darkconversion")
+}
+
 pub(super) fn rules_with_repair() -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,
 ) {
     rules_with_extra_order("repair")
+}
+
+/// The fixture registry with a fifth order, `attackground`, and the stock follow profile.
+pub(super) fn rules_with_attackground() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    let (registry, rules) = rules_with_extra_order("attackground");
+    let rules = rules
+        .with_follow_profiles(
+            &[(
+                "synthetic follow misc",
+                b"[Misc]\nFollowRange=12\nStructureFollowRange=4\n",
+            )],
+            4096,
+        )
+        .unwrap();
+    (registry, rules)
 }
 
 fn rules_with_extra_order(

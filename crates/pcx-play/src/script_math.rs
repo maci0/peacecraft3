@@ -1,4 +1,4 @@
-//! `SquareRoot` and `Atan2` as the reviewed client's software routines.
+//! `SquareRoot`, `Atan2`, `Sin` and `Cos` as the reviewed client's software routines.
 //! Code windows are fingerprinted; every coefficient, angle and loop bound is
 //! read from the image through the addresses and immediates that code uses.
 //! Runtime-initialized zero/one come from their reviewed static initializers.
@@ -21,6 +21,33 @@ pub struct Binding {
     pub arctangent: SourceWindow,
     pub zero_initializer: SourceWindow,
     pub one_initializer: SourceWindow,
+    /// Absent leaves `Sin` and `Cos` unsupported.
+    pub trig: Option<TrigBinding>,
+}
+
+/// The table-driven sine and cosine routines and their native wrappers.
+#[derive(Clone, Debug)]
+pub struct TrigBinding {
+    pub sine_native: SourceWindow,
+    pub cosine_native: SourceWindow,
+    pub sine: SourceWindow,
+    pub cosine: SourceWindow,
+}
+
+/// Entries of the quarter-wave table: one per index `0..=1024`, so that index `i` and `i + 1`
+/// bound each interpolation step.
+const TABLE_ENTRIES: usize = 1025;
+/// Interpolation fraction bits and table index bits of the fixed-point angle.
+const FRACTION_BITS: u32 = 8;
+const INDEX_MASK: i32 = 0x3ff;
+const QUADRANT_SHIFT: u32 = 18;
+const SINGLE_BIAS_SHIFT: u32 = 31 << 23;
+
+/// Angle scale (fixed-point units per radian, as a real) and the quarter-wave table.
+#[derive(Clone, Debug)]
+struct Trig {
+    scale: u32,
+    table: Vec<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +65,7 @@ pub struct ScriptMath {
     root_scale: u32,
     odd_mantissa: u32,
     root_steps: u32,
+    trig: Option<Trig>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -153,6 +181,75 @@ impl ScriptMath {
             root_scale: at(root, 0x56)?,
             odd_mantissa: at(root, 0x71)?,
             root_steps: u32::from(integer_root[0x0f]),
+            trig: binding
+                .trig
+                .as_ref()
+                .map(|trig| Self::read_trig(&pe, trig, numeric.multiplication_va(), &fail))
+                .transpose()?,
+        })
+    }
+
+    /// The sine and cosine routines share one shape: scale the angle by a constant through the
+    /// shared multiply, truncate to a fixed-point integer, interpolate a quarter-wave table by
+    /// quadrant and convert back. Cosine differs from sine by one added quadrant.
+    fn read_trig(
+        pe: &Pe,
+        binding: &TrigBinding,
+        multiplication: u32,
+        fail: &impl Fn(Problem) -> Error,
+    ) -> Result<Trig, Error> {
+        let open = |w: &SourceWindow| pe.window(w, true).map_err(|e| fail(Problem::Image(e)));
+        let shape = |ok: bool| {
+            if ok {
+                Ok(())
+            } else {
+                Err(fail(Problem::Shape))
+            }
+        };
+        let (sine_native, cosine_native) =
+            (open(&binding.sine_native)?, open(&binding.cosine_native)?);
+        let (sine, cosine) = (open(&binding.sine)?, open(&binding.cosine)?);
+        // Offsets of the immediates inside each routine; the cosine routine is one byte longer
+        // after its added quadrant, which shifts the table operands by one.
+        let operands = |bytes: &[u8], shift: usize| {
+            Some([
+                word(bytes, 0x88 + shift)?,
+                word(bytes, 0x8f + shift)?,
+                word(bytes, 0xa4 + shift)?,
+                word(bytes, 0xab + shift)?,
+            ])
+        };
+        let (Some([sr0, sr1, sf0, sf1]), Some([cr0, cr1, cf0, cf1])) =
+            (operands(sine, 0), operands(cosine, 1))
+        else {
+            return Err(fail(Problem::Shape));
+        };
+        let table_va = sf1;
+        shape(
+            call(sine_native, binding.sine_native.va, 11) == Some(binding.sine.va)
+                && call(cosine_native, binding.cosine_native.va, 11) == Some(binding.cosine.va)
+                && call(sine, binding.sine.va, 0x13) == Some(multiplication)
+                && call(cosine, binding.cosine.va, 0x13) == Some(multiplication)
+                && sine.get(7) == Some(&0x68)
+                && word(sine, 8) == word(cosine, 8)
+                && [sr0, sr1, sf0, sf1] == [cr0, cr1, cf0, cf1]
+                && sr0 == table_va.wrapping_add(4 * (TABLE_ENTRIES as u32 - 1))
+                && sr1 == sr0.wrapping_sub(4)
+                && sf0 == table_va.wrapping_add(4),
+        )?;
+        let words = |va: u32, count: usize| -> Result<Vec<u32>, Error> {
+            let bytes = pe
+                .read_from(va, false)
+                .map_err(|e| fail(Problem::Image(e)))?;
+            (0..count)
+                .map(|i| word(bytes, 4 * i).ok_or_else(|| fail(Problem::Shape)))
+                .collect()
+        };
+        let scale = words(word(sine, 8).ok_or_else(|| fail(Problem::Shape))?, 1)?[0];
+        real::from_f32(f32::from_bits(scale)).map_err(|_| fail(Problem::Shape))?;
+        Ok(Trig {
+            scale,
+            table: words(table_va, TABLE_ENTRIES)?,
         })
     }
 
@@ -239,6 +336,26 @@ impl ScriptMath {
         Ok(numeric.equality_threshold() > f32::from_bits(difference))
     }
 
+    /// The native `Sin`: the table routine with no input filtering.
+    pub fn sine_native(&self, x: f32) -> Result<f32, MathError> {
+        self.trig(x, 0)
+    }
+
+    /// The native `Cos`: the sine routine one quadrant on.
+    pub fn cosine_native(&self, x: f32) -> Result<f32, MathError> {
+        self.trig(x, 1)
+    }
+
+    fn trig(&self, x: f32, quadrant_offset: i32) -> Result<f32, MathError> {
+        let trig = self.trig.as_ref().ok_or(MathError::Unsupported)?;
+        let angle = real::mul(real::from_f32(x)?, trig.scale)?;
+        Ok(f32::from_bits(table_trig(
+            &trig.table,
+            angle,
+            quadrant_offset,
+        )))
+    }
+
     /// The native wrapper: near-zero or negative input yields the zero constant.
     pub fn square_root_native(&self, numeric: &NumericPolicy, x: f32) -> Result<f32, MathError> {
         let x = real::from_f32(x)?;
@@ -260,5 +377,122 @@ impl ScriptMath {
             return Ok(f32::from_bits(self.zero));
         }
         self.arctangent2(numeric, y, x).map(f32::from_bits)
+    }
+}
+
+/// Truncate the scaled angle to a fixed-point integer, interpolate the quarter-wave table for
+/// its quadrant and rebuild the real, discarding low bits as the routine does.
+fn table_trig(table: &[u32], angle: u32, quadrant_offset: i32) -> u32 {
+    let exponent = (angle >> 23) & 0xff;
+    let units: i32 = if exponent < 0x7f {
+        0
+    } else {
+        let mantissa = (angle & 0x7f_ffff) | 0x80_0000;
+        let shift = 0x96 - exponent as i32;
+        // x86 shifts mask the count to five bits.
+        let magnitude = if shift >= 0 {
+            mantissa >> (shift & 31)
+        } else {
+            mantissa << ((-shift) & 31)
+        };
+        let sign = (angle as i32) >> 31;
+        ((magnitude as i32) ^ sign).wrapping_sub(sign)
+    };
+    let fraction = (units & 0xff) as u32;
+    let replicated = fraction | fraction << 8 | fraction << 16 | fraction << 24;
+    let quadrant = ((units >> QUADRANT_SHIFT).wrapping_add(quadrant_offset) & 3) as u32;
+    let index = ((units >> FRACTION_BITS) & INDEX_MASK) as usize;
+    let high = |difference: u32| ((u64::from(difference) * u64::from(replicated)) >> 32) as u32;
+    let value = if quadrant & 1 == 1 {
+        let upper = table[TABLE_ENTRIES - 1 - index];
+        let lower = table[TABLE_ENTRIES - 2 - index];
+        let step = high(upper.wrapping_sub(lower));
+        step.wrapping_neg().wrapping_add(upper)
+    } else {
+        let lower = table[index];
+        let step = high(table[index + 1].wrapping_sub(lower));
+        step.wrapping_add(lower)
+    };
+    let negate = -(((quadrant >> 1) & 1) as i32);
+    let signed = ((value as i32) ^ negate).wrapping_sub(negate);
+    let mut bits = 0u32;
+    if signed != 0 {
+        let sign = (signed as u32) & SIGN;
+        let magnitude = ((signed ^ (signed >> 31)).wrapping_sub(signed >> 31)) as u32;
+        let leading = magnitude.leading_zeros();
+        let msb = 31 - leading;
+        let move_by = leading as i32 - 8;
+        let mantissa = if move_by >= 0 {
+            magnitude << (move_by & 31)
+        } else {
+            ((magnitude as i32) >> ((-move_by) & 31)) as u32
+        };
+        bits = ((msb + 127) << 23) | (mantissa & 0x7f_ffff) | sign;
+    }
+    if bits & 0x7f80_0000 != 0 {
+        bits = bits.wrapping_sub(SINGLE_BIAS_SHIFT);
+    }
+    bits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The routine scales the 8-bit interpolation fraction by 1/255 (a replicated byte), so it
+    /// reaches the next table entry one step early; the error stays under this bound.
+    const TOLERANCE: f64 = 3e-5;
+
+    /// A nonstock quarter-wave table sampled at 1024 steps per quadrant.
+    fn table() -> Vec<u32> {
+        (0..TABLE_ENTRIES)
+            .map(|i| {
+                let angle = i as f64 * std::f64::consts::FRAC_PI_2 / 1024.0;
+                (angle.sin() * f64::from(i32::MAX)).round() as u32
+            })
+            .collect()
+    }
+
+    fn scale() -> u32 {
+        (((1u32 << 20) as f64 / std::f64::consts::TAU) as f32).to_bits()
+    }
+
+    fn eval(table: &[u32], x: f32, quadrant_offset: i32) -> f32 {
+        let angle = real::mul(real::from_f32(x).unwrap(), scale()).unwrap();
+        f32::from_bits(table_trig(table, angle, quadrant_offset))
+    }
+
+    #[test]
+    fn sine_and_cosine_follow_the_table_across_quadrants() {
+        let table = table();
+        for step in -40..=40 {
+            let x = step as f32 * 0.37;
+            let (sin, cos) = (eval(&table, x, 0), eval(&table, x, 1));
+            assert!(
+                (f64::from(sin) - f64::from(x).sin()).abs() < TOLERANCE,
+                "sin {x}: {sin}"
+            );
+            assert!(
+                (f64::from(cos) - f64::from(x).cos()).abs() < TOLERANCE,
+                "cos {x}: {cos}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_symmetry_and_huge_angles_hold() {
+        let table = table();
+        assert_eq!(eval(&table, 0.0, 0), 0.0);
+        for x in [0.1f32, 1.0, 2.5, 4.0, 6.0] {
+            // Negative angles wrap through the table, so the pair is odd and even only to the
+            // routine's own accuracy.
+            assert!(f64::from(eval(&table, -x, 0) + eval(&table, x, 0)).abs() < TOLERANCE);
+            assert!(f64::from(eval(&table, -x, 1) - eval(&table, x, 1)).abs() < TOLERANCE);
+        }
+        // Counts above the word size wrap like the routine's shifts and stay finite.
+        for x in [1.0e9f32, -1.0e9, 3.0e38] {
+            assert!(eval(&table, x, 0).is_finite());
+            assert!(eval(&table, x, 1).abs() <= 1.0);
+        }
     }
 }

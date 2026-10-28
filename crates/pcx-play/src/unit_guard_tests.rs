@@ -80,6 +80,7 @@ fn guarded_configured_with_orders(
         DECLARATIONS,
         r#"
 native RemoveGuardPosition takes unit u returns nothing
+native RemoveAllGuardPositions takes player num returns nothing
 native RemoveUnit takes unit u returns nothing
 native SetUnitOwner takes unit u, player p, boolean color returns nothing
 native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
@@ -1583,4 +1584,28 @@ fn captain_pending_home_preserves_existing_live_combat_admission() {
     assert_eq!(h.campaign_captain_state(owner).unwrap().unwrap(), before);
     assert_eq!(h.executed_unit(a).unwrap(), &unit_before);
     assert!(!h.captain_home_pending(a));
+}
+
+#[test]
+fn remove_all_guard_positions_releases_only_that_players_guards() {
+    let (mut vm, a, b) = guarded();
+    let h = &mut vm.host().inner;
+    let owners = [a, b].map(|unit| h.executed_unit(unit).unwrap().owner);
+    assert_ne!(owners[0], owners[1]);
+    let released = |h: &ObjectHost, unit| h.guard_state().unwrap().get(unit).map(|g| g.released);
+    let other_before = released(h, b);
+    assert_eq!(released(h, a), Some(false));
+    h.native("RemoveAllGuardPositions", &[Value::Handle(owners[0])])
+        .unwrap();
+    assert_eq!(released(h, a), Some(true));
+    assert_eq!(released(h, b), other_before);
+    h.native("RemoveAllGuardPositions", &[Value::Handle(owners[0])])
+        .unwrap();
+    h.native("RemoveAllGuardPositions", &[Value::Null]).unwrap();
+    assert!(
+        h.native("RemoveAllGuardPositions", &[Value::Handle(a)])
+            .is_err(),
+        "a unit is not a player"
+    );
+    assert_eq!(released(h, b), other_before);
 }

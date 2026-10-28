@@ -22,6 +22,8 @@ pub enum ScoreScreen {
         missing: &'static [&'static str],
         local_result: Option<LocalGameResult>,
         game_time: Option<f64>,
+        /// Local player's `RACE_PREF_*` constant, which selects the race skin section.
+        local_race: Result<Option<String>, String>,
         /// Context of the exiting session. Its selected resolver supplies the score UI.
         context: Arc<ParsedMapContext>,
         next_level: Option<String>,
@@ -121,6 +123,7 @@ pub fn consume(
             missing: &MISSING_INPUTS,
             local_result: snapshot.local_result,
             game_time: snapshot.game_time,
+            local_race: snapshot.local_race,
             context: snapshot.context,
             next_level: snapshot.next_level,
         })

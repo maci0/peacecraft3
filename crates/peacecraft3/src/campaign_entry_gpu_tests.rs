@@ -26,6 +26,38 @@ use peacecraft3::{
 };
 use std::{path::Path, time::Duration};
 
+/// Virtual time per fixture update.
+const STEP_SECONDS: f64 = 1.0 / 64.0;
+
+/// Optional game time, in seconds, from an original-client schedule supplied by
+/// the comparison runner (e.g. `PCX_PAIRED_SKIP_AT`, `PCX_PAIRED_CAPTURE_AT`).
+fn paired_time(name: &str) -> Option<f64> {
+    let value = std::env::var(name).ok()?;
+    let seconds = value
+        .parse::<f64>()
+        .unwrap_or_else(|_| panic!("{name} must be seconds, got {value:?}"));
+    assert!(seconds.is_finite() && seconds >= 0., "{name} out of range");
+    Some(seconds)
+}
+
+/// Steps until the script clock reaches `seconds`, bounded by twice the updates
+/// that time needs at [`STEP_SECONDS`].
+fn advance_game_time(app: &mut App, seconds: f64) {
+    let now = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .and_then(|host| host.objects().timer_game_time())
+    };
+    for _ in 0..(2.0 * seconds / STEP_SECONDS).ceil() as usize {
+        if now(app).is_some_and(|t| t >= seconds) {
+            return;
+        }
+        step(app);
+    }
+    panic!("game time {:?} did not reach {seconds}s", now(app));
+}
+
 #[derive(Resource)]
 struct Target(Handle<Image>);
 
@@ -159,7 +191,7 @@ fn frame_button(app: &mut App, frame: &str) -> Entity {
         .0
 }
 
-fn capture(app: &mut App, output: &Path) {
+fn capture(app: &mut App, output: &Path) -> Image {
     assert!(!output.exists(), "capture must be new");
     for _ in 0..12 {
         step(app);
@@ -175,7 +207,13 @@ fn capture(app: &mut App, output: &Path) {
         w.resource::<Capture>().0.is_some()
     });
     let image = app.world_mut().resource_mut::<Capture>().0.take().unwrap();
-    image.try_into_dynamic().unwrap().save(output).unwrap();
+    image
+        .clone()
+        .try_into_dynamic()
+        .unwrap()
+        .save(output)
+        .unwrap();
+    image
 }
 
 fn color_snapshot(
@@ -288,16 +326,22 @@ fn item_visibility_roundtrip(app: &mut App, output: &Path) {
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_menu_enters_the_rendered_campaign() {
-    check_mounted_campaign(false);
+    check_mounted_campaign(false, false);
 }
 
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_campaign_hud_and_research_states() {
-    check_mounted_campaign(true);
+    check_mounted_campaign(true, false);
 }
 
-fn check_mounted_campaign(hud_only: bool) {
+#[test]
+#[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
+fn mounted_campaign_rendering_state() {
+    check_mounted_campaign(false, true);
+}
+
+fn check_mounted_campaign(hud_only: bool, render_only: bool) {
     let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
     let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
     let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
@@ -345,7 +389,7 @@ fn check_mounted_campaign(hud_only: bool) {
         expansion,
     ))
     .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-        Duration::from_secs_f64(1.0 / 64.0),
+        Duration::from_secs_f64(STEP_SECONDS),
     ))
     .init_resource::<Capture>();
     let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
@@ -450,6 +494,9 @@ fn check_mounted_campaign(hud_only: bool) {
                 .is_some()
     });
     capture(&mut app, &output.join("campaign-entry.png"));
+    if let Some(at) = paired_time("PCX_PAIRED_SKIP_AT") {
+        advance_game_time(&mut app, at);
+    }
     let mut controlled = false;
     // Diagnostic input schedule: do not assume when the map enables cinematic skipping.
     for _ in 0..300 {
@@ -482,6 +529,9 @@ fn check_mounted_campaign(hud_only: bool) {
         "cinematic Escape input must return control within 600 updates"
     );
     capture(&mut app, &output.join("campaign-control.png"));
+    if let Some(at) = paired_time("PCX_PAIRED_CAPTURE_AT") {
+        advance_game_time(&mut app, at);
+    }
     // Exercise the real mounted console, rather than supplying a synthetic parent.
     let selected = {
         let mut session = app
@@ -503,7 +553,119 @@ fn check_mounted_campaign(hud_only: bool) {
         objects.select_units(&[unit], true);
         unit
     };
-    capture(&mut app, &output.join("selected-unit.png"));
+    let selected_image = capture(&mut app, &output.join("selected-unit.png"));
+    if render_only {
+        let scene_image = app.world_mut().query_filtered::<&RenderTarget, With<peacecraft3::campaign_camera::CampaignSceneCamera>>()
+            .single(app.world()).unwrap().as_image().unwrap().clone();
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&scene_image)
+            .unwrap()
+            .texture_descriptor
+            .usage |= TextureUsages::COPY_SRC;
+        let output_image = app.world().resource::<Target>().0.clone();
+        app.world_mut().resource_mut::<Target>().0 = scene_image;
+        let world_image = capture(&mut app, &output.join("world-target.png"));
+        app.world_mut().resource_mut::<Target>().0 = output_image;
+        let nodes = app
+            .world_mut()
+            .query::<(
+                Entity,
+                &Name,
+                Option<&Node>,
+                Option<&ComputedNode>,
+                Option<&InheritedVisibility>,
+                Option<&UiTargetCamera>,
+            )>()
+            .iter(app.world())
+            .filter(|(_, name, ..)| name.as_str() == "World composition image")
+            .map(|row| format!("{row:?}"))
+            .collect::<Vec<_>>();
+        std::fs::write(output.join("composition-nodes.txt"), nodes.join("\n")).unwrap();
+        let composition = app
+            .world_mut()
+            .query::<(
+                Entity,
+                Option<&Name>,
+                &Camera,
+                &RenderTarget,
+                Option<&bevy::render::view::Msaa>,
+                Option<&bevy::camera::CompositingSpace>,
+            )>()
+            .iter(app.world())
+            .map(|row| format!("{row:?}"))
+            .collect::<Vec<_>>();
+        std::fs::write(
+            output.join("camera-composition.txt"),
+            composition.join("\n"),
+        )
+        .unwrap();
+        let cameras = app.world_mut().query_filtered::<(&Transform, &Projection, &Camera), With<peacecraft3::campaign_camera::CampaignSceneCamera>>()
+            .iter(app.world()).map(|(transform, projection, camera)| format!("{transform:?} {projection:?} {camera:?}")).collect::<Vec<_>>();
+        let actors = app.world().resource::<crate::campaign_actors::UnitActors>();
+        let destructables = actors.rendered_destructables();
+        let actor_error = actors.last_error.clone();
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects();
+        let now = objects.timer_game_time().unwrap();
+        let models = objects.executed_units().filter_map(|(id, unit)| {
+            let animation = unit.animation.as_ref()?;
+            Some(serde_json::json!({"unit": format!("{id:?}"), "definition": format!("{:?}", unit.definition.rawcode),
+                "model": animation.model.member, "origin": format!("{:?}", animation.model.origin),
+                "sequence": animation.sequence, "sample": format!("{:?}", animation.sample(now)),
+                "shown": unit.shown}))
+        }).collect::<Vec<_>>();
+        std::fs::write(output.join("render-state.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "clock": now, "day_fraction": objects.day_fraction(), "cameras": cameras, "models": models,
+            "rendered_destructables": destructables, "actor_error": actor_error,
+            "scope": "Diagnostic source scene; effective graphics settings and stock camera/time pairing remain unqualified"
+        })).unwrap()).unwrap();
+        let viewport = app
+            .world_mut()
+            .query_filtered::<&Camera, With<peacecraft3::campaign_camera::CampaignSceneCamera>>()
+            .single(app.world())
+            .unwrap()
+            .viewport
+            .clone()
+            .unwrap();
+        let pixel = viewport.physical_position + viewport.physical_size / 2;
+        let selected_image = selected_image.try_into_dynamic().unwrap().to_rgba8();
+        let world_image = world_image.try_into_dynamic().unwrap().to_rgba8();
+        let expected = world_image.get_pixel(pixel.x, pixel.y);
+        let actual = selected_image.get_pixel(pixel.x, pixel.y);
+        assert!(
+            expected.0[..3].iter().any(|v| *v != 0),
+            "fixture needs visible ground at the viewport centre"
+        );
+        for channel in 0..3 {
+            assert!(
+                actual[channel].abs_diff(expected[channel]) <= 2,
+                "world was lost beneath HUD: {actual:?} != {expected:?}"
+            );
+        }
+        assert!(
+            destructables > 0,
+            "fixture needs visible canonical destructables: {actor_error:?}"
+        );
+        let splat_error = app
+            .world()
+            .resource::<crate::campaign_uber_splats::CampaignUberSplats>()
+            .last_error
+            .clone();
+        assert!(splat_error.is_none(), "ubersplat failed: {splat_error:?}");
+        let splats = app
+            .world_mut()
+            .query_filtered::<(), With<crate::campaign_uber_splats::UberSplat>>()
+            .iter(app.world())
+            .count();
+        assert!(
+            splats > 0,
+            "fixture needs source ubersplats under buildings"
+        );
+        return;
+    }
     if hud_only {
         let button = app
             .world_mut()
@@ -843,6 +1005,20 @@ fn check_mounted_campaign(hud_only: bool) {
     )
     .unwrap();
     if hud_only {
+        assert!(
+            app.world()
+                .resource::<peacecraft3::map_ground::GroundPublication>()
+                .last_error
+                .is_none(),
+            "ground projection failed"
+        );
+        assert!(
+            app.world()
+                .resource::<peacecraft3::map_ground::GroundPublication>()
+                .shadow_error
+                .is_none(),
+            "source shadow projection failed"
+        );
         for error in [
             &app.world()
                 .resource::<crate::campaign_hud::CampaignHud>()

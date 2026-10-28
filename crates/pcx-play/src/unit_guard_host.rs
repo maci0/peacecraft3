@@ -5,6 +5,7 @@ use pcx_objects::editor::misc::CombatRules;
 use pcx_script::{HandleId, Value};
 use pcx_sim::world::Definition;
 const REMOVE: &str = "RemoveGuardPosition";
+const REMOVE_ALL: &str = "RemoveAllGuardPositions";
 #[derive(Clone, Copy, Debug)]
 pub struct GuardBudget {
     pub max_units: usize,
@@ -394,6 +395,7 @@ impl ObjectHost {
         self.cancel_harvest(unit);
         self.cancel_unit_follow(unit);
         self.cancel_summon_cast(unit);
+        self.forget_curse_cast(unit);
         self.cancel_patrol(unit);
         self.wake_natural_sleep(unit);
         if let Some(state) = &mut self.guards
@@ -595,11 +597,14 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name != REMOVE {
+        if name != REMOVE && name != REMOVE_ALL {
             return None;
         }
         self.guards.as_ref()?;
         Some((|| {
+            if name == REMOVE_ALL {
+                return self.remove_all_guard_positions(args);
+            }
             let unit = match args {
                 [Value::Null] => return Ok(Value::Null),
                 [Value::Handle(id)] => *id,
@@ -610,24 +615,72 @@ impl ObjectHost {
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }
-            if self.guards.as_ref().and_then(|s| s.get(unit)).is_none() {
-                return Ok(Value::Null);
-            }
-            // The native manager sends its stop order even for a repeated release.
-            self.steer_unit(unit, None, name)?;
-            self.release_campaign_guard_post(unit);
-            self.cancel_patrol(unit);
-            self.cancel_inventory_order(unit);
-            self.clear_combat_target(unit);
-            if let Some(state) = &mut self.guards
-                && let Some((_, g)) = state.records.iter_mut().find(|(id, _)| *id == unit)
-            {
-                g.released = true;
-                g.returning = false;
-                g.chase_since = None;
-            }
+            self.release_guard_position(unit, name)?;
             Ok(Value::Null)
         })())
+    }
+
+    /// `RemoveAllGuardPositions(player)`: the single-unit release for every unit the managed
+    /// guard list holds for that owner. A recreation reading of the name and the `player`
+    /// parameter; a player with no guards is a no-op.
+    fn remove_all_guard_positions(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [player] = args else {
+            return Err(self.inner.error(REMOVE_ALL, Failure::Signature));
+        };
+        Self::contract(
+            &self.inner,
+            REMOVE_ALL,
+            &["player"],
+            "nothing",
+            false,
+            Some("unit"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(REMOVE_ALL).map(|n| &n.source) != natives.get(REMOVE).map(|n| &n.source) {
+            return Err(self.inner.error(REMOVE_ALL, Failure::Source));
+        }
+        let Value::Handle(owner) = player else {
+            return Ok(Value::Null);
+        };
+        self.player_settings(*owner)?;
+        let units: Vec<HandleId> = self
+            .guards
+            .as_ref()
+            .map(|state| {
+                state
+                    .records
+                    .iter()
+                    .filter(|(_, guard)| guard.owner == *owner)
+                    .map(|(id, _)| *id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for unit in units {
+            if matches!(self.inner.entry(unit)?, Entry::Unit { .. }) {
+                self.release_guard_position(unit, REMOVE_ALL)?;
+            }
+        }
+        Ok(Value::Null)
+    }
+
+    fn release_guard_position(&mut self, unit: HandleId, name: &str) -> Result<(), Error> {
+        if self.guards.as_ref().and_then(|s| s.get(unit)).is_none() {
+            return Ok(());
+        }
+        // The native manager sends its stop order even for a repeated release.
+        self.steer_unit(unit, None, name)?;
+        self.release_campaign_guard_post(unit);
+        self.cancel_patrol(unit);
+        self.cancel_inventory_order(unit);
+        self.clear_combat_target(unit);
+        if let Some(state) = &mut self.guards
+            && let Some((_, g)) = state.records.iter_mut().find(|(id, _)| *id == unit)
+        {
+            g.released = true;
+            g.returning = false;
+            g.chase_since = None;
+        }
+        Ok(())
     }
 }
 #[cfg(test)]

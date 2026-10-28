@@ -1839,6 +1839,8 @@ fn held_flat_damage_changes_real_damage() {
         sides: 1,
         attack: 0,
         missile_speed: None,
+        min_range: 0.0,
+        splash: None,
     };
     let factor = h.roll_damage(ordinary, weapon, ordinary).unwrap() / 10.0;
     let hero_bare = h.roll_damage(hero, weapon, ordinary).unwrap();
@@ -1876,6 +1878,8 @@ fn held_armor_changes_real_damage_and_its_drop_restores_it() {
         sides: 1,
         attack: 0,
         missile_speed: None,
+        min_range: 0.0,
+        splash: None,
     };
     let bare = h.roll_damage(hero, weapon, ordinary).unwrap();
     let armor = item(&mut h, b"parm", 0.0);

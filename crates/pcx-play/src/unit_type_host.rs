@@ -45,6 +45,34 @@ pub(super) fn class(definition: &Definition, global: &str) -> Result<bool, Strin
 }
 
 impl ObjectHost {
+    /// Living, shown `UNIT_TYPE_PEON` units of player `owner` that report no current order
+    /// and are not run by the harvest controller, in creation order. Recreation choice:
+    /// the client's idle-worker list is not decoded.
+    pub fn idle_workers(&self, owner: i32) -> Result<Vec<pcx_script::HandleId>, String> {
+        let mut idle = Vec::new();
+        for (id, unit) in self.executed_units() {
+            let present = unit.shown
+                && !unit.combat.as_ref().is_some_and(|c| c.dead)
+                && !unit.vitals.as_ref().is_some_and(|v| v.life <= 0.0);
+            if !present
+                || self
+                    .player_settings(unit.owner)
+                    .map_err(|e| e.to_string())?
+                    .number
+                    != owner
+                || !class(&unit.definition, "UNIT_TYPE_PEON")?
+            {
+                continue;
+            }
+            if !self.harvest_runs(id)
+                && self.current_unit_order(id).map_err(|e| e.to_string())? == 0
+            {
+                idle.push(id);
+            }
+        }
+        Ok(idle)
+    }
+
     pub(super) fn unit_type_native(
         &self,
         name: &str,

@@ -12,6 +12,9 @@ pub struct CampaignModePolicy {
     pub unit_mask: u32,
     pub campaign_mode: bool,
     pub replacement_count_field: u32,
+    /// The replacement limit an AI context holds until a script sets it: the immediate the
+    /// context initializer stores in that field.
+    pub default_replacement: i32,
     pub guard_posts: GuardPostRules,
 }
 
@@ -27,7 +30,7 @@ pub struct GuardPostRules {
 #[error("campaign mode policy: {0}")]
 pub struct Error(&'static str);
 
-const WINDOWS: [(u32, usize, bool); 40] = [
+const WINDOWS: [(u32, usize, bool); 41] = [
     (0xab6887, 20, true),
     (0xab6e80, 60, true),
     (0xe70fac, 4, false),
@@ -68,6 +71,7 @@ const WINDOWS: [(u32, usize, bool); 40] = [
     (0xac1b20, 97, true),
     (0xf15d10, 17, false),
     (0xad3b50, 156, true),
+    (0xabfa00, 10, true),
 ];
 
 const DEBUG_TEXT: [(&[u8], &[u8]); 4] = [
@@ -310,6 +314,14 @@ impl CampaignModePolicy {
             at(windows[base + 2], 0, signature)?;
             at(windows[base + 3], 0, name)?;
         }
+        let initializer = windows[40];
+        if initializer[0] != 0xc7
+            || !(0x80..=0x87).contains(&initializer[1])
+            || word(initializer, 2)? != replacement_count_field
+        {
+            return Err(Error("replacement default initializer differs"));
+        }
+        let default_replacement = word(initializer, 6)? as i32;
         let return_order = return_post_order(windows, word(handler, 1)?)?;
         let guard_posts = guard_post_rules(
             &windows[28..35],
@@ -323,6 +335,7 @@ impl CampaignModePolicy {
             unit_mask,
             campaign_mode: handler[36] != 0,
             replacement_count_field,
+            default_replacement,
             guard_posts,
         })
     }
@@ -874,6 +887,9 @@ fn synthetic() -> Vec<Vec<u8>> {
     ] {
         put(&mut w, 39, offset, bytes);
     }
+    put(&mut w, 40, 0, &[0xc7, 0x86]);
+    word(&mut w, 40, 2, 0x380);
+    word(&mut w, 40, 6, 5);
     word(&mut w, 39, 40, 0x330000);
     word(&mut w, 39, 63, 0x570);
     word(&mut w, 39, 121, 431);
@@ -905,6 +921,8 @@ mod tests {
             (0x8000, 0x20, true)
         );
         assert_eq!(p.replacement_count_field, 0x380);
+        assert_eq!(p.default_replacement, 5);
+        w[40][2..6].copy_from_slice(&0x398u32.to_le_bytes());
         for offset in [45, 61] {
             w[9][offset..offset + 4].copy_from_slice(&0x398u32.to_le_bytes());
         }
@@ -1109,6 +1127,7 @@ mod tests {
         );
         assert_eq!(p.image_sha256, REVIEWED_IMAGE);
         assert_eq!(p.replacement_count_field, 0x1d4);
+        assert_eq!(p.default_replacement, 3);
         assert_eq!(p.guard_posts.initial_count, 0);
         assert_eq!(p.guard_posts.binding_increment, 1);
         assert_eq!(p.guard_posts.released_count, 99999);

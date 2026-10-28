@@ -27,6 +27,28 @@ fn filter_roundtrip_recolors_the_same_world_and_tracks_directional_alliances() {
         h.minimap_role_color(h.executed_unit(a).unwrap()).unwrap(),
         Some([7, 11, 13, 17])
     );
+    // The fixture's start option is 7, which the mode handler treats as minimap ally colours,
+    // but the client constructor reads the raw option and starts on player colours.
+    assert_eq!(
+        h.minimap_role_color(h.executed_unit(b).unwrap()).unwrap(),
+        None
+    );
+    h.native("SetAllyColorFilterState", &[Value::Int(7)])
+        .unwrap();
+    assert_eq!(
+        h.minimap_role_color(h.executed_unit(b).unwrap()).unwrap(),
+        Some([59, 61, 67, 53])
+    );
+    h.native("SetAllyColorFilterState", &[Value::Int(0)])
+        .unwrap();
+    assert_eq!(
+        h.minimap_role_color(h.executed_unit(b).unwrap()).unwrap(),
+        None
+    );
+    assert_eq!(
+        h.minimap_role_color(h.executed_unit(a).unwrap()).unwrap(),
+        Some([7, 11, 13, 17])
+    );
     let handles = h.inner().handles();
     h.native("SetAllyColorFilterState", &[Value::Int(11)])
         .unwrap();

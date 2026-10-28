@@ -35,6 +35,8 @@ pub(super) type AbilityEvent = (
 
 const ORDER: &str = "IssueTargetOrder";
 const ORDER_BY_ID: &str = "IssueTargetOrderById";
+/// Registry name of the ground-attack point order.
+const GROUND_ORDER: &str = "attackground";
 const KILL: &str = "KillUnit";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +50,56 @@ pub struct Weapon {
     pub sides: i32,
     pub attack: usize,
     pub missile_speed: Option<f32>,
+    /// `UnitWeapons` `minRange`; zero when the cell is empty.
+    pub min_range: f32,
+    /// The weapon-1 splash columns, when all five are numeric.
+    pub splash: Option<Splash>,
+}
+
+/// `Farea1`/`Harea1`/`Qarea1` radii with the `Hfact1`/`Qfact1` damage factors of the
+/// middle and outer rings, and the `splashTargs1` classes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Splash {
+    pub full: f32,
+    pub half: f32,
+    pub quarter: f32,
+    pub half_factor: f32,
+    pub quarter_factor: f32,
+    pub targets: SplashTargets,
+}
+
+/// Parsed `splashTargs1` tokens. `ground`, `air` and `structure` select unit classes.
+/// `enemy` limits the splash to units hostile to the shooter and `notself` spares the shooter;
+/// no relationship token means no restriction (the stock siege rows, which list neither, are
+/// the only ones that hit allies). `debris`, `tree`, `wall`, `ward` and `item` name objects that
+/// are not units and have no effect here. Any other token (`neutral`, vulnerability and so on)
+/// sets `unsupported`, because its meaning for splash is not established.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SplashTargets {
+    pub ground: bool,
+    pub air: bool,
+    pub structure: bool,
+    pub enemy: bool,
+    pub not_self: bool,
+    pub unsupported: bool,
+}
+
+impl SplashTargets {
+    fn parse(tokens: &str) -> Self {
+        let mut parsed = Self::default();
+        for token in tokens.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+            match token.to_ascii_lowercase().as_str() {
+                "ground" => parsed.ground = true,
+                "air" => parsed.air = true,
+                "structure" => parsed.structure = true,
+                "enemy" => parsed.enemy = true,
+                "notself" => parsed.not_self = true,
+                "debris" | "tree" | "wall" | "ward" | "item" => {}
+                _ => parsed.unsupported = true,
+            }
+        }
+        parsed
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,11 +109,15 @@ pub struct Combat {
     pub defense: usize,
     pub target: Option<HandleId>,
     pub dead: bool,
-    ready_at: f64,
+    pub(super) ready_at: f64,
     swing: Option<(HandleId, f64)>,
-    chase: Option<[f32; 2]>,
+    pub(super) chase: Option<[f32; 2]>,
     /// Retained accepted attack-move or patrol endpoint while acquisition interrupts travel.
     pub attack_destination: Option<[f32; 2]>,
+    /// Point of an accepted attack-ground order, until another order replaces it.
+    pub ground_target: Option<[f32; 2]>,
+    /// Game time at which the pending attack-ground swing releases its shot.
+    pub(super) ground_swing: Option<f64>,
 }
 
 struct Missile {
@@ -90,12 +146,17 @@ impl Combat {
         if let Some((_, impact)) = &mut self.swing {
             *impact += elapsed;
         }
+        if let Some(release) = &mut self.ground_swing {
+            *release += elapsed;
+        }
     }
 }
 
 pub(super) struct Rules {
     rules: CombatRules,
     attack_order: i32,
+    /// The registered `attackground` order, when the selected registry has one.
+    pub(super) ground_order: Option<i32>,
     /// From the selected neutral rule, set once the host is assembled.
     neutral_passive: Option<i32>,
     pub(super) neutral_aggressive: Option<i32>,
@@ -106,6 +167,7 @@ pub(super) struct Rules {
     unit_attacked: i32,
     player_attacked: i32,
     missiles: Vec<Missile>,
+    pub(super) ground_missiles: Vec<super::attack_ground::GroundMissile>,
 }
 
 /// `None` is an omitted SLK cell, which is empty.
@@ -228,6 +290,8 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
             sides: required(SlkId::UnitWeapons, "sides1")? as i32,
             attack,
             missile_speed,
+            min_range: optional_number(d, "minRange")?.unwrap_or(0.0),
+            splash: read_splash(d)?,
         })
     };
     Ok(Combat {
@@ -240,7 +304,47 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
         swing: None,
         chase: None,
         attack_destination: None,
+        ground_target: None,
+        ground_swing: None,
     })
+}
+
+/// A `UnitWeapons` column that a unit definition may lack entirely (fixtures that predate
+/// splash); an empty cell and an absent column both read as `None`.
+fn optional_column<'a>(d: &'a Definition, name: &str) -> Result<Option<&'a FieldValue>, String> {
+    match column(d, SlkId::UnitWeapons, name) {
+        Err(error) if error.starts_with("missing unit field") => Ok(None),
+        other => other,
+    }
+}
+
+fn optional_number(d: &Definition, name: &str) -> Result<Option<f32>, String> {
+    optional_column(d, name)?.map_or(Ok(None), |v| number(v, name))
+}
+
+/// The weapon-1 splash columns; `None` unless all five numbers are present.
+fn read_splash(d: &Definition) -> Result<Option<Splash>, String> {
+    let (Some(full), Some(half), Some(quarter), Some(half_factor), Some(quarter_factor)) = (
+        optional_number(d, "Farea1")?,
+        optional_number(d, "Harea1")?,
+        optional_number(d, "Qarea1")?,
+        optional_number(d, "Hfact1")?,
+        optional_number(d, "Qfact1")?,
+    ) else {
+        return Ok(None);
+    };
+    let targets = match optional_column(d, "splashTargs1")? {
+        Some(v) => SplashTargets::parse(text(v, "splashTargs1")?),
+        None => SplashTargets::default(),
+    };
+    Ok(Some(Splash {
+        full,
+        half,
+        quarter,
+        half_factor,
+        quarter_factor,
+        targets,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,6 +397,7 @@ impl ObjectHost {
     pub(super) fn combat_step_eligible(&self, unit: HandleId, record: &ExecutedUnit) -> bool {
         !self.mirror_busy(unit)
             && self.summon_current_order(unit).is_none()
+            && self.curse_current_order(unit).is_none()
             && record.construction.is_none()
             && record.construction_request.is_none()
             && self.unit_construction_order(unit).ok().flatten().is_none()
@@ -477,6 +582,10 @@ impl ObjectHost {
         self.combat = Some(Rules {
             rules,
             attack_order,
+            ground_order: self
+                .order_registry
+                .as_ref()
+                .and_then(|r| r.id(GROUND_ORDER)),
             neutral_passive: None,
             neutral_aggressive: None,
             passive: self.source_constant_enumerand("ALLIANCE_PASSIVE", "alliancetype")?,
@@ -488,6 +597,7 @@ impl ObjectHost {
             player_attacked: self
                 .source_constant_enumerand("EVENT_PLAYER_UNIT_ATTACKED", "playerunitevent")?,
             missiles: Vec::new(),
+            ground_missiles: Vec::new(),
         });
         Ok(())
     }
@@ -873,6 +983,9 @@ impl ObjectHost {
         let rules = self.combat.as_ref()?;
         let record = self.executed_unit(unit).ok()?;
         let combat = record.combat.as_ref()?;
+        if combat.ground_target.is_some() {
+            return rules.ground_order;
+        }
         (combat.target.is_some() || combat.attack_destination.is_some())
             .then_some(rules.attack_order)
     }
@@ -894,6 +1007,7 @@ impl ObjectHost {
         self.cancel_summon_cast(unit);
         self.forget_holy_cast(unit);
         self.forget_chain_cast(unit);
+        self.forget_curse_cast(unit);
         if let Ok(Entry::Unit { record }) = self.inner.entry_mut(unit)
             && let Some(combat) = &mut record.combat
         {
@@ -901,6 +1015,8 @@ impl ObjectHost {
             combat.swing = None;
             combat.chase = None;
             combat.attack_destination = None;
+            combat.ground_target = None;
+            combat.ground_swing = None;
         }
     }
 
@@ -1041,6 +1157,31 @@ impl ObjectHost {
         Ok(nearest.map(|(id, _)| id))
     }
 
+    /// `IsUnitEnemy(unit, player)`: `player` treats the unit's owner as an enemy under the combat
+    /// rules' alliance reading (the owner itself, passive allies and Neutral Passive are not).
+    /// A recreation reading: the shipped Human05 asks it of every unit coming near a tower,
+    /// including Neutral Passive ones, for a trigger meant to answer only for the undead.
+    pub(super) fn is_unit_enemy_native(&self, args: &[Value]) -> Result<Value, Error> {
+        const NAME: &str = "IsUnitEnemy";
+        Self::contract(
+            &self.inner,
+            NAME,
+            &["unit", "player"],
+            "boolean",
+            true,
+            Some("unit"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(NAME).map(|n| &n.source) != natives.get("CreateUnit").map(|n| &n.source) {
+            return Err(self.inner.error(NAME, Failure::Source));
+        }
+        let [Value::Handle(unit), Value::Handle(player)] = args else {
+            return Err(self.inner.error(NAME, Failure::Signature));
+        };
+        let owner = self.executed_unit(*unit)?.owner;
+        Ok(Value::Bool(self.hostile_owners(*player, owner)))
+    }
+
     /// Whether `attacker`'s owner treats `target` as hostile under the combat rules.
     pub fn is_enemy(&self, attacker: HandleId, target: HandleId) -> bool {
         match (self.live(attacker), self.live(target)) {
@@ -1096,7 +1237,27 @@ impl ObjectHost {
                 };
                 return Ok(Value::Bool(self.order_chain_lightning(*unit, *target, id)?));
             }
+            if let Some(id) = order
+                && self.curse_order_claimed(id)
+            {
+                let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {
+                    return Ok(Value::Bool(false));
+                };
+                return Ok(Value::Bool(self.order_curse(*unit, *target, id)?));
+            }
             if order != Some(attack_order) {
+                // An order aimed at nothing, or at a unit already removed, issues nothing (the
+                // shipped Human04 farm trigger orders `repair` on its removed opening town hall).
+                let aimless = match target {
+                    Value::Null => true,
+                    Value::Handle(id) => {
+                        matches!(self.inner.entry(*id)?, Entry::RemovedUnit { .. })
+                    }
+                    _ => false,
+                };
+                if aimless {
+                    return Ok(Value::Bool(false));
+                }
                 return Err(self.inner.error(
                     name,
                     Failure::UnitActivity("only the attack target order is supported".into()),
@@ -1163,6 +1324,7 @@ impl ObjectHost {
         let owner = record.owner;
         let experience = self.plan_hero_kill_experience(unit, killer)?;
         self.forget_morph_unit(unit);
+        self.forget_curse_unit(unit);
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
@@ -1310,7 +1472,7 @@ impl ObjectHost {
         self.apply_damage(source, target, damage, true)
     }
 
-    fn apply_damage(
+    pub(super) fn apply_damage(
         &mut self,
         source: HandleId,
         target: HandleId,
@@ -1432,24 +1594,46 @@ impl ObjectHost {
         weapon: Weapon,
         target: HandleId,
     ) -> Result<f32, Error> {
-        let name = "combat damage";
-        let (armor, defense) = {
-            let combat = self
-                .executed_unit(target)?
-                .combat
-                .as_ref()
-                .ok_or_else(|| self.inner.error(name, Failure::UnitState("combat missing")))?;
-            (combat.armor, combat.defense)
-        };
         // Hero armor derives from agility; held armor points are a separate item bonus.
-        let armor =
-            armor + self.hero_combat_bonuses(target)?.armor + self.held_armor_bonus(target)? as f32;
+        let (armor, defense) = self.victim_armor(target)?;
+        let base = self.roll_base_damage(source, weapon)?;
+        Ok(self.armored_damage(base, weapon, armor, defense))
+    }
+
+    /// The dice roll plus the attacker's flat bonuses, before any victim's armor.
+    pub(super) fn roll_base_damage(
+        &mut self,
+        source: HandleId,
+        weapon: Weapon,
+    ) -> Result<f32, Error> {
         let bonuses = self.hero_combat_bonuses(source)?;
         let primary_damage = bonuses.damage + bonuses.held_damage;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {
-            roll += self.draw_random_integer(1, weapon.sides.max(1), name)?;
+            roll += self.draw_random_integer(1, weapon.sides.max(1), "combat damage")?;
         }
+        Ok(roll as f32 + primary_damage)
+    }
+
+    /// The victim's armor (with hero and held bonuses) and defense type.
+    pub(super) fn victim_armor(&self, target: HandleId) -> Result<(f32, usize), Error> {
+        let combat = self.executed_unit(target)?.combat.as_ref().ok_or_else(|| {
+            self.inner
+                .error("combat damage", Failure::UnitState("combat missing"))
+        })?;
+        let armor = combat.armor
+            + self.hero_combat_bonuses(target)?.armor
+            + self.held_armor_bonus(target)? as f32;
+        Ok((armor, combat.defense))
+    }
+
+    pub(super) fn armored_damage(
+        &self,
+        base: f32,
+        weapon: Weapon,
+        armor: f32,
+        defense: usize,
+    ) -> f32 {
         let rules = &self.combat.as_ref().expect("combat").rules;
         let factor = rules.armor_factor;
         let armor_scale = if armor >= 0.0 {
@@ -1457,9 +1641,7 @@ impl ObjectHost {
         } else {
             2.0 - (1.0 - factor).powf(-armor)
         };
-        Ok((roll as f32 + primary_damage)
-            * rules.damage_bonus[weapon.attack][defense]
-            * armor_scale)
+        base * rules.damage_bonus[weapon.attack][defense] * armor_scale
     }
 
     /// One combat step at the current game time, in unit handle order.
@@ -1499,10 +1681,12 @@ impl ObjectHost {
                 return Err(*failure.error);
             }
         }
+        self.advance_ground_missiles(now)?;
         self.advance_morph(now)?;
         self.advance_mirror_image(now)?;
         self.advance_holy_light(now)?;
         self.advance_chain_lightning(now)?;
+        self.advance_curses(now)?;
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
@@ -1515,6 +1699,13 @@ impl ObjectHost {
         let mut acquisition_refusal: Option<&'static str> = None;
         for &(unit, attacks) in &units {
             if !attacks {
+                continue;
+            }
+            if let Some(point) = self
+                .live(unit)
+                .and_then(|record| record.combat.as_ref()?.ground_target)
+            {
+                self.advance_ground_attack(unit, point, now)?;
                 continue;
             }
             if self.captain_route_owned(unit) || self.harvest_owns_unit(unit) {
@@ -1697,7 +1888,16 @@ impl ObjectHost {
             };
             match swing {
                 None if now >= ready_at => {
-                    let speed = self.hero_combat_bonuses(unit)?.speed;
+                    let speed =
+                        self.hero_combat_bonuses(unit)?.speed - self.curse_attack_penalty(unit);
+                    if !speed.is_finite() || speed <= 0.0 {
+                        return Err(self.inner.error(
+                            name,
+                            Failure::UnitActivity(
+                                "attack speed multiplier after slow is not positive".into(),
+                            ),
+                        ));
+                    }
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.face = facing;
                         let combat = record.combat.as_mut().expect("combat");

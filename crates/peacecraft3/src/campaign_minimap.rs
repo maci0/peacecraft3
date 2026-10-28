@@ -30,6 +30,8 @@ const POINTER_PRESSES: usize = 64;
 
 #[path = "campaign_minimap_markers.rs"]
 mod markers;
+#[path = "campaign_minimap_outline.rs"]
+mod outline;
 
 struct FogImage {
     raster: crate::campaign_visibility::Raster,
@@ -49,12 +51,21 @@ pub(crate) struct CampaignMinimap {
     image: Option<Handle<Image>>,
     fog: Option<FogImage>,
     markers: Option<Result<markers::Markers, String>>,
+    outline: Option<Entity>,
+    outline_rgb: Option<[u8; 3]>,
     pending_pointer: VecDeque<MinimapPress>,
     drag: Option<Entity>,
     load_error: Option<String>,
     pub member: Option<String>,
     pub shown: bool,
     pub last_error: Option<String>,
+    terrain_hidden: bool,
+}
+impl CampaignMinimap {
+    /// The terrain button's state; hidden terrain leaves the fog mask and markers over black.
+    pub(crate) fn set_terrain_hidden(&mut self, hidden: bool) {
+        self.terrain_hidden = hidden;
+    }
 }
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 impl CampaignMinimap {
@@ -84,6 +95,13 @@ pub(crate) fn install(app: &mut App) {
                 .after(CampaignCameraSet)
                 .after(peacecraft3::campaign_runtime::CampaignAdvanceSet)
                 .after(peacecraft3::campaign_startup::CampaignStartupSet)
+                .before(crate::campaign_hud::CampaignHudSet)
+                .before(CampaignPresentationSet),
+        )
+        .add_systems(
+            Update,
+            outline::update
+                .after(project)
                 .before(crate::campaign_hud::CampaignHudSet)
                 .before(CampaignPresentationSet),
         )
@@ -339,9 +357,14 @@ struct Inputs<'w> {
     sources: Option<Res<'w, peacecraft3::browser_configuration::SelectedMapSources>>,
 }
 
-fn publish_minimap_alpha(pixels: &mut [u8], base: &[u8], alpha: &[u8]) {
+/// Copies `base` and sets the alpha plane. With the terrain button off the colour planes are
+/// zero, as the client's updater clears them instead of copying the map image.
+fn publish_minimap_alpha(pixels: &mut [u8], base: &[u8], alpha: &[u8], terrain_hidden: bool) {
     pixels.copy_from_slice(base);
     for (pixel, alpha) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
+        if terrain_hidden {
+            pixel[..3].fill(0);
+        }
         pixel[3] = *alpha;
     }
 }
@@ -352,6 +375,7 @@ fn update_fog(
     images: &mut Assets<Image>,
 ) -> Result<(), String> {
     let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
+    let terrain_hidden = state.terrain_hidden;
     let image_id = state.image.as_ref().ok_or("minimap image missing")?;
     let pixel_len = images
         .get(image_id)
@@ -379,7 +403,7 @@ fn update_fog(
             .data
             .as_mut()
             .ok_or("minimap CPU pixels unavailable")?;
-        publish_minimap_alpha(pixels, &original_pixels, &original_alpha);
+        publish_minimap_alpha(pixels, &original_pixels, &original_alpha, terrain_hidden);
         return Ok(());
     }
     // Stage the ledger projection before replacing accepted pixels. A refusal
@@ -429,7 +453,7 @@ fn update_fog(
         .data
         .as_mut()
         .ok_or("minimap CPU pixels unavailable")?;
-    publish_minimap_alpha(pixels, &original_pixels, &alpha);
+    publish_minimap_alpha(pixels, &original_pixels, &alpha, terrain_hidden);
     Ok(())
 }
 fn project(
@@ -548,7 +572,7 @@ fn project(
         return;
     };
     state.attempted = true;
-    let geometry: Result<Rules, String> = (|| {
+    let geometry: Result<(Rules, pcx_play::minimap_draw_layout::Draw), String> = (|| {
         if bindings.catalog_map_bytes.len() > bindings.max_map_file_bytes {
             return Err("minimap map byte budget exceeded".into());
         }
@@ -561,17 +585,18 @@ fn project(
             .as_deref()
             .and_then(crate::launch_gui::selected_install);
         crate::menu_lighting::with_client_image(install.as_deref(), |source, bytes| {
-            Rules::reviewed_legacy(
-                bytes,
-                pcx_play::scripts::AssetIdentity {
-                    source: source.into(),
-                    edition: "selected campaign client".into(),
-                    version: "reviewed Legacy 1.29.2.9231 minimap image".into(),
-                },
-            )
+            let identity = || pcx_play::scripts::AssetIdentity {
+                source: source.into(),
+                edition: "selected campaign client".into(),
+                version: "reviewed Legacy 1.29.2.9231 minimap image".into(),
+            };
+            Ok((
+                Rules::reviewed_legacy(bytes, identity())?,
+                pcx_play::minimap_draw_layout::Draw::reviewed_legacy(bytes, identity())?,
+            ))
         })
     })();
-    let rules = match geometry {
+    let (rules, draw) = match geometry {
         Ok(rules) => rules,
         Err(error) => {
             state.load_error = Some(error.clone());
@@ -579,11 +604,12 @@ fn project(
             return;
         }
     };
+    state.outline_rgb = Some(draw.outline_rgb);
     state.markers = input
         .sources
         .as_deref()
         .and_then(|sources| sources.for_receipts(&bindings.receipts))
-        .map(|reader| markers::Markers::read(reader, &rules));
+        .map(|reader| markers::Markers::read(reader, draw));
     if let Some(Err(error)) = &state.markers {
         state.last_error = Some(error.clone());
     }
@@ -726,6 +752,15 @@ fn project(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    #[test]
+    fn hidden_terrain_zeroes_colour_planes_and_keeps_the_fog_alpha() {
+        let base = [10, 20, 30, 255, 40, 50, 60, 255];
+        let mut pixels = [0; 8];
+        publish_minimap_alpha(&mut pixels, &base, &[96, 192], false);
+        assert_eq!(pixels, [10, 20, 30, 96, 40, 50, 60, 192]);
+        publish_minimap_alpha(&mut pixels, &base, &[96, 192], true);
+        assert_eq!(pixels, [0, 0, 0, 96, 0, 0, 0, 192]);
+    }
     fn tga() -> Vec<u8> {
         let mut bytes = vec![0; 18];
         bytes[2] = 2;

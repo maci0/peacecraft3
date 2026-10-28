@@ -390,13 +390,8 @@ fn sound_properties_preserve_pcm_and_mpeg_identity_and_raw_assignments() {
         );
         assert!(
             host.native(
-                "SetSoundPosition",
-                &[
-                    Value::Handle(other),
-                    Value::Int(0),
-                    Value::Int(0),
-                    Value::Int(0)
-                ]
+                "SetSoundDistances",
+                &[Value::Handle(other), Value::Int(0), Value::Int(0)]
             )
             .unwrap_err()
             .contains("explicit 3D")
@@ -468,17 +463,26 @@ fn sound_property_errors_do_not_mutate_state_or_cross_handle_families() {
         .unwrap();
     assert!(
         host.native(
-            "SetSoundPosition",
+            "SetSoundVelocity",
             &[label.clone(), Value::Int(1), Value::Int(2), Value::Int(3)]
         )
         .unwrap_err()
         .contains("explicit 3D creation required")
     );
+    host.native(
+        "SetSoundPosition",
+        &[label.clone(), Value::Int(1), Value::Int(2), Value::Int(3)],
+    )
+    .unwrap();
     let Value::Handle(label) = label else {
         panic!("label");
     };
     assert_eq!(host.sound_properties(label).unwrap().volume, Some(29));
-    assert_eq!(host.sound_properties(label).unwrap().position, None);
+    assert_eq!(host.sound_properties(label).unwrap().velocity, None);
+    assert_eq!(
+        host.sound_properties(label).unwrap().position,
+        Some([1.0, 2.0, 3.0])
+    );
     assert_eq!(*host.sound_properties(id).unwrap(), before);
 }
 

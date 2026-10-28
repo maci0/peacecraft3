@@ -1491,6 +1491,9 @@ impl pcx_sim::world::ObjectCatalog for AiProductionCatalog {
         let mut definition = self.0.resolve(code)?;
         if code != *b"b001" {
             definition.fields.get_mut(b"T001").unwrap().value = Ok(FieldValue::Cell("".into()));
+            if let Some(field) = definition.fields.get_mut(b"T011") {
+                field.value = Ok(FieldValue::Cell("".into()));
+            }
         }
         definition.fields.get_mut(b"F001").unwrap().value = Ok(FieldValue::Cell(
             if code == *b"b001" { "1" } else { "0" }.into(),
@@ -1577,8 +1580,9 @@ fn ai_production_rejects_invalid_quantity_and_unsupported_requests_without_spend
     }
     assert!(h.set_ai_produce(4, 1, kind, 0).is_err());
     assert!(
-        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"b001"), -1)
-            .is_err()
+        !h.set_ai_produce(4, 1, i32::from_be_bytes(*b"b001"), -1)
+            .unwrap(),
+        "a structure with no builder answers false"
     );
     assert!(
         h.set_ai_produce(4, 1, i32::from_be_bytes(*b"J001"), -1)
@@ -1941,4 +1945,236 @@ fn repeated_subwake_witnesses_are_bounded_and_a_later_fault_discards_them() {
         "cleanup discards witnesses, not committed training effects"
     );
     assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 49);
+}
+
+#[test]
+fn guard_posts_fill_with_the_contexts_initial_replacement_limit_when_no_script_sets_one() {
+    let (mut vm, actor, _) = fixture_with(&[
+        profile_field(b"T002", "Requires", "techList", "d001"),
+        requirement_amount("2"),
+    ]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    assert_eq!(h.campaign_replacement_count(owner).unwrap(), None);
+    assert_eq!(h.campaign_mode_policy().unwrap().default_replacement, 5);
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    // No `SetReplacementCount` ran: the policy's initializer value bounds the fill, no refusal.
+    h.fill_ai_guard_posts(4).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+}
+
+const RESEARCHED: [u8; 4] = *b"R001";
+const GATED: [u8; 4] = *b"R002";
+
+/// `R001` has two levels (gold 50 + 25 n, lumber 20 + 10 n, seconds 7 + 3 n) and needs a
+/// `u001` for level 2; `R002` needs a `d001` nobody owns. Only `b001` researches them.
+fn research_fixture() -> (Vm, HandleId, HandleId) {
+    let (mut vm, actor, producer) = ai_production_fixture_with(&[profile_field(
+        b"T011",
+        "Researches",
+        "upgradeList",
+        "R001,R002",
+    )]);
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    let rules = crate::upgrade_research::fixture_with_research(
+        &ctx.sources.catalog,
+        vec![
+            (
+                i32::from_be_bytes(RESEARCHED),
+                2,
+                [50, 25, 20, 10, 7, 3],
+                vec![vec![], vec![*b"u001"]],
+            ),
+            (
+                i32::from_be_bytes(GATED),
+                1,
+                [5, 0, 5, 0, 4, 0],
+                vec![vec![*b"d001"]],
+            ),
+        ],
+    );
+    h.admit_upgrade_research(&ctx, rules).unwrap();
+    (vm, actor, producer)
+}
+
+fn tech_level(h: &mut ObjectHost, owner: HandleId, upgrade: [u8; 4]) -> i32 {
+    match h
+        .native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(upgrade)),
+                Value::Bool(true),
+            ],
+        )
+        .unwrap()
+    {
+        Value::Int(level) => level,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn fund(vm: &mut Vm, owner: HandleId, gold: i32, lumber: i32) {
+    for (state, value) in [
+        ("PLAYER_STATE_RESOURCE_GOLD", gold),
+        ("PLAYER_STATE_RESOURCE_LUMBER", lumber),
+    ] {
+        let state = vm.global(state);
+        vm.host()
+            .inner
+            .native(
+                "SetPlayerState",
+                &[Value::Handle(owner), state, Value::Int(value)],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn ai_research_pays_the_level_cost_runs_the_level_time_and_raises_the_level() {
+    let (mut vm, actor, producer) = research_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    let upgrade = i32::from_be_bytes(RESEARCHED);
+    assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 0);
+    assert_eq!(h.ai_upgrade_cost(owner, upgrade, false).unwrap(), 50);
+    assert_eq!(h.ai_upgrade_cost(owner, upgrade, true).unwrap(), 20);
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 50);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 80);
+    // Queued or running research counts as a level for the AI, and prices the next one.
+    assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 1);
+    assert_eq!(h.ai_upgrade_cost(owner, upgrade, false).unwrap(), 75);
+    assert_eq!(h.ai_upgrade_cost(owner, upgrade, true).unwrap(), 30);
+    assert_eq!(tech_level(h, owner, RESEARCHED), 0);
+    assert_eq!(h.unit_training_queue(producer).unwrap().len(), 1);
+    assert!(h.set_ai_upgrade(4, upgrade).is_err(), "already running");
+    step(&mut vm, 1. + 6.);
+    let h = &mut vm.host().inner;
+    assert_eq!(tech_level(h, owner, RESEARCHED), 0, "7 s of research");
+    step(&mut vm, 1. + 7.5);
+    let h = &mut vm.host().inner;
+    assert_eq!(tech_level(h, owner, RESEARCHED), 1);
+    assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 1);
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 25);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 70);
+    step(&mut vm, 1. + 7.5 + 10.5);
+    let h = &mut vm.host().inner;
+    assert_eq!(tech_level(h, owner, RESEARCHED), 2, "10 s for level 2");
+    assert!(
+        h.set_ai_upgrade(4, upgrade).is_err(),
+        "a level beyond the upgrade's levels is refused loudly"
+    );
+}
+
+#[test]
+fn ai_research_waits_for_funds_requirements_a_researcher_and_an_idle_queue() {
+    let (mut vm, actor, producer) = research_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    let upgrade = i32::from_be_bytes(RESEARCHED);
+    fund(&mut vm, owner, 49, 80);
+    let h = &mut vm.host().inner;
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert!(h.unit_training_queue(producer).unwrap().is_empty(), "gold");
+    fund(&mut vm, owner, 90, 19);
+    let h = &mut vm.host().inner;
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert!(
+        h.unit_training_queue(producer).unwrap().is_empty(),
+        "lumber"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    fund(&mut vm, owner, 90, 80);
+    let h = &mut vm.host().inner;
+    h.set_ai_upgrade(4, i32::from_be_bytes(GATED)).unwrap();
+    assert!(
+        h.unit_training_queue(producer).unwrap().is_empty(),
+        "requires d001"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    // A queued unit keeps the building busy.
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"u001"), -1)
+            .unwrap()
+    );
+    let gold = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert_eq!(h.unit_training_queue(producer).unwrap().len(), 1);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+    // An upgrade no building lists, and one the rules do not know.
+    assert!(h.set_ai_upgrade(4, i32::from_be_bytes(*b"R009")).is_err());
+    assert!(h.set_ai_upgrade(3, upgrade).is_err(), "inactive player");
+}
+
+#[test]
+fn ai_research_refunds_on_cancel_and_leaves_the_level_unchanged() {
+    let (mut vm, actor, producer) = research_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    let upgrade = i32::from_be_bytes(RESEARCHED);
+    h.set_ai_upgrade(4, upgrade).unwrap();
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    let gold = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    assert!(
+        gold > 50 && gold < 100,
+        "refund, not the full price: {gold}"
+    );
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 0);
+    step(&mut vm, 20.);
+    assert_eq!(tech_level(&mut vm.host().inner, owner, RESEARCHED), 0);
+}
+
+/// The second fixture gives every unit a `Builds` list with `b001`.
+#[test]
+fn ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_with_one() {
+    let structure = i32::from_be_bytes(*b"b001");
+    let (mut vm, actor, producer) = ai_production_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    assert!(!h.set_ai_produce(4, 1, structure, -1).unwrap());
+    assert!(!h.set_ai_produce(4, 3, structure, -1).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+
+    let (mut vm, actor, _) =
+        ai_production_fixture_with(&[profile_field(b"T012", "Builds", "unitList", "b001")]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let error = h.set_ai_produce(4, 1, structure, -1).unwrap_err();
+    assert!(
+        error.to_string().contains("placement is not admitted"),
+        "{error}"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
+    // A unit that upgrades into the kind also routes the request (the executable's fallback).
+    let (mut vm, actor, _) =
+        ai_production_fixture_with(&[profile_field(b"T009", "Upgrade", "unitList", "b001")]);
+    let h = &mut vm.host().inner;
+    let _ = actor;
+    let error = h.set_ai_produce(4, 1, structure, -1).unwrap_err();
+    assert!(
+        error.to_string().contains("upgrade is not admitted"),
+        "{error}"
+    );
+    let (mut vm, actor, _) =
+        ai_production_fixture_with(&[profile_field(b"T012", "Builds", "unitList", "b001")]);
+    let h = &mut vm.host().inner;
+    let _ = actor;
+    // Dead units are not builders.
+    for unit in h.executed_units().map(|(id, _)| id).collect::<Vec<_>>() {
+        h.native("KillUnit", &[Value::Handle(unit)]).unwrap();
+    }
+    assert!(!h.set_ai_produce(4, 1, structure, -1).unwrap());
 }

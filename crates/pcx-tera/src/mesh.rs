@@ -82,7 +82,8 @@ impl TerrainMesh {
             positions.push([
                 origin_x + cx as f32 * xy_per_tile,
                 origin_y + cy as f32 * xy_per_tile,
-                (corner.height_index as f32 - z_reference_index) * z_per_index,
+                (corner.height_index as f32 - z_reference_index) * z_per_index
+                    + crate::world::layer_offset(corner, xy_per_tile),
             ]);
             uvs.push([cx as f32, cy as f32]);
             slot_per_vertex.push(corner.slot_nibble);

@@ -997,7 +997,11 @@ fn composition_readback(raw: bool) -> GpuReadback {
             RenderLayers::layer(layer),
         ));
         if raw {
-            camera.insert(menu_composition::MenuColourCamera);
+            if layer == 1 {
+                camera.insert(peacecraft3::campaign_camera::CampaignSceneCamera);
+            } else {
+                camera.insert(crate::campaign_actors::sky::SkyCamera);
+            }
         }
     }
     let camera = {

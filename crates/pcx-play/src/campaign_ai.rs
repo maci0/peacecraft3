@@ -138,6 +138,8 @@ pub(crate) trait AiWorld: Host {
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String>;
     fn ai_return_guard_posts(&mut self, player: i32) -> Result<(), String>;
     fn ai_upgrade_level(&mut self, player: i32, upgrade: i32) -> Result<i32, String>;
+    fn ai_upgrade_cost(&mut self, player: i32, upgrade: i32, lumber: bool) -> Result<i32, String>;
+    fn ai_set_upgrade(&mut self, player: i32, upgrade: i32) -> Result<(), String>;
     fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String>;
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String>;
     fn ai_ignored_units(&mut self, player: i32, unit: i32) -> Result<i32, String>;
@@ -174,6 +176,9 @@ pub(crate) trait AiWorld: Host {
     fn ai_captain_is_empty(&mut self, player: i32) -> Result<bool, String>;
     fn ai_captain_in_combat(&mut self, player: i32, attack: bool) -> Result<bool, String>;
     fn ai_add_defenders(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String>;
+    fn ai_commands_waiting(&mut self, player: i32) -> Result<i32, String>;
+    fn ai_last_command(&mut self, player: i32, native: &str) -> Result<(i32, i32), String>;
+    fn ai_pop_command(&mut self, player: i32) -> Result<(), String>;
 }
 
 impl AiWorld for NeutralStack {
@@ -327,9 +332,39 @@ impl AiWorld for NeutralStack {
                 Value::Bool(true),
             ],
         )? {
-            Value::Int(level) => Ok(level),
+            Value::Int(level) => Ok(level
+                + i32::from(
+                    self.inner()
+                        .inner()
+                        .inner()
+                        .inner()
+                        .inner()
+                        .inner()
+                        .has_pending_research(identity, upgrade),
+                )),
             _ => Err("GetUpgradeLevel: player research returned a non-integer".into()),
         }
+    }
+
+    fn ai_upgrade_cost(&mut self, player: i32, upgrade: i32, lumber: bool) -> Result<i32, String> {
+        let objects = self.inner().inner().inner().inner().inner().inner();
+        let identity = objects
+            .player_identity(player)
+            .ok_or("upgrade cost: AI player identity is not admitted")?;
+        objects
+            .ai_upgrade_cost(identity, upgrade, lumber)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_upgrade(&mut self, player: i32, upgrade: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .set_ai_upgrade(player, upgrade)
+            .map_err(|e| e.to_string())
     }
 
     fn ai_unit_amount(&mut self, player: i32, unit: i32, column: &str) -> Result<i32, String> {
@@ -507,6 +542,40 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .clear_ai_harvest(player)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_commands_waiting(&mut self, player: i32) -> Result<i32, String> {
+        let count = self
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .ai_commands_waiting(player);
+        i32::try_from(count).map_err(|e| e.to_string())
+    }
+
+    fn ai_last_command(&mut self, player: i32, native: &str) -> Result<(i32, i32), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .ai_last_command(player, native)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_pop_command(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .pop_ai_command(player)
             .map_err(|e| e.to_string())
     }
 
@@ -915,6 +984,8 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("GetUnitBuildTime", &["integer"][..]),
         ("IgnoredUnits", &["integer"][..]),
         ("GetPlayerUnitTypeCount", &["player", "integer"][..]),
+        ("GetUpgradeGoldCost", &["integer"][..]),
+        ("GetUpgradeWoodCost", &["integer"][..]),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
             continue;
@@ -935,6 +1006,18 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
                 "StartCampaignAI: {name} AI common declaration differs"
             ));
         }
+    }
+    if let Some(native) = scripts.program().natives().get("SetUpgrade")
+        && (native.source != *source
+            || !native.also_declared_in.is_empty()
+            || native.is_constant
+            || native.params.len() != 1
+            || native.params[0].ty.array
+            || native.params[0].ty.kind.name() != "integer"
+            || native.ret.array
+            || native.ret.kind.name() != "boolean")
+    {
+        return Err("StartCampaignAI: SetUpgrade AI common declaration differs".into());
     }
     if let Some(native) = scripts.program().natives().get("StopGathering")
         && (native.source != *source
@@ -1005,6 +1088,10 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         ("CaptainIsEmpty", &[][..], "boolean"),
         ("CaptainInCombat", &["boolean"][..], "boolean"),
         ("AddDefenders", &["integer", "integer"][..], "boolean"),
+        ("CommandsWaiting", &[][..], "integer"),
+        ("GetLastCommand", &[][..], "integer"),
+        ("GetLastData", &[][..], "integer"),
+        ("PopLastCommand", &[][..], "nothing"),
     ] {
         let Some(native) = scripts.program().natives().get(name) else {
             if scripts.program().natives().ambiguous(name).is_some() {
@@ -1212,6 +1299,27 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .map_err(|e| format!("{name}: {e}"))?;
                 Ok(Value::Null)
             }
+            "GetUpgradeGoldCost" | "GetUpgradeWoodCost" => {
+                let [Value::Int(upgrade)] = args else {
+                    return Err(format!("{name}: expected an integer upgrade ID"));
+                };
+                let player = self.player;
+                Ok(Value::Int(self.world_mut()?.ai_upgrade_cost(
+                    player,
+                    *upgrade,
+                    name == "GetUpgradeWoodCost",
+                )?))
+            }
+            // The native returns false whether or not an order was issued (exe 0xab7680 zeroes
+            // the result after calling the AI player's method).
+            "SetUpgrade" => {
+                let [Value::Int(upgrade)] = args else {
+                    return Err("SetUpgrade: expected an integer upgrade ID".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_set_upgrade(player, *upgrade)?;
+                Ok(Value::Bool(false))
+            }
             "GetUnitGoldCost" | "GetUnitWoodCost" | "GetUnitBuildTime" => {
                 let [Value::Int(unit)] = args else {
                     return Err(format!("{name}: expected an integer unit ID"));
@@ -1391,6 +1499,27 @@ impl<W: AiWorld> Host for AiHost<W> {
                         .ai_add_defenders(player, *quantity, *kind)?,
                 ))
             }
+            "CommandsWaiting" | "GetLastCommand" | "GetLastData" | "PopLastCommand" => {
+                if !args.is_empty() {
+                    return Err(format!("{name}: expected no arguments"));
+                }
+                let player = self.player;
+                match name {
+                    "CommandsWaiting" => {
+                        Ok(Value::Int(self.world_mut()?.ai_commands_waiting(player)?))
+                    }
+                    "GetLastCommand" => Ok(Value::Int(
+                        self.world_mut()?.ai_last_command(player, name)?.0,
+                    )),
+                    "GetLastData" => Ok(Value::Int(
+                        self.world_mut()?.ai_last_command(player, name)?.1,
+                    )),
+                    _ => {
+                        self.world_mut()?.ai_pop_command(player)?;
+                        Ok(Value::Null)
+                    }
+                }
+            }
             "CaptainGroupSize" => {
                 if !args.is_empty() {
                     return Err("CaptainGroupSize: expected no arguments".into());
@@ -1514,6 +1643,8 @@ mod tests {
         group_timed_life: BTreeMap<i32, bool>,
         retirement_blocked: bool,
         production_requests: Vec<(i32, i32, i32, i32)>,
+        upgrade_costs: Vec<(i32, i32, bool)>,
+        upgrade_orders: Vec<(i32, i32)>,
         assault_calls: Vec<(i32, &'static str)>,
     }
 
@@ -1542,6 +1673,35 @@ mod tests {
                 .contains("expected quantity")
         );
         assert_eq!(shared.lock().unwrap().production_requests.len(), 2);
+    }
+
+    #[test]
+    fn upgrade_natives_reach_the_world_and_set_upgrade_answers_false() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(7, World(Arc::clone(&shared)));
+        let upgrade = i32::from_be_bytes(*b"Rume");
+        assert_eq!(
+            host.native("GetUpgradeGoldCost", &[Value::Int(upgrade)])
+                .unwrap(),
+            Value::Int(7)
+        );
+        assert_eq!(
+            host.native("GetUpgradeWoodCost", &[Value::Int(upgrade)])
+                .unwrap(),
+            Value::Int(5)
+        );
+        assert_eq!(
+            host.native("SetUpgrade", &[Value::Int(upgrade)]).unwrap(),
+            Value::Bool(false)
+        );
+        assert!(host.native("SetUpgrade", &[Value::Null]).is_err());
+        assert!(host.native("GetUpgradeGoldCost", &[]).is_err());
+        let state = shared.lock().unwrap();
+        assert_eq!(
+            state.upgrade_costs,
+            vec![(7, upgrade, false), (7, upgrade, true)]
+        );
+        assert_eq!(state.upgrade_orders, vec![(7, upgrade)]);
     }
 
     #[test]
@@ -1690,6 +1850,27 @@ mod tests {
         fn ai_upgrade_level(&mut self, _player: i32, _upgrade: i32) -> Result<i32, String> {
             Err("test world has no admitted upgrade research".into())
         }
+        fn ai_upgrade_cost(
+            &mut self,
+            player: i32,
+            upgrade: i32,
+            lumber: bool,
+        ) -> Result<i32, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .upgrade_costs
+                .push((player, upgrade, lumber));
+            Ok(if lumber { 5 } else { 7 })
+        }
+        fn ai_set_upgrade(&mut self, player: i32, upgrade: i32) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .upgrade_orders
+                .push((player, upgrade));
+            Ok(())
+        }
         fn ai_unit_amount(
             &mut self,
             _player: i32,
@@ -1834,6 +2015,15 @@ mod tests {
             }
             state.gathering.insert(player, false);
             Ok(())
+        }
+        fn ai_commands_waiting(&mut self, _player: i32) -> Result<i32, String> {
+            Ok(0)
+        }
+        fn ai_last_command(&mut self, _player: i32, native: &str) -> Result<(i32, i32), String> {
+            Err(format!("{native}: this fixture queues no AI commands"))
+        }
+        fn ai_pop_command(&mut self, _player: i32) -> Result<(), String> {
+            Err("PopLastCommand: this fixture queues no AI commands".into())
         }
         fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String> {
             let mut state = self.0.lock().unwrap();

@@ -552,7 +552,7 @@ impl ObjectHost {
         Ok(self)
     }
 
-    pub(super) fn prepare_unit_abilities(
+    pub(in super::super) fn prepare_unit_abilities(
         &self,
         definition: &Definition,
     ) -> Result<Option<UnitAbilities>, Error> {
@@ -1225,6 +1225,45 @@ impl ObjectHost {
             art,
             position,
         }))
+    }
+
+    /// Presentation of every learned, player-available ability that authors both a `Buttonpos`
+    /// and an `Art`, in unit ability order. Presence on the card is not a cast-readiness or
+    /// implemented-command claim.
+    pub fn learned_ability_buttons(
+        &self,
+        unit: HandleId,
+    ) -> Result<Vec<crate::ability_profile::Button>, Error> {
+        if !self.has_hero_skills() {
+            return Ok(Vec::new());
+        }
+        let record = self.executed_unit(unit)?;
+        let aliases: Vec<[u8; 4]> = record
+            .abilities
+            .iter()
+            .flat_map(|abilities| abilities.levels())
+            .filter(|(_, rank)| *rank > 0)
+            .map(|(alias, _)| alias)
+            .collect();
+        let input = self
+            .heroes_admission()
+            .map_err(|detail| self.hero_error(ABILITY, detail))?;
+        let mut buttons = Vec::new();
+        for alias in aliases {
+            if !crate::ability_profile::has_button_position(&input.tables, &input.overlay, alias)
+                .map_err(|detail| self.hero_error(ABILITY, detail))?
+                || self
+                    .hero_ability_profiles(alias, "Art")
+                    .map_err(|detail| self.hero_error(ABILITY, detail))?
+                    .is_empty()
+            {
+                continue;
+            }
+            if let Some(button) = self.ability_button(unit, alias)? {
+                buttons.push(button);
+            }
+        }
+        Ok(buttons)
     }
 
     /// Learn-menu presentation. Uses the research profile fields, not cast `Art`/`Buttonpos`/`Tip`.

@@ -7,6 +7,8 @@ use pcx_script::HandleId;
 
 #[path = "campaign_chain_lightning.rs"]
 mod chain_lightning;
+#[path = "campaign_destructables.rs"]
+mod destructables;
 #[path = "campaign_doodads.rs"]
 mod doodads;
 #[path = "campaign_item_model.rs"]
@@ -72,6 +74,7 @@ pub(crate) struct UnitActors {
     water: Option<Result<WaterSurface, String>>,
     sky: sky::Sky,
     doodads: doodads::Doodads,
+    destructables: destructables::Draw,
     pub last_error: Option<String>,
 }
 
@@ -82,6 +85,15 @@ impl UnitActors {
             .iter()
             .map(|(&id, actor)| (id, actor.color))
             .collect()
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+    pub(crate) fn rendered_destructables(&self) -> usize {
+        self.destructables
+            .instances
+            .keys()
+            .filter(|id| self.actors.contains_key(id))
+            .count()
     }
 
     #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
@@ -429,13 +441,9 @@ pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
         Ok(FieldValue::Override(pcx_objects::Value::Int(v))) if metadata.kind == FieldKind::Int => {
             *v as f32
         }
-        Ok(FieldValue::Override(pcx_objects::Value::Real(v)))
-            if metadata.kind == FieldKind::Real =>
-        {
-            *v
-        }
-        Ok(FieldValue::Override(pcx_objects::Value::Unreal(v)))
-            if metadata.kind == FieldKind::Unreal =>
+        // Object-data records choose real or unreal per override, not per metadata kind.
+        Ok(FieldValue::Override(pcx_objects::Value::Real(v) | pcx_objects::Value::Unreal(v)))
+            if matches!(metadata.kind, FieldKind::Real | FieldKind::Unreal) =>
         {
             *v
         }
@@ -639,6 +647,7 @@ enum Visual<'a> {
         &'a pcx_play::campaign_placement::PlacedDoodad,
         &'a pcx_play::campaign_placement::DoodadAppearance,
     ),
+    Destructable(&'a destructables::Instance),
     /// The sky dome centred on the scene camera eye.
     Sky(&'a pcx_play::unit_model::Animation, Vec3),
 }
@@ -657,6 +666,7 @@ impl<'a> Visual<'a> {
                 .ok_or_else(|| "unit model is unavailable".into()),
             Self::Item(_, animation) | Self::Sky(animation, _) => Ok(animation),
             Self::Doodad(_, appearance) => Ok(&appearance.animation),
+            Self::Destructable(instance) => Ok(&instance.animation),
         }
     }
     fn face(self) -> f32 {
@@ -664,12 +674,13 @@ impl<'a> Visual<'a> {
             Self::Unit(unit, ..) => unit.face,
             Self::Item(..) | Self::Sky(..) => 0.0,
             Self::Doodad(row, _) => row.source.angle.to_degrees(),
+            Self::Destructable(instance) => instance.face,
         }
     }
     fn layer(self) -> usize {
         match self {
             Self::Sky(..) => sky::RENDER_LAYER,
-            Self::Unit(..) | Self::Item(..) | Self::Doodad(..) => {
+            Self::Unit(..) | Self::Item(..) | Self::Doodad(..) | Self::Destructable(..) => {
                 peacecraft3::campaign_camera::RENDER_LAYER
             }
         }
@@ -686,6 +697,7 @@ impl<'a> Visual<'a> {
             }
             Self::Unit(unit, _, water) => transform_for(unit, terrain, scale, height, water),
             Self::Doodad(row, _) => doodads::transform(row),
+            Self::Destructable(instance) => Ok(instance.pose),
             Self::Item(item, _) => {
                 let z = pcx_tera::world::sample_world_z(terrain, item.x, item.y)
                     .ok_or("item outside admitted terrain")?;
@@ -711,6 +723,9 @@ impl<'a> Visual<'a> {
             Self::Item(item, _) => item_model::properties(&item.definition, channel_scale)
                 .map(|(scale, tint)| (scale, 0.0, tint)),
             Self::Doodad(_, appearance) => Ok((1., 0., appearance.tint.map(|c| c * channel_scale))),
+            Self::Destructable(instance) => {
+                Ok((1., 0., instance.profile.tint.map(|c| c * channel_scale)))
+            }
             // The dome is authored in world units and carries no script tint, so no channel scale applies.
             Self::Sky(..) => Ok((sky::MODEL_SCALE, 0.0, [1.0; 3])),
         }
@@ -802,8 +817,17 @@ impl Actor {
             if !required.contains(&(index as u32)) {
                 continue;
             }
+            if let Visual::Destructable(instance) = visual
+                && let Some((slot, path)) = &instance.profile.replacement
+                && texture.slot == *slot
+            {
+                texture.path.clone_from(path);
+            }
             if texture.path.is_empty() {
-                if matches!(visual, Visual::Item(..) | Visual::Doodad(..)) {
+                if matches!(
+                    visual,
+                    Visual::Item(..) | Visual::Doodad(..) | Visual::Destructable(..)
+                ) {
                     return Err(format!(
                         "item has unsupported replaceable texture slot {}",
                         texture.slot
@@ -1279,6 +1303,7 @@ fn advance_doodad_particles(
     else {
         return;
     };
+    destructables::advance_particles(&mut state, &mut assets, &mut queries, now, &parameters);
     doodads::advance_particles(
         &mut state,
         &mut assets,
@@ -1474,6 +1499,7 @@ fn project(
                 .filter(|(_, item)| item.held_by.is_none())
                 .map(|(id, _)| id),
         )
+        .chain(objects.destructables_with_handles().map(|(id, _, _)| id))
         .collect();
     let retired: Vec<_> = state
         .actors
@@ -1609,6 +1635,15 @@ fn project(
         objects
             .executed_items()
             .filter(|(_, item)| item.held_by.is_none()),
+    );
+    destructables::project(
+        &mut commands,
+        &mut state,
+        &mut assets,
+        &mut queries,
+        &draw,
+        objects,
+        &context.sources.map.edition,
     );
     doodads::project(
         &mut commands,
@@ -1793,6 +1828,7 @@ fn project_ground_items<'a>(
 
 fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
     state.item_animations.remove(&id);
+    state.destructables.instances.remove(&id);
     if let Some(actor) = state.actors.remove(&id) {
         commands.entity(actor.root).try_despawn();
         state.image_bytes -= actor.image_bytes;
@@ -1914,7 +1950,7 @@ mod tests {
         for _ in 0..4 {
             bytes.extend(8232u16.to_le_bytes());
             bytes.extend(8192u16.to_le_bytes());
-            bytes.extend([0, 0, 0]);
+            bytes.extend([0, 0, 2]); // neutral elevation layer
         }
         pcx_map::Terrain::from_bytes(bytes).unwrap()
     }
@@ -2120,6 +2156,15 @@ mod tests {
         assert_eq!(scalar(&unit.definition, "modelScale").unwrap(), 1.25);
         unit.definition.fields.get_mut(b"S001").unwrap().value =
             Ok(FieldValue::Override(pcx_objects::Value::Unreal(2.75)));
+        assert_eq!(scalar(&unit.definition, "modelScale").unwrap(), 2.75);
+        unit.definition
+            .fields
+            .get_mut(b"S001")
+            .unwrap()
+            .metadata
+            .as_mut()
+            .unwrap()
+            .kind = FieldKind::Real;
         assert_eq!(scalar(&unit.definition, "modelScale").unwrap(), 2.75);
         unit.definition.fields.get_mut(b"S001").unwrap().value = Ok(FieldValue::Cell("NaN".into()));
         assert!(scalar(&unit.definition, "modelScale").is_err());

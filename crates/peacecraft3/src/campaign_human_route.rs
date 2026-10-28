@@ -1245,12 +1245,8 @@ fn continue_campaign(app: &mut App, mut runtime: CampaignRuntime) {
             pcx_assets::AssetPath::new(&next).unwrap(),
             "{identity:?}; member={member:?}; next={next}"
         );
-        let restored = handle(&session, "bj_lastLoadedUnit");
-        assert_eq!(
-            handle(&session, "udg_Arthas"),
-            restored,
-            "source must use restored Arthas"
-        );
+        // The source's own Arthas global (a later load may be Jaina, so not `bj_lastLoadedUnit`).
+        let restored = handle(&session, "udg_Arthas");
         let unit = session
             .host()
             .unwrap()
@@ -2828,3 +2824,12 @@ fn human02_outro_diagnostic(cancel: bool) {
         runtime.tick()
     );
 }
+
+#[cfg(feature = "test-fixtures")]
+mod human03;
+
+#[cfg(feature = "test-fixtures")]
+mod human04;
+
+#[cfg(feature = "test-fixtures")]
+mod human05;

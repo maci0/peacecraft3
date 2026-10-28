@@ -77,6 +77,15 @@ pub(super) enum Birth {
     Construction,
 }
 
+/// How much of a unit a same-handle form change may replace.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FormChange {
+    /// Same authored model, ability association and pool rules.
+    Ordinary,
+    /// Another model, abilities and pool rules; the caller keeps what must survive.
+    Replacement,
+}
+
 pub(super) struct PreparedUnit {
     pub(super) record: ExecutedUnit,
     placement: Option<crate::unit_placement::Prepared>,
@@ -1652,6 +1661,7 @@ impl ObjectHost {
         } else {
             None
         };
+        let upgrades = self.prepare_upgrade_transfer(*unit, previous, *player)?;
         if self
             .guard_state()
             .and_then(|state| state.get(*unit))
@@ -1666,6 +1676,7 @@ impl ObjectHost {
             self.clear_combat_target(*unit);
         }
         self.forget_captain_member(*unit);
+        self.commit_upgrade_transfer(upgrades)?;
         match self.inner.entry_mut(*unit)? {
             Entry::Unit { record } => {
                 record.owner = *player;
@@ -2494,6 +2505,9 @@ impl ObjectHost {
         }
         record.health_handicap = self.owner_health_handicap(record.owner)?;
         record.vitals = self.prepare_unit_vitals(&record.definition, record.health_handicap)?;
+        if saved.is_none() && !matches!(birth, Birth::Corpse | Birth::Illusion) {
+            self.apply_creation_upgrades(&mut record)?;
+        }
         record.combat = self.prepare_unit_combat(&record.definition)?;
         if birth == Birth::Corpse {
             record
@@ -3122,8 +3136,13 @@ impl ObjectHost {
         unit: HandleId,
         kind: [u8; 4],
     ) -> Result<super::unit_morph::Form, Error> {
+        let definition = self.resolve_form_definition(kind)?;
+        self.prepare_form(unit, definition, FormChange::Ordinary)
+    }
+
+    /// The catalog definition of a form unit, checked against the retained-definition budgets.
+    pub(super) fn resolve_form_definition(&self, kind: [u8; 4]) -> Result<Definition, Error> {
         let fail = |why: String| self.inner.error("morph", Failure::UnitActivity(why));
-        let source = self.executed_unit(unit)?.clone();
         let definition = self
             .unit_catalog()?
             .resolve(kind)
@@ -3140,19 +3159,35 @@ impl ObjectHost {
                 "form catalog family or retained-definition budget differs".into(),
             ));
         }
-        let old = self.prepare_unit_abilities(&source.definition)?;
-        let new = self.prepare_unit_abilities(&definition)?;
-        if old.as_ref().map(|a| a.levels().collect::<Vec<_>>())
-            != new.as_ref().map(|a| a.levels().collect::<Vec<_>>())
-        {
-            return Err(fail("form changes owned ability association".into()));
-        }
-        let source_vitals = self.prepare_unit_vitals(&source.definition, source.health_handicap)?;
-        let next_vitals = self.prepare_unit_vitals(&definition, source.health_handicap)?;
-        if source_vitals != next_vitals {
-            return Err(fail(
-                "form changes effective pool/regeneration rules".into(),
-            ));
+        Ok(definition)
+    }
+
+    /// Builds the form for `definition`. An ordinary change keeps the model, ability association and
+    /// pool rules of the unit; a replacement changes them and the caller owns those consequences.
+    pub(super) fn prepare_form(
+        &mut self,
+        unit: HandleId,
+        definition: Definition,
+        change: FormChange,
+    ) -> Result<super::unit_morph::Form, Error> {
+        let fail = |why: String| self.inner.error("morph", Failure::UnitActivity(why));
+        let source = self.executed_unit(unit)?.clone();
+        if change == FormChange::Ordinary {
+            let old = self.prepare_unit_abilities(&source.definition)?;
+            let new = self.prepare_unit_abilities(&definition)?;
+            if old.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+                != new.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+            {
+                return Err(fail("form changes owned ability association".into()));
+            }
+            let source_vitals =
+                self.prepare_unit_vitals(&source.definition, source.health_handicap)?;
+            let next_vitals = self.prepare_unit_vitals(&definition, source.health_handicap)?;
+            if source_vitals != next_vitals {
+                return Err(fail(
+                    "form changes effective pool/regeneration rules".into(),
+                ));
+            }
         }
         let activity = self.prepare_unit_activity(&definition)?;
         let combat = self.prepare_unit_combat(&definition)?;
@@ -3188,10 +3223,11 @@ impl ObjectHost {
                     Failure::UnitAnimation("form has no materialized model".into()),
                 )
             })?;
-        if source
-            .animation
-            .as_ref()
-            .is_none_or(|a| a.model.member != model.member || a.model.bytes != model.bytes)
+        if change == FormChange::Ordinary
+            && source
+                .animation
+                .as_ref()
+                .is_none_or(|a| a.model.member != model.member || a.model.bytes != model.bytes)
         {
             return Err(self.inner.error("morph", Failure::UnitAnimation("ordinary form requires the same authored model; other form model transitions are unqualified".into())));
         }
@@ -3267,11 +3303,43 @@ impl ObjectHost {
             .commit(unit, prepared);
         Ok(())
     }
+    /// Commits a replacement form: definition, model animation, movement class and speed,
+    /// weapon, and owned abilities change. Life, mana, armor and defense type stay with the unit.
+    pub(super) fn commit_replacement_form(
+        &mut self,
+        unit: HandleId,
+        form: super::unit_morph::Form,
+        abilities: Option<UnitAbilities>,
+    ) -> Result<(), Error> {
+        let defense = self
+            .executed_unit(unit)?
+            .combat
+            .as_ref()
+            .map(|combat| (combat.armor, combat.defense));
+        self.commit_morph_form(unit, &form, false)?;
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("checked unit")
+        };
+        record.animation = form.animation;
+        record.abilities = abilities;
+        if let (Some(current), Some((armor, defense))) = (&mut record.combat, defense) {
+            current.armor = armor;
+            current.defense = defense;
+        }
+        Ok(())
+    }
+
     pub(super) fn commit_morph_form(
         &mut self,
         unit: HandleId,
         form: &super::unit_morph::Form,
+        ordinary: bool,
     ) -> Result<(), Error> {
+        let vitals = if ordinary {
+            self.project_form_upgrades(unit, &form.definition)?
+        } else {
+            None
+        };
         let placement = self.prepare_morph_placement(unit, &form.definition)?;
         let radius = Self::catalog_collision_radius(&form.definition);
         let next = self
@@ -3288,6 +3356,9 @@ impl ObjectHost {
             unreachable!("checked unit")
         };
         record.definition = form.definition.clone();
+        if let Some(vitals) = vitals {
+            record.vitals = Some(vitals);
+        }
         record.definition_revision = next;
         record.collision_radius = radius;
         if let (Some(current), Some(profile)) = (&mut record.activity, &form.activity) {

@@ -8,7 +8,7 @@ const MAX_TILES: u64 = 256;
 /// Two tile triangles, each clipped by four square edges, at most five fan triangles.
 const MAX_VERTICES_PER_TILE: usize = 2 * 5 * 3;
 
-pub(super) fn project(
+pub(crate) fn project(
     terrain: &Terrain,
     transform: &Transform,
     z_offset: f32,
@@ -156,7 +156,7 @@ mod tests {
         raw.extend((-48f32).to_le_bytes());
         for height in heights {
             raw.extend(height.to_le_bytes());
-            raw.extend([0; 5]);
+            raw.extend([0, 0, 0, 0, 2]); // neutral elevation layer
         }
         Terrain::from_bytes(raw).unwrap()
     }

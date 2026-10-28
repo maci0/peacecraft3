@@ -152,6 +152,22 @@ impl AiWorld for AiResearchWorld {
         Err("unit costs are outside this research fixture".into())
     }
 
+    fn ai_upgrade_cost(&mut self, player: i32, upgrade: i32, lumber: bool) -> Result<i32, String> {
+        let identity = self
+            .object
+            .player_identity(player)
+            .ok_or("upgrade cost: AI player identity is not admitted")?;
+        self.object
+            .ai_upgrade_cost(identity, upgrade, lumber)
+            .map_err(|e| e.to_string())
+    }
+
+    fn ai_set_upgrade(&mut self, player: i32, upgrade: i32) -> Result<(), String> {
+        self.object
+            .set_ai_upgrade(player, upgrade)
+            .map_err(|e| e.to_string())
+    }
+
     fn ai_unit_count(&mut self, player: i32, unit: i32, done: bool) -> Result<i32, String> {
         self.object
             .ai_unit_count(player, unit, done)
@@ -233,6 +249,15 @@ impl AiWorld for AiResearchWorld {
         self.object
             .stop_ai_gathering(player)
             .map_err(|e| e.to_string())
+    }
+    fn ai_commands_waiting(&mut self, _player: i32) -> Result<i32, String> {
+        Ok(0)
+    }
+    fn ai_last_command(&mut self, _player: i32, native: &str) -> Result<(i32, i32), String> {
+        Err(format!("{native}: this fixture queues no AI commands"))
+    }
+    fn ai_pop_command(&mut self, _player: i32) -> Result<(), String> {
+        Err("PopLastCommand: this fixture queues no AI commands".into())
     }
     fn ai_clear_harvest(&mut self, player: i32) -> Result<(), String> {
         self.object
@@ -534,13 +559,15 @@ fn absent_research_ids_answer_false_and_zero_for_both_queries_and_flags() {
             }
         }
     }
-    assert!(
-        h.native(
-            "SetPlayerTechResearched",
-            &[p.clone(), Value::Int(6), Value::Int(1)]
-        )
-        .is_err()
-    );
+    // An id with no upgrade row accepts the write (the shipped Human05 sets one) but gains no
+    // effective level, so the queries keep answering false and zero.
+    h.native(
+        "SetPlayerTechResearched",
+        &[p.clone(), Value::Int(6), Value::Int(1)],
+    )
+    .unwrap();
+    assert_eq!(query(&mut h, &p, 6, true).unwrap(), Value::Bool(false));
+    assert_eq!(query_count(&mut h, &p, 6, false).unwrap(), Value::Int(0));
     let color = h.native("ConvertPlayerColor", &[Value::Int(37)]).unwrap();
     let bad = [
         vec![],

@@ -1433,3 +1433,66 @@ fn catalog_identity_is_distinct_from_the_map_record_source_and_remains_checked()
             .is_err()
     );
 }
+
+#[test]
+fn learned_buttons_list_only_abilities_with_authored_art_and_slot() {
+    let profile =
+        "[L000]\nArt=Textures\\Passive.blp\n[L001]\nArt=Textures\\Cast.blp\nButtonpos=2,1\n";
+    let mut vm = host(NATIVES, "L001", Overlay::default(), profile, 8);
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("created hero")
+    };
+    assert!(
+        vm.host()
+            .inner
+            .learned_ability_buttons(unit)
+            .unwrap()
+            .is_empty()
+    );
+    learn(&mut vm, *b"L001");
+    let buttons = vm.host().inner.learned_ability_buttons(unit).unwrap();
+    assert_eq!(
+        buttons
+            .iter()
+            .map(|b| (b.ability, b.art.as_str(), b.position))
+            .collect::<Vec<_>>(),
+        vec![(*b"L001", "Textures\\Cast.blp", [2, 1])]
+    );
+}
+
+#[test]
+fn learned_buttons_accept_a_map_slot_and_skip_slots_without_art() {
+    let slot = |field, value| pcx_objects::Mod {
+        field,
+        value_type: pcx_objects::ValueType::Int,
+        selectors: Some([0, 0]),
+        value: pcx_objects::Value::Int(value),
+        end_word: 0,
+    };
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("L000".into(), vec![slot(*b"abpx", 1), slot(*b"abpy", 2)]);
+    let mut vm = host(
+        NATIVES,
+        "L001",
+        overlay,
+        "[L000]\nArt=Textures\\Passive.blp\n[L001]\nButtonpos=2,1\n",
+        8,
+    );
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("created hero")
+    };
+    learn(&mut vm, *b"L001");
+    let buttons = vm.host().inner.learned_ability_buttons(unit).unwrap();
+    assert_eq!(
+        buttons
+            .iter()
+            .map(|b| (b.ability, b.position))
+            .collect::<Vec<_>>(),
+        vec![(*b"L000", [1, 2])],
+        "L001 authors a slot but no art"
+    );
+}

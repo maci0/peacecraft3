@@ -85,6 +85,7 @@ impl ObjectHost {
             }
             if let Some(since) = since {
                 self.resume_summon_cast(unit, now - since);
+                self.resume_curse_cast(unit, now - since);
                 self.resume_mirror_cast(unit, now - since);
                 self.guard_resumed(unit, since, now);
             }

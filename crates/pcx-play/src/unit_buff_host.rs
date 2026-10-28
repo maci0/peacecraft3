@@ -17,9 +17,10 @@
 //! supply the rawcode (checked against the buff table spelling when the
 //! applying ability is implemented) and the class traits; classification is the
 //! applying ability's behavior, not a value invented here or derived from the
-//! buff tables. The attach/query producer hooks are test-only until such a host
-//! lands; the bounded per-unit state backs the removal filters and is not a
-//! public API.
+//! buff tables. Producers (Slow and Polymorph in `unit_curse_host`) attach and
+//! remove buffs through the crate-internal hooks below; the bounded per-unit
+//! state backs the removal filters and is not a public API. A buff that
+//! `UnitRemoveBuffs` removes is reported to its producer so the effect ends.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
@@ -60,15 +61,18 @@ pub(crate) struct ActiveBuff {
     traits: BuffTraits,
 }
 
-#[cfg(test)]
 impl ActiveBuff {
     pub(crate) const fn new(rawcode: [u8; 4], traits: BuffTraits) -> Self {
         Self { rawcode, traits }
     }
+
+    #[cfg(test)]
+    pub(crate) const fn rawcode(&self) -> [u8; 4] {
+        self.rawcode
+    }
 }
 
 /// Cap on buffs retained per unit in the test-only producer hook.
-#[cfg(test)]
 pub(crate) const MAX_BUFFS_PER_UNIT: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,8 +148,7 @@ impl ObjectHost {
     }
 
     /// `Ok(Some(()))` for a live `unit`, `Ok(None)` for a removed tombstone,
-    /// and `Err` for any other family. Test-only producer hook.
-    #[cfg(test)]
+    /// and `Err` for any other family.
     fn unit_liveness(&self, native: &str, unit: HandleId) -> Result<Option<()>, Error> {
         let fail = |failure| self.inner.error(native, failure);
         match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
@@ -155,12 +158,11 @@ impl ObjectHost {
         }
     }
 
-    /// Internal, bounded, test-only hook for a future buff-producing ability
-    /// host to attach an active buff to a live unit. The producer supplies the
-    /// rawcode and class traits from its own behavior; this is not a public API
-    /// and does not claim buff-table-derived classification. Refuses removed
-    /// units and is capped at [`MAX_BUFFS_PER_UNIT`] per unit.
-    #[cfg(test)]
+    /// Internal, bounded hook for a buff-producing ability host to attach an
+    /// active buff to a live unit. The producer supplies the rawcode and class
+    /// traits from its own behavior; this is not a public API and does not
+    /// claim buff-table-derived classification. Refuses removed units and is
+    /// capped at [`MAX_BUFFS_PER_UNIT`] per unit.
     pub(crate) fn attach_unit_buff(
         &mut self,
         unit: HandleId,
@@ -195,6 +197,16 @@ impl ObjectHost {
             .map(Vec::as_slice)
             .unwrap_or(&[])
             .to_vec())
+    }
+
+    /// Removes every active buff of `rawcode` from a unit and reports whether one was present.
+    pub(crate) fn detach_unit_buff(&mut self, unit: HandleId, rawcode: [u8; 4]) -> bool {
+        let Some(active) = self.unit_buffs.active.get_mut(&unit) else {
+            return false;
+        };
+        let before = active.len();
+        active.retain(|buff| buff.rawcode != rawcode);
+        before != active.len()
     }
 
     pub(super) fn forget_unit_buffs(&mut self, unit: HandleId) {
@@ -256,8 +268,18 @@ impl ObjectHost {
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }
+            let mut removed = Vec::new();
             if let Some(active) = self.unit_buffs.active.get_mut(&id) {
-                active.retain(|buff| !should_remove(buff, &options));
+                active.retain(|buff| {
+                    let remove = should_remove(buff, &options);
+                    if remove {
+                        removed.push(buff.rawcode);
+                    }
+                    !remove
+                });
+            }
+            for rawcode in removed {
+                self.curse_buff_removed(id, rawcode)?;
             }
             Ok(Value::Null)
         })())

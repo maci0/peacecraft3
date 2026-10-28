@@ -94,6 +94,7 @@ impl ObjectHost {
             }
         }
         self.clear_unit_cooldowns(unit);
+        self.forget_curse_unit(unit);
         self.forget_unit_buffs(unit);
         self.forget_divine_shield(unit);
         let now = self.timer_game_time();

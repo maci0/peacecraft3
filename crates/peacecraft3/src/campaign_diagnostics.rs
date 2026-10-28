@@ -110,6 +110,7 @@ struct Stages<'w> {
     inventory: Option<Res<'w, crate::campaign_inventory::CampaignInventory>>,
     unit_panel: Option<Res<'w, crate::campaign_unit_panel::UnitPanel>>,
     portrait: Option<Res<'w, crate::campaign_portrait::CampaignPortrait>>,
+    time_indicator: Option<Res<'w, crate::campaign_hud::time_indicator::CampaignTimeIndicator>>,
     command_card: Option<Res<'w, crate::campaign_command_card::CommandCard>>,
     minimap: Option<Res<'w, crate::campaign_minimap::CampaignMinimap>>,
     escape_menu: Option<Res<'w, crate::campaign_escape_menu::EscapeMenu>>,
@@ -132,6 +133,7 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
         inventory,
         unit_panel,
         portrait,
+        time_indicator,
         command_card,
         minimap,
         escape_menu,
@@ -143,6 +145,14 @@ fn report(stages: Stages, mut reported: ResMut<Reported>) {
                 menu.last_error
                     .as_ref()
                     .map(|error| format!("{error} ({} source receipts)", menu.receipt_count()))
+            }),
+        ),
+        (
+            "time-of-day indicator",
+            time_indicator.and_then(|t| {
+                t.last_error
+                    .as_ref()
+                    .map(|e| format!("{e} ({} source receipts)", t.receipt_count()))
             }),
         ),
         (

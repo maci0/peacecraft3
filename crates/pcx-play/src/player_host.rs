@@ -1522,6 +1522,9 @@ impl ObjectHost {
         } else if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
+        if research && players.upgrade_research.is_some() {
+            return Some(self.set_researched_with_effects(args));
+        }
         Some(self.apply_player(name, args))
     }
     fn apply_player(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
@@ -1576,7 +1579,10 @@ impl ObjectHost {
                 research_levels: Vec::new(),
                 alliances: Vec::new(),
                 state_requests: Vec::new(),
-                experience_handicap: None,
+                experience_handicap: players
+                    .experience_handicap
+                    .as_ref()
+                    .map(|rules| rules.initial_result()),
                 health_handicap: players
                     .health_handicap
                     .as_ref()
@@ -1752,21 +1758,18 @@ impl ObjectHost {
                         .iter()
                         .find(|(id, _)| id == techid)
                         .map_or(model.rules.initial, |(_, level)| *level);
-                    Some(
-                        model
-                            .rules
-                            .target(*techid, current, *level)
-                            .ok_or_else(|| {
-                                fail(Failure::PlayerState(
-                                    "technology is not an admitted upgrade",
-                                ))
-                            })?,
-                    )
+                    // An id with no upgrade row keeps only its requested level in the stored list:
+                    // the shipped Human05 sets `'Rump'`, which no selected table defines.
+                    model.rules.target(*techid, current, *level)
                 } else {
                     None
                 };
                 let stored = players.rows[at]
                     .tech_researched
+                    .iter()
+                    .position(|(id, _)| id == techid);
+                let effective = players.rows[at]
+                    .research_levels
                     .iter()
                     .position(|(id, _)| id == techid);
                 if stored.is_none() {
@@ -1778,14 +1781,14 @@ impl ObjectHost {
                             )));
                         }
                     };
-                    if records >= max_records {
+                    if effective.is_none() && records >= max_records {
                         return Err(fail(Failure::Budget("player tech research")));
                     }
                     players.rows[at]
                         .tech_researched
                         .try_reserve(1)
                         .map_err(|_| fail(Failure::Capacity))?;
-                    if applied.is_some() {
+                    if applied.is_some() && effective.is_none() {
                         players.rows[at]
                             .research_levels
                             .try_reserve(1)
@@ -1793,26 +1796,22 @@ impl ObjectHost {
                     }
                 }
                 if let Some(stored) = stored {
-                    if let Some(applied) = applied {
-                        let effective = players.rows[at]
-                            .research_levels
-                            .iter_mut()
-                            .find(|(id, _)| id == techid)
-                            .ok_or_else(|| {
-                                fail(Failure::PlayerState("upgrade counter record is missing"))
-                            })?;
-                        effective.1 = applied;
-                    }
                     players.rows[at].tech_researched[stored].1 = *level;
                 } else {
                     players.rows[at].tech_researched.push((*techid, *level));
-                    if let Some(applied) = applied {
+                    if effective.is_none() {
+                        let research = players.research.as_mut().ok_or_else(|| {
+                            fail(Failure::PlayerState("tech research is not admitted"))
+                        })?;
+                        research.records += 1;
+                    }
+                }
+                if let Some(applied) = applied {
+                    if let Some(effective) = effective {
+                        players.rows[at].research_levels[effective].1 = applied;
+                    } else {
                         players.rows[at].research_levels.push((*techid, applied));
                     }
-                    let research = players.research.as_mut().ok_or_else(|| {
-                        fail(Failure::PlayerState("tech research is not admitted"))
-                    })?;
-                    research.records += 1;
                 }
                 let number = players.rows[at].number;
                 if let Some(entries) = players.current_research.as_mut() {
@@ -1855,6 +1854,9 @@ mod controllers;
 
 #[path = "player_current_research_host.rs"]
 mod current_research;
+
+#[path = "unit_upgrade_effects_host.rs"]
+mod upgrade_effects;
 pub use current_research::ResearchObservation;
 
 #[path = "player_handicap_host.rs"]

@@ -618,11 +618,21 @@ pub struct Corner {
     pub corner_flags: u8,
     /// Fifth byte, opaque.
     pub byte5: u8,
-    /// Sixth byte, opaque.
+    /// Packed cliff texture (high nibble) and elevation layer (low nibble).
     pub byte6: u8,
 }
 
 impl Corner {
+    /// Low nibble of the packed cliff byte: the W3E elevation layer.
+    pub fn layer_height(&self) -> u8 {
+        self.byte6 & 0x0f
+    }
+
+    /// High nibble of the packed cliff byte: the cliff texture selector.
+    pub fn cliff_texture(&self) -> u8 {
+        self.byte6 >> 4
+    }
+
     /// W3E texture/flags byte bit 0x20, retained in bit 1 of `corner_flags`.
     /// This is an on-disk flag, independent of the selected ground texture.
     pub fn is_blighted(&self) -> bool {

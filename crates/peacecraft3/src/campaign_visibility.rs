@@ -82,6 +82,33 @@ impl Raster {
         })
     }
 
+    /// Image pixel of a world point, outside the image included.
+    pub(crate) fn pixel_of(
+        &self,
+        bounds: [[f32; 2]; 2],
+        point: [f32; 2],
+    ) -> Result<[f64; 2], String> {
+        if point.iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite minimap point".into());
+        }
+        let m = Mapping::new(self.width, self.height, bounds)?;
+        Ok([
+            (f64::from(point[0]) - m.left) * m.scale + m.pad[0],
+            (m.top - f64::from(point[1])) * m.scale + m.pad[1],
+        ])
+    }
+
+    /// Whole-pixel padding of the map inside the image: the slack of each axis, truncated and halved.
+    pub(crate) fn pads(&self, bounds: [[f32; 2]; 2]) -> Result<[u32; 2], String> {
+        let m = Mapping::new(self.width, self.height, bounds)?;
+        let slack =
+            |size: usize, extent: f64| ((size as f64 - extent * m.scale).max(0.) as u32) >> 1;
+        Ok([
+            slack(self.width, m.right - m.left),
+            slack(self.height, m.top - m.bottom),
+        ])
+    }
+
     pub(crate) fn point_at(
         &self,
         bounds: [[f32; 2]; 2],
@@ -227,5 +254,21 @@ mod tests {
         assert_eq!(raster.point_at(bounds, [4., 2.]).unwrap(), Some([4., 4.]));
         assert_eq!(raster.point_at(bounds, [-1., 2.]).unwrap(), None);
         assert!(raster.point_at(bounds, [f32::NAN, 0.]).is_err());
+    }
+
+    #[test]
+    fn pixels_outside_the_image_and_whole_pixel_paddings_follow_the_fit() {
+        let raster = Raster::new(32, 32, 1024).unwrap();
+        // 6 by 2 world units fit the width at 32/6 pixels per unit: 32 by 10.67, slack 21.33.
+        let wide = [[0., 0.], [6., 2.]];
+        assert_eq!(raster.pads(wide).unwrap(), [0, 10]);
+        let tall = [[0., 0.], [2., 8.]];
+        assert_eq!(raster.pads(tall).unwrap(), [12, 0]);
+        let square = [[-3., -3.], [3., 3.]];
+        assert_eq!(raster.pads(square).unwrap(), [0, 0]);
+        let [x, y] = raster.pixel_of(wide, [-3., 5.]).unwrap();
+        assert!((x + 16.).abs() < 1e-9 && (y + 16. / 3.).abs() < 1e-9);
+        assert!(raster.pixel_of(wide, [f32::INFINITY, 0.]).is_err());
+        assert!(raster.pads([[0.; 2]; 2]).is_err());
     }
 }

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 const COMMON: &str = "type agent extends handle
 type timer extends agent
+type timerdialog extends agent
 type widget extends agent
 type unit extends widget
 type location extends agent
@@ -21,6 +22,15 @@ constant native ConvertPlayerColor takes integer i returns playercolor
 constant native ConvertVolumeGroup takes integer i returns volumegroup
 constant native ConvertCameraField takes integer i returns camerafield
 native CreateTimer takes nothing returns timer
+native CreateTimerDialog takes timer t returns timerdialog
+native DestroyTimerDialog takes timerdialog d returns nothing
+native TimerDialogSetTitle takes timerdialog d, string title returns nothing
+native TimerDialogSetTitleColor takes timerdialog d, integer r, integer g, integer b, integer a returns nothing
+native TimerDialogSetTimeColor takes timerdialog d, integer r, integer g, integer b, integer a returns nothing
+native TimerDialogSetSpeed takes timerdialog d, real speed returns nothing
+native TimerDialogDisplay takes timerdialog d, boolean display returns nothing
+native IsTimerDialogDisplayed takes timerdialog d returns boolean
+native TimerDialogSetRealTimeRemaining takes timerdialog d, real time returns nothing
 native DestroyTimer takes timer t returns nothing
 native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
 native TimerGetElapsed takes timer t returns real
@@ -51,6 +61,9 @@ native CameraSetupApplyForceDuration takes camerasetup s, boolean pan, real d re
 native PanCameraToTimed takes real x, real y, real d returns nothing
 native ResetToGameCamera takes real d returns nothing
 constant native GetCameraTargetPositionLoc takes nothing returns location
+constant native GetCameraTargetPositionX takes nothing returns real
+constant native GetCameraTargetPositionY takes nothing returns real
+constant native GetCameraField takes camerafield f returns real
 globals
 constant fgamestate CLOCK = ConvertFGameState(2)
 constant fgamestate OTHER = ConvertFGameState(1)
@@ -60,8 +73,10 @@ constant camerafield CAMERA_FIELD_TARGET_DISTANCE = ConvertCameraField(0)
 constant camerafield CAMERA_FIELD_FARZ = ConvertCameraField(1)
 constant camerafield CAMERA_FIELD_ANGLE_OF_ATTACK = ConvertCameraField(2)
 constant camerafield CAMERA_FIELD_FIELD_OF_VIEW = ConvertCameraField(3)
+constant camerafield CAMERA_FIELD_ROLL = ConvertCameraField(4)
 constant camerafield CAMERA_FIELD_ROTATION = ConvertCameraField(5)
 constant camerafield CAMERA_FIELD_ZOFFSET = ConvertCameraField(6)
+constant integer bj_CAMERA_DEFAULT_ROLL = 0
 endglobals
 ";
 
@@ -306,4 +321,138 @@ fn camera_ramps_toward_setups_and_game_fields_over_their_durations() {
     h.scroll_camera([7.0, 8.0]).unwrap();
     assert_eq!(h.camera_target(), Some([7.0, 8.0]));
     assert_eq!(h.camera_scroll_rates(), Some([3000.0, 3000.0]));
+}
+
+#[test]
+fn camera_getters_report_live_target_and_fields_with_angles_in_radians() {
+    let mut h = host();
+    h.admit_camera_view(&GameCamera {
+        angle_of_attack: 304.0,
+        field_of_view: 70.0,
+        rotation: 90.0,
+        distance: 1650.0,
+        far_z: 5000.0,
+        height: 0.0,
+        forward_rate: 3000.0,
+        strafe_rate: 3000.0,
+    })
+    .unwrap();
+    for name in ["GetCameraTargetPositionX", "GetCameraTargetPositionY"] {
+        assert!(h.native(name, &[]).is_err(), "unset target must refuse");
+    }
+    h.native(
+        "PanCameraToTimed",
+        &[Value::Real(12.5), Value::Real(-3.0), Value::Real(0.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("GetCameraTargetPositionX", &[]).unwrap(),
+        Value::Real(12.5)
+    );
+    assert_eq!(
+        h.native("GetCameraTargetPositionY", &[]).unwrap(),
+        Value::Real(-3.0)
+    );
+    let field = |h: &mut ObjectHost, index: i32| {
+        let field = h
+            .native("ConvertCameraField", &[Value::Int(index)])
+            .unwrap();
+        h.native("GetCameraField", &[field])
+    };
+    assert_eq!(field(&mut h, 0).unwrap(), Value::Real(1650.0));
+    assert_eq!(field(&mut h, 6).unwrap(), Value::Real(0.0));
+    assert_eq!(field(&mut h, 2).unwrap(), Value::Real(304f32.to_radians()));
+    assert_eq!(field(&mut h, 3).unwrap(), Value::Real(70f32.to_radians()));
+    assert_eq!(field(&mut h, 4).unwrap(), Value::Real(0.0));
+    assert_eq!(field(&mut h, 5).unwrap(), Value::Real(90f32.to_radians()));
+    assert_eq!(field(&mut h, 1).unwrap(), Value::Real(5000.0));
+}
+
+#[test]
+fn ai_commands_queue_per_player_and_refuse_an_unordered_read() {
+    let mut h = host();
+    assert_eq!(h.ai_commands_waiting(4), 0);
+    assert!(h.ai_last_command(4, "GetLastCommand").is_err());
+    h.push_ai_command(4, 7, 9).unwrap();
+    assert_eq!(h.ai_commands_waiting(4), 1);
+    assert_eq!(h.ai_commands_waiting(5), 0);
+    assert_eq!(h.ai_last_command(4, "GetLastCommand").unwrap(), (7, 9));
+    h.pop_ai_command(4).unwrap();
+    assert_eq!(h.ai_commands_waiting(4), 0);
+    h.push_ai_command(4, 1, 2).unwrap();
+    h.push_ai_command(4, 3, 4).unwrap();
+    let error = h.ai_last_command(4, "GetLastData").unwrap_err().to_string();
+    assert!(
+        error.contains("which one is last is not established"),
+        "{error}"
+    );
+    assert!(h.pop_ai_command(4).is_err());
+    assert_eq!(h.ai_commands_waiting(4), 2, "a refused pop removes nothing");
+    for _ in 2..64 {
+        h.push_ai_command(4, 0, 0).unwrap();
+    }
+    assert!(h.push_ai_command(4, 0, 0).is_err());
+}
+
+#[test]
+fn timer_dialogs_retain_executed_state_and_refuse_unestablished_uses() {
+    let mut h = host().with_timer_dialogs().unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let Value::Handle(dialog) = h
+        .native("CreateTimerDialog", std::slice::from_ref(&timer))
+        .unwrap()
+    else {
+        panic!("dialog");
+    };
+    let call = |h: &mut ObjectHost, name: &str, tail: &[Value]| {
+        let mut args = vec![Value::Handle(dialog)];
+        args.extend_from_slice(tail);
+        h.native(name, &args)
+    };
+    assert_eq!(
+        call(&mut h, "IsTimerDialogDisplayed", &[]).unwrap(),
+        Value::Bool(false)
+    );
+    call(
+        &mut h,
+        "TimerDialogSetTitle",
+        &[Value::Str("Reinforcements".into())],
+    )
+    .unwrap();
+    call(&mut h, "TimerDialogDisplay", &[Value::Bool(true)]).unwrap();
+    call(&mut h, "TimerDialogSetSpeed", &[Value::Real(2.5)]).unwrap();
+    call(
+        &mut h,
+        "TimerDialogSetRealTimeRemaining",
+        &[Value::Real(31.0)],
+    )
+    .unwrap();
+    let color = [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+    call(&mut h, "TimerDialogSetTitleColor", &color).unwrap();
+    call(&mut h, "TimerDialogSetTimeColor", &color).unwrap();
+    assert_eq!(
+        call(&mut h, "IsTimerDialogDisplayed", &[]).unwrap(),
+        Value::Bool(true)
+    );
+    let live: Vec<_> = h.timer_dialogs().collect();
+    assert_eq!(live.len(), 1);
+    let (_, state) = live[0];
+    assert_eq!(state.title.as_deref(), Some("Reinforcements"));
+    assert_eq!(
+        (state.speed, state.real_time_remaining),
+        (Some(2.5), Some(31.0))
+    );
+    assert_eq!(state.title_color, Some([1, 2, 3, 4]));
+    assert!(matches!(timer, Value::Handle(t) if t == state.timer));
+    // Unestablished uses refuse; a bad argument leaves the state unchanged.
+    assert!(h.native("CreateTimerDialog", &[Value::Null]).is_err());
+    assert!(call(&mut h, "TimerDialogSetSpeed", &[Value::Real(f32::NAN)]).is_err());
+    assert!(
+        h.native("TimerDialogDisplay", &[Value::Null, Value::Bool(true)])
+            .is_err()
+    );
+    call(&mut h, "DestroyTimerDialog", &[]).unwrap();
+    assert_eq!(h.timer_dialogs().count(), 0);
+    assert!(call(&mut h, "DestroyTimerDialog", &[]).is_err());
+    assert!(call(&mut h, "IsTimerDialogDisplayed", &[]).is_err());
 }

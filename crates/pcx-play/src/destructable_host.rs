@@ -261,6 +261,14 @@ pub struct DestructableStats {
     pub tree: bool,
 }
 
+/// Source art for one destructable variation, independent of its live state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DestructableVisual {
+    pub member: String,
+    pub replacement: Option<(u32, String)>,
+    pub tint: [f32; 3],
+}
+
 /// The selected object tables plus this map's `.w3b`/`.w3d` overlays.
 #[derive(Clone)]
 pub struct DestructableCatalog {
@@ -270,6 +278,99 @@ pub struct DestructableCatalog {
 }
 
 impl DestructableCatalog {
+    pub fn visual<'a>(
+        &self,
+        objectid: i32,
+        variation: u32,
+        paths: impl Iterator<Item = &'a str>,
+    ) -> Result<DestructableVisual, String> {
+        let id = objectid.to_be_bytes();
+        let name = std::str::from_utf8(&id).map_err(|_| "non-UTF8 destructable identity")?;
+        let (family, slk, object, mods) = self
+            .find(name)?
+            .ok_or_else(|| format!("{name}: missing destructable visual record"))?;
+        if family != Family::Destructable {
+            return Err(format!("{name}: visual record is not a destructable"));
+        }
+        let text = |column| {
+            text_field(
+                self.tables.editor(),
+                object,
+                family,
+                slk,
+                column,
+                mods,
+                name,
+            )
+        };
+        let optional = |column| {
+            numeric_field(
+                self.tables.editor(),
+                object,
+                family,
+                slk,
+                column,
+                mods,
+                name,
+            )
+        };
+        let number =
+            |column| optional(column)?.ok_or_else(|| format!("{name}: missing visual {column}"));
+        let whole = |column, value: f32| {
+            if !value.is_finite()
+                || value < 0.0
+                || value.fract() != 0.0
+                || f64::from(value) > f64::from(u32::MAX)
+            {
+                return Err(format!("{name}: invalid visual {column}"));
+            }
+            Ok(value as u32)
+        };
+        let count = whole("numVar", number("numVar")?)?;
+        if variation >= count {
+            return Err(format!("{name}: visual variation outside numVar"));
+        }
+        let member =
+            crate::campaign_placement::model_member(&text("file")?, variation, count, paths)?;
+        let path = text("texFile")?;
+        let no_path = matches!(path.trim(), "" | "_" | "-");
+        // An authored `-`/`_` texID marks an absent replacement, not a slot.
+        let slot = match optional("texID")? {
+            Some(value) => whole("texID", value)?,
+            None if no_path => 0,
+            None => return Err(format!("{name}: replacement texture without texID")),
+        };
+        let replacement = if slot == 0 {
+            None
+        } else {
+            if no_path {
+                return Err(format!("{name}: missing replacement texture"));
+            }
+            let path = if path.to_ascii_lowercase().ends_with(".blp")
+                || path.to_ascii_lowercase().ends_with(".tga")
+            {
+                path
+            } else {
+                format!("{path}.blp")
+            };
+            Some((
+                slot,
+                pcx_assets::AssetPath::new(&path)
+                    .map_err(|e| e.to_string())?
+                    .to_string(),
+            ))
+        };
+        let tint = [number("colorR")?, number("colorG")?, number("colorB")?];
+        if tint.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(format!("{name}: invalid visual colour"));
+        }
+        Ok(DestructableVisual {
+            member,
+            replacement,
+            tint,
+        })
+    }
+
     pub fn new(tables: Arc<DefaultTables>, destructables: Overlay, decorations: Overlay) -> Self {
         Self {
             tables,
@@ -293,7 +394,8 @@ impl DestructableCatalog {
         if family != Family::Destructable {
             return Ok(None);
         }
-        let max_life = numeric_field(self.tables.editor(), object, family, slk, "HP", mods, name)?;
+        let max_life = numeric_field(self.tables.editor(), object, family, slk, "HP", mods, name)?
+            .ok_or_else(|| format!("{name}: missing authored HP"))?;
         if !max_life.is_finite() || max_life <= 0.0 {
             return Err(format!("{name}: invalid authored HP"));
         }
@@ -415,7 +517,7 @@ fn numeric_field(
     column: &str,
     mods: &[pcx_objects::Mod],
     name: &str,
-) -> Result<f32, String> {
+) -> Result<Option<f32>, String> {
     let definition = definition(editor, family, slk, column, name)?;
     if !matches!(
         definition.kind,
@@ -430,15 +532,21 @@ fn numeric_field(
         .field(definition.fourcc)
         .map_err(|error| format!("{name}: {column}: {error}"))?;
     let base = match (definition.kind, mapped.value) {
-        (FieldKind::Int, pcx_objects::editor::defaults::Value::Integer(value)) => value as f64,
+        (FieldKind::Int, pcx_objects::editor::defaults::Value::Integer(value)) => {
+            Some(value as f64)
+        }
         (
             FieldKind::Real | FieldKind::Unreal,
             pcx_objects::editor::defaults::Value::Real(value),
-        ) => value,
+        ) => Some(value),
+        (_, pcx_objects::editor::defaults::Value::Marker(_)) => None,
         _ => return Err(format!("{name}: invalid authored {column}")),
     };
     let value = match chosen_mod(mods, definition, name, column)? {
-        None => base,
+        None => match base {
+            Some(base) => base,
+            None => return Ok(None),
+        },
         Some(edit) => match (definition.kind, &edit.value) {
             (FieldKind::Int, pcx_objects::Value::Int(value)) => f64::from(*value as i32),
             (
@@ -451,7 +559,7 @@ fn numeric_field(
     if !value.is_finite() {
         return Err(format!("{name}: nonfinite authored {column}"));
     }
-    Ok(value as f32)
+    Ok(Some(value as f32))
 }
 
 fn text_field(
@@ -567,6 +675,9 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
+    pub fn destructable_catalog(&self) -> Option<&DestructableCatalog> {
+        self.destructable_catalog.as_ref()
+    }
     pub fn with_destructable_restore(mut self, policy: RestoreLifePolicy) -> Result<Self, Error> {
         if self.destructable_restore.is_some() {
             return Err(self.inner.error(

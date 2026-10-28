@@ -459,6 +459,14 @@ impl ObjectHost {
         let normal = self.prepare_morph_form(unit, spec.normal)?;
         let alternate = self.prepare_morph_form(unit, spec.alternate)?;
         self.validate_morph_forms(&normal, &alternate)?;
+        self.project_form_upgrades(
+            unit,
+            if on {
+                &alternate.definition
+            } else {
+                &normal.definition
+            },
+        )?;
         let normal_height = self.morph_height(&normal.definition)?;
         let alternate_height = self.morph_height(&alternate.definition)?;
         let normal_movement = super::unit_positions::geometry(&normal.definition)
@@ -596,7 +604,10 @@ impl ObjectHost {
             FieldValue::Cell(value) => value
                 .parse::<f32>()
                 .map_err(|_| self.morph_error("malformed source movement height"))?,
-            FieldValue::Override(pcx_objects::Value::Real(value)) => *value,
+            // Object-data overrides store this metadata-real field as either type.
+            FieldValue::Override(
+                pcx_objects::Value::Real(value) | pcx_objects::Value::Unreal(value),
+            ) => *value,
             _ => return Err(self.morph_error("unsupported source movement height value")),
         };
         if !value.is_finite() || value < 0. {
@@ -665,7 +676,7 @@ impl ObjectHost {
         match c.phase {
             EventPhase::Begin => {
                 if morph.phase == MorphPhase::TakingOff {
-                    self.commit_morph_form(c.unit, &pending.alternate)?;
+                    self.commit_morph_form(c.unit, &pending.alternate, true)?;
                 }
                 if morph.phase == MorphPhase::Landing {
                     self.commit_morph_placement(c.unit, &pending.normal.definition)?;
@@ -807,7 +818,7 @@ impl ObjectHost {
                         .ok_or_else(|| self.morph_error("completion event overflow"))?,
                 )?;
                 if m.phase == MorphPhase::Landing {
-                    self.commit_morph_form(unit, &p.normal)?;
+                    self.commit_morph_form(unit, &p.normal, true)?;
                 }
                 let c = Context {
                     unit,

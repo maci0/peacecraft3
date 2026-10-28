@@ -81,6 +81,37 @@ impl Rules {
         if all == minimap_only {
             return Err("indistinguishable ally-color modes".into());
         }
+        // The minimap's ally-colour flag. The mode handler's callee stores its argument, the
+        // constructor stores `option != 0` from the same option slot (the unsigned compare
+        // with 1 is zero only for a zero option), and the marker table reads player colours
+        // for a nonzero flag and ally/enemy colours for zero.
+        let store = read(0x652e30, 12)?;
+        let ctor = read(0x6208be, 25)?;
+        let branch = read(0x65bbfb, 9)?;
+        let player = read(0x65bc04, 6)?;
+        let (first, second) = (read(0x5ea75f, 5)?, read(0x5ea77c, 5)?);
+        if store.len() != 12
+            || ctor.len() != 25
+            || branch.len() != 9
+            || player.len() != 6
+            || store[..8] != [0x55, 0x8b, 0xec, 0x8b, 0x45, 8, 0x89, 0x81]
+            || ctor[..4] != [0x6a, setter[15], 0x8b, 0xcf]
+            || !call(&ctor, 4, 0x6208be, 0x42b5f0)
+            || ctor[9..21]
+                != [
+                    0x83, 0x7d, 8, 1, 0x8b, 0x45, 0xec, 0x1b, 0xc9, 0x41, 0x89, 0x88,
+                ]
+            || ctor[21..] != store[8..]
+            || branch[..2] != [0x83, 0xbb]
+            || branch[2..6] != store[8..]
+            || branch[6..] != [0, 0x74, 0x15]
+            || player[0] != 0x50
+            || !call(&player, 1, 0x65bc04, 0x5c60d0)
+            || !call(&first, 0, 0x5ea75f, 0x652e30)
+            || !call(&second, 0, 0x5ea77c, 0x652e30)
+        {
+            return Err("ally-color minimap flag relationship differs".into());
+        }
         let table = read(0x42b630, 9)?;
         if table.len() != 9 || table[..5] != [0xc1, 0xe0, 4, 0xff, 0xb0] {
             return Err("ally-color option table differs".into());
@@ -130,6 +161,11 @@ impl Rules {
     }
     pub fn filters_minimap(&self, state: i32) -> bool {
         state == self.minimap_only || state == self.all
+    }
+    /// Minimap colours at map start. The client's constructor reads the option itself, not
+    /// through the mode handler, and only a zero option selects ally/enemy colours.
+    pub fn minimap_filtered_at_start(&self) -> bool {
+        self.initial == 0
     }
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn fixture() -> Self {
@@ -189,6 +225,35 @@ mod tests {
                 0x42b630,
                 [&[0xc1, 0xe0, 4, 0xff, 0xb0][..], &0x100000u32.to_le_bytes()].concat(),
             ),
+            // Nonstock flag offset 0x930 shared by the store, constructor and table branch.
+            (
+                0x652e30,
+                vec![0x55, 0x8b, 0xec, 0x8b, 0x45, 8, 0x89, 0x81, 0x30, 9, 0, 0],
+            ),
+            (0x6208be, {
+                let mut ctor = vec![
+                    0x6a, 5, 0x8b, 0xcf, 0xe8, 0, 0, 0, 0, 0x83, 0x7d, 8, 1, 0x8b, 0x45, 0xec,
+                    0x1b, 0xc9, 0x41, 0x89, 0x88, 0x30, 9, 0, 0,
+                ];
+                call(&mut ctor, 4, 0x6208be, 0x42b5f0);
+                ctor
+            }),
+            (0x65bbfb, vec![0x83, 0xbb, 0x30, 9, 0, 0, 0, 0x74, 0x15]),
+            (0x65bc04, {
+                let mut player = vec![0x50, 0xe8, 0, 0, 0, 0];
+                call(&mut player, 1, 0x65bc04, 0x5c60d0);
+                player
+            }),
+            (0x5ea75f, {
+                let mut store = vec![0xe8, 0, 0, 0, 0];
+                call(&mut store, 0, 0x5ea75f, 0x652e30);
+                store
+            }),
+            (0x5ea77c, {
+                let mut store = vec![0xe8, 0, 0, 0, 0];
+                call(&mut store, 0, 0x5ea77c, 0x652e30);
+                store
+            }),
             (0x100050, 0x200000u32.to_le_bytes().to_vec()),
             (0x200000, [b"9\0".as_slice(), &[0; 14]].concat()),
             (0x5bd912, vec![0x83, 0xff, 15]),
@@ -220,6 +285,22 @@ mod tests {
         assert!(r.filters_minimap(11));
     }
     #[test]
+    fn minimap_colours_at_start_follow_the_raw_option_not_the_mode_handler() {
+        let r = decode(&fixture()).unwrap();
+        assert_eq!(r.initial, 9);
+        assert!(!r.minimap_filtered_at_start());
+        let mut data = fixture();
+        data.insert(0x200000, [b"0\0".as_slice(), &[0; 14]].concat());
+        let r = decode(&data).unwrap();
+        assert_eq!(r.initial, 0);
+        assert!(r.minimap_filtered_at_start());
+        assert!(!r.filters_minimap(0));
+        data.insert(0x200000, [b"7\0".as_slice(), &[0; 14]].concat());
+        let r = decode(&data).unwrap();
+        assert!(r.filters_minimap(r.initial));
+        assert!(!r.minimap_filtered_at_start());
+    }
+    #[test]
     fn changed_calls_fields_branches_defaults_and_all_short_windows_refuse() {
         for (va, at) in [
             (0x4a6e70, 15),
@@ -229,6 +310,17 @@ mod tests {
             (0x42b630, 3),
             (0x200000, 0),
             (0x5bd912, 1),
+            (0x652e30, 8),
+            (0x652e30, 6),
+            (0x6208be, 1),
+            (0x6208be, 5),
+            (0x6208be, 12),
+            (0x6208be, 21),
+            (0x65bbfb, 4),
+            (0x65bbfb, 8),
+            (0x65bc04, 2),
+            (0x5ea75f, 1),
+            (0x5ea77c, 3),
         ] {
             let mut data = fixture();
             data.get_mut(&va).unwrap()[at] ^= 0xff;
@@ -250,6 +342,7 @@ mod tests {
         let rules = Rules::read(&bytes).unwrap();
         assert_eq!(rules.initial, 1);
         assert!(rules.filters_minimap(1));
+        assert!(!rules.minimap_filtered_at_start());
         assert!(!rules.filters_units(1));
         assert!(rules.filters_units(2));
         assert_eq!((rules.creep_first, rules.unfiltered_owner), (24, 27));

@@ -50,12 +50,15 @@ struct AttemptKey {
 #[derive(Resource, Default)]
 pub struct GroundPublication {
     attempted: Option<AttemptKey>,
+    shadow: Option<Handle<Image>>,
     pub entity: Option<Entity>,
     /// Source context of the mounted draw; a refused replacement keeps it.
     pub context: Option<Arc<ParsedMapContext>>,
     /// Catalog and BLP winners for the mounted draw, excluding their contents.
     pub receipts: Vec<AssetReceipt>,
     pub last_error: Option<MapGroundError>,
+    /// Optional source-shadow failure; the independently admitted ground stays drawable.
+    pub shadow_error: Option<String>,
 }
 
 /// Caller budgets for the admitted binding revision. `Default` sets no limit.
@@ -231,6 +234,13 @@ pub(crate) fn publish_admitted_ground(
         }
     };
     let texture_limits = device.as_ref().map(|device| device.limits());
+    let shadow = prepare_shadow(
+        &context.terrain,
+        reader.as_ref(),
+        &bindings.receipts,
+        read_limit,
+        texture_limits.as_ref(),
+    );
     let result = prepare_draw(
         &context.terrain,
         reader.as_ref(),
@@ -247,11 +257,113 @@ pub(crate) fn publish_admitted_ground(
             publication.context = Some(context);
             publication.receipts = receipts;
             publication.last_error = None;
+            if let Some(old) = publication.shadow.take() {
+                assets.1.remove(old.id());
+            }
+            match shadow {
+                Ok((image, bounds, color, source_receipt)) => {
+                    if let Some(mut material) =
+                        draw.material.as_ref().and_then(|h| assets.2.get_mut(h))
+                    {
+                        let image = assets.1.add(image);
+                        material
+                            .set_shadow(image.clone(), bounds, color)
+                            .expect("preflighted shadow bounds");
+                        publication.shadow = Some(image);
+                        publication.receipts.push(source_receipt);
+                    }
+                    publication.shadow_error = None;
+                }
+                Err(error) => publication.shadow_error = Some(error.to_string()),
+            }
         }
         Err(error) => {
             publication.last_error = Some(error);
         }
     }
+}
+
+fn prepare_shadow(
+    terrain: &Terrain,
+    reader: &pcx_assets::Resolver,
+    receipts: &BindingReceipts,
+    limit: u64,
+    device: Option<&WgpuLimits>,
+) -> Result<(Image, Vec4, [u8; 4], AssetReceipt), MapGroundError> {
+    let read_error = |path: &str, detail: String| MapGroundError::Read {
+        path: path.into(),
+        detail,
+    };
+    let source = reader
+        .resolve_bounded(receipts.map.path.as_str(), limit)
+        .map_err(|e| read_error("war3map.shd", e.to_string()))?;
+    if receipt(&source) != receipts.map {
+        return Err(read_error(
+            "war3map.shd",
+            "map differs from admitted receipt".into(),
+        ));
+    }
+    let map =
+        pcx_map::Map::parse(&source.bytes).map_err(|e| read_error("war3map.shd", e.to_string()))?;
+    let budget = usize::try_from(limit)
+        .map_err(|_| read_error("war3map.shd", "read budget overflow".into()))?;
+    let raw = map
+        .extract_checked(
+            receipts.map.path.as_str(),
+            "war3map.shd",
+            pcx_mpq::checked::ReadBudget {
+                max_archive_bytes: budget,
+                max_archive_table_bytes: budget,
+                max_raw_packed_bytes: budget,
+                max_decoded_bytes: budget,
+            },
+        )
+        .map_err(|e| read_error("war3map.shd", e.to_string()))?
+        .ok_or_else(|| read_error("war3map.shd", "missing authored shadow mask".into()))?;
+    let mask = pcx_map::Shadows::from_bytes(raw, terrain.width(), terrain.height())
+        .map_err(|e| read_error("war3map.shd", e.to_string()))?;
+    let max_dimension = device.map_or(u32::MAX, |d| d.max_texture_dimension_2d);
+    let image = shadow_image(&mask, max_dimension).map_err(|e| read_error("war3map.shd", e))?;
+    let profile = reader
+        .resolve_bounded("UI\\MiscData.txt", limit)
+        .map_err(|e| read_error("UI\\MiscData.txt", e.to_string()))?;
+    let color = pcx_objects::editor::fog_boundary::ShadowColor::read(&profile.bytes, budget)
+        .map_err(|e| read_error("UI\\MiscData.txt", e))?
+        .0;
+    let (x, y) = terrain.origin();
+    let [end_x, end_y, _] = pcx_tera::corner_world(terrain, terrain.width(), terrain.height())
+        .ok_or_else(|| read_error("war3map.shd", "missing terrain extent".into()))?;
+    let bounds = Vec4::new(x, y, end_x - x, end_y - y);
+    if !bounds.is_finite() || bounds.z <= 0.0 || bounds.w <= 0.0 {
+        return Err(read_error("war3map.shd", "invalid terrain extent".into()));
+    }
+    Ok((image, bounds, color, receipt(&profile)))
+}
+
+fn shadow_image(mask: &pcx_map::Shadows, max_dimension: u32) -> Result<Image, String> {
+    use bevy::{
+        asset::RenderAssetUsages,
+        render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    };
+    let width = u32::try_from(mask.columns()).map_err(|_| "shadow width overflow")?;
+    let height = u32::try_from(mask.rows()).map_err(|_| "shadow height overflow")?;
+    if width == 0 || height == 0 || width > max_dimension || height > max_dimension {
+        return Err("shadow grid exceeds active texture limits or is empty".into());
+    }
+    // SHD rows increase in world Y; the shader samples in the same coordinate system.
+    let mut image = Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        mask.raw().to_vec(),
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = bevy::image::ImageSampler::linear();
+    Ok(image)
 }
 
 fn prepare_draw(
@@ -398,6 +510,20 @@ pub fn spawn_admitted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadow_grid_keeps_source_orientation_values_and_device_limits() {
+        let mut cells = vec![0; 32];
+        cells[0] = 37;
+        cells[31] = 191;
+        let mask = pcx_map::Shadows::from_bytes(cells.clone(), 2, 1).unwrap();
+        let image = shadow_image(&mask, 8).unwrap();
+        assert_eq!(image.width(), 8);
+        assert_eq!(image.height(), 4);
+        assert_eq!(image.data.unwrap(), cells);
+        assert!(shadow_image(&mask, 7).is_err());
+        assert!(shadow_image(&pcx_map::Shadows::from_bytes(vec![], 0, 1).unwrap(), 8).is_err());
+    }
 
     fn catalog() -> TileCatalog {
         let text = "ID;PWXL;N;E\r\nC;Y1;X1;K\"tileID\"\r\nC;X2;K\"dir\"\r\nC;X3;K\"file\"\r\nC;Y2;X1;K\"Ldrt\"\r\nC;X2;K\"TerrainArt\\LordaeronSummer\"\r\nC;X3;K\"LordaeronSummer\"\r\nE\r\n";

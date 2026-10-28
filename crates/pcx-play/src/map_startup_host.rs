@@ -791,6 +791,15 @@ fn assemble_inner(
     {
         object = object.with_unit_effects()?;
     }
+    if context
+        .scripts
+        .program()
+        .natives()
+        .get("CreateTimerDialog")
+        .is_some()
+    {
+        object = object.with_timer_dialogs()?;
+    }
     object = object.with_environment()?.with_volume_groups()?;
     if let Some(bounds) = world_bounds {
         object = object.with_world_bounds(bounds)?;
@@ -995,6 +1004,7 @@ fn assemble_inner(
             }
             if object.has_hero_skills() {
                 object.admit_chain_lightning()?;
+                object.admit_unit_curses()?;
             }
             if object.has_hero_skills() && had_orders {
                 object.admit_divine_shield()?;
@@ -1222,6 +1232,41 @@ impl Host for MapStartupHost {
                 .find(|&slot| self.objects().player_identity(slot) == Some(*player))
                 .ok_or("StartCampaignAI: player is not a current identity")?;
             self.ai.start(&mut self.inner, ordinal, path)?;
+            return Ok(Value::Null);
+        }
+        if name == "CommandAI" {
+            let scripts = &self.context().scripts;
+            let declaration = scripts
+                .program()
+                .natives()
+                .get(name)
+                .ok_or("CommandAI: selected common does not declare the native")?;
+            if scripts
+                .digests
+                .first()
+                .is_none_or(|common| declaration.source != common.label)
+                || declaration.params.len() != 3
+                || declaration.params[0].ty.kind.name() != "player"
+                || declaration.params[1].ty.kind.name() != "integer"
+                || declaration.params[2].ty.kind.name() != "integer"
+                || declaration.ret.kind.name() != "nothing"
+            {
+                return Err("CommandAI: selected common declaration differs".into());
+            }
+            let [Value::Handle(player), Value::Int(command), Value::Int(data)] = args else {
+                return Err("CommandAI: expected player and two integers".into());
+            };
+            let slots = self
+                .objects()
+                .player_slots()
+                .ok_or("CommandAI: players are not admitted")?;
+            let ordinal = (0..slots)
+                .filter_map(|slot| i32::try_from(slot).ok())
+                .find(|&slot| self.objects().player_identity(slot) == Some(*player))
+                .ok_or("CommandAI: player is not a current identity")?;
+            self.objects_mut()
+                .push_ai_command(ordinal, *command, *data)
+                .map_err(|e| e.to_string())?;
             return Ok(Value::Null);
         }
         if name == "CreateUnit"

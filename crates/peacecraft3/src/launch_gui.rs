@@ -418,8 +418,11 @@ pub(crate) fn app_with_plugins(
     crate::campaign_escape_menu::install(&mut app);
     crate::campaign_inventory::install(&mut app);
     crate::campaign_minimap::install(&mut app);
+    crate::campaign_minimap_buttons::install(&mut app);
     crate::campaign_command_card::install(&mut app);
     crate::campaign_selection::install(&mut app);
+    crate::campaign_uber_splats::install(&mut app);
+    crate::campaign_unit_shadows::install(&mut app);
     #[cfg(not(target_arch = "wasm32"))]
     crate::native_campaign::install(&mut app);
     peacecraft3::campaign_presentation::install(&mut app);

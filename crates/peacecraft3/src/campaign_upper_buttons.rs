@@ -14,6 +14,9 @@ use peacecraft3::{
 };
 use std::{collections::HashMap, sync::Weak};
 
+#[path = "campaign_message_log.rs"]
+mod message_log;
+
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CampaignHudSet;
 
@@ -25,8 +28,66 @@ pub(crate) enum CampaignHudAction {
 enum Action {
     Quests,
     Menu,
+    MessageLog,
     Close,
+    CloseMessageLog,
     Select(pcx_script::HandleId),
+}
+/// Session-provider tags `Warcraft III.exe` compares at 0x005ad700 (global object
+/// 13, field +8, offset 0x2650): the fourth bar button is Chat unless the tag is
+/// `LOOP` or `NONE`, in which case it is Log. 0x0062e440 enables Allies only when
+/// that same test says Chat. The tags are read as the local single-player session
+/// (S, shipped code); that reading is not traced further.
+const PROVIDER_LOOPBACK: u32 = u32::from_be_bytes(*b"LOOP");
+const PROVIDER_NONE: u32 = u32::from_be_bytes(*b"NONE");
+/// The campaign HUD only serves the local single-player session.
+const CAMPAIGN_PROVIDER: u32 = PROVIDER_LOOPBACK;
+fn networked(provider: u32) -> bool {
+    !matches!(provider, PROVIDER_LOOPBACK | PROVIDER_NONE)
+}
+/// The upper bar's buttons in the authored `UpperButtonBar.fdf` anchor chain.
+/// The fourth FDF frame is `UpperButtonBarChatButton`; the client relabels it Log
+/// and makes it open the message log for a local session (see [`networked`]).
+/// Allies is disabled for a local session. 0x0062e440 also keeps it disabled when
+/// a byte at CUpperButtonBar+0x170 is set or when the predicate at 0x005edaa0
+/// holds for the local player; neither is traced, and both are moot while the
+/// session is local.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpperButton {
+    Quests,
+    Menu,
+    Allies,
+    Log,
+}
+impl UpperButton {
+    const ALL: [Self; 4] = [Self::Quests, Self::Menu, Self::Allies, Self::Log];
+    fn frame(self) -> &'static str {
+        match self {
+            Self::Quests => "UpperButtonBarQuestsButton",
+            Self::Menu => "UpperButtonBarMenuButton",
+            Self::Allies => "UpperButtonBarAlliesButton",
+            Self::Log => "UpperButtonBarChatButton",
+        }
+    }
+    fn action(self, provider: u32) -> Option<Action> {
+        match self {
+            Self::Quests => Some(Action::Quests),
+            Self::Menu => Some(Action::Menu),
+            Self::Allies => None,
+            Self::Log => (!networked(provider)).then_some(Action::MessageLog),
+        }
+    }
+    fn disabled(self, provider: u32) -> bool {
+        self == Self::Allies && !networked(provider)
+    }
+    /// Global-string key shown for the authored `key`.
+    fn text_key(self, authored: &str, provider: u32) -> &str {
+        match (self, authored, networked(provider)) {
+            (Self::Log, "KEY_CHAT", false) => "KEY_LOG",
+            (Self::Log, "CHAT", false) => "LOG",
+            _ => authored,
+        }
+    }
 }
 #[derive(Component)]
 struct AuthoredShortcut(KeyCode);
@@ -106,7 +167,10 @@ fn redirect_quest_scroll(
 struct UpperControls {
     witness: Option<Weak<()>>,
     root: Option<Entity>,
+    /// The quest log dialog, not the message log.
     log: Option<Entity>,
+    messages: message_log::Shown,
+    messages_open: bool,
     attempted: bool,
     escape_consumed: bool,
     pointer_consumed: bool,
@@ -122,6 +186,7 @@ struct Source {
     fdf: Fdf,
     globals: String,
     quests_key: KeyCode,
+    message_log: message_log::Art,
     fonts: HashMap<String, Handle<Font>>,
     backdrop: glue_menu::Backdrop,
     details_backdrop: glue_menu::Backdrop,
@@ -194,16 +259,26 @@ fn activate(
         state.pointer_consumed = std::mem::take(&mut state.pointer_pending);
         return;
     }
-    state.escape_consumed = state.open && keys.just_pressed(KeyCode::Escape);
+    state.escape_consumed =
+        (state.open || state.messages_open) && keys.just_pressed(KeyCode::Escape);
     state.pointer_consumed = std::mem::take(&mut state.pointer_pending);
     for entity in &activations.entities {
         let Ok(action) = buttons.get(*entity) else {
             continue;
         };
         state.pointer_consumed = true;
+        // One modal dialog at a time (recreation choice).
         match action {
-            Action::Quests => state.open = !state.open,
+            Action::Quests => {
+                state.open = !state.open;
+                state.messages_open = false;
+            }
             Action::Close => state.open = false,
+            Action::MessageLog => {
+                state.messages_open = !state.messages_open;
+                state.open = false;
+            }
+            Action::CloseMessageLog => state.messages_open = false,
             Action::Select(id) => {
                 state.selected = Some(*id);
                 state.signature.clear();
@@ -215,6 +290,7 @@ fn activate(
     }
     if keys.just_pressed(KeyCode::Escape) {
         state.open = false;
+        state.messages_open = false;
     }
 }
 fn capture_pointer_press(
@@ -233,6 +309,7 @@ struct RenderAssets<'w> {
     images: ResMut<'w, Assets<Image>>,
     materials: ResMut<'w, Assets<BackdropImage>>,
     highlights: ResMut<'w, Assets<AdditiveImage>>,
+    history: ResMut<'w, crate::campaign_messages::MessageHistory>,
 }
 fn project(
     mut commands: Commands,
@@ -248,6 +325,7 @@ fn project(
         mut images,
         mut materials,
         mut highlights,
+        mut history,
     } = assets;
     let witness = session.session_witness();
     let same = match (&state.witness, &witness) {
@@ -256,7 +334,14 @@ fn project(
         _ => false,
     };
     if !same {
-        for entity in [state.root.take(), state.log.take()].into_iter().flatten() {
+        for entity in [
+            state.root.take(),
+            state.log.take(),
+            state.messages.entity.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             commands.entity(entity).despawn();
         }
         if let Some(assets) = state.assets.take() {
@@ -286,7 +371,7 @@ fn project(
             Visibility::Hidden
         });
     }
-    if let Some(log) = state.log {
+    for log in state.log.into_iter().chain(state.messages.entity) {
         commands.entity(log).insert(if camera.active() {
             Visibility::Visible
         } else {
@@ -346,6 +431,15 @@ fn project(
             commands.entity(log).despawn();
         }
         state.signature.clear();
+    }
+    message_log::sync(
+        &mut commands,
+        &mut state,
+        &mut history,
+        &images,
+        &mut materials,
+    );
+    if !state.open {
         return;
     }
     let board = session
@@ -484,6 +578,7 @@ fn load(
     for path in [
         "UI\\FrameDef\\UI\\EscMenuTemplates.fdf",
         "UI\\FrameDef\\UI\\QuestDialog.fdf",
+        message_log::FDF,
     ] {
         fdf.parse_into(&text(reader, path, &mut receipts)?)
             .map_err(|e| format!("{path}: {e}"))?;
@@ -509,7 +604,9 @@ fn load(
     ] {
         fdf.rect(name, view).map_err(|e| e.to_string())?;
     }
-    quest_text_area(&fdf)?;
+    text_area(&fdf, "QuestDisplay")?;
+    let globals = text(reader, "UI\\FrameDef\\GlobalStrings.fdf", &mut receipts)?;
+    let message_log = message_log::Art::load(&mut fdf, &globals)?;
     let file = |key: &str| skin_file(&skin, &sections, key);
     let mut decoded_fonts = HashMap::new();
     let mut font_styles = vec![
@@ -522,16 +619,18 @@ fn load(
         "QuestDisplay".into(),
         "QuestMainTitle".into(),
         "QuestOptionalTitle".into(),
+        "QuestListItemComplete".into(),
     ];
-    for button in ["UpperButtonBarQuestsButton", "UpperButtonBarMenuButton"] {
+    for button in UpperButton::ALL {
         for property in ["NormalText", "HighlightText", "DisabledText"] {
-            font_styles.push(upper_text(&fdf, button, property)?.0);
+            font_styles.push(upper_text(&fdf, button.frame(), property)?.0);
         }
     }
     font_styles.push(
         fdf.string("QuestAcceptButton", "ButtonText")
             .ok_or("missing quest accept text")?,
     );
+    font_styles.extend(message_log.font_styles());
     for name in font_styles {
         let style = menu_text::render_style(&fdf, &name)?;
         if decoded_fonts.contains_key(&style.font) {
@@ -559,15 +658,19 @@ fn load(
         return Err("quest accept button lacks authored state art/offset".into());
     }
     let mut decoded_backdrops = HashMap::new();
-    for art in [&backdrop, &details_backdrop].into_iter().chain(
-        [
-            accept.normal.as_ref(),
-            accept.pushed.as_ref(),
-            accept.disabled.as_ref(),
-        ]
+    for art in [&backdrop, &details_backdrop]
         .into_iter()
-        .flatten(),
-    ) {
+        .chain(
+            [
+                accept.normal.as_ref(),
+                accept.pushed.as_ref(),
+                accept.disabled.as_ref(),
+            ]
+            .into_iter()
+            .flatten(),
+        )
+        .chain(message_log.backdrops())
+    {
         for (token, tiled) in art
             .background
             .iter()
@@ -594,9 +697,16 @@ fn load(
             decoded_backdrops.insert((token.clone(), tiled), image);
         }
     }
-    if let Some(glow) = &accept.mouse_over {
+    for glow in accept
+        .mouse_over
+        .iter()
+        .chain(message_log.ok.mouse_over.iter())
+    {
         if !glow.additive {
-            return Err("quest accept highlight requires unsupported blend mode".into());
+            return Err("dialog button highlight requires unsupported blend mode".into());
+        }
+        if decoded_backdrops.contains_key(&(glow.file.clone(), false)) {
+            continue;
         }
         let path = file(&glow.file)?;
         let bytes = read(reader, &path, 4 << 20, &mut receipts)?;
@@ -615,16 +725,18 @@ fn load(
     let decoded =
         pcx_gfx::load_image_bounded(&image, &image_path, 16 << 20).map_err(|e| e.to_string())?;
     let image_size = Vec2::new(decoded.width as f32, decoded.height as f32);
-    let globals = text(reader, "UI\\FrameDef\\GlobalStrings.fdf", &mut receipts)?;
     for key in [
         "KEY_QUESTS",
         "KEY_MENU",
+        "KEY_ALLIES",
+        "KEY_LOG",
+        "ALLIES",
+        "LOG",
         "QUESTSMAIN",
         "QUESTSOPTIONAL",
         "QUESTACCEPT",
         "QUESTCOMPLETED",
         "QUESTFAILED",
-        "QUESTNOTCOMPLETED",
     ] {
         let value = menu_text::global_string(&globals, key)
             .ok_or_else(|| format!("missing global string {key}"))?;
@@ -641,6 +753,7 @@ fn load(
     Ok(Source {
         receipts,
         quests_key,
+        message_log,
         fdf,
         globals,
         fonts: decoded_fonts
@@ -713,27 +826,29 @@ fn global(source: &Source, key: &str) -> Result<String, String> {
     menu_text::global_string(&source.globals, key)
         .ok_or_else(|| format!("missing global string {key}"))
 }
-fn quest_text_area(fdf: &Fdf) -> Result<(f32, f32), String> {
-    let number = |property| -> Result<f32, String> {
-        let values = fdf
-            .numbers("QuestDisplay", property)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("QuestDisplay: missing {property}"))?;
-        let [value] = values.as_slice() else {
-            return Err(format!("QuestDisplay: invalid {property}"));
-        };
-        if !value.is_finite() {
-            return Err(format!("QuestDisplay: nonfinite {property}"));
-        }
-        Ok(*value)
+fn text_area_number(fdf: &Fdf, frame: &str, property: &'static str) -> Result<f32, String> {
+    let values = fdf
+        .numbers(frame, property)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{frame}: missing {property}"))?;
+    let [value] = values.as_slice() else {
+        return Err(format!("{frame}: invalid {property}"));
     };
-    let inset = number("TextAreaInset")?;
-    let height = number("TextAreaLineHeight")?;
-    let gap = number("TextAreaLineGap")?;
-    let font = menu_text::render_style(fdf, "QuestDisplay")?;
+    if !value.is_finite() {
+        return Err(format!("{frame}: nonfinite {property}"));
+    }
+    Ok(*value)
+}
+/// A `TEXTAREA`'s inset and line pitch (line height plus gap) as a multiple of
+/// its font height.
+fn text_area(fdf: &Fdf, frame: &str) -> Result<(f32, f32), String> {
+    let inset = text_area_number(fdf, frame, "TextAreaInset")?;
+    let height = text_area_number(fdf, frame, "TextAreaLineHeight")?;
+    let gap = text_area_number(fdf, frame, "TextAreaLineGap")?;
+    let font = menu_text::render_style(fdf, frame)?;
     let ratio = (height + gap) / font.height;
     if inset < 0. || height <= 0. || gap < 0. || !ratio.is_finite() || ratio <= 0. {
-        return Err("QuestDisplay: invalid text area dimensions".into());
+        return Err(format!("{frame}: invalid text area dimensions"));
     }
     Ok((inset, ratio))
 }
@@ -953,20 +1068,37 @@ fn show_quest_button_text(
         }
     }
 }
+/// The additive hover material for a dialog button's authored highlight art.
+fn glow_material(
+    source: &mut Source,
+    file: Option<String>,
+    highlights: &mut Assets<AdditiveImage>,
+) -> Result<Option<Handle<AdditiveImage>>, String> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let handle = source
+        .backdrop_images
+        .get(&(file, false))
+        .ok_or("dialog button highlight missing")?;
+    let material = highlights.add(AdditiveImage::new(handle.clone()));
+    source.highlights.push(material.clone());
+    Ok(Some(material))
+}
 fn upper(
     commands: &mut Commands,
     source: &mut Source,
     highlights: &mut Assets<AdditiveImage>,
 ) -> Result<Entity, String> {
-    if let Some(glow) = &source.accept.mouse_over {
-        let handle = source
-            .backdrop_images
-            .get(&(glow.file.clone(), false))
-            .ok_or("quest accept highlight missing")?;
-        let material = highlights.add(AdditiveImage::new(handle.clone()));
-        source.highlights.push(material.clone());
-        source.accept_material = Some(material);
-    }
+    let accept_glow = source.accept.mouse_over.as_ref().map(|g| g.file.clone());
+    source.accept_material = glow_material(source, accept_glow, highlights)?;
+    let ok_glow = source
+        .message_log
+        .ok
+        .mouse_over
+        .as_ref()
+        .map(|g| g.file.clone());
+    source.message_log.ok_material = glow_material(source, ok_glow, highlights)?;
     let fdf = &source.fdf;
     let width = fdf
         .width("UpperButtonBarFrame")
@@ -974,33 +1106,35 @@ fn upper(
     let height = fdf
         .height("UpperButtonBarFrame")
         .map_err(|e| e.to_string())?;
-    let profiles = [
-        ("UpperButtonBarQuestsButton", Action::Quests),
-        ("UpperButtonBarMenuButton", Action::Menu),
-    ]
-    .into_iter()
-    .map(|(name, action)| {
-        let rect = fdf.rect(name, (width, height)).map_err(|e| e.to_string())?;
-        let art = upper_button_art(
-            fdf,
-            name,
-            source.image_size,
-            Vec2::new(rect.width, rect.height),
-        )?;
-        let texts = [
-            (UpperButtonTextState::Normal, "NormalText"),
-            (UpperButtonTextState::Highlight, "HighlightText"),
-            (UpperButtonTextState::Disabled, "DisabledText"),
-        ]
-        .map(|(state, property)| {
-            let (style, key) = upper_text(fdf, name, property)?;
-            Ok((state, style, global(source, &key)?))
-        })
+    let profiles = UpperButton::ALL
         .into_iter()
+        .map(|button| {
+            let name = button.frame();
+            let rect = fdf.rect(name, (width, height)).map_err(|e| e.to_string())?;
+            let art = upper_button_art(
+                fdf,
+                name,
+                source.image_size,
+                Vec2::new(rect.width, rect.height),
+            )?;
+            let texts = [
+                (UpperButtonTextState::Normal, "NormalText"),
+                (UpperButtonTextState::Highlight, "HighlightText"),
+                (UpperButtonTextState::Disabled, "DisabledText"),
+            ]
+            .map(|(state, property)| {
+                let (style, key) = upper_text(fdf, name, property)?;
+                Ok((
+                    state,
+                    style,
+                    global(source, button.text_key(&key, CAMPAIGN_PROVIDER))?,
+                ))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, String>>()?;
+            Ok((button, rect, art, texts))
+        })
         .collect::<Result<Vec<_>, String>>()?;
-        Ok((name, action, rect, art, texts))
-    })
-    .collect::<Result<Vec<_>, String>>()?;
     let root = commands
         .spawn((
             Node {
@@ -1017,7 +1151,8 @@ fn upper(
             peacecraft3::campaign_presentation::CampaignInterface,
         ))
         .id();
-    for (name, action, rect, art, texts) in profiles {
+    for (profile, rect, art, texts) in profiles {
+        let name = profile.frame();
         let mut image = ImageNode::new(source.image.clone())
             .with_mode(bevy::ui::widget::NodeImageMode::Stretch);
         image.rect = Some(art.normal);
@@ -1025,7 +1160,6 @@ fn upper(
             .spawn((
                 UiButton,
                 bevy::picking::hover::Hovered::default(),
-                action,
                 art,
                 Name::new(name),
                 Node {
@@ -1041,10 +1175,22 @@ fn upper(
                 image,
             ))
             .id();
-        if matches!(name, "UpperButtonBarQuestsButton") {
+        if let Some(action) = profile.action(CAMPAIGN_PROVIDER) {
+            commands.entity(button).insert(action);
+        }
+        if profile.disabled(CAMPAIGN_PROVIDER) {
+            commands.entity(button).insert(InteractionDisabled);
+        }
+        if profile == UpperButton::Quests {
             commands
                 .entity(button)
                 .insert(AuthoredShortcut(source.quests_key));
+        }
+        // Menu's key is consumed by the campaign camera; Allies has no dialog.
+        if profile == UpperButton::Log && !networked(CAMPAIGN_PROVIDER) {
+            commands
+                .entity(button)
+                .insert(AuthoredShortcut(source.message_log.key));
         }
         commands.entity(root).add_child(button);
         let uv = art.highlight;
@@ -1098,6 +1244,23 @@ fn upper(
         }
     }
     Ok(root)
+}
+/// Text around a completed quest item's `QUESTCOMPLETED` suffix, the literals
+/// `Warcraft III.exe` appends at 0x00657c49..0x00657c68.
+const COMPLETED_OPEN: &str = " ( ";
+const COMPLETED_CLOSE: &str = " )";
+/// The global string a quest list row shows in `QuestListItemComplete`. The
+/// client loads only `QUESTCOMPLETED` and `QUESTFAILED` (0x00633c1c, 0x00633c3c),
+/// tests completed before failed (0x00657d6c..0x00657d99) and hides the label for
+/// neither.
+fn row_status_key(completed: bool, failed: bool) -> Option<&'static str> {
+    if completed {
+        Some("QUESTCOMPLETED")
+    } else if failed {
+        Some("QUESTFAILED")
+    } else {
+        None
+    }
 }
 fn quest_log(
     commands: &mut Commands,
@@ -1195,6 +1358,7 @@ fn quest_log(
                     Node {
                         width: Val::Percent(100.),
                         min_height: Val::Vh(row / crate::mainmenu::FRAME_H * 100.),
+                        flex_direction: FlexDirection::Column,
                         flex_shrink: 0.,
                         ..default()
                     },
@@ -1203,6 +1367,15 @@ fn quest_log(
             commands.entity(parent).add_child(item);
             if let Some(title) = quest.title {
                 label(commands, item, title.into(), source, "QuestListItemTitle")?;
+            }
+            if let Some(key) = row_status_key(quest.completed, quest.failed) {
+                label(
+                    commands,
+                    item,
+                    global(source, key)?,
+                    source,
+                    "QuestListItemComplete",
+                )?;
             }
         }
     }
@@ -1261,29 +1434,17 @@ fn quest_log(
             .spawn((node, QuestScrollArea, Name::new("QuestItemListContainer")))
             .id();
         commands.entity(root).add_child(items);
-        let status = if quest.failed {
-            "QUESTFAILED"
-        } else if quest.completed {
-            "QUESTCOMPLETED"
-        } else {
-            "QUESTNOTCOMPLETED"
-        };
-        label(
-            commands,
-            items,
-            global(source, status)?,
-            source,
-            "EscMenuInfoTextTemplate",
-        )?;
         for item in &quest.items {
             if let Some(description) = item.description {
-                label(
-                    commands,
-                    items,
-                    description.into(),
-                    source,
-                    "QuestItemListItemTitle",
-                )?;
+                let text = if item.completed {
+                    format!(
+                        "{description}{COMPLETED_OPEN}{}{COMPLETED_CLOSE}",
+                        global(source, "QUESTCOMPLETED")?
+                    )
+                } else {
+                    description.into()
+                };
+                label(commands, items, text, source, "QuestItemListItemTitle")?;
             }
         }
         if let Some(description) = quest.description {
@@ -1291,7 +1452,7 @@ fn quest_log(
                 .fdf
                 .rect("QuestDisplay", (width, height))
                 .map_err(|e| e.to_string())?;
-            let (inset, line_height) = quest_text_area(&source.fdf)?;
+            let (inset, line_height) = text_area(&source.fdf, "QuestDisplay")?;
             if rect.width <= 2. * inset || rect.height <= 2. * inset {
                 return Err("QuestDisplay: inset consumes text area".into());
             }
@@ -1315,28 +1476,73 @@ fn quest_log(
             // shortcut: native scrollbar and line-count behavior remain unqualified; bind after their source lifecycle is reviewed.
         }
     }
-    let rect = source
-        .fdf
-        .rect("QuestAcceptButton", (width, height))
-        .map_err(|e| e.to_string())?;
+    let accept = source.accept.clone();
+    let material = source.accept_material.clone();
+    dialog_button(
+        commands,
+        source,
+        root,
+        DialogButton {
+            frame: "QuestAcceptButton",
+            art: accept,
+            material,
+            action: Action::Close,
+        },
+        (width, height),
+        images,
+        materials,
+    )?;
+    Ok(root)
+}
+/// A modal dialog's authored button: state art, hover glow and label, bound to
+/// `action`. `view` is the dialog's size in frame units.
+struct DialogButton {
+    frame: &'static str,
+    art: glue_menu::Button,
+    material: Option<Handle<AdditiveImage>>,
+    action: Action,
+}
+fn dialog_button(
+    commands: &mut Commands,
+    source: &mut Source,
+    parent: Entity,
+    button: DialogButton,
+    view: (f32, f32),
+    images: &Assets<Image>,
+    materials: &mut Assets<BackdropImage>,
+) -> Result<Entity, String> {
+    let DialogButton {
+        frame,
+        art: accept,
+        material,
+        action,
+    } = button;
+    let rect = source.fdf.rect(frame, view).map_err(|e| e.to_string())?;
+    let (width, height) = view;
     let close = commands
         .spawn((
             UiButton,
             bevy::picking::hover::Hovered::default(),
-            Action::Close,
-            Name::new("QuestAcceptButton"),
-            place(rect),
+            action,
+            Name::new(frame),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(rect.left / width * 100.),
+                top: Val::Percent((height - rect.top()) / height * 100.),
+                width: Val::Percent(rect.width / width * 100.),
+                height: Val::Percent(rect.height / height * 100.),
+                ..default()
+            },
         ))
         .id();
-    commands.entity(root).add_child(close);
-    let accept = source.accept.clone();
+    commands.entity(parent).add_child(close);
     let size = Vec2::new(rect.width, rect.height);
     for (state, art) in [
         (QuestButtonState::Normal, accept.normal.as_ref()),
         (QuestButtonState::Pushed, accept.pushed.as_ref()),
         (QuestButtonState::Disabled, accept.disabled.as_ref()),
     ] {
-        let art = art.ok_or("quest accept state missing")?;
+        let art = art.ok_or("dialog button state art missing")?;
         let layer = commands
             .spawn((
                 Node {
@@ -1353,7 +1559,7 @@ fn quest_log(
         commands.entity(close).add_child(layer);
         paint_backdrop(commands, layer, source, art, size, images, materials)?;
     }
-    if let Some(material) = &source.accept_material {
+    if let Some(material) = &material {
         commands.entity(close).with_child((
             Node {
                 position_type: PositionType::Absolute,
@@ -1369,10 +1575,10 @@ fn quest_log(
     }
     let offset = accept
         .pushed_text_offset
-        .ok_or("quest accept offset missing")?;
+        .ok_or("dialog button text offset missing")?;
     let offset = Vec2::new(offset[0] / size.x * 100., -offset[1] / size.y * 100.);
     if !offset.is_finite() {
-        return Err("quest accept offset ratio invalid".into());
+        return Err("dialog button text offset ratio invalid".into());
     }
     let wrapper = commands
         .spawn((
@@ -1392,11 +1598,11 @@ fn quest_log(
         ))
         .id();
     commands.entity(close).add_child(wrapper);
-    let text_frame = accept.text.as_deref().ok_or("quest accept text missing")?;
+    let text_frame = accept.text.as_deref().ok_or("dialog button text missing")?;
     let key = source
         .fdf
         .text_value(text_frame)
-        .ok_or("quest accept text key missing")?;
+        .ok_or("dialog button text key missing")?;
     let style = menu_text::render_style(&source.fdf, text_frame)?;
     let text = label(commands, wrapper, global(source, &key)?, source, text_frame)?;
     commands.entity(text).insert(QuestButtonText {
@@ -1405,17 +1611,43 @@ fn quest_log(
         highlight: colour(style.highlight),
         disabled: colour(style.disabled),
     });
-    Ok(root)
+    Ok(close)
 }
 #[cfg(test)]
 mod tests {
-    fn fixture_source(fdf: Fdf) -> Source {
+    pub(super) fn blank_backdrop() -> glue_menu::Backdrop {
+        glue_menu::Backdrop {
+            background: None,
+            tile: false,
+            background_size: None,
+            mirrored: false,
+            inset: None,
+            edge: None,
+        }
+    }
+    pub(super) fn fixture_source(fdf: Fdf) -> Source {
         let font = Handle::<Font>::default();
         Source {
             receipts: Vec::new(),
             fdf,
             globals: String::new(),
             quests_key: KeyCode::F1,
+            message_log: message_log::Art {
+                backdrop: blank_backdrop(),
+                area_backdrop: blank_backdrop(),
+                ok: glue_menu::Button {
+                    normal: Some(blank_backdrop()),
+                    pushed: Some(blank_backdrop()),
+                    disabled: Some(blank_backdrop()),
+                    mouse_over: None,
+                    text: Some("LogOkButtonText".into()),
+                    pushed_text_offset: Some([0.001, -0.001]),
+                    shortcut: None,
+                },
+                ok_material: None,
+                key: KeyCode::F12,
+                max_entries: 4,
+            },
             fonts: HashMap::from([("FixtureFont".into(), font)]),
             backdrop: glue_menu::Backdrop {
                 background: None,
@@ -1505,7 +1737,7 @@ mod tests {
                 TextAreaLineGap 0.007,
             }
         "#;
-        let read = |source: &str| quest_text_area(&Fdf::parse(source).unwrap());
+        let read = |source: &str| text_area(&Fdf::parse(source).unwrap(), "QuestDisplay");
         let (inset, ratio) = read(source).unwrap();
         assert_eq!(inset, 0.004);
         assert!((ratio - 0.026 / 0.023).abs() < 0.000001);
@@ -2086,6 +2318,193 @@ mod tests {
         assert_eq!(rect.left, 0.007);
         assert!((rect.top() - 0.038).abs() < 0.000001);
     }
+
+    #[test]
+    fn upper_bar_spawns_all_four_buttons_with_source_text_and_states() {
+        let mut fdf_text = String::from(
+            "Texture \"UpperMenuButtonBackground\" {\nFile \"Atlas\",\nTexCoord 0.0, 0.5, 0.0, 0.25,\n}\n\
+             Texture \"Pushed\" {\nFile \"Atlas\",\nTexCoord 0.0, 0.5, 0.25, 0.5,\n}\n\
+             Texture \"Disabled\" {\nFile \"Atlas\",\nTexCoord 0.0, 0.5, 0.5, 0.75,\n}\n\
+             Texture \"Glow\" {\nFile \"Atlas\",\nTexCoord 0.0, 0.5, 0.75, 1.0,\nAlphaMode \"ADD\",\n}\n\
+             Frame \"SIMPLEBUTTON\" \"Template\" {\nWidth 0.085,\nHeight 0.022,\n\
+             ButtonPushedTextOffset 0.001 -0.001,\nNormalTexture \"UpperMenuButtonBackground\",\n\
+             PushedTexture \"Pushed\",\nDisabledTexture \"Disabled\",\nUseHighlight \"Glow\",\n}\n\
+             String \"Text\" {\nFont \"FixtureFont\",0.01,\nFontColor 1.0 1.0 1.0,\n}\n\
+             Frame \"SIMPLEFRAME\" \"UpperButtonBarFrame\" {\nWidth 0.34,\nHeight 0.022,\n",
+        );
+        let chain = [
+            ("UpperButtonBarQuestsButton", "KEY_QUESTS", "QUESTS"),
+            ("UpperButtonBarMenuButton", "KEY_MENU", "MENU"),
+            ("UpperButtonBarAlliesButton", "KEY_ALLIES", "ALLIES"),
+            ("UpperButtonBarChatButton", "KEY_CHAT", "CHAT"),
+        ];
+        for (index, (name, normal, disabled)) in chain.iter().enumerate() {
+            let anchor = match index {
+                0 => "TOPLEFT,\"UpperButtonBarFrame\",TOPLEFT,0.002,0".to_string(),
+                _ => format!("LEFT,\"{}\",RIGHT,0,0", chain[index - 1].0),
+            };
+            fdf_text.push_str(&format!(
+                "Frame \"SIMPLEBUTTON\" \"{name}\" INHERITS \"Template\" {{\nSetPoint {anchor},\n\
+                 NormalText \"Text\" \"{normal}\",\nDisabledText \"Text\" \"{disabled}\",\n\
+                 HighlightText \"Text\" \"{normal}\",\n}}\n"
+            ));
+        }
+        fdf_text.push_str("}\n");
+        let mut source = fixture_source(Fdf::parse(&normalize(&fdf_text)).unwrap());
+        source.globals = [
+            ("KEY_QUESTS", "Quests (F9)"),
+            ("KEY_MENU", "Menu (F10)"),
+            ("KEY_ALLIES", "Allies (F11)"),
+            ("KEY_CHAT", "Chat (Enter)"),
+            ("KEY_LOG", "Log (F12)"),
+            ("QUESTS", "Quests"),
+            ("MENU", "Menu"),
+            ("ALLIES", "Allies"),
+            ("CHAT", "Chat"),
+            ("LOG", "Log"),
+        ]
+        .map(|(key, value)| format!("{key} \"{value}\",\n"))
+        .concat();
+        source.image_size = Vec2::splat(64.);
+        let mut world = World::new();
+        let mut highlights = Assets::<AdditiveImage>::default();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        upper(
+            &mut Commands::new(&mut queue, &world),
+            &mut source,
+            &mut highlights,
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        let mut shown = HashMap::new();
+        let mut buttons =
+            world.query::<(Entity, &Name, Has<InteractionDisabled>, Option<&Action>)>();
+        let buttons: Vec<_> = buttons
+            .iter(&world)
+            .map(|(entity, name, disabled, action)| {
+                (
+                    entity,
+                    name.to_string(),
+                    disabled,
+                    action.map(|a| matches!(a, Action::MessageLog)),
+                )
+            })
+            .collect();
+        assert_eq!(buttons.len(), 4);
+        for (button, name, _, _) in &buttons {
+            for child in world.get::<Children>(*button).unwrap() {
+                if world.get::<UpperButtonTextState>(*child) != Some(&UpperButtonTextState::Normal)
+                {
+                    continue;
+                }
+                let text = world.get::<Children>(*child).unwrap()[0];
+                let visible: String = world
+                    .get::<Children>(text)
+                    .unwrap()
+                    .iter()
+                    .map(|span| world.get::<TextSpan>(span).unwrap().0.clone())
+                    .collect();
+                shown.insert(name.clone(), visible);
+            }
+        }
+        let text = |name: &str| shown[name].as_str();
+        assert_eq!(text("UpperButtonBarQuestsButton"), "Quests (F9)");
+        assert_eq!(text("UpperButtonBarAlliesButton"), "Allies (F11)");
+        assert_eq!(text("UpperButtonBarChatButton"), "Log (F12)");
+        let state = |name: &str| buttons.iter().find(|b| b.1 == name).unwrap();
+        assert!(state("UpperButtonBarAlliesButton").2);
+        assert!(state("UpperButtonBarAlliesButton").3.is_none());
+        assert!(!state("UpperButtonBarChatButton").2);
+        assert_eq!(state("UpperButtonBarChatButton").3, Some(true));
+        assert!(!state("UpperButtonBarMenuButton").2);
+        let shortcut = world
+            .get::<AuthoredShortcut>(state("UpperButtonBarChatButton").0)
+            .map(|s| s.0);
+        assert_eq!(shortcut, Some(KeyCode::F12));
+        assert!(
+            world
+                .get::<AuthoredShortcut>(state("UpperButtonBarAlliesButton").0)
+                .is_none()
+        );
+    }
+
+    /// A session provider tag other than `LOOP` and `NONE`.
+    const NETWORK_PROVIDER: u32 = u32::from_be_bytes(*b"UDPN");
+
+    #[test]
+    fn quest_row_status_follows_the_client_string_selection() {
+        assert_eq!(row_status_key(true, false), Some("QUESTCOMPLETED"));
+        assert_eq!(row_status_key(false, true), Some("QUESTFAILED"));
+        assert_eq!(row_status_key(true, true), Some("QUESTCOMPLETED"));
+        assert_eq!(row_status_key(false, false), None);
+    }
+
+    #[test]
+    fn allies_and_log_follow_the_session_provider_tag() {
+        for provider in [PROVIDER_LOOPBACK, PROVIDER_NONE] {
+            assert!(UpperButton::Allies.disabled(provider));
+            assert!(matches!(
+                UpperButton::Log.action(provider),
+                Some(Action::MessageLog)
+            ));
+            assert_eq!(UpperButton::Log.text_key("KEY_CHAT", provider), "KEY_LOG");
+            assert_eq!(UpperButton::Log.text_key("CHAT", provider), "LOG");
+        }
+        assert!(!UpperButton::Allies.disabled(NETWORK_PROVIDER));
+        assert!(UpperButton::Log.action(NETWORK_PROVIDER).is_none());
+        assert_eq!(UpperButton::Log.text_key("CHAT", NETWORK_PROVIDER), "CHAT");
+        for provider in [PROVIDER_LOOPBACK, NETWORK_PROVIDER] {
+            assert_eq!(UpperButton::Quests.text_key("CHAT", provider), "CHAT");
+            assert!(!UpperButton::Quests.disabled(provider));
+            assert!(!UpperButton::Menu.disabled(provider));
+        }
+        assert!(!networked(CAMPAIGN_PROVIDER));
+    }
+
+    fn press(world: &mut World, entity: Entity) {
+        world
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities = vec![entity];
+        world.run_system_once(activate).unwrap();
+    }
+    #[test]
+    fn message_log_and_quest_log_never_open_together_and_escape_closes_either() {
+        let mut app = App::new();
+        app.init_resource::<UpperControls>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .add_message::<CampaignHudAction>();
+        let log = app.world_mut().spawn(Action::MessageLog).id();
+        let ok = app.world_mut().spawn(Action::CloseMessageLog).id();
+        let quests = app.world_mut().spawn(Action::Quests).id();
+        let flags = |app: &App| {
+            let state = app.world().resource::<UpperControls>();
+            (state.open, state.messages_open)
+        };
+        press(app.world_mut(), log);
+        assert_eq!(flags(&app), (false, true));
+        assert!(app.world().resource::<UpperControls>().pointer_consumed);
+        press(app.world_mut(), quests);
+        assert_eq!(flags(&app), (true, false));
+        press(app.world_mut(), log);
+        assert_eq!(flags(&app), (false, true));
+        press(app.world_mut(), log);
+        assert_eq!(flags(&app), (false, false), "the Log button toggles");
+        press(app.world_mut(), log);
+        press(app.world_mut(), ok);
+        assert_eq!(flags(&app), (false, false));
+        press(app.world_mut(), log);
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.world_mut().run_system_once(activate).unwrap();
+        assert_eq!(flags(&app), (false, false));
+        assert!(app.world().resource::<UpperControls>().escape_consumed);
+    }
 }
 
 pub(crate) fn image_sampler(tiled: bool) -> bevy::image::ImageSamplerDescriptor {
@@ -2193,7 +2612,8 @@ fn publish_error(state: Res<UpperControls>, mut hud: ResMut<super::CampaignHud>)
     if hud.control_receipts != receipts {
         hud.control_receipts = receipts.to_vec();
     }
-    hud.quest_log_open = state.open;
+    // Names every modal dialog the bar opens, so gameplay input stays blocked.
+    hud.quest_log_open = state.open || state.messages_open;
     hud.quest_escape_consumed = state.escape_consumed;
     hud.pointer_consumed = state.pointer_consumed;
     if let Some(error) = &state.last_error {
@@ -2218,8 +2638,8 @@ fn show_controls(
 mod supplied_asset_tests {
     use super::*;
     #[test]
-    #[ignore = "requires PCX_HUD_FIXTURE_DIR with locally extracted original UpperButtonBar.fdf, QuestDialog.fdf, and EscMenuTemplates.fdf"]
-    fn original_upper_controls_and_quest_frames_parse() {
+    #[ignore = "requires PCX_HUD_FIXTURE_DIR with locally extracted original UpperButtonBar.fdf, QuestDialog.fdf, LogDialog.fdf, EscMenuTemplates.fdf and GlobalStrings.fdf"]
+    fn original_upper_controls_quest_and_log_frames_parse() {
         let root = std::path::PathBuf::from(
             std::env::var_os("PCX_HUD_FIXTURE_DIR").expect("PCX_HUD_FIXTURE_DIR required"),
         );
@@ -2227,7 +2647,7 @@ mod supplied_asset_tests {
             &std::fs::read_to_string(root.join("UpperButtonBar.fdf")).unwrap(),
         ))
         .unwrap();
-        for name in ["EscMenuTemplates.fdf", "QuestDialog.fdf"] {
+        for name in ["EscMenuTemplates.fdf", "QuestDialog.fdf", "LogDialog.fdf"] {
             fdf.parse_into(&std::fs::read_to_string(root.join(name)).unwrap())
                 .unwrap();
         }
@@ -2236,6 +2656,7 @@ mod supplied_asset_tests {
             "QuestMainTitle",
             "QuestDetailsTitle",
             "QuestListItemTitle",
+            "QuestListItemComplete",
             "QuestDisplay",
         ] {
             menu_text::render_style(&fdf, name).unwrap();
@@ -2245,5 +2666,12 @@ mod supplied_asset_tests {
                 .unwrap()
                 .is_some()
         );
+        let globals = std::fs::read_to_string(root.join("GlobalStrings.fdf")).unwrap();
+        let art = message_log::Art::load(&mut fdf, &globals).unwrap();
+        assert_eq!(art.key, KeyCode::F12);
+        assert_eq!(art.max_entries, 128);
+        for key in ["QUESTCOMPLETED", "QUESTFAILED", "MESSAGE_LOG", "OK"] {
+            assert!(menu_text::global_string(&globals, key).is_some(), "{key}");
+        }
     }
 }

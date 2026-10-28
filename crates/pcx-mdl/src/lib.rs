@@ -1409,16 +1409,7 @@ fn sample_bone_track_range(track: &BoneTrack, frame: u32, first: usize, end: usi
                 sample_vec3(track, frame, 2, first, end),
             ]
         }
-        TrackKind::Rotation => {
-            pose.rotation = [
-                sample_vec3(track, frame, 0, first, end),
-                sample_vec3(track, frame, 1, first, end),
-                sample_vec3(track, frame, 2, first, end),
-                // The quaternion's w component is the fourth vector slot; the key
-                // stride is the track's own, so it reads like any other component.
-                sample_vec3(track, frame, 3, first, end),
-            ]
-        }
+        TrackKind::Rotation => pose.rotation = sample_rotation(track, frame, first, end),
         TrackKind::Scaling => {
             pose.scale = [
                 sample_vec3(track, frame, 0, first, end),
@@ -1430,21 +1421,24 @@ fn sample_bone_track_range(track: &BoneTrack, frame: u32, first: usize, end: usi
     pose
 }
 
-/// Samples component `c` of a vector-valued track.
-///
-/// The key stride comes from the track, so this works for both 3-component
-/// vectors and the 4-component quaternion a rotation track holds.
-fn sample_vec3(track: &BoneTrack, frame: u32, component: usize, first: usize, end: usize) -> f32 {
+/// Where `frame` falls among keys `first..end`.
+enum Span {
+    /// Before the first key, after the last, or a track with one key.
+    Key(usize),
+    /// Between two keys, `t` of the way from `lo` to `hi`.
+    Between { lo: usize, hi: usize, t: f32 },
+}
+
+fn span(track: &BoneTrack, frame: u32, first: usize, end: usize) -> Option<Span> {
     let n = end - first;
     if n == 0 {
-        return 0.0;
+        return None;
     }
     if n == 1 || frame <= track.key_time(first).unwrap_or(0) {
-        return track.value(first).map(|v| v[component]).unwrap_or(0.0);
+        return Some(Span::Key(first));
     }
-    let last = track.key_time(end - 1).unwrap_or(0);
-    if frame >= last {
-        return track.value(end - 1).map(|v| v[component]).unwrap_or(0.0);
+    if frame >= track.key_time(end - 1).unwrap_or(0) {
+        return Some(Span::Key(end - 1));
     }
     let mut lo = first;
     let mut hi = end - 1;
@@ -1460,37 +1454,61 @@ fn sample_vec3(track: &BoneTrack, frame: u32, component: usize, first: usize, en
         track.key_time(lo).unwrap_or(0),
         track.key_time(hi).unwrap_or(0),
     );
-    let (v0, v1) = (
-        track.value(lo).map(|v| v[component]).unwrap_or(0.0),
-        track.value(hi).map(|v| v[component]).unwrap_or(0.0),
-    );
+    let t = if t1 == t0 {
+        0.0
+    } else {
+        ((frame - t0) as f32 / (t1 - t0) as f32).clamp(0.0, 1.0)
+    };
+    Some(Span::Between { lo, hi, t })
+}
+
+/// Samples component `c` of a translation or scaling track.
+fn sample_vec3(track: &BoneTrack, frame: u32, component: usize, first: usize, end: usize) -> f32 {
+    let at = |i: usize| track.value(i).map(|v| v[component]).unwrap_or(0.0);
+    let (lo, hi, t) = match span(track, frame, first, end) {
+        None => return 0.0,
+        Some(Span::Key(i)) => return at(i),
+        Some(Span::Between { lo, hi, t }) => (lo, hi, t),
+    };
+    let (v0, v1) = (at(lo), at(hi));
     match track.interpolation {
         Interpolation::None => v0,
-        Interpolation::Linear => {
-            if t1 == t0 {
-                return v0;
-            }
-            let t = (frame - t0) as f32 / (t1 - t0) as f32;
-            v0 + (v1 - v0) * t.clamp(0.0, 1.0)
-        }
+        Interpolation::Linear => v0 + (v1 - v0) * t,
         Interpolation::Hermite | Interpolation::Bezier => {
             // A midpoint is *not* Hermite. With tangents available the curve
             // bulges, and ignoring that flattens every bone animation into
             // something close to linear — which looks almost right and is not.
-            let m0 = track
-                .out_tangent(lo)
-                .map(|v| v.get(component).copied().unwrap_or(0.0))
-                .unwrap_or(0.0);
-            let m1 = track
-                .in_tangent(hi)
-                .map(|v| v.get(component).copied().unwrap_or(0.0))
-                .unwrap_or(0.0);
-            let t = if t1 == t0 {
-                0.0
-            } else {
-                ((frame - t0) as f32 / (t1 - t0) as f32).clamp(0.0, 1.0)
-            };
+            let m0 = track.out_tangent(lo).map_or(0.0, |v| v[component]);
+            let m1 = track.in_tangent(hi).map_or(0.0, |v| v[component]);
             cubic(track.interpolation, v0, v1, m0, m1, t)
+        }
+    }
+}
+
+/// Samples a rotation track as a unit quaternion (`x y z w`).
+///
+/// `Linear` keys slerp and `Hermite`/`Bezier` keys use squad through the keys'
+/// tangent quaternions, each along the shorter arc. Interpolating components
+/// separately leaves the unit sphere and folds through zero between keys of
+/// opposite sign, which turned the time-of-day sphere edge-on at midday.
+/// A degenerate (zero or non-finite) key holds the earlier key.
+fn sample_rotation(track: &BoneTrack, frame: u32, first: usize, end: usize) -> [f32; 4] {
+    const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    let key = |i: usize| track.value(i).unwrap_or(IDENTITY);
+    let (lo, hi, t) = match span(track, frame, first, end) {
+        None => return [0.0; 4],
+        Some(Span::Key(i)) => return key(i),
+        Some(Span::Between { lo, hi, t }) => (lo, hi, t),
+    };
+    let (q0, q1) = (key(lo), key(hi));
+    let slerp = |a, b, t| crate::pose::slerp(a, b, t).unwrap_or(a);
+    match track.interpolation {
+        Interpolation::None => q0,
+        Interpolation::Linear => slerp(q0, q1, t),
+        Interpolation::Hermite | Interpolation::Bezier => {
+            let out0 = track.out_tangent(lo).unwrap_or(q0);
+            let in1 = track.in_tangent(hi).unwrap_or(q1);
+            slerp(slerp(q0, q1, t), slerp(out0, in1, t), 2.0 * t * (1.0 - t))
         }
     }
 }

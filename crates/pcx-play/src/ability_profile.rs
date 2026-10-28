@@ -151,6 +151,33 @@ pub(crate) fn button_position(
     profile_position(tables, overlay, alias, "Buttonpos")
 }
 
+/// Whether the ability authors a `Buttonpos`, in its stock profile or a map override.
+/// Abilities without one (inventory, harvest-lumber alias, and so on) have no command slot.
+pub(crate) fn has_button_position(
+    tables: &DefaultTables,
+    overlay: &Overlay,
+    alias: [u8; 4],
+) -> Result<bool, String> {
+    let (base, mods) = base(tables, overlay, alias)?;
+    let object = tables
+        .object(Family::Ability, base)
+        .map_err(|error| error.to_string())?;
+    if object
+        .profile("Buttonpos")
+        .iter()
+        .any(|cell| !matches!(cell.text.trim(), "" | "_" | "-"))
+    {
+        return Ok(true);
+    }
+    Ok(mods.iter().any(|entry| {
+        tables.editor().field(entry.field).is_some_and(|field| {
+            field.from == SlkId::AbilityMetaData
+                && matches!(&field.source, FieldSource::Profile { key, .. }
+                    if key.eq_ignore_ascii_case("Buttonpos"))
+        })
+    }))
+}
+
 pub(crate) fn profile_position(
     tables: &DefaultTables,
     overlay: &Overlay,

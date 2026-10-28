@@ -256,12 +256,21 @@ impl ObjectHost {
                 return Some(self.start_gold_harvest(unit, *mine));
             }
         }
+        if target && order == Some(self.harvest.as_ref()?.harvest_order) {
+            // A destructable target: explicit lumber harvest of that tree.
+            let [_, _, Value::Handle(tree)] = args else {
+                return None;
+            };
+            if self.destructable_creation(*tree).is_ok() {
+                return Some(self.start_harvest(unit, Some(*tree)));
+            }
+        }
         if !immediate || args.len() != 2 {
             return None;
         }
         let state = self.harvest.as_ref()?;
         if order == Some(state.autoharvestlumber_order) {
-            return Some(self.start_harvest(unit));
+            return Some(self.start_harvest(unit, None));
         }
         if order == Some(state.return_order) {
             return Some(self.return_resources(unit));
@@ -396,6 +405,13 @@ impl ObjectHost {
         }
     }
 
+    /// Whether the harvest controller currently runs `unit`, in any phase.
+    pub(crate) fn harvest_runs(&self, unit: HandleId) -> bool {
+        self.harvest
+            .as_ref()
+            .is_some_and(|state| state.workers.iter().any(|worker| worker.unit == unit))
+    }
+
     #[cfg(test)]
     pub(crate) fn harvest_cargo(&self, unit: HandleId) -> Option<f32> {
         self.harvest
@@ -442,8 +458,8 @@ impl ObjectHost {
         }
     }
 
-    fn start_harvest(&mut self, unit: HandleId) -> Result<Value, Error> {
-        let Some(prepared) = self.prepare_lumber_harvest(unit)? else {
+    fn start_harvest(&mut self, unit: HandleId, tree: Option<HandleId>) -> Result<Value, Error> {
+        let Some(prepared) = self.prepare_lumber_harvest(unit, tree)? else {
             return Ok(Value::Bool(false));
         };
         let new_task = usize::from(
@@ -460,7 +476,14 @@ impl ObjectHost {
         Ok(Value::Bool(true))
     }
 
-    fn prepare_lumber_harvest(&mut self, unit: HandleId) -> Result<Option<PreparedHarvest>, Error> {
+    /// `tree` is the explicit target of a `harvest` target order; `None` selects the nearest
+    /// tree in the worker's search area. An explicit target that is not a live, visible,
+    /// vulnerable tree refuses the order (returns false) and is not range-limited.
+    fn prepare_lumber_harvest(
+        &mut self,
+        unit: HandleId,
+        tree: Option<HandleId>,
+    ) -> Result<Option<PreparedHarvest>, Error> {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
@@ -496,13 +519,23 @@ impl ObjectHost {
         let rules = setup.rules;
         validate_rules(&rules).map_err(|detail| self.harvest_error(detail))?;
         let reach = tree_reach(&rules);
-        let tree = self
-            .select_tree(position, &rules)?
-            .ok_or_else(|| self.harvest_error("no harvestable tree within Ahar Area"))?;
+        let tree = match tree {
+            Some(tree) => {
+                if !self.explicit_tree_is_harvestable(tree)? {
+                    return Ok(None);
+                }
+                tree
+            }
+            None => self
+                .select_tree(position, &rules)?
+                .ok_or_else(|| self.harvest_error("no harvestable tree within Ahar Area"))?,
+        };
         let tree_position = self.tree_position(tree)?;
         let depot = self
             .select_depot(unit, owner, position, &rules, false)?
-            .ok_or_else(|| self.harvest_error("no lumber-accepting depot within Ahar Area"))?;
+            .ok_or_else(|| {
+                self.harvest_error("no lumber-accepting depot owned by the worker's player")
+            })?;
         let carrying = {
             let state = self.harvest.as_ref().expect("admitted");
             state
@@ -957,7 +990,16 @@ impl ObjectHost {
             worker.gold.is_some(),
         )?
         else {
-            return Err(self.harvest_error("no resource-accepting depot within Ahar Area"));
+            let number = self.player_settings(owner)?.number;
+            let scope = if worker.gold.is_some() {
+                "within Ahar Area"
+            } else {
+                "owned by the worker's player"
+            };
+            return Err(self.harvest_error(format!(
+                "no resource-accepting depot {scope} (player {number}, worker at {position:?}, search radius {})",
+                worker.rules.search_radius
+            )));
         };
         let depot_position = self.unit_position(depot)?;
         let reach = self.depot_reach(depot, &worker.rules)?;
@@ -974,6 +1016,26 @@ impl ObjectHost {
             }
         }
         Ok(())
+    }
+
+    fn explicit_tree_is_harvestable(&self, tree: HandleId) -> Result<bool, Error> {
+        let Some((_, creation, state)) = self
+            .destructables_with_handles()
+            .find(|(handle, ..)| *handle == tree)
+        else {
+            return Ok(false);
+        };
+        if state.dead
+            || state.hidden
+            || state.invulnerable
+            || !state.life.is_some_and(|life| life > 0.0)
+        {
+            return Ok(false);
+        }
+        Ok(self
+            .tree_stats(creation.objectid)
+            .map_err(|error| self.harvest_error(error))?
+            .is_some_and(|stats| stats.tree))
     }
 
     fn select_tree(
@@ -1086,7 +1148,12 @@ impl ObjectHost {
                 continue;
             };
             let squared = squared_distance(from, position);
-            if squared > radius * radius {
+            // Original-client probes (`.scratch/depot-probe`, Legacy 1.29.2.9231, `-classic`): a
+            // lumber worker explicitly ordered to a tree 2400 and 4400 from the only town hall
+            // chopped it, walked the whole way to that hall with a full load, deposited, and
+            // returned to the tree. Lumber depot choice is therefore not bounded by `Ahar.Area`.
+            // Gold keeps the bound: no gold probe was run.
+            if gold && squared > radius * radius {
                 continue;
             }
             let Some(depot) = self.depot_return(rawcode)? else {

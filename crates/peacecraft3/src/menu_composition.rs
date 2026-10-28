@@ -22,7 +22,11 @@ pub(crate) struct MenuCompositionPlugin;
 
 impl Plugin for MenuCompositionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ExtractComponentPlugin::<MenuColourCamera>::default());
+        app.add_plugins(ExtractComponentPlugin::<MenuColourCamera>::default())
+            .add_systems(
+                PostUpdate,
+                bind_world_channels.before(bevy::camera::CameraUpdateSystems),
+            );
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.add_systems(
                 Render,
@@ -37,6 +41,24 @@ impl Plugin for MenuCompositionPlugin {
                 ),
             );
         }
+    }
+}
+
+// Campaign models and ground textures use the same numeric source channels as glue.
+type UnboundWorldCamera = (
+    Without<MenuColourCamera>,
+    Or<(
+        With<peacecraft3::campaign_camera::CampaignSceneCamera>,
+        With<crate::campaign_actors::sky::SkyCamera>,
+    )>,
+);
+fn bind_world_channels(mut commands: Commands, cameras: Query<Entity, UnboundWorldCamera>) {
+    for entity in &cameras {
+        commands.entity(entity).insert((
+            MenuColourCamera,
+            bevy::core_pipeline::tonemapping::Tonemapping::None,
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
+        ));
     }
 }
 
@@ -68,6 +90,30 @@ pub(crate) fn image(texture: &pcx_gfx::LoadedTexture) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn world_and_sky_bind_source_channels_without_changing_other_cameras() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let scene = world
+            .spawn(peacecraft3::campaign_camera::CampaignSceneCamera)
+            .id();
+        let sky = world.spawn(crate::campaign_actors::sky::SkyCamera).id();
+        let other = world.spawn_empty().id();
+        world.run_system_once(bind_world_channels).unwrap();
+        for entity in [scene, sky] {
+            assert!(world.get::<MenuColourCamera>(entity).is_some());
+            assert_eq!(
+                world.get::<CompositingSpace>(entity),
+                Some(&CompositingSpace::Srgb)
+            );
+            assert_eq!(
+                world.get::<bevy::core_pipeline::tonemapping::Tonemapping>(entity),
+                Some(&bevy::core_pipeline::tonemapping::Tonemapping::None)
+            );
+        }
+        assert!(world.get::<MenuColourCamera>(other).is_none());
+    }
 
     #[test]
     fn working_channels_and_source_alpha_are_not_gamma_converted() {

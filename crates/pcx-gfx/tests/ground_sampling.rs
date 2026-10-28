@@ -36,7 +36,7 @@ fn one_tile(slots: &[[u8; 4]], nibbles: [u8; 4], byte5: u8) -> Terrain {
         bytes.extend(0u16.to_le_bytes());
         bytes.push(*nibble);
         bytes.push(if index == 0 { byte5 } else { 0 });
-        bytes.push(0);
+        bytes.push(2); // neutral elevation layer
     }
     Terrain::from_bytes(bytes).unwrap()
 }

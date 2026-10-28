@@ -67,7 +67,7 @@ fn fixture_terrain() -> Terrain {
         b.extend_from_slice(&pos.to_le_bytes());
         b.push((flags << 4) | slot);
         b.push(0);
-        b.push(0);
+        b.push(2); // W3E zero elevation layer.
     }
     Terrain::from_bytes(b).unwrap()
 }
@@ -126,7 +126,7 @@ fn water_tile(tileset: u8, corners: &[(u16, u16, u8)]) -> Terrain {
         bytes.extend(water.to_le_bytes());
         bytes.push(flags << 4);
         bytes.push(0);
-        bytes.push(0);
+        bytes.push(2);
     }
     Terrain::from_bytes(bytes).unwrap()
 }
@@ -667,36 +667,35 @@ fn scale_is_measured_on_shipped_maps() {
 /// counts, a clean mesh, and world z spanning exactly what its height indices
 /// measure.
 #[test]
+#[ignore = "requires PEACECRAFT3_FORMAT_INSTALL with the original Human01 map"]
 fn human01_mesh_matches_its_terrain() {
-    let Some(dir) = legacy_dir().or_else(install_dir) else {
-        eprintln!("no install with Human01; skipping");
-        return;
-    };
-    let Some(m) = shipped(&dir, r"Maps\Campaign\Human01.w3m").or_else(|| {
-        // Fall back to any human01 spelling.
-        shipped(&dir, r"maps\campaign\human01.w3m")
-    }) else {
-        eprintln!("Human01 not present; skipping");
-        return;
-    };
+    let dir = std::env::var_os("PEACECRAFT3_FORMAT_INSTALL")
+        .map(PathBuf::from)
+        .expect("PEACECRAFT3_FORMAT_INSTALL");
+    let m =
+        shipped(&dir, r"Maps\Campaign\Human01.w3m").expect("selected install must contain Human01");
     let t = m.terrain().unwrap();
     let mesh = TerrainMesh::build(&t);
 
-    assert_eq!(mesh.vertex_count(), 96 * 96 + 96 + 96 + 1);
     assert_eq!(
         mesh.vertex_count(),
         (t.width() as usize + 1) * (t.height() as usize + 1)
     );
-    assert_eq!(mesh.triangle_count(), 2 * 96 * 96);
+    assert_eq!(
+        mesh.triangle_count(),
+        2 * t.width() as usize * t.height() as usize
+    );
     assert!(mesh.manifold().is_clean());
 
-    // World z bounds equal the terrain's index bounds run through the scale.
-    let (lo, hi) = t.height_index_range().unwrap();
-    let zs: Vec<f32> = mesh.positions.iter().map(|p| p[2]).collect();
-    let zmin = zs.iter().cloned().fold(f32::INFINITY, f32::min);
-    let zmax = zs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    assert!((zmin - (lo as f32 - Z_REFERENCE_INDEX) * Z_PER_INDEX).abs() < 1e-3);
-    assert!((zmax - (hi as f32 - Z_REFERENCE_INDEX) * Z_PER_INDEX).abs() < 1e-3);
+    // The mesh must use the same full-height codec as camera and actor placement.
+    for (index, position) in mesh.positions.iter().enumerate() {
+        let stride = t.width() as usize + 1;
+        assert_eq!(
+            *position,
+            crate::world::corner_world(&t, (index % stride) as u32, (index / stride) as u32)
+                .unwrap()
+        );
+    }
 }
 
 /// Every ground slot fourcc used by shipped maps resolves to a BLP that
@@ -1078,4 +1077,24 @@ fn water_surface_uses_nonstock_mapping_profile_and_authored_corner_levels() {
         ),
         Err(crate::WaterError::Ambiguous { .. })
     ));
+}
+
+#[test]
+fn elevation_layers_are_separate_from_raw_height_and_cliff_texture() {
+    let t = fixture_terrain();
+    let mut bytes = t.canonical_bytes();
+    let start = bytes.len() - t.corner_count() * 7;
+    for (index, layer) in [2u8, 3, 4, 5, 6, 7, 8, 9, 10].into_iter().enumerate() {
+        bytes[start + index * 7 + 6] = 0xa0 | layer;
+    }
+    let t = Terrain::from_bytes(bytes).unwrap();
+    let c = t.corner(1, 0).unwrap();
+    assert_eq!(c.layer_height(), 3);
+    assert_eq!(c.cliff_texture(), 10);
+    let p = corner_world_scaled(&t, 1, 0, 23.0, 0.5, 8000.0).unwrap();
+    assert_eq!(p[2], (8196.0 - 8000.0) * 0.5 + 23.0);
+    let mesh = TerrainMesh::build_scaled(&t, 23.0, 0.5, 8000.0);
+    assert_eq!(mesh.positions[1], p);
+    let mapping = crate::world::Mapping::new(23.0, 4000.0, 2.0).unwrap();
+    assert_eq!(mapping.sample_ground(&t, 23.0, 0.0), Some(p[2]));
 }

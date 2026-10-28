@@ -1,4 +1,4 @@
-//! Launcher-only supersampling; original UI cameras retain their display targets.
+//! Isolated world composition and launcher supersampling; UI keeps its display target.
 use crate::campaign_actors::sky::SkyCamera;
 use bevy::{
     camera::{CameraUpdateSystems, ImageRenderTarget, RenderTarget, visibility::RenderLayers},
@@ -130,6 +130,20 @@ fn retire(
     targets.materials.remove(pass.material.id());
 }
 type SkyFilter = (With<SkyCamera>, Without<CampaignSceneCamera>);
+type ClearFilter = (Without<SkyCamera>, Without<CampaignSceneCamera>);
+
+/// Cameras and UI roots that follow the scene camera's target.
+#[derive(SystemParam)]
+struct Companions<'w, 's> {
+    skies: Query<'w, 's, (&'static mut Camera, &'static mut RenderTarget), SkyFilter>,
+    clears: Query<'w, 's, (&'static mut Camera, &'static mut RenderTarget), ClearFilter>,
+    hud: Query<
+        'w,
+        's,
+        &'static UiTargetCamera,
+        With<peacecraft3::campaign_presentation::CampaignHud>,
+    >,
+}
 
 fn world_viewport(frame: [f32; 4], size: UVec2) -> bevy::camera::Viewport {
     let edge = |fraction: f32, extent: u32| {
@@ -152,7 +166,7 @@ fn sync(
     mut state: ResMut<InternalResolution>,
     mut targets: Targets,
     mut scenes: Query<(Entity, &mut Camera, &mut RenderTarget), With<CampaignSceneCamera>>,
-    mut skies: Query<(&mut Camera, &mut RenderTarget), SkyFilter>,
+    mut companions: Companions,
     card: Option<Res<crate::campaign_command_card::CommandCard>>,
     mut session: Option<
         ResMut<
@@ -212,22 +226,16 @@ fn sync(
                         .id()
                 });
                 // Clear the render target outside the source world frame, below every scene pass.
-                commands.entity(clear).insert((
-                    Camera {
-                        order: -3,
-                        is_active: true,
-                        clear_color: bevy::camera::ClearColorConfig::Custom(Color::BLACK),
-                        ..default()
-                    },
-                    output,
-                ));
+                if let Ok((mut camera, mut target)) = companions.clears.get_mut(clear) {
+                    camera.is_active = true;
+                    *target = output;
+                }
             }
         }
-    } else if let Some(clear) = state.clear {
-        commands.entity(clear).insert(Camera {
-            is_active: false,
-            ..default()
-        });
+    } else if let Some(clear) = state.clear
+        && let Ok((mut camera, _)) = companions.clears.get_mut(clear)
+    {
+        camera.is_active = false;
     }
     let mut desired = None;
     let mut error = if scene.is_none() && state.factor != 1 {
@@ -235,9 +243,8 @@ fn sync(
     } else {
         None
     };
-    if let Some(entity) = scene
-        && state.factor != 1
-    {
+    // Numeric world channels need their own target even at 1×; HUD cameras use linear inputs.
+    if let Some(entity) = scene {
         let (_, camera, target) = scenes.get(entity).expect("live scene");
         let old = state.pass.as_ref().filter(|p| p.scene == entity);
         let output = old.map_or(target, |p| &p.output);
@@ -338,10 +345,15 @@ fn sync(
                         ..default()
                     },
                     UiTargetCamera(compositor),
-                    MaterialNode(material.clone()),
+                    Name::new("World composition image"),
                     Pickable::IGNORE,
                 ))
                 .id();
+            if state.factor == 1 {
+                commands.entity(root).insert(ImageNode::new(image.clone()));
+            } else {
+                commands.entity(root).insert(MaterialNode(material.clone()));
+            }
             state.pass = Some(Pass {
                 scene: entity,
                 camera: compositor,
@@ -357,8 +369,35 @@ fn sync(
             });
         }
     }
+    if let Some(pass) = &state.pass {
+        // Draw into the HUD's own buffer; its final write otherwise replaces the earlier 2D pass.
+        let hud_camera = companions.hud.iter().next().map(|target| target.0);
+        commands.entity(pass.root).insert((
+            UiTargetCamera(hud_camera.unwrap_or(pass.camera)),
+            GlobalZIndex(i32::MIN),
+        ));
+        if let Ok((mut camera, mut target)) = companions.clears.get_mut(pass.camera) {
+            if hud_camera.is_some() {
+                // Clear the entire working image, including pixels outside the world viewport.
+                camera.order = -3;
+                camera.clear_color = ClearColorConfig::Custom(Color::NONE);
+                *target = scenes.get(pass.scene).expect("live scene").2.clone();
+                commands
+                    .entity(pass.camera)
+                    .insert(crate::menu_composition::MenuColourCamera);
+            } else {
+                camera.order = pass.order;
+                camera.clear_color = ClearColorConfig::None;
+                *target = pass.output.clone();
+                commands.entity(pass.camera).remove::<(
+                    crate::menu_composition::MenuColourCamera,
+                    bevy::camera::CompositingSpace,
+                )>();
+            }
+        }
+    }
     // Actor projection refreshes the sky camera every frame, before this system.
-    for (mut camera, mut target) in &mut skies {
+    for (mut camera, mut target) in &mut companions.skies {
         if scene.is_some() && state.clear.is_some() {
             camera.clear_color = bevy::camera::ClearColorConfig::None;
         }

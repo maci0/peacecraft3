@@ -3035,3 +3035,151 @@ fn gold_dead_occupied_mine_refuses_with_identity_without_debit_or_reveal() {
     assert_eq!(after.activity, before.activity);
     assert_eq!(player_bank(&mut vm, "PLAYER_STATE_RESOURCE_GOLD"), bank);
 }
+
+#[test]
+fn idle_workers_exclude_busy_hidden_and_foreign_peons() {
+    let mut fields = harvest_fields();
+    let mut class = field(*b"clas", SlkId::UnitBalance, "type", "peon");
+    class.1.metadata.as_mut().unwrap().from = SlkId::UnitMetaData;
+    fields.push(class);
+    let (mut vm, _) = open_harvest_with(harvest_tables(), tree_catalog(), placed_tree(), fields);
+    let busy = create_unit(&mut vm, *b"hpea", 32., 32.);
+    let idle = create_unit(&mut vm, *b"hpea", 36., 32.);
+    let hidden_worker = create_unit(&mut vm, *b"hpea", 40., 32.);
+    let foreign = create_unit_for(&mut vm, 1, *b"hpea", 48., 32.);
+    start_harvest(&mut vm, busy);
+    tick(&mut vm, 1.);
+    let host = &mut vm.host().inner;
+    host.native(
+        "ShowUnit",
+        &[Value::Handle(hidden_worker), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(host.idle_workers(0).unwrap(), [idle]);
+    assert_eq!(host.idle_workers(1).unwrap(), [foreign]);
+    assert!(host.idle_workers(2).unwrap().is_empty());
+}
+
+/// A `harvest` target order on a tree starts lumber work on that tree even where the
+/// automatic search finds none (search radius 12, tree 20 away).
+#[test]
+fn an_explicit_harvest_order_on_a_tree_is_not_limited_by_the_search_radius() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_search_range("9", "20", "4", "200", "12"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    let error = vm
+        .host()
+        .inner
+        .native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(worker), Value::Int(900)],
+        )
+        .unwrap_err();
+    assert!(error.contains("no harvestable tree"), "{error}");
+    let issued = vm
+        .host()
+        .inner
+        .native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(worker),
+                Value::Str("harvest".into()),
+                Value::Handle(tree),
+            ],
+        )
+        .unwrap();
+    assert_eq!(issued, Value::Bool(true));
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+    tick(&mut vm, 4.5);
+    assert!(tree_life(&mut vm, tree) < 80.0);
+}
+
+fn lumber_bank(vm: &mut Vm) -> i32 {
+    let Value::Handle(player) = vm.host().inner.native("Player", &[Value::Int(0)]).unwrap() else {
+        panic!("player handle")
+    };
+    vm.host()
+        .inner
+        .player_resource_value(player, "PLAYER_STATE_RESOURCE_LUMBER")
+        .unwrap()
+        .unwrap()
+}
+
+fn explicit_tree_order(vm: &mut Vm, worker: HandleId, tree: HandleId) -> Result<Value, String> {
+    vm.host().inner.native(
+        "IssueTargetOrder",
+        &[
+            Value::Handle(worker),
+            Value::Str("harvest".into()),
+            Value::Handle(tree),
+        ],
+    )
+}
+
+/// Original-client probes (`.scratch/depot-probe`): a lumber worker 2400 and 4400 from the only
+/// town hall walked to it with a full load and deposited. Here the search radius is 12 and the
+/// depot 64 away.
+#[test]
+fn a_loaded_lumber_worker_returns_to_a_depot_beyond_the_search_radius() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_search_range("9", "20", "4", "200", "12"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    create_unit(&mut vm, *b"htow", 96.0, 32.0);
+    let before = lumber_bank(&mut vm);
+    assert_eq!(
+        explicit_tree_order(&mut vm, worker, tree).unwrap(),
+        Value::Bool(true)
+    );
+    let mut deposited = false;
+    for step in 1..=120 {
+        tick(&mut vm, f64::from(step) * 0.5);
+        if lumber_bank(&mut vm) > before {
+            deposited = true;
+            break;
+        }
+    }
+    assert!(deposited, "the load reached the distant depot");
+}
+
+#[test]
+fn a_lumber_worker_without_any_owned_depot_refuses_loudly() {
+    let (mut vm, tree) = open_harvest_with(
+        harvest_tables_for_search_range("9", "20", "4", "200", "12"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let error = explicit_tree_order(&mut vm, worker, tree).unwrap_err();
+    assert!(error.contains("no lumber-accepting depot owned"), "{error}");
+}
+
+/// The explicit gold order also accepts a depot within the search radius of the mine when the
+/// worker itself is outside it (worker 90 from the depot, mine 64, radius 70).
+#[test]
+fn an_explicit_gold_order_accepts_a_depot_near_the_mine_but_far_from_the_worker() {
+    let (mut vm, _) = open_harvest_with_budget(
+        harvest_tables_for_search_range("9", "20", "4", "20", "70"),
+        tree_catalog(),
+        placed_tree(),
+        harvest_fields(),
+        crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let depot = create_unit(&mut vm, *b"htow", 96.0, 96.0);
+    let mine = create_unit(&mut vm, *b"ngol", 96.0, 32.0);
+    gold_role(&mut vm, worker, "Ahar", false, None);
+    gold_role(&mut vm, depot, "Argl", true, None);
+    gold_role(&mut vm, mine, "Agld", true, Some(500));
+    start_gold(&mut vm, worker, mine);
+}

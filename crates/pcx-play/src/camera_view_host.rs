@@ -6,7 +6,7 @@ use pcx_objects::editor::camera::GameCamera;
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
-const NATIVES: [(&str, &[&str], &str, bool); 5] = [
+const NATIVES: [(&str, &[&str], &str, bool); 8] = [
     (
         "PanCameraToTimed",
         &["real", "real", "real"],
@@ -22,7 +22,22 @@ const NATIVES: [(&str, &[&str], &str, bool); 5] = [
         false,
     ),
     ("GetCameraTargetPositionLoc", &[], "location", true),
+    ("GetCameraTargetPositionX", &[], "real", true),
+    ("GetCameraTargetPositionY", &[], "real", true),
+    ("GetCameraField", &["camerafield"], "real", true),
 ];
+
+/// Fields whose `GetCameraField` result is in radians. The selected `Blizzard.j`
+/// `GetCurrentCameraSetup` scales exactly these by `bj_RADTODEG` before
+/// `CameraSetupSetField`, which takes degrees. Stored values stay in degrees.
+const ANGLE_FIELDS: [&str; 4] = [
+    "CAMERA_FIELD_ANGLE_OF_ATTACK",
+    "CAMERA_FIELD_FIELD_OF_VIEW",
+    "CAMERA_FIELD_ROLL",
+    "CAMERA_FIELD_ROTATION",
+];
+/// The selected script's own default game-camera roll; `[Camera]` has no roll key.
+const DEFAULT_ROLL: &str = "bj_CAMERA_DEFAULT_ROLL";
 
 #[derive(Clone, Copy, Debug)]
 struct Ramp<const N: usize> {
@@ -102,6 +117,9 @@ impl ObjectHost {
         for (global, value) in game_fields(camera) {
             game.push((self.camera_field_constant(global)?, value));
         }
+        if let Some(roll) = self.default_roll()? {
+            game.push((self.camera_field_constant("CAMERA_FIELD_ROLL")?, roll));
+        }
         let fields = game
             .iter()
             .map(|&(field, value)| (field, Ramp::fixed([value], now)))
@@ -115,6 +133,28 @@ impl ObjectHost {
             scroll_rates: [camera.forward_rate, camera.strafe_rate],
         });
         Ok(())
+    }
+
+    /// `bj_CAMERA_DEFAULT_ROLL` when the selected script declares it.
+    fn default_roll(&self) -> Result<Option<f32>, Error> {
+        let Some(declared) = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .find(|g| g.name == DEFAULT_ROLL && g.is_constant && !g.array)
+        else {
+            return Ok(None);
+        };
+        let fail = |reason| self.inner.error(DEFAULT_ROLL, Failure::UnitState(reason));
+        let init = declared
+            .init
+            .as_ref()
+            .ok_or_else(|| fail("missing initializer"))?;
+        let mut work = 4096;
+        let roll = crate::playercolor_host::integer(init, 64, &mut work)
+            .map_err(|failure| self.inner.error(DEFAULT_ROLL, failure))?;
+        Ok(Some(roll as f32))
     }
 
     fn camera_field_constant(&self, global: &str) -> Result<i32, Error> {
@@ -199,6 +239,24 @@ impl ObjectHost {
         Some((|| {
             let fail = |reason| self.inner.error(name, Failure::CameraSetupObject(reason));
             let now = self.timer_game_time().ok_or_else(|| fail("game clock"))?;
+            if name == "GetCameraField" {
+                let [Value::Handle(field)] = args else {
+                    return Err(self.inner.error(name, Failure::Signature));
+                };
+                let value = self
+                    .camera_field(*field)?
+                    .ok_or_else(|| fail("camera field has no value"))?;
+                let Entry::Symbolic { enumerand, .. } = self.inner.entry(*field)? else {
+                    return Err(self.inner.error(name, Failure::WrongFamily));
+                };
+                let enumerand = *enumerand;
+                for angle in ANGLE_FIELDS {
+                    if self.camera_field_constant(angle).ok() == Some(enumerand) {
+                        return Ok(Value::Real(value.to_radians()));
+                    }
+                }
+                return Ok(Value::Real(value));
+            }
             let reals = args
                 .iter()
                 .map(|v| v.as_real().filter(|r| r.is_finite()))
@@ -220,6 +278,13 @@ impl ObjectHost {
                 }
                 ("CameraSetSmoothingFactor", &[factor]) => view.smoothing = Some(factor),
                 ("SetCameraQuickPosition", &[x, y]) => view.quick = Some([x, y]),
+                ("GetCameraTargetPositionX" | "GetCameraTargetPositionY", []) => {
+                    let point = view
+                        .target
+                        .map(|ramp| ramp.at(now))
+                        .ok_or_else(|| fail("camera target is unset"))?;
+                    return Ok(Value::Real(point[usize::from(name.ends_with('Y'))]));
+                }
                 ("GetCameraTargetPositionLoc", []) => {
                     let point = view
                         .target

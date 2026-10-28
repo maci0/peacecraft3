@@ -115,7 +115,12 @@ fn borrowed_sampling_preserves_curves_identities_and_allocates_nothing() {
             (Interpolation::Bezier, 3.25),
         ] {
             let t = track(kind, interpolation, 2);
-            for (frame, value) in [(0, 2.), (10, 2.), (60, midpoint), (110, 6.), (200, 6.)] {
+            // Rotation midpoints are quaternion curves; see the rotation test below.
+            let frames = [(0, 2.), (10, 2.), (60, midpoint), (110, 6.), (200, 6.)];
+            for (frame, value) in frames
+                .into_iter()
+                .filter(|&(frame, _)| kind != TrackKind::Rotation || frame != 60)
+            {
                 assert_eq!(sample_bone_track(&t, frame), expected(kind, value));
                 assert_eq!(
                     sample_bone_pose(&bone(vec![t.clone()]), frame),
@@ -212,4 +217,49 @@ fn independent_bone_composition_has_bounded_scratch_allocations() {
             .iter()
             .all(|m| *m == pcx_mdl::compose(pcx_mdl::identity(), Pose::default(), [0.; 3]))
     );
+}
+
+/// Rotation keys interpolate on the unit sphere along the shorter arc, also
+/// when consecutive keys are stored with opposite signs.
+#[test]
+fn rotation_keys_interpolate_as_unit_quaternions() {
+    let half = std::f32::consts::FRAC_1_SQRT_2;
+    // 0° then 90° about Y, the second stored negated.
+    let keys = [[0., 0., 0., 1.], [0., -half, 0., -half]];
+    for interpolation in [
+        Interpolation::Linear,
+        Interpolation::Hermite,
+        Interpolation::Bezier,
+    ] {
+        let tangents = interpolation != Interpolation::Linear;
+        let mut raw = Vec::new();
+        for (time, key) in [10_u32, 110].into_iter().zip(keys) {
+            raw.extend(time.to_le_bytes());
+            // Tangents equal to their key reduce squad to slerp.
+            for _ in 0..if tangents { 3 } else { 1 } {
+                raw.extend(key.iter().flat_map(|v: &f32| v.to_le_bytes()));
+            }
+        }
+        let t = BoneTrack {
+            kind: TrackKind::Rotation,
+            count: 2,
+            interpolation,
+            global_sequence_id: 0,
+            offset: 0,
+            stride: 4 + 16 * if tangents { 3 } else { 1 },
+            raw,
+        };
+        let q = sample_bone_track(&t, 60).rotation;
+        let length = q.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((length - 1.).abs() < 1e-5, "{interpolation:?}: {q:?}");
+        // 45° about Y, up to sign.
+        let expected = [
+            0.,
+            (std::f32::consts::PI / 8.).sin(),
+            0.,
+            (std::f32::consts::PI / 8.).cos(),
+        ];
+        let dot: f32 = q.iter().zip(expected).map(|(a, b)| a * b).sum();
+        assert!((dot.abs() - 1.).abs() < 1e-5, "{interpolation:?}: {q:?}");
+    }
 }

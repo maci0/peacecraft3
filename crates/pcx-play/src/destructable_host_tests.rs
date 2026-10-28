@@ -1646,3 +1646,109 @@ fn owned_vm_keeps_destructable_records_beside_sound_timer_and_player_identities(
         .unwrap_err();
     assert!(cross.contains("another family"), "{cross}");
 }
+
+#[test]
+fn visual_profile_uses_authored_variation_replacement_and_colour_edits() {
+    use pcx_objects::editor::{
+        EditorReadLimits, Overlay, SlkId,
+        defaults::{DefaultTables, Identity},
+    };
+    let data = slk_table(
+        &[
+            "DestructableID",
+            "file",
+            "numVar",
+            "texID",
+            "texFile",
+            "colorR",
+            "colorG",
+            "colorB",
+        ],
+        &[
+            &[
+                "Zx17",
+                "Nonstock/Tree",
+                "3",
+                "57",
+                "Nonstock/Leaves",
+                "31",
+                "79",
+                "137",
+            ],
+            &["Zx18", "Nonstock/Tree", "3", "-", "_", "31", "79", "137"],
+            &[
+                "Zx19",
+                "Nonstock/Tree",
+                "3",
+                "-",
+                "Nonstock/Bark",
+                "31",
+                "79",
+                "137",
+            ],
+            &["Zx20", "Nonstock/Tree", "3", "x", "_", "31", "79", "137"],
+        ],
+    );
+    let metadata = slk_table(
+        &["ID", "field", "slk", "type", "index", "category"],
+        &[
+            &["Zfil", "file", "DestructableData", "model", "0", "art"],
+            &["Zvar", "numVar", "DestructableData", "int", "0", "art"],
+            &["Ztid", "texID", "DestructableData", "int", "0", "art"],
+            &["Ztex", "texFile", "DestructableData", "texture", "0", "art"],
+            &["Zred", "colorR", "DestructableData", "int", "0", "art"],
+            &["Zgrn", "colorG", "DestructableData", "int", "0", "art"],
+            &["Zblu", "colorB", "DestructableData", "int", "0", "art"],
+        ],
+    );
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic".into(),
+                edition_version: "nonstock".into(),
+            },
+            &[
+                (SlkId::DestructableData.path(), &data),
+                (SlkId::DestructableMetaData.path(), &metadata),
+            ],
+            &[],
+            EditorReadLimits {
+                max_listed_paths: 8,
+                max_asset_bytes: 16384,
+                max_aggregate_input_bytes: 32768,
+            },
+        )
+        .unwrap(),
+    );
+    let id = i32::from_be_bytes(*b"Zx17");
+    let paths = ["nonstock/tree0.mdx", "nonstock/tree2.mdx"];
+    let catalog =
+        DestructableCatalog::new(Arc::clone(&tables), Overlay::default(), Overlay::default());
+    let visual = catalog.visual(id, 2, paths.into_iter()).unwrap();
+    assert_eq!(visual.member, paths[1]);
+    assert_eq!(visual.replacement, Some((57, "nonstock/leaves.blp".into())));
+    assert_eq!(visual.tint, [31., 79., 137.]);
+    assert!(catalog.visual(id, 3, paths.into_iter()).is_err());
+    assert!(catalog.visual(id, 1, paths.into_iter()).is_err());
+    let other = |name: &[u8; 4]| catalog.visual(i32::from_be_bytes(*name), 2, paths.into_iter());
+    assert_eq!(other(b"Zx18").unwrap().replacement, None);
+    let orphan = other(b"Zx19").unwrap_err();
+    assert!(orphan.contains("without texID"), "{orphan}");
+    assert!(other(b"Zx20").is_err());
+    let mut edits = Overlay::default();
+    edits.mods.insert(
+        "Zx17".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Zgrn",
+            value_type: pcx_objects::ValueType::Int,
+            selectors: None,
+            value: pcx_objects::Value::Int(101),
+            end_word: 0,
+        }],
+    );
+    let catalog = DestructableCatalog::new(tables, edits, Overlay::default());
+    assert_eq!(
+        catalog.visual(id, 2, paths.into_iter()).unwrap().tint,
+        [31., 101., 137.]
+    );
+}

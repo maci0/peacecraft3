@@ -1,5 +1,6 @@
 //! Actual factory/session → camera consumer, including failed/replaced sessions.
 use super::*;
+use bevy::camera::CameraProjection;
 use peacecraft3::campaign_camera::{CampaignCamera, CampaignSceneCamera};
 use peacecraft3::map_ground::GroundPublication;
 
@@ -132,10 +133,13 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
         view.clip_receipt.as_ref().unwrap().provenance.byte_length,
         b"[Camera]\nNearZ=3,9".len() as u64
     );
-    let Projection::Perspective(projection) = app.world().get::<Projection>(entity).unwrap() else {
-        panic!("perspective")
+    let Projection::Custom(projection) = app.world().get::<Projection>(entity).unwrap() else {
+        panic!("source projection")
     };
-    assert_eq!((projection.near, projection.far), (9.0, 900.0));
+    let source = projection
+        .get::<peacecraft3::campaign_camera::SourceProjection>()
+        .expect("campaign camera uses the source projection");
+    assert_eq!((source.near(), source.far()), (9.0, 900.0));
     let previous = *app.world().get::<Transform>(entity).unwrap();
     let function = app
         .world()
@@ -225,10 +229,13 @@ pub fn published_camera_uses_executed_fields_and_preserves_session_ownership() {
     );
     assert_ne!(next, entity);
     assert!(app.world().get::<CampaignSceneCamera>(entity).is_none());
-    let Projection::Perspective(projection) = app.world().get::<Projection>(next).unwrap() else {
-        panic!("perspective")
+    let Projection::Custom(projection) = app.world().get::<Projection>(next).unwrap() else {
+        panic!("source projection")
     };
-    assert_eq!(projection.near, 15.0);
+    let source = projection
+        .get::<peacecraft3::campaign_camera::SourceProjection>()
+        .expect("campaign camera uses the source projection");
+    assert_eq!(source.near(), 15.0);
     app.world_mut().resource_mut::<GroundPublication>().context = None;
     app.update();
     assert!(!app.world().resource::<CampaignCamera>().active());

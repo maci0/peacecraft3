@@ -5,6 +5,7 @@ use pcx_script::{HandleId, Value};
 
 const ADD: &str = "AddSpecialEffectTarget";
 const DESTROY: &str = "DestroyEffect";
+const ADD_AT: &str = "AddSpecialEffectLoc";
 
 /// One live effect as executed: authored model string and attach point, verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,7 +16,8 @@ pub struct UnitEffect<'a> {
 }
 
 impl ObjectHost {
-    /// Requires the unit catalog; both natives must share its declaration source.
+    /// Requires the unit catalog; the natives must share its declaration source.
+    /// `AddSpecialEffectLoc` is admitted when declared and needs the location arena.
     pub fn with_unit_effects(mut self) -> Result<Self, Error> {
         let source = self
             .units
@@ -38,8 +40,46 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
+        if let Some(native) = self.inner.program.natives().get(ADD_AT) {
+            Self::contract(
+                &self.inner,
+                ADD_AT,
+                &["string", "location"],
+                "effect",
+                false,
+                Some("effect"),
+            )?;
+            if native.source != source {
+                return Err(self.inner.error(ADD_AT, Failure::Source));
+            }
+            if !self.locations {
+                return Err(self
+                    .inner
+                    .error(ADD_AT, Failure::UnitState("location arena required")));
+            }
+        }
         self.effects = true;
         Ok(self)
+    }
+
+    /// Live point effects: authored model string and the location point copied at creation.
+    pub fn point_effects(&self) -> impl Iterator<Item = (HandleId, &str, [f32; 2])> {
+        self.inner
+            .arena
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| match entry {
+                Entry::PointEffect {
+                    model,
+                    point,
+                    live: true,
+                } => Some((
+                    self.inner.id(i, ADD_AT).expect("allocated identity"),
+                    model.as_str(),
+                    *point,
+                )),
+                _ => None,
+            })
     }
 
     /// Live effects at the current game time. An effect with `expires_at` is over once the
@@ -128,10 +168,26 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if !self.effects || !matches!(name, ADD | DESTROY) {
+        if !self.effects || !matches!(name, ADD | ADD_AT | DESTROY) {
+            return None;
+        }
+        if name == ADD_AT && self.inner.program.natives().get(ADD_AT).is_none() {
             return None;
         }
         Some((|| match (name, args) {
+            (ADD_AT, [Value::Str(model), location]) => {
+                let point = self.location_point(location, name)?;
+                self.inner
+                    .allocate(
+                        Entry::PointEffect {
+                            model: model.clone(),
+                            point,
+                            live: true,
+                        },
+                        name,
+                    )
+                    .map(Value::Handle)
+            }
             (
                 ADD,
                 [
@@ -150,7 +206,7 @@ impl ObjectHost {
             // effects are accepted without change.
             (DESTROY, [Value::Null]) => Ok(Value::Null),
             (DESTROY, [Value::Handle(id)]) => match self.inner.entry_mut(*id)? {
-                Entry::Effect { live, .. } => {
+                Entry::Effect { live, .. } | Entry::PointEffect { live, .. } => {
                     *live = false;
                     Ok(Value::Null)
                 }

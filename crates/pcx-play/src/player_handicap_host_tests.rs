@@ -40,12 +40,13 @@ endfunction
     v.call("setup", &[]).unwrap();
     let p = v.global("P");
     let handles = v.host().inner.inner().handles();
-    assert!(
+    // An unassigned player holds the factor the source reset installs.
+    assert_eq!(
         v.host()
             .inner
             .native("GetPlayerHandicapXP", std::slice::from_ref(&p))
-            .unwrap_err()
-            .contains("initial experience")
+            .unwrap(),
+        Value::Real(3.0)
     );
     v.call("run", &[]).unwrap();
     assert_eq!(v.global("RESULT"), Value::Real(expected_literal));
@@ -104,10 +105,9 @@ fn bounds_special_values_and_null_handling_follow_selected_rules() {
         h.native("GetPlayerHandicapXP", &[Value::Null]).unwrap(),
         Value::Real(3.0)
     );
-    assert!(
-        h.native("GetPlayerHandicapXP", &[b])
-            .unwrap_err()
-            .contains("initial experience")
+    assert_eq!(
+        h.native("GetPlayerHandicapXP", &[b]).unwrap(),
+        Value::Real(3.0)
     );
 }
 #[test]
@@ -212,4 +212,27 @@ fn each_foreign_declaration_and_a_mismatched_numeric_image_refuse() {
         .unwrap()
         .with_script_numeric(numeric);
     assert!(h.with_player_experience_handicap(rules).is_err());
+}
+#[test]
+fn rows_created_before_admission_receive_the_reset_factor() {
+    let ctx = context(
+        300,
+        &format!("{COMMON}{DECL}"),
+        "// no globals",
+        "handicap-map",
+    );
+    let (rules, numeric) = crate::player_handicap::tests::rules();
+    let mut h = object(&ctx, 16)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_script_numeric(numeric);
+    let early = player(&mut h, 4);
+    let mut h = h.with_player_experience_handicap(rules).unwrap();
+    let late = player(&mut h, 5);
+    for p in [early, late] {
+        assert_eq!(
+            h.native("GetPlayerHandicapXP", &[p]).unwrap(),
+            Value::Real(3.0)
+        );
+    }
 }

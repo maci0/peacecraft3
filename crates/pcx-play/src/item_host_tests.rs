@@ -362,3 +362,29 @@ fn visibility_contracts_and_precreation_admission_are_checked() {
         Value::Bool(true)
     );
 }
+
+#[test]
+fn set_item_position_moves_world_items_and_ignores_null_and_removed_ones() {
+    let common =
+        format!("{COMMON}native SetItemPosition takes item i, real x, real y returns nothing\n");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let catalog: Arc<dyn ObjectCatalog + Send + Sync> = Arc::new(Catalog(hits));
+    let mut host = host(&common, 8)
+        .with_item_catalog(catalog, source(), budget())
+        .unwrap();
+    let item = handle(host.native(CREATE, &args(b"ITEM")).unwrap());
+    let moved = |host: &mut ObjectHost, target: Value, x: f32, y: f32| {
+        host.native("SetItemPosition", &[target, Value::Real(x), Value::Real(y)])
+    };
+    moved(&mut host, Value::Handle(item), 10.5, -7.25).unwrap();
+    let record = host.executed_item(item).unwrap();
+    assert_eq!((record.x, record.y), (10.5, -7.25));
+    assert_eq!(
+        moved(&mut host, Value::Null, 1.0, 2.0).unwrap(),
+        Value::Null
+    );
+    let timer = host.native("CreateTimer", &[]).unwrap();
+    assert!(moved(&mut host, timer, 1.0, 2.0).is_err());
+    assert!(moved(&mut host, Value::Handle(item), f32::NAN, 2.0).is_err());
+    assert_eq!(host.executed_item(item).unwrap().x, 10.5);
+}

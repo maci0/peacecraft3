@@ -359,6 +359,9 @@ pub struct CampaignExitSnapshot {
     /// Score counters of the local player. `None` when scores are not admitted or no
     /// local player is selected. Each counter's value is `None` until its source is verified.
     pub local_scores: Option<PlayerScoreSnapshot>,
+    /// `RACE_PREF_*` constant of the local player's executed `SetPlayerRacePreference`.
+    /// `Ok(None)` when none ran; `Err` when the constant is not uniquely identifiable.
+    pub local_race: Result<Option<String>, String>,
     /// Map context of the exiting session, for resolving its assets.
     pub context: Arc<ParsedMapContext>,
 }
@@ -427,6 +430,9 @@ fn take_game_exit(
         game_time: objects.timer_game_time(),
         local_result,
         local_scores: local_number.and_then(|number| objects.player_score_snapshot(number)),
+        local_race: objects
+            .local_race_preference_constant()
+            .map_err(|error| error.to_string()),
         context,
     });
     session.clear();

@@ -13,14 +13,17 @@ pub(super) fn transform(
     row: &pcx_play::campaign_placement::PlacedDoodad,
 ) -> Result<Transform, String> {
     let source = &row.source;
-    let [x, y, z] = source.position;
+    pose(source.position, source.angle, source.scale)
+}
+
+pub(super) fn pose(position: [f32; 3], angle: f32, scale: [f32; 3]) -> Result<Transform, String> {
+    let [x, y, z] = position;
     let pose = Transform::from_translation(Vec3::new(x, z, -y))
         .with_rotation(
-            Quat::from_rotation_y(source.angle)
-                * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            Quat::from_rotation_y(angle) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
         )
-        .with_scale(Vec3::from_array(source.scale));
-    if !pose.is_finite() || source.scale.iter().any(|s| *s <= 0.) {
+        .with_scale(Vec3::from_array(scale));
+    if !pose.is_finite() || scale.iter().any(|s| *s <= 0.) {
         return Err("nonfinite or mirrored placed doodad pose".into());
     }
     Ok(pose)

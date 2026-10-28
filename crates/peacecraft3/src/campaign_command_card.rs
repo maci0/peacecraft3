@@ -4,7 +4,7 @@ use bevy::{
     ecs::system::SystemParam, picking::events::PointerPress, prelude::*, ui_widgets::Button,
 };
 use pcx_play::{
-    ability_profile, command_layout::Rules, map_startup_host::MapStartupHost,
+    ability_profile, command_layout::Rules, hero_bar_layout, map_startup_host::MapStartupHost,
     playercolor_host::ObjectHost,
 };
 use pcx_script::HandleId;
@@ -43,6 +43,9 @@ pub(crate) enum Kind {
     SkillCancel,
     /// `SelectHeroSkill` for one admitted learnable alias.
     Learn(i32),
+    /// A learned ability with authored `Art` and `Buttonpos` but no implemented command.
+    /// Drawn in its slot; pressing it issues no order.
+    DisplayOnly,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -230,10 +233,41 @@ struct Source {
     skill: (pcx_play::standard_command::MenuButton, String),
     cancel: (pcx_play::standard_command::MenuButton, String),
     cancel_build: (pcx_play::standard_command::MenuButton, String),
+    /// Independent of the command grid: a failure here leaves the card mounted.
+    hero_bar: Result<HeroBarSource, String>,
     images: HashMap<String, Handle<Image>>,
     failed: HashMap<String, String>,
     retained: usize,
     receipts: Vec<AssetReceipt>,
+}
+
+/// Hero-bar layout from the client and the skin art for its two status bars.
+struct HeroBarSource {
+    rules: hero_bar_layout::Rules,
+    health_art: String,
+    mana_art: String,
+}
+
+/// One hero-bar row: the unit and its authored icon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeroRow {
+    unit: HandleId,
+    art: String,
+}
+
+/// Selects the hero. The press belongs to the hero bar, not to a command order.
+#[derive(Component, Clone)]
+pub(crate) struct HeroBarButton {
+    unit: HandleId,
+    session: Weak<()>,
+}
+
+/// A status-bar fill whose width follows the hero's live vitals.
+struct HeroFill {
+    entity: Entity,
+    /// Full bar width as a percentage of the viewport width.
+    full: f32,
+    fraction: f32,
 }
 
 #[derive(Resource, Default)]
@@ -249,6 +283,11 @@ pub(crate) struct CommandCard {
     signature: Option<Signature>,
     pending_pointer: bool,
     pub last_error: Option<String>,
+    hero_root: Option<Entity>,
+    hero_parent: Option<Entity>,
+    hero_rows: Vec<HeroRow>,
+    hero_fills: Vec<HeroFill>,
+    pub hero_error: Option<String>,
 }
 
 impl CommandCard {
@@ -366,12 +405,21 @@ pub(crate) fn install(app: &mut App) {
                 .after(CampaignCameraSet)
                 .after(crate::campaign_hud::CampaignHudSet)
                 .before(CampaignPresentationSet),
+        )
+        .add_systems(
+            Update,
+            select_hero
+                .after(CommandCardSet)
+                .before(crate::button_actions::clear),
         );
 }
 
+// Presses the card owns: command buttons and hero-bar buttons.
+type PressTarget = Or<(With<ButtonOrder>, With<HeroBarButton>)>;
+
 fn capture_press(
     event: On<PointerPress>,
-    buttons: Query<(), With<ButtonOrder>>,
+    buttons: Query<(), PressTarget>,
     mut card: ResMut<CommandCard>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
@@ -472,12 +520,14 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             });
         }
     }
+    let mut represented = Vec::new();
     for (kind, command) in [
         (Kind::TargetUnit, objects.holy_light_command(unit)),
         (Kind::TargetUnit, objects.chain_lightning_command(unit)),
         (Kind::Immediate, objects.water_elemental_command(unit)),
     ] {
         if let Some(command) = command.map_err(|error| error.to_string())? {
+            represented.push(command.ability);
             let data = objects
                 .ability_button(unit, command.ability)
                 .map_err(|error| error.to_string())?
@@ -588,7 +638,56 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             order: None,
         });
     }
+    represented.extend(
+        objects
+            .unit_build_menu_ability(unit)
+            .map_err(|e| e.to_string())?,
+    );
+    let learned = objects
+        .learned_ability_buttons(unit)
+        .map_err(|error| error.to_string())?;
+    for data in display_only(learned, &represented, &icons) {
+        pcx_assets::AssetPath::new(&data.art).map_err(|error| error.to_string())?;
+        let tooltip = objects
+            .ability_tooltip(unit, data.ability)
+            .map_err(|e| e.to_string())
+            .and_then(|tip| tip.ok_or("command has no learned tooltip".into()));
+        icons.push(Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
+            unavailable: None,
+            kind: Kind::DisplayOnly,
+            data: IconData {
+                art: data.art,
+                position: data.position,
+                hotkey: None,
+            },
+            tooltip,
+            order: None,
+        });
+    }
     Ok(Some(View { unit, icons }))
+}
+
+/// Learned buttons the card does not already draw. The first button in a slot wins, so an
+/// implemented command is never displaced; ability order decides between display-only
+/// buttons that share a slot (for example gather and return-resources).
+fn display_only(
+    learned: Vec<ability_profile::Button>,
+    represented: &[[u8; 4]],
+    icons: &[Icon],
+) -> Vec<ability_profile::Button> {
+    let mut taken: Vec<[usize; 2]> = icons.iter().map(|icon| icon.data.position).collect();
+    let mut shown = Vec::new();
+    for button in learned {
+        if represented.contains(&button.ability) || taken.contains(&button.position) {
+            continue;
+        }
+        taken.push(button.position);
+        shown.push(button);
+    }
+    shown
 }
 
 fn building_page(
@@ -776,7 +875,7 @@ fn reset(
     materials: &mut Assets<crate::glue_menu::AdditiveImage>,
     witness: Option<Weak<()>>,
 ) {
-    if let Some(root) = card.root {
+    for root in [card.root, card.hero_root].into_iter().flatten() {
         commands.entity(root).try_despawn();
     }
     if let Some(source) = card.source.take() {
@@ -1050,7 +1149,7 @@ fn project(
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut images: ResMut<Assets<Image>>,
     mut fonts: ResMut<Assets<Font>>,
-    nodes: Query<&Node>,
+    mut nodes: Query<&mut Node>,
 ) {
     let witness = session.session_witness();
     if !same_session(card.witness.as_ref(), witness.as_ref()) {
@@ -1094,12 +1193,13 @@ fn project(
                 .launcher
                 .as_deref()
                 .and_then(crate::launch_gui::selected_install);
-            let rules =
+            let (rules, hero_rules) =
                 crate::menu_lighting::with_client_image(install.as_deref(), |label, image| {
-                    Rules::reviewed_legacy(
-                        image,
-                        pcx_play::campaign_inputs::client_identity(image, label),
-                    )
+                    let identity = pcx_play::campaign_inputs::client_identity(image, label);
+                    Ok((
+                        Rules::reviewed_legacy(image, identity.clone())?,
+                        hero_bar_layout::Rules::reviewed_legacy(image, identity),
+                    ))
                 })?;
             let mut receipts = Vec::new();
             let skin = crate::menu_skin::SkinTable::parse(&text(&reader, SKIN, &mut receipts)?)
@@ -1138,6 +1238,15 @@ fn project(
                 let art = resolve(&cancel_build.art_key, cancel_build.position)?;
                 (cancel_build, art)
             };
+            let hero_bar = hero_rules.and_then(|hero| {
+                let health_art = skin_file(&skin, &sections, &hero.health.fill_key)?;
+                let mana_art = skin_file(&skin, &sections, &hero.mana.fill_key)?;
+                Ok(HeroBarSource {
+                    rules: hero,
+                    health_art,
+                    mana_art,
+                })
+            });
             let active_art = skin_file(&skin, &sections, &rules.active_key)?;
             let badge_art = skin_file(&skin, &sections, &rules.badge.art_key)?;
             let font_path = skin_file(&skin, &sections, &rules.badge.font_key)?;
@@ -1182,6 +1291,7 @@ fn project(
                 skill,
                 cancel,
                 cancel_build,
+                hero_bar,
                 receipts,
                 images: HashMap::new(),
                 failed: HashMap::new(),
@@ -1303,7 +1413,290 @@ fn project(
         commands.entity(root).insert(root_node(Display::None));
     }
     card.last_error = result.err();
+    card.hero_error = sync_hero_bar(
+        &mut HeroFrame {
+            commands: &mut commands,
+            images: &mut images,
+            nodes: &mut nodes,
+        },
+        &mut card,
+        &mut source,
+        &reader,
+        host.objects(),
+        &witness,
+        inputs.camera.active(),
+    )
+    .err();
     card.source = Some(source);
+}
+
+/// Bevy handles the hero bar writes through.
+struct HeroFrame<'a, 'cw, 'cs, 'qw, 'qs, 'n> {
+    commands: &'a mut Commands<'cw, 'cs>,
+    images: &'a mut Assets<Image>,
+    nodes: &'a mut Query<'qw, 'qs, &'n mut Node>,
+}
+
+/// One painted hero: its row identity and live status-bar fractions.
+struct HeroEntry {
+    row: HeroRow,
+    health: f32,
+    /// Zero when the hero has no mana pool, which leaves the bar empty.
+    mana: f32,
+}
+
+fn fraction(value: f32, maximum: f32) -> f32 {
+    (value / maximum).clamp(0., 1.)
+}
+
+/// Living, shown heroes of the local player in unit creation order, at most one per grid row.
+/// Native hero ordering, overflow past the grid and dead-hero presentation are not qualified.
+fn hero_entries(objects: &ObjectHost, rows: usize) -> Result<Vec<HeroEntry>, String> {
+    let Some(local) = objects.local_player_number() else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    for (unit, record) in objects.executed_units() {
+        if entries.len() == rows {
+            break;
+        }
+        if !record.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+            || !record.shown
+            || record.combat.as_ref().is_none_or(|combat| combat.dead)
+            || objects
+                .player_settings(record.owner)
+                .map_err(|error| error.to_string())?
+                .number
+                != local
+        {
+            continue;
+        }
+        let vitals = record
+            .vitals
+            .as_ref()
+            .ok_or("hero bar: live vitals unavailable")?;
+        if !vitals.max_life.is_finite()
+            || vitals.max_life <= 0.
+            || !vitals.max_mana.is_finite()
+            || vitals.max_mana < 0.
+        {
+            return Err("hero bar: invalid live maximum".into());
+        }
+        entries.push(HeroEntry {
+            row: HeroRow {
+                unit,
+                art: pcx_play::training_command::icon(&record.definition)?,
+            },
+            health: fraction(vitals.life, vitals.max_life),
+            mana: if vitals.max_mana > 0. {
+                fraction(vitals.mana, vitals.max_mana)
+            } else {
+                0.
+            },
+        });
+    }
+    Ok(entries)
+}
+
+fn hero_source(source: &Source) -> Result<&HeroBarSource, String> {
+    source.hero_bar.as_ref().map_err(Clone::clone)
+}
+
+fn colour(argb: u32) -> Color {
+    let [a, r, g, b] = argb.to_be_bytes();
+    Color::srgba_u8(r, g, b, a)
+}
+
+fn viewport_node(rect: pcx_play::inventory_layout::Rect, viewport: [f32; 2]) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Percent(rect.x / viewport[0] * 100.),
+        bottom: Val::Percent(rect.y / viewport[1] * 100.),
+        width: Val::Percent(rect.width / viewport[0] * 100.),
+        height: Val::Percent(rect.height / viewport[1] * 100.),
+        ..default()
+    }
+}
+
+/// Mounts the hero rows under the console parent and follows the heroes' live vitals.
+/// Rows are rebuilt only when the hero set or an icon changes; otherwise only fill widths move.
+fn sync_hero_bar(
+    frame: &mut HeroFrame<'_, '_, '_, '_, '_, '_>,
+    card: &mut CommandCard,
+    source: &mut Source,
+    reader: &pcx_assets::Resolver,
+    objects: &ObjectHost,
+    witness: &Weak<()>,
+    active: bool,
+) -> Result<(), String> {
+    let Some(parent) = card.parent else {
+        return Ok(());
+    };
+    let hero = hero_source(source)?;
+    let entries = hero_entries(objects, hero.rules.rows)?;
+    let rows: Vec<HeroRow> = entries.iter().map(|entry| entry.row.clone()).collect();
+    let display = if active && !entries.is_empty() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let mounted = card
+        .hero_root
+        .filter(|root| frame.nodes.get(*root).is_ok())
+        .filter(|_| card.hero_parent == Some(parent) && card.hero_rows == rows);
+    if let Some(root) = mounted {
+        if frame
+            .nodes
+            .get(root)
+            .is_ok_and(|node| node.display != display)
+        {
+            frame.commands.entity(root).insert(root_node(display));
+        }
+        for (index, entry) in entries.iter().enumerate() {
+            for (slot, value) in [(2 * index, entry.health), (2 * index + 1, entry.mana)] {
+                let fill = card
+                    .hero_fills
+                    .get_mut(slot)
+                    .ok_or("hero bar fill is missing")?;
+                if fill.fraction != value {
+                    fill.fraction = value;
+                    frame
+                        .nodes
+                        .get_mut(fill.entity)
+                        .map_err(|_| "hero bar fill node is missing")?
+                        .width = Val::Percent(fill.full * value);
+                }
+            }
+        }
+        return Ok(());
+    }
+    if let Some(root) = card.hero_root.take() {
+        frame.commands.entity(root).try_despawn();
+    }
+    card.hero_fills.clear();
+    card.hero_rows.clear();
+    let (health_art, mana_art) = (hero.health_art.clone(), hero.mana_art.clone());
+    let icons = rows
+        .iter()
+        .map(|row| image(reader, source, &row.art, frame.images))
+        .collect::<Result<Vec<_>, _>>()?;
+    let fills = [
+        image(reader, source, &health_art, frame.images)?,
+        image(reader, source, &mana_art, frame.images)?,
+    ];
+    let hero = hero_source(source)?;
+    let rules = &hero.rules;
+    let root = frame
+        .commands
+        .spawn((root_node(display), CampaignInterface, Pickable::IGNORE))
+        .id();
+    frame.commands.entity(parent).add_child(root);
+    for (index, (entry, icon)) in entries.iter().zip(icons).enumerate() {
+        let button = rules.button(index)?;
+        frame.commands.spawn((
+            viewport_node(button, rules.viewport),
+            ImageNode::new(icon).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
+            Button,
+            bevy::picking::hover::Hovered::default(),
+            HeroBarButton {
+                unit: entry.row.unit,
+                session: witness.clone(),
+            },
+            ChildOf(root),
+        ));
+        for (bar, style, texture, value) in [
+            (
+                rules.health_bar(index)?,
+                &rules.health,
+                &fills[0],
+                entry.health,
+            ),
+            (rules.mana_bar(index)?, &rules.mana, &fills[1], entry.mana),
+        ] {
+            let outset = pcx_play::inventory_layout::Rect {
+                x: bar.x - rules.inset,
+                y: bar.y - rules.inset,
+                width: bar.width + 2. * rules.inset,
+                height: bar.height + 2. * rules.inset,
+            };
+            frame.commands.spawn((
+                viewport_node(outset, rules.viewport),
+                BackgroundColor(colour(rules.background)),
+                Pickable::IGNORE,
+                ChildOf(root),
+            ));
+            let full = bar.width / rules.viewport[0] * 100.;
+            let mut node = viewport_node(bar, rules.viewport);
+            node.width = Val::Percent(full * value);
+            let entity = frame
+                .commands
+                .spawn((
+                    node,
+                    ImageNode::new(texture.clone())
+                        .with_mode(bevy::ui::widget::NodeImageMode::Stretch)
+                        .with_color(colour(style.tint)),
+                    Pickable::IGNORE,
+                    ChildOf(root),
+                ))
+                .id();
+            card.hero_fills.push(HeroFill {
+                entity,
+                full,
+                fraction: value,
+            });
+        }
+    }
+    card.hero_root = Some(root);
+    card.hero_parent = Some(parent);
+    card.hero_rows = rows;
+    Ok(())
+}
+
+/// A hero-bar press selects that hero, replacing the selection.
+fn select_hero(
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&HeroBarButton, Without<bevy::ui::InteractionDisabled>>,
+    controls: HeroControls,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    let witness = session.session_witness();
+    let Some(host) = session.host() else { return };
+    if !crate::campaign_input::commands_available(
+        &controls.view,
+        &controls.hud,
+        &controls.dialogs,
+        host,
+    ) {
+        return;
+    }
+    for entity in &actions.entities {
+        let Ok(button) = buttons.get(*entity) else {
+            continue;
+        };
+        if !witness
+            .as_ref()
+            .is_some_and(|current| Weak::ptr_eq(current, &button.session))
+        {
+            continue;
+        }
+        let objects = host.objects_mut();
+        let local = objects.local_player_number();
+        let owned = objects
+            .executed_unit(button.unit)
+            .ok()
+            .and_then(|record| objects.player_settings(record.owner).ok())
+            .is_some_and(|player| Some(player.number) == local);
+        if owned {
+            objects.select_units(&[button.unit], true);
+        }
+    }
+}
+
+#[derive(SystemParam)]
+struct HeroControls<'w> {
+    view: Res<'w, CampaignCamera>,
+    hud: Res<'w, crate::campaign_hud::CampaignHud>,
+    dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
 }
 
 fn same_session(a: Option<&Weak<()>>, b: Option<&Weak<()>>) -> bool {
@@ -1414,6 +1807,7 @@ mod tests {
                 skill: fixture_menu(),
                 cancel: fixture_menu(),
                 cancel_build: fixture_menu(),
+                hero_bar: Err("fixture".into()),
                 images: HashMap::new(),
                 failed: HashMap::new(),
                 retained: 0,
@@ -1680,6 +2074,7 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Font>>()
             .init_resource::<Assets<crate::glue_menu::BackdropImage>>()
+            .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>()
             .init_resource::<ButtonInput<KeyCode>>();
         crate::campaign_hud::install(&mut app);
         crate::hud_render::install(&mut app);
@@ -1769,6 +2164,26 @@ mod tests {
                     .get::<crate::campaign_inventory::ControlTooltip>(*child)
                     .expect("source-ranked tooltip must reach its mounted button");
                 assert!(!tooltip.name.is_empty() && !tooltip.ubertip.contains(['<', '>']));
+            }
+            assert!(card.hero_error.is_none(), "hero bar: {:?}", card.hero_error);
+            let hero_root = card.hero_root.expect("hero bar root");
+            assert_eq!(
+                app.world().get::<ChildOf>(hero_root).unwrap().parent(),
+                parent
+            );
+            let rows = app
+                .world()
+                .get::<Children>(hero_root)
+                .unwrap()
+                .iter()
+                .filter(|child| app.world().get::<HeroBarButton>(*child).is_some())
+                .count();
+            assert!(rows >= 1 && rows == card.hero_rows.len());
+            assert_eq!(card.hero_fills.len(), rows * 2);
+            for fill in &card.hero_fills {
+                assert!((0.0..=1.0).contains(&fill.fraction));
+                let node = app.world().get::<Node>(fill.entity).unwrap();
+                assert_eq!(node.width, Val::Percent(fill.full * fill.fraction));
             }
             (
                 root,
@@ -2031,6 +2446,7 @@ mod tests {
             skill: fixture_menu(),
             cancel: fixture_menu(),
             cancel_build: fixture_menu(),
+            hero_bar: Err("fixture".into()),
             images: HashMap::from([("fixture".into(), owned.clone())]),
             failed: HashMap::new(),
             retained: 0,
@@ -2315,5 +2731,55 @@ mod active_tests {
         assert!(!standard_active(Kind::Stop, 17, 31, false));
         assert!(standard_active(Kind::Attack, 41, 41, false));
         assert!(!standard_active(Kind::Move, 31, 41, false));
+    }
+}
+
+#[cfg(test)]
+mod display_only_tests {
+    use super::{Icon, IconData, Kind, ability_profile::Button, display_only};
+
+    fn button(ability: &[u8; 4], position: [usize; 2]) -> Button {
+        Button {
+            ability: *ability,
+            rank: 1,
+            art: format!("{}.blp", String::from_utf8_lossy(ability)),
+            position,
+        }
+    }
+
+    fn icon(position: [usize; 2]) -> Icon {
+        Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
+            unavailable: None,
+            kind: Kind::TargetUnit,
+            data: IconData {
+                art: "implemented.blp".into(),
+                position,
+                hotkey: None,
+            },
+            tooltip: Err("fixture".into()),
+            order: Some(1),
+        }
+    }
+
+    #[test]
+    fn learned_buttons_fill_only_free_slots_and_skip_represented_abilities() {
+        let learned = vec![
+            button(b"AAAA", [0, 2]),
+            button(b"BBBB", [1, 2]),
+            button(b"CCCC", [1, 2]),
+            button(b"DDDD", [2, 2]),
+            button(b"EEEE", [3, 1]),
+        ];
+        let shown = display_only(learned, &[*b"DDDD"], &[icon([0, 2])]);
+        let abilities: Vec<_> = shown.iter().map(|b| b.ability).collect();
+        assert_eq!(abilities, vec![*b"BBBB", *b"EEEE"]);
+    }
+
+    #[test]
+    fn no_learned_buttons_leave_the_card_unchanged() {
+        assert!(display_only(Vec::new(), &[], &[icon([0, 0])]).is_empty());
     }
 }

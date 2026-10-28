@@ -21,7 +21,7 @@ use peacecraft3::{
 };
 
 #[path = "campaign_selection_mesh.rs"]
-mod projection;
+pub(crate) mod projection;
 
 const TEXTURE_SUFFIX: &str = ".blp";
 /// Read and decode limit for one circle texture.
@@ -75,10 +75,10 @@ struct Inputs<'w> {
 }
 
 #[derive(SystemParam)]
-struct DrawAssets<'w> {
-    meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
-    images: ResMut<'w, Assets<Image>>,
+pub(crate) struct DrawAssets<'w> {
+    pub(crate) meshes: ResMut<'w, Assets<Mesh>>,
+    pub(crate) materials: ResMut<'w, Assets<StandardMaterial>>,
+    pub(crate) images: ResMut<'w, Assets<Image>>,
 }
 
 type Drawn = (
@@ -182,22 +182,7 @@ fn draw(
                 Some("selection terrain does not belong to the active script session".into());
         }
     }
-    let reader = requests
-        .bindings
-        .as_ref()
-        .filter(|bindings| {
-            requests
-                .admission
-                .shared_context()
-                .as_ref()
-                .zip(session.context())
-                .is_some_and(|(admitted, active)| Arc::ptr_eq(admitted, active))
-                && requests
-                    .published_receipts
-                    .as_ref()
-                    .is_some_and(|published| Arc::ptr_eq(published, &bindings.receipts))
-        })
-        .and_then(|bindings| sources.for_receipts(&bindings.receipts));
+    let reader = session_reader(&requests, &sources, &session);
     let mut placed = BTreeMap::new();
     for (unit, transform, look) in wanted {
         let material = match state.materials.get(&look) {
@@ -209,7 +194,7 @@ fn draw(
                     );
                     continue;
                 };
-                match load_material(reader, &look, images, materials) {
+                match load_material(reader, &look, images, materials, DEPTH_BIAS) {
                     Ok(material) => {
                         state.materials.insert(look.clone(), material.clone());
                         material
@@ -305,6 +290,30 @@ fn draw(
     }
 }
 
+/// The resolver for the map receipts published to the active script session.
+pub(crate) fn session_reader(
+    requests: &MapRequests,
+    sources: &SelectedMapSources,
+    session: &MapScriptSession<MapStartupHost>,
+) -> Option<Arc<pcx_assets::Resolver>> {
+    requests
+        .bindings
+        .as_ref()
+        .filter(|bindings| {
+            requests
+                .admission
+                .shared_context()
+                .as_ref()
+                .zip(session.context())
+                .is_some_and(|(admitted, active)| Arc::ptr_eq(admitted, active))
+                && requests
+                    .published_receipts
+                    .as_ref()
+                    .is_some_and(|published| Arc::ptr_eq(published, &bindings.receipts))
+        })
+        .and_then(|bindings| sources.for_receipts(&bindings.receipts))
+}
+
 type Wanted = Vec<(HandleId, Transform, (String, [u8; 4]))>;
 
 fn wanted_circles(
@@ -363,11 +372,12 @@ fn wanted_circles(
     wanted
 }
 
-fn load_material(
+pub(crate) fn load_material(
     reader: &pcx_assets::Resolver,
     (path, [a, r, g, b]): &(String, [u8; 4]),
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
+    depth_bias: f32,
 ) -> Result<Handle<StandardMaterial>, String> {
     let raw = reader
         .resolve_bounded(path, MAX_TEXTURE_BYTES as u64)
@@ -391,7 +401,7 @@ fn load_material(
         base_color_texture: Some(image),
         unlit: true,
         alpha_mode: AlphaMode::Blend,
-        depth_bias: DEPTH_BIAS,
+        depth_bias,
         cull_mode: None,
         ..default()
     }))

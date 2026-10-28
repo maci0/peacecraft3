@@ -759,7 +759,7 @@ impl ObjectHost {
                     .map(Value::Bool)
             })());
         }
-        if name != "IssuePointOrderById" {
+        if !matches!(name, "IssuePointOrderById" | "IssueBuildOrderById") {
             return None;
         }
         let [
@@ -774,6 +774,9 @@ impl ObjectHost {
         if !kind.to_be_bytes().iter().all(u8::is_ascii_graphic) {
             return None;
         }
+        // `IssueBuildOrderById` is the same build request under its own name (a build order's
+        // id is the building's rawcode) and reports whether the request was accepted.
+        let build = name == "IssueBuildOrderById";
         Some((|| {
             Self::contract(
                 &self.inner,
@@ -792,8 +795,8 @@ impl ObjectHost {
             if declaration.source != self.unit_declaration()?.0 {
                 return Err(self.inner.error(name, Failure::Source));
             }
-            self.request_unit_construction(*worker, *kind, [*x, *y])?;
-            Ok(Value::Bool(false))
+            let accepted = self.request_unit_construction(*worker, *kind, [*x, *y])?;
+            Ok(Value::Bool(build && accepted))
         })())
     }
 

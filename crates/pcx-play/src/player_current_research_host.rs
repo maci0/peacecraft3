@@ -19,53 +19,49 @@ pub(super) struct UpgradeResearch {
     pub(super) rules: crate::upgrade_research::Rules,
     pub(super) active: bool,
     pub(super) count_admitted: bool,
+    /// Effects of the player's researched levels that the host does not apply, by
+    /// player, upgrade and slot.
+    pub(super) unapplied: Vec<crate::upgrade_effects::Unapplied>,
 }
 impl ObjectHost {
     /// Effective classes of this unit type's authored upgrade list, independent of research level.
     pub fn unit_upgrade_classes(&self, unit: pcx_script::HandleId) -> Result<Vec<&str>, String> {
-        use pcx_objects::editor::{FieldSource, SlkId};
-        use pcx_sim::world::FieldValue;
-        let definition = &self
-            .executed_unit(unit)
-            .map_err(|e| e.to_string())?
-            .definition;
-        let mut fields = definition.fields.values().filter(|f| f.metadata.as_ref().is_some_and(|m|
-            matches!(&m.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "upgrades")));
-        let field = fields
-            .next()
-            .ok_or("unit panel: missing unit upgrade-list metadata")?;
-        if fields.next().is_some() {
-            return Err("unit panel: ambiguous unit upgrade-list metadata".into());
-        }
-        let text = match field
-            .value
+        let model = self
+            .players
             .as_ref()
-            .map_err(|e| format!("unit upgrade list: {e:?}"))?
-        {
-            FieldValue::Cell(text) => text.as_str(),
-            FieldValue::Override(pcx_objects::Value::Str(bytes)) => {
-                std::str::from_utf8(bytes).map_err(|e| e.to_string())?
-            }
-            _ => return Err("unit panel: nonstring unit upgrade list".into()),
-        };
-        if text.len() > 4096 {
-            return Err("unit panel: upgrade-list budget".into());
-        }
-        text.split([' ', ',', '-', '_', '\t'])
-            .filter(|s| !s.is_empty())
-            .map(|alias| {
-                let code: [u8; 4] = alias
-                    .as_bytes()
-                    .try_into()
-                    .map_err(|_| format!("unit panel: invalid upgrade {alias:?}"))?;
-                let model = self
-                    .players
-                    .as_ref()
-                    .and_then(|p| p.upgrade_research.as_ref())
-                    .ok_or("unit panel: upgrade classes not admitted")?;
-                model.rules.class(i32::from_be_bytes(code))
-            })
-            .collect()
+            .and_then(|p| p.upgrade_research.as_ref())
+            .ok_or("unit panel: upgrade classes not admitted")?;
+        definition_upgrade_codes(
+            &self
+                .executed_unit(unit)
+                .map_err(|e| e.to_string())?
+                .definition,
+        )?
+        .into_iter()
+        .map(|code| model.rules.class(i32::from_be_bytes(code)))
+        .collect()
+    }
+
+    /// The active upgrade model's rules.
+    pub(in super::super) fn active_upgrade_rules(&self) -> Option<&crate::upgrade_research::Rules> {
+        self.players
+            .as_ref()
+            .and_then(|players| players.upgrade_research.as_ref())
+            .filter(|model| model.active)
+            .map(|model| &model.rules)
+    }
+
+    /// The stored level of an upgrade the active model knows.
+    pub(in super::super) fn stored_upgrade_level(
+        &self,
+        owner: pcx_script::HandleId,
+        upgrade: i32,
+    ) -> Result<Option<i32>, Error> {
+        let number = self.player_settings(owner)?.number;
+        Ok(match self.stored_tech_level(number, upgrade) {
+            super::TechRead::Level(level) => Some(level),
+            _ => None,
+        })
     }
 
     pub(in super::super) fn technology_requirement_met(
@@ -165,6 +161,7 @@ impl ObjectHost {
             rules,
             active: true,
             count_admitted,
+            unapplied: Vec::new(),
         });
         Ok(())
     }
@@ -320,4 +317,41 @@ impl ObjectHost {
             .map(|index| Value::Bool(entries[index].researched))
             .map_err(|_| fail(Failure::PlayerState("current research query is unset")))
     }
+}
+
+/// Upgrade codes of a unit type's authored `upgrades` list, in list order.
+pub(in super::super) fn definition_upgrade_codes(
+    definition: &pcx_sim::world::Definition,
+) -> Result<Vec<[u8; 4]>, String> {
+    use pcx_objects::editor::{FieldSource, SlkId};
+    use pcx_sim::world::FieldValue;
+    let mut fields = definition.fields.values().filter(|f| f.metadata.as_ref().is_some_and(|m|
+        matches!(&m.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "upgrades")));
+    let field = fields.next().ok_or("missing unit upgrade-list metadata")?;
+    if fields.next().is_some() {
+        return Err("ambiguous unit upgrade-list metadata".into());
+    }
+    let text = match field
+        .value
+        .as_ref()
+        .map_err(|e| format!("unit upgrade list: {e:?}"))?
+    {
+        FieldValue::Cell(text) => text.as_str(),
+        FieldValue::Override(pcx_objects::Value::Str(bytes)) => {
+            std::str::from_utf8(bytes).map_err(|e| e.to_string())?
+        }
+        _ => return Err("nonstring unit upgrade list".into()),
+    };
+    if text.len() > 4096 {
+        return Err("unit upgrade-list budget".into());
+    }
+    text.split([' ', ',', '-', '_', '\t'])
+        .filter(|s| !s.is_empty())
+        .map(|alias| {
+            alias
+                .as_bytes()
+                .try_into()
+                .map_err(|_| format!("invalid upgrade {alias:?} in unit upgrade list"))
+        })
+        .collect()
 }

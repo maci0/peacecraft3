@@ -1357,3 +1357,41 @@ fn optional_streaming_probe_charges_near_obstruction_without_complete_segment_bu
         assert_eq!(complete, streaming, "identical samples cost identical work");
     }
 }
+
+#[test]
+fn a_standing_footprint_keeps_its_creation_facing_across_hide_and_reveal() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "footprint facing".into(),
+        },
+        10000,
+    )
+    .with_footprint_loader(|_| {
+        Ok(Footprint {
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: vec![[0, 0], [1, 0]],
+        })
+    });
+    // A new footprint at a non-quarter facing is still refused.
+    assert!(
+        p.prepare([32., 32.], None, "fixture.tga", 41.)
+            .unwrap_err()
+            .0
+            .contains("quarter-turn")
+    );
+    let a = p.prepare([32., 32.], None, "fixture.tga", 270.).unwrap();
+    let cells = a.footprint.clone();
+    p.commit(id(1), a);
+    p.hide(id(1)).unwrap();
+    // The model has turned to 41 degrees meanwhile; the footprint does not rotate with it.
+    let shown = p
+        .prepare_show(id(1), [32., 32.], None, "fixture.tga", 41.)
+        .unwrap();
+    assert_eq!(shown.footprint, cells);
+}

@@ -310,6 +310,14 @@ enum Entry {
         /// Game time the effect ends on its own, when its model finishes. `None` runs until destroyed.
         expires_at: Option<f64>,
     },
+    /// `None` after `DestroyTimerDialog`.
+    TimerDialog(Option<objects::TimerDialog>),
+    /// Effect created at a copied location point; later moves of the location do not follow.
+    PointEffect {
+        model: String,
+        point: [f32; 2],
+        live: bool,
+    },
     /// Trigger identity, with no enabled default unless a runtime input supplies it.
     Trigger {
         enabled: Option<bool>,
@@ -708,7 +716,10 @@ impl EnumHost {
             Entry::Weather { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
             }
-            Entry::Effect { live: false, .. } => {
+            Entry::PointEffect { live: true, .. } => "effect",
+            Entry::TimerDialog(Some(_)) => "timerdialog",
+            Entry::TimerDialog(None) => return Err(self.error("arena", Failure::Identity)),
+            Entry::Effect { live: false, .. } | Entry::PointEffect { live: false, .. } => {
                 return Err(self.error("arena", Failure::Identity));
             }
             Entry::Unit { .. } | Entry::RemovedUnit { .. } => "unit",
@@ -836,24 +847,24 @@ pub use objects::{
     AcceptedSpan, AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState,
     CineFilter, ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration,
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableStats, Environment, ExecutedItem, ExecutedUnit, ExecutedUnitState, FileSoundState,
-    FilterBudget, FilterCallback, FilterSample, ForceBudget, GameStateEventRegistration,
-    GuardBudget, GuardState, HeroBudget, HeroProgress, Illusion, ItemBudget, LabelSoundFlags,
-    LearnBlock, LearnableSkill, MapConfig, MapConfigBudget, MapMusicSelection, MessageBudget,
-    MessageState, MirrorEventContext, MirrorEventPhase, MorphEventContext, MorphEventPhase,
-    MorphPhase, ObjectHost, PlayerAdmissionError, PlayerAllianceBudget, PlayerBudget,
-    PlayerEventRegistration, PlayerRemoval, PlayerRemovalBudget, PlayerRemovalState,
-    PlayerScoreCounter, PlayerScoreSnapshot, PlayerSettings, PlayerStateRequestBudget,
-    PlayerUnitEventRegistration, PresentationState, QuestBudget, QuestEvent, QuestFlag,
-    RegionBudget, RegionEventKind, RegionEventRegistration, RegionRectRequest, ResearchIcon,
-    ResearchObservation, RestoreLifeBinding, RestoreLifePolicy, ShopCapacity, SoundProperties,
-    SoundState, StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities,
-    StartPriority, StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TerrainFog,
-    TimedMessage, TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord,
-    TriggerBudget, TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput,
-    UnitAbilities, UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
-    UnitInRangeRegistration, UnitLookAt, UnitMorph, UnitRangeEntry, UnitSleep, UnitStateBudget,
-    WeatherEffect,
+    DestructableStats, DestructableVisual, Environment, ExecutedItem, ExecutedUnit,
+    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
+    GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress, Illusion,
+    ItemBudget, LabelSoundFlags, LearnBlock, LearnableSkill, MapConfig, MapConfigBudget,
+    MapMusicSelection, MessageBudget, MessageState, MirrorEventContext, MirrorEventPhase,
+    MorphEventContext, MorphEventPhase, MorphPhase, ObjectHost, PlayerAdmissionError,
+    PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration, PlayerRemoval,
+    PlayerRemovalBudget, PlayerRemovalState, PlayerScoreCounter, PlayerScoreSnapshot,
+    PlayerSettings, PlayerStateRequestBudget, PlayerUnitEventRegistration, PresentationState,
+    QuestBudget, QuestEvent, QuestFlag, RegionBudget, RegionEventKind, RegionEventRegistration,
+    RegionRectRequest, ResearchIcon, ResearchObservation, RestoreLifeBinding, RestoreLifePolicy,
+    ShopCapacity, SoundProperties, SoundState, StackedSoundAction, StackedSoundRequest,
+    StartLocation, StartPriorities, StartPriority, StartupClockState, StartupSettings, StockBudget,
+    TechLimitBudget, TerrainFog, TimedMessage, TimerEventRegistration, TimerExpiry, TimerHost,
+    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
+    TriggerRuntimeInput, UnitAbilities, UnitActivity, UnitBudget, UnitEffect,
+    UnitEventRegistration, UnitGuard, UnitInRangeRegistration, UnitLookAt, UnitMorph,
+    UnitRangeEntry, UnitSleep, UnitStateBudget, WeatherEffect,
 };
 pub use objects::{
     BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionContext, ConstructionOrder,

@@ -185,9 +185,13 @@ impl ObjectCatalog for Forms {
                     ));
                 }
                 if column == "moveHeight" {
-                    f.value = Ok(FieldValue::Cell(
-                        if code == *b"u002" { "73" } else { "0" }.into(),
-                    ));
+                    // The alternate form carries its height as an unreal override,
+                    // the shape of the Human02 interlude's authored form record.
+                    f.value = Ok(if code == *b"u002" {
+                        FieldValue::Override(pcx_objects::Value::Unreal(73.))
+                    } else {
+                        FieldValue::Cell("0".into())
+                    });
                 }
             }
             if let FieldSource::Profile { key, .. } = &m.source
@@ -360,6 +364,13 @@ fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
     };
     let rules = rules.with_morph(Ok(morph));
     let mut fields = hero_fields("STR");
+    fields.push(column(
+        b"mUpg",
+        SlkId::UnitBalance,
+        "upgrades",
+        FieldKind::Token,
+        "Qeff",
+    ));
     fields.retain(|(_,f)| !f.metadata.as_ref().is_some_and(|m| matches!(&m.source,FieldSource::Column{slk:SlkId::UnitAbilities,column}if column=="abilList")));
     fields.push(column(
         b"A008",
@@ -404,7 +415,12 @@ fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
         enumeration::TRIGGERS,
         super::super::activity::ORDERS
     );
+    let extra = format!(
+        "{extra}\nconstant native SetPlayerTechResearched takes player p, integer id, integer level returns nothing\nconstant native GetPlayerTechResearched takes player p, integer id, boolean specific returns boolean\n"
+    );
     let mut h = position_host_admitting(2000, 16, SCRIPT, &extra, &fields, |h| h)
+        .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 8 })
+        .unwrap()
         .with_order_registry(registry)
         .unwrap()
         .with_script_numeric(numeric)
@@ -473,6 +489,93 @@ fn advance(vm: &mut Vm, until: f64) {
             }
         }
     }
+}
+
+#[test]
+fn morph_reapplies_shared_upgrades_with_full_range_rounding() {
+    let (mut vm, unit) = open("0.125", "0.375");
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let upgrade = i32::from_be_bytes(*b"Qeff");
+    let table = crate::upgrade_effects::Table::synthetic(
+        &[*b"rmnx"],
+        vec![(
+            upgrade,
+            vec![crate::upgrade_effects::Slot {
+                number: 1,
+                effect: *b"rmnx",
+                base: 100.0,
+                modifier: 0.0,
+                code: String::new(),
+            }],
+        )],
+    );
+    host.admit_upgrade_research(
+        &context,
+        crate::upgrade_research::fixture_with_effects(&context.sources.catalog, table),
+    )
+    .unwrap();
+    let owner = host.executed_unit(unit).unwrap().owner;
+    host.native(
+        "SetPlayerTechResearched",
+        &[Value::Handle(owner), Value::Int(upgrade), Value::Int(1)],
+    )
+    .unwrap();
+    let mana = vm.global("UNIT_STATE_MANA");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), mana, Value::Real(74.0)],
+        )
+        .unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    let vitals = vm.host().inner.unit_vitals(unit).unwrap().unwrap();
+    assert_eq!((vitals.mana, vitals.max_mana), (68.0, 200.0));
+}
+
+#[test]
+fn failed_morph_upgrade_preflight_keeps_unit_and_mana() {
+    let (mut vm, unit) = open("0.125", "0.375");
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let upgrade = i32::from_be_bytes(*b"Qeff");
+    let table = crate::upgrade_effects::Table::synthetic(
+        &[*b"rmnx"],
+        vec![(
+            upgrade,
+            vec![crate::upgrade_effects::Slot {
+                number: 1,
+                effect: *b"rmnx",
+                base: 100.0,
+                modifier: 0.0,
+                code: String::new(),
+            }],
+        )],
+    );
+    host.admit_upgrade_research(
+        &context,
+        crate::upgrade_research::fixture_with_effects(&context.sources.catalog, table),
+    )
+    .unwrap();
+    let owner = host.executed_unit(unit).unwrap().owner;
+    host.native(
+        "SetPlayerTechResearched",
+        &[Value::Handle(owner), Value::Int(upgrade), Value::Int(1)],
+    )
+    .unwrap();
+    let mana = vm.global("UNIT_STATE_MANA");
+    vm.host()
+        .inner
+        .native(
+            "SetUnitState",
+            &[Value::Handle(unit), mana, Value::Real(20.0)],
+        )
+        .unwrap();
+    vm.host().inner.set_test_maximum(unit, None, Some(50.0));
+    let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert!(vm.call("on", &[]).is_err());
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
 }
 
 #[test]

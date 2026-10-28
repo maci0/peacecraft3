@@ -1,9 +1,8 @@
-//! The corner → world mapping, measured tile by tile on both builds.
+//! W3E raw height plus its independent elevation-layer encoding.
 //!
-//! See the crate docs for the evidence: 11 800 (1.28c) and 6 540 (1.29b)
-//! flat-tile doodads whose stored world `z` satisfies
-//! `(index - 8192) * 0.25` exactly in `f32`, across 176 and 64 distinct
-//! height indices.
+//! The raw component retains the measured quarter-unit index scale. The low
+//! cliff-byte nibble adds tile-height layers relative to W3E encoding layer 2;
+//! omitting it displaced authored doodads from the rendered ground.
 
 use pcx_map::Terrain;
 
@@ -24,6 +23,13 @@ pub const Z_PER_INDEX: f32 = 0.25;
 /// Measured: the fit over the exact matches is `z = 0.25·index - 2048`, which
 /// is `z = 0.25·(index - 8192)`.
 pub const Z_REFERENCE_INDEX: f32 = 8192.0;
+
+/// W3E's elevation-layer encoding bias, not a map's chosen cliff level.
+const ZERO_LAYER: f32 = 2.0;
+
+pub(crate) fn layer_offset(corner: &pcx_map::Corner, tile: f32) -> f32 {
+    (f32::from(corner.layer_height()) - ZERO_LAYER) * tile
+}
 
 /// World `z` of a raw corner height index.
 #[inline]
@@ -69,7 +75,8 @@ pub fn corner_world_scaled(
     Some([
         origin_x + cx as f32 * xy_per_tile,
         origin_y + cy as f32 * xy_per_tile,
-        (corner.height_index as f32 - z_reference_index) * z_per_index,
+        (corner.height_index as f32 - z_reference_index) * z_per_index
+            + layer_offset(corner, xy_per_tile),
     ])
 }
 
@@ -105,12 +112,9 @@ pub fn sample_world_z(terrain: &Terrain, world_x: f32, world_y: f32) -> Option<f
     if tx >= terrain.width() || ty >= terrain.height() {
         return None;
     }
-    let (dx, dy) = (fx - tx as f32, fy - ty as f32);
-    let h = |cx: u32, cy: u32| terrain.corner(cx, cy).unwrap().height_index as f32;
-    let bottom = h(tx, ty) * (1.0 - dx) + h(tx + 1, ty) * dx;
-    let top = h(tx, ty + 1) * (1.0 - dx) + h(tx + 1, ty + 1) * dx;
-    let index = bottom * (1.0 - dy) + top * dy;
-    Some((index - Z_REFERENCE_INDEX) * Z_PER_INDEX)
+    sample_corners(terrain, [fx, fy], |corner| {
+        world_z(corner.height_index) + layer_offset(corner, TILE_XY)
+    })
 }
 
 /// Coordinate encoding supplied by a checked source reader, rather than measured defaults.
@@ -148,8 +152,9 @@ impl Mapping {
 
     pub fn sample_ground(self, terrain: &Terrain, x: f32, y: f32) -> Option<f32> {
         let point = self.corner_at(terrain, x, y)?;
-        let index = sample_corners(terrain, point, |c| c.height_index as f32)?;
-        Some(self.height(index))
+        sample_corners(terrain, point, |c| {
+            self.height(c.height_index as f32) + layer_offset(c, self.tile)
+        })
     }
 }
 

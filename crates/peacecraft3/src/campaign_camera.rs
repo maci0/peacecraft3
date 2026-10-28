@@ -7,8 +7,11 @@ use crate::{
     map_requests::MapRequests,
     map_script_session::MapScriptSession,
 };
-use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
+use bevy::{
+    camera::{CameraProjection, SubCameraView, visibility::RenderLayers},
+    math::Vec3A,
+};
 use pcx_play::map_startup_host::MapStartupHost;
 use pcx_script::Value;
 use std::sync::{Arc, Weak};
@@ -29,6 +32,45 @@ const FIELDS: [&str; 7] = [
 
 #[derive(Component)]
 pub struct CampaignSceneCamera;
+
+/// Native gameplay normalizes its source angle by the live world-viewport aspect.
+#[derive(Clone, Debug)]
+pub struct SourceProjection {
+    source_fov: f32,
+    inner: PerspectiveProjection,
+}
+impl SourceProjection {
+    /// Near clip distance, retained from the selected assets.
+    pub fn near(&self) -> f32 {
+        self.inner.near
+    }
+
+    fn new(inner: PerspectiveProjection) -> Self {
+        let source_fov = inner.fov;
+        let mut result = Self { source_fov, inner };
+        result.update(result.inner.aspect_ratio, 1.0);
+        result
+    }
+}
+impl CameraProjection for SourceProjection {
+    fn get_clip_from_view(&self) -> Mat4 {
+        self.inner.get_clip_from_view()
+    }
+    fn get_clip_from_view_for_sub(&self, sub: &SubCameraView) -> Mat4 {
+        self.inner.get_clip_from_view_for_sub(sub)
+    }
+    fn update(&mut self, width: f32, height: f32) {
+        self.inner.update(width, height);
+        self.inner.fov =
+            self.source_fov / (1.0 + self.inner.aspect_ratio * self.inner.aspect_ratio).sqrt();
+    }
+    fn far(&self) -> f32 {
+        self.inner.far()
+    }
+    fn get_frustum_corners(&self, near: f32, far: f32) -> [Vec3A; 8] {
+        self.inner.get_frustum_corners(near, far)
+    }
+}
 
 /// Projection selection is application policy. Clip values still come from the selected assets.
 #[derive(Resource)]
@@ -396,9 +438,10 @@ fn apply_camera(
     match result {
         Ok((transform, projection)) => {
             if let Some(entity) = camera.entity {
-                commands
-                    .entity(entity)
-                    .insert((transform, Projection::Perspective(projection)));
+                commands.entity(entity).insert((
+                    transform,
+                    Projection::custom(SourceProjection::new(projection)),
+                ));
             } else {
                 camera.entity = Some(
                     commands
@@ -407,7 +450,7 @@ fn apply_camera(
                             RenderLayers::layer(RENDER_LAYER),
                             Camera3d::default(),
                             transform,
-                            Projection::Perspective(projection),
+                            Projection::custom(SourceProjection::new(projection)),
                         ))
                         .id(),
                 );
@@ -509,7 +552,8 @@ fn pose(
     }
     let mut transform = Transform::from_translation(eye).looking_to(direction, up);
     transform.rotate_local_z(roll.to_radians());
-    // shortcut: vertical FOV and bilinear terrain targeting are recreation conventions; qualify native projection/smoothing separately.
+    // The stored angle is normalized by SourceProjection after the viewport is known.
+    // shortcut: bilinear terrain targeting remains a recreation convention; qualify native smoothing separately.
     let projection = PerspectiveProjection {
         fov: fov.to_radians(),
         near,
@@ -603,6 +647,25 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn source_angle_tracks_viewport_aspect_without_accumulating_conversion() {
+        let mut projection = SourceProjection::new(PerspectiveProjection {
+            fov: 0.93,
+            near: 3.0,
+            far: 817.0,
+            ..default()
+        });
+        for (width, height) in [(137.0, 83.0), (83.0, 137.0), (137.0, 83.0)] {
+            projection.update(width, height);
+            let ratio = width / height;
+            assert_eq!(projection.inner.fov, 0.93 / (1.0 + ratio * ratio).sqrt());
+            assert_eq!(projection.inner.aspect_ratio, ratio);
+            assert!(projection.get_clip_from_view().is_finite());
+            assert_eq!(projection.far(), 817.0);
+            assert_eq!(projection.inner.near, 3.0);
+        }
+    }
 
     #[test]
     fn source_axes_angles_and_clips_drive_the_pose() {

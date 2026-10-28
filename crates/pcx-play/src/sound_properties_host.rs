@@ -158,12 +158,13 @@ impl ObjectHost {
         };
         self.sound_admitted(*id)
             .map_err(|e| self.inner.error(name, e.failure))?;
+        // `SetSoundPosition` is exempt: its native wrapper (0x4a9d70) has no creation-flag
+        // guard, and the shipped Human03 script calls it on explicit 2D sounds.
         if matches!(
             name,
             "SetSoundDistances"
                 | "SetSoundConeAngles"
                 | "SetSoundConeOrientation"
-                | "SetSoundPosition"
                 | "SetSoundVelocity"
         ) && !matches!(
             self.inner.entry(*id)?,

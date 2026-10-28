@@ -18,12 +18,14 @@ native SetUnitPathing takes unit u, boolean b returns nothing
 native SetUnitPosition takes unit u, real x, real y returns nothing
 native SetUnitPositionLoc takes unit u, location l returns nothing
 native CreateUnitAtLoc takes player id, integer unitid, location whichLocation, real face returns unit
+native CreateBlightedGoldmine takes player id, real x, real y, real face returns unit
 constant native IsUnitType takes unit u, unittype t returns boolean
 native ClearSelection takes nothing returns nothing
 native SelectUnit takes unit u, boolean b returns nothing
 constant native IsUnitSelected takes unit u, player p returns boolean
 type effect extends agent
 native AddSpecialEffectTarget takes string model, widget w, string point returns effect
+native AddSpecialEffectLoc takes string modelName, location where returns effect
 native DestroyEffect takes effect e returns nothing
 constant native GetEnteringUnit takes nothing returns unit
 constant native GetLeavingUnit takes nothing returns unit
@@ -57,12 +59,30 @@ endfunction
 "#;
 
 fn open() -> (Vm, HandleId, HandleId) {
+    open_map(MAP)
+}
+
+/// The shipped script routes one rawcode to `CreateBlightedGoldmine`; this nonstock map routes
+/// the fixture's `u001` instead of the stock Haunted Gold Mine type.
+const BLIGHT_MAPPER: &str = r#"
+function CreateUnitAtLocSaveLast takes player id, integer unitid, real x, real y returns unit
+local unit made = null
+if (unitid == 'u001') then
+set made = CreateBlightedGoldmine(id, x, y, 0.0)
+else
+set made = CreateUnit(id, unitid, x, y, 0.0)
+endif
+return made
+endfunction
+"#;
+
+fn open_map(map: &str) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}{DECLARATIONS}",
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
-    let h = position_host_admitting(1000, 16, MAP, &extra, &[], |h| h)
+    let h = position_host_admitting(1000, 16, map, &extra, &[], |h| h)
         .with_locations()
         .unwrap()
         .with_regions(crate::playercolor_host::RegionBudget {
@@ -176,6 +196,25 @@ fn removed_unit_location_survives_synchronous_removal_then_retires_on_clock_adva
         h.native("GetLocationX", &[snapshot]).unwrap(),
         Value::Real(16.0)
     );
+}
+
+#[test]
+fn removed_unit_coordinates_survive_the_removal_tick_then_read_zero() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(
+        h.native("GetUnitX", &[Value::Handle(a)]).unwrap(),
+        Value::Real(16.0)
+    );
+    tick(&mut vm, 1.0);
+    let h = &mut vm.host().inner;
+    for name in ["GetUnitX", "GetUnitY"] {
+        assert_eq!(
+            h.native(name, &[Value::Handle(a)]).unwrap(),
+            Value::Real(0.0)
+        );
+    }
 }
 
 #[test]
@@ -329,6 +368,55 @@ fn blocked_destinations_route_near_and_disabled_pathing_ignores_collision() {
 }
 
 #[test]
+fn the_blighted_goldmine_native_creates_the_type_the_script_maps_to_it() {
+    let (mut vm, a, _) = open_map(&format!("{MAP}{BLIGHT_MAPPER}"));
+    let h = &mut vm.host().inner;
+    let owner = Value::Handle(h.executed_unit(a).unwrap().owner);
+    let Value::Handle(mine) = h
+        .native(
+            "CreateBlightedGoldmine",
+            &[
+                owner.clone(),
+                Value::Real(40.0),
+                Value::Real(48.0),
+                Value::Real(90.0),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("unit")
+    };
+    let made = h.executed_unit(mine).unwrap();
+    assert_eq!(made.definition.rawcode, *b"u001");
+    assert_eq!(made.position, Some([40.0, 48.0]));
+    assert_eq!(made.owner, h.executed_unit(a).unwrap().owner);
+    assert_eq!(made.face, 90.0);
+}
+
+#[test]
+fn the_blighted_goldmine_native_refuses_when_the_script_does_not_name_its_type() {
+    let (mut vm, a, _) = open();
+    let h = &mut vm.host().inner;
+    let owner = Value::Handle(h.executed_unit(a).unwrap().owner);
+    let error = h
+        .native(
+            "CreateBlightedGoldmine",
+            &[
+                owner,
+                Value::Real(40.0),
+                Value::Real(48.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("does not name the haunted gold mine type"),
+        "{error}"
+    );
+    assert_eq!(h.executed_units().count(), 2);
+}
+
+#[test]
 fn unit_effects_keep_authored_strings_until_destroyed_or_their_unit_is_removed() {
     let (mut vm, a, b) = open();
     let h = &mut vm.host().inner;
@@ -375,6 +463,62 @@ fn unit_effects_keep_authored_strings_until_destroyed_or_their_unit_is_removed()
 }
 
 #[test]
+fn point_effects_copy_the_location_and_end_when_destroyed() {
+    let (mut vm, _, _) = open();
+    let h = &mut vm.host().inner;
+    let Value::Handle(location) = h
+        .native("Location", &[Value::Real(12.5), Value::Real(-3.0)])
+        .unwrap()
+    else {
+        panic!("location")
+    };
+    let add = |h: &mut ObjectHost, model: &str| {
+        h.native(
+            "AddSpecialEffectLoc",
+            &[Value::Str(model.into()), Value::Handle(location)],
+        )
+    };
+    let effect = add(h, "Models\\Teleport.mdl").unwrap();
+    // The effect keeps the point it was created at.
+    h.native(
+        "MoveLocation",
+        &[
+            Value::Handle(location),
+            Value::Real(99.0),
+            Value::Real(99.0),
+        ],
+    )
+    .unwrap();
+    let live: Vec<_> = h.point_effects().collect();
+    assert_eq!(
+        live,
+        [(
+            match effect {
+                Value::Handle(id) => id,
+                _ => panic!("effect"),
+            },
+            "Models\\Teleport.mdl",
+            [12.5, -3.0]
+        )]
+    );
+    assert_eq!(h.unit_effects().count(), 0);
+    h.native("DestroyEffect", std::slice::from_ref(&effect))
+        .unwrap();
+    h.native("DestroyEffect", &[effect]).unwrap();
+    assert_eq!(h.point_effects().count(), 0);
+    assert!(
+        h.native(
+            "AddSpecialEffectLoc",
+            &[Value::Str("m".into()), Value::Null]
+        )
+        .is_err()
+    );
+    h.native("RemoveLocation", &[Value::Handle(location)])
+        .unwrap();
+    assert!(add(h, "m").is_err());
+}
+
+#[test]
 fn set_unit_position_places_like_a_reveal_unless_pathing_is_off() {
     let (mut vm, a, _) = open();
     let h = &mut vm.host().inner;
@@ -410,4 +554,19 @@ fn set_unit_position_places_like_a_reveal_unless_pathing_is_off() {
         .unwrap();
     set(h, 80.0, 16.0).unwrap();
     assert_eq!(at(h), [80.0, 16.0]);
+}
+
+#[test]
+fn set_unit_pathing_on_a_removed_unit_changes_nothing() {
+    let (mut vm, a, b) = open();
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    assert_eq!(
+        h.native("SetUnitPathing", &[Value::Handle(b), Value::Bool(false)])
+            .unwrap(),
+        Value::Null
+    );
+    // A live unit is still accepted.
+    h.native("SetUnitPathing", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
 }

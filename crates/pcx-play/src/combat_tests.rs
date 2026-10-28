@@ -1,12 +1,18 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "unit_acquire_range_tests.rs"]
+mod acquire_range;
+#[path = "attack_ground_tests.rs"]
+mod attack_ground;
 #[path = "autocast_host_tests.rs"]
 mod autocast;
 #[path = "campaign_group_timed_life_host_tests.rs"]
 mod campaign_timed_life;
 #[path = "chain_lightning_tests.rs"]
 mod chain_lightning;
+#[path = "unit_curse_tests.rs"]
+mod curses;
 #[path = "hero_experience_kill_tests.rs"]
 mod experience_kills;
 #[path = "unit_mirror_image_tests.rs"]
@@ -17,6 +23,8 @@ mod morph;
 mod standard_commands;
 #[path = "unit_summon_tests.rs"]
 mod summoning;
+#[path = "unit_upgrade_effects_tests.rs"]
+mod upgrade_effects;
 #[path = "unit_vertex_color_host_tests.rs"]
 mod vertex_color;
 use crate::playercolor_host::{CombatActor, CombatTraceEvent, VisionCapability};
@@ -136,6 +144,8 @@ constant native ConvertAllianceType takes integer i returns alliancetype
 constant native GetUnitState takes unit u, unitstate s returns real
 native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
+native GetUnitDefaultAcquireRange takes unit u returns real
+constant native IsUnitEnemy takes unit u, player p returns boolean
 native KillUnit takes unit u returns nothing
 native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
 native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
@@ -374,11 +384,26 @@ fn open_fixture_with(
         extra.push('\n');
         extra.push_str(super::resource::RESOURCE_FAMILY_NATIVES);
     }
-    let upgrade_list = fields.iter().any(|(_, f)| {
-        f.metadata.as_ref().is_some_and(
-            |m| matches!(&m.source, FieldSource::Column { column, .. } if column == "upgradeList"),
-        )
-    });
+    let column_named = |name: &str| {
+        fields.iter().any(|(_, f)| {
+            f.metadata.as_ref().is_some_and(
+                |m| matches!(&m.source, FieldSource::Column { column, .. } if column == name),
+            )
+        })
+    };
+    // A unit type with an `upgrades` list needs the research natives for the upgrade model.
+    let upgrade_effects = column_named("upgrades");
+    let upgrade_list = column_named("upgradeList") || upgrade_effects;
+    if upgrade_effects {
+        extra.push_str(
+            "native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing\n",
+        );
+    }
+    if upgrade_effects && defend.is_none() {
+        extra.push_str(
+            "constant native GetPlayerTechResearched takes player whichPlayer, integer techid, boolean specificOnly returns boolean\n",
+        );
+    }
     if upgrade_list || defend.is_some() {
         extra.push_str(
             "\nconstant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
@@ -408,7 +433,11 @@ constant native GetPlayerTechResearched takes player whichPlayer, integer techid
         Some(tables) => h.with_resource_amounts(tables).unwrap(),
         None => h,
     };
-    let (registry, activity) = super::activity::rules();
+    let (registry, activity) = if column_named("Farea1") {
+        super::activity::rules_with_attackground()
+    } else {
+        super::activity::rules()
+    };
     let mut h = h
         .with_locations()
         .unwrap()
@@ -5737,4 +5766,56 @@ fn unsupported_immediate_order_retains_error_and_reports_bounded_actual_context_
     assert!(error.contains(&format!("rawcode={:?}", Some(before.definition.rawcode))));
     assert_eq!(h.executed_unit(unit).unwrap(), &before);
     assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn a_non_attack_target_order_at_nothing_or_a_removed_unit_issues_nothing() {
+    let mut fields = armed("64", "normal");
+    fields.push(column(
+        b"Z002",
+        SlkId::UnitBalance,
+        "isbldg",
+        FieldKind::Bool,
+        "0",
+    ));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    let issue = |h: &mut ObjectHost, target: Value| {
+        h.native(
+            "IssueTargetOrder",
+            &[Value::Handle(a), Value::Str("repair".into()), target],
+        )
+    };
+    // A live target still refuses loudly: the order has no implementation.
+    let error = issue(h, Value::Handle(b)).unwrap_err();
+    assert!(error.contains("only the attack target order"), "{error}");
+    assert_eq!(issue(h, Value::Null).unwrap(), Value::Bool(false));
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    assert_eq!(issue(h, Value::Handle(b)).unwrap(), Value::Bool(false));
+}
+
+#[test]
+fn is_unit_enemy_reads_the_players_view_and_never_counts_neutral_passive() {
+    let mut fields = armed("64", "normal");
+    fields.push(column(
+        b"Z002",
+        SlkId::UnitBalance,
+        "isbldg",
+        FieldKind::Bool,
+        "0",
+    ));
+    let (mut vm, a, b) = open(&fields);
+    let h = &mut vm.host().inner;
+    let (own, other) = (
+        h.executed_unit(a).unwrap().owner,
+        h.executed_unit(b).unwrap().owner,
+    );
+    let ask = |h: &mut ObjectHost, unit, player| {
+        h.native("IsUnitEnemy", &[Value::Handle(unit), Value::Handle(player)])
+    };
+    assert_eq!(ask(h, b, own).unwrap(), Value::Bool(true));
+    assert_eq!(ask(h, a, other).unwrap(), Value::Bool(true));
+    assert_eq!(ask(h, a, own).unwrap(), Value::Bool(false));
+    h.set_neutral_passive(5);
+    assert_eq!(ask(h, b, own).unwrap(), Value::Bool(false));
 }

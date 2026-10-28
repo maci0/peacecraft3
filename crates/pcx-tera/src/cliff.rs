@@ -1,28 +1,9 @@
-//! Cliff detection: what the corner heights measure, and the rule they cannot
-//! support.
+//! Raw-height diagnostics, not an elevation-layer or native cliff-mesh classifier.
 //!
-//! Three measurements, each of which kills a tempting rule — see the crate
-//! docs for the numbers:
-//!
-//! 1. Cliff levels are **not quantised**. Of 1 009 520 stepped tiles only 524
-//!    have a corner-to-corner step that is a multiple of 512 index units, and
-//!    the step distribution is continuous (largest buckets: 65..256 at 532 800
-//!    tiles, 257..512 at 183 330). There is no "one level = 128 world units"
-//!    in the data to key a cliff rule to.
-//! 2. **No ground slot is a cliff slot.** `TerrainArt\Terrain.slk`'s `cliffSet`
-//!    column is separate from `-1` on 36 of 177 tile rows, and zero corners of
-//!    the shipped set select one. A shipped map's ground-slot list never
-//!    contains a cliff-set tile, so "the slot changed ⇒ cliff ground" is not a
-//!    rule that can be read off the file.
-//! 3. A slot change is a **weak** cliff signal: 20.6 % of flat tiles also have
-//!    one between their own corners, against 47.7 % of tiles with a
-//!    257..512-index step. A rule built on that misclassifies a fifth of the
-//!    map's flat ground.
-//!
-//! So the cliff look is a renderer decision — a threshold on the corner step
-//! plus a vertical wall quad — and neither the threshold nor the wall geometry
-//! is in any shipped byte. What this module hands out is the *measured
-//! geometry*, and what it refuses is the decision.
+//! Raw corner heights vary continuously; that does not mean W3E lacks discrete
+//! cliffs. `Corner::layer_height` supplies their separate elevation-layer field.
+//! These diagnostics retain their raw-index meaning. Native cliff mesh selection
+//! and ramp geometry remain separate from the layer-aware ground height codec.
 
 use pcx_map::Terrain;
 

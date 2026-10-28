@@ -228,7 +228,7 @@ fn appearance_source<'a>(
     Ok((model_member(&file, instance.variation, count, paths)?, tint))
 }
 
-fn model_member<'a>(
+pub(crate) fn model_member<'a>(
     file: &str,
     variation: u32,
     count: u32,

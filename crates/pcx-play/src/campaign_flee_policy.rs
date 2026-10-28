@@ -930,6 +930,7 @@ pub(crate) mod tests {
             arctangent,
             zero_initializer: zero,
             one_initializer: one,
+            trig: None,
         };
         let numeric = NumericPolicy::read(&image, numeric_binding, budget, 64)
             .unwrap()
@@ -1761,6 +1762,7 @@ pub(crate) mod tests {
                 arctangent: window(0x9a0da0, 423, true),
                 zero_initializer: window(0x401300, 16, true),
                 one_initializer: window(0x401460, 16, true),
+                trig: None,
             },
             budget,
         )

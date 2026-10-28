@@ -191,6 +191,16 @@ impl UnitActivity {
         self.speed = source.speed;
     }
 
+    /// The movement class and effective speed a form transition replaces.
+    pub(super) fn form_profile(&self) -> (bool, Option<f32>) {
+        (self.movable, self.speed)
+    }
+
+    pub(super) fn restore_form_profile(&mut self, (movable, speed): (bool, Option<f32>)) {
+        self.movable = movable;
+        self.speed = speed;
+    }
+
     pub(super) fn resume_after_pause(&mut self, since: f64, now: f64) {
         if let Some(motion) = &mut self.motion {
             motion.started += now - since.max(motion.started);
@@ -229,7 +239,8 @@ impl UnitActivity {
     pub(super) fn can_start_motion(&self) -> bool {
         self.movable && self.speed.is_some_and(|speed| speed > 0.0)
     }
-    pub(super) fn speed(&self) -> Option<f32> {
+    /// The effective move speed, after any form or ability change.
+    pub fn speed(&self) -> Option<f32> {
         self.speed
     }
     /// The accepted route's waypoints, in travel order, and the index of the next one. Empty
@@ -364,6 +375,7 @@ impl ObjectHost {
                 .or_else(|| self.morph_current_order(unit))
                 .or_else(|| self.mirror_current_order(unit))
                 .or_else(|| self.summon_current_order(unit))
+                .or_else(|| self.curse_current_order(unit))
                 .or_else(|| self.inventory_order(unit))
                 .or_else(|| activity.patrol.map(|_| state.rules.patrol))
                 .or_else(|| activity.follow.map(|_| state.rules.movement))
@@ -630,6 +642,12 @@ impl ObjectHost {
                 }
             }
         };
+        if point
+            && let Value::Int(_) | Value::Str(_) = &args[1]
+            && self.is_attack_ground_order(order)
+        {
+            return Some(self.attack_ground_native(name, args, location));
+        }
         let rally = point
             && self
                 .order_registry
@@ -1222,6 +1240,7 @@ impl ObjectHost {
             self.advance_harvest(now, work)?;
             let spans = sink.as_ref().map(|s| &s.spans[s.base..]).unwrap_or(&[]);
             self.advance_unit_regen_motion(now, Some((spans, &starts)), work)?;
+            self.complete_research(now)?;
             self.advance_combat()?;
             self.advance_inventory(work)?;
             self.advance_sound_environments();
@@ -1656,6 +1675,7 @@ impl ObjectHost {
         self.cancel_patrol(unit);
         self.forget_holy_cast(unit);
         self.forget_chain_cast(unit);
+        self.forget_curse_cast(unit);
         if let Some(state) = &mut self.unit_activity {
             state.active.retain(|&u| u != unit);
         }
@@ -1751,6 +1771,55 @@ impl ObjectHost {
         Ok(progress.then_some(motion))
     }
 
+    /// Sets a live unit's move speed after the structure clamp, re-anchoring any route
+    /// and the walk animation. Returns the clamped speed. Callers own the policy about
+    /// who may change speed.
+    pub(super) fn apply_unit_move_speed(
+        &mut self,
+        unit: HandleId,
+        requested: f32,
+        name: &str,
+    ) -> Result<f32, Error> {
+        let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        let limits = self
+            .unit_activity
+            .as_ref()
+            .and_then(|state| state.rules.move_speed_limits())
+            .ok_or_else(|| fail("move speed limits not admitted"))?;
+        let record = self.executed_unit(unit)?;
+        let building =
+            super::unit_types::structure(&record.definition).map_err(|detail| fail(&detail))?;
+        let speed = clamp_move_speed(requested, limits.for_building(building));
+        let position = record
+            .position
+            .ok_or_else(|| fail("accepted position required"))?;
+        let activity = record
+            .activity
+            .as_ref()
+            .ok_or_else(|| fail("activity not initialized"))?;
+        let moving = activity.moving();
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| fail("clock not admitted"))?;
+        let mut animation = record.animation.clone();
+        if moving
+            && speed > 0.
+            && let Some(animation) = &mut animation
+        {
+            animation
+                .select_engine("walk", now, Some(speed))
+                .map_err(|detail| self.inner.error(name, Failure::UnitAnimation(detail)))?;
+        }
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("checked unit");
+        };
+        let activity = record.activity.as_mut().expect("checked activity");
+        activity.relocated(position, now);
+        activity.speed = Some(speed);
+        record.animation = animation;
+        Ok(speed)
+    }
+
     fn move_speed_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
         let setter = name == "SetUnitMoveSpeed";
@@ -1800,40 +1869,12 @@ impl ObjectHost {
             .and_then(|state| state.rules.move_speed_limits());
         let record = self.executed_unit(unit)?;
         if let Some(speed) = requested {
-            if record.admitted_order.is_some_and(|(_, active)| active) {
+            if record.admitted_order.is_some_and(|(_, active)| active)
+                || self.unit_speed_modified(unit)
+            {
                 return Err(fail("active ability speed modifiers are not admitted"));
             }
-            let limits = limits.ok_or_else(|| fail("move speed limits not admitted"))?;
-            let building =
-                super::unit_types::structure(&record.definition).map_err(|detail| fail(&detail))?;
-            let speed = clamp_move_speed(speed, limits.for_building(building));
-            let position = record
-                .position
-                .ok_or_else(|| fail("accepted position required"))?;
-            let activity = record
-                .activity
-                .as_ref()
-                .ok_or_else(|| fail("activity not initialized"))?;
-            let moving = activity.moving();
-            let now = self
-                .timer_game_time()
-                .ok_or_else(|| fail("clock not admitted"))?;
-            let mut animation = record.animation.clone();
-            if moving
-                && speed > 0.
-                && let Some(animation) = &mut animation
-            {
-                animation
-                    .select_engine("walk", now, Some(speed))
-                    .map_err(|detail| self.inner.error(name, Failure::UnitAnimation(detail)))?;
-            }
-            let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
-                unreachable!("checked unit");
-            };
-            let activity = record.activity.as_mut().expect("checked activity");
-            activity.relocated(position, now);
-            activity.speed = Some(speed);
-            record.animation = animation;
+            self.apply_unit_move_speed(unit, speed, name)?;
             return Ok(Value::Null);
         }
         if name == "GetUnitDefaultMoveSpeed" {
@@ -1841,7 +1882,8 @@ impl ObjectHost {
                 .map(Value::Real)
                 .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)));
         }
-        if record.admitted_order.is_some_and(|(_, active)| active) {
+        if record.admitted_order.is_some_and(|(_, active)| active) || self.unit_speed_modified(unit)
+        {
             return Err(fail("active ability speed modifiers are not admitted"));
         }
         let activity = record
@@ -1871,6 +1913,16 @@ impl ObjectHost {
             [Value::Handle(unit), Value::Bool(on)] => (*unit, *on),
             _ => return Err(fail("unit and boolean required")),
         };
+        // The native (Legacy 1.29.2.9231, `0x4ab970`) resolves the handle through `0x483940`
+        // and jumps to its epilogue when that yields no unit, so a removed unit is a no-op.
+        if matches!(
+            self.inner
+                .entry(unit)
+                .map_err(|e| self.inner.error(name, e.failure))?,
+            Entry::RemovedUnit { .. }
+        ) {
+            return Ok(Value::Null);
+        }
         let record = self.executed_unit(unit)?;
         let activity = record
             .activity

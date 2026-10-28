@@ -606,21 +606,6 @@ pub fn jpeg_header<'a>(d: &'a [u8], h: &Header) -> Result<&'a [u8], Error> {
     })
 }
 
-/// Inverted-CMYK to RGB, as the shipped JPEG textures require.
-///
-/// The four-component loading screens are Adobe-flavoured, so the channel
-/// values are subtracted from white rather than multiplied together.
-/// Checked against an independent decoder: `(215, 189, 188, 0)` becomes
-/// `(40, 66, 67)`, which only `255 - clamp(C + K)` reproduces.
-pub fn cmyk_to_rgb(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
-    let k = u32::from(k);
-    let mut rgb = [0u8; 3];
-    for (out, ch) in rgb.iter_mut().zip([c, m, y]) {
-        *out = (255 - (u32::from(ch) + k).min(255)) as u8;
-    }
-    rgb
-}
-
 /// Decode a JPEG-content mip by prepending [`jpeg_header`] to the mip bytes.
 ///
 /// `jpeg-decoder` picks its output layout from the stream, so the format is
@@ -710,31 +695,29 @@ pub fn decode_jpeg_with_limit(
         });
     }
 
-    // Whether a fourth JPEG component is an alpha channel. `alpha_bits` is the
-    // BLP1 flag at `0x08`: a non-zero value is the texture saying it has alpha.
-    let has_alpha = h.alpha_bits > 0;
     let mut out = Vec::new();
     out.try_reserve_exact(rgba_bytes)
         .map_err(|_| Error::Unsupported("jpeg RGBA allocation"))?;
     out.resize(rgba_bytes, 0);
     for i in 0..px {
         let p = &rgb[i * channels..(i + 1) * channels];
-        out[i * 4..i * 4 + 4].copy_from_slice(&rgba_from_jpeg(format, p, has_alpha));
+        out[i * 4..i * 4 + 4].copy_from_slice(&rgba_from_jpeg(format, p));
     }
     Ok(out)
 }
 
 /// One JPEG pixel's components as straight RGBA8.
 ///
-/// `has_alpha` is whether the header's `alpha_bits` says the texture carries an
-/// alpha channel, which decides how a four-component pixel is read:
-///
-/// BLP JPEG color components use BGR order. A four-component stream with alpha
-/// carries inverted BGRA; without alpha its fourth component is black ink and
-/// [`cmyk_to_rgb`] supplies the color conversion before the BGR channel reorder.
+/// BLP JPEG color components use BGR order. A four-component stream carries
+/// inverted BGRA whatever the header's `alpha_bits` says; materials decide
+/// whether alpha is used. With `alpha_bits 0`, the original client blends
+/// `HumanSymbol.blp` (filter mode 2) with its fourth component as alpha on the
+/// Lordaeron loading screen. `Textures\Base.blp` stores `255` there at every
+/// mip below 0, which an opaque material ignores, so the fourth component is
+/// not black ink either.
 /// Grayscale has no channel order to change. This is a format conversion, not
 /// an artwork-specific tint or correction in the renderer.
-fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8], has_alpha: bool) -> [u8; 4] {
+fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8]) -> [u8; 4] {
     match format {
         jpeg_decoder::PixelFormat::L8 => [p[0], p[0], p[0], 255],
         jpeg_decoder::PixelFormat::L16 => {
@@ -743,13 +726,7 @@ fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8], has_alpha: bool) 
             [s, s, s, 255]
         }
         jpeg_decoder::PixelFormat::RGB24 => [p[2], p[1], p[0], 255],
-        jpeg_decoder::PixelFormat::CMYK32 if has_alpha => {
-            [255 - p[2], 255 - p[1], 255 - p[0], 255 - p[3]]
-        }
-        jpeg_decoder::PixelFormat::CMYK32 => {
-            let [r, g, b] = cmyk_to_rgb(p[0], p[1], p[2], p[3]);
-            [b, g, r, 255]
-        }
+        jpeg_decoder::PixelFormat::CMYK32 => [255 - p[2], 255 - p[1], 255 - p[0], 255 - p[3]],
     }
 }
 
@@ -1509,19 +1486,6 @@ mod tests {
         assert_eq!(rows[0].bytes_per_pixel.get(&BPP_INDEX), None);
     }
 
-    #[test]
-    fn cmyk_subtracts_from_white_rather_than_multiplying() {
-        // Value taken from a shipped loading screen, cross-checked against an
-        // independent decoder.
-        assert_eq!(cmyk_to_rgb(215, 189, 188, 0), [40, 66, 67]);
-        // Multiplication would give (0, 0, 0) here, so this pins the difference.
-        assert_ne!(cmyk_to_rgb(219, 154, 204, 0), [0, 0, 0]);
-        assert_eq!(cmyk_to_rgb(0, 0, 0, 0), [255, 255, 255]);
-        assert_eq!(cmyk_to_rgb(255, 255, 255, 255), [0, 0, 0]);
-        // Summing past 255 saturates rather than wrapping.
-        assert_eq!(cmyk_to_rgb(200, 10, 10, 200), [0, 45, 45]);
-    }
-
     /// **The enumeration that closes the variant question.**
     ///
     /// Every `.blp` either shipped build contains is bucketed by magic and
@@ -1764,68 +1728,34 @@ mod jpeg_component_tests {
     use super::*;
     use jpeg_decoder::PixelFormat;
 
-    /// The alpha gate, on both sides, with no Warcraft files involved.
-    ///
-    /// The two readings of a four-component pixel agree when the fourth
-    /// component is zero, so a test that only covered `(c, m, y, 0)` would pass
-    /// whichever path the code took. The fourth value here is deliberately
-    /// non-zero, which is what separates them.
+    /// Inverted BGRA with no Warcraft files involved: the fourth component is
+    /// alpha and never darkens the colors as black ink would.
     #[test]
-    fn four_components_read_as_alpha_only_when_the_header_says_so() {
-        // A pixel whose fourth component is half-way: opaque-ish as CMYK, half
-        // transparent as alpha.
-        let p = [200u8, 100, 50, 128];
-
-        let with_alpha = rgba_from_jpeg(PixelFormat::CMYK32, &p, true);
+    fn four_components_are_inverted_bgra() {
+        for p in [
+            [200u8, 100, 50, 0],
+            [200, 100, 50, 128],
+            [200, 100, 50, 255],
+        ] {
+            assert_eq!(
+                rgba_from_jpeg(PixelFormat::CMYK32, &p),
+                [205, 155, 55, 255 - p[3]]
+            );
+        }
         assert_eq!(
-            with_alpha,
-            [205, 155, 55, 127],
-            "inverted BGRA reordered to RGBA, fourth is alpha"
-        );
-
-        // Without the flag the previous reading is kept: `cmyk_to_rgb` mixes the
-        // fourth component in as black ink and the pixel is opaque. This is the
-        // behaviour the alpha change must not have moved.
-        let without_alpha = rgba_from_jpeg(PixelFormat::CMYK32, &p, false);
-        assert_eq!(
-            without_alpha,
-            [77, 27, 0, 255],
-            "converted BGR reordered to RGB"
-        );
-        let mut converted = cmyk_to_rgb(200, 100, 50, 128);
-        converted.reverse();
-        assert_eq!(without_alpha[..3], converted);
-        assert_ne!(
-            with_alpha, without_alpha,
-            "the gate has to change something"
+            rgba_from_jpeg(PixelFormat::CMYK32, &[40, 66, 67, 0]),
+            [188, 189, 215, 255]
         );
     }
 
-    /// With a zero fourth component the two readings coincide, which is exactly
-    /// why the mistake survived this long — and why a regression here would be
-    /// invisible on every texture that is not the logo.
+    /// Three-component color is reordered; grayscale stays grayscale; both are opaque.
     #[test]
-    fn a_zero_fourth_component_reads_the_same_either_way() {
-        let p = [40u8, 66, 67, 0];
-        let a = rgba_from_jpeg(PixelFormat::CMYK32, &p, true);
-        let b = rgba_from_jpeg(PixelFormat::CMYK32, &p, false);
-        assert_eq!(a, [188, 189, 215, 255]);
-        assert_eq!(b, [188, 189, 215, 255]);
-    }
-
-    /// Color channel order does not depend on alpha; grayscale stays grayscale.
-    #[test]
-    fn color_channels_reorder_independently_of_alpha_and_grayscale_is_unchanged() {
+    fn color_channels_reorder_and_grayscale_is_unchanged() {
         assert_eq!(
-            rgba_from_jpeg(PixelFormat::RGB24, &[1, 2, 3], true),
+            rgba_from_jpeg(PixelFormat::RGB24, &[1, 2, 3]),
             [3, 2, 1, 255]
         );
-        assert_eq!(
-            rgba_from_jpeg(PixelFormat::RGB24, &[1, 2, 3], false),
-            [3, 2, 1, 255]
-        );
-        assert_eq!(rgba_from_jpeg(PixelFormat::L8, &[9], true), [9, 9, 9, 255]);
-        assert_eq!(rgba_from_jpeg(PixelFormat::L8, &[9], false), [9, 9, 9, 255]);
+        assert_eq!(rgba_from_jpeg(PixelFormat::L8, &[9]), [9, 9, 9, 255]);
     }
 }
 

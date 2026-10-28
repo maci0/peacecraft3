@@ -2,6 +2,7 @@
 //! glue helpers and fills labels from `GlobalStrings` keys. Score rows are not drawn: their
 //! counters are not qualified yet. Refusals go to diagnostics until source-authored refusal
 //! UI exists; no game copy is invented for them.
+use crate::campaign_score_art;
 use crate::campaign_score_model::{self, ScoreSceneHandles};
 use crate::glue_menu::{self, GlueButton, GlueLabel};
 use crate::mainmenu::{FRAME_H, FRAME_W};
@@ -125,7 +126,11 @@ fn rebuild(
         commands.entity(entity).despawn();
     }
     let Some(ScoreScreen::Refused {
-        missing, context, ..
+        missing,
+        context,
+        local_result,
+        local_race,
+        ..
     }) = &state.0
     else {
         return;
@@ -192,12 +197,21 @@ fn rebuild(
     }
     // The three authored backgrounds. A failed read or check refuses the backgrounds only.
     if let Some(source) = source {
-        match campaign_score_model::authored_backgrounds(layout, VIEWPORT).and_then(|found| {
-            found
-                .iter()
-                .map(|background| campaign_score_model::prepare(&source, background))
-                .collect::<Result<Vec<_>, String>>()
-        }) {
+        let race_art =
+            match campaign_score_art::resolve_race_art(&source, local_race, *local_result) {
+                Ok(model) => Some(model),
+                Err(error) => {
+                    warn!("score race art refused: {error}");
+                    None
+                }
+            };
+        match campaign_score_model::authored_backgrounds(layout, VIEWPORT, race_art.as_deref())
+            .and_then(|found| {
+                found
+                    .iter()
+                    .map(|background| campaign_score_model::prepare(&source, background))
+                    .collect::<Result<Vec<_>, String>>()
+            }) {
             Ok(plans) => {
                 // Depth runs from the models' own extents, as the glue panel camera does.
                 let (low, high) = plans
@@ -404,7 +418,10 @@ mod selected_tests {
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, MAP, ADDON and PCX_NATIVE_NEXT_CHAPTER_MAP"]
     fn selected_victory_continue_runs_the_next_chapters_opening_minute() {
-        let _ = check_selected_continue(60, false);
+        // PCX_NATIVE_NEXT_CHAPTER_SECONDS lengthens the interval to find later refusals.
+        let seconds = std::env::var("PCX_NATIVE_NEXT_CHAPTER_SECONDS")
+            .map_or(60, |value| value.parse().expect("whole seconds"));
+        let _ = check_selected_continue(seconds, false);
     }
 
     fn check_selected_continue(seconds: usize, interlude: bool) -> (App, Option<Carryover>) {

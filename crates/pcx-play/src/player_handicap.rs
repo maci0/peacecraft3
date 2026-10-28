@@ -13,6 +13,8 @@ pub struct Binding {
     pub getter: SourceWindow,
     pub maximum_initializer: SourceWindow,
     pub null_initializer: SourceWindow,
+    /// Player reset statement that installs the initial factor into the setter's property.
+    pub reset: SourceWindow,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +27,7 @@ pub struct Rules {
     minimum: f32,
     maximum: f32,
     null: f32,
+    initial: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +137,7 @@ impl Rules {
             &binding.getter,
             &binding.maximum_initializer,
             &binding.null_initializer,
+            &binding.reset,
         ];
         if image.len() > budget.image_bytes
             || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() + 4
@@ -157,6 +161,7 @@ impl Rules {
         let code = |w| pe.window(w, true).map_err(|e| fail(&e.to_string()));
         let setter = code(&binding.setter)?;
         let getter = code(&binding.getter)?;
+        let reset = code(&binding.reset)?;
         if !shape(
             setter,
             97,
@@ -203,6 +208,19 @@ impl Rules {
             || word(setter, 28) != word(setter, 48)
             || word(setter, 57) != word(setter, 62)
             || word(setter, 76).and_then(|v| v.checked_add(4)) != word(getter, 27)
+            // Reset reads then re-addresses the setter's property cell, pushing a source real.
+            || !shape(
+                reset,
+                21,
+                &[
+                    (0, &[0x8b, 0x86]),
+                    (6, &[0x8d, 0x8e]),
+                    (12, &[0x6a, 0x01, 0x68]),
+                    (19, &[0xff, 0x10]),
+                ],
+            )
+            || word(reset, 2) != word(setter, 76)
+            || word(reset, 8) != word(setter, 76)
         {
             return Err(fail("unsupported wrapper shape or relationship"));
         }
@@ -218,7 +236,10 @@ impl Rules {
                 binding.null_initializer.va,
             )
             .ok_or_else(|| fail("null real initializer"))?;
-        if Some(max_address) != word(setter, 57) || Some(null_address) != word(getter, 19) {
+        if Some(max_address) != word(setter, 57)
+            || Some(null_address) != word(getter, 19)
+            || Some(null_address) != word(reset, 15)
+        {
             return Err(fail("initializer destination does not match wrapper"));
         }
         let data = pe
@@ -233,6 +254,7 @@ impl Rules {
             minimum,
             maximum,
             null,
+            initial: null,
         })
     }
     pub fn origin(&self) -> &AssetIdentity {
@@ -253,6 +275,10 @@ impl Rules {
     }
     pub fn null_result(&self) -> f32 {
         self.null
+    }
+    /// Factor the player reset path installs, not inferred from the null-player return.
+    pub fn initial_result(&self) -> f32 {
+        self.initial
     }
 }
 

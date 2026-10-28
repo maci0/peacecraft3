@@ -31,13 +31,95 @@ pub(crate) struct CampaignMessages {
     pub receipts: Vec<AssetReceipt>,
     pub last_error: Option<String>,
 }
+/// Text shown to the local player this session, oldest first, for the message log
+/// dialog. Sampled once per frame from the live messages, so a message that
+/// starts and expires between two frames (zero duration) is not recorded.
+#[derive(Resource, Default)]
+pub(crate) struct MessageHistory {
+    session: Option<Weak<()>>,
+    /// Highest `TimedMessage::sequence` already recorded.
+    recorded: u64,
+    lines: std::collections::VecDeque<String>,
+    /// Entry cap, bound by the log dialog from its `TextAreaMaxLines`.
+    limit: Option<usize>,
+    revision: u64,
+}
+impl MessageHistory {
+    pub(crate) fn lines(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.lines.iter().map(String::as_str)
+    }
+    /// Changes whenever `lines` does.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn limit_to(&mut self, limit: usize) {
+        if self.limit != Some(limit) {
+            self.limit = Some(limit);
+            self.trim();
+        }
+    }
+    fn trim(&mut self) {
+        let Some(limit) = self.limit else {
+            return;
+        };
+        if self.lines.len() > limit {
+            self.lines.drain(..self.lines.len() - limit);
+            self.revision += 1;
+        }
+    }
+    pub(crate) fn absorb<'a>(&mut self, visible: impl IntoIterator<Item = &'a TimedMessage>) {
+        let mut added = false;
+        for entry in visible {
+            if entry.sequence > self.recorded {
+                self.recorded = entry.sequence;
+                self.lines.push_back(entry.text.clone());
+                added = true;
+            }
+        }
+        if added {
+            self.revision += 1;
+            self.trim();
+        }
+    }
+}
+fn record_history(
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut history: ResMut<MessageHistory>,
+) {
+    let witness = session.session_witness();
+    if !match (&history.session, &witness) {
+        (Some(a), Some(b)) => Weak::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    } {
+        let limit = history.limit;
+        *history = MessageHistory {
+            session: witness,
+            limit,
+            revision: history.revision + 1,
+            ..default()
+        };
+    }
+    let Some(objects) = session.host().map(|host| host.objects()) else {
+        return;
+    };
+    let (Some(messages), Some(now)) = (objects.messages(), objects.timer_game_time()) else {
+        return;
+    };
+    history.absorb(messages.visible(now));
+}
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<CampaignMessages>().add_systems(
-        Update,
-        project
-            .after(CampaignCameraSet)
-            .before(CampaignPresentationSet),
-    );
+    app.init_resource::<CampaignMessages>()
+        .init_resource::<MessageHistory>()
+        .add_systems(
+            Update,
+            (
+                record_history,
+                project
+                    .after(CampaignCameraSet)
+                    .before(CampaignPresentationSet),
+            ),
+        );
 }
 fn remove_root(commands: &mut Commands, state: &mut CampaignMessages) {
     if let Some(root) = state.root.take() {
@@ -310,7 +392,10 @@ pub(crate) fn paint(
     }
     let parsed = entries
         .iter()
-        .map(|entry| crate::rich_text::parse(&entry.text).map_err(|e| e.to_string()))
+        .map(|entry| {
+            // Map string tables store line breaks as CR LF; one break, not two.
+            crate::rich_text::parse(&entry.text.replace("\r\n", "\n")).map_err(|e| e.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if parsed.iter().any(|text| !text.unsupported.is_empty()) {
         return Err("message contains unsupported text substitutions".into());
@@ -347,6 +432,8 @@ pub(crate) fn paint(
                     bevy::text::Justify::Left,
                     bevy::text::LineBreak::WordBoundary,
                 ),
+                // The authored height is the line pitch, as for the other HUD fonts.
+                bevy::text::LineHeight::RelativeToFont(1.0),
                 Pickable::IGNORE,
             ))
             .id();
@@ -360,6 +447,7 @@ pub(crate) fn paint(
                     TextSpan::new(span.text),
                     text_font.clone(),
                     TextColor(color),
+                    bevy::text::LineHeight::RelativeToFont(1.0),
                     Pickable::IGNORE,
                 ))
                 .id();
@@ -683,5 +771,91 @@ mod tests {
         let node = app.world().get::<Node>(new_root).unwrap();
         assert_eq!(node.left, expected.0);
         assert_eq!(node.bottom, expected.1);
+    }
+    fn timed(sequence: u64, text: &str) -> TimedMessage {
+        TimedMessage {
+            sequence,
+            position: [0., 0.],
+            text: text.into(),
+            started_at: 0.,
+            expires_at: 1.,
+        }
+    }
+    #[test]
+    fn history_records_each_live_message_once_in_order_within_its_limit() {
+        let mut history = MessageHistory::default();
+        history.limit_to(3);
+        let revision = history.revision();
+        history.absorb([&timed(2, "a"), &timed(3, "b")]);
+        history.absorb([&timed(3, "b"), &timed(5, "c")]);
+        assert_eq!(history.lines().collect::<Vec<_>>(), ["a", "b", "c"]);
+        let revision_after_three = history.revision();
+        assert!(revision_after_three > revision);
+        history.absorb([&timed(5, "c")]);
+        assert_eq!(history.revision(), revision_after_three);
+        history.absorb([&timed(6, "d")]);
+        assert_eq!(history.lines().collect::<Vec<_>>(), ["b", "c", "d"]);
+        history.limit_to(1);
+        assert_eq!(history.lines().collect::<Vec<_>>(), ["d"]);
+    }
+}
+
+#[cfg(test)]
+mod crlf_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Map `.wts` strings carry CR LF; the text must hold one break per line.
+    #[test]
+    fn crlf_in_message_text_is_one_line_break() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.world_mut()
+            .run_system_once(|mut commands: Commands| {
+                paint(
+                    &mut commands,
+                    &[TimedMessage {
+                        sequence: 1,
+                        position: [0., 0.],
+                        text: "one\r\ntwo".into(),
+                        started_at: 0.,
+                        expires_at: 4.,
+                    }],
+                    &MessageStyle {
+                        font_path: "synthetic.ttf".into(),
+                        height: 0.03,
+                    },
+                    &Handle::default(),
+                    pcx_play::message_layout::Placement {
+                        left: 0.05,
+                        bottom: 0.2,
+                        width: 0.5,
+                        height: 0.25,
+                        viewport: [0.8, 0.6],
+                    },
+                )
+                .unwrap();
+            })
+            .unwrap();
+        let world = app.world_mut();
+        let text: String = world
+            .query::<&TextSpan>()
+            .iter(world)
+            .map(|span| span.0.as_str())
+            .collect();
+        assert_eq!(text, "one\ntwo");
+        // The authored height is the line pitch, on the line and on every span.
+        let pitches: Vec<_> = world
+            .query_filtered::<&bevy::text::LineHeight, Or<(With<Text>, With<TextSpan>)>>()
+            .iter(world)
+            .copied()
+            .collect();
+        assert!(!pitches.is_empty());
+        assert!(
+            pitches
+                .iter()
+                .all(|p| *p == bevy::text::LineHeight::RelativeToFont(1.0)),
+            "{pitches:?}"
+        );
     }
 }

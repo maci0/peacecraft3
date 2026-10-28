@@ -8,6 +8,8 @@
 //! `[Default]`. An unset race refuses; no race is assumed.
 #[path = "campaign_resource_bar.rs"]
 mod resource_bar;
+#[path = "campaign_time_indicator.rs"]
+pub(crate) mod time_indicator;
 #[path = "campaign_upper_buttons.rs"]
 pub(crate) mod upper_buttons;
 pub(crate) use upper_buttons::{CampaignHudAction, CampaignHudSet};
@@ -61,6 +63,7 @@ pub(crate) struct CampaignHud {
 pub(crate) fn install(app: &mut App) {
     upper_buttons::install(app);
     resource_bar::install(app);
+    time_indicator::install(app);
     crate::campaign_unit_panel::install(app);
     app.init_resource::<CampaignHud>().add_systems(
         Update,

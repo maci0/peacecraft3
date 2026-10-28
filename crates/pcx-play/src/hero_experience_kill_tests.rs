@@ -152,7 +152,7 @@ fn lethal_damage_uses_source_grants_sharing_creep_handicap_and_suspension_once()
     assert_eq!((xp(h, a), xp(h, second)), (7, 6), "owned kills award no XP");
 }
 #[test]
-fn nearby_hero_excludes_far_hero_then_global_fallback_and_missing_handicap_refuse() {
+fn nearby_hero_excludes_far_hero_then_global_fallback_and_unassigned_handicap_uses_reset() {
     let (mut vm, a, _) = fixture();
     let h = &mut vm.host().inner;
     h.set_neutral_aggressive(3);
@@ -173,11 +173,12 @@ fn nearby_hero_excludes_far_hero_then_global_fallback_and_missing_handicap_refus
     );
     let own = spawn(h, 5, *b"H001", 48.0);
     let target = spawn(h, 4, *b"u001", 56.0);
-    assert!(
-        h.plan_hero_kill_experience(target, Some(own)).is_err(),
-        "unassigned player handicap must not become one"
+    // The unassigned player holds the source reset factor (3.0 in this fixture's
+    // synthetic table), so the 11 base XP of a non-creep kill becomes 33.
+    assert_eq!(
+        h.plan_hero_kill_experience(target, Some(own)).unwrap(),
+        [(own, 33)]
     );
-    assert_eq!(xp(h, own), 0);
 }
 
 #[test]

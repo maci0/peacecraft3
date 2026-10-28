@@ -327,10 +327,63 @@ impl ObjectHost {
         {
             return Some(self.item_visibility_native(name, args));
         }
+        if name == "SetItemPosition"
+            && self.items.is_some()
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.set_item_position(args));
+        }
         if name != CREATE || self.items.is_none() {
             return None;
         }
         Some(self.create_item(args))
+    }
+
+    /// `SetItemPosition`: a null or already removed item is a no-op (the shipped Human05 drops
+    /// Jaina's six slots, which may be empty); a world item moves to the point. A carried item's
+    /// reposition (whether it leaves the inventory) is not established and refuses.
+    fn set_item_position(&mut self, args: &[Value]) -> Result<Value, Error> {
+        const NAME: &str = "SetItemPosition";
+        Self::contract(
+            &self.inner,
+            NAME,
+            &["item", "real", "real"],
+            "nothing",
+            false,
+            Some("item"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(NAME).map(|n| &n.source) != natives.get(CREATE).map(|n| &n.source) {
+            return Err(self.inner.error(NAME, Failure::Source));
+        }
+        let [item, x, y] = args else {
+            return Err(self.inner.error(NAME, Failure::Signature));
+        };
+        let point = [x, y].map(|v| v.as_real().filter(|r| r.is_finite()));
+        let [Some(x), Some(y)] = point else {
+            return Err(self
+                .inner
+                .error(NAME, Failure::ItemState("finite real coordinate required")));
+        };
+        let item = match item {
+            Value::Null => return Ok(Value::Null),
+            Value::Handle(id) => *id,
+            _ => return Err(self.inner.error(NAME, Failure::WrongFamily)),
+        };
+        match self.live_item(item)? {
+            None => Ok(Value::Null),
+            Some(record) if record.held_by.is_some() => Err(self.inner.error(
+                NAME,
+                Failure::ItemState("repositioning a carried item is not established"),
+            )),
+            Some(_) => {
+                let Entry::Item { record } = self.inner.entry_mut(item)? else {
+                    unreachable!()
+                };
+                (record.x, record.y) = (x, y);
+                Ok(Value::Null)
+            }
+        }
     }
 
     pub(crate) fn create_item(&mut self, args: &[Value]) -> Result<Value, Error> {

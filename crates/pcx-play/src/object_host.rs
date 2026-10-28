@@ -19,6 +19,7 @@ pub struct ObjectHost {
     combat_trace: Option<combat::CombatTrace>,
     holy_light: Option<holy_light::Rules>,
     chain_lightning: Option<chain_lightning::Rules>,
+    curses: Option<unit_curse::State>,
     summoning: Option<unit_summon::State>,
     mirror_image: Option<unit_mirror_image::State>,
     morph_active: Vec<HandleId>,
@@ -39,6 +40,7 @@ pub struct ObjectHost {
     time_of_day: Option<time_of_day::TimeOfDay>,
     locations: bool,
     effects: bool,
+    timer_dialogs: bool,
     unit_activity: Option<unit_activity::State>,
     harvest: Option<harvest_runtime::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
@@ -112,6 +114,7 @@ pub struct ObjectHost {
     game_difficulty: Option<HandleId>,
     campaign_targeting: Option<targeting::State>,
     campaign_ai: campaign_flee::Registry,
+    ai_commands: std::collections::BTreeMap<i32, std::collections::VecDeque<(i32, i32)>>,
     campaign_flee: Option<crate::campaign_flee_policy::FleePolicy>,
     campaign_new_heroes: Option<crate::campaign_new_heroes_policy::NewHeroesPolicy>,
     campaign_mode: Option<crate::campaign_mode_policy::CampaignModePolicy>,
@@ -289,6 +292,7 @@ impl ObjectHost {
             combat_trace: None,
             holy_light: None,
             chain_lightning: None,
+            curses: None,
             summoning: None,
             mirror_image: None,
             morph_active: Vec::new(),
@@ -303,6 +307,7 @@ impl ObjectHost {
             fog_modifiers: false,
             shared_vision: None,
             effects: false,
+            timer_dialogs: false,
             items: None,
             unit_explosions: None,
             item_drops: None,
@@ -324,6 +329,7 @@ impl ObjectHost {
             game_difficulty: None,
             campaign_targeting: None,
             campaign_ai: campaign_flee::Registry::default(),
+            ai_commands: std::collections::BTreeMap::new(),
             campaign_flee: None,
             campaign_new_heroes: None,
             campaign_mode: None,
@@ -764,6 +770,8 @@ impl ObjectHost {
         let result = match (name, args) {
             ("SquareRoot", [x]) => math.square_root_native(numeric, real(x)?),
             ("Atan2", [y, x]) => math.arctangent2_native(numeric, real(y)?, real(x)?),
+            ("Sin", [x]) => math.sine_native(real(x)?),
+            ("Cos", [x]) => math.cosine_native(real(x)?),
             _ => return None,
         };
         Some(
@@ -897,6 +905,17 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_timed_life_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if name == "IsUnitEnemy" && self.combat.is_some() {
+            return self.is_unit_enemy_native(args).map_err(|e| e.to_string());
+        }
+        if name == "GetUnitDefaultAcquireRange" && self.units.is_some() {
+            return self.default_acquire_range(args).map_err(|e| e.to_string());
+        }
+        if name == "CreateBlightedGoldmine" && self.units.is_some() {
+            return self
+                .create_blighted_goldmine(args)
+                .map_err(|e| e.to_string());
+        }
         if name == "CreateUnitAtLoc" && self.locations && self.units.is_some() {
             return self
                 .create_unit_at_location(args)
@@ -1023,6 +1042,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.thread_sleep_native(name) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.timer_dialog_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.effect_native(name, args) {
@@ -1267,8 +1289,8 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 mod destructables;
 pub use destructables::{
     DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, DestructableStats, PlacedDestructable, PlacedSource, RestoreLifeBinding,
-    RestoreLifePolicy,
+    DestructableState, DestructableStats, DestructableVisual, PlacedDestructable, PlacedSource,
+    RestoreLifeBinding, RestoreLifePolicy,
 };
 
 #[path = "unit_construction_host.rs"]
@@ -1492,6 +1514,18 @@ pub use campaign_captains::CaptainObservation;
 #[path = "campaign_group_timed_life_host.rs"]
 mod campaign_group_timed_life;
 
+#[path = "campaign_ai_commands_host.rs"]
+mod campaign_ai_commands;
+
+#[path = "unit_acquire_range_host.rs"]
+mod unit_acquire_range;
+
+#[path = "blighted_goldmine_host.rs"]
+mod blighted_goldmine;
+
+#[path = "attack_ground_host.rs"]
+mod attack_ground;
+
 #[path = "combat_host.rs"]
 mod combat;
 pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
@@ -1516,6 +1550,10 @@ mod thread;
 
 #[path = "time_of_day_host.rs"]
 mod time_of_day;
+
+#[path = "timer_dialog_host.rs"]
+mod timer_dialogs;
+pub use timer_dialogs::TimerDialog;
 
 #[path = "effect_host.rs"]
 mod effects;
@@ -1565,6 +1603,9 @@ mod holy_light;
 
 #[path = "chain_lightning_host.rs"]
 mod chain_lightning;
+
+#[path = "unit_curse_host.rs"]
+mod unit_curse;
 
 #[path = "doodad_host.rs"]
 mod doodads;
