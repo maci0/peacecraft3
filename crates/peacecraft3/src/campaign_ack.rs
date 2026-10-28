@@ -48,6 +48,7 @@ fn ack_for(
     enemy: impl Fn(HandleId, HandleId) -> bool,
 ) -> Option<(HandleId, Ack)> {
     match command {
+        PlayerCommand::Queued(inner) => ack_for(inner, enemy),
         PlayerCommand::Select { units, .. } => units.first().map(|&unit| (unit, Ack::What)),
         PlayerCommand::Point { unit, order, .. } => match order.as_str() {
             "attack" => Some((*unit, Ack::YesAttack)),
@@ -61,7 +62,7 @@ fn ack_for(
         } => match order.as_str() {
             "attack" => Some((*unit, Ack::YesAttack)),
             "smart" if enemy(*unit, *target) => Some((*unit, Ack::YesAttack)),
-            "smart" | "move" | "patrol" => Some((*unit, Ack::Yes)),
+            "smart" | "move" | "patrol" | "harvest" | "repair" => Some((*unit, Ack::Yes)),
             _ => None,
         },
         _ => None,

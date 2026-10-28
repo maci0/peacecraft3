@@ -92,6 +92,7 @@ impl Rig {
                 Update,
                 (
                     crate::campaign_game_input::refresh_gate,
+                    sync_queue_flag,
                     crate::campaign_box_select::gesture_input,
                     click,
                     crate::campaign_box_select::draw_outline,
