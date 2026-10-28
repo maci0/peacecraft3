@@ -109,6 +109,8 @@ pub mod minimap_layout;
 pub mod minimize;
 pub mod mp3_frame;
 #[cfg(any(test, feature = "test-fixtures"))]
+pub mod native_path_hierarchy;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod native_path_queue;
 pub mod neutral_player;
 mod neutral_rule_discovery;

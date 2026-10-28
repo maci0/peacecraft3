@@ -962,10 +962,27 @@ walkers at `0x8a3830` and `0x8a2ed0` descend into a mixed neighbor, splitting it
 recursing on the two portions before adding traversable nodes. This narrows the remaining edge
 work, but does not by itself map the occupancy classifications or establish the clearance
 and corner helpers needed to replay the recorded reach decisions.
+
+The base lookup rejects a mixed cell as well as a blocked one; only mixed cells above the
+base level request splitting (`0x8a20a0`). A parent is blocked when all four children are
+blocked or outside the grid, open when all four are open without links, and mixed otherwise;
+an open child with an auxiliary link also makes the parent mixed (`0x8b7990`). The node
+created for an open hierarchy cell stores the base-grid coordinate of the first lookup, not
+the geometric center (`0x8a3b50`, `0x8a48f0`). Subsequent lookups reuse that cell's node.
+The test-only `native_path_hierarchy` module implements the aggregation and lookup pieces on
+caller-supplied classifications, with synthetic boundary and link tests. It does not create
+or cache search nodes, expand edges, compute costs or build the native occupancy cache.
 At a coarse node, `0x8a43c0` visits the negative-y, positive-x, positive-y and negative-x
 edges in that order, then tests the four corners in the corresponding order. The edge walkers
 can emit multiple lower-level nodes when a neighboring cell is mixed, so a single coarse
 neighbor cannot be substituted for this traversal.
+For class 2, the negative-y edge's interior clearance checks the base cell at `(x+1, y)`.
+At the end of that edge it also requires `(x+1, y+1)` and either `(x+1, y+2)` or
+`(x-1, y)` to be open (`0x8a3930`, `0x8a3a10`, `0x8a2730`). The negative-x edge has the
+corresponding transposed checks (`0x8a4f00`, `0x8a5200`). The other two edge-end helpers
+have additional alternative clearance patterns (`0x8a32d0`, `0x8a4c20`); these checks read
+the base occupancy classifications, so their results still depend on the missing cache input.
+The two negative-edge predicates have synthetic tests in the test-only hierarchy module.
 For internal movement class 2, the finest-level positive-x check also requires the cells one
 step farther in positive x, with the second at positive y; the positive-y check similarly
 requires the next row at the current and positive-x columns (`0x8a2e50`, `0x8a4680`). The

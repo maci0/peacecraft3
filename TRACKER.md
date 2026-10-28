@@ -5526,3 +5526,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   and digests are unchanged. No budget was raised.
 - Checks: 2,207 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
   denied; snapshot checkpoint and original-input diagnostics passed.
+
+### 2026-10-28: Reach hierarchy classification
+
+- [~] Added test-only aggregation and lookup of caller-supplied reach hierarchy cells.
+  Mixed base cells are rejected, open cells ascend through open parents, and linked open
+  children force mixed parents. Synthetic tests cover boundary cells, missing parents and
+  two class-2 negative-edge clearance predicates. Node caching, the remaining edge and corner
+  checks, occupancy-cache construction and the two recorded reach
+  tables remain open; production placement is still refused. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Checks: 2,210 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
+  denied; the simulation budget check passed without raising budgets.
