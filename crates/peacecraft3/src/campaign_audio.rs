@@ -16,12 +16,24 @@ use peacecraft3::{
     browser_configuration::SelectedMapSources, campaign_startup::CampaignSeed,
     map_requests::MapRequests, map_script_session::MapScriptSession,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Weak};
 
 const SKIN: &str = "UI\\war3skins.txt";
-/// Application read bounds: the skin text limit matches the HUD, the track limit the menu.
+/// Application read bounds: the skin text limit matches the HUD; the track, table and
+/// sound-file limits match the menu audio.
 const MAX_SKIN_BYTES: u64 = 1 << 20;
 const MAX_TRACK_BYTES: u64 = 64 << 20;
+const MAX_TABLE_BYTES: u64 = 8 << 20;
+const MAX_SOUND_BYTES: u64 = 16 << 20;
+const TABLE_COORDINATES: pcx_slq::CoordinateLimits = pcx_slq::CoordinateLimits {
+    max_row: 100_000,
+    max_column: 1024,
+};
+/// Application memory bound for sound files kept for reuse.
+const SOUND_CACHE_BYTES: usize = 32 << 20;
+/// Most distinct problem reports kept for de-duplication.
+const MAX_REPORTS: usize = 256;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CampaignAudioSet;
@@ -72,6 +84,32 @@ struct Bank {
     sections: Vec<String>,
     expansion: bool,
     rng: Rng,
+    /// The script's sound-volume range (`SetSoundVolumeBJ`), which table `Volume` cells map onto.
+    volume_maximum: Result<f32, String>,
+    tables: BTreeMap<&'static str, pcx_slq::Table>,
+    sounds: BTreeMap<String, Arc<[u8]>>,
+    sounds_bytes: usize,
+}
+
+/// One `UI\SoundInfo` row: the columns every sound table shares.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SoundRow {
+    name: String,
+    /// Archive paths of the alternatives; one is drawn per start.
+    members: Vec<String>,
+    /// `Volume` as a fraction of the script's range.
+    volume: f32,
+    pitch: f32,
+    pitch_variance: f32,
+    channel: i32,
+    flags: Vec<String>,
+}
+
+/// Plays one sound row; the entity ends with its sound.
+#[derive(Component)]
+pub(crate) struct GameSound {
+    pub name: String,
+    channel: i32,
 }
 
 impl Bank {
@@ -80,6 +118,93 @@ impl Bank {
             .resolve_bounded(member, limit)
             .map(|asset| asset.bytes)
             .map_err(|error| format!("{member}: {error}"))
+    }
+
+    /// A sound file's bytes, kept for reuse within the cache bound.
+    fn sound_bytes(&mut self, member: &str) -> Result<Arc<[u8]>, String> {
+        let key = member.to_ascii_lowercase();
+        if let Some(bytes) = self.sounds.get(&key) {
+            return Ok(Arc::clone(bytes));
+        }
+        let bytes: Arc<[u8]> = self.read(member, MAX_SOUND_BYTES)?.into();
+        if self
+            .sounds_bytes
+            .checked_add(bytes.len())
+            .is_some_and(|total| total <= SOUND_CACHE_BYTES)
+        {
+            self.sounds_bytes += bytes.len();
+            self.sounds.insert(key, Arc::clone(&bytes));
+        }
+        Ok(bytes)
+    }
+
+    /// The unique row of a sound table named `name` (ASCII case-insensitive).
+    fn row(&mut self, table: &'static str, name: &str) -> Result<SoundRow, String> {
+        if !self.tables.contains_key(table) {
+            let bytes = self.read(table, MAX_TABLE_BYTES)?;
+            let parsed = pcx_slq::Table::parse_bounded(&bytes, TABLE_COORDINATES)
+                .map_err(|error| format!("{table}: {error}"))?;
+            self.tables.insert(table, parsed);
+        }
+        let table_data = &self.tables[table];
+        let fail = |reason: &str| format!("{table} row {name:?}: {reason}");
+        let mut hits = table_data.data_rows().filter(|row| {
+            row.by_name("SoundName")
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        });
+        let row = hits.next().ok_or_else(|| fail("not found"))?;
+        if hits.next().is_some() {
+            return Err(fail("defined more than once"));
+        }
+        let sounds = pcx_slq::SoundTable(table_data);
+        // A `_` entry is a disabled placeholder, not a file.
+        let members: Vec<String> = sounds
+            .file_names(row.index())
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| **file != "_")
+            .filter_map(|(index, _)| sounds.sound_path(row.index(), index))
+            .collect();
+        if members.is_empty() {
+            return Err(fail("lists no file"));
+        }
+        let number = |column: &str| -> Result<f32, String> {
+            row.by_name(column)
+                .and_then(|cell| cell.trim().parse::<f32>().ok())
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| fail(&format!("{column} is missing or not a number")))
+        };
+        let maximum = self.volume_maximum.clone()?;
+        let volume = number("Volume")?;
+        if !(0.0..=maximum).contains(&volume) {
+            return Err(fail("Volume is outside the script's sound range"));
+        }
+        let pitch = number("Pitch")?;
+        let pitch_variance = number("PitchVariance")?;
+        if pitch <= 0.0 || pitch_variance < 0.0 {
+            return Err(fail("Pitch must be positive and PitchVariance nonnegative"));
+        }
+        let channel = row
+            .by_name("Channel")
+            .and_then(|cell| cell.trim().parse::<i32>().ok())
+            .ok_or_else(|| fail("Channel is missing or not an integer"))?;
+        let flags = row
+            .by_name("Flags")
+            .unwrap_or_default()
+            .split([',', '|'])
+            .map(str::trim)
+            .filter(|flag| !matches!(*flag, "" | "0"))
+            .map(str::to_owned)
+            .collect();
+        Ok(SoundRow {
+            name: name.to_owned(),
+            members,
+            volume: volume / maximum,
+            pitch,
+            pitch_variance,
+            channel,
+            flags,
+        })
     }
 
     /// The playlist for a map-music name: first race section defining the key.
@@ -170,8 +295,22 @@ pub(crate) struct CampaignAudio {
     finished_thematic: Option<String>,
     /// The request that failed to start; it is not retried until the script changes it.
     failed: Option<Request>,
+    /// Accepted player commands already voiced.
+    pub(crate) commands_seen: usize,
+    /// Problems already logged, so a repeating one is reported once.
+    reported: BTreeSet<String>,
+    /// Row flags already reported as not applied.
+    unapplied_flags: BTreeSet<String>,
     pub last_error: Option<String>,
 }
+
+/// Row flags the player applies. `WANT3D` and the rest of the row flags are reported once.
+const FLAG_CHANNEL_PREEMPT: &str = "CHANNELFULLPREEMPT";
+const FLAG_RANDOM_PITCH: &str = "RANDOMPITCH";
+const FLAG_NO_DUPLICATES: &str = "NODUPLICATES";
+const APPLIED_FLAGS: [&str; 3] = [FLAG_CHANNEL_PREEMPT, FLAG_RANDOM_PITCH, FLAG_NO_DUPLICATES];
+/// Resolution of the pitch draw for `RANDOMPITCH`.
+const PITCH_STEPS: usize = 1 << 16;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
@@ -250,6 +389,105 @@ impl CampaignAudio {
             }
         }
     }
+
+    /// Prepares the session's sources once. A failure is reported and not retried.
+    pub(crate) fn ensure_bank(
+        &mut self,
+        sources: &Sources,
+        session: &mut MapScriptSession<MapStartupHost>,
+    ) {
+        if self.bank.is_some() || self.prepare_failed {
+            return;
+        }
+        let Some(reader) = published_reader(&sources.requests, &sources.sources, session) else {
+            return;
+        };
+        let Some(host) = session.host() else { return };
+        let race = host
+            .objects()
+            .local_race_preference_constant()
+            .map_err(|error| error.to_string());
+        let maximum = volume_maximum(session);
+        let seed = sources.seed.prepared.unwrap_or_default();
+        match prepare_bank(reader, race, seed, maximum) {
+            Ok(bank) => self.bank = Some(bank),
+            Err(error) => {
+                self.prepare_failed = true;
+                self.report(error);
+            }
+        }
+    }
+
+    /// Logs a problem the first time it occurs and keeps the latest for inspection.
+    pub(crate) fn report(&mut self, error: String) {
+        if self.reported.len() < MAX_REPORTS && self.reported.insert(error.clone()) {
+            warn!("campaign audio unavailable: {error}");
+        }
+        self.last_error = Some(error);
+    }
+
+    /// Starts the named row of a sound table at the user's effects volume.
+    ///
+    /// `CHANNELFULLPREEMPT` ends the sounds on the row's channel, `NODUPLICATES` skips a
+    /// start while the row is audible and `RANDOMPITCH` varies the pitch by up to
+    /// `PitchVariance`. Positioning (`WANT3D`) and the remaining flags are not applied and
+    /// are reported once per flag.
+    pub(crate) fn play(
+        &mut self,
+        table: &'static str,
+        name: &str,
+        effects: f32,
+        commands: &mut Commands,
+        assets: &mut Assets<AudioSource>,
+        live: &Query<(Entity, &GameSound)>,
+    ) -> Result<(), String> {
+        let bank = self
+            .bank
+            .as_mut()
+            .ok_or("campaign audio sources are not ready")?;
+        let row = bank.row(table, name)?;
+        for flag in &row.flags {
+            if !APPLIED_FLAGS.contains(&flag.as_str()) && self.unapplied_flags.insert(flag.clone())
+            {
+                warn!("campaign audio: row flag {flag} (first seen on {name}) is not applied");
+            }
+        }
+        let flagged = |wanted: &str| row.flags.iter().any(|flag| flag == wanted);
+        if flagged(FLAG_NO_DUPLICATES) && live.iter().any(|(_, sound)| sound.name == row.name) {
+            return Ok(());
+        }
+        let member = &row.members[bank.rng.below(row.members.len())];
+        let bytes = bank.sound_bytes(member)?;
+        let mut speed = row.pitch;
+        if flagged(FLAG_RANDOM_PITCH) {
+            if row.pitch_variance >= row.pitch {
+                return Err(format!(
+                    "{table} row {name:?}: PitchVariance must stay below Pitch for RANDOMPITCH"
+                ));
+            }
+            let draw = bank.rng.below(PITCH_STEPS) as f32 / PITCH_STEPS as f32;
+            speed += row.pitch_variance * (2.0 * draw - 1.0);
+        }
+        if flagged(FLAG_CHANNEL_PREEMPT) {
+            for (entity, sound) in live {
+                if sound.channel == row.channel {
+                    commands.entity(entity).despawn();
+                }
+            }
+        }
+        commands.spawn((
+            AudioPlayer(assets.add(AudioSource { bytes })),
+            PlaybackSettings::DESPAWN
+                .with_volume(bevy::audio::Volume::Linear(row.volume * effects))
+                .with_speed(speed),
+            GameSound {
+                name: row.name,
+                channel: row.channel,
+            },
+            AuthoredVolume(row.volume),
+        ));
+        Ok(())
+    }
 }
 
 /// Source reader of the published session, under the same publication checks as the HUD.
@@ -276,6 +514,7 @@ fn prepare_bank(
     reader: Arc<Resolver>,
     race: Result<Option<String>, String>,
     seed: i32,
+    volume_maximum: Result<f32, String>,
 ) -> Result<Bank, String> {
     let text = reader
         .resolve_bounded(SKIN, MAX_SKIN_BYTES)
@@ -289,15 +528,40 @@ fn prepare_bank(
         skin,
         sections,
         rng: Rng(u64::from(seed.cast_unsigned())),
+        volume_maximum,
+        tables: BTreeMap::new(),
+        sounds: BTreeMap::new(),
+        sounds_bytes: 0,
     })
 }
 
+/// The script's sound-volume range, read from the retained `SetSoundVolumeBJ` source.
+fn volume_maximum(session: &MapScriptSession<MapStartupHost>) -> Result<f32, String> {
+    let context = session
+        .context()
+        .ok_or("published script context missing")?;
+    let helper = context
+        .scripts
+        .program()
+        .function("SetSoundVolumeBJ")
+        .ok_or("sound-volume helper missing")?;
+    let source = context
+        .scripts
+        .source(&helper.source)
+        .ok_or_else(|| format!("{}: retained sound-volume source missing", helper.source))?;
+    let scale = peacecraft3::sound_volume::VolumeScale::checked(source.as_bytes())
+        .map_err(|error| format!("{}: {error}", helper.source))?;
+    Some(scale.maximum)
+        .filter(|maximum| maximum.is_finite() && *maximum > 0.0)
+        .ok_or_else(|| format!("{}: invalid sound-volume range", helper.source))
+}
+
 #[derive(bevy::ecs::system::SystemParam)]
-struct Sources<'w> {
+pub(crate) struct Sources<'w> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
     seed: Res<'w, CampaignSeed>,
-    settings: Res<'w, crate::menu_settings::Backend>,
+    pub(crate) settings: Res<'w, crate::menu_settings::Backend>,
 }
 
 fn drive_music(
@@ -340,21 +604,8 @@ fn drive_music(
         }
         None => return,
     };
-    if audio.bank.is_none() && !audio.prepare_failed && (thematic.is_some() || map.is_some()) {
-        let reader = published_reader(&sources.requests, &sources.sources, &session);
-        let race = session
-            .host()
-            .map(|host| host.objects().local_race_preference_constant())
-            .map(|race| race.map_err(|error| error.to_string()));
-        if let (Some(reader), Some(race)) = (reader, race) {
-            match prepare_bank(reader, race, sources.seed.prepared.unwrap_or_default()) {
-                Ok(bank) => audio.bank = Some(bank),
-                Err(error) => {
-                    audio.prepare_failed = true;
-                    report(&mut audio, error);
-                }
-            }
-        }
+    if thematic.is_some() || map.is_some() {
+        audio.ensure_bank(&sources, &mut session);
     }
     let audible = !music.is_empty();
     let step = audio.step(thematic.as_deref(), map, audible);
@@ -386,26 +637,33 @@ fn drive_music(
                 }
                 Err(error) => {
                     audio.failed = audio.playing.take();
-                    report(&mut audio, error);
+                    audio.report(error);
                 }
             }
         }
-        Err(error) => report(&mut audio, error),
-    }
-}
-
-fn report(audio: &mut CampaignAudio, error: String) {
-    if audio.last_error.as_deref() != Some(&error) {
-        warn!("campaign music unavailable: {error}");
-        audio.last_error = Some(error);
+        Err(error) => audio.report(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     const SKIN_TEXT: &str = "[Human]\nMusic_V0=a.mp3;b.mp3;c.mp3\nMusic_V1=x.mp3;a.mp3\n[Orc]\nMusic_V1=o.mp3\n[Default]\nFallback_V1=d.mp3\n";
+
+    const TABLE: &str = "UI\\SoundInfo\\Test.slk";
+    const HEADER: [&str; 9] = [
+        "SoundName",
+        "FileNames",
+        "DirectoryBase",
+        "Volume",
+        "Pitch",
+        "PitchVariance",
+        "Priority",
+        "Channel",
+        "Flags",
+    ];
 
     fn bank(expansion: bool, sections: &[&str]) -> Bank {
         Bank {
@@ -414,7 +672,118 @@ mod tests {
             sections: sections.iter().map(|s| (*s).to_owned()).collect(),
             expansion,
             rng: Rng(7),
+            volume_maximum: Ok(127.0),
+            tables: BTreeMap::new(),
+            sounds: BTreeMap::new(),
+            sounds_bytes: 0,
         }
+    }
+
+    fn slk(rows: &[[&str; 9]]) -> Vec<u8> {
+        let mut text = String::from("ID;PWXL;N;E\r\n");
+        for (y, row) in std::iter::once(HEADER)
+            .chain(rows.iter().copied())
+            .enumerate()
+        {
+            for (x, cell) in row.iter().enumerate() {
+                text.push_str(&format!("C;X{};Y{};K\"{cell}\"\r\n", x + 1, y + 1));
+            }
+        }
+        text.push_str("E\r\n");
+        text.into_bytes()
+    }
+
+    fn rows() -> Vec<u8> {
+        slk(&[
+            [
+                "TestWhat",
+                "TestWhat1.wav,TestWhat2.wav,",
+                "Units\\Test\\",
+                "127",
+                "1",
+                "0.01",
+                "1000",
+                "1",
+                "WANT3D,CHANNELFULLPREEMPT,RANDOMPITCH",
+            ],
+            [
+                "TestYes",
+                "TestYes1.wav",
+                "Units\\Test",
+                "64",
+                "1",
+                "0",
+                "1000",
+                "3",
+                "NODUPLICATES",
+            ],
+            [
+                "Disabled",
+                "_",
+                "Units\\Test\\",
+                "10",
+                "1",
+                "0",
+                "1",
+                "2",
+                "0",
+            ],
+            [
+                "TooLoud",
+                "TestYes1.wav",
+                "Units\\Test\\",
+                "200",
+                "1",
+                "0",
+                "1",
+                "2",
+                "0",
+            ],
+            [
+                "BadPitch",
+                "TestYes1.wav",
+                "Units\\Test\\",
+                "10",
+                "1",
+                "-1",
+                "1",
+                "2",
+                "0",
+            ],
+            [
+                "WidePitch",
+                "TestYes1.wav",
+                "Units\\Test\\",
+                "10",
+                "1",
+                "2",
+                "1",
+                "2",
+                "RANDOMPITCH",
+            ],
+            [
+                "Twice",
+                "TestYes1.wav",
+                "Units\\Test\\",
+                "10",
+                "1",
+                "0",
+                "1",
+                "2",
+                "0",
+            ],
+            [
+                "Twice",
+                "TestYes1.wav",
+                "Units\\Test\\",
+                "10",
+                "1",
+                "0",
+                "1",
+                "2",
+                "0",
+            ],
+        ])
     }
 
     struct Memory {
@@ -458,10 +827,18 @@ mod tests {
     }
 
     fn synthetic_reader() -> Arc<Resolver> {
-        let files = ["a.mp3", "b.mp3", "c.mp3", "x.mp3", "o.mp3", "d.mp3"]
-            .iter()
-            .map(|name| ((*name).to_owned(), name.as_bytes().to_vec()))
-            .collect();
+        let mut files: Vec<(String, Vec<u8>)> =
+            ["a.mp3", "b.mp3", "c.mp3", "x.mp3", "o.mp3", "d.mp3"]
+                .iter()
+                .map(|name| ((*name).to_owned(), name.as_bytes().to_vec()))
+                .collect();
+        files.push((TABLE.into(), rows()));
+        for name in ["TestWhat1", "TestWhat2", "TestYes1"] {
+            files.push((
+                format!("Units\\Test\\{name}.wav"),
+                format!("pcm:{name}").into_bytes(),
+            ));
+        }
         Arc::new(
             Resolver::new(
                 pcx_assets::GameMode {
@@ -656,5 +1033,237 @@ mod tests {
         assert_eq!(bank.read("a.mp3", 16).unwrap(), b"a.mp3");
         assert!(bank.read("a.mp3", 2).is_err());
         assert!(bank.read("missing.mp3", 16).is_err());
+    }
+
+    #[test]
+    fn rows_resolve_files_volume_and_flags_from_the_table() {
+        let mut bank = bank(true, &["Human"]);
+        let what = bank.row(TABLE, "testwhat").unwrap();
+        assert_eq!(
+            what.members,
+            ["Units\\Test\\TestWhat1.wav", "Units\\Test\\TestWhat2.wav"]
+        );
+        assert_eq!(what.volume, 1.0);
+        assert_eq!(
+            (what.pitch, what.pitch_variance, what.channel),
+            (1.0, 0.01, 1)
+        );
+        assert_eq!(what.flags, ["WANT3D", "CHANNELFULLPREEMPT", "RANDOMPITCH"]);
+        let yes = bank.row(TABLE, "TestYes").unwrap();
+        assert_eq!(yes.members, ["Units\\Test\\TestYes1.wav"]);
+        assert_eq!(yes.volume, 64.0 / 127.0);
+        assert_eq!(yes.flags, ["NODUPLICATES"]);
+    }
+
+    #[test]
+    fn unusable_rows_are_errors_naming_the_row() {
+        let mut bank = bank(true, &["Human"]);
+        for (name, reason) in [
+            ("Missing", "not found"),
+            ("Twice", "more than once"),
+            ("Disabled", "no file"),
+            ("TooLoud", "Volume"),
+            ("BadPitch", "Pitch"),
+        ] {
+            let error = bank.row(TABLE, name).unwrap_err();
+            assert!(error.contains(reason) && error.contains(name), "{error}");
+        }
+        assert!(bank.row("UI\\SoundInfo\\Absent.slk", "TestYes").is_err());
+        bank.volume_maximum = Err("no range".into());
+        assert_eq!(bank.row(TABLE, "TestYes").unwrap_err(), "no range");
+    }
+
+    #[test]
+    fn sound_files_are_cached_within_the_bound() {
+        let mut bank = bank(true, &["Human"]);
+        let first = bank.sound_bytes("Units\\Test\\TestYes1.wav").unwrap();
+        let again = bank.sound_bytes("units\\test\\testyes1.wav").unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        assert_eq!(bank.sounds_bytes, first.len());
+        bank.sounds_bytes = SOUND_CACHE_BYTES;
+        bank.sound_bytes("Units\\Test\\TestWhat1.wav").unwrap();
+        assert_eq!(bank.sounds.len(), 1);
+    }
+
+    fn world(seed: u64) -> World {
+        let mut world = World::new();
+        world.init_resource::<Assets<AudioSource>>();
+        let mut audio = audio_with(bank(true, &["Human"]));
+        audio.bank.as_mut().unwrap().rng = Rng(seed);
+        world.insert_resource(audio);
+        world
+    }
+
+    fn play(world: &mut World, name: &str) -> Result<(), String> {
+        let name = name.to_owned();
+        world
+            .run_system_once(
+                move |mut audio: ResMut<CampaignAudio>,
+                      mut commands: Commands,
+                      mut assets: ResMut<Assets<AudioSource>>,
+                      live: Query<(Entity, &GameSound)>| {
+                    audio.play(TABLE, &name, 0.5, &mut commands, &mut assets, &live)
+                },
+            )
+            .unwrap()
+    }
+
+    fn voices(world: &mut World) -> Vec<(String, f32, f32)> {
+        let mut query = world.query::<(&GameSound, &PlaybackSettings, &AuthoredVolume)>();
+        let mut found: Vec<_> = query
+            .iter(world)
+            .map(|(sound, settings, authored)| {
+                let bevy::audio::Volume::Linear(volume) = settings.volume else {
+                    panic!("linear volume expected");
+                };
+                assert_eq!(
+                    authored.0 * 0.5,
+                    volume,
+                    "start volume is gain times effects"
+                );
+                (sound.name.clone(), volume, settings.speed)
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found
+    }
+
+    #[test]
+    fn a_row_becomes_one_audio_entity_with_its_source_bytes() {
+        let mut world = world(1);
+        play(&mut world, "TestYes").unwrap();
+        let found = voices(&mut world);
+        assert_eq!(found, [("TestYes".to_owned(), 64.0 / 127.0 * 0.5, 1.0)]);
+        let mut players = world.query::<&AudioPlayer>();
+        let handle = players.single(&world).unwrap().0.clone();
+        let assets = world.resource::<Assets<AudioSource>>();
+        assert_eq!(&*assets.get(&handle).unwrap().bytes, b"pcm:TestYes1");
+    }
+
+    #[test]
+    fn random_pitch_stays_within_the_variance_and_follows_the_seed() {
+        let mut speeds = Vec::new();
+        for seed in [11, 11, 12] {
+            let mut world = world(seed);
+            play(&mut world, "TestWhat").unwrap();
+            let found = voices(&mut world);
+            let (_, _, speed) = found[0];
+            assert!((0.99..=1.01).contains(&speed), "{speed}");
+            speeds.push(speed);
+        }
+        assert_eq!(speeds[0], speeds[1]);
+        assert_ne!(speeds[0], speeds[2]);
+    }
+
+    #[test]
+    fn channel_preemption_cuts_the_previous_sound_on_the_channel() {
+        let mut world = world(2);
+        play(&mut world, "TestWhat").unwrap();
+        play(&mut world, "TestYes").unwrap();
+        assert_eq!(voices(&mut world).len(), 2, "other channels coexist");
+        play(&mut world, "TestWhat").unwrap();
+        let found = voices(&mut world);
+        let names: Vec<_> = found.iter().map(|v| v.0.as_str()).collect();
+        assert_eq!(names, ["TestWhat", "TestYes"]);
+        assert_eq!(world.query::<&GameSound>().iter(&world).count(), 2);
+    }
+
+    #[test]
+    fn a_pitch_variance_that_would_stop_playback_is_an_error() {
+        let mut world = world(6);
+        let error = play(&mut world, "WidePitch").unwrap_err();
+        assert!(error.contains("PitchVariance"), "{error}");
+        assert_eq!(voices(&mut world).len(), 0);
+    }
+
+    #[test]
+    fn a_no_duplicates_row_does_not_start_while_audible() {
+        let mut world = world(3);
+        play(&mut world, "TestYes").unwrap();
+        play(&mut world, "TestYes").unwrap();
+        assert_eq!(voices(&mut world).len(), 1);
+    }
+
+    #[test]
+    fn flags_that_are_not_applied_are_remembered_for_one_report() {
+        let mut world = world(4);
+        play(&mut world, "TestWhat").unwrap();
+        play(&mut world, "TestWhat").unwrap();
+        let audio = world.resource::<CampaignAudio>();
+        assert_eq!(audio.unapplied_flags.iter().collect::<Vec<_>>(), ["WANT3D"]);
+    }
+
+    #[test]
+    fn playing_before_the_sources_are_ready_is_an_error() {
+        let mut world = World::new();
+        world.init_resource::<Assets<AudioSource>>();
+        world.init_resource::<CampaignAudio>();
+        assert!(play(&mut world, "TestYes").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an installed chapter"]
+    fn the_installed_sound_tables_resolve_row_by_row() {
+        let mut app = crate::native_campaign::tests::started_app();
+        app.init_resource::<crate::menu_settings::Backend>()
+            .init_resource::<CampaignAudio>();
+        app.world_mut()
+            .run_system_once(
+                |mut audio: ResMut<CampaignAudio>,
+                 mut session: ResMut<MapScriptSession<MapStartupHost>>,
+                 sources: Sources| audio.ensure_bank(&sources, &mut session),
+            )
+            .unwrap();
+        let mut audio = app.world_mut().resource_mut::<CampaignAudio>();
+        assert_eq!(audio.last_error, None);
+        let bank = audio
+            .bank
+            .as_mut()
+            .expect("the published session's sources");
+        let mut failures = Vec::new();
+        for table in [
+            "UI\\SoundInfo\\UISounds.slk",
+            "UI\\SoundInfo\\UnitAckSounds.slk",
+        ] {
+            bank.row(table, "probe").unwrap_err();
+            let names: Vec<String> = bank.tables[table]
+                .data_rows()
+                .filter_map(|row| row.by_name("SoundName").map(str::to_owned))
+                .collect();
+            let mut files = 0;
+            for name in &names {
+                match bank.row(table, name) {
+                    Ok(row) => {
+                        for member in &row.members {
+                            files += 1;
+                            if let Err(error) = bank.sound_bytes(member) {
+                                failures.push(error);
+                            }
+                        }
+                    }
+                    Err(error) => failures.push(error),
+                }
+            }
+            println!("{table}: {} rows, {files} files", names.len());
+        }
+        for failure in failures.iter().take(40) {
+            println!("unresolved: {failure}");
+        }
+        println!("{} unresolved in total", failures.len());
+        for known in ["PeasantWhat", "FootmanYes", "ArthasYesAttack"] {
+            bank.row("UI\\SoundInfo\\UnitAckSounds.slk", known).unwrap();
+        }
+        bank.row("UI\\SoundInfo\\UISounds.slk", "InterfaceError")
+            .unwrap();
+    }
+
+    #[test]
+    fn repeated_reports_are_logged_once_and_the_latest_is_kept() {
+        let mut audio = CampaignAudio::default();
+        audio.report("a".into());
+        audio.report("a".into());
+        audio.report("b".into());
+        assert_eq!(audio.reported.len(), 2);
+        assert_eq!(audio.last_error.as_deref(), Some("b"));
     }
 }

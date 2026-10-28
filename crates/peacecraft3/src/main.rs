@@ -9,6 +9,7 @@ use peacecraft3::browser_read;
 mod import_assets;
 
 mod button_actions;
+mod campaign_ack;
 mod campaign_actors;
 mod campaign_audio;
 mod campaign_build_ui;

@@ -459,6 +459,7 @@ pub(crate) fn app_with_plugins(
     crate::menu_audio::install(&mut app);
     peacecraft3::script_audio::install(&mut app);
     crate::campaign_audio::install(&mut app);
+    crate::campaign_ack::install(&mut app);
     crate::glue_menu::install(&mut app);
     crate::hud_render::install(&mut app);
     crate::campaign_messages::install(&mut app);

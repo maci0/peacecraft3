@@ -98,8 +98,52 @@ hand-back, clear, failure latch, bounded reads) and the Human01 probe
 `[Human]` `Music_V0` entry `Human1.mp3` follows when the dialogue ends, and that no
 second track overlaps. Entities are checked, not a device.
 
+## Sound rows (`campaign_audio.rs`) and unit voices (`campaign_ack.rs`)
+
+`CampaignAudio::play` starts one named row of a `UI\SoundInfo` table through the
+session resolver. Columns come from the table: `FileNames` (one alternative drawn
+per start from the seeded stream, `_` placeholders skipped), `DirectoryBase`
+(exactly one separator inserted), `Volume` divided by the script's sound range
+(`SetSoundVolumeBJ`, the range `script_audio` and the menu already use), `Pitch`,
+`PitchVariance`, `Channel`, `Flags`. A row that is missing, defined twice,
+list-less, or outside the range is an error naming the row. Voices run at
+`Volume` times the user's effects setting (`AuthoredVolume` on the existing
+effects bus) and end with their sound.
+
+Flags applied: `CHANNELFULLPREEMPT` (ends the other game sounds on the row's
+channel; this is the stated meaning of the flag name and the script mixer's
+channel rule, not a read of the player), `NODUPLICATES` (skip while the row is
+audible), `RANDOMPITCH` (speed is `Pitch` plus a draw within `PitchVariance`; the
+band shape is an inference). Every other flag (`WANT3D`, `NODUPEUSERNAMES`,
+`DYNAMICOCCLUSION`, ...) is logged once and not applied: voices are not
+positioned or attenuated.
+
+Unit voices: a `Select` command plays `<unitSound>What`, a move/smart/patrol order
+`<unitSound>Yes`, an attack order or a smart order on an enemy
+`<unitSound>YesAttack`, where `unitSound` is the unit's UnitUI cell. The suffix
+names are shipped bytes (`PeasantWhat`, `FootmanYes`, `ArthasYesAttack`, ...); which
+command plays which is an inference. Only the local player's units speak, one
+voice per batch of commands. Not implemented: `Pissed` (repeat-click count
+unknown), `Ready` (no production-complete event is observed), `Warcry`, and
+acknowledgement of spell orders.
+
+Data check (`the_installed_sound_tables_resolve_row_by_row`, Legacy 1.29 install):
+all 134 `UISounds.slk` rows and all 1155 `UnitAckSounds.slk` rows parse; 3114 of
+3149 ack files are present. The 35 absent entries are named by the table but not
+shipped (all `HeroRanger*` rows, `MoonPriestessWarcry1`, `DreadLordMorphed*`,
+`IceTrollPissed5`, `OrcLumberMill`, `PigFarmWhat1`, `DraeneiHutWhat1`,
+`SacrificialAltarWhat1`, and two malformed paths). Picking one of those
+alternatives is reported once and plays nothing.
+
+Verification: `campaign_audio::tests` use a synthetic archive and table (row
+parsing, errors, volume/pitch/seed, preemption, duplicates, flag reports, cache
+bound) and `campaign_ack::tests` cover the command-to-row mapping. The Human01
+probe selects Arthas and orders a move through the command log and asserts the
+`ArthasWhat` and `ArthasYes` rows become entities with their source bytes.
+
 ## Status
 
 | Category | State |
 |---|---|
-| Map and thematic music | connected (this section) |
+| Map and thematic music | connected (music section) |
+| Unit selection and order acknowledgement | connected for `What`, `Yes`, `YesAttack` (unit voices section) |
