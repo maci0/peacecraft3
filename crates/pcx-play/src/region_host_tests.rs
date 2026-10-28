@@ -147,6 +147,21 @@ fn inputs(h: &mut ObjectHost) -> (Value, Value, Value) {
 }
 
 #[test]
+fn live_region_enumeration_includes_empty_and_added_regions() {
+    assert!(base(COMMON, MAP, 64).executed_regions().is_err());
+    let mut h = host(limits());
+    let (first, rectangle, _) = inputs(&mut h);
+    let second = h.native(CREATE, &[]).unwrap();
+    h.native(ADD, &[second.clone(), rectangle]).unwrap();
+    let regions: Vec<_> = h.executed_regions().unwrap().collect();
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0].0, id(&first));
+    assert!(regions[0].1.is_empty());
+    assert_eq!(regions[1].0, id(&second));
+    assert_eq!(regions[1].1[0].bounds, [-4., 2., 8., 10.]);
+}
+
+#[test]
 fn owned_vm_retains_call_time_bounds_and_both_subscription_kinds_without_evaluation() {
     let mut vm = host(limits()).into_vm();
     vm.init_globals().unwrap();

@@ -538,6 +538,7 @@ fn human05_placement_diagnostic() {
     let identity =
         pcx_play::campaign_inputs::client_identity(&image, &image_path.display().to_string());
     let rules = Rules::reviewed_legacy(&image, identity.clone()).unwrap();
+    pcx_play::native_path_hierarchy::EntryRules::reviewed_legacy(&image, &rules).unwrap();
     let mode = GameMode {
         build: Build::V1_29b,
         addon: Addon::NoAddon,

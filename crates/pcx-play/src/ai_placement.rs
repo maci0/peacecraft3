@@ -1283,6 +1283,7 @@ mod tests {
     fn reviewed_executable_operands_are_admitted() {
         let path = std::env::var_os("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
         let image = std::fs::read(path).unwrap();
-        Rules::reviewed_legacy(&image, rules().origin).unwrap();
+        let rules = Rules::reviewed_legacy(&image, rules().origin).unwrap();
+        crate::native_path_hierarchy::EntryRules::reviewed_legacy(&image, &rules).unwrap();
     }
 }

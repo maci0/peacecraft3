@@ -2,6 +2,97 @@
 //!
 //! Callers must supply source-qualified occupancy classes and search inputs.
 
+/// Entry tests for a cell in the selected client's full-mask reach query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntryRules {
+    active: u32,
+    registered: u32,
+    forbidden: u32,
+    class_mask: u32,
+    object_class: u32,
+    pathing_mask: u32,
+}
+
+impl EntryRules {
+    /// Decode the tests from the same verified image used by placement.
+    pub fn reviewed_legacy(
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<Self, String> {
+        use crate::neutral_player::{RuleInputBudget, sha256};
+        use crate::neutral_rule_input::Pe;
+
+        if rules.image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
+            || sha256(image) != rules.image_sha256
+        {
+            return Err("reach image identity mismatch".into());
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let read = |address, count| -> Result<&[u8], String> {
+            pe.read_from(address, true)
+                .map_err(|e| e.to_string())?
+                .get(..count)
+                .ok_or_else(|| format!("truncated reach entry test at {address:#x}"))
+        };
+        let class = read(0x8be4ac, 6)?;
+        let active = read(0x8be4ce, 5)?;
+        let registered = read(0x8be4d8, 5)?;
+        let object = read(0x8be4ea, 6)?;
+        let forbidden = read(0x8be4f2, 7)?;
+        let pathing = read(0x8be504, 6)?;
+        if class[..2] != [0x81, 0xe3]
+            || active[..2] != [0xc1, 0xe8]
+            || active[3..] != [0xa8, 0x01]
+            || registered[..2] != [0xc1, 0xe8]
+            || registered[3..] != [0xa8, 0x01]
+            || object[..2] != [0x81, 0xfb]
+            || forbidden[..3] != [0xf7, 0x42, 0x44]
+            || pathing[..2] != [0xf7, 0xc1]
+        {
+            return Err("unrecognized reach entry test instructions".into());
+        }
+        let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().expect("checked width"));
+        Ok(Self {
+            active: 1_u32
+                .checked_shl(u32::from(active[2]))
+                .ok_or("active bit")?,
+            registered: 1_u32
+                .checked_shl(u32::from(registered[2]))
+                .ok_or("registration bit")?,
+            forbidden: word(&forbidden[3..]),
+            class_mask: word(&class[2..]),
+            object_class: word(&object[2..]),
+            pathing_mask: word(&pathing[2..]),
+        })
+    }
+
+    /// Test one live, not-yet-visited entry in its cell chain.
+    /// The caller still applies the native chain traversal limit and static cell mask.
+    pub fn blocks(
+        self,
+        present: bool,
+        entry_flags: u32,
+        entry_state: u32,
+        chain_class: u32,
+        selected_mask: u32,
+    ) -> bool {
+        present
+            && entry_flags & self.active != 0
+            && entry_state & self.registered != 0
+            && chain_class & self.class_mask == self.object_class
+            && entry_state & self.forbidden == 0
+            && entry_flags & selected_mask & self.pathing_mask != 0
+    }
+}
+
 /// Reach operands from the same verified image used by the placement diagnostic.
 #[cfg(feature = "test-fixtures")]
 pub fn diagnostic_operands(
@@ -931,6 +1022,28 @@ pub fn search_observed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entry_tests_keep_object_flags_and_chain_class_distinct() {
+        let rules = EntryRules {
+            active: 0x100,
+            registered: 0x200,
+            forbidden: 0x40,
+            class_mask: 0xf000,
+            object_class: 0x3000,
+            pathing_mask: 0xff,
+        };
+        let check =
+            |present, flags, state, class, mask| rules.blocks(present, flags, state, class, mask);
+        assert!(check(true, 0x104, 0x200, 0x3001, 4));
+        assert!(!check(false, 0x104, 0x200, 0x3001, 4));
+        assert!(!check(true, 4, 0x200, 0x3001, 4));
+        assert!(!check(true, 0x104, 0, 0x3001, 4));
+        assert!(!check(true, 0x104, 0x240, 0x3001, 4));
+        assert!(!check(true, 0x104, 0x200, 0x4001, 4));
+        assert!(!check(true, 0x104, 0x200, 0x3001, 2));
+        assert!(!check(true, 0, 0x200, 0x3001, 4));
+    }
 
     #[test]
     fn parent_counts_outside_and_blocked_children_and_preserves_links() {

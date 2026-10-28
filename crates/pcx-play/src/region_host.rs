@@ -137,6 +137,28 @@ impl ObjectHost {
         Ok(self.region_admission()?.events)
     }
 
+    /// Enumerate retained regions and the rectangle additions executed for each.
+    pub fn executed_regions(
+        &self,
+    ) -> Result<impl Iterator<Item = (HandleId, &[RegionRectRequest])> + '_, Error> {
+        self.region_admission()?;
+        Ok(self
+            .inner
+            .arena
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| {
+                if let Entry::Region { additions } = entry {
+                    Some((
+                        self.inner.id(i, CREATE).expect("allocated identity"),
+                        additions.as_slice(),
+                    ))
+                } else {
+                    None
+                }
+            }))
+    }
+
     pub fn region_rect_requests(&self, id: HandleId) -> Result<&[RegionRectRequest], Error> {
         self.region_admission()?;
         match self

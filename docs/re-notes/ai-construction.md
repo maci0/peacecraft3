@@ -514,7 +514,25 @@ through `0x8c1950`, which initializes their state to zero; the separate `0x8c19e
 that bit on entries it creates. The direct call at `0x8013a3` is in a virtual method of the
 trigger-region class: its table at `0xebd234` also contains the class-name getter at `0x801290`.
 The call at `0x805343` is used by the texture-cell path at `0x6c098f`. These findings do not
-establish that trigger-region entries pass the other selected-mask tests. The diagnostic applies
+by themselves establish that trigger-region entries pass the other selected-mask tests. A newly
+created region entry starts with its object flags at `+0x34` clear (`0x8c19c6`). The rectangle
+addition path `0x4a4ed0` to `0x801a50` and `0x8c23f0` inserts the region into each covered
+cell through `0x8c2470`. It assigns a class to the cell-chain link, but does not set the entry's
+object flags. The two words are distinct: `0x8be420` checks the entry's active and pathing bits
+as well as the link class and entry state. A source-checked classifier now exposes those tests;
+it does not reconstruct the ordered cell chains or apply their 49-entry traversal limit.
+Deserialization can restore the object flags (`0x8c1a44`), so an initial zero is not a general
+proof about every later region entry.
+
+The selected Human05 `war3map.w3r` contains 311 authored rectangles. Comparing their bounds
+with the 1600-unit search half-width gives 24, 18 and 23 intersections for the baseline,
+workers-at-start and workers-near-mine captured origins. The map script registers one of the
+intersecting rectangles for an enter event in each of the first two layouts and none in the
+third. Authored rectangles are not themselves equivalent to live registered regions, and the
+reach traversal can visit outside this candidate square. Those counts therefore do not prove a
+complete live occupancy cache. The region host now exposes its executed region handles and
+rectangle-addition requests without allocating; the requests still need native cell rasterization
+and insertion ordering before they can supply the reach query. The diagnostic applies
 this distinction to units whose selected data says they are not structures, while retaining
 structure footprint and terrain stamps.
 This class-to-entry association, absent auxiliary links and complete order-time object state
@@ -1118,6 +1136,11 @@ deterministically sampled unsigned words; that is not a comparison of full reach
 - Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
   boundary cases and placement requirements such as blight. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.
+  The current placement cache stores aggregate cell counts rather than the ordered native
+  entry chains. Unit records preserve requested creation coordinates and current accepted
+  positions, but do not generally retain the accepted creation position or creation time;
+  model animation creation time is conditional on model admission. The live effect bound
+  therefore cannot yet use those fields as complete movement history.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
 - Cost charging for AI construction (the human construction path charges when the structure is

@@ -157,7 +157,10 @@ details in [AI construction](ai-construction.md).
   sites at their recorded dequeue counts with the hierarchical reach check enabled. Its
   sampled workers and supplied town origins do not replay movement or timer callbacks;
   general live reach inputs, effect-source qualification and town selection remain open.
-  The 1223 s Human05 refusal remains in both `town-order` runs.
+  The 1223 s Human05 refusal remains in both `undead-lifecycle` runs. A region registered by
+  the script overlaps the baseline candidate square; the individual entry tests are now decoded,
+  but the live cell-chain ordering and traversal limit remain unrepresented. See
+  [AI construction](ai-construction.md).
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

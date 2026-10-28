@@ -5722,3 +5722,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   with reach enabled. The simulation budget check passed with lower Human03 allocations and
   bytes. Human03 and Human04 reached victory and matched their `g1` checkpoint and RNG lines;
   both Human05 runs stopped at 1223 s with matching checkpoints and the named refusal.
+
+### 2026-10-29: Reach entry classification
+
+- [~] Added source-checked tests for reach entries and a no-allocation iterator over retained
+  region requests. A trigger-region link's class and its entry flags are separate; ordinary
+  rectangle addition does not set the entry's active flags. A Human05 trigger rectangle
+  intersects the baseline search square. The live ordered cell chains and 49-entry limit
+  are not represented by the existing aggregate occupancy cache. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Live AI structure placement remains refused. The live town association, occupancy and
+  links, and complete movement-effect evidence are still required; the existing snapshot
+  results do not validate those inputs. Accepted creation position and creation time are
+  not retained for every unit by the current host.
+- The `pcx-play` library suite passed 2,290 tests with 89 ignored. The pinned executable
+  entry-reader test and native and WASM Clippy with warnings denied passed. The simulation
+  budget check passed, and the sampled baseline and farm searches still selected the recorded
+  sites at dequeues 1 and 280. Human05 was not rerun because production placement remains
+  disconnected.
