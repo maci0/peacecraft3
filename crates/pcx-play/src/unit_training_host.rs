@@ -902,11 +902,11 @@ impl ObjectHost {
             // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
             // whose build ability lists the kind) and, failing that, for an idle unit that
             // upgrades into the kind. With neither the request answers false and orders nothing.
-            // The search is not yet connected to a qualified town, snap or reach check.
+            // The search still lacks live town, texture and reach inputs.
             for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
                 if let Some((rawcode, position)) = self.ai_unit_lists(owner, requested, key)? {
                     let reason = if key == "Builds" {
-                        "; town association, snapping and reach check are not admitted"
+                        "; town association, texture mapping, structure enumeration and reach check are not admitted"
                     } else {
                         ""
                     };

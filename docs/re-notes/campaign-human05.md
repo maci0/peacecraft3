@@ -113,7 +113,7 @@ Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reach
 1223 s refusal. Their Human05 checkpoints, RNG checkpoints and refusal text match each other
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
 changed by those runs. The subsequent placement search implementation is not connected to
-orders, and the refusal now names its unresolved town, snap and reach inputs. No new route
+orders, and the refusal names its unresolved town, texture, enumeration and reach inputs. No new route
 runs were made because the original-map oracle has not been reproduced.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
@@ -130,9 +130,10 @@ details in [AI construction](ai-construction.md).
 ## Open
 
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
-  score caps have a separately tested implementation, as does town-coordinate refresh. The AI
+  score caps have a separately tested implementation, as do town-coordinate refresh and
+  native snap arithmetic. The AI
   search and player orders share a validator, for which the existing player-placement code is
-  the current implementation. Live town association, snapping, the additional reach check and
+  the current implementation. Live town association, texture dimensions, the additional reach check and
   complete texture-rectangle enumeration remain open; undead construction, cost charging,
   worker choice and script retry timing are also open
   ([AI construction](ai-construction.md)). The recreation's human construction path

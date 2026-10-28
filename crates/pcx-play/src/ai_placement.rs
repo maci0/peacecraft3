@@ -1,7 +1,7 @@
 //! Source-qualified pieces of the campaign AI's structure-site search.
 //!
-//! The caller must supply the native-equivalent snapping, terrain sampling, object
-//! enumeration, reach check and shared building validator. This module alone does
+//! The caller must supply terrain sampling, texture dimensions, object enumeration,
+//! reach check and shared building validator. This module alone does
 //! not admit an AI construction order.
 use std::collections::VecDeque;
 
@@ -30,6 +30,10 @@ pub struct Rules {
     other_radius: i32,
     neighbors: [[i32; 2]; 8],
     half: f32,
+    snap_period: i32,
+    snap_half: i32,
+    snap_odd: f32,
+    snap_edge: f32,
 }
 
 impl Rules {
@@ -106,6 +110,16 @@ impl Rules {
         let east = byte(&mut r, 0xad46a2, &[0x8d, 0x4b])? as i8 as i32;
         let half_bytes = r.bytes(0x10db0a8, 4, false)?;
         let half = f32::from_le_bytes(half_bytes.try_into().unwrap());
+        let remainder_mask = r.word(0x4e01a1, &[0x81, 0xe1])? & 0x7fff_ffff;
+        let shift = byte(&mut r, 0x4e01cf, &[0xc1, 0xe0])?;
+        if byte(&mut r, 0x4e01e6, &[0xc1, 0xe6])? != shift || shift >= 30 {
+            return Err("snap alignment shifts differ".into());
+        }
+        let snap_period = i32::try_from(remainder_mask.checked_add(1).ok_or("snap period")?)
+            .map_err(|_| "snap period")?;
+        let snap_half = 1_i32 << shift;
+        let snap_odd = f32::from(byte(&mut r, 0x403b40, &[0x6a])?);
+        let snap_edge = f32::from(byte(&mut r, 0x4015b0, &[0x6a])?);
         if width == 0
             || width > 4096
             || center >= width
@@ -118,6 +132,9 @@ impl Rules {
             || margin != center as f32 * step
             || width != center * 2 + 1
             || classes.iter().any(|v| *v < 0 || *v >= good as i8)
+            || snap_period != snap_half * 2
+            || snap_odd <= 0.
+            || snap_edge <= 0.
         {
             return Err("inconsistent search operands".into());
         }
@@ -145,7 +162,73 @@ impl Rules {
                 [0, north],
             ],
             half,
+            snap_period,
+            snap_half,
+            snap_odd,
+            snap_edge,
         })
+    }
+
+    /// Snap a point using the selected texture dimensions and map bounds.
+    pub fn snap(
+        &self,
+        point: [f32; 2],
+        bounds: [[f32; 2]; 2],
+        dimensions: [u32; 2],
+        quarter: u8,
+    ) -> Result<[f32; 2], String> {
+        use crate::script_random::real;
+        if quarter > 3
+            || dimensions.contains(&0)
+            || point
+                .iter()
+                .chain(bounds.iter().flatten())
+                .any(|v| real::from_f32(*v).is_err())
+        {
+            return Err("invalid AI placement snap inputs".into());
+        }
+        let dimensions = if quarter.is_multiple_of(2) {
+            dimensions
+        } else {
+            [dimensions[1], dimensions[0]]
+        };
+        let mut result = [0.; 2];
+        for axis in 0..2 {
+            let upper = f32::from_bits(
+                real::sub(
+                    real::from_f32(bounds[1][axis]).map_err(|e| e.to_string())?,
+                    real::from_f32(self.snap_edge).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?,
+            );
+            if upper < bounds[0][axis] || !upper.is_finite() {
+                return Err("invalid AI placement map bounds".into());
+            }
+            let value = point[axis].clamp(bounds[0][axis], upper);
+            if value <= i32::MIN as f32 || value >= i32::MAX as f32 {
+                return Err("AI placement snap coordinate exceeds integer range".into());
+            }
+            let integer = value as i32;
+            let base = integer - integer % self.snap_period;
+            let direction = if value < 0. { -1 } else { 1 };
+            let parity = ((dimensions[axis] >> 1) & 1) as i32;
+            let aligned = base
+                .checked_add(direction * parity * self.snap_half)
+                .ok_or("AI placement snap overflow")?;
+            let offset = if !dimensions[axis].is_multiple_of(2) {
+                direction as f32 * self.snap_odd
+            } else {
+                0.
+            };
+            result[axis] = f32::from_bits(
+                real::add(
+                    real::from_i32(aligned).map_err(|e| e.to_string())?,
+                    real::from_f32(offset).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        Ok(result)
     }
 
     /// Refresh the coordinate stored on a town record.
@@ -358,6 +441,10 @@ mod tests {
                 [0, 1],
             ],
             half: 0.5,
+            snap_period: 16,
+            snap_half: 8,
+            snap_odd: 4.,
+            snap_edge: 8.,
         }
     }
 
@@ -379,6 +466,33 @@ mod tests {
             [7., 11.]
         );
         assert!(r.town_center([f32::NAN, 0.], None, None).is_err());
+    }
+
+    #[test]
+    fn snapping_uses_signed_alignment_dimensions_rotation_and_bounds() {
+        let r = rules();
+        let bounds = [[-100., -100.], [100., 100.]];
+        assert_eq!(r.snap([19., -19.], bounds, [4, 2], 0).unwrap(), [16., -24.]);
+        assert_eq!(r.snap([19., -19.], bounds, [4, 2], 1).unwrap(), [24., -16.]);
+        assert_eq!(r.snap([19., -19.], bounds, [3, 1], 0).unwrap(), [28., -20.]);
+        assert_eq!(
+            r.snap([200., -200.], bounds, [4, 4], 0).unwrap(),
+            [80., -96.]
+        );
+        assert!(r.snap([0., 0.], bounds, [0, 2], 0).is_err());
+        assert!(r.snap([0., 0.], bounds, [2, 2], 4).is_err());
+        let mut r = r;
+        r.snap_odd = 3.;
+        assert_eq!(
+            r.snap(
+                [16_777_216., 0.],
+                [[0., 0.], [33_554_432., 100.]],
+                [1, 1],
+                0
+            )
+            .unwrap()[0],
+            16_777_216.
+        );
     }
 
     #[test]

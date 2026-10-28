@@ -5123,3 +5123,25 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   native and WASM Clippy with `-D warnings` passed. `python3 tools/perf/sim_run.py --check`
   passed all deterministic budgets using the selected local install and Human03 map. These
   checks do not establish original placement parity.
+
+### 2026-10-28: AI placement town selection and snapping
+
+- [~] Traced the orange script's `CampaignAI`, `CreateCaptains`, `SetBuildUnit` and town -1
+  request. The native worker-association path selects among town records by a shared route
+  calculation, preferring hall then primary mine for existing player towns; the global fallback
+  prefers primary mine then hall. Its exact metric and Human05's selected record remain open.
+  The placement score enumeration selects structure-class units, not a separate tree or
+  destructable list. Addresses and qualifications:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] Implemented source-qualified snap arithmetic with signed alignment, texture-dimension
+  parity, rotation, map-edge clamping and reviewed real-number operations. Nonstock synthetic
+  tests pass. An ignored local-input test reads Human05 bounds and the stock Necropolis texture:
+  both original Necropolis positions remain stable under the snap when the texture header
+  dimensions are used. This does not establish native texture-axis mapping or site selection.
+- [ ] The search is not connected to construction; live town, texture, enumeration and reach
+  inputs still refuse. There is no full oracle comparison or new Human05 route run. The last
+  pair of verified runs stops at 1223 s, before the victory path:
+  [Human05](docs/re-notes/campaign-human05.md).
+- Gate: headless, muted `cargo test -p pcx-play --lib` passed 2181 tests with 84 ignored; the
+  local-input snap test, native and WASM Clippy with `-D warnings`, and
+  `python3 tools/perf/sim_run.py --check` passed. Budgets were unchanged.

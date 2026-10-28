@@ -52,13 +52,16 @@ claim that the unknown checks have been matched:
   function after translating its pathing type; the selected image maps the walkability type to
   mask 2. The exact edge normalization and dynamic pathing inputs still need qualification.
   Nearby objects modify the first grid through `0xad4c10`, `0x4dfb40`, `0xad4b90` and
-  `0xad4ac0`; their category and radius rules are described below. The spatial enumeration
-  filter is not decoded.
+  `0xad4ac0`; their structure selector and category rules are described below. Exact spatial
+  boundary and dynamic-state behavior remain unqualified.
 - The first search enables an additional check at `0x7fd6b0`. If no site is found and that
   check has failed for at least one candidate, `0xad4970` searches the copy again with that
   additional check disabled (`0xad4a38` through `0xad4aa2`). The result is a failure sentinel
-  if neither immediate nor retained candidates succeed. The check's meaning and later AI-script
-  retry timing remain unknown.
+  if neither immediate nor retained candidates succeed. The town selector's metric wrapper
+  `0x7fd610` also calls `0x7fd6b0`; both lead to `0x8a2270`, which can return a value from a
+  two-coordinate calculation, a result from `0x8a3130`, or -1 when its worklist is exhausted
+  (`0x7fd68c`, `0x7fd8cb`, `0x8a22a3` through `0x8a2365`). The exact reachability rules,
+  movement inputs and later AI-script retry timing remain unknown.
 
 #### Town coordinates
 
@@ -84,14 +87,43 @@ then resolves the reference at `+0x48` of that associated object (`0xac2bd8` thr
 when the player-unit iterator is present (`0xac2c25` through `0xac2c3b`). One initialization
 path allocates the worker-associated object with its town reference initially empty, then
 attaches it to the unit (`0xabb34f` through `0xabb3ea`, setter `0x69dd10`). The removal path
-clears that attachment (`0xac4c9a` through `0xac4ccf`). These do not yet establish when or how
-Human05 fills the town reference, or which town is selected when the argument is -1.
+clears that attachment (`0xac4c9a` through `0xac4ccf`). The selection path is described below;
+the Human05 record's actual contents remain unobserved.
+
+The selected `h05_orange.ai` calls `CampaignAI`, then sets captain homes and queues its first
+Necropolis with `SetBuildUnit`. The selected `common.ai` implementation of `CampaignAI` calls
+`CreateCaptains`; `SetBuildUnit` stores town -1, and `StartUnit` passes that town to
+`SetProduce`. The Human05 map creates the four acolytes before it starts the orange script.
+There is no explicit expansion request in that opening build list.
+
+The worker-association initialization calls `0xabc630` and stores its returned town in the
+associated object (`0xabb448` through `0xabb4b1`, `0xac3830`). With an existing first town,
+`0xabc630` visits up to four town slots in order. For each resolved town it prefers its hall as
+the reference object, otherwise its primary mine; a town with neither is skipped for the
+comparison. It calls `0x7fd610` with the reference object and worker coordinates and associated
+parameters, retaining the first result with the lowest unsigned returned value. If no town supplies a
+reference object it returns the first resolved town instead (`0xabc65a` through `0xabc773`).
+When the first town slot is empty it calls `0xac7120`, which invokes `0xac7550` over the global
+town records. That routine prefers a primary mine and then a hall; without either it uses the
+town coordinates, and passes the selected reference and worker to the same metric wrapper
+(`0xac714d`, `0xac7550` through `0xac779a`). The metric is not yet qualified as a particular
+path or distance, and this trace does not establish the actual contents of the Human05 town
+list at the first build order.
 
 For `ugol`, the caller resolves one of the town's two mine references before searching; a successful order
 passes that resolved handle to `0x69f760`, whereas an ordinary build order passes the selected
 coordinates to `0x698f60` (`0xac2c3d` through `0xac2c89`, `0xac2d92` through `0xac2de1`).
 
 #### Nearby-object score
+
+The search invokes the unit enumerator with the town center, a radius taken from the same
+1600-unit operand as the grid margin, and selector 2 (`0xad4b60`). The selector installs
+predicate `0x696dd0` (`0x68ed7b`, `0x68f018`), which uses the same structure-class bit test as
+`0x696b50`: the unit has bit `0x10000`, except the excluded `flags & 0x08000080 == 0x80`
+combination. This is a structure-unit enumeration, not a separate enumeration of trees or
+other destructables; mines participate when their unit state passes the same predicate. The
+enumerator also applies its state mask (`0x696cf0`). Exact radius-boundary and dynamic-state
+behavior remains to be checked against the recreation.
 
 The client's unit-data constructor binds `buffType` and `buffRadius` to the fields later read by
 `0x67c350` and `0x67c310` (`0x6b3e7f`, `0x6b3e9a`, `0x67cf1e` through `0x67cf3e`).
@@ -125,7 +157,13 @@ specific limitations below.
 
 `0x67ecd0` consults the building's pathing-texture object, transforms coordinates through
 `0x4e00f0`, and uses masks and further callbacks. `0x4e00f0` depends on texture dimensions,
-orientation and coordinate sign, including 64-unit alignment and parity adjustments. The
+orientation and coordinate sign. It first clamps each coordinate to the map minimum and to the
+map maximum minus 32 (`0x7f4a60`, initializer `0x4015b0`). For quarter turns 1 and 3 it swaps
+the two texture dimensions. It truncates each clamped coordinate toward zero, removes its signed
+remainder modulo 64, adds 32 toward that coordinate's sign when bit 1 of the corresponding
+dimension is set, and adds 16 toward the sign when the dimension is odd (`0x4e013d` through
+`0x4e028d`, initializer `0x403b40`). Zero uses the positive sign. Mapping the selected TGA's
+axes to those native dimensions and the live construction facing remain unqualified. The
 recreation's current `construction_position` explicitly uses a source-grid anchor as an
 unqualified snap, and its construction host supports only the Human worker style and a subset of
 placement tokens. Those limitations remain fidelity questions for this shared path.
@@ -133,13 +171,20 @@ placement tokens. Those limitations remain fidelity questions for this shared pa
 ## Recreation
 
 `ai_placement.rs` implements the decoded score raster, clipping of texture-rectangle buffers,
-queue order, candidate classes, tie-break and conditional second pass, and town-coordinate
-refresh. It reads grid and score operands from the fingerprinted executable. Its caller must
-supply terrain samples, complete texture-rectangle cells, snapping, the extra check and the
-shared build validator; it propagates errors from those inputs. Synthetic tests exercise these
-pieces. The module does not yet obtain those inputs from a live map or issue a build order, and
+queue order, candidate classes, tie-break and conditional second pass, town-coordinate refresh,
+and the snap arithmetic. It reads grid, score and snap operands from the fingerprinted executable,
+and uses the reviewed client real-number helpers for the snap's addition and subtraction.
+Its caller must supply terrain samples, texture dimensions, complete texture-rectangle cells,
+the extra check and the shared build validator; it propagates errors from those inputs. Synthetic
+tests exercise these pieces. The module does not yet obtain those inputs from a live map or issue a build order, and
 there is no original-map placement comparison. In particular, the caller must resolve the
 special buffer-radius branch before scoring, and the `0x7fd6b0` check is still unidentified.
+
+The ignored local-input test `ai_placement_original.rs` reads the selected executable, the
+Human05 terrain and pathing bounds, and the stock Necropolis texture from the selected install.
+With the texture header dimensions supplied as native dimensions, the two recorded Necropolis
+positions are unchanged by the snap. This is a snap compatibility check only: it does not apply
+map object overrides, establish the native dimension mapping, or run the placement search.
 
 `set_ai_produce` (`unit_training_host.rs`) for a structure kind:
 
@@ -202,8 +247,9 @@ comparison against it is available.
 
 ## Not established
 
-- Town association and the search record selected by the Human05 worker; the initial grid's
-  edge normalization and object enumeration; candidate snapping, blight and the shared validator's detailed
+- The Human05 town record's actual mine and hall associations and the route metric used to select
+  among towns; the initial grid's edge normalization and the enumerator's boundary/state behavior;
+  live texture dimension mapping, blight and the shared validator's detailed
   checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
