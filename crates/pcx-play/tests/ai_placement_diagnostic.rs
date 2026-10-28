@@ -29,6 +29,24 @@ fn building_facing(angle: f32) -> f32 {
     ((angle / 90 * 90).rem_euclid(360)) as f32
 }
 
+fn probe_point(value: &str) -> [f32; 2] {
+    let (x, y) = value.split_once(',').expect("probe coordinates");
+    [x.parse().expect("probe x"), y.parse().expect("probe y")]
+}
+
+fn probe_order_worker(log: &str, kind: [u8; 4], owner: i32) -> [f32; 2] {
+    let marker = format!("/id{}/p{owner}@", i32::from_be_bytes(kind));
+    let event = log.split_once(&marker).expect("probe order").1;
+    probe_point(event.split_once("/point").expect("probe point order").0)
+}
+
+fn probe_sample_workers(log: &str) -> Vec<[f32; 2]> {
+    log.split(" A:")
+        .skip(1)
+        .map(|worker| probe_point(worker.split_once("/o").expect("probe worker order").0))
+        .collect()
+}
+
 #[test]
 fn building_facing_truncates_before_normalizing() {
     assert_eq!(building_facing(-17.5), 0.);
@@ -38,7 +56,23 @@ fn building_facing_truncates_before_normalizing() {
 }
 
 #[test]
-#[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP and PCX_HUMAN05_DECISION_LOG"]
+fn order_and_sample_inputs_read_the_observed_worker_coordinates() {
+    assert_eq!(
+        probe_order_worker(
+            " E:t2/id1094861636/p7@12.5,-3/point4,5/targetnone",
+            *b"ABCD",
+            7
+        ),
+        [12.5, -3.]
+    );
+    assert_eq!(
+        probe_sample_workers("acolytes A:12.5,-3/o42 A:9,8/o0"),
+        [[12.5, -3.], [9., 8.]]
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP, PCX_HUMAN05_DECISION_LOG and PCX_HUMAN05_ORDER_PROBE"]
 fn human05_placement_diagnostic() {
     let install = PathBuf::from(std::env::var("PCX_STARTUP_INSTALL").unwrap());
     let map = PathBuf::from(std::env::var("PCX_STARTUP_MAP").unwrap());
@@ -57,6 +91,12 @@ fn human05_placement_diagnostic() {
         x.trim().parse::<f32>().unwrap(),
         y.trim().parse::<f32>().unwrap(),
     ];
+    let probe = PathBuf::from(std::env::var("PCX_HUMAN05_ORDER_PROBE").unwrap());
+    let order_log = std::fs::read_to_string(probe.join("PCXO-11.txt")).unwrap();
+    let sample_log = std::fs::read_to_string(probe.join("PCXO-10.txt")).unwrap();
+    let order_worker = probe_order_worker(&order_log, *b"unpl", 5);
+    let sample_workers = probe_sample_workers(&sample_log);
+    assert_eq!(sample_workers.len(), 4);
     let image_path = install.join("Warcraft III.exe");
     let image = std::fs::read(&image_path).unwrap();
     let identity =
@@ -136,13 +176,14 @@ fn human05_placement_diagnostic() {
     let catalog = objects.unit_catalog().unwrap();
     let acolyte = catalog.resolve(*b"uaco").unwrap();
     let worker_radius = text(&acolyte, "collision").parse::<f32>().unwrap();
-    let mut worker = None;
-    for point in [
+    let blocked_sample = [
         [5611.785, 2795.562],
         [5676.686, 2656.12],
         [5779.904, 2595.492],
         [5468.591, 2861.923],
-    ] {
+    ];
+    let mut workers = Vec::new();
+    for point in std::iter::once(order_worker).chain(sample_workers.into_iter().take(3)) {
         let created = objects
             .native(
                 "CreateUnit",
@@ -158,9 +199,9 @@ fn human05_placement_diagnostic() {
         let Value::Handle(handle) = created else {
             panic!("acolyte creation")
         };
-        worker.get_or_insert(handle);
+        workers.push(handle);
     }
-    let worker = worker.unwrap();
+    let worker = workers[0];
     let necropolis = catalog.resolve(*b"unpl").unwrap();
     let path = text(&necropolis, "pathTex");
     let dims = dimensions(&resolver, path);
@@ -170,6 +211,18 @@ fn human05_placement_diagnostic() {
 
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
         if blocked {
+            for (&handle, point) in workers.iter().zip(blocked_sample) {
+                objects
+                    .native(
+                        "SetUnitPosition",
+                        &[
+                            Value::Handle(handle),
+                            Value::Real(point[0]),
+                            Value::Real(point[1]),
+                        ],
+                    )
+                    .unwrap();
+            }
             let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
             objects
                 .native(

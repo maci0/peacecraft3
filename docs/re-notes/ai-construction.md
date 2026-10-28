@@ -249,7 +249,7 @@ start. Map SHA-256 `7513e385...`.
 
 | Game time | Observation |
 | --- | --- |
-| 8 to 9 s | The first acolyte reaches the rally rectangle `Acolyte_Move` and stops; one second later its order is the build order for `unpl`. |
+| 8 to 9 s | The first acolyte reaches the rally rectangle `Acolyte_Move` and stops; a later sample shows its `unpl` build order. |
 | 12 s | Necropolis `unpl` at (6208, 2752), life 166 (under construction), built by the acolyte that was at (6064, 2800) at that sample. |
 | 15 to 18 s | Two ziggurats `uzig` at (5664, 2912) and (5472, 2592) by two other acolytes. |
 | 24 s | Haunted gold mine `ugol` at (5696, 3456), the map's gold mine position. |
@@ -282,22 +282,38 @@ unit can also affect handles or random state, so the comparison does not isolate
 prove a specific blocking rule. The recreation refuses before selecting a site, so no placement
 comparison from production orders is available.
 
+### Order-time observations
+
+One further isolated, muted and network-free reference run used a copy of the unblocked setup.
+It registered player-unit order events and wrote their captured fields with the one-second samples;
+scripts and receipts remain under `.scratch/ai-placement/order-probe/`. The map is instrumented,
+and the added event trigger can affect handles, so this is a separate observation rather than
+proof of identical internal town state. At elapsed 8.211 s, the `unpl` point order was issued to
+a player 5 acolyte at (5467.445, 2808.107) for (6208, 2752), with no unit target. The 8 s
+sample had four player 5 acolytes and no player 5 structures. The other workers' exact positions
+at 8.211 s were not recorded. At 20.211 s, the `ugol` target order was issued to a player 5
+acolyte at (5488, 2736), targeting the player 15 gold mine at (5696, 3456). The order events
+for the first two ziggurats target (5664, 2912) and (5472, 2592). These API observations do
+not expose the worker's native town association or either temporary pathing rectangle.
+
 ### Local-input search diagnostic
 
 The ignored `ai_placement_diagnostic.rs` test starts the selected Human05 map headlessly,
 reads the selected texture headers and unit definitions, and runs the search with the existing
 construction validator. It uses player 5's assigned start (7488, 2752), the map mine at
 (5696, 3456), no hall, and the decoded refresh rule, giving a provisional center at the mine.
-It creates the four observed acolytes at the probe's 9 s positions, which are sampled after the
-order and therefore are not guaranteed to be the exact order-time positions. The blocked case
-also creates the observed neutral farm. Terrain domains and pathing come from the live placement
-cache; its static pathing sample does not prove native dynamic pathing parity.
-Set `PCX_STARTUP_INSTALL`, `PCX_STARTUP_MAP` and `PCX_HUMAN05_DECISION_LOG` to the selected
-install, Human05 map and recorded route log, respectively, and run the ignored test with
-`--features test-fixtures`. This comparison used `.scratch/human05/placement-evidence-1.log`.
+For the unblocked case it reads the builder's order-event position and the other three acolytes'
+8 s sampled positions from the new probe. Creation in the recreation changes that builder's
+position to (5467.25, 2808), and the other workers were moving between the sample and the order.
+The blocked case uses its earlier sampled positions and creates the observed neutral farm.
+Terrain domains and pathing come from the live placement cache; its static pathing sample does
+not prove native dynamic pathing parity. Set `PCX_STARTUP_INSTALL`, `PCX_STARTUP_MAP`,
+`PCX_HUMAN05_DECISION_LOG` and `PCX_HUMAN05_ORDER_PROBE` to the selected install, Human05 map,
+recorded route log and new probe's `CustomMapData` directory, respectively, and run the ignored
+test with `--features test-fixtures`. The route log was `.scratch/human05/placement-evidence-1.log`.
 
-The diagnostic now tries four origins: mine; assigned player start; the 9 s original-probe
-worker; and the worker at the recreation's 1223 s refusal, read from the saved route log. The
+The diagnostic now tries four origins: mine; assigned player start; the original-probe worker;
+and the worker at the recreation's 1223 s refusal, read from the saved route log. The
 last is a cross-scenario hypothesis, not an observed original town or probe worker coordinate.
 For each it enumerates structures around that origin. Both texture-axis mappings give the same
 results because these structures' textures are square. The table gives the chosen site when the
@@ -306,15 +322,14 @@ dequeued grid points up to the first occurrence of the snapped site in a complet
 they are not counts of valid cells. Both oracle and chosen scores are 5. The validator accepts
 both oracle sites with the sampled worker positions. The first valid score-5 rank is also shown,
 so no oracle is the first accepted site under these inputs. The diagnostic now reads the selected
-building angle and uses the separate object-coordinate conversion described above. Repeating the
-comparison after those corrections produced the same table. The ranks do not establish which
+building angle and uses the separate object-coordinate conversion described above. The ranks do not establish which
 earlier candidates the native reach check would reject.
 
 | Layout | Origin | Chosen point, cell | First valid score-5 rank | Oracle rank | Distance |
 | --- | --- | --- | --- | --- | --- |
 | No farm | Mine | (5184, 3008), (34, 36) | 867 | 1760 | 1055.515 |
 | No farm | Start | (7168, 2432), (40, 40) | 307 | 5930 | 1011.929 |
-| No farm | Probe worker | (5440, 2624), (44, 44) | 84 | 1328 | 778.594 |
+| No farm | Probe worker | (5248, 2752), (43, 48) | 77 | 2076 | 960 |
 | No farm | Route worker | (6272, 2304), (48, 49) | 1 | 705 | 452.548 |
 | Farm | Mine | (5184, 3008), (34, 36) | 867 | 3822 | 960 |
 | Farm | Start | (7168, 2432), (40, 40) | 307 | 8667 | 1216 |
@@ -368,7 +383,10 @@ uses a priority queue keyed by accumulated cost plus a goal estimate. The ordina
 estimate use the client's integer square-root routine on coordinate differences scaled by 24
 (`0x8a3d00`, `0x99b740`); the queue has its own equal-key ordering (`0x8a3090`, `0x8a2d20`).
 Insertion promotes a new equal-key entry above its parent; removal favors the right child when
-child keys are equal (`0x8a3090`, `0x8a2d20`). It allows at most 15 queue removals, including stale entries, and succeeds when the goal node is
+child keys are equal (`0x8a3090`, `0x8a2d20`). A lower-cost rediscovery increments the node's
+generation and inserts another entry; a removal whose generation no longer matches consumes
+work but does not expand (`0x8a3d00`, `0x8a3ff0`, `0x8a3bf0`). Equal or worse rediscoveries
+do not replace the existing path. It allows at most 15 queue removals, including stale entries, and succeeds when the goal node is
 removed (`0x8a3bf0`). This is a work limit, not a distance or path-length bound. The caller tests
 only whether the result is different from -1 and does not compare the returned distance to a
 threshold (`0xad4442` through `0xad4458`).
@@ -381,6 +399,19 @@ edge and corner expansion routines and descend into mixed cells (`0x8a43c0`, `0x
 reproduce the native work budget or necessarily the result. Exact edge expansion, integer cost
 rounding, dynamic occupancy flags and worker-reference contents remain to be mapped before this
 search can be implemented faithfully.
+
+The lowest-level expansion can also follow an optional link identified by the cell's auxiliary
+record. That transition adds one to the search cost instead of the ordinary distance; returned
+path length handles it separately (`0x8a4200`, `0x8a4f70`, `0x8a3130`). A registration path
+allocates an index, writes it across a clipped rectangle, and removes that index on teardown
+(`0x7f6eb0`, `0x7f6d00`, `0x8b66c0`, `0xb2ef00`, `0xb33177`). The lookup checks an active
+bit and a destination in the indexed record (`0x8a4371`, `0x8b73e0`). A nearby native class
+identifier reports `Awrp`, which the selected ability table calls Warp; associating that class
+with this registration is an inference until its vtable relationship is checked. The
+recreation's movement router is a
+separate eight-neighbor A* with its own octile heuristic, tie order and work accounting
+(`unit_placement.rs`, `route_search`); its work policy and nearest-reachable behavior are not a
+decoded implementation of this search ([collision replanning](unit-collision-replanning.md)).
 
 The rectangle updates above have a more specific meaning than cache invalidation alone. Each
 base entry contains four two-bit occupancy classifications in byte 7. A pre-search update

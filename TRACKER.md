@@ -5213,3 +5213,19 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the ignored
   local-input diagnostic, native and WASM Clippy with `-D warnings`, and
   `python3 tools/perf/sim_run.py --check` passed. No budget was raised.
+
+### 2026-10-28: Human05 construction order observations
+
+- [~] An isolated, muted reference run captured the first Necropolis point order at 8.211 s,
+  including the builder's position, and the later haunted-mine order's neutral mine target.
+  The script API did not expose the native town record or temporary spatial rectangles.
+  Evidence and limitations: [AI construction](docs/re-notes/ai-construction.md).
+- [~] The ignored diagnostic reads the captured builder position and the preceding one-second
+  worker sample. Its updated worker-origin variant still misses the unblocked oracle; the native
+  hierarchical reach search and object-state mapping remain incomplete. The existing movement
+  route is a separate recreation-choice A*, not the decoded native pathfinder.
+- [ ] Production remains disconnected; the last reproducible Human05 pair stops at 1223 s.
+  No Human03 or Human04 routing was changed.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the local-input
+  diagnostic and synthetic probe parser tests passed, native and WASM Clippy passed with
+  `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed without raised budgets.
