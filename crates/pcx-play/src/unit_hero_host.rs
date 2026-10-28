@@ -1469,6 +1469,12 @@ impl ObjectHost {
             .ok_or_else(|| "hero skills are not admitted".into())
     }
 
+    /// The stock ability row an alias derives from: the alias itself, or the row a map's
+    /// custom ability was created from.
+    pub(crate) fn hero_ability_base(&self, alias: [u8; 4]) -> Result<String, String> {
+        Ok(self.heroes_admission()?.base(alias)?.0.to_owned())
+    }
+
     /// Integer `AbilityData` column of an ability alias, through the selected tables.
     pub(crate) fn hero_ability_number(&self, alias: [u8; 4], column: &str) -> Result<i32, String> {
         self.heroes_admission()?.number(alias, column)

@@ -43,6 +43,9 @@ pub enum PlayerCommand {
         order: String,
         target: HandleId,
     },
+    /// The order was issued with Shift held: it waits behind the unit's current order
+    /// instead of replacing it.
+    Queued(Box<PlayerCommand>),
     /// A local-player event fired by the application, such as end-of-cinematic.
     LocalEvent { name: String },
     /// `SelectHeroSkill` for one admitted ability rawcode.

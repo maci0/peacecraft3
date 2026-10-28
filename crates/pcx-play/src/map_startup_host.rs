@@ -166,6 +166,10 @@ pub struct UnitGuardsInput {
 /// The Holy Light row, which the implementation is bound to.
 pub const HOLY_LIGHT_ROW: [u8; 4] = *b"AHhb";
 
+/// Host bound on Shift-queued orders per unit. The client's own limit is not established
+/// (`docs/re-notes/input-smart-order.md`), so this is a resource bound, not a game rule.
+const QUEUED_ORDERS_PER_UNIT: usize = 64;
+
 pub struct HeroSkillsInput {
     pub rules: crate::hero_skills::Rules,
     pub abilities: pcx_objects::editor::Overlay,
@@ -954,6 +958,10 @@ fn assemble_inner(
         }
         if let Some(activity) = input.activity {
             object.admit_unit_activity(activity, 65536)?;
+            object.admit_order_queue(crate::playercolor_host::QueueBudget {
+                units: budgets.units.max_records,
+                orders_per_unit: QUEUED_ORDERS_PER_UNIT,
+            })?;
             object = object.with_harvest(
                 Arc::clone(&tables),
                 harvest_abilities,
