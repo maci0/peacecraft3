@@ -105,6 +105,11 @@ impl CampaignCamera {
         self.menu_open = open && self.active();
     }
 
+    /// The admitted session's terrain is published, with or without a camera setup.
+    pub fn view_ready(&self) -> bool {
+        self.ready
+    }
+
     pub fn active(&self) -> bool {
         self.ready && self.visible && self.entity.is_some()
     }

@@ -244,7 +244,11 @@ fn the_signals_wait_for_this_loads_revision_and_session() {
     let requests = MapRequests::default();
     let supply = CampaignHostSupply::default();
     let startup = CampaignStartup::default();
-    let none = signals(&loading, &requests, &supply, &startup, None, true);
+    let ready = ViewState {
+        ready: true,
+        failed: false,
+    };
+    let none = signals(&loading, &requests, &supply, &startup, None, ready);
     assert_eq!(none, Signals::default());
     // A session that was already running at the launch is not this load's.
     let old = Arc::new(());
@@ -255,7 +259,7 @@ fn the_signals_wait_for_this_loads_revision_and_session() {
         &supply,
         &startup,
         Some(Arc::downgrade(&old)),
-        true,
+        ready,
     );
     assert!(!same.published && !same.ready);
 }
@@ -294,23 +298,57 @@ fn a_press_ends_the_loaded_screen_and_never_reaches_the_game() {
 }
 
 #[test]
-fn escape_ends_a_load_that_never_completes_but_other_keys_do_not() {
+fn a_press_while_the_map_is_still_loading_is_consumed_and_ends_nothing() {
     let mut app = app();
     app.insert_resource(begun());
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyA);
-    app.update();
+    for key in [KeyCode::KeyA, KeyCode::Escape] {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CampaignLoading>().phase(),
+            Phase::Loading
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(key)
+        );
+    }
+}
+
+#[test]
+fn a_map_without_a_camera_setup_still_ends_the_load_on_its_terrain() {
+    let context = Arc::new(());
+    // Terrain published for the running session: ready, whatever the camera does.
+    let ok = view_state(true, false, Some(&context), Some(&context));
     assert_eq!(
-        app.world().resource::<CampaignLoading>().phase(),
-        Phase::Loading
+        ok,
+        ViewState {
+            ready: true,
+            failed: false
+        }
     );
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(CANCEL_KEY);
-    app.update();
-    assert_eq!(
-        app.world().resource::<CampaignLoading>().phase(),
-        Phase::Idle
-    );
+    let mut loading = begun();
+    loading.observe(Signals {
+        admitted: true,
+        prepared: true,
+        published: true,
+        ready: ok.ready,
+        failed: ok.failed,
+    });
+    assert_eq!(loading.phase(), Phase::AwaitKey);
+}
+
+#[test]
+fn a_refused_terrain_for_this_load_ends_the_screen_but_the_mounted_one_does_not() {
+    let (mounted, current) = (Arc::new(()), Arc::new(()));
+    // An error beside another context's ground: this load's terrain was refused.
+    assert!(view_state(false, true, Some(&mounted), Some(&current)).failed);
+    // An error left over from a replacement that this ground already supersedes.
+    assert!(!view_state(true, true, Some(&current), Some(&current)).failed);
+    assert!(!view_state(false, false, Some(&mounted), Some(&current)).failed);
+    // No ground yet and an error is a refusal as well.
+    assert!(view_state(false, true, None, Some(&current)).failed);
 }

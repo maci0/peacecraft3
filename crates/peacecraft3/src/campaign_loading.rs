@@ -5,6 +5,7 @@
 //! `docs/re-notes/campaign-loading-screen.md`.
 use crate::{
     campaign_camera::{CampaignCamera, CampaignCameraSet},
+    map_ground::GroundPublication,
     campaign_startup::{CampaignHostSupply, CampaignStartup, CampaignStartupSet, StartupError},
     map_requests::{MapRequestSet, MapRequests},
     map_script_session::MapScriptSession,
@@ -29,8 +30,6 @@ const TABLE_BYTES: u64 = 4 << 20;
 /// The original's own stage weights are code immediates that are not attributed
 /// to one load path.
 const STAGES: usize = 4;
-/// Recreation fail-safe: ends a screen whose load never completes.
-const CANCEL_KEY: KeyCode = KeyCode::Escape;
 
 /// What the screen is built from. The resolver is the one the table was read
 /// through, so the frames, models and textures come from the same sources.
@@ -89,7 +88,7 @@ pub struct Signals {
     pub prepared: bool,
     /// Its script session is running.
     pub published: bool,
-    /// Its view is active.
+    /// Its terrain is published, so the view can be drawn.
     pub ready: bool,
     /// A stage refused; the error is reported by that stage.
     pub failed: bool,
@@ -216,6 +215,34 @@ impl CampaignLoading {
     }
 }
 
+/// The campaign view's part of the load. The original ends the load when its game
+/// start sequence finishes, whether or not the map set a camera, so readiness is
+/// the published terrain, not an active camera.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ViewState {
+    ready: bool,
+    /// The terrain for this load was refused.
+    failed: bool,
+}
+
+/// A refused ground replacement keeps the previous ground mounted, so an error
+/// beside a ground that is not the running session's means this load's terrain was
+/// refused.
+fn view_state<K: ?Sized>(
+    camera_ready: bool,
+    ground_error: bool,
+    mounted: Option<&Arc<K>>,
+    current: Option<&Arc<K>>,
+) -> ViewState {
+    let matches = mounted
+        .zip(current)
+        .is_some_and(|(mounted, current)| Arc::ptr_eq(mounted, current));
+    ViewState {
+        ready: camera_ready,
+        failed: ground_error && !matches,
+    }
+}
+
 /// The load's observable state, read from the published resources.
 fn signals(
     loading: &CampaignLoading,
@@ -223,7 +250,7 @@ fn signals(
     supply: &CampaignHostSupply,
     startup: &CampaignStartup,
     witness: Option<Weak<()>>,
-    view_active: bool,
+    view: ViewState,
 ) -> Signals {
     let revision = requests.bindings.as_ref().map(|b| b.revision);
     let admitted = revision.is_some_and(|r| Some(r) != loading.revision)
@@ -249,8 +276,10 @@ fn signals(
         admitted,
         prepared,
         published,
-        ready: published && view_active,
-        failed: loading.fresh_outcome_failed(requests) || startup_failed,
+        ready: published && view.ready,
+        failed: loading.fresh_outcome_failed(requests)
+            || startup_failed
+            || (published && view.failed),
     }
 }
 
@@ -262,6 +291,7 @@ struct LoadState<'w> {
     startup: Res<'w, CampaignStartup>,
     session: Res<'w, MapScriptSession<MapStartupHost>>,
     camera: Option<Res<'w, CampaignCamera>>,
+    ground: Option<Res<'w, GroundPublication>>,
 }
 
 #[derive(SystemParam)]
@@ -277,18 +307,25 @@ fn advance_loading(mut loading: ResMut<CampaignLoading>, state: LoadState, press
         startup,
         session,
         camera,
+        ground,
     } = state;
     let Presses { keys, mouse } = presses;
     if !loading.shown() {
         return;
     }
+    let view = view_state(
+        camera.is_some_and(|c| c.view_ready()),
+        ground.as_ref().is_some_and(|g| g.last_error.is_some()),
+        ground.as_ref().and_then(|g| g.context.as_ref()),
+        session.context(),
+    );
     let observed = signals(
         &loading,
         &requests,
         &supply,
         &startup,
         session.session_witness(),
-        camera.is_some_and(|c| c.active()),
+        view,
     );
     // Only a press made while the loaded screen was already waiting counts.
     let waiting = loading.phase() == Phase::AwaitKey;
@@ -297,11 +334,6 @@ fn advance_loading(mut loading: ResMut<CampaignLoading>, state: LoadState, press
     if let Some(mut keys) = keys
         && keys.get_just_pressed().next().is_some()
     {
-        // Recreation fail-safe, not in the original: a load that never completes
-        // would otherwise leave the screen up for good.
-        if loading.phase() == Phase::Loading && keys.just_pressed(CANCEL_KEY) {
-            loading.cancel();
-        }
         pressed |= waiting;
         keys.clear();
     }
