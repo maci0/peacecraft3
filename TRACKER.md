@@ -5569,3 +5569,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Checks: 2,239 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
   denied; the simulation budget check passed without raising budgets. The recorded reach
   tables and original-client debugger capture were not run.
+### 2026-10-28: Input live capture
+
+- [x] Slice 1 of the input audit ran against the original client in the isolated
+  reference container (headless, muted): [input live capture](docs/re-notes/input-live-capture.md).
+  Measured: edge-scroll margin (0.004 of the 0.8 x 0.6 UI space per axis, strict; checked at
+  1280x960, 1024x768, 1920x1080), no trigger delay and a constant speed equal to arrow keys,
+  no drag threshold, 500 ms double-click window, 0.5 s control-group double tap, Shift+digit
+  adds, Ctrl+Shift+digit replaces, a click on empty ground keeps the selection (the audit's
+  DOC entry was wrong), Tab subgroups, F8 and `` ` `` select an idle worker (1.0 s cycle),
+  Backspace jumps to the own Town Hall, hover and armed cursor colours, and the zoom table
+  (the live camera settles at the exe literals, 1200 and 335 at the last level).
+- [ ] Open: Shift+Tab with three subgroups, cursor mode to sequence names, edge-scroll speed
+  in world units and its option dependence, multi-hall Backspace, selection cap 12. All
+  numbers are Wine runtime observations with xdotool input.

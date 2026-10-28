@@ -21,7 +21,8 @@ audit changes code.
   output stay in the ignored `.scratch/input-audit/`. No original bytes or tables
   are copied into the repository; only short facts and addresses are quoted.
 - Analysis was static. The original client was not launched, so no row below is a
-  runtime observation.
+  runtime observation except where a row cites RO or RO-dbg, which come from the
+  later [live capture](input-live-capture.md).
 
 Evidence classes used in every table:
 
@@ -32,6 +33,8 @@ Evidence classes used in every table:
 | EX | Executable code, decompiled in this audit, with address |
 | DOC | Widely documented original behaviour, not verified here |
 | INF | Inference from the above |
+| RO | Runtime observation of the original client under Wine (input synthesised by xdotool, screenshots) |
+| RO-dbg | Runtime read of client memory through read-only winedbg breakpoints |
 | UNK | Not established |
 
 Recreation status: **OK** implemented and faithful to the evidence, **DIFF**
@@ -59,14 +62,14 @@ Facts every later row relies on.
 | # | Action | Original behaviour | Evidence | Lives in | Recreation | Handler |
 | --- | --- | --- | --- | --- | --- | --- |
 | A1 | Left click a unit | Selects on button press, not release. The down handler tests a per-unit selectable flag before selecting. Own, allied, enemy and neutral units are all selectable. | EX `0x5fd820` (down handler calls `0x5fff10`); flag name INF; enemy/neutral DOC | exe | DIFF: selects on press (OK). Picks the nearest unit whose selection circle (UnitUI `scale` times `[SelectionCircle] ScaleFactor` 72, halved) covers the clicked ground point. The original pick method (mesh, circle or bounds) is UNK. | `campaign_input.rs:1031`, `:1133` |
-| A2 | Left click on ground | Deselects. The no-unit path of `0x5fd820` calls `0x5ffdd0`, which returns at once for a null unit, so the clear is probably done by the empty drag-box release. | DOC; mechanism INF | exe | MISS: a click on empty ground keeps the selection | `campaign_input.rs:1244` |
-| A3 | Shift+click | Add or toggle (removes an already selected unit). The shift read is at `0x5fff10`. The add/remove split is DOC. | EX read, DOC semantics | exe | DIFF: adds only, never removes | `campaign_input.rs:1090`, `:1246` |
-| A4 | Ctrl+click | Selects all visible units of the same type. The click path reads Ctrl at `0x83fdc0`, builds a visible same-type list (`0x6010e0`) and selects it (`0x5ffae0`). | EX `0x5fff10` | exe | MISS | none |
-| A5 | Double-click | Same-type-on-screen selection. No OS double-click event reaches the game (see pipeline), and the in-game timing window was not located. | DOC; timing UNK | exe | MISS | none |
+| A2 | Left click on ground | Keeps the selection; an empty drag box (1 to 100 px) keeps it too. The earlier DOC entry (deselects) is refuted by the live capture. The no-unit path of `0x5fd820` calls `0x5ffdd0`, which returns at once for a null unit. | RO ([live capture](input-live-capture.md)); earlier DOC wrong | exe | OK: a click on empty ground keeps the selection | `campaign_input.rs:1244` |
+| A3 | Shift+click | Toggles: adds a unit, a second Shift+click removes it. Shift+click on a building with units selected replaces the selection with the building. The shift read is at `0x5fff10`. | EX read; RO ([live capture](input-live-capture.md)) | exe | DIFF: adds only, never removes | `campaign_input.rs:1090`, `:1246` |
+| A4 | Ctrl+click | Selects all visible units of the same type. The click path reads Ctrl at `0x83fdc0`, builds a visible same-type list (`0x6010e0`) and selects it (`0x5ffae0`). Confirmed live (4 of 4 footmen). | EX `0x5fff10`; RO | exe | MISS | none |
+| A5 | Double-click | Same-type-on-screen selection when the second press follows the first within 500 ms (press to press; yes at 493.5 ms, no at 506.2 ms). No OS double-click event reaches the game (see pipeline) and the exe imports no `GetDoubleClickTime`. | RO ([live capture](input-live-capture.md)) | exe | MISS | none |
 | A6 | Selection cap | 12 units. The select-control-group dispatch limits the result to `12 - current count` in add mode, else 12. | EX `0x6cbf40` | exe | MISS: no cap | `crates/pcx-play/src/selection_host.rs:37` |
 | A7 | Click on selected unit in a group | Information-panel group buttons: click selects that unit (and makes it primary), Shift removes it, Ctrl selects its type among the selection. | EX `0x5fc020` (Shift via `0x83fea0`, Ctrl via `0x83fdc0`); button meaning INF | exe | MISS: portrait and unit panel have no pointer handling | `campaign_unit_panel.rs`, `campaign_portrait.rs` |
 | A8 | Left click on hero/portrait buttons | Event `0x30067` calls `0x5fff10` with the unit stored on the clicked button, so Shift and Ctrl follow A3/A4. That the button is the hero button is INF. | EX `0x5fb580`; role INF | exe | MISS | none |
-| A9 | Drag box | Left press on world posts `0x1a0068`, starting `CDragSelectMode`; release calls `0x5fff10` per unit (`0x5f9b40`). Cap, hysteresis and which units qualify not yet read. | EX `0x610880`, `0x5fe070`, `0x5f9b40`; threshold UNK | exe | other agent | n/a |
+| A9 | Drag box | Left press on world posts `0x1a0068`, starting `CDragSelectMode`; release calls `0x5fff10` per unit (`0x5f9b40`). Cap and which units qualify not yet read. No drag threshold: a 1 px move already acts as a box, using the same unit region as a click. | EX `0x610880`, `0x5fe070`, `0x5f9b40`; RO ([live capture](input-live-capture.md)) | exe | other agent | n/a |
 | A10 | Right click on ground | Issues the **smart** order (id `0xd0003`) at the point. Order flags: bit0 Shift (queue); bits 2-4 come from `0x62f120`, the selection size and an option check (formation related, INF). Validity is checked first (`0x4f5d70`); a failure reports a `[Errors]` string. Click feedback uses attack/move markers (`0xd0012`/`0xd000f`). | EX `0x5fd2f0`; id names DOC (smart 851971, attack 851986, move 851983) | exe; `[Errors]` in `Units\CommandStrings.txt` (SB) | DIFF: always Move for non-enemy ground | `campaign_input.rs:1291`-`1349` |
 | A11 | Right click on enemy | Smart order with target (`0x5fd4c0`), resolved to attack. | EX | exe | OK for attack, via `Kind::Attack` | `campaign_input.rs:1291` |
 | A12 | Right click on friendly unit, resource, building, item, transport | Smart order resolves to follow, harvest/return, repair, rally, pick up, load. The resolution table was not read. Rally behaviour text is in `CmdRally` Ubertip (SB). | DOC; resolver UNK; rally text SB | exe | MISS except item pick-up (`"smart"` target order to an item) | `campaign_input.rs:1270` |
@@ -76,7 +79,7 @@ Facts every later row relies on.
 | A16 | Middle button drag | `CDragScrollMode`: press (code 2) on world starts a drag scroll (`0x5fd0d0` to `0x5f9ed0`), release ends it. Scroll ratio not read. | EX `0x63bd00`, `0x5fd0d0` | exe | MISS | none |
 | A17 | X1/X2 mouse buttons | Delivered as button codes 8 and 0x10; no game binding located. | EX platform; binding UNK | exe | MISS | none |
 | A18 | Mouse wheel | One zoom step per 120 units of delta (`delta / 0x78`, toward zero); positive zooms in (level + 1), negative zooms out. See C1. | EX `0x5e12f0` | exe | MISS | none |
-| A19 | Edge scroll | Eight direction masks (1 up, 2 down, 4 left, 8 right and sums) run the same scroll helpers as arrow keys with the mouse multiplier. The producer that detects the screen edge and its margin were not located. | EX `0x5dfd50`, `0x5e12f0`; margin UNK | exe; `mousescroll`/`mousescrolldisable` options | MISS | none |
+| A19 | Edge scroll | Eight direction masks (1 up, 2 down, 4 left, 8 right and sums) run the same scroll helpers as arrow keys with the mouse multiplier. Measured live: the pointer scrolls when within 0.004 of an edge in the 0.8 x 0.6 UI space (strict; 6.4 px horizontal and vertical at 1280x960), with no trigger delay, constant speed equal to arrow-key scroll, and a directional arrow cursor. The producer's address was not located. | EX `0x5dfd50`, `0x5e12f0`; RO ([live capture](input-live-capture.md)) | exe; `mousescroll`/`mousescrolldisable` options | MISS | none |
 | A20 | Click on minimap | Left: camera jump with held-drag follow. Right: move/smart order at the point. Both gated like world input. | DOC; recreation per `campaign-minimap.md` | exe | OK (camera, drag, point order); right click is Move not smart | `campaign_minimap.rs:138`, `campaign_input.rs:753` |
 | A21 | Alt+click world or minimap | Minimap signal ("ping") to allies, same as the signal button. Text states Alt+left-click. Alt-G arms the signal. | SS `MINIMAPSIGNALTOOLTIP_UBER`, MiscUI `MinimapSignal='G'`; net command `CNetCommandAllyPing` RTTI | data | MISS | none |
 | A22 | Click command-card buttons | Press consumes the pointer; the button issues its command. | OK | | OK | `campaign_command_card.rs:373`, `campaign_input.rs:107` |
@@ -91,11 +94,11 @@ Facts every later row relies on.
 | B1 | Command-card hotkeys | Per-ability `Hotkey`/`Unhotkey`/`Researchhotkey` letters from the ability data and `CommandStrings.txt` (Move `M`, Attack `A`, Attack Ground `G`, Stop `S`, Hold `H`, Patrol `P`, Rally `Y`, Hero Abilities `O`, Build `B`, Shop `s`). Cancel is `27` in `CommandStrings.txt` and `512` in the CustomKeys sample. Dispatch ignores the key when Ctrl or Alt is held; Shift is read for queueing. | SB; EX `0x5fc700` (Alt/Ctrl gate at `0x5fcd0a`, matching `0x638ed0`/`0x639140`) | data files | DIFF: letters from data for Move/Stop/Hold/Patrol/Attack, training, build menus, Holy Light, Water Elemental. MISS: Attack Ground, Rally, Shop, hero-abilities `O`, learn (`Researchhotkey`) and `Unhotkey` keys; Ctrl/Alt gate; Shift queue. | `campaign_input.rs:834`, `standard_command.rs:6` |
 | B2 | Digits 1-9, 0 | `1`..`9` are groups 0..8, `0` is group 9. | EX `0x5fc700` | exe | MISS | none |
 | B3 | Ctrl+digit | Defines the group from the current selection (replaces; helper `0x4f4fb0` also runs on this path, purpose UNK). Empty or foreign selections report `Emptycontrolgroup`/`Invalidcontrolgroup`/`Nonunitincontrolgroup`. | EX `0x5fc700` (`0x6cc8e0` is the define dispatch); error texts SB | exe; `[Errors]` | MISS | none |
-| B4 | Shift+digit | Adds the current selection to the group (extends and dedupes). Decompiler output for this branch is noisy; semantics are INF from the branch building a merged list before `0x6cc8e0`. | EX, INF | exe | MISS | none |
-| B5 | Digit (no modifier) | Selects the group (`0x6cbf40`). A second press of the same digit within 0.5 s (float compare `last + 0.5 <= now`) centres the camera on one unit (`0x4f2070` result passed to `0x5eae20`; INF that it is the selection's primary unit) and resets the memory. | EX `0x5fc700` | exe | MISS | none |
-| B6 | Tab, Shift+Tab | Cycles the active subgroup. `CNetCommandUnitSelectSubGroup` exists and the subgroup model is in the exe; the key handler was not located. The option `subgrouporder` ("Subgroup order modifier key") feeds it. | DOC; RTTI; handler UNK | exe | MISS | none |
+| B4 | Shift+digit | Adds the current selection to the group (extends and dedupes). Confirmed live: the group gains the selection and the current selection does not change. Ctrl+Shift+digit behaves as Ctrl+digit (replace). Decompiler output for this branch is noisy. | EX; RO ([live capture](input-live-capture.md)) | exe | MISS | none |
+| B5 | Digit (no modifier) | Selects the group (`0x6cbf40`). A second press of the same digit within 0.5 s (float compare `last + 0.5 <= now`) centres the camera on one unit (`0x4f2070` result passed to `0x5eae20`; INF that it is the selection's primary unit) and resets the memory. Live: the window ends between 492.9 and 498.9 ms press to press, and the first press never moves the camera. | EX `0x5fc700`; RO ([live capture](input-live-capture.md)) | exe | MISS | none |
+| B6 | Tab, Shift+Tab | Cycles the active subgroup (type) of a mixed selection; the hero subgroup is active first, portrait, info panel and command card follow, and the selection list is unchanged. With two subgroups Tab and Shift+Tab cannot be told apart. `CNetCommandUnitSelectSubGroup` exists in the exe; the key handler was not located. The option `subgrouporder` ("Subgroup order modifier key") feeds it. | RTTI; RO ([live capture](input-live-capture.md)) | exe | MISS | none |
 | B7 | F1-F5 | Virtual keys `0x70`-`0x74` call `0x5eb390`, which indexes the hero-bar array (index limit 7) and selects that hero. | EX `0x5fc700`, `0x5eb390` | exe | MISS | none |
-| B8 | F8 and `` ` `` | Both call one virtual method on a member of the game UI object (`0x5eb420`). Purpose not identified. | EX; purpose UNK | exe | MISS (F8 is the debug overlay) | `pcx-gfx/src/performance.rs:406` |
+| B8 | F8 and `` ` `` | Both call one virtual method on a member of the game UI object (`0x5eb420`). Live: both select an idle worker and centre the camera on it; a second press within about 1.0 s advances to the next idle worker, later restarts at the first. No effect without idle workers. | EX; RO ([live capture](input-live-capture.md)) | exe | MISS (F8 is the debug overlay, which collides with the original idle-worker key) | `pcx-gfx/src/performance.rs:406` |
 | B9 | F9 Quests, F10 Menu, F11 Allies, F12 Chat/Log | Shown as the shortcuts in the upper-button tooltips. | SS `UPPER_BUTTON_*_TIP`, `KEY_*` | GlobalStrings | OK for F9/F10 (derived from `KEY_QUESTS`/`KEY_MENU`); MISS F11, F12 | `campaign_upper_buttons.rs:640`, `campaign_camera.rs:273` |
 | B10 | Esc | Cancel entry in the command card (`Hotkey=27`). Closes menus. Also raises the player end-cinematic event (the recreation's prior note records that the original raises it on every Esc). | SB; EX unread for Esc order of precedence | data | OK in effect: clears targeting, closes skill page, raises event; precedence versus an open modal matches the escape-menu note | `campaign_input.rs:634` |
 | B11 | Enter, Ctrl+Enter, Shift+Enter | Opens chat. Ctrl+Enter sends to allies, Shift+Enter to everyone. | SS `UPPER_BUTTON_CHAT_UBER` | data | MISS (no chat) | none |
@@ -103,7 +106,7 @@ Facts every later row relies on.
 | B13 | Page Up, Page Down | Zoom in and out one level. | EX `0x5e12f0` | exe | MISS | none |
 | B14 | Insert, Delete | Hold: camera swings to the second or third rotation state; release returns (see C2). Numpad 0 and Numpad `.` key-ups also clear the state. | EX `0x5e12f0` | exe | MISS | none |
 | B15 | Space | Jumps to the latest alert location; pressing again within 1.0 s steps back through the history. Disabled when the game UI object's `+0x298` is set (meaning UNK). | EX `0x5e1930` | exe | MISS | none |
-| B16 | Backspace | Cycles the camera through a sorted object list; within 1.0 s of the last press it advances, otherwise it restarts at the first entry. The list's contents (class tag `0x2b61676c`, flag `0x100` clear) were not identified; DOC says town halls. | EX `0x5e1120`; contents UNK | exe | MISS | none |
+| B16 | Backspace | Cycles the camera through a sorted object list; within 1.0 s of the last press it advances, otherwise it restarts at the first entry. The list holds the own Town Hall (live: a melee start with a worker selected jumps to the hall; Human01 with no own building does nothing), not the selection or workers; class tag `0x2b61676c`, flag `0x100` clear. Several halls and the 1.0 s window were not exercised live. | EX `0x5e1120`; RO ([live capture](input-live-capture.md)) | exe | MISS | none |
 | B17 | Ctrl+C, Alt+C | Centre on the selection. The key letter comes from `MiscUI.txt [Hotkeys] UnitCenter` (`C`); the handler requires Ctrl or Alt in the modifier mask. | SB; EX `0x5e12f0` default branch, `0x5dced0` | data | MISS | none |
 | B18 | Alt, `[` , `]` | Alt, `[` (VK `0xDB`) and `]` (VK `0xDD`) change unit health bar display while held (`0x601050`); option `healthbars` inverts. DOC: `[` own, `]` enemy. | EX `0x5fc700`, `0x5fd040`; SS `HEALTH_BARS_INFO` | exe | MISS | none |
 | B19 | Alt+F | Toggles formation movement (also an Alt-hold inversion on orders). | SS `FORMATION_*`, MiscUI `FormationToggle='F'`; EX flag in `0x5fd2f0` | data | MISS | none |
@@ -120,7 +123,7 @@ Facts every later row relies on.
 | --- | --- | --- | --- | --- | --- |
 | C1 | Scroll speed | Key scroll vector magnitude = (`keyscroll` / 100 + 0.5) x 3000 (the camera integrates it over time); edge scroll uses `mousescroll` the same way. Lateral motion uses yaw minus pi/2; both axes can run at once and are not renormalised. Values over 100 are ignored (multiplier stays 1.0). | EX `0x5dced0` (the `CCameraWar3` constructor stores the multipliers at `+0x4ec` mouse and `+0x4f0` key, and `mousescrolldisable` at `+0x30`), `0x5e07a0`, `0x5e52f0` | exe literal 3000.0; `[CameraRates] Forward`/`Strafe` = 3000 (SB) agrees; option defaults `mousescroll` 50, `keyscroll` 50, `mousescrolldisable` 0 | DIFF: rate from `[CameraRates]` (OK at defaults); the options are not read. `campaign_camera.rs:123` |
 | C2 | Zoom levels | Six discrete levels, clamped to 0..5, changed by wheel and Page Up/Down. A change eases over 1.0 s. | EX `0x5e1090`, `0x5de2c0` | exe, `[Camera]` tables | MISS (fixed index) |
-| C3 | Zoom table | `[Camera]` has six entries per field. The camera routine's code literals match `AOA`, `FOV`, `Rotation`, `Distance` and `FarZ` except at the last level: literal Distance 1200 and AOA 335 versus file 1100 and 339. Which one drives the live camera is UNK. | SB, EX `0x5de2c0` | both | UNK (resolve by a live capture before using either) |
+| C3 | Zoom table | `[Camera]` has six entries per field. The camera routine's code literals match `AOA`, `FOV`, `Rotation`, `Distance` and `FarZ` except at the last level: literal Distance 1200 and AOA 335 versus file 1100 and 339. The live camera settles at the code literals: a debugger read at level 5 gives Distance 1200 and AOA 335 (levels 0 to 5: 1650, 1600, 1500, 1400, 1275, 1200 and 304, 311, 318, 325, 332, 335). | SB, EX `0x5de2c0`; RO-dbg ([live capture](input-live-capture.md)) | both | Use the literals; the file's last-level values are not applied by the zoom path |
 | C4 | Rotation states | `Rotation` has 18 entries: 90 degrees x6 (normal), 20 x6 (Insert held), 160 x6 (Delete held). Index = level + 6 x state. Press and release ease over 0.5 s. | SB, EX `0x5de2c0`, `0x5e12f0` | `[Camera] Rotation` | MISS |
 | C5 | Camera lock | The camera handler returns at once when `+0x2c` is set. Edge events also stop when `+0x30` (the `mousescrolldisable` value) is set; wheel, Page Up/Down and Insert/Delete stop when `+0x5c` is set; key, wheel and edge-start events stop when `0x5e0ba0` is true. The meaning of `+0x2c`, `+0x5c` and `0x5e0ba0` is UNK. | EX `0x5e12f0` | exe | DIFF: scripts disabling control gate it (`presentation.control_enabled`) |
 | C6 | Bounds | Clamped to the camera bounds; margins `[CameraMargins]` 4/4/2/2 cells. | SB | data | OK (`scroll_to`) |
@@ -132,7 +135,7 @@ Facts every later row relies on.
 | --- | --- | --- | --- | --- |
 | D1 | Cursor art | A per-race MDX model, `Cursor=UI\Cursor\<Race>Cursor.mdl` in `war3skins.txt`. Sequences in the Human cursor: Target, Normal, Select, TargetSelect, InvalidTarget, HoldItem, Scroll Left, Scroll Right, Scroll Up, Scroll Down, Scroll Up Left, Scroll Up Right, Scroll Down Left, Scroll Down Right. | SB | MISS: system cursor |
 | D2 | Scroll arrows | Cursor mode values `0xa`..`0x11` map left, right, up, down, up-left, up-right, down-left, down-right (mask 1 up, 2 down, 4 left, 8 right) and align with the MDX scroll sequences when offset by 4. | EX `0x5dfd50`; alignment INF | MISS |
-| D3 | Hover states | `0x5fbdf0` and `0x5fda30` set modes 0-3 (`0x5fbdf0`) and 4, 6, 7 (`0x5fda30`) from the unit under the cursor and the armed command. That the split is own, ally, neutral and enemy is INF. The mapping of mode values to sequence names is UNK for modes below 10. | EX; INF | MISS |
+| D3 | Hover states | `0x5fbdf0` and `0x5fda30` set modes 0-3 (`0x5fbdf0`) and 4, 6, 7 (`0x5fda30`) from the unit under the cursor and the armed command. Live: the gauntlet is green over own units and buildings, yellow over neutral, red over enemies, grey-blue elsewhere; with attack armed the crosshair is cyan over ground, green own, yellow neutral, red enemy; with a spell armed it stayed cyan over every target. The mapping of mode values to sequence names is UNK for modes below 10. | EX; RO ([live capture](input-live-capture.md)) | MISS |
 | D4 | Placement and area cursors | `PlacementCursor` texture per race in `war3skins.txt`; building placement colours `[Placement]` (SB). | SB | DIFF: `campaign_build_ui` handles building placement; spell area cursor MISS |
 | D5 | Selection circle colours | `[SelectionCircle]` friend/neutral/enemy colours and `[TargetingColors]`. | SB | other agent / selection circle note |
 | D6 | Error line | Order failures post `[Errors]` strings above the console. | SB, EX `0x5ecc20` | DIFF: `last_error` is a log field, not a world message |
@@ -207,12 +210,13 @@ Drag-box selection (A9) is the other agent's work and not ranked.
 Each slice is sized for one agent and keeps data in the asset-derived path (no
 copied constants; read keys, rates and tables from the data and the supplied exe).
 
-1. **Live capture of the unknowns.** Use the paired original/native input journal
-   in `tools/original-game-reference/` to measure: edge-scroll margin and trigger,
-   drag-box threshold, double-click window, Tab behaviour, hover cursor modes,
-   Shift+digit and Backspace list contents, and the zoom table question (C3).
-   Everything below that needs those values waits on this slice. All runs
-   headless and muted.
+1. **Live capture of the unknowns. Done**, see [input live capture](input-live-capture.md):
+   edge-scroll margin, trigger and speed, drag threshold (none), double-click window
+   (500 ms), control-group double tap, Tab, hover and armed cursors, Shift+digit,
+   Backspace list, F8 and `` ` `` (idle worker), and the zoom table (C3, literals
+   win). Still open: Shift+Tab with three or more subgroups, cursor mode to sequence
+   names, invalid-target and hold-item cursors, edge-scroll speed in world units and
+   its option dependence, multi-hall Backspace, selection cap 12.
 2. **Modifier and gate foundation.** One input-state resource for Shift, Ctrl,
    Alt (left and right) and a single "game input open" gate reused by `click`,
    hotkeys and camera. Read the option table (`mousescroll`, `keyscroll`,
@@ -220,19 +224,23 @@ copied constants; read keys, rates and tables from the data and the supplied exe
 3. **Control groups.** Digits, Ctrl define, Shift add, selection cap 12,
    0.5 s double-tap centre, the three `[Errors]` strings.
 4. **Zoom and rotation.** Six levels via wheel and Page Up/Down with 1.0 s easing;
-   Insert/Delete rotation states with 0.5 s easing; table source decided by slice 1.
+   Insert/Delete rotation states with 0.5 s easing; distance and angle per level from the exe's
+   literals (the live camera ignores the `[Camera]` file values at level 5).
 5. **Smart right-click.** Resolve target classes (resource, friendly unit,
    own building, item, transport) to harvest, return, follow, rally, load.
    Start from the existing harvest and rally order paths.
 6. **Order queueing.** Shift on right-click and on armed targeting; Shift+hotkey.
-7. **Selection rules.** Shift toggle, Ctrl and double-click same-type, empty-click
-   clear, subgroup model, Tab and Shift+Tab, group-button clicks, F1-F5 hero keys.
-8. **Edge scroll and drag scroll.** Margin from slice 1, `mousescroll` multiplier,
+7. **Selection rules.** Shift toggle, Ctrl and double-click (500 ms) same-type,
+   subgroup model, Tab and Shift+Tab, group-button clicks, F1-F5 hero keys. A click
+   on empty ground keeps the selection (already the recreation's behaviour).
+8. **Edge scroll and drag scroll.** Margin 0.004 of the 0.8 x 0.6 UI space (strict,
+   per axis) from the live capture, `mousescroll` multiplier,
    disable flag, middle-button drag.
 9. **Cursor.** Load the per-race cursor MDX from `war3skins.txt`, drive sequences
    from hover state, armed state and scroll direction.
 10. **Camera jump keys.** Space (alert history, 1.0 s), Backspace (list cycling,
-    1.0 s), Ctrl/Alt+`UnitCenter`.
+    1.0 s, own Town Hall), F8 and `` ` `` (idle worker, 1.0 s cycle; the recreation's
+    F8 debug overlay must move), Ctrl/Alt+`UnitCenter`.
 11. **Command card keys.** Generic `Hotkey`/`Unhotkey`/`Researchhotkey` dispatch,
     Attack Ground, Rally, Shop, `O`, Ctrl/Alt gate, cancel `27`/`512`,
     optional `CustomKeys.txt`.
@@ -244,18 +252,23 @@ copied constants; read keys, rates and tables from the data and the supplied exe
 
 ## Not established
 
-- The edge-scroll producer, its margin and trigger delay (A19).
-- The drag-box threshold and double-click window (A5, A9).
-- The Tab handler and the subgroup key semantics (B6).
+Resolved by the [live capture](input-live-capture.md): edge-scroll margin, trigger
+and speed (A19), drag threshold and double-click window (A5, A9), Tab semantics
+with two subgroups (B6), F8 and `` ` `` and the Backspace list (B8, B16), the last
+zoom level (C3), Shift+digit and Ctrl+Shift+digit (B4).
+
+- The edge-scroll producer's address, and the margin constant's location in the exe
+  or data (the value, 0.004 of the 0.8 x 0.6 UI space, is a fit to measurements).
+- Edge-scroll speed in world units, and the effect of `mousescroll`.
+- The Tab key handler, and Shift+Tab direction with three or more subgroups (B6).
 - The target-class resolution table behind the smart order (A12).
 - The key-binding hash table contents (action ids behind `0x7cd160`), which may
   hold keys not seen in `CSelectMode` and `CCameraWar3`.
-- Purpose of F8 and `` ` `` (B8), Backspace list contents (B16), the hero-bar
-  index semantics of F1-F5 (B7).
-- Which source governs the last zoom level (C3) and what `Smoothing` does (C7).
-- Mapping from cursor mode values below 10 to sequence names (D3).
+- The hero-bar index semantics of F1-F5 (B7), and several-hall Backspace cycling (B16).
+- What `Smoothing` does (C7).
+- Mapping from cursor mode values below 10 to sequence names, and the invalid-target
+  and hold-item cursors (D3).
 - X1/X2, PrintScreen and Alt+Tab handling (A17, B25).
-- Whether Shift+Ctrl+digit has a separate meaning (B4 is INF).
 - Observer, replay and multiplayer-only input paths were not read.
 
 ## Reproduction
