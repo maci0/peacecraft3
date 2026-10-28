@@ -2,6 +2,7 @@
 use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
+    pe_image::occurrences,
     scripts::AssetIdentity,
 };
 
@@ -83,16 +84,14 @@ impl Rules {
                 work = work
                     .checked_sub(b.len())
                     .ok_or("morph scan work exhausted")?;
-                for (i, w) in b.windows(needle.len()).enumerate() {
-                    if w == needle {
-                        if matches.len() == 2 {
-                            return Err("morph source anchor ambiguous".into());
-                        }
-                        matches.push(
-                            va.checked_add(i.try_into().map_err(|_| "morph offset overflow")?)
-                                .ok_or("morph address overflow")?,
-                        )
+                for i in occurrences(b, needle) {
+                    if matches.len() == 2 {
+                        return Err("morph source anchor ambiguous".into());
                     }
+                    matches.push(
+                        va.checked_add(i.try_into().map_err(|_| "morph offset overflow")?)
+                            .ok_or("morph address overflow")?,
+                    )
                 }
             }
             unique(matches.into_iter())
@@ -242,12 +241,11 @@ impl FlightRules {
         read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         fn address(ranges: &[(u32, &[u8])], needle: &[u8]) -> Result<u32, String> {
-            unique(ranges.iter().flat_map(|(va, b)| {
-                b.windows(needle.len())
-                    .enumerate()
-                    .filter(move |(_, w)| *w == needle)
-                    .map(move |(i, _)| *va + i as u32)
-            }))
+            unique(
+                ranges
+                    .iter()
+                    .flat_map(|(va, b)| occurrences(b, needle).map(move |i| *va + i as u32)),
+            )
         }
         fn call(b: &[u8], va: u32, at: usize) -> Result<u32, String> {
             shape(b, at, &[0xe8])?;
@@ -268,8 +266,8 @@ impl FlightRules {
             needle.extend(address(data, name)?.to_le_bytes());
             let mut found = Vec::new();
             for (_, b) in code {
-                for (i, w) in b.windows(needle.len()).enumerate() {
-                    if w != needle || b.get(i + 10) != Some(&0x68) || b.get(i + 15) != Some(&0xe8) {
+                for i in occurrences(b, &needle) {
+                    if b.get(i + 10) != Some(&0x68) || b.get(i + 15) != Some(&0xe8) {
                         continue;
                     }
                     let va = word(b, i + 11)?;

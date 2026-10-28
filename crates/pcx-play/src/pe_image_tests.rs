@@ -92,3 +92,61 @@ fn a_repeated_name_is_refused_when_queried_and_unrelated_repeats_stay_accepted()
             .is_none()
     );
 }
+
+#[test]
+fn occurrences_equal_the_window_scan_at_every_boundary() {
+    let mut state = 99u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 33) as u8 % 4
+    };
+    for len in [0usize, 1, 2, 31, 32, 33, 63, 64, 65, 200] {
+        let haystack: Vec<u8> = (0..len).map(|_| next()).collect();
+        for needle_len in 1..=4 {
+            for seed in 0..8u8 {
+                let needle: Vec<u8> = (0..needle_len).map(|n| (seed >> n) & 3).collect();
+                let expected: Vec<usize> = haystack
+                    .windows(needle_len)
+                    .enumerate()
+                    .filter(|(_, window)| *window == needle)
+                    .map(|(at, _)| at)
+                    .collect();
+                let actual: Vec<usize> = occurrences(&haystack, &needle).collect();
+                assert_eq!(actual, expected, "len {len} needle {needle:?}");
+            }
+        }
+    }
+    assert_eq!(occurrences(&[1, 2, 3], &[]).count(), 0);
+    assert_eq!(occurrences(&[1, 2], &[1, 2, 3]).count(), 0);
+    assert_eq!(occurrences(&[7; 70], &[7, 7]).count(), 69);
+}
+
+#[test]
+fn windows_with_byte_equal_the_filtered_window_scan() {
+    let mut state = 5u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 33) as u8 % 3
+    };
+    for len in [0usize, 1, 5, 31, 32, 33, 64, 97] {
+        let haystack: Vec<u8> = (0..len).map(|_| next()).collect();
+        for window_len in 1..=6 {
+            for index in 0..window_len {
+                for byte in 0..3u8 {
+                    let expected: Vec<(usize, &[u8])> = haystack
+                        .windows(window_len)
+                        .enumerate()
+                        .filter(|(_, window)| window[index] == byte)
+                        .collect();
+                    let actual: Vec<(usize, &[u8])> =
+                        windows_with_byte(&haystack, index, byte, window_len).collect();
+                    assert_eq!(actual, expected, "len {len} window {window_len} at {index}");
+                }
+            }
+        }
+    }
+}

@@ -2,7 +2,10 @@
 use super::neutral_player::{
     NeutralError, RuleInputBudget, RuleProblem, Sha256Digest, VerifiedNeutralRule, sha256,
 };
+use crate::pe_image::windows_with_byte;
 use crate::scripts::AssetIdentity;
+/// First byte `decode_header` requires of its window (`cmp eax, imm8`).
+pub(super) const HEADER_FIRST_BYTE: u8 = 0x83;
 fn bad(p: RuleProblem) -> NeutralError {
     NeutralError::Rule(p)
 }
@@ -357,7 +360,7 @@ pub(super) fn decode_getter(d: &[u8]) -> Result<(u32, i32, i32), NeutralError> {
 }
 pub(super) fn decode_header(d: &[u8]) -> Result<(u32, u32), NeutralError> {
     let mut found = None;
-    for (i, b) in d.windows(36).enumerate() {
+    for (i, b) in windows_with_byte(d, 0, HEADER_FIRST_BYTE, 36) {
         if b[..2] != [0x83, 0xf8]
             || b[3] != 0x76
             || b[5..8] != [0x33, 0xc0, 0xe9]

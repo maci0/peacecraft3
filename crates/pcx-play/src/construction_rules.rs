@@ -2,7 +2,7 @@
 use crate::{
     camera_margins::SourceWindow,
     neutral_player::{DiscoveryBudget, Sha256Digest, sha256},
-    pe_image::{PeSections, RDATA, TEXT, u16_at, u32_at},
+    pe_image::{PeSections, RDATA, TEXT, occurrences, u16_at, u32_at},
     scripts::AssetIdentity,
 };
 
@@ -75,20 +75,18 @@ impl<'a> Reader<'a> {
             .checked_add(section.rva)
             .ok_or("scan VA overflow")?;
         let mut found = Vec::new();
-        for (offset, window) in section.bytes.windows(needle.len()).enumerate() {
-            if window == needle {
-                self.candidates = self
-                    .candidates
-                    .checked_sub(1)
-                    .ok_or("construction candidate budget")?;
-                found
-                    .try_reserve(1)
-                    .map_err(|_| "construction candidate allocation")?;
-                found.push(
-                    base.checked_add(u32::try_from(offset).map_err(|_| "scan offset width")?)
-                        .ok_or("scan VA overflow")?,
-                );
-            }
+        for offset in occurrences(section.bytes, needle) {
+            self.candidates = self
+                .candidates
+                .checked_sub(1)
+                .ok_or("construction candidate budget")?;
+            found
+                .try_reserve(1)
+                .map_err(|_| "construction candidate allocation")?;
+            found.push(
+                base.checked_add(u32::try_from(offset).map_err(|_| "scan offset width")?)
+                    .ok_or("scan VA overflow")?,
+            );
         }
         Ok(found)
     }
@@ -387,10 +385,7 @@ fn initial_fraction(
 }
 
 fn one_position(bytes: &[u8], needle: &[u8]) -> Result<usize, String> {
-    let mut found = bytes
-        .windows(needle.len())
-        .enumerate()
-        .filter_map(|(i, w)| (w == needle).then_some(i));
+    let mut found = occurrences(bytes, needle);
     let at = found.next().ok_or("missing construction instruction")?;
     if found.next().is_some() {
         return Err("ambiguous construction instruction".into());

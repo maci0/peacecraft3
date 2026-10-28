@@ -64,10 +64,13 @@ impl ObjectHost {
 
     /// Live modifiers in creation order.
     pub fn fog_modifiers(&self) -> impl Iterator<Item = &FogModifier> {
-        self.inner.arena.iter().filter_map(|e| match e {
-            Entry::FogModifier(Some(m)) => Some(m),
-            _ => None,
-        })
+        self.inner
+            .fog_slots
+            .iter()
+            .filter_map(|&i| match &self.inner.arena[i] {
+                Entry::FogModifier(Some(m)) => Some(m),
+                _ => None,
+            })
     }
 
     pub(super) fn fog_modifier_native(

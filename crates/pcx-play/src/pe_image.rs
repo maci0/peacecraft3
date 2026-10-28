@@ -27,6 +27,61 @@ pub fn bytes_at(data: &[u8], at: usize, len: usize) -> Option<&[u8]> {
     data.get(at..at.checked_add(len)?)
 }
 
+/// Bytes tested per step by [`find_byte`]. Wide enough for the compiler to compare a block
+/// with a few vector operations instead of a branch per byte.
+const SCAN_BLOCK: usize = 32;
+
+fn find_byte(haystack: &[u8], byte: u8) -> Option<usize> {
+    let (blocks, remainder) = haystack.as_chunks::<SCAN_BLOCK>();
+    let mut start = 0;
+    for block in blocks {
+        if block.iter().fold(false, |found, &b| found | (b == byte)) {
+            return block.iter().position(|&b| b == byte).map(|at| start + at);
+        }
+        start += SCAN_BLOCK;
+    }
+    remainder
+        .iter()
+        .position(|&b| b == byte)
+        .map(|at| start + at)
+}
+
+/// Offsets and contents of the `len`-byte windows of `haystack` whose byte at `index` is `byte`,
+/// ascending. The same items as `haystack.windows(len).enumerate()` filtered on that byte, found
+/// without testing every offset. `index` must be less than `len`.
+pub(crate) fn windows_with_byte(
+    haystack: &[u8],
+    index: usize,
+    byte: u8,
+    len: usize,
+) -> impl Iterator<Item = (usize, &[u8])> {
+    debug_assert!(index < len);
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        loop {
+            let start = from + find_byte(haystack.get(index + from..)?, byte)?;
+            from = start + 1;
+            if let Some(window) = haystack.get(start..start.checked_add(len)?) {
+                return Some((start, window));
+            }
+        }
+    })
+}
+
+/// Offsets where `needle` occurs in `haystack`, ascending, overlapping occurrences included.
+/// The same offsets as `haystack.windows(needle.len())` filtered by equality, without a
+/// comparison call per offset. An empty needle has no occurrences.
+pub(crate) fn occurrences<'a>(
+    haystack: &'a [u8],
+    needle: &'a [u8],
+) -> impl Iterator<Item = usize> + 'a {
+    let first = needle.first().copied();
+    // An empty needle never reaches the search; the window length only needs to be positive.
+    windows_with_byte(haystack, 0, first.unwrap_or(0), needle.len().max(1))
+        .filter(move |(_, window)| first.is_some() && *window == needle)
+        .map(|(at, _)| at)
+}
+
 pub fn u16_at(data: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes_at(data, at, 2)?.try_into().ok()?))
 }
@@ -108,12 +163,7 @@ impl<'a> PeSections<'a> {
                 continue;
             };
             found.extend(
-                section
-                    .bytes
-                    .windows(needle.len().max(1))
-                    .enumerate()
-                    .filter(|(_, w)| *w == needle)
-                    .filter_map(|(at, _)| base.checked_add(at as u32)),
+                occurrences(section.bytes, needle).filter_map(|at| base.checked_add(at as u32)),
             );
         }
         found

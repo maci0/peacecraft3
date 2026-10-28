@@ -111,6 +111,7 @@ fn app() -> App {
     let terrain = pcx_map::Terrain::from_bytes(crate::fixtures::terrain_bytes(2, 2)).unwrap();
     let mut app = App::new();
     app.init_resource::<UnitActors>()
+        .init_resource::<crate::campaign_actors::DecodedTextures>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<Image>>()
         .init_resource::<Assets<crate::menu_material::MenuMaterial>>()

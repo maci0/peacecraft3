@@ -2,7 +2,7 @@
 //!
 //! Positions and placement state stay in their original representation. No
 //! fixed-point rounding, spawn defaults, life conversion or combat rules occur.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use pcx_map::{
     GridAlignment, GridAlignmentError, GridDimensions, Map, MapInfo, Pathing, RandomUnit,
@@ -68,6 +68,80 @@ pub struct Definition {
     pub fields: BTreeMap<Fourcc, ObjectField>,
     /// All authored override records, including unsupported/indexed fields.
     pub modifications: Vec<Mod>,
+}
+
+/// Why a column does not select exactly one field of a [`Definition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnError {
+    /// No field's metadata names the column.
+    Missing,
+    /// More than one field's metadata names the column.
+    Ambiguous,
+}
+
+impl Definition {
+    /// The one field whose metadata names `column` as its SLK column, in any table. Scans every
+    /// field; use [`ColumnIndex`] for repeated lookups on one unchanged definition.
+    pub fn column_field(&self, column: &str) -> Result<(&Fourcc, &ObjectField), ColumnError> {
+        let mut matches = self
+            .fields
+            .iter()
+            .filter(|(_, field)| field_column(field) == Some(column));
+        let found = matches.next().ok_or(ColumnError::Missing)?;
+        match matches.next() {
+            Some(_) => Err(ColumnError::Ambiguous),
+            None => Ok(found),
+        }
+    }
+
+    /// Index for repeated [`ColumnIndex::field`] lookups on this definition.
+    pub fn column_index(&self) -> ColumnIndex {
+        let mut columns: HashMap<String, Option<Fourcc>> = HashMap::new();
+        for (id, field) in &self.fields {
+            if let Some(column) = field_column(field) {
+                // A second field with the same column makes the entry ambiguous (`None`).
+                columns
+                    .entry(column.to_owned())
+                    .and_modify(|slot| *slot = None)
+                    .or_insert(Some(*id));
+            }
+        }
+        ColumnIndex { columns }
+    }
+}
+
+fn field_column(field: &ObjectField) -> Option<&str> {
+    match &field.metadata.as_ref()?.source {
+        FieldSource::Column { column, .. } => Some(column),
+        _ => None,
+    }
+}
+
+/// Column-to-field map of one [`Definition`], built once by [`Definition::column_index`].
+/// It describes the definition as it was when built: rebuild it after any change to
+/// `fields` (a unit's definition changes only when its `definition_revision` does).
+#[derive(Debug, Clone)]
+pub struct ColumnIndex {
+    /// The field id for a unique column, `None` for an ambiguous one.
+    columns: HashMap<String, Option<Fourcc>>,
+}
+
+impl ColumnIndex {
+    /// Same result as [`Definition::column_field`] on the definition the index was built from.
+    pub fn field<'a>(
+        &self,
+        definition: &'a Definition,
+        column: &str,
+    ) -> Result<(&'a Fourcc, &'a ObjectField), ColumnError> {
+        match self.columns.get(column) {
+            None => Err(ColumnError::Missing),
+            Some(None) => Err(ColumnError::Ambiguous),
+            Some(Some(id)) => definition
+                .fields
+                .get_key_value(id)
+                .ok_or(ColumnError::Missing),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

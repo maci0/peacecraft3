@@ -157,6 +157,7 @@ impl RenderDevice {
         layout: &'a BindGroupLayout,
         entries: &'a [BindGroupEntry<'a>],
     ) -> BindGroup {
+        crate::render_stats::bind_group_created();
         let wgpu_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             label: label.into(),
             layout,
@@ -216,12 +217,14 @@ impl RenderDevice {
 
     /// Creates a [`Buffer`].
     pub fn create_buffer(&self, desc: &wgpu::BufferDescriptor) -> Buffer {
+        crate::render_stats::buffer_created(desc.size);
         let wgpu_buffer = self.device.create_buffer(desc);
         Buffer::from(wgpu_buffer)
     }
 
     /// Creates a [`Buffer`] and initializes it with the specified data.
     pub fn create_buffer_with_data(&self, desc: &wgpu::util::BufferInitDescriptor) -> Buffer {
+        crate::render_stats::buffer_created(desc.contents.len() as u64);
         let wgpu_buffer = self.device.create_buffer_init(desc);
         Buffer::from(wgpu_buffer)
     }
@@ -237,6 +240,7 @@ impl RenderDevice {
         order: wgpu::util::TextureDataOrder,
         data: &[u8],
     ) -> Texture {
+        crate::render_stats::texture_created();
         let wgpu_texture = self
             .device
             .create_texture_with_data(render_queue, desc, order, data);
@@ -247,6 +251,7 @@ impl RenderDevice {
     ///
     /// `desc` specifies the general format of the texture.
     pub fn create_texture(&self, desc: &wgpu::TextureDescriptor) -> Texture {
+        crate::render_stats::texture_created();
         let wgpu_texture = self.device.create_texture(desc);
         Texture::from(wgpu_texture)
     }

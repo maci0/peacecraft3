@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{File, OpenOptions},
-    io::{Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -1064,16 +1064,15 @@ struct SourceStamp {
 }
 
 #[cfg(unix)]
-fn source_stamp(path: &Path) -> Result<SourceStamp, Error> {
+fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
     use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::metadata(path)?;
-    Ok(SourceStamp {
+    SourceStamp {
         len: metadata.len(),
         device: metadata.dev(),
         inode: metadata.ino(),
         modified: (metadata.mtime(), metadata.mtime_nsec()),
         changed: (metadata.ctime(), metadata.ctime_nsec()),
-    })
+    }
 }
 
 #[cfg(not(unix))]
@@ -1084,12 +1083,15 @@ struct SourceStamp {
 }
 
 #[cfg(not(unix))]
-fn source_stamp(path: &Path) -> Result<SourceStamp, Error> {
-    let metadata = std::fs::metadata(path)?;
-    Ok(SourceStamp {
+fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
+    SourceStamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),
-    })
+    }
+}
+
+fn source_stamp(path: &Path) -> Result<SourceStamp, Error> {
+    Ok(stamp_of(&std::fs::metadata(path)?))
 }
 
 fn create_snapshot_file(directory: &Path, source: &Path) -> Result<File, Error> {
@@ -1126,84 +1128,81 @@ fn create_snapshot_file(directory: &Path, source: &Path) -> Result<File, Error> 
     )))
 }
 
-fn snapshot_archive(
-    mut archive: pcx_mpq::MpqArchive,
-    budget: &mut SnapshotBudget,
-) -> Result<(pcx_mpq::MpqArchive, Sha256Digest), Error> {
-    let source = archive.path().to_path_buf();
-    let len = archive.byte_len();
-    if len > MAX_SNAPSHOT_ARCHIVE_BYTES {
-        return Err(Error::Message(format!(
-            "{}: archive is {len} bytes, exceeding the {MAX_SNAPSHOT_ARCHIVE_BYTES}-byte snapshot limit",
-            source.display()
-        )));
-    }
-    if len > budget.remaining {
-        return Err(Error::Message(format!(
-            "{}: snapshot would exceed the {MAX_SNAPSHOT_TOTAL_BYTES}-byte recipe limit",
-            source.display()
-        )));
-    }
-    let before = source_stamp(&source)?;
+/// A private copy of one archive and the SHA-256 of the copy's bytes.
+struct Snapshot {
+    file: File,
+    sha256: Sha256Digest,
+}
+
+/// Copies `source` into a private unlinked file inside the kernel, then hashes the copy in one
+/// read. The digest covers the bytes the snapshot archive is parsed from, so a source that
+/// changes after the copy cannot make the pin disagree with what is used.
+fn copy_snapshot(source: &Path, len: u64, directory: &Path) -> Result<Snapshot, Error> {
+    let changed =
+        |when: &str| Error::Message(format!("{}: archive changed {when}", source.display()));
+    let before = source_stamp(source)?;
     if before.len != len {
-        return Err(Error::Message(format!(
-            "{}: archive changed after it was opened",
-            source.display()
-        )));
+        return Err(changed("after it was opened"));
     }
-    let mut file = create_snapshot_file(&budget.directory, &source)?;
-    let mut hasher = Sha256::new();
-    let mut offset = 0u64;
-    while offset < len {
-        let want = usize::try_from((len - offset).min(SNAPSHOT_CHUNK_BYTES))
-            .map_err(|_| Error::Message("snapshot chunk length overflowed".into()))?;
-        let bytes = archive.read_at(offset, want).map_err(|error| {
-            Error::Message(format!(
-                "{}: cannot copy snapshot at byte {offset}: {error}",
-                source.display()
-            ))
-        })?;
-        if bytes.len() != want {
-            return Err(Error::Message(format!(
-                "{}: snapshot copy at byte {offset} returned {} bytes, expected {want}",
-                source.display(),
-                bytes.len()
-            )));
-        }
-        hasher.update(&bytes);
-        file.write_all(&bytes).map_err(|error| {
-            Error::Message(format!(
-                "{}: cannot write private snapshot at byte {offset}: {error}",
-                source.display()
-            ))
-        })?;
-        offset += want as u64;
+    let mut input = File::open(source)?;
+    if stamp_of(&input.metadata()?) != before {
+        return Err(changed("after it was opened"));
     }
-    file.flush().map_err(|error| {
+    let mut file = create_snapshot_file(directory, source)?;
+    let copied = std::io::copy(&mut input, &mut file).map_err(|error| {
         Error::Message(format!(
-            "{}: cannot flush private snapshot: {error}",
+            "{}: cannot copy private snapshot: {error}",
             source.display()
         ))
     })?;
-    let after = source_stamp(&source)?;
-    if before != after {
-        return Err(Error::Message(format!(
-            "{}: archive changed while its snapshot was copied",
-            source.display()
-        )));
+    if copied != len || source_stamp(source)? != before {
+        return Err(changed("while its snapshot was copied"));
     }
     file.seek(SeekFrom::Start(0))?;
-    let snapshot = pcx_mpq::MpqArchive::from_file(file, &source).map_err(|error| {
-        Error::Message(format!(
-            "{}: cannot parse private archive snapshot: {error}",
-            source.display()
-        ))
-    })?;
-    budget.remaining = budget
-        .remaining
-        .checked_sub(len)
-        .ok_or_else(|| Error::Message("campaign snapshot budget underflowed".into()))?;
-    Ok((snapshot, hasher.finalize().into()))
+    let mut hasher = Sha256::new();
+    let mut chunk = vec![0u8; usize::try_from(len.min(SNAPSHOT_CHUNK_BYTES)).unwrap_or(usize::MAX)];
+    let mut offset = 0u64;
+    while offset < len {
+        let want = usize::try_from((len - offset).min(chunk.len() as u64))
+            .map_err(|_| Error::Message("snapshot chunk length overflowed".into()))?;
+        file.read_exact(&mut chunk[..want]).map_err(|error| {
+            Error::Message(format!(
+                "{}: cannot read private snapshot at byte {offset}: {error}",
+                source.display()
+            ))
+        })?;
+        hasher.update(&chunk[..want]);
+        offset += want as u64;
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(Snapshot {
+        file,
+        sha256: hasher.finalize().into(),
+    })
+}
+
+/// Runs [`copy_snapshot`] for each `(path, length)`, one thread per archive, and returns the
+/// results in input order. A thread that cannot start runs its copy on the calling thread.
+fn copy_snapshots(sources: &[(PathBuf, u64)], directory: &Path) -> Vec<Result<Snapshot, Error>> {
+    std::thread::scope(|scope| {
+        let pending: Vec<_> = sources
+            .iter()
+            .map(|(path, len)| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, || copy_snapshot(path, *len, directory))
+                    .map_err(|_| (path, *len))
+            })
+            .collect();
+        pending
+            .into_iter()
+            .map(|started| match started {
+                Ok(thread) => thread.join().unwrap_or_else(|_| {
+                    Err(Error::Message("snapshot copy thread panicked".into()))
+                }),
+                Err((path, len)) => copy_snapshot(path, len, directory),
+            })
+            .collect()
+    })
 }
 
 struct OpenedArchive {
@@ -1615,8 +1614,13 @@ fn open_campaign_inventory(
         )));
     }
     let mut budget = SnapshotBudget::new();
-    for archive in members {
-        let path = archive.path().to_path_buf();
+    let sources: Vec<(PathBuf, u64)> = members
+        .iter()
+        .map(|archive| (archive.path().to_path_buf(), archive.byte_len()))
+        .collect();
+    drop(members);
+    let copies = copy_snapshots(&sources, &budget.directory);
+    for ((path, len), copied) in sources.into_iter().zip(copies) {
         let key = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -1627,7 +1631,23 @@ fn open_campaign_inventory(
                 ))
             })?
             .to_ascii_lowercase();
-        let (mut archive, snapshot_sha256) = snapshot_archive(archive, &mut budget)?;
+        if len > budget.remaining {
+            return Err(Error::Message(format!(
+                "{}: snapshot would exceed the {MAX_SNAPSHOT_TOTAL_BYTES}-byte recipe limit",
+                path.display()
+            )));
+        }
+        let Snapshot {
+            file,
+            sha256: snapshot_sha256,
+        } = copied?;
+        let mut archive = pcx_mpq::MpqArchive::from_file(file, &path).map_err(|error| {
+            Error::Message(format!(
+                "{}: cannot parse private archive snapshot: {error}",
+                path.display()
+            ))
+        })?;
+        budget.remaining -= len;
         let listfile = read_listfile(&mut archive, huffman)?;
         listfile_bytes = listfile_bytes
             .checked_add(listfile.len())

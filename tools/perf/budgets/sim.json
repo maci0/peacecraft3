@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "inputs": {
+    "install_exe_sha256": "3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed",
+    "map_sha256": "8345a25e39c4b50b0efd85ff968fc2a7c6c83306534126e19144150b8521d8b8"
+  },
+  "workloads": {
+    "script-vm baseline": {
+      "allocations": 1,
+      "reallocations": 0,
+      "allocated_bytes": 42,
+      "digest": "cbf29ce484225242"
+    },
+    "script-vm run": {
+      "allocations": 398615,
+      "reallocations": 49925,
+      "allocated_bytes": 37376713,
+      "digest": "46ab4f7898e3b995"
+    },
+    "script-front-end load": {
+      "allocations": 1,
+      "reallocations": 0,
+      "allocated_bytes": 52,
+      "digest": "e712325123c95e4c"
+    },
+    "script-front-end parse": {
+      "allocations": 148816,
+      "reallocations": 1444,
+      "allocated_bytes": 38092658,
+      "digest": "dd43cbb388d79d47"
+    },
+    "script-front-end resolve": {
+      "allocations": 215217,
+      "reallocations": 1468,
+      "allocated_bytes": 43038969,
+      "digest": "d6bdd75945858da9"
+    },
+    "human03 0": {
+      "allocations": 1598052,
+      "reallocations": 43177,
+      "allocated_bytes": 1039378080,
+      "vision_cell_visits": 0,
+      "digest": "a2517f75b75e84cf"
+    },
+    "human03 4096": {
+      "allocations": 3375599,
+      "reallocations": 406994,
+      "allocated_bytes": 1756608852,
+      "vision_cell_visits": 2010077,
+      "digest": "97c1d17bf808534c"
+    }
+  }
+}

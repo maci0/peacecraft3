@@ -1141,6 +1141,7 @@ pub fn spawn(
             pivots: pivots.as_ref().unwrap(),
             global_durations: &runtime.global_sequences,
             look_at: None,
+            hidden: &[],
             camera_pose: Some(&camera_pose_plan),
         },
         &handles,
@@ -1540,6 +1541,10 @@ pub struct Rig<'a> {
     /// Script-selected bone and target in source model space.
     pub look_at: Option<(&'a str, Vec3)>,
     pub blend: Option<pcx_play::unit_model::BlendSample<'a>>,
+    /// Geosets, in model mesh order, that the caller draws nowhere this pose. Their vertices keep
+    /// the last pose they were skinned with, which no frame shows; empty means every geoset is
+    /// drawn.
+    pub hidden: &'a [bool],
 }
 
 /// Poses the skeleton at `frame` and rewrites every geoset's positions.
@@ -1578,8 +1583,8 @@ pub fn skin_geosets(
         pcx_gfx::mdx_look_at::apply(&mut skeleton, rig.bones, rig.pivots, bone, target)
             .map_err(|error| SceneError::Decode(error.into()))?;
     }
-    for (handle, rest) in handles.iter().zip(&rig.model.meshes) {
-        if rest.bone_indices.is_empty() {
+    for (index, (handle, rest)) in handles.iter().zip(&rig.model.meshes).enumerate() {
+        if rest.bone_indices.is_empty() || rig.hidden.get(index) == Some(&true) {
             continue;
         }
         pcx_gfx::set_mesh_positions(meshes, handle, pcx_gfx::skin_mesh(rest, &skeleton));
@@ -2128,6 +2133,7 @@ pub fn advance(
             global_durations: &scene.global_durations,
             camera_pose: scene.camera_pose.as_ref(),
             look_at: None,
+            hidden: &[],
         },
         &scene.handles,
         frame,
@@ -2208,6 +2214,7 @@ mod tests {
             global_durations: &[],
             camera_pose: None,
             look_at: None,
+            hidden: &[],
             blend: Some(pcx_play::unit_model::BlendSample {
                 from: &from,
                 weight,
@@ -2236,6 +2243,93 @@ mod tests {
             _ => panic!("positions"),
         };
         assert_eq!(positions[0], [2., 0., 0.]);
+    }
+
+    #[test]
+    fn hidden_geosets_keep_their_last_pose_while_drawn_ones_move() {
+        let bone = pcx_mdl::Bone {
+            offset: 0,
+            span: 104,
+            name: "joint".into(),
+            object_id: 0,
+            parent_id: -1,
+            flags: 0x100,
+            tracks: vec![],
+            geoset_id: -1,
+            geoset_anim_id: -1,
+        };
+        let rest = |geoset| pcx_gfx::LoadedMesh {
+            positions: vec![[2., 0., 0.]],
+            normals: vec![[0., 0., 1.]],
+            tex_coords: vec![[0.; 2]],
+            indices: vec![],
+            vertex_groups: vec![0],
+            bone_indices: vec![0],
+            group_counts: vec![1],
+            geoset,
+            material_id: 0,
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        let handles: Vec<_> = (0..2)
+            .map(|geoset| meshes.add(pcx_gfx::to_bevy_mesh(&rest(geoset))))
+            .collect();
+        let model = pcx_gfx::LoadedModel {
+            name: "synthetic".into(),
+            minimum_extent: [0.; 3],
+            maximum_extent: [0.; 3],
+            meshes: vec![rest(0), rest(1)],
+            bone_names: vec![bone.name.clone()],
+            bone_parents: vec![-1],
+            sequences: vec![],
+        };
+        let from = [pcx_mdl::Pose {
+            translation: [8., 0., 0.],
+            scale: [3.; 3],
+            rotation: [0., 0., 1., 0.],
+        }];
+        let pivots = pcx_mdl::Pivots(vec![[1., 0., 0.]]);
+        let bones = [bone];
+        let skin = |hidden: &[bool], meshes: &mut Assets<Mesh>| {
+            skin_geosets(
+                Rig {
+                    interval: [0, 100],
+                    model: &model,
+                    bones: &bones,
+                    pivots: &pivots,
+                    global_durations: &[],
+                    camera_pose: None,
+                    look_at: None,
+                    hidden,
+                    blend: Some(pcx_play::unit_model::BlendSample {
+                        from: &from,
+                        weight: 0.5,
+                    }),
+                },
+                &handles,
+                50,
+                50,
+                meshes,
+            )
+            .unwrap();
+        };
+        let first = |meshes: &Assets<Mesh>, handle: &Handle<Mesh>| match meshes
+            .get(handle)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+        {
+            bevy::mesh::VertexAttributeValues::Float32x3(p) => p[0],
+            _ => panic!("positions"),
+        };
+        skin(&[false, true], &mut meshes);
+        assert!(
+            Vec3::from_array(first(&meshes, &handles[0])).abs_diff_eq(Vec3::new(5., 2., 0.), 1e-5)
+        );
+        assert_eq!(first(&meshes, &handles[1]), [2., 0., 0.]);
+        skin(&[], &mut meshes);
+        assert!(
+            Vec3::from_array(first(&meshes, &handles[1])).abs_diff_eq(Vec3::new(5., 2., 0.), 1e-5)
+        );
     }
 
     #[test]

@@ -147,6 +147,7 @@ fn hidden_ground_items_publish_no_root_and_unknown_visibility_still_refuses() {
     ]));
     let mut app = App::new();
     app.init_resource::<UnitActors>()
+        .init_resource::<super::DecodedTextures>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<Image>>()
         .init_resource::<Assets<crate::menu_material::MenuMaterial>>()

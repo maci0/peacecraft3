@@ -349,32 +349,27 @@ fn human03(ticks: u64) -> Result<(), String> {
         .session
         .sample_admitted_vision()
         .map_err(|e| e.to_string())?;
-    let debug = std::env::var_os("PCX_SIM_BENCH_DEBUG").is_some();
-    let mut remaining = ticks;
-    let (mut visits, mut sources, mut resampled) = (0usize, 0usize, 0usize);
-    while remaining > 0 {
-        let step = if debug {
-            1
-        } else {
-            remaining.min(pcx_play::headless_startup::MAX_CLOCK_TICKS_PER_CALL)
-        };
-        startup.step_clock(step).map_err(|e| e.to_string())?;
-        remaining -= step;
-        if debug
-            && let Some(stats) = startup
-                .session
-                .host()
-                .and_then(|host| host.objects().vision_sample_stats())
-        {
-            visits += stats.cell_visits;
-            sources += stats.emitted_sources;
-            resampled += usize::from(stats.cell_visits > 0);
+    // One tick per call, so each tick's vision sample statistics and revisions can be read.
+    let (mut vision_cell_visits, mut ticks_with_unit_change, mut ticks_with_vision_change) =
+        (0usize, 0usize, 0usize);
+    let revisions = |startup: &mut pcx_play::headless_startup::Startup| {
+        let host = startup.session.host().ok_or("no published host")?;
+        Ok::<_, String>((
+            host.objects().unit_revision(),
+            host.objects().vision_revision(),
+        ))
+    };
+    let mut last = revisions(&mut startup)?;
+    for _ in 0..ticks {
+        startup.step_clock(1).map_err(|e| e.to_string())?;
+        let host = startup.session.host().ok_or("no published host")?;
+        if let Some(stats) = host.objects().vision_sample_stats() {
+            vision_cell_visits += stats.cell_visits;
         }
-    }
-    if debug {
-        eprintln!(
-            "vision: cell_visits={visits} emitted_sources={sources} ticks_with_visits={resampled}"
-        );
+        let now = revisions(&mut startup)?;
+        ticks_with_unit_change += usize::from(now.0 != last.0);
+        ticks_with_vision_change += usize::from(now.1 != last.1);
+        last = now;
     }
     let mut digest = FNV_OFFSET;
     let mut units = 0usize;
@@ -405,7 +400,7 @@ fn human03(ticks: u64) -> Result<(), String> {
         region,
         "sim-human03-v1",
         format!(
-            "\"seed\":{HUMAN03_SEED},\"ticks\":{ticks},\"tick_reached\":{},\"units\":{units},\"random_state\":{random_present}",
+            "\"seed\":{HUMAN03_SEED},\"ticks\":{ticks},\"tick_reached\":{},\"units\":{units},\"random_state\":{random_present},\"vision_cell_visits\":{vision_cell_visits},\"ticks_with_unit_change\":{ticks_with_unit_change},\"ticks_with_vision_change\":{ticks_with_vision_change}",
             startup.tick()
         ),
         digest,

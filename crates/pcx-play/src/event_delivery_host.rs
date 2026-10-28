@@ -639,8 +639,8 @@ impl ObjectHost {
             return Ok(0);
         }
         let mut registrations = Vec::new();
-        for (index, entry) in self.inner.arena.iter().enumerate() {
-            if let Entry::RegisteredRegionEvent(record) = entry {
+        for &index in &self.inner.region_event_slots {
+            if let Entry::RegisteredRegionEvent(record) = &self.inner.arena[index] {
                 let id = self.inner.id(index, name)?;
                 registrations.push((id, *record));
             }

@@ -3,11 +3,14 @@ use super::{Binding, Defaults, Error, Problem, RowBinding, getter};
 use crate::camera_margins::SourceWindow;
 use crate::neutral_player::{RuleInputBudget, sha256};
 use crate::neutral_rule_input::Pe;
+use crate::pe_image::windows_with_byte;
 use crate::scripts::AssetIdentity;
 use std::alloc::Layout;
 
 // Length of the supported complete opcode profile, not a game-data extent.
 const GETTER_BYTES: usize = 91;
+/// First byte `getter` requires of its window (`push ebp`).
+const GETTER_FIRST_BYTE: u8 = 0x55;
 const WORD_BYTES: u32 = 4;
 
 /// Explicit caller limits, independent of the source's decoded ordinal bound.
@@ -59,7 +62,7 @@ impl<'a> Defaults<'a> {
         let mut found = None;
         for (va, code) in pe.code_ranges() {
             charge(&mut work, code.len(), budget.work_bytes).map_err(fail)?;
-            for (offset, bytes) in code.windows(GETTER_BYTES).enumerate() {
+            for (offset, bytes) in windows_with_byte(code, 0, GETTER_FIRST_BYTE, GETTER_BYTES) {
                 let Some(operands) = getter(bytes) else {
                     continue;
                 };

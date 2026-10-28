@@ -2,7 +2,7 @@
 //! row names `EnvironmentType`. Names, room types, display keys and reverb cells
 //! are the table's own values; column names are the table's headers.
 
-use crate::pe_image::{PeSections, RDATA, TEXT, i32_at, u32_at};
+use crate::pe_image::{PeSections, RDATA, TEXT, i32_at, u32_at, windows_with_byte};
 use pcx_slq::Table;
 use std::collections::BTreeSet;
 
@@ -326,8 +326,8 @@ fn read_rooms(pe: &PeSections<'_>) -> Result<Vec<String>, String> {
 /// with the cluster inside `.rdata`. Row `k` lives at `base + 20*k`.
 fn row_table(code: &[u8], rdata_start: u64, rdata_end: u64) -> Result<u32, String> {
     let mut displacements = BTreeSet::new();
-    for window in code.windows(6) {
-        if window[0] & 0xc7 == MODRM_SIB && window[1] == SIB_INDEX4_DISP32 {
+    for (_, window) in windows_with_byte(code, 1, SIB_INDEX4_DISP32, 6) {
+        if window[0] & 0xc7 == MODRM_SIB {
             displacements.insert(u32_at(window, 2).ok_or("truncated operand")?);
         }
     }
@@ -348,7 +348,7 @@ fn row_table(code: &[u8], rdata_start: u64, rdata_end: u64) -> Result<u32, Strin
 /// Unique displacement of `push dword ptr [edx*4 + disp32]` in `.text`.
 fn name_table(code: &[u8]) -> Result<u32, String> {
     let mut displacements = BTreeSet::new();
-    for window in code.windows(7) {
+    for (_, window) in windows_with_byte(code, 0, PUSH_INDEX4[0], 7) {
         if window[..3] == PUSH_INDEX4 {
             displacements.insert(u32_at(window, 3).ok_or("truncated operand")?);
         }

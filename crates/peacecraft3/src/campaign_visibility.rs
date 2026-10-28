@@ -85,6 +85,11 @@ impl Raster {
         })
     }
 
+    /// The alpha plane of the last accepted projection.
+    pub(crate) fn alpha(&self) -> &[u8] {
+        &self.alpha
+    }
+
     /// Image pixel of a world point, outside the image included.
     pub(crate) fn pixel_of(
         &self,

@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Write;
 
 const WAR3_DESCRIPTOR: u32 = 0x112d8b0;
 const WAR3_LOCAL_DESCRIPTOR: u32 = 0x112d9b8;
@@ -1338,12 +1339,11 @@ fn snapshot_isolated_from_same_inode_rewrite() {
     let path = directory.join("synthetic.mpq");
     let original = synthetic_mpq("fixture", b"original payload");
     std::fs::write(&path, &original).unwrap();
-    let archive = pcx_mpq::MpqArchive::open(&path).unwrap();
-    let mut budget = SnapshotBudget {
-        directory: directory.clone(),
-        remaining: MAX_SNAPSHOT_TOTAL_BYTES,
-    };
-    let (mut snapshot, digest) = snapshot_archive(archive, &mut budget).unwrap();
+    let Snapshot {
+        file,
+        sha256: digest,
+    } = copy_snapshot(&path, original.len() as u64, &directory).unwrap();
+    let mut snapshot = pcx_mpq::MpqArchive::from_file(file, &path).unwrap();
     assert_eq!(digest, sha256(&original));
     assert_eq!(snapshot.path(), path);
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
@@ -1362,4 +1362,78 @@ fn snapshot_isolated_from_same_inode_rewrite() {
     assert_same_inode(&before, &after);
     assert_eq!(snapshot.extract("fixture").unwrap(), b"original payload");
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn pattern(len: usize) -> Vec<u8> {
+    (0..len).map(|n| (n.wrapping_mul(31) >> 3) as u8).collect()
+}
+
+#[test]
+fn snapshot_copy_hashes_the_private_copy_byte_for_byte() {
+    let dir = table_temp_dir("snapshot");
+    // Several chunks and a partial last chunk, then the empty and one-byte edges.
+    for len in [
+        SNAPSHOT_CHUNK_BYTES as usize * 2 + 12_345,
+        SNAPSHOT_CHUNK_BYTES as usize,
+        1,
+        0,
+    ] {
+        let content = pattern(len);
+        let path = dir.join("a.mpq");
+        std::fs::write(&path, &content).unwrap();
+        let mut snapshot = copy_snapshot(&path, len as u64, &dir).unwrap();
+        assert_eq!(snapshot.sha256, <[u8; 32]>::from(Sha256::digest(&content)));
+        let mut copy = Vec::new();
+        snapshot.file.read_to_end(&mut copy).unwrap();
+        assert!(copy == content, "private copy differs at length {len}");
+    }
+    let names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["a.mpq"], "the private copy is unlinked");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn snapshot_copy_refuses_a_source_whose_length_differs_from_the_opened_one() {
+    let dir = table_temp_dir("snapshot-length");
+    let path = dir.join("a.mpq");
+    std::fs::write(&path, pattern(4096)).unwrap();
+    for wrong in [4095u64, 4097] {
+        let error = copy_snapshot(&path, wrong, &dir).err().unwrap();
+        assert!(error.to_string().contains("changed after it was opened"));
+    }
+    assert!(copy_snapshot(&dir.join("absent.mpq"), 0, &dir).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn concurrent_snapshot_copies_return_results_in_input_order() {
+    let dir = table_temp_dir("snapshot-order");
+    let mut sources = Vec::new();
+    let mut contents = Vec::new();
+    for (n, len) in [70_000usize, 3, SNAPSHOT_CHUNK_BYTES as usize + 7]
+        .into_iter()
+        .enumerate()
+    {
+        let content = pattern(len + n);
+        let path = dir.join(format!("{n}.mpq"));
+        std::fs::write(&path, &content).unwrap();
+        sources.push((path, content.len() as u64));
+        contents.push(content);
+    }
+    // A missing archive fails alone, in its own position.
+    sources.insert(1, (dir.join("missing.mpq"), 5));
+    let results = copy_snapshots(&sources, &dir);
+    assert_eq!(results.len(), 4);
+    assert!(results[1].is_err());
+    for (result, content) in [&results[0], &results[2], &results[3]]
+        .into_iter()
+        .zip(&contents)
+    {
+        let snapshot = result.as_ref().unwrap();
+        assert_eq!(snapshot.sha256, <[u8; 32]>::from(Sha256::digest(content)));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

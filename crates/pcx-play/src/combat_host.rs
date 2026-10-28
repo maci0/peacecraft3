@@ -1070,14 +1070,19 @@ impl ObjectHost {
         if id == unit {
             return Ok(None);
         }
-        let Some(other) = self.weapon_target(id) else {
-            return Ok(None);
-        };
-        let Some(other_position) = other.position else {
+        // The range test needs only the unit's record and refuses most candidates, so it runs
+        // before the protection and alliance checks. Every check only refuses.
+        let Some(other_position) = self.inner.unit_record(id).and_then(|r| r.position) else {
             return Ok(None);
         };
         let gap = distance(other_position, position);
-        if gap > acquire || !self.hostile_owners(owner, other.owner) {
+        if gap > acquire {
+            return Ok(None);
+        }
+        let Some(other) = self.weapon_target(id) else {
+            return Ok(None);
+        };
+        if !self.hostile_owners(owner, other.owner) {
             return Ok(None);
         }
         if let Some((fog, mask)) = vision_gate

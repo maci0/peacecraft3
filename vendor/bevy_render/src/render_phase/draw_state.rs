@@ -169,6 +169,7 @@ impl<'a> TrackedRenderPass<'a> {
             return;
         }
         self.pass.set_pipeline(pipeline);
+        crate::render_stats::pipeline_set();
         self.state.set_pipeline(pipeline.id());
     }
 
@@ -208,6 +209,7 @@ impl<'a> TrackedRenderPass<'a> {
 
         self.pass
             .set_bind_group(index as u32, bind_group, dynamic_uniform_indices);
+        crate::render_stats::bind_group_set();
         self.state
             .set_bind_group(index, bind_group.id(), dynamic_uniform_indices);
     }
@@ -276,6 +278,7 @@ impl<'a> TrackedRenderPass<'a> {
         #[cfg(feature = "detailed_trace")]
         trace!("draw: {:?} {:?}", vertices, instances);
         self.pass.draw(vertices, instances);
+        crate::render_stats::draw();
     }
 
     /// Draws using a mesh pipeline.
@@ -404,6 +407,7 @@ impl<'a> TrackedRenderPass<'a> {
             instances
         );
         self.pass.draw_indexed(indices, base_vertex, instances);
+        crate::render_stats::draw();
     }
 
     /// Draws primitives from the active vertex buffer(s) based on the contents of the
@@ -427,6 +431,7 @@ impl<'a> TrackedRenderPass<'a> {
         #[cfg(feature = "detailed_trace")]
         trace!("draw indirect: {:?} {}", indirect_buffer, indirect_offset);
         self.pass.draw_indirect(indirect_buffer, indirect_offset);
+        crate::render_stats::draw();
     }
 
     /// Draws indexed primitives using the active index buffer and the active vertex buffers,
@@ -457,6 +462,7 @@ impl<'a> TrackedRenderPass<'a> {
         );
         self.pass
             .draw_indexed_indirect(indirect_buffer, indirect_offset);
+        crate::render_stats::draw();
     }
 
     /// Dispatches multiple draw calls from the active vertex buffer(s) based on the contents of the
@@ -491,6 +497,7 @@ impl<'a> TrackedRenderPass<'a> {
         );
         self.pass
             .multi_draw_indirect(indirect_buffer, indirect_offset, count);
+        crate::render_stats::multi_draw();
     }
 
     /// Dispatches multiple draw calls from the active vertex buffer(s) based on the contents of
@@ -532,6 +539,7 @@ impl<'a> TrackedRenderPass<'a> {
             count_offset,
             max_count
         );
+        crate::render_stats::multi_draw();
         self.pass.multi_draw_indirect_count(
             indirect_buffer,
             indirect_offset,
@@ -575,6 +583,7 @@ impl<'a> TrackedRenderPass<'a> {
         );
         self.pass
             .multi_draw_indexed_indirect(indirect_buffer, indirect_offset, count);
+        crate::render_stats::multi_draw();
     }
 
     /// Dispatches multiple draw calls from the active index buffer and the active vertex buffers,
@@ -618,6 +627,7 @@ impl<'a> TrackedRenderPass<'a> {
             count_offset,
             max_count
         );
+        crate::render_stats::multi_draw();
         self.pass.multi_draw_indexed_indirect_count(
             indirect_buffer,
             indirect_offset,

@@ -39,3 +39,15 @@ without the guard numeric menu targets fail texture validation and render blank.
 The target format, pixel bytes and compositing rules are unchanged. The vendored crate retains the published style edition for formatting. A synthetic
 capability regression covers both supported format pairs and formats without an
 alternate view. Actual browser rendering is a separate application gate.
+
+## Render submission counters
+
+`bevy_render` also carries `src/render_stats.rs`: process-wide relaxed atomic counters for the
+draw calls (`draw*`, single indirect draws), `multi_draw_*` calls, pipelines and bind groups
+actually set through `TrackedRenderPass` (redundant sets are skipped there and not counted), and
+for `RenderDevice` bind group, buffer (with requested bytes) and texture creation. They are read
+with `bevy::render::render_stats::snapshot()`; a difference of two snapshots counts one interval.
+The patch adds one call to each of 15 existing functions (`render_phase/draw_state.rs`,
+`renderer/render_device.rs`) and changes no rendering behaviour. Only the render CPU workload
+(`docs/performance/render-cpu.md`) reads them. Bind groups made through `wgpu` handles directly
+and buffer writes through `RenderQueue` are not counted.

@@ -436,12 +436,16 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
             .unwrap()
             .parent();
     }
+    let menu_entry = cpu_workload.then(|| bench::EntryWindow::start("enter_menu"));
     activate(&mut app, button);
     escape(&mut app, ButtonState::Pressed);
     step(&mut app);
     escape(&mut app, ButtonState::Released);
     // The game main menu follows the intro; the launcher is only setup.
     screen(&mut app, crate::menu_screens::Screen::Main);
+    if let Some(window) = menu_entry {
+        window.finish(&output);
+    }
     capture(&mut app, &output.join("main-menu.png"));
     let mut workload = cpu_workload.then(bench::Harness::new);
     if let Some(workload) = workload.as_mut() {
@@ -508,6 +512,7 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         .find(|(_, b)| b.campaign == campaign && b.mission == mission)
         .unwrap()
         .0;
+    let campaign_entry = cpu_workload.then(|| bench::EntryWindow::start("enter_campaign"));
     activate(&mut app, button);
     until(&mut app, "campaign startup", |w| {
         w.resource::<CampaignCamera>().active()
@@ -515,6 +520,9 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
                 .context()
                 .is_some()
     });
+    if let Some(window) = campaign_entry {
+        window.finish(&output);
+    }
     capture(&mut app, &output.join("campaign-entry.png"));
     if let Some(at) = paired_time("PCX_PAIRED_SKIP_AT") {
         advance_game_time(&mut app, at);

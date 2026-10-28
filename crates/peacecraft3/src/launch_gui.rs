@@ -322,7 +322,8 @@ pub(crate) fn app_with_plugins(
         .init_resource::<AssetStoreRevision>()
         .init_resource::<crate::menu_screens::Navigation>()
         .add_observer(menu_acquire_focus)
-        .add_systems(Startup, setup)
+        .add_observer(skip_light_clustering)
+        .add_systems(Startup, (setup, use_cpu_light_clustering))
         .add_systems(
             Update,
             (
@@ -1155,6 +1156,22 @@ type MenuFocusRoot = Or<(
     With<MenuLayer>,
     With<crate::campaign_escape_menu::EscapeRoot>,
 )>;
+
+/// No scene here carries a Bevy light, light probe or decal, so a view needs no cluster grid.
+/// `ClusterConfig::None` works only with CPU clustering (with GPU clustering the first capture
+/// never completes), which [`use_cpu_light_clustering`] selects; GPU clustering allocated about
+/// 1.5MB of buffers per frame in the campaign scene.
+fn skip_light_clustering(add: On<Add<Camera3d>>, mut commands: Commands) {
+    commands
+        .entity(add.entity)
+        .insert(bevy::light::cluster::ClusterConfig::None);
+}
+
+fn use_cpu_light_clustering(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
+    if let Some(mut settings) = settings {
+        settings.gpu_clustering = None;
+    }
+}
 
 fn menu_acquire_focus(
     mut event: On<bevy::input_focus::AcquireFocus>,

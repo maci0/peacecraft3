@@ -22,7 +22,7 @@ mod doodads;
 mod item_model;
 #[path = "campaign_sky.rs"]
 pub(crate) mod sky;
-use pcx_sim::world::{Definition, FieldValue};
+use pcx_sim::world::{ColumnError, Definition, FieldValue};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_camera::{CampaignCameraSet, CampaignSceneCamera},
@@ -67,6 +67,9 @@ struct Actor {
     key_scratch: UpdateKey,
     /// Linear tinted colour per geoset, rebuilt by each full update.
     tints: Vec<[f32; 4]>,
+    /// Per geoset, whether the last full update hides it (alpha 0); hidden geosets are neither
+    /// skinned nor lit.
+    hidden: Vec<bool>,
     /// Reused vertex colour buffer for sun lighting.
     colours: Vec<[f32; 4]>,
     /// A full update has run, so culling may skip later ones.
@@ -229,6 +232,43 @@ struct DrawAssets<'w> {
     materials: ResMut<'w, Assets<MenuMaterial>>,
     images: ResMut<'w, Assets<Image>>,
     particle_materials: ResMut<'w, Assets<model_scene::ParticleMaterial>>,
+    textures: ResMut<'w, DecodedTextures>,
+}
+
+/// Decoded model textures by archive path, so actors that share a texture decode it once. Each
+/// actor still gets its own copy of the pixels. Cleared with the actor state on a session change.
+#[derive(Resource, Default)]
+struct DecodedTextures {
+    by_path: BTreeMap<String, pcx_gfx::LoadedTexture>,
+    bytes: usize,
+}
+
+/// Decoded pixels the cache may hold; past it textures are decoded on every use again.
+const DECODED_TEXTURE_CACHE_BYTES: usize = 256 << 20;
+
+impl DecodedTextures {
+    fn get_or_decode(
+        &mut self,
+        path: &str,
+        decode: impl FnOnce() -> Result<pcx_gfx::LoadedTexture, String>,
+    ) -> Result<pcx_gfx::LoadedTexture, String> {
+        if let Some(texture) = self.by_path.get(path) {
+            return Ok(texture.clone());
+        }
+        let texture = decode()?;
+        if let Some(size) = texture.rgba_bytes()
+            && self.bytes.saturating_add(size) <= DECODED_TEXTURE_CACHE_BYTES
+        {
+            self.bytes += size;
+            self.by_path.insert(path.to_owned(), texture.clone());
+        }
+        Ok(texture)
+    }
+
+    fn clear(&mut self) {
+        self.by_path.clear();
+        self.bytes = 0;
+    }
 }
 
 #[derive(SystemParam)]
@@ -429,6 +469,7 @@ pub(crate) fn original_team_color(
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<UnitActors>()
+        .init_resource::<DecodedTextures>()
         .init_resource::<chain_lightning::Bolts>()
         .add_systems(
             Update,
@@ -439,18 +480,11 @@ pub(crate) fn install(app: &mut App) {
 }
 
 pub(crate) fn scalar(unit: &Definition, column: &str) -> Result<f32, String> {
-    use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
-    let mut matches = unit.fields.iter().filter(|(_, f)| {
-        f.metadata
-            .as_ref()
-            .is_some_and(|m| matches!(&m.source,FieldSource::Column {column:c,..} if c==column))
-    });
-    let (id, field) = matches
-        .next()
-        .ok_or_else(|| format!("missing unit field {column}"))?;
-    if matches.next().is_some() {
-        return Err(format!("ambiguous unit field {column}"));
-    }
+    use pcx_objects::editor::{FieldKind, SlkId};
+    let (id, field) = unit.column_field(column).map_err(|error| match error {
+        ColumnError::Missing => format!("missing unit field {column}"),
+        ColumnError::Ambiguous => format!("ambiguous unit field {column}"),
+    })?;
     let metadata = field.metadata.as_ref().expect("selected metadata");
     if metadata.from != SlkId::UnitMetaData
         || metadata.fourcc != *id
@@ -876,12 +910,13 @@ impl Actor {
                     slot => return Err(format!("unsupported empty unit texture slot {slot}")),
                 };
             }
-            let raw = reader
-                .resolve_bounded(&texture.path, 16 << 20)
-                .map_err(|e| e.to_string())?;
-            let decoded =
-                pcx_gfx::load_mipmapped_image_bounded(&raw.bytes, &texture.path, remaining)
+            let decoded = assets.textures.get_or_decode(&texture.path, || {
+                let raw = reader
+                    .resolve_bounded(&texture.path, 16 << 20)
                     .map_err(|e| e.to_string())?;
+                pcx_gfx::load_mipmapped_image_bounded(&raw.bytes, &texture.path, remaining)
+                    .map_err(|e| e.to_string())
+            })?;
             remaining = remaining
                 .checked_sub(decoded.rgba_bytes().ok_or("invalid unit image mip chain")?)
                 .ok_or("actor image budget exceeded")?;
@@ -1059,6 +1094,7 @@ impl Actor {
                 update_key: None,
                 key_scratch: UpdateKey::default(),
                 tints: Vec::new(),
+                hidden: Vec::new(),
                 colours: Vec::new(),
                 posed: false,
             },
@@ -1181,50 +1217,10 @@ impl Actor {
             self.update_key = previous;
             return Ok(());
         }
-        let skeleton = model_scene::skin_geosets(
-            model_scene::Rig {
-                blend,
-                interval: self.interval,
-                model: &self.model,
-                bones: self.runtime.joints.joints(),
-                pivots: self.runtime.joints.pivots(),
-                global_durations: &self.runtime.global_sequences,
-                camera_pose: None,
-                look_at: look_at.map(|(bone, target)| {
-                    (
-                        bone,
-                        self.world_transform
-                            .compute_affine()
-                            .inverse()
-                            .transform_point3(target),
-                    )
-                }),
-            },
-            &self.geosets.handles,
-            sample.frame,
-            elapsed_ms,
-            &mut assets.meshes,
-        )
-        .map_err(|e| e.to_string())?;
-        model_scene::apply_texture_selection(
-            &self.selection,
-            &mut self.geosets.textures,
-            sample.frame,
-            sample.elapsed_ms,
-            &mut assets.materials,
-        )
-        .map_err(|e| e.to_string())?;
-        model_scene::apply_uv_translation(
-            &self.uv,
-            &self.geosets.textures,
-            sample.frame,
-            sample.elapsed_ms,
-            &mut assets.materials,
-        )
-        .map_err(|e| e.to_string())?;
         // Opacity, colour and tint compose into one value per geoset; a material is only
         // written when that value differs, so unchanged geosets raise no asset event.
         self.tints.clear();
+        self.hidden.clear();
         for (index, ((geoset, entity, handle), (mode, blend))) in self
             .geosets
             .bound
@@ -1254,6 +1250,12 @@ impl Actor {
                 c.alpha * tint[3],
             );
             let (mode, blend) = blend.with_unit_opacity(*mode, tint[3]);
+            let wanted = if c.alpha * tint[3] <= 0.0 {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+            self.hidden.push(wanted == Visibility::Hidden);
             self.tints.push(tinted.to_linear().to_f32_array());
             // Sun-lit geosets get their colour from the lighting pass below.
             let sunlit = lighting.is_some() && self.lit[index];
@@ -1268,23 +1270,68 @@ impl Actor {
                 material.base.alpha_mode = mode;
                 material.extension = blend;
             }
-            if let Ok(mut visible) = visibility.get_mut(*entity) {
-                let wanted = if c.alpha * tint[3] <= 0.0 {
-                    Visibility::Hidden
-                } else {
-                    Visibility::Inherited
-                };
-                if *visible != wanted {
-                    *visible = wanted;
-                }
+            if let Ok(mut visible) = visibility.get_mut(*entity)
+                && *visible != wanted
+            {
+                *visible = wanted;
             }
         }
+        // The first pose poses every geoset, because Bevy takes each mesh's culling bounds from
+        // the vertices it holds when the entity first appears.
+        let skippable: &[bool] = if self.posed { &self.hidden } else { &[] };
+        let skeleton = model_scene::skin_geosets(
+            model_scene::Rig {
+                blend,
+                interval: self.interval,
+                model: &self.model,
+                bones: self.runtime.joints.joints(),
+                pivots: self.runtime.joints.pivots(),
+                global_durations: &self.runtime.global_sequences,
+                camera_pose: None,
+                look_at: look_at.map(|(bone, target)| {
+                    (
+                        bone,
+                        self.world_transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(target),
+                    )
+                }),
+                hidden: skippable,
+            },
+            &self.geosets.handles,
+            sample.frame,
+            elapsed_ms,
+            &mut assets.meshes,
+        )
+        .map_err(|e| e.to_string())?;
+        model_scene::apply_texture_selection(
+            &self.selection,
+            &mut self.geosets.textures,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+        )
+        .map_err(|e| e.to_string())?;
+        model_scene::apply_uv_translation(
+            &self.uv,
+            &self.geosets.textures,
+            sample.frame,
+            sample.elapsed_ms,
+            &mut assets.materials,
+        )
+        .map_err(|e| e.to_string())?;
         if let Some((direction, sun, parameters)) = lighting {
             crate::menu_lighting::apply_sun(
                 &animation.model.member,
                 &self.model,
                 &skeleton,
-                (&self.geosets.handles, &self.geosets.bound, &self.lit),
+                crate::menu_lighting::SunGeosets {
+                    handles: &self.geosets.handles,
+                    bound: &self.geosets.bound,
+                    lit: &self.lit,
+                    hidden: skippable,
+                },
                 &self.tints,
                 (direction, sun, parameters),
                 (&mut assets.meshes, &mut assets.materials, &mut self.colours),
@@ -1574,6 +1621,7 @@ fn project(
             session: witness,
             ..default()
         };
+        assets.textures.clear();
         chain_lightning::release(&mut bolts);
     }
     let Some(context) = session.context().cloned() else {
@@ -2478,6 +2526,44 @@ mod tests {
         field.value = Ok(FieldValue::Cell("7".into()));
         field.metadata.as_mut().unwrap().declared = "unknownEnum".into();
         assert!(scalar(&unit.definition, "teamColor").is_err());
+    }
+    #[test]
+    fn a_texture_shared_by_actors_is_decoded_once_and_failures_are_not_kept() {
+        let texture = |size: u32| pcx_gfx::LoadedTexture {
+            width: size,
+            height: 1,
+            rgba: vec![7; size as usize * 4],
+            mipmaps: vec![],
+            source: "synthetic".into(),
+        };
+        let mut cache = DecodedTextures::default();
+        let mut decodes = 0;
+        for _ in 0..3 {
+            let found = cache
+                .get_or_decode("a.blp", || {
+                    decodes += 1;
+                    Ok(texture(2))
+                })
+                .unwrap();
+            assert_eq!(found.rgba, [7; 8]);
+        }
+        assert_eq!(decodes, 1);
+        assert!(cache.get_or_decode("bad.blp", || Err("no".into())).is_err());
+        assert!(cache.get_or_decode("bad.blp", || Ok(texture(1))).is_ok());
+        assert_eq!(cache.by_path.len(), 2);
+        cache.clear();
+        assert!(cache.by_path.is_empty() && cache.bytes == 0);
+        // Past the byte cap a texture is returned but not kept, so it is decoded again.
+        cache.bytes = DECODED_TEXTURE_CACHE_BYTES;
+        for _ in 0..2 {
+            cache
+                .get_or_decode("big.blp", || {
+                    decodes += 1;
+                    Ok(texture(2))
+                })
+                .unwrap();
+        }
+        assert_eq!((decodes, cache.by_path.len()), (3, 0));
     }
     #[test]
     fn boolean_visual_fields_keep_source_cells_and_integer_wire_overrides() {

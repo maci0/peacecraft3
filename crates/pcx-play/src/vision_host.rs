@@ -150,16 +150,39 @@ impl ObjectHost {
             })
     }
 
-    fn shares_vision(&self, owner: HandleId, viewer: HandleId) -> Result<bool, Error> {
+    fn shares_vision(
+        &self,
+        owner: HandleId,
+        viewer: HandleId,
+        kinds: &[i32],
+    ) -> Result<bool, Error> {
         if owner == viewer {
             return Ok(true);
         }
         let source = self.player_settings(owner)?;
         let target = self.player_settings(viewer)?;
-        Ok(["ALLIANCE_SHARED_VISION", "ALLIANCE_SHARED_VISION_FORCED"]
+        Ok(kinds
+            .iter()
+            .any(|&kind| self.effective_alliance(source, target, kind)))
+    }
+
+    /// The selected alliance kinds that share vision. A constant the script does not declare
+    /// is skipped.
+    fn sharing_kinds(&self) -> Vec<i32> {
+        ["ALLIANCE_SHARED_VISION", "ALLIANCE_SHARED_VISION_FORCED"]
             .into_iter()
             .filter_map(|name| self.source_constant_enumerand(name, "alliancetype").ok())
-            .any(|kind| self.effective_alliance(source, target, kind)))
+            .collect()
+    }
+
+    /// The selected fog state values, which `FOG_OF_WAR_*` constants map to a [`VisionState`].
+    fn fog_state_values(&self) -> [(Option<i32>, VisionState); 3] {
+        [
+            ("FOG_OF_WAR_MASKED", VisionState::Masked),
+            ("FOG_OF_WAR_FOGGED", VisionState::Fogged),
+            ("FOG_OF_WAR_VISIBLE", VisionState::Visible),
+        ]
+        .map(|(name, state)| (self.source_constant_enumerand(name, "fogstate").ok(), state))
     }
 
     /// Live vision areas only; this neither changes the arena nor retains a second unit store.
@@ -169,17 +192,60 @@ impl ObjectHost {
         night: bool,
         limit: usize,
     ) -> Result<Vec<VisionSource>, Error> {
+        let mut table = self.source_table(night)?;
         Ok(self
-            .list_vision_sources(viewer, night, limit, &mut SightRadii::default())?
+            .list_vision_sources(viewer, limit, &mut SightRadii::default(), &mut table)?
             .sources)
+    }
+
+    /// Gathers what every viewer's listing reads, so a sample walks the world once.
+    pub(super) fn source_table(&self, night: bool) -> Result<SourceTable<'_>, Error> {
+        let fail = |detail: &str| {
+            self.inner
+                .error("vision", Failure::UnitActivity(detail.into()))
+        };
+        let mut modifiers = Vec::new();
+        modifiers
+            .try_reserve(self.inner.fog_slots.len())
+            .map_err(|_| fail("vision allocation failed"))?;
+        modifiers.extend(
+            self.inner
+                .fog_slots
+                .iter()
+                .filter_map(|&index| match &self.inner.arena[index] {
+                    Entry::FogModifier(Some(modifier)) if modifier.started => {
+                        Some((index, modifier))
+                    }
+                    _ => None,
+                }),
+        );
+        let mut units = Vec::new();
+        units
+            .try_reserve(self.inner.unit_slots.len())
+            .map_err(|_| fail("vision allocation failed"))?;
+        units.extend(self.executed_units().map(|(id, unit)| TableUnit {
+            id,
+            unit,
+            live: unit.shown
+                && !unit.combat.as_ref().is_some_and(|c| c.dead)
+                && !unit.vitals.is_some_and(|v| v.life <= 0.),
+            radius: None,
+        }));
+        Ok(SourceTable {
+            night,
+            modifiers,
+            units,
+            sharing_kinds: None,
+            fog_states: None,
+        })
     }
 
     pub(super) fn list_vision_sources(
         &self,
         viewer: HandleId,
-        night: bool,
         limit: usize,
         radii: &mut SightRadii,
+        table: &mut SourceTable<'_>,
     ) -> Result<ListedVision, Error> {
         let fail = |detail| self.inner.error("vision", Failure::UnitActivity(detail));
         self.player_settings(viewer)?;
@@ -198,35 +264,31 @@ impl ObjectHost {
             sources.push(circle);
             Ok(())
         };
-        for (index, entry) in self.inner.arena.iter().enumerate() {
-            let Entry::FogModifier(Some(modifier)) = entry else {
-                continue;
-            };
-            if !modifier.started {
-                continue;
-            }
+        for &(index, modifier) in &table.modifiers {
             scanned = scanned.saturating_add(1);
             if scanned > limit {
                 return Err(fail("vision scan budget exceeded".into()));
             }
             if modifier.player != viewer
-                && !(modifier.shared_vision && self.shares_vision(modifier.player, viewer)?)
+                && !(modifier.shared_vision
+                    && self.shares_vision(
+                        modifier.player,
+                        viewer,
+                        table
+                            .sharing_kinds
+                            .get_or_insert_with(|| self.sharing_kinds()),
+                    )?)
             {
                 continue;
             }
             let modifier_id = self.inner.id(index, "vision")?;
             let value = self.inner.symbolic_value(modifier.state, "fogstate")?;
-            let state = [
-                ("FOG_OF_WAR_MASKED", VisionState::Masked),
-                ("FOG_OF_WAR_FOGGED", VisionState::Fogged),
-                ("FOG_OF_WAR_VISIBLE", VisionState::Visible),
-            ]
-            .into_iter()
-            .find_map(|(name, state)| {
-                (self.source_constant_enumerand(name, "fogstate").ok() == Some(value))
-                    .then_some(state)
-            })
-            .ok_or_else(|| fail("unsupported source fog state".into()))?;
+            let state = table
+                .fog_states
+                .get_or_insert_with(|| self.fog_state_values())
+                .iter()
+                .find_map(|&(known, state)| (known == Some(value)).then_some(state))
+                .ok_or_else(|| fail("unsupported source fog state".into()))?;
             push(VisionSource {
                 shape: modifier.shape,
                 state,
@@ -243,22 +305,24 @@ impl ObjectHost {
         let mut units = Vec::new();
         // Whether each unit owner shares vision with `viewer`; the answer depends on the owner only.
         let mut shares: Vec<(HandleId, bool)> = Vec::new();
-        for (unit_id, unit) in self.executed_units() {
+        let night = table.night;
+        for listed in &mut table.units {
             scanned = scanned.saturating_add(1);
             if scanned > limit {
                 return Err(fail("vision scan budget exceeded".into()));
             }
-            if !unit.shown
-                || unit.combat.as_ref().is_some_and(|c| c.dead)
-                || unit.vitals.is_some_and(|v| v.life <= 0.)
-            {
+            if !listed.live {
                 continue;
             }
+            let unit = listed.unit;
             if !unit.vision_viewers.contains(&viewer) {
                 let shared = match shares.iter().find(|(owner, _)| *owner == unit.owner) {
                     Some(&(_, shared)) => shared,
                     None => {
-                        let shared = self.shares_vision(unit.owner, viewer)?;
+                        let kinds = table
+                            .sharing_kinds
+                            .get_or_insert_with(|| self.sharing_kinds());
+                        let shared = self.shares_vision(unit.owner, viewer, kinds)?;
                         shares.push((unit.owner, shared));
                         shared
                     }
@@ -271,8 +335,12 @@ impl ObjectHost {
                 .position
                 .ok_or_else(|| fail("unit has no accepted vision position".into()))?;
             // shortcut: base day/night sight only; apply sight-changing upgrades and effects when their live consumers are modeled.
-            let radius = radii
-                .of(unit_id, unit.definition_revision, &unit.definition, night)
+            let radius = listed
+                .radius
+                .get_or_insert_with(|| {
+                    radii.of(listed.id, unit.definition_revision, &unit.definition, night)
+                })
+                .clone()
                 .map_err(fail)?;
             units
                 .try_reserve(1)
@@ -281,7 +349,7 @@ impl ObjectHost {
                 shape: VisionShape::Circle { center, radius },
                 state: VisionState::Visible,
                 after_units: false,
-                origin: VisionOrigin::Unit { unit: unit_id },
+                origin: VisionOrigin::Unit { unit: listed.id },
                 source_height: None,
             });
         }
@@ -294,6 +362,28 @@ impl ObjectHost {
             candidates_scanned: scanned,
         })
     }
+}
+
+/// What every viewer's source listing reads, gathered once per sample.
+pub(super) struct SourceTable<'a> {
+    night: bool,
+    /// Started fog modifiers with their arena index, in creation order.
+    modifiers: Vec<(usize, &'a super::FogModifier)>,
+    /// Every executed unit in arena order.
+    units: Vec<TableUnit<'a>>,
+    /// Resolved on first use: the alliance kinds that share vision.
+    sharing_kinds: Option<Vec<i32>>,
+    /// Resolved on first use: the fog state values.
+    fog_states: Option<[(Option<i32>, VisionState); 3]>,
+}
+
+struct TableUnit<'a> {
+    id: HandleId,
+    unit: &'a super::ExecutedUnit,
+    /// Shown, not dead and with life left: the units that can emit a source.
+    live: bool,
+    /// Sight radius, read the first time a viewer needs it.
+    radius: Option<Result<f32, String>>,
 }
 
 /// Sight radius of a unit's definition at day or night. A unit's definition changes only with

@@ -2,7 +2,8 @@
 use crate::neutral_player::{
     self as n, DiscoveryBudget, NeutralError, RuleProblem, VerifiedNeutralRule, sha256,
 };
-use crate::neutral_rule_input::{Pe, decode_getter, decode_header};
+use crate::neutral_rule_input::{HEADER_FIRST_BYTE, Pe, decode_getter, decode_header};
+use crate::pe_image::windows_with_byte;
 use crate::scripts::AssetIdentity;
 
 pub(crate) const NAMES: [&str; 6] = [
@@ -63,7 +64,7 @@ pub(crate) fn discover(
     for (va, code) in pe.code_ranges() {
         add(&mut work, code.len(), budget.work_bytes)?;
         add(&mut work, code.len(), budget.work_bytes)?;
-        for (offset, bytes) in code.windows(36).enumerate() {
+        for (offset, bytes) in windows_with_byte(code, 0, HEADER_FIRST_BYTE, 36) {
             if let Ok(bounds) = decode_header(bytes) {
                 let address = va
                     .checked_add(u32::try_from(offset).map_err(|_| fail(RuleProblem::Budget))?)
@@ -73,8 +74,8 @@ pub(crate) fn discover(
                 }
             }
         }
-        for (offset, bytes) in code.windows(15).enumerate() {
-            if bytes[0] != 0x68 || bytes[5] != 0x68 || bytes[10] != 0x68 {
+        for (offset, bytes) in windows_with_byte(code, 0, 0x68, 15) {
+            if bytes[5] != 0x68 || bytes[10] != 0x68 {
                 continue;
             }
             candidates = candidates

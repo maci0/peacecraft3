@@ -41,8 +41,39 @@ struct FogImage {
     /// The pixels the image should hold after this frame's fog and markers.
     composed: Vec<u8>,
     viewer: Option<pcx_script::HandleId>,
+    /// What the raster's alpha was last projected from; equal inputs project the same alpha.
+    projected: Option<ProjectionInputs>,
     width: u32,
     height: u32,
+}
+
+/// Everything a fog projection reads: the shared vision field (by its revision, which counts
+/// every sample that changed a cell or the viewer set), the viewer, both switches and the mapped
+/// world extent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ProjectionInputs {
+    vision_revision: u64,
+    viewer: pcx_script::HandleId,
+    fog: bool,
+    mask: bool,
+    bounds: [[u32; 2]; 2],
+}
+
+impl ProjectionInputs {
+    fn new(
+        vision_revision: u64,
+        viewer: pcx_script::HandleId,
+        (fog, mask): (bool, bool),
+        bounds: [[f32; 2]; 2],
+    ) -> Self {
+        Self {
+            vision_revision,
+            viewer,
+            fog,
+            mask,
+            bounds: bounds.map(|corner| corner.map(f32::to_bits)),
+        }
+    }
 }
 #[derive(Resource, Default)]
 pub(crate) struct CampaignMinimap {
@@ -417,6 +448,10 @@ fn update_fog(
         .ok_or("minimap needs the admitted world extent")?;
     let fog_enabled = settings.fog_enabled;
     let mask_enabled = settings.fog_mask_enabled;
+    let inputs = host.vision_revision().map(|revision| {
+        ProjectionInputs::new(revision, viewer, (fog_enabled, mask_enabled), bounds)
+    });
+    let unchanged = inputs.is_some() && fog.projected == inputs && fog.viewer == Some(viewer);
     let mut staged_raster = if fog.viewer == Some(viewer) {
         None
     } else {
@@ -426,18 +461,26 @@ fn update_fog(
             PIXEL_BYTES / 4,
         )?)
     };
-    let raster = staged_raster.as_mut().unwrap_or(&mut fog.raster);
-    let alpha = raster.project(bounds, fog.alpha, VISION_WORK, |point| {
-        Ok(host
-            .vision_presented(
-                viewer,
-                [point[0] as f32, point[1] as f32],
-                fog_enabled,
-                mask_enabled,
-            )
-            .map_err(|error| error.to_string())?
-            .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
-    })?;
+    let alpha = if unchanged {
+        fog.raster.alpha()
+    } else {
+        // A refused projection must not leave the previous inputs standing.
+        fog.projected = None;
+        let raster = staged_raster.as_mut().unwrap_or(&mut fog.raster);
+        let alpha = raster.project(bounds, fog.alpha, VISION_WORK, |point| {
+            Ok(host
+                .vision_presented(
+                    viewer,
+                    [point[0] as f32, point[1] as f32],
+                    fog_enabled,
+                    mask_enabled,
+                )
+                .map_err(|error| error.to_string())?
+                .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
+        })?;
+        fog.projected = inputs;
+        alpha
+    };
     fog.composed.resize(pixel_len, 0);
     publish_minimap_alpha(
         &mut fog.composed,
@@ -701,6 +744,7 @@ fn project(
                     composed: Vec::new(),
                     original_alpha,
                     viewer: None,
+                    projected: None,
                     width,
                     height,
                 })
@@ -754,6 +798,23 @@ fn project(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    #[test]
+    fn a_projection_is_reused_only_when_every_input_is_equal() {
+        let viewer = pcx_script::HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let other = pcx_script::HandleId::new(std::num::NonZeroU64::new(8).unwrap());
+        let bounds = [[-100., -40.], [300., 160.]];
+        let base = ProjectionInputs::new(3, viewer, (true, true), bounds);
+        assert!(base == ProjectionInputs::new(3, viewer, (true, true), bounds));
+        for changed in [
+            ProjectionInputs::new(4, viewer, (true, true), bounds),
+            ProjectionInputs::new(3, other, (true, true), bounds),
+            ProjectionInputs::new(3, viewer, (false, true), bounds),
+            ProjectionInputs::new(3, viewer, (true, false), bounds),
+            ProjectionInputs::new(3, viewer, (true, true), [[-100., -40.], [300., 160.5]]),
+        ] {
+            assert!(base != changed);
+        }
+    }
     #[test]
     fn hidden_terrain_zeroes_colour_planes_and_keeps_the_fog_alpha() {
         let base = [10, 20, 30, 255, 40, 50, 60, 255];
@@ -945,6 +1006,7 @@ endglobals
                 original_pixels: vec![1, 2, 3, 255],
                 composed: Vec::new(),
                 viewer: None,
+                projected: None,
                 width: 1,
                 height: 1,
             }),
@@ -1211,6 +1273,7 @@ endglobals
             original_pixels: Vec::new(),
             composed: Vec::new(),
             viewer: None,
+            projected: None,
             width: 80,
             height: 40,
         };

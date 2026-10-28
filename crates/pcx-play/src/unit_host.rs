@@ -856,6 +856,15 @@ impl ObjectHost {
             })
     }
 
+    /// Count of unit allocations and mutable accesses to unit records. While it is equal, no
+    /// unit's position, definition, owner, visibility, vitals or other record field has
+    /// changed, so a consumer can reuse what it derived from them. It is a superset: an
+    /// access that writes nothing still counts. A single unit's `definition_revision` is the
+    /// finer signal for its definition alone.
+    pub fn unit_revision(&self) -> u64 {
+        self.inner.unit_revision
+    }
+
     /// The factor a newly created unit inherits from its owner. Without player
     /// admission no factor is assigned and the creation baseline is unchanged.
     pub(super) fn owner_health_handicap(&self, owner: HandleId) -> Result<f32, Error> {

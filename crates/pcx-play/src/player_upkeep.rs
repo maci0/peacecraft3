@@ -1,6 +1,7 @@
 //! Bounded source-code admission for the participant resource-bar upkeep label.
 use super::{call, shape, word};
 use crate::neutral_rule_input::Pe;
+use crate::pe_image::windows_with_byte;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpkeepLabel {
@@ -72,7 +73,7 @@ impl Upkeep {
         // Bind the updater's text member to the source constructor's named frame.
         let mut members = Vec::new();
         for (_, bytes) in pe.code_ranges() {
-            for b in bytes.windows(30) {
+            for (_, b) in windows_with_byte(bytes, 0, 0x68, 30) {
                 if shape(b, &[(0, &[0x68]), (5, &[0xe8]), (24, &[0x89, 0x86])])
                     && string(pe, operand(b, 1)?).is_ok_and(|s| s == "ResourceBarUpkeepText")
                 {
@@ -85,7 +86,7 @@ impl Upkeep {
         };
         let mut updaters = Vec::new();
         for (va, bytes) in pe.code_ranges() {
-            for (at, b) in bytes.windows(49).enumerate() {
+            for (at, b) in windows_with_byte(bytes, 0, 0x55, 49) {
                 if shape(
                     b,
                     &[

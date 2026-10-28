@@ -90,6 +90,7 @@ impl ObjectHost {
                     .as_ref()
                     .is_some_and(|look| look.target == unit)
             {
+                self.inner.unit_revision += 1;
                 record.look_at = None;
             }
         }

@@ -10,7 +10,10 @@
 //! rebuilding sight circles.
 use super::{Error, Failure, ObjectHost, VisionShape, VisionSource, VisionState};
 use pcx_script::HandleId;
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 /// Application allocation ceiling for one viewer's grid. Not a map constant.
 const MAX_GRID_CELLS: usize = 4_000_000;
@@ -18,9 +21,6 @@ const MAX_GRID_CELLS: usize = 4_000_000;
 /// Not a game rule. The charge is the touched rectangles, not viewers times
 /// every cell times every source.
 const STAMP_COVERINGS: usize = 64;
-/// Changed sources above which a viewer is restamped in full instead of by region. Bounds the
-/// pairwise region merge; not a game rule.
-const MAX_INCREMENTAL_SOURCES: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VisionCell {
@@ -220,50 +220,53 @@ impl Rect {
         Ok(Self { x0, x1, y0, y1 })
     }
 
-    fn intersection(self, other: Self) -> Self {
-        Self {
-            x0: self.x0.max(other.x0),
-            x1: self.x1.min(other.x1),
-            y0: self.y0.max(other.y0),
-            y1: self.y1.min(other.y1),
-        }
-    }
-
-    fn overlaps(self, other: Self) -> bool {
-        self.intersection(other).area() > 0
-    }
-
-    fn bounding(self, other: Self) -> Self {
-        Self {
-            x0: self.x0.min(other.x0),
-            x1: self.x1.max(other.x1),
-            y0: self.y0.min(other.y0),
-            y1: self.y1.max(other.y1),
-        }
+    fn contains(self, x: usize, y: usize) -> bool {
+        (self.x0..self.x1).contains(&x) && (self.y0..self.y1).contains(&y)
     }
 }
 
-/// Merges overlapping regions into their bounding boxes until all remaining regions are disjoint.
-fn merge_overlapping(regions: &mut Vec<Rect>) {
-    'again: loop {
-        for i in 0..regions.len() {
-            for j in i + 1..regions.len() {
-                if regions[i].overlaps(regions[j]) {
-                    let other = regions.swap_remove(j);
-                    regions[i] = regions[i].bounding(other);
-                    continue 'again;
-                }
-            }
-        }
-        return;
+/// What one source shape covers on the grid: its bounding rectangle and the run of covered cells
+/// in each row of it. A function of the shape alone, so every viewer that lists the same unit
+/// shares one footprint.
+struct Footprint {
+    rect: Rect,
+    /// Covered cells `(x0, x1)` of row `rect.y0 + n`; `x0 == x1` when none.
+    runs: Vec<(usize, usize)>,
+}
+
+impl Footprint {
+    /// Covered cells of row `y`, empty outside the rectangle.
+    fn run(&self, y: usize) -> (usize, usize) {
+        y.checked_sub(self.rect.y0)
+            .and_then(|n| self.runs.get(n))
+            .copied()
+            .unwrap_or((0, 0))
+    }
+}
+
+/// Bit pattern of a shape: equal shapes share one footprint.
+type ShapeKey = [u32; 5];
+
+fn shape_key(shape: VisionShape) -> ShapeKey {
+    match shape {
+        VisionShape::Circle { center, radius } => [
+            0,
+            center[0].to_bits(),
+            center[1].to_bits(),
+            radius.to_bits(),
+            0,
+        ],
+        VisionShape::Rectangle {
+            bounds: [a, b, c, d],
+        } => [1, a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()],
     }
 }
 
 struct ViewerGrid {
     explored: Vec<bool>,
     current: Vec<VisionState>,
-    /// Cell rectangle of each entry of `sources`, in the same order.
-    rects: Vec<Rect>,
+    /// Footprint of each entry of `sources`, in the same order.
+    footprints: Vec<Arc<Footprint>>,
     sources: Vec<VisionSource>,
 }
 
@@ -282,7 +285,7 @@ impl ViewerGrid {
         Ok(Self {
             explored,
             current,
-            rects: Vec::new(),
+            footprints: Vec::new(),
             sources: Vec::new(),
         })
     }
@@ -300,48 +303,69 @@ impl ViewerGrid {
         }
     }
 
-    /// Stamps `sources` in order, optionally only inside `clip`. Cell sample coordinates are read
-    /// from the grid's per-column and per-row tables, the same values `sample_x`/`sample_y` return.
+    /// Stamps `sources` in order. Each row of a source writes its contiguous covered run.
     fn stamp(
         &mut self,
         sources: &[VisionSource],
-        rects: &[Rect],
-        clip: Option<Rect>,
+        footprints: &[Arc<Footprint>],
         vision: &SharedVision,
         visits: &mut usize,
     ) {
         let width = vision.shape.width;
-        for (source, rect) in sources.iter().zip(rects) {
-            let rect = clip.map_or(*rect, |clip| rect.intersection(clip));
+        for (source, footprint) in sources.iter().zip(footprints) {
+            let rect = footprint.rect;
             let explored = source.state != VisionState::Masked;
             for y in rect.y0..rect.y1 {
                 *visits += rect.x1.saturating_sub(rect.x0);
-                let sy = vision.rows[y];
+                let (x0, x1) = footprint.run(y);
                 let row = y * width;
-                match source.shape {
-                    VisionShape::Circle { center, radius } => {
-                        let dy2 = (sy - f64::from(center[1])).powi(2);
-                        let radius2 = f64::from(radius).powi(2);
-                        let cx = f64::from(center[0]);
-                        for x in rect.x0..rect.x1 {
-                            if (vision.columns[x] - cx).powi(2) + dy2 <= radius2 {
-                                self.current[row + x] = source.state;
-                                self.explored[row + x] = explored;
-                            }
-                        }
-                    }
-                    shape @ VisionShape::Rectangle { .. } => {
-                        for x in rect.x0..rect.x1 {
-                            if shape.contains([vision.columns[x], sy]) {
-                                self.current[row + x] = source.state;
-                                self.explored[row + x] = explored;
-                            }
-                        }
-                    }
-                }
+                self.current[row + x0..row + x1].fill(source.state);
+                self.explored[row + x0..row + x1].fill(explored);
             }
         }
     }
+
+    /// Sets one cell to what stamping `sources` in order would leave there: the last source that
+    /// covers it, else the previous exploration without current sight.
+    fn recompute(
+        &mut self,
+        sources: &[VisionSource],
+        footprints: &[Arc<Footprint>],
+        vision: &SharedVision,
+        x: usize,
+        y: usize,
+    ) {
+        let at = y * vision.shape.width + x;
+        let point = [vision.columns[x], vision.rows[y]];
+        let covering = sources
+            .iter()
+            .zip(footprints)
+            .rev()
+            .find(|(source, footprint)| {
+                footprint.rect.contains(x, y) && source.shape.contains(point)
+            });
+        match covering {
+            Some((source, _)) => {
+                self.current[at] = source.state;
+                self.explored[at] = source.state != VisionState::Masked;
+            }
+            None => {
+                self.current[at] = if self.explored[at] {
+                    VisionState::Fogged
+                } else {
+                    VisionState::Masked
+                };
+            }
+        }
+    }
+}
+
+/// Cells `x0..x1` of row `y`.
+#[derive(Clone, Copy, Debug)]
+struct Run {
+    y: usize,
+    x0: usize,
+    x1: usize,
 }
 
 /// How one viewer's grid reaches the new source list.
@@ -349,15 +373,16 @@ enum Update {
     Unchanged,
     /// Reset every previous rectangle and stamp every source.
     Full,
-    /// Reset and restamp only these disjoint regions, which contain every cell a changed source
-    /// covered before or covers now. Cells outside them are covered only by unchanged sources.
-    Regions(Vec<Rect>),
+    /// Recompute only these cells. Same-length source lists differ only at changed indices, and a
+    /// cell's value depends only on which sources cover it, so cells whose coverage by every
+    /// changed source (and its state) is the same before and after keep their value.
+    Cells(Vec<Run>),
 }
 
 struct Planned {
     id: HandleId,
     sources: Vec<VisionSource>,
-    rects: Vec<Rect>,
+    footprints: Vec<Arc<Footprint>>,
     update: Update,
 }
 
@@ -368,7 +393,12 @@ pub(crate) struct SharedVision {
     /// Sample coordinate of each row's cell centre.
     rows: Vec<f64>,
     viewers: BTreeMap<HandleId, ViewerGrid>,
+    /// Footprints of the shapes in the latest sample, kept so an unchanged shape is not
+    /// covered again.
+    footprints: HashMap<ShapeKey, Arc<Footprint>>,
     radii: Box<super::SightRadii>,
+    /// Counts samples that changed any viewer's cells or the set of viewers.
+    revision: u64,
     ready: bool,
     /// Terrain and tree occlusion are not part of this sampler.
     occlusion_applied: bool,
@@ -382,8 +412,10 @@ impl SharedVision {
             columns: (0..shape.width).map(|x| shape.sample_x(x)).collect(),
             rows: (0..shape.height).map(|y| shape.sample_y(y)).collect(),
             viewers: BTreeMap::new(),
+            footprints: HashMap::new(),
             radii: Box::default(),
             ready: false,
+            revision: 0,
             occlusion_applied: false,
             last: VisionSampleStats {
                 cell_visits: 0,
@@ -393,11 +425,111 @@ impl SharedVision {
         }
     }
 
+    /// Cells of row `y` inside `rect` that `shape` covers. They form one run, found by binary
+    /// search over the column table with the exact tests `VisionShape::contains` applies: a
+    /// circle's test only gets harder with distance from its centre column on either side, and a
+    /// rectangle's bounds are two thresholds. An empty run is `(rect.x0, rect.x0)`.
+    fn row_run(&self, shape: VisionShape, rect: Rect, y: usize) -> (usize, usize) {
+        let sy = self.rows[y];
+        let columns = &self.columns[rect.x0..rect.x1];
+        let (first, end) = match shape {
+            VisionShape::Circle { center, radius } => {
+                let cx = f64::from(center[0]);
+                let dy2 = (sy - f64::from(center[1])).powi(2);
+                let radius2 = f64::from(radius).powi(2);
+                let inside = |column: f64| (column - cx).powi(2) + dy2 <= radius2;
+                let (left, right) = columns.split_at(columns.partition_point(|&c| c <= cx));
+                (
+                    left.partition_point(|&c| !inside(c)),
+                    left.len() + right.partition_point(|&c| inside(c)),
+                )
+            }
+            VisionShape::Rectangle {
+                bounds: [x0, y0, x1, y1],
+            } => {
+                if (f64::from(y0)..=f64::from(y1)).contains(&sy) {
+                    (
+                        columns.partition_point(|&c| c < f64::from(x0)),
+                        columns.partition_point(|&c| c <= f64::from(x1)),
+                    )
+                } else {
+                    (0, 0)
+                }
+            }
+        };
+        if first < end {
+            (rect.x0 + first, rect.x0 + end)
+        } else {
+            (rect.x0, rect.x0)
+        }
+    }
+
+    /// Appends runs that include every cell where `old` and `new` differ in what they stamp:
+    /// cells exactly one of them covers, or every cell either covers when their states differ.
+    fn changed_runs(
+        old: &VisionSource,
+        old_footprint: &Footprint,
+        new: &VisionSource,
+        new_footprint: &Footprint,
+        runs: &mut Vec<Run>,
+    ) {
+        let (old_rect, new_rect) = (old_footprint.rect, new_footprint.rect);
+        let (first, last) = [old_rect, new_rect]
+            .into_iter()
+            .filter(|rect| rect.y0 < rect.y1)
+            .fold((usize::MAX, 0), |(first, last), rect| {
+                (first.min(rect.y0), last.max(rect.y1))
+            });
+        let same_state = old.state == new.state;
+        for y in first..last {
+            let (old_run, new_run) = (old_footprint.run(y), new_footprint.run(y));
+            let mut push = |(x0, x1): (usize, usize)| {
+                if x0 < x1 {
+                    runs.push(Run { y, x0, x1 });
+                }
+            };
+            let overlapping = old_run.0.max(new_run.0) < old_run.1.min(new_run.1);
+            if same_state && overlapping {
+                push((old_run.0.min(new_run.0), old_run.0.max(new_run.0)));
+                push((old_run.1.min(new_run.1), old_run.1.max(new_run.1)));
+            } else {
+                push(old_run);
+                push(new_run);
+            }
+        }
+    }
+
+    /// The footprint of `shape`, from this sample's shapes or the previous sample's, else computed.
+    fn footprint(
+        &self,
+        current: &mut HashMap<ShapeKey, Arc<Footprint>>,
+        shape: VisionShape,
+    ) -> Result<Arc<Footprint>, String> {
+        let key = shape_key(shape);
+        if let Some(known) = current.get(&key) {
+            return Ok(Arc::clone(known));
+        }
+        let footprint = match self.footprints.get(&key) {
+            Some(known) => Arc::clone(known),
+            None => {
+                let rect = Rect::from_source(shape, &self.shape)?;
+                Arc::new(Footprint {
+                    rect,
+                    runs: (rect.y0..rect.y1)
+                        .map(|y| self.row_run(shape, rect, y))
+                        .collect(),
+                })
+            }
+        };
+        current.insert(key, Arc::clone(&footprint));
+        Ok(footprint)
+    }
+
     /// Chooses the cheapest exact update from a viewer's previous sources to `sources`.
     fn plan_update(
         previous: Option<&ViewerGrid>,
         sources: &[VisionSource],
-        rects: &[Rect],
+        footprints: &[Arc<Footprint>],
     ) -> Update {
         let Some(previous) = previous else {
             return Update::Full;
@@ -405,19 +537,32 @@ impl SharedVision {
         if previous.sources.len() != sources.len() {
             return Update::Full;
         }
-        let mut regions = Vec::new();
+        let mut runs = Vec::new();
         for (index, (old, new)) in previous.sources.iter().zip(sources).enumerate() {
-            if old == new {
-                continue;
+            if old != new {
+                Self::changed_runs(
+                    old,
+                    &previous.footprints[index],
+                    new,
+                    &footprints[index],
+                    &mut runs,
+                );
             }
-            if regions.len() >= 2 * MAX_INCREMENTAL_SOURCES {
-                return Update::Full;
-            }
-            regions.extend([previous.rects[index], rects[index]]);
         }
-        regions.retain(|region| region.area() > 0);
-        merge_overlapping(&mut regions);
-        Update::Regions(regions)
+        // Each recomputed cell scans at most every source; the full update touches each
+        // previous and new rectangle once.
+        let recomputed = runs.iter().map(|run| run.x1 - run.x0).sum::<usize>();
+        let full = previous
+            .footprints
+            .iter()
+            .chain(footprints)
+            .map(|footprint| footprint.rect.area())
+            .fold(0usize, usize::saturating_add);
+        if recomputed.saturating_mul(sources.len()) > full {
+            Update::Full
+        } else {
+            Update::Cells(runs)
+        }
     }
 
     fn apply(
@@ -432,56 +577,52 @@ impl SharedVision {
             .map_err(|_| "shared vision allocation")?;
         let mut cell_visits = 0usize;
         let mut emitted_sources = 0usize;
+        let mut current_footprints = HashMap::new();
         for (id, sources) in plans {
             emitted_sources = emitted_sources
                 .checked_add(sources.len())
                 .ok_or("shared vision work overflow")?;
             let previous = self.viewers.get(&id);
-            if previous.is_some_and(|viewer| viewer.sources == sources) {
+            if let Some(viewer) = previous.filter(|viewer| viewer.sources == sources) {
+                for (source, footprint) in viewer.sources.iter().zip(&viewer.footprints) {
+                    current_footprints
+                        .entry(shape_key(source.shape))
+                        .or_insert_with(|| Arc::clone(footprint));
+                }
                 planned.push(Planned {
                     id,
                     sources,
-                    rects: Vec::new(),
+                    footprints: Vec::new(),
                     update: Update::Unchanged,
                 });
                 continue;
             }
-            let mut rects = Vec::new();
-            rects
+            let mut footprints = Vec::new();
+            footprints
                 .try_reserve_exact(sources.len())
                 .map_err(|_| "shared vision allocation")?;
             for source in &sources {
-                rects.push(Rect::from_source(source.shape, &self.shape)?);
+                footprints.push(self.footprint(&mut current_footprints, source.shape)?);
             }
-            let update = Self::plan_update(previous, &sources, &rects);
-            let area_sum = |rects: &[Rect]| {
-                rects.iter().try_fold(0usize, |sum, rect| {
-                    sum.checked_add(rect.area())
+            let update = Self::plan_update(previous, &sources, &footprints);
+            let area_sum = |footprints: &[Arc<Footprint>]| {
+                footprints.iter().try_fold(0usize, |sum, footprint| {
+                    sum.checked_add(footprint.rect.area())
                         .ok_or("shared vision work overflow")
                 })
             };
             let work = match &update {
                 Update::Unchanged => 0,
                 Update::Full => {
-                    let reset = previous.map_or(Ok(0), |viewer| area_sum(&viewer.rects))?;
+                    let reset = previous.map_or(Ok(0), |viewer| area_sum(&viewer.footprints))?;
                     reset
-                        .checked_add(area_sum(&rects)?)
+                        .checked_add(area_sum(&footprints)?)
                         .ok_or("shared vision work overflow")?
                 }
-                Update::Regions(regions) => {
-                    let mut work = 0usize;
-                    for region in regions {
-                        let stamped = rects.iter().try_fold(0usize, |sum, rect| {
-                            sum.checked_add(rect.intersection(*region).area())
-                                .ok_or("shared vision work overflow")
-                        })?;
-                        work = work
-                            .checked_add(region.area())
-                            .and_then(|sum| sum.checked_add(stamped))
-                            .ok_or("shared vision work overflow")?;
-                    }
-                    work
-                }
+                Update::Cells(runs) => runs.iter().try_fold(0usize, |sum, run| {
+                    sum.checked_add(run.x1 - run.x0)
+                        .ok_or("shared vision work overflow")
+                })?,
             };
             cell_visits = cell_visits
                 .checked_add(work)
@@ -489,7 +630,7 @@ impl SharedVision {
             planned.push(Planned {
                 id,
                 sources,
-                rects,
+                footprints,
                 update,
             });
         }
@@ -507,6 +648,7 @@ impl SharedVision {
         let width = self.shape.width;
         let mut live = Vec::with_capacity(planned.len());
         let mut applied = Vec::with_capacity(planned.len());
+        let mut changed = false;
         for plan in planned {
             live.push(plan.id);
             if matches!(plan.update, Update::Unchanged) {
@@ -525,25 +667,36 @@ impl SharedVision {
             match &plan.update {
                 Update::Unchanged => {}
                 Update::Full => {
-                    for rect in std::mem::take(&mut viewer.rects) {
-                        viewer.reset_rect(rect, width, &mut visits);
+                    for footprint in std::mem::take(&mut viewer.footprints) {
+                        viewer.reset_rect(footprint.rect, width, &mut visits);
                     }
-                    viewer.stamp(&plan.sources, &plan.rects, None, self, &mut visits);
+                    viewer.stamp(&plan.sources, &plan.footprints, self, &mut visits);
                 }
-                Update::Regions(regions) => {
-                    for &region in regions {
-                        viewer.reset_rect(region, width, &mut visits);
-                        viewer.stamp(&plan.sources, &plan.rects, Some(region), self, &mut visits);
+                Update::Cells(runs) => {
+                    for run in runs {
+                        visits += run.x1 - run.x0;
+                        for x in run.x0..run.x1 {
+                            viewer.recompute(&plan.sources, &plan.footprints, self, x, run.y);
+                        }
                     }
                 }
             }
-            viewer.rects = plan.rects;
+            changed |= match &plan.update {
+                Update::Unchanged => false,
+                Update::Full => true,
+                Update::Cells(runs) => !runs.is_empty(),
+            };
+            viewer.footprints = plan.footprints;
             viewer.sources = plan.sources;
             applied.push((plan.id, viewer));
         }
         debug_assert_eq!(visits, cell_visits);
         self.viewers.extend(applied);
+        self.footprints = current_footprints;
+        let viewer_count = self.viewers.len();
         self.viewers.retain(|id, _| live.contains(id));
+        changed |= self.viewers.len() != viewer_count;
+        self.revision += u64::from(changed);
         self.ready = true;
         self.last = VisionSampleStats {
             cell_visits,
@@ -556,7 +709,7 @@ impl SharedVision {
 
 pub(crate) enum VisionSlot {
     Blocked(VisionBlock),
-    Live(SharedVision),
+    Live(Box<SharedVision>),
 }
 
 impl ObjectHost {
@@ -588,7 +741,7 @@ impl ObjectHost {
                 return Ok(false);
             }
         };
-        self.shared_vision = Some(VisionSlot::Live(SharedVision::new(shape)));
+        self.shared_vision = Some(VisionSlot::Live(Box::new(SharedVision::new(shape))));
         Ok(true)
     }
 
@@ -639,6 +792,16 @@ impl ObjectHost {
     pub fn vision_sample_stats(&self) -> Option<VisionSampleStats> {
         match &self.shared_vision {
             Some(VisionSlot::Live(vision)) if vision.ready => Some(vision.last),
+            _ => None,
+        }
+    }
+
+    /// Count of samples that changed any viewer's raw cells or the set of viewers. While it is
+    /// equal, every [`Self::vision_cell`] answer is equal, so a consumer can skip re-reading
+    /// the field. Fog and mask switches are not part of it. `None` until the first sample.
+    pub fn vision_revision(&self) -> Option<u64> {
+        match &self.shared_vision {
+            Some(VisionSlot::Live(vision)) if vision.ready => Some(vision.revision),
             _ => None,
         }
     }
@@ -713,9 +876,12 @@ impl ObjectHost {
         plans
             .try_reserve_exact(viewers.len())
             .map_err(|_| fail("shared vision allocation".into()))?;
+        let mut table = self
+            .source_table(night)
+            .map_err(|error| fail(error.to_string()))?;
         for viewer in viewers {
             let listed = self
-                .list_vision_sources(viewer, night, source_limit, &mut radii)
+                .list_vision_sources(viewer, source_limit, &mut radii, &mut table)
                 .map_err(|error| fail(error.to_string()))?;
             candidates_scanned = candidates_scanned
                 .checked_add(listed.candidates_scanned)
@@ -1003,7 +1169,12 @@ mod tests {
         }
     }
 
-    fn random_source(random: &mut Lcg, width: f32, height: f32) -> VisionSource {
+    fn random_source(
+        random: &mut Lcg,
+        width: f32,
+        height: f32,
+        rectangle_one_in: u64,
+    ) -> VisionSource {
         let state = [
             VisionState::Visible,
             VisionState::Visible,
@@ -1011,7 +1182,7 @@ mod tests {
             VisionState::Masked,
         ][random.below(4) as usize];
         let (x, y) = (random.unit(width), random.unit(height));
-        let shape = if random.below(5) == 0 {
+        let shape = if random.below(rectangle_one_in) == 0 {
             VisionShape::Rectangle {
                 bounds: [x, y, x + random.unit(10.0), y + random.unit(10.0)],
             }
@@ -1030,10 +1201,57 @@ mod tests {
         }
     }
 
-    #[test]
-    fn regional_updates_match_a_full_recompute_cell_for_cell() {
-        let bounds = [[0., 0.], [40., 30.]];
-        let mut vision = grid(bounds, 1.);
+    /// One random mutation of a viewer's source list.
+    fn mutate(random: &mut Lcg, sources: &mut Vec<VisionSource>, extent: [f32; 2], rect_odds: u64) {
+        match random.below(10) {
+            0..=5 => {
+                let index = random.below(sources.len() as u64) as usize;
+                let (dx, dy) = (random.unit(3.0) - 1.5, random.unit(3.0) - 1.5);
+                sources[index].shape = match sources[index].shape {
+                    VisionShape::Circle { center, radius } => VisionShape::Circle {
+                        center: [center[0] + dx, center[1] + dy],
+                        radius,
+                    },
+                    VisionShape::Rectangle {
+                        bounds: [a, b, c, d],
+                    } => VisionShape::Rectangle {
+                        bounds: [a + dx, b + dy, c + dx, d + dy],
+                    },
+                };
+            }
+            6 => sources.push(random_source(random, extent[0], extent[1], rect_odds)),
+            7 if sources.len() > 1 => {
+                sources.remove(random.below(sources.len() as u64) as usize);
+            }
+            8 => {
+                let index = random.below(sources.len() as u64) as usize;
+                sources[index].state = [
+                    VisionState::Visible,
+                    VisionState::Fogged,
+                    VisionState::Masked,
+                ][random.below(3) as usize];
+            }
+            _ => {
+                let (a, b) = (
+                    random.below(sources.len() as u64) as usize,
+                    random.below(sources.len() as u64) as usize,
+                );
+                sources.swap(a, b);
+            }
+        }
+    }
+
+    /// Runs `steps` random mutations through `apply` and the full-recompute oracle, comparing
+    /// both grids after each. Returns the cells `apply` visited and the oracle visited.
+    fn differential(
+        extent: [f32; 2],
+        pitch: f32,
+        count: usize,
+        rect_odds: u64,
+        steps: usize,
+        seed: u64,
+    ) -> (usize, usize) {
+        let mut vision = grid([[0., 0.], extent], pitch);
         let shape = vision.shape;
         let mut oracle = Oracle {
             explored: vec![false; shape.cells()],
@@ -1041,61 +1259,112 @@ mod tests {
             rects: Vec::new(),
         };
         let viewer = id(5);
-        let mut random = Lcg(7);
-        let mut sources: Vec<VisionSource> = (0..6)
-            .map(|_| random_source(&mut random, 40.0, 30.0))
+        let mut random = Lcg(seed);
+        let mut sources: Vec<VisionSource> = (0..count)
+            .map(|_| random_source(&mut random, extent[0], extent[1], rect_odds))
             .collect();
-        let (mut regional_visits, mut full_visits) = (0, 0);
-        for step in 0..400 {
-            match random.below(10) {
-                0..=5 => {
-                    let index = random.below(sources.len() as u64) as usize;
-                    let (dx, dy) = (random.unit(3.0) - 1.5, random.unit(3.0) - 1.5);
-                    sources[index].shape = match sources[index].shape {
-                        VisionShape::Circle { center, radius } => VisionShape::Circle {
-                            center: [center[0] + dx, center[1] + dy],
-                            radius,
-                        },
-                        VisionShape::Rectangle {
-                            bounds: [a, b, c, d],
-                        } => VisionShape::Rectangle {
-                            bounds: [a + dx, b + dy, c + dx, d + dy],
-                        },
-                    };
-                }
-                6 => sources.push(random_source(&mut random, 40.0, 30.0)),
-                7 if sources.len() > 1 => {
-                    sources.remove(random.below(sources.len() as u64) as usize);
-                }
-                8 => {
-                    let index = random.below(sources.len() as u64) as usize;
-                    sources[index].state = [
-                        VisionState::Visible,
-                        VisionState::Fogged,
-                        VisionState::Masked,
-                    ][random.below(3) as usize];
-                }
-                _ => {
-                    let (a, b) = (
-                        random.below(sources.len() as u64) as usize,
-                        random.below(sources.len() as u64) as usize,
-                    );
-                    sources.swap(a, b);
-                }
-            }
+        let (mut incremental, mut full) = (0, 0);
+        for step in 0..steps {
+            mutate(&mut random, &mut sources, extent, rect_odds);
             let stats = vision
                 .apply(vec![(viewer, sources.clone())], usize::MAX, 0)
                 .unwrap();
-            full_visits += oracle.apply(&shape, &sources);
-            regional_visits += stats.cell_visits;
+            full += oracle.apply(&shape, &sources);
+            incremental += stats.cell_visits;
             let actual = vision.viewers.get(&viewer).unwrap();
-            assert_eq!(actual.current, oracle.current, "step {step}");
-            assert_eq!(actual.explored, oracle.explored, "step {step}");
+            assert_eq!(actual.current, oracle.current, "seed {seed} step {step}");
+            assert_eq!(actual.explored, oracle.explored, "seed {seed} step {step}");
         }
+        (incremental, full)
+    }
+
+    #[test]
+    fn incremental_updates_match_a_full_recompute_cell_for_cell() {
+        let (incremental, full) = differential([40., 30.], 1., 6, 5, 400, 7);
         assert!(
-            regional_visits < full_visits,
-            "regional updates did not reduce work: {regional_visits} vs {full_visits}"
+            incremental < full,
+            "incremental updates did not reduce work: {incremental} vs {full}"
         );
+        // Partial final cells, circle-only lists and crowded lists.
+        for seed in 0..6 {
+            differential([40.3, 30.7], 1.7, 12, 5, 300, seed);
+            differential([64., 48.], 1., 20, u64::MAX, 300, 100 + seed);
+            differential([25., 25.], 0.5, 40, 8, 200, 200 + seed);
+        }
+    }
+
+    #[test]
+    fn a_moving_circle_among_many_recomputes_only_its_crescent() {
+        let mut vision = grid([[0., 0.], [200., 200.]], 1.);
+        let viewer = id(6);
+        let mut sources: Vec<VisionSource> = (0..30)
+            .map(|n| circle([20. + 5. * n as f32, 100.], 30., VisionState::Visible))
+            .collect();
+        vision
+            .apply(vec![(viewer, sources.clone())], usize::MAX, 0)
+            .unwrap();
+        sources[4].shape = VisionShape::Circle {
+            center: [40.5, 100.],
+            radius: 30.,
+        };
+        let moved = vision
+            .apply(vec![(viewer, sources)], usize::MAX, 0)
+            .unwrap();
+        assert!(
+            (1..200).contains(&moved.cell_visits),
+            "{} cells",
+            moved.cell_visits
+        );
+    }
+
+    #[test]
+    fn row_runs_equal_the_cell_test_for_every_row() {
+        let vision = grid([[0., 0.], [37.3, 21.1]], 1.3);
+        let whole = Rect {
+            x0: 0,
+            x1: vision.shape.width,
+            y0: 0,
+            y1: vision.shape.height,
+        };
+        let mut random = Lcg(11);
+        let mut shapes = vec![
+            // Radius zero, centre on a sample column, centre outside the grid, huge radius.
+            VisionShape::Circle {
+                center: [vision.columns[3] as f32, vision.rows[2] as f32],
+                radius: 0.,
+            },
+            VisionShape::Circle {
+                center: [-5., -5.],
+                radius: 9.,
+            },
+            VisionShape::Circle {
+                center: [18., 10.],
+                radius: 1000.,
+            },
+            VisionShape::Rectangle {
+                bounds: [3., 3., 3., 3.],
+            },
+        ];
+        for _ in 0..300 {
+            shapes.push(random_source(&mut random, 37.3, 21.1, 3).shape);
+        }
+        for shape in shapes {
+            let rect = Rect::from_source(shape, &vision.shape).unwrap();
+            for y in rect.y0..rect.y1 {
+                let (x0, x1) = vision.row_run(shape, rect, y);
+                for x in rect.x0..rect.x1 {
+                    let covered = shape.contains([vision.columns[x], vision.rows[y]]);
+                    assert_eq!((x0..x1).contains(&x), covered, "{shape:?} cell {x},{y}");
+                }
+            }
+            for y in 0..vision.shape.height {
+                let (x0, x1) = vision.row_run(shape, whole, y);
+                let covered = (0..vision.shape.width)
+                    .filter(|&x| shape.contains([vision.columns[x], vision.rows[y]]))
+                    .collect::<Vec<_>>();
+                assert_eq!(covered, (x0..x1).collect::<Vec<_>>(), "{shape:?} row {y}");
+            }
+        }
     }
 
     fn cell(vision: &SharedVision, viewer: HandleId, point: [f32; 2]) -> VisionCell {

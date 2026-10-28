@@ -377,6 +377,7 @@ pub fn animate_backgrounds(
                 global_durations: &state.runtime.global_sequences,
                 camera_pose: None,
                 look_at: None,
+                hidden: &[],
             },
             &state.handles,
             frame,

@@ -382,6 +382,15 @@ pub struct EnumHost {
     /// after it is allocated, so these cover every live one in arena order.
     unit_slots: Vec<usize>,
     item_slots: Vec<usize>,
+    /// Arena positions that hold a fog modifier, destroyed or not, in creation order.
+    fog_slots: Vec<usize>,
+    /// Arena positions that hold a timer or a registered timed event.
+    timer_slots: Vec<usize>,
+    /// Arena positions that hold a registered region event.
+    region_event_slots: Vec<usize>,
+    /// Counts mutable accesses to unit records and unit allocations. A superset of every change
+    /// to a unit's position, definition, owner, visibility and vitals.
+    unit_revision: u64,
     max_handles: usize,
 }
 pub type ColorHost = EnumHost;
@@ -593,6 +602,10 @@ impl EnumHost {
             arena: Vec::new(),
             unit_slots: Vec::new(),
             item_slots: Vec::new(),
+            fog_slots: Vec::new(),
+            timer_slots: Vec::new(),
+            region_event_slots: Vec::new(),
+            unit_revision: 0,
             max_handles: limits.max_handles,
         })
     }
@@ -654,6 +667,7 @@ impl EnumHost {
         let at = self.arena.len();
         match entry {
             Entry::Unit { .. } => {
+                self.unit_revision += 1;
                 self.unit_slots
                     .try_reserve(1)
                     .map_err(|_| self.error(name, Failure::Capacity))?;
@@ -664,6 +678,24 @@ impl EnumHost {
                     .try_reserve(1)
                     .map_err(|_| self.error(name, Failure::Capacity))?;
                 self.item_slots.push(at);
+            }
+            Entry::FogModifier(_) => {
+                self.fog_slots
+                    .try_reserve(1)
+                    .map_err(|_| self.error(name, Failure::Capacity))?;
+                self.fog_slots.push(at);
+            }
+            Entry::Timer { .. } | Entry::RegisteredTimedEvent { .. } => {
+                self.timer_slots
+                    .try_reserve(1)
+                    .map_err(|_| self.error(name, Failure::Capacity))?;
+                self.timer_slots.push(at);
+            }
+            Entry::RegisteredRegionEvent(_) => {
+                self.region_event_slots
+                    .try_reserve(1)
+                    .map_err(|_| self.error(name, Failure::Capacity))?;
+                self.region_event_slots.push(at);
             }
             _ => {}
         }
@@ -687,11 +719,21 @@ impl EnumHost {
             .and_then(|i| self.arena.get(i))
             .ok_or_else(|| self.error("arena", Failure::Identity))
     }
+    /// The unit record behind `id`, without building an error for other handles.
+    fn unit_record(&self, id: HandleId) -> Option<&objects::ExecutedUnit> {
+        match self.arena.get(usize::try_from(id.token() - 1).ok()?)? {
+            Entry::Unit { record } => Some(record),
+            _ => None,
+        }
+    }
     fn entry_mut(&mut self, id: HandleId) -> Result<&mut Entry, Error> {
         let index =
             usize::try_from(id.token() - 1).map_err(|_| self.error("arena", Failure::Identity))?;
         if index >= self.arena.len() {
             return Err(self.error("arena", Failure::Identity));
+        }
+        if matches!(self.arena[index], Entry::Unit { .. }) {
+            self.unit_revision += 1;
         }
         Ok(&mut self.arena[index])
     }

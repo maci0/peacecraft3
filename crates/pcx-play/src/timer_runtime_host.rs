@@ -415,11 +415,10 @@ impl ObjectHost {
         let state = self.timers.as_ref().expect("validated timer clock");
         let next = self
             .inner
-            .arena
+            .timer_slots
             .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                let (run, timed) = match entry {
+            .filter_map(|&index| {
+                let (run, timed) = match &self.inner.arena[index] {
                     Entry::Timer {
                         live: true,
                         run: Some(run),

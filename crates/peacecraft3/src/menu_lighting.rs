@@ -454,19 +454,31 @@ fn channels(colour: [f32; 3]) -> Vec3 {
     Vec3::from_array(colour.map(|n| f32::from((n * f32::from(u8::MAX)) as u8)))
 }
 
+/// The geosets [`apply_sun`] lights, parallel to the model's meshes.
+pub(crate) struct SunGeosets<'a> {
+    pub(crate) handles: &'a [Handle<Mesh>],
+    pub(crate) bound: &'a [crate::mainmenu_scene::BoundGeoset],
+    /// Whether each geoset's authored material is lit.
+    pub(crate) lit: &'a [bool],
+    /// Geosets drawn nowhere this pose; empty means none.
+    pub(crate) hidden: &'a [bool],
+}
+
 /// Gouraud lighting by one directional sun, in the client's packed channels:
 /// `clamp(ambient + diffuse * max(0, n . -direction)) * material colour`.
 /// `direction` is the sun's travel direction in the model's own space. Geosets
-/// whose authored material is unlit (`lit[i] == false`) keep their colour.
+/// whose authored material is unlit (`lit[i] == false`) keep their colour. Hidden geosets get the
+/// material state but no vertex colours.
 pub(crate) fn apply_sun(
     source: &str,
     model: &pcx_gfx::LoadedModel,
     skeleton: &pcx_gfx::Skeleton,
-    (handles, bound, lit): (
-        &[Handle<Mesh>],
-        &[crate::mainmenu_scene::BoundGeoset],
-        &[bool],
-    ),
+    SunGeosets {
+        handles,
+        bound,
+        lit,
+        hidden,
+    }: SunGeosets,
     tints: &[[f32; 4]],
     (direction, sun, parameters): (Vec3, &pcx_play::day_night::Sun, &Parameters),
     (meshes, materials, colours): (
@@ -494,27 +506,31 @@ pub(crate) fn apply_sun(
         if materials.get(material).is_none() {
             return Err("sun lighting material ownership lost".into());
         }
-        let current = meshes
-            .get(handle)
-            .ok_or("sun lighting mesh ownership lost")?;
-        let normals = normals(rest, skeleton).map_err(|e| format!("{source}: {e}"))?;
         let [red, green, blue, alpha] = tints[index];
-        let tint = Vec3::new(red, green, blue);
-        colours.clear();
-        colours.extend(normals.iter().map(|n| {
-            let rgb =
-                ((ambient + diffuse * n.dot(towards).max(0.0)) * tint).clamp(Vec3::ZERO, Vec3::ONE);
-            [rgb.x, rgb.y, rgb.z, 1.0]
-        }));
-        let unchanged = matches!(
-            current.attribute(Mesh::ATTRIBUTE_COLOR),
-            Some(VertexAttributeValues::Float32x4(old)) if old == colours
-        );
-        if !unchanged {
-            meshes
-                .get_mut(handle)
-                .expect("checked mesh")
-                .insert_attribute(Mesh::ATTRIBUTE_COLOR, colours.clone());
+        // A geoset drawn nowhere this pose keeps its last vertex colours; the material state
+        // below does not depend on them.
+        if !hidden.get(index).copied().unwrap_or(false) {
+            let current = meshes
+                .get(handle)
+                .ok_or("sun lighting mesh ownership lost")?;
+            let normals = normals(rest, skeleton).map_err(|e| format!("{source}: {e}"))?;
+            let tint = Vec3::new(red, green, blue);
+            colours.clear();
+            colours.extend(normals.iter().map(|n| {
+                let rgb = ((ambient + diffuse * n.dot(towards).max(0.0)) * tint)
+                    .clamp(Vec3::ZERO, Vec3::ONE);
+                [rgb.x, rgb.y, rgb.z, 1.0]
+            }));
+            let unchanged = matches!(
+                current.attribute(Mesh::ATTRIBUTE_COLOR),
+                Some(VertexAttributeValues::Float32x4(old)) if old == colours
+            );
+            if !unchanged {
+                meshes
+                    .get_mut(handle)
+                    .expect("checked mesh")
+                    .insert_attribute(Mesh::ATTRIBUTE_COLOR, colours.clone());
+            }
         }
         let white = crate::menu_composition::colour([1.0, 1.0, 1.0, alpha]);
         let material_current = materials.get(material).expect("checked material");
@@ -641,6 +657,71 @@ pub(crate) mod tests {
             group_counts: vec![],
             geoset: 0,
             material_id: 0,
+        }
+    }
+    #[test]
+    fn hidden_geosets_get_their_material_state_but_no_vertex_colours() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<crate::menu_material::MenuMaterial>::default();
+        let handles: Vec<_> = (0..2)
+            .map(|_| meshes.add(pcx_gfx::to_bevy_mesh(&mesh())))
+            .collect();
+        let bound: Vec<_> = (0..2)
+            .map(|geoset| {
+                (
+                    geoset,
+                    Entity::PLACEHOLDER,
+                    materials.add(crate::menu_material::MenuMaterial::default()),
+                )
+            })
+            .collect();
+        let model = pcx_gfx::LoadedModel {
+            name: "synthetic".into(),
+            minimum_extent: [0.; 3],
+            maximum_extent: [0.; 3],
+            meshes: vec![mesh(), mesh()],
+            bone_names: vec![],
+            bone_parents: vec![],
+            sequences: vec![],
+        };
+        let skeleton = pcx_gfx::Skeleton {
+            matrices: vec![],
+            ids: vec![],
+            names: vec![],
+        };
+        let sun = pcx_play::day_night::Sun {
+            direction: [0., 0., -1.],
+            colour: [1.; 3],
+            intensity: 1.,
+            ambient_colour: [0.; 3],
+            ambient_intensity: 0.,
+        };
+        apply_sun(
+            "synthetic",
+            &model,
+            &skeleton,
+            SunGeosets {
+                handles: &handles,
+                bound: &bound,
+                lit: &[true, true],
+                hidden: &[false, true],
+            },
+            &[[1.; 4], [1.; 4]],
+            (Vec3::new(0., 0., -1.), &sun, &parameters()),
+            (&mut meshes, &mut materials, &mut Vec::new()),
+        )
+        .unwrap();
+        let has_colours = |index: usize| {
+            meshes
+                .get(&handles[index])
+                .unwrap()
+                .attribute(Mesh::ATTRIBUTE_COLOR)
+                .is_some()
+        };
+        assert!(has_colours(0));
+        assert!(!has_colours(1));
+        for (_, _, material) in &bound {
+            assert!(materials.get(material).unwrap().base.unlit);
         }
     }
     fn fixture_record(track: &[u8]) -> Vec<u8> {
@@ -1006,6 +1087,7 @@ pub(crate) mod tests {
                     pivots: runtime.joints.pivots(),
                     global_durations: &runtime.global_sequences,
                     look_at: None,
+                    hidden: &[],
                     camera_pose: Some(&camera_pose),
                 },
                 &handles,

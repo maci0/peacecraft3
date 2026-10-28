@@ -1,6 +1,7 @@
 //! Selected client state-counter initialization and money assignment bounds.
 use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
+use crate::pe_image::windows_with_byte;
 use crate::scripts::AssetIdentity;
 #[path = "player_upkeep.rs"]
 mod upkeep;
@@ -78,9 +79,12 @@ fn call(bytes: &[u8], va: u32, at: usize) -> Option<u32> {
     )
 }
 fn shape(bytes: &[u8], parts: &[(usize, &[u8])]) -> bool {
-    parts
-        .iter()
-        .all(|(at, part)| bytes.get(*at..at + part.len()) == Some(*part))
+    parts.iter().all(|(at, part)| {
+        bytes
+            .get(*at..at + part.len())
+            // The first byte rejects almost every window without a comparison call.
+            .is_some_and(|window| window.first() == part.first() && window == *part)
+    })
 }
 /// Follow both authored food descriptors to the common integer cell reader.
 fn food_marker_default(pe: &Pe<'_>) -> Result<i32, String> {
@@ -88,7 +92,7 @@ fn food_marker_default(pe: &Pe<'_>) -> Result<i32, String> {
     for key in [b"fmade\0".as_slice(), b"fused\0"] {
         let mut descriptors = Vec::new();
         for (_, code) in pe.code_ranges() {
-            for b in code.windows(18) {
+            for (_, b) in windows_with_byte(code, 0, 0x68, 18) {
                 if shape(
                     b,
                     &[(0, &[0x68]), (5, &[0x8d, 0x81]), (11, &[0x50, 0x57, 0xe8])],
@@ -105,7 +109,7 @@ fn food_marker_default(pe: &Pe<'_>) -> Result<i32, String> {
         };
         let mut targets = Vec::new();
         for (va, code) in pe.code_ranges() {
-            for (at, b) in code.windows(22).enumerate() {
+            for (at, b) in windows_with_byte(code, 0, 0x55, 22) {
                 if shape(
                     b,
                     &[
@@ -201,12 +205,8 @@ impl Rules {
         let entry = |name: &[u8], signature: &[u8]| -> Result<u32, String> {
             let mut found = Vec::new();
             for (_, code) in pe.code_ranges() {
-                for bytes in code.windows(20) {
-                    if bytes[0] != 0x68
-                        || bytes[5] != 0x68
-                        || bytes[10] != 0x68
-                        || bytes[15] != 0xe8
-                    {
+                for (_, bytes) in windows_with_byte(code, 0, 0x68, 20) {
+                    if bytes[5] != 0x68 || bytes[10] != 0x68 || bytes[15] != 0xe8 {
                         continue;
                     }
                     let string = |at| pe.read_from(word(bytes, at).unwrap_or(0), false).ok();
@@ -375,7 +375,7 @@ impl Rules {
         }
         let mut initializers = Vec::new();
         for (code_va, code) in pe.code_ranges() {
-            for (offset, b) in code.windows(79).enumerate() {
+            for (offset, b) in windows_with_byte(code, 0, 0xbe, 79) {
                 if !shape(
                     b,
                     &[
@@ -467,7 +467,7 @@ impl Rules {
                 ];
                 let mut constructors = Vec::new();
                 for (_, code) in pe.code_ranges() {
-                    for factory in code.windows(56) {
+                    for (_, factory) in windows_with_byte(code, 0, 0xc7, 56) {
                         if shape(
                             factory,
                             &[
@@ -514,7 +514,7 @@ impl Rules {
         let version_global = word(version, 1).ok_or_else(|| fail("version selector"))?;
         let mut ceilings = Vec::new();
         for (_, code) in pe.code_ranges() {
-            for b in code.windows(155) {
+            for (_, b) in windows_with_byte(code, 0, 0xa1, 155) {
                 if !shape(
                     b,
                     &[

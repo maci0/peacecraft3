@@ -70,6 +70,7 @@ pub mod pipelined_rendering;
 pub mod render_asset;
 pub mod render_phase;
 pub mod render_resource;
+pub mod render_stats;
 pub mod renderer;
 pub mod settings;
 pub mod slab_allocator;

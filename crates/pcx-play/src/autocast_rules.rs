@@ -2,6 +2,7 @@
 use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
+    pe_image::occurrences,
     scripts::AssetIdentity,
 };
 
@@ -80,16 +81,14 @@ impl Rules {
                 work = work
                     .checked_sub(b.len())
                     .ok_or("autocast scan work exhausted")?;
-                for (i, w) in b.windows(needle.len()).enumerate() {
-                    if w == needle {
-                        if matches.len() == 2 {
-                            return Err("autocast source anchor ambiguous".into());
-                        }
-                        matches.push(
-                            va.checked_add(i.try_into().map_err(|_| "autocast offset overflow")?)
-                                .ok_or("autocast address overflow")?,
-                        )
+                for i in occurrences(b, needle) {
+                    if matches.len() == 2 {
+                        return Err("autocast source anchor ambiguous".into());
                     }
+                    matches.push(
+                        va.checked_add(i.try_into().map_err(|_| "autocast offset overflow")?)
+                            .ok_or("autocast address overflow")?,
+                    )
                 }
             }
             unique(matches.into_iter())

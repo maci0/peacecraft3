@@ -608,6 +608,7 @@ fn advance(
             global_durations: &scene.plan.runtime.global_sequences,
             camera_pose: Some(&billboard),
             look_at: None,
+            hidden: &[],
         },
         &scene.geosets.handles,
         frame,

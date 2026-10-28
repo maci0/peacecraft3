@@ -9,16 +9,17 @@
 use super::{STEP_SECONDS, capture, step};
 use crate::counting_allocator::totals;
 use bevy::{
-    asset::AssetEvent,
+    asset::{AssetEvent, UntypedAssetId},
     camera::visibility::ViewVisibility,
     ecs::{
         message::{MessageCursor, Messages},
         schedule::Schedules,
     },
-    pbr::StandardMaterial,
+    pbr::{RenderMaterialInstances, RenderMeshInstances, StandardMaterial},
     prelude::*,
     render::{RenderApp, render_resource::PollType, renderer::RenderDevice},
 };
+mod budget;
 mod spans;
 
 use pcx_play::map_startup_host::MapStartupHost;
@@ -50,7 +51,22 @@ struct AssetCounts {
     removed: u64,
     /// Mesh vertices or image bytes carried by added and modified assets.
     payload: u64,
+    /// Mesh vertex and index buffer bytes (meshes) or image bytes (images) of the same assets.
+    payload_bytes: u64,
     live: u64,
+    /// Modified assets whose mesh entity was not in view that frame (meshes only).
+    modified_unseen: u64,
+    /// Of those, meshes whose own `Visibility` is `Hidden` (geoset alpha 0).
+    modified_unseen_hidden: u64,
+    /// Of those, meshes visible by inheritance that the frustum test rejected.
+    modified_unseen_culled: u64,
+}
+
+impl AssetCounts {
+    fn add(&mut self, [units, bytes]: [u64; 2]) {
+        self.payload += units;
+        self.payload_bytes += bytes;
+    }
 }
 
 impl std::ops::AddAssign for AssetCounts {
@@ -59,15 +75,20 @@ impl std::ops::AddAssign for AssetCounts {
         self.modified += other.modified;
         self.removed += other.removed;
         self.payload += other.payload;
+        self.payload_bytes += other.payload_bytes;
+        self.modified_unseen += other.modified_unseen;
+        self.modified_unseen_hidden += other.modified_unseen_hidden;
+        self.modified_unseen_culled += other.modified_unseen_culled;
         self.live = other.live;
     }
 }
 
-type AssetProbe = Box<dyn FnMut(&World) -> AssetCounts>;
+/// Counts for one frame and the ids of the assets modified in it.
+type AssetProbe = Box<dyn FnMut(&World) -> (AssetCounts, Vec<UntypedAssetId>)>;
 
 fn probe_asset<A: Asset>(
     world: &World,
-    payload: impl Fn(&A) -> u64 + 'static,
+    payload: impl Fn(&A) -> [u64; 2] + 'static,
 ) -> Option<AssetProbe> {
     let mut cursor: MessageCursor<AssetEvent<A>> = world
         .get_resource::<Messages<AssetEvent<A>>>()?
@@ -77,8 +98,9 @@ fn probe_asset<A: Asset>(
             world.get_resource::<Messages<AssetEvent<A>>>(),
             world.get_resource::<Assets<A>>(),
         ) else {
-            return AssetCounts::default();
+            return (AssetCounts::default(), Vec::new());
         };
+        let mut modified = Vec::new();
         let mut counts = AssetCounts {
             live: assets.len() as u64,
             ..default()
@@ -87,17 +109,18 @@ fn probe_asset<A: Asset>(
             match event {
                 AssetEvent::Added { id } => {
                     counts.added += 1;
-                    counts.payload += assets.get(*id).map_or(0, &payload);
+                    counts.add(assets.get(*id).map_or([0; 2], &payload));
                 }
                 AssetEvent::Modified { id } => {
                     counts.modified += 1;
-                    counts.payload += assets.get(*id).map_or(0, &payload);
+                    modified.push(id.untyped());
+                    counts.add(assets.get(*id).map_or([0; 2], &payload));
                 }
                 AssetEvent::Removed { .. } => counts.removed += 1,
                 AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => {}
             }
         }
-        counts
+        (counts, modified)
     }))
 }
 
@@ -116,6 +139,23 @@ struct Frame {
     visible_mesh_entities: u64,
     ui_nodes: u64,
     text_entities: u64,
+    /// Mesh entities whose `Visibility` is `Hidden`.
+    hidden_mesh_entities: u64,
+    /// Distinct mesh and material assets among the visible mesh entities.
+    visible_distinct_meshes: u64,
+    visible_distinct_materials: u64,
+    /// Entries of the render world's mesh and material instance tables after the frame.
+    render_mesh_instances: u64,
+    render_material_instances: u64,
+    /// Renderer submission counters from `bevy_render::render_stats` during the update.
+    draw_calls: u64,
+    multi_draw_calls: u64,
+    pipelines_set: u64,
+    bind_groups_set: u64,
+    bind_groups_created: u64,
+    buffers_created: u64,
+    buffer_bytes_created: u64,
+    textures_created: u64,
     assets: BTreeMap<&'static str, AssetCounts>,
 }
 
@@ -158,26 +198,33 @@ impl Probe {
                 }
             };
         }
-        track!("mesh", Mesh, |mesh: &Mesh| mesh.count_vertices() as u64);
-        track!("image", Image, |image: &Image| image
-            .data
-            .as_ref()
-            .map_or(0, |data| data.len() as u64));
-        track!("standard_material", StandardMaterial, |_| 0);
-        track!("menu_material", crate::menu_material::MenuMaterial, |_| 0);
+        track!("mesh", Mesh, |mesh: &Mesh| [
+            mesh.count_vertices() as u64,
+            (mesh.get_vertex_buffer_size() + mesh.get_index_buffer_bytes().map_or(0, <[u8]>::len))
+                as u64,
+        ]);
+        track!("image", Image, |image: &Image| {
+            let bytes = image.data.as_ref().map_or(0, |data| data.len() as u64);
+            [bytes, bytes]
+        });
+        track!("standard_material", StandardMaterial, |_| [0; 2]);
+        track!("menu_material", crate::menu_material::MenuMaterial, |_| [0;
+            2]);
         track!(
             "particle_material",
             crate::mainmenu_scene::ParticleMaterial,
-            |_| 0
+            |_| [0; 2]
         );
-        track!("ground_material", pcx_gfx::GroundMaterial, |_| 0);
+        track!("ground_material", pcx_gfx::GroundMaterial, |_| [0; 2]);
         track!(
             "filter_material",
             peacecraft3::campaign_presentation::FilterMaterial,
-            |_| 0
+            |_| [0; 2]
         );
-        track!("additive_image", crate::glue_menu::AdditiveImage, |_| 0);
-        track!("backdrop_image", crate::glue_menu::BackdropImage, |_| 0);
+        track!("additive_image", crate::glue_menu::AdditiveImage, |_| [0;
+            2]);
+        track!("backdrop_image", crate::glue_menu::BackdropImage, |_| [0;
+            2]);
         let mut systems = HashMap::new();
         system_ticks(world, "", &mut systems);
         if let Some(render) = app.get_sub_app(RenderApp) {
@@ -193,8 +240,10 @@ impl Probe {
     /// Updates once with only the update itself inside the counted window.
     fn frame(&mut self, app: &mut App, ran: &mut BTreeMap<String, u64>) -> Frame {
         let before = totals();
+        let stats_before = bevy::render::render_stats::snapshot();
         app.update();
         let allocated = totals() - before;
+        let submitted = bevy::render::render_stats::snapshot() - stats_before;
         app.world()
             .resource::<RenderDevice>()
             .wgpu_device()
@@ -207,6 +256,14 @@ impl Probe {
             allocation_calls: allocated.calls,
             reallocation_calls: allocated.reallocations,
             requested_bytes: allocated.bytes,
+            draw_calls: submitted.draw_calls,
+            multi_draw_calls: submitted.multi_draw_calls,
+            pipelines_set: submitted.pipelines_set,
+            bind_groups_set: submitted.bind_groups_set,
+            bind_groups_created: submitted.bind_groups_created,
+            buffers_created: submitted.buffers_created,
+            buffer_bytes_created: submitted.buffer_bytes_created,
+            textures_created: submitted.textures_created,
             ..default()
         };
         let world = app.world();
@@ -219,6 +276,15 @@ impl Probe {
         system_ticks(world, "", &mut ticks);
         if let Some(render) = app.get_sub_app(RenderApp) {
             frame.render_world_entities = render.world().iter_entities().count() as u64;
+            frame.render_mesh_instances = match render.world().resource::<RenderMeshInstances>() {
+                RenderMeshInstances::CpuBuilding(instances) => instances.len(),
+                RenderMeshInstances::GpuBuilding(instances) => instances.len(),
+            } as u64;
+            frame.render_material_instances = render
+                .world()
+                .resource::<RenderMaterialInstances>()
+                .instances
+                .len() as u64;
             system_ticks(render.world(), "render:", &mut ticks);
         }
         for (name, tick) in &ticks {
@@ -228,8 +294,13 @@ impl Probe {
             }
         }
         self.systems = ticks;
+        let mut modified_meshes = Vec::new();
         for (name, probe) in &mut self.assets {
-            frame.assets.insert(name, probe(app.world()));
+            let (counts, modified) = probe(app.world());
+            if *name == "mesh" {
+                modified_meshes = modified;
+            }
+            frame.assets.insert(name, counts);
         }
         let world = app.world_mut();
         frame.mesh_entities = world.query::<&Mesh3d>().iter(world).count() as u64;
@@ -238,6 +309,65 @@ impl Probe {
             .iter(world)
             .filter(|visible| visible.get())
             .count() as u64;
+        frame.hidden_mesh_entities = world
+            .query_filtered::<&Visibility, With<Mesh3d>>()
+            .iter(world)
+            .filter(|visibility| **visibility == Visibility::Hidden)
+            .count() as u64;
+        let (mut meshes, mut materials) = (HashSet::new(), HashSet::new());
+        for (mesh, menu, standard, ground, visible) in world
+            .query::<(
+                &Mesh3d,
+                Option<&MeshMaterial3d<crate::menu_material::MenuMaterial>>,
+                Option<&MeshMaterial3d<StandardMaterial>>,
+                Option<&MeshMaterial3d<pcx_gfx::GroundMaterial>>,
+                &ViewVisibility,
+            )>()
+            .iter(world)
+        {
+            if !visible.get() {
+                continue;
+            }
+            meshes.insert(mesh.0.id());
+            materials.extend(
+                menu.map(|m| m.0.id().untyped())
+                    .or(standard.map(|m| m.0.id().untyped()))
+                    .or(ground.map(|m| m.0.id().untyped())),
+            );
+        }
+        let mut hidden_meshes = HashSet::new();
+        let mut culled_meshes = HashSet::new();
+        for (mesh, visibility, inherited, visible) in world
+            .query::<(&Mesh3d, &Visibility, &InheritedVisibility, &ViewVisibility)>()
+            .iter(world)
+        {
+            if visible.get() {
+                continue;
+            }
+            if *visibility == Visibility::Hidden {
+                hidden_meshes.insert(mesh.0.id());
+            } else if inherited.get() {
+                culled_meshes.insert(mesh.0.id());
+            }
+        }
+        frame.visible_distinct_meshes = meshes.len() as u64;
+        if let Some(counts) = frame.assets.get_mut("mesh") {
+            let unseen: Vec<_> = modified_meshes
+                .iter()
+                .map(|id| id.typed_unchecked::<Mesh>())
+                .filter(|id| !meshes.contains(id))
+                .collect();
+            counts.modified_unseen = unseen.len() as u64;
+            counts.modified_unseen_hidden = unseen
+                .iter()
+                .filter(|id| hidden_meshes.contains(id))
+                .count() as u64;
+            counts.modified_unseen_culled = unseen
+                .iter()
+                .filter(|id| culled_meshes.contains(id))
+                .count() as u64;
+        }
+        frame.visible_distinct_materials = materials.len() as u64;
         frame.ui_nodes = world.query::<&Node>().iter(world).count() as u64;
         frame.text_entities = world.query::<&Text>().iter(world).count() as u64;
         frame
@@ -256,6 +386,42 @@ struct Phase {
     game_time: Option<f64>,
     /// Exclusive per-span allocation counters (needs `profile-cpu`), largest first.
     spans: Vec<(String, spans::SpanStats)>,
+}
+
+impl Phase {
+    /// The counters a budget bounds, keyed `<phase>.<counter>`.
+    fn budget_counters(&self) -> impl Iterator<Item = (String, u64)> + '_ {
+        let t = &self.totals;
+        let asset = |name: &str| t.assets.get(name).copied().unwrap_or_default();
+        let (mesh, image, menu_material) = (asset("mesh"), asset("image"), asset("menu_material"));
+        [
+            (
+                "allocation_calls",
+                t.allocation_calls + t.reallocation_calls,
+            ),
+            ("requested_bytes", t.requested_bytes),
+            ("entities_spawned", t.entities_spawned),
+            ("entities_despawned", t.entities_despawned),
+            ("mesh_entities", t.mesh_entities),
+            ("render_world_entities", t.render_world_entities),
+            ("render_mesh_instances", t.render_mesh_instances),
+            ("draw_calls", t.draw_calls),
+            ("multi_draw_calls", t.multi_draw_calls),
+            ("pipelines_set", t.pipelines_set),
+            ("bind_groups_set", t.bind_groups_set),
+            ("bind_groups_created", t.bind_groups_created),
+            ("buffers_created", t.buffers_created),
+            ("buffer_bytes_created", t.buffer_bytes_created),
+            ("textures_created", t.textures_created),
+            ("mesh_modified", mesh.modified),
+            ("mesh_upload_bytes", mesh.payload_bytes),
+            ("image_modified", image.modified),
+            ("image_upload_bytes", image.payload_bytes),
+            ("menu_material_modified", menu_material.modified),
+        ]
+        .into_iter()
+        .map(|(counter, value)| (format!("{}.{counter}", self.name), value))
+    }
 }
 
 fn game_time(app: &mut App) -> Option<f64> {
@@ -286,17 +452,15 @@ impl PerfWindow {
         control.push(&ctl);
         control.push(",");
         control.push(&ack);
-        let perf = std::process::Command::new("perf")
-            .args([
-                "stat",
-                "--per-thread",
-                "-x,",
-                "-e",
-                "instructions:u",
-                "-D",
-                "-1",
-                "-p",
-            ])
+        // `PCX_PERF_RECORD` samples every N-th user instruction into `PCX_PERF_OUT` (a perf.data
+        // file) instead of counting them, for a per-symbol breakdown of the same window.
+        let mut command = std::process::Command::new("perf");
+        match std::env::var("PCX_PERF_RECORD") {
+            Ok(period) => command.args(["record", "-e", "instructions:u", "-c", &period]),
+            Err(_) => command.args(["stat", "--per-thread", "-x,", "-e", "instructions:u"]),
+        };
+        let perf = command
+            .args(["-D", "-1", "-p"])
             .arg(std::process::id().to_string())
             .arg("--control")
             .arg(control)
@@ -400,6 +564,14 @@ impl Harness {
             totals.entities_spawned += frame.entities_spawned;
             totals.entities_despawned += frame.entities_despawned;
             totals.systems_ran += frame.systems_ran;
+            totals.draw_calls += frame.draw_calls;
+            totals.multi_draw_calls += frame.multi_draw_calls;
+            totals.pipelines_set += frame.pipelines_set;
+            totals.bind_groups_set += frame.bind_groups_set;
+            totals.bind_groups_created += frame.bind_groups_created;
+            totals.buffers_created += frame.buffers_created;
+            totals.buffer_bytes_created += frame.buffer_bytes_created;
+            totals.textures_created += frame.textures_created;
             for (asset, counts) in &frame.assets {
                 *totals.assets.entry(asset).or_default() += *counts;
             }
@@ -409,6 +581,11 @@ impl Harness {
             totals.visible_mesh_entities = frame.visible_mesh_entities;
             totals.ui_nodes = frame.ui_nodes;
             totals.text_entities = frame.text_entities;
+            totals.hidden_mesh_entities = frame.hidden_mesh_entities;
+            totals.visible_distinct_meshes = frame.visible_distinct_meshes;
+            totals.visible_distinct_materials = frame.visible_distinct_materials;
+            totals.render_mesh_instances = frame.render_mesh_instances;
+            totals.render_material_instances = frame.render_material_instances;
             rows.push(frame);
         }
         spans::set_active(false);
@@ -532,6 +709,22 @@ impl Harness {
             serde_json::to_vec_pretty(&summary).unwrap(),
         )
         .unwrap();
+        let observed: BTreeMap<String, u64> = self
+            .phases
+            .iter()
+            .flat_map(Phase::budget_counters)
+            .collect();
+        std::fs::write(
+            output.join("render-budget-observed.json"),
+            budget::render(WORKLOAD, &observed),
+        )
+        .unwrap();
+        if let Some(path) = std::env::var_os("PCX_RENDER_BUDGET") {
+            let budget = std::fs::read_to_string(&path).expect("PCX_RENDER_BUDGET file");
+            if let Err(failures) = budget::check(WORKLOAD, &observed, &budget) {
+                panic!("render budget exceeded:\n{}", failures.join("\n"));
+            }
+        }
     }
 }
 
@@ -539,3 +732,57 @@ impl Harness {
 const MOVE_DISTANCE: f32 = 512.;
 
 use pcx_script::{HandleId, Host as _, Value};
+
+/// Counters of one scene-entry interval (menu or campaign), written to
+/// `entry-<name>.json`. The interval is a variable number of `App::update` calls that ends when
+/// the scene is ready, so it reports work totals, never a per-frame rate.
+pub(super) struct EntryWindow {
+    name: &'static str,
+    perf: Option<PerfWindow>,
+    allocated: crate::counting_allocator::Totals,
+    submitted: bevy::render::render_stats::RenderStats,
+}
+
+impl EntryWindow {
+    pub(super) fn start(name: &'static str) -> Self {
+        let mut perf = PerfWindow::start(name);
+        if let Some(window) = perf.as_mut() {
+            window.send("enable\n");
+        }
+        Self {
+            name,
+            perf,
+            allocated: totals(),
+            submitted: bevy::render::render_stats::snapshot(),
+        }
+    }
+
+    pub(super) fn finish(self, output: &Path) {
+        let allocated = totals() - self.allocated;
+        let submitted = bevy::render::render_stats::snapshot() - self.submitted;
+        if let Some(mut window) = self.perf {
+            window.send("disable\n");
+            window.stop();
+        }
+        let summary = serde_json::json!({
+            "workload": WORKLOAD,
+            "entry": self.name,
+            "allocation_calls": allocated.calls,
+            "reallocation_calls": allocated.reallocations,
+            "requested_bytes": allocated.bytes,
+            "draw_calls": submitted.draw_calls,
+            "multi_draw_calls": submitted.multi_draw_calls,
+            "pipelines_set": submitted.pipelines_set,
+            "bind_groups_set": submitted.bind_groups_set,
+            "bind_groups_created": submitted.bind_groups_created,
+            "buffers_created": submitted.buffers_created,
+            "buffer_bytes_created": submitted.buffer_bytes_created,
+            "textures_created": submitted.textures_created,
+        });
+        std::fs::write(
+            output.join(format!("entry-{}.json", self.name)),
+            serde_json::to_vec_pretty(&summary).unwrap(),
+        )
+        .unwrap();
+    }
+}
