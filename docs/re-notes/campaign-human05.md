@@ -140,6 +140,10 @@ each other and `town-order-1`. Their first refusal identifies the missing live t
 reach occupancy and links, and effect-source evidence. The selector and unattended construction
 path are not connected to AI placement.
 
+The reach-chain cleanup helper was subsequently checked against the selected executable and
+the baseline and farm snapshot sites. Live chains and their cleanup schedule remain unconnected,
+so no later Human05 state was tested in that change.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

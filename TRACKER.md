@@ -5793,3 +5793,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   items and destructables, the neutral house under an armed attack, `InvalidTarget` and `HoldItem` producers,
   the signal cursor, in-game tone against the original, and a live check of the interface and viewport gating.
   The hover picker copies the click picker and should be unified once the smart right-click change lands.
+
+### 2026-10-29: Reach-chain cleanup
+
+- [~] The movement entry updates only the changed parts of its spatial rectangle, and dirty
+  cells are compacted by the client. The source-checked chain helper now implements the
+  cleanup for supplied entries, including removal links and duplicate identities. Its
+  synthetic test covers the effect on the bounded reach query. The live cache still lacks
+  native rectangle registration, per-entry state and the cleanup schedule, so production
+  AI placement remains refused. Details: [AI construction](docs/re-notes/ai-construction.md).
+- The ignored local-input snapshot still selects the recorded baseline and farm sites at
+  dequeues 1 and 280 with reach enabled. It does not use live chains. The `pcx-play` library
+  suite passed 2,321 tests with 90 ignored; native and WASM Clippy passed with warnings denied.
+  The simulation budget check passed and Human03 allocation and reallocation counts were
+  unchanged from the prior placement run. Allocated bytes increased by 72 in each Human03
+  workload after the intervening input merge; that change has not been isolated.

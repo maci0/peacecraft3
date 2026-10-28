@@ -15,7 +15,8 @@ pub struct EntryRules {
     max_entries: u8,
 }
 
-/// One spatial-chain link, in newest-first order.
+/// One spatial-chain link, in newest-first order. Entry fields must reflect the
+/// current object state for every link with the same identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainEntry {
     pub identity: u64,
@@ -62,6 +63,8 @@ impl EntryRules {
         let object = read(0x8be4ea, 6)?;
         let forbidden = read(0x8be4f2, 7)?;
         let pathing = read(0x8be504, 6)?;
+        let cleanup_skipped = read(0x8c2c79, 6)?;
+        let cleanup_object = read(0x8c2c89, 6)?;
         if class[..2] != [0x81, 0xe3]
             || skipped[..2] != [0x81, 0xfb]
             || limit[..2] != [0x83, 0xff]
@@ -72,6 +75,10 @@ impl EntryRules {
             || object[..2] != [0x81, 0xfb]
             || forbidden[..3] != [0xf7, 0x42, 0x44]
             || pathing[..2] != [0xf7, 0xc1]
+            || cleanup_skipped[..2] != [0x81, 0xf9]
+            || cleanup_skipped[2..] != skipped[2..]
+            || cleanup_object[..2] != [0x81, 0xf9]
+            || cleanup_object[2..] != object[2..]
         {
             return Err("unrecognized reach entry test instructions".into());
         }
@@ -138,6 +145,27 @@ impl EntryRules {
             }
         }
         false
+    }
+
+    /// Compact one newest-first chain when the spatial grid runs its cleanup.
+    /// `seen` is reusable caller-owned scratch and is empty on return.
+    pub fn compact_chain(
+        self,
+        entries: &mut Vec<ChainEntry>,
+        seen: &mut Vec<u64>,
+    ) -> Result<(), std::collections::TryReserveError> {
+        seen.clear();
+        seen.try_reserve(entries.len())?;
+        entries.retain(|entry| {
+            let class = entry.class & self.class_mask;
+            if class == self.skipped_class || !entry.present || seen.contains(&entry.identity) {
+                return false;
+            }
+            seen.push(entry.identity);
+            class == self.object_class
+        });
+        seen.clear();
+        Ok(())
     }
 }
 
@@ -1131,6 +1159,61 @@ mod tests {
         assert!(!rules.cell_blocked(0, 4, [inactive, inactive, inactive, blocked]));
         assert!(!rules.cell_blocked(0, 4, [tombstone, blocked]));
         assert!(rules.cell_blocked(0, 4, [skipped, blocked]));
+    }
+
+    #[test]
+    fn cell_cleanup_keeps_newest_live_object_and_removes_tombstones() {
+        let rules = EntryRules {
+            active: 0x100,
+            registered: 0x200,
+            forbidden: 0x40,
+            class_mask: 0xf000,
+            object_class: 0x3000,
+            skipped_class: 0x4000,
+            pathing_mask: 0xff,
+            max_entries: 3,
+        };
+        let object = ChainEntry {
+            identity: 1,
+            present: true,
+            flags: 0x104,
+            state: 0x200,
+            class: 0x3000,
+        };
+        let removed = ChainEntry {
+            identity: 2,
+            ..object
+        };
+        let other = ChainEntry {
+            identity: 3,
+            flags: 0,
+            ..object
+        };
+        let mut entries = vec![
+            ChainEntry {
+                class: 0x4000,
+                ..object
+            },
+            ChainEntry {
+                class: 0,
+                ..removed
+            },
+            other,
+            object,
+            removed,
+            object,
+            ChainEntry {
+                identity: 4,
+                present: false,
+                ..object
+            },
+        ];
+        let mut seen = Vec::new();
+        assert!(!rules.cell_blocked(0, 4, entries.iter().copied()));
+        rules.compact_chain(&mut entries, &mut seen).unwrap();
+        assert_eq!(entries, [other, object]);
+        assert!(seen.is_empty());
+        assert!(rules.cell_blocked(0, 4, entries));
     }
 
     #[test]

@@ -528,6 +528,19 @@ classifier does not yet reconstruct ordered cell chains from the live simulation
 Deserialization can restore the object flags (`0x8c1a44`), so an initial zero is not a general
 proof about every later region entry.
 
+The rectangle update at `0x8c3050` leaves the overlap of the old and new rectangles alone.
+It prepends removal links for cells leaving the rectangle and object links for cells entering it
+(`0x8c3177`, `0x8c322f`); a disjoint move removes the old rectangle and inserts the new one
+(`0x8c325a`). Removal links also mark their cells dirty (`0x8c2488`). A cleanup at `0x8c28c0`
+visits dirty cells and compacts their chains through `0x8c2c20`: it retains only the newest
+valid object-class link for each entry, with a newer removal link suppressing an older object
+link. Skipped-class links and entries no longer present are discarded. Cleanup does not use
+the reach query's active or pathing filters, and can change which links fall within its visit
+limit. The same cleanup is called from scheduled paths at `0x7f979c` and `0x7fb07f`; their
+schedule relative to recreation movement and placement queries is not yet established. The
+chain helper implements this compaction for supplied entries, using reusable caller scratch;
+it does not represent live registration or establish the cleanup schedule.
+
 The selected Human05 `war3map.w3r` contains 311 authored rectangles. Comparing their bounds
 with the 1600-unit search half-width gives 24, 18 and 23 intersections for the baseline,
 workers-at-start and workers-near-mine captured origins. The map script registers one of the
