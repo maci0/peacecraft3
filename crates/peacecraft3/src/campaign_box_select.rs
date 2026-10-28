@@ -118,33 +118,9 @@ pub(crate) fn load_parameters(
 
 /// Everything that must let a press reach the session. The press position is the
 /// cursor, which must lie in the scene viewport.
-fn pointer_open(
-    picking: &Picking,
-    hud: &crate::campaign_hud::CampaignHud,
-    session: &mut MapScriptSession<MapStartupHost>,
-    pressed: bool,
-) -> bool {
-    if !picking.view.active()
-        || picking.view.menu_open()
-        || hud.quest_log_open
-        || (pressed && (hud.pointer_consumed || picking.inventory.pointer_consumed))
-        || picking.dialogs.input_blocked()
-    {
-        return false;
-    }
-    let Some(host) = session.host() else {
-        return false;
-    };
-    let objects = host.objects();
-    !objects
-        .presentation()
-        .is_some_and(|p| p.control_enabled == Some(false))
-        && !objects.local_player_settings().is_some_and(|local| {
-            objects
-                .player_removal_state()
-                .and_then(|state| state.get(local.identity))
-                .is_some_and(|result| result.left)
-        })
+fn pointer_open(picking: &Picking, hud: &crate::campaign_hud::CampaignHud, pressed: bool) -> bool {
+    picking.game_input.open()
+        && !(pressed && (hud.pointer_consumed || picking.inventory.pointer_consumed))
 }
 
 pub(crate) fn gesture_input(
@@ -183,20 +159,20 @@ pub(crate) fn gesture_input(
         return;
     };
     let armed = input.command.is_some() || input.build.is_some();
-    if state.gesture.is_active() && (armed || !pointer_open(&picking, &hud, &mut session, false)) {
+    if state.gesture.is_active() && (armed || !pointer_open(&picking, &hud, false)) {
         state.gesture.cancel();
     }
     if state.gesture.is_active() && keys.just_pressed(KeyCode::Escape) {
         state.gesture.cancel();
         input.escape_cancelled_drag = true;
     }
-    let additive = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let additive = picking.game_input.shift.held();
     if mouse.just_pressed(MouseButton::Left)
         && !armed
         && state.ready()
         && let Some(cursor) = window.cursor_position()
         && viewport.contains(cursor)
-        && pointer_open(&picking, &hud, &mut session, true)
+        && pointer_open(&picking, &hud, true)
         && let Some(Ok(parameters)) = state.parameters.clone()
     {
         let now_ms = time.elapsed().as_secs_f64() * 1000.0;

@@ -17,6 +17,7 @@ mod campaign_build_ui;
 mod campaign_command_card;
 mod campaign_diagnostics;
 mod campaign_escape_menu;
+mod campaign_game_input;
 mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;

@@ -22,6 +22,7 @@ use pcx_script::{HandleId, Host, Value};
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_camera::{CampaignCamera, CampaignCameraSet, CampaignSceneCamera},
+    game_input::GameInput,
     map_ground::GroundPublication,
     map_requests::MapRequests,
     map_script_session::MapScriptSession,
@@ -824,55 +825,30 @@ fn armed_pointer(armed: Option<i32>, select: bool, right: bool, has_target: bool
     }
 }
 
-/// Camera, HUD, inventory, dialogs and local control must all let input reach the session.
-fn commands_open(
-    view: &CampaignCamera,
-    hud: &crate::campaign_hud::CampaignHud,
-    inventory: &crate::campaign_inventory::CampaignInventory,
-    dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
-    host: &MapStartupHost,
-) -> bool {
-    !hud.pointer_consumed
-        && !inventory.pointer_consumed
-        && commands_available(view, hud, dialogs, host)
-}
-
+/// The same gate the [`GameInput`] resource holds, for callers that have the
+/// session in hand and need no system ordering.
 pub(crate) fn commands_available(
     view: &CampaignCamera,
     hud: &crate::campaign_hud::CampaignHud,
     dialogs: &crate::campaign_script_dialogs::CampaignScriptDialogs,
     host: &MapStartupHost,
 ) -> bool {
-    let objects = host.objects();
-    view.active()
-        && !view.menu_open()
-        && !hud.quest_log_open
-        && !dialogs.input_blocked()
-        && !objects
-            .presentation()
-            .is_some_and(|p| p.control_enabled == Some(false))
-        && !objects.local_player_settings().is_some_and(|local| {
-            objects
-                .player_removal_state()
-                .and_then(|state| state.get(local.identity))
-                .is_some_and(|result| result.left)
-        })
+    let mut gate = GameInput::default();
+    crate::campaign_game_input::sync_gate(&mut gate, view, hud, dialogs, Some(host));
+    gate.open()
 }
 
 /// Dispatches authored standard and learned hotkeys. Closed input disarms targeting.
+/// The command card ignores a key pressed with Ctrl or Alt held.
 fn command_hotkey(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     controls: CommandControls,
+    game_input: Res<GameInput>,
     mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
-    let CommandControls {
-        view,
-        hud,
-        inventory,
-        dialogs,
-    } = controls;
+    let CommandControls { hud, inventory, .. } = controls;
     let Some(keys) = keys else {
         return;
     };
@@ -882,9 +858,12 @@ fn command_hotkey(
         input.build = None;
         return;
     };
-    if !commands_open(&view, &hud, &inventory, &dialogs, host) {
+    if !game_input.open() || hud.pointer_consumed || inventory.pointer_consumed {
         input.command = None;
         input.build = None;
+        return;
+    }
+    if game_input.ctrl.held() || game_input.alt.held() {
         return;
     }
     let objects = host.objects();
@@ -1050,9 +1029,8 @@ pub(crate) struct Picking<'w, 's> {
         ),
         With<CampaignSceneCamera>,
     >,
-    pub view: Res<'w, CampaignCamera>,
+    pub game_input: Res<'w, GameInput>,
     pub ground: Res<'w, GroundPublication>,
-    pub dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
     pub actors: Res<'w, crate::campaign_actors::UnitActors>,
     pub inventory: Res<'w, crate::campaign_inventory::CampaignInventory>,
 }
@@ -1069,9 +1047,8 @@ fn click(
     let Picking {
         windows,
         cameras,
-        view,
+        game_input,
         ground,
-        dialogs,
         actors,
         inventory,
     } = &picking;
@@ -1088,13 +1065,7 @@ fn click(
     // The press was gated when the gesture began; where it is released does not matter.
     let pointer_blocked =
         finished.is_none() && (hud.pointer_consumed || inventory.pointer_consumed);
-    if !(select || order)
-        || !view.active()
-        || view.menu_open()
-        || hud.quest_log_open
-        || pointer_blocked
-        || dialogs.input_blocked()
-    {
+    if !(select || order) || !game_input.open() || pointer_blocked {
         return;
     }
     let (Ok(window), Ok((camera, transform, projection))) = (windows.single(), cameras.single())
@@ -1123,14 +1094,7 @@ fn click(
     let Some(point) = ground_point(ray, &context.terrain, far) else {
         return;
     };
-    let additive = finished.map_or_else(
-        || {
-            buttons
-                .keys
-                .is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight))
-        },
-        |click| click.additive,
-    );
+    let additive = finished.map_or(game_input.shift.held(), |click| click.additive);
     let witness = session.session_witness();
     let Some(host) = session.host() else {
         return;
@@ -1139,20 +1103,6 @@ fn click(
     let item_hit = witness
         .as_ref()
         .and_then(|witness| actors.item_hit(ray, far, witness, objects));
-    if objects
-        .presentation()
-        .is_some_and(|p| p.control_enabled == Some(false))
-    {
-        return;
-    }
-    if objects.local_player_settings().is_some_and(|local| {
-        objects
-            .player_removal_state()
-            .and_then(|state| state.get(local.identity))
-            .is_some_and(|result| result.left)
-    }) {
-        return;
-    }
     if input.build.is_some() {
         if order {
             input.build = None;
