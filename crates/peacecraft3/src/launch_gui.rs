@@ -421,6 +421,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_box_select::install(&mut app);
     crate::campaign_game_input::install(&mut app);
     crate::campaign_camera_input::install(&mut app);
+    crate::campaign_cursor::install(&mut app);
     crate::campaign_selection_rules::install(&mut app);
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);

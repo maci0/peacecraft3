@@ -207,13 +207,11 @@ pub fn prepare_sequence(
             .map_err(|e| e.to_string())
     })
     .map_err(|e| format!("{source}: {e}"))?;
-    let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(&runtime, interval)
-        .map_err(|e| format!("{source}: {e}"))?;
-    let selection = crate::mainmenu_scene::texture_selection(&runtime, interval, &source)
-        .map_err(|e| e.to_string())?;
-    let uv =
-        pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(&runtime, interval, &source)
-            .map_err(|e| format!("{source}: {e}"))?;
+    let IntervalPlans {
+        opacity,
+        selection,
+        uv,
+    } = interval_plans(&runtime, interval, &source)?;
     Ok(BackgroundPlan {
         frame: background.frame.clone(),
         source,
@@ -230,6 +228,44 @@ pub fn prepare_sequence(
         unlit: background.unlit,
         driven: false,
     })
+}
+
+/// The plans a model's tracks give for one sequence interval.
+pub struct IntervalPlans {
+    pub opacity: pcx_gfx::mdx_opacity::OpacityPlan,
+    pub selection: pcx_gfx::mdx_texture_selection::TextureSelectionPlan,
+    pub uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
+}
+
+/// Checks `runtime`'s opacity, texture selection and UV tracks over `interval`.
+pub fn interval_plans(
+    runtime: &pcx_gfx::mdx_runtime::RuntimePlan,
+    interval: [u32; 2],
+    source: &str,
+) -> Result<IntervalPlans, String> {
+    let opacity = pcx_gfx::mdx_opacity::OpacityPlan::checked(runtime, interval)
+        .map_err(|e| format!("{source}: {e}"))?;
+    let selection = crate::mainmenu_scene::texture_selection(runtime, interval, source)
+        .map_err(|e| e.to_string())?;
+    let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(runtime, interval, source)
+        .map_err(|e| format!("{source}: {e}"))?;
+    Ok(IntervalPlans {
+        opacity,
+        selection,
+        uv,
+    })
+}
+
+/// Points a spawned background at another sequence interval and restarts its clock. The state
+/// is unchanged when the interval's plans are refused.
+pub fn set_interval(state: &mut ScoreBackgroundState, interval: [u32; 2]) -> Result<(), String> {
+    let plans = interval_plans(&state.runtime, interval, &state.source)?;
+    state.interval = interval;
+    state.opacity = plans.opacity;
+    state.selection = plans.selection;
+    state.uv = plans.uv;
+    state.elapsed = std::time::Duration::ZERO;
+    Ok(())
 }
 
 /// Marks one spawned background frame root.

@@ -776,6 +776,19 @@ impl ArmedCommand {
     }
 }
 
+impl CampaignInput {
+    /// The kind of command waiting for a target in `session`, for the cursor.
+    pub(crate) fn armed_kind(
+        &self,
+        session: Option<Weak<()>>,
+    ) -> Option<crate::campaign_command_card::Kind> {
+        self.command
+            .as_ref()
+            .filter(|armed| armed.is_for(session))
+            .map(|armed| armed.kind)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MinimapAction {
     Camera,
