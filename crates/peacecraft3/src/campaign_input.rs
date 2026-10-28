@@ -2,7 +2,10 @@
 //!
 //! Left click selects the nearest live unit whose source selection circle
 //! (UnitUI `scale` times `[SelectionCircle] ScaleFactor`) covers the clicked
-//! ground point; Shift adds. Right click attacks an enemy under the cursor or
+//! ground point; Shift adds. The press and release are tracked by
+//! [`crate::campaign_box_select`], which hands a plain click back here and
+//! selects a dragged rectangle itself; with no armed command a click selects on
+//! release, otherwise on press. Right click attacks an enemy under the cursor or
 //! moves to the ground point, for selected units the local player owns. Orders go
 //! through the same order natives scripts use. Input is off while scripts disable
 //! user control. Escape raises the local player's end-cinematic event.
@@ -43,10 +46,23 @@ pub(crate) struct CampaignInput {
     pub build: Option<crate::campaign_build_ui::Intent>,
     /// Accepted player commands of the prepared session, in clock order.
     pub commands: PlayerCommandLog,
+    /// This frame's Escape cancelled a selection drag and is not an end-cinematic request.
+    pub escape_cancelled_drag: bool,
+}
+
+/// Mouse and keyboard button state, absent until the input plugin has run.
+#[derive(SystemParam)]
+pub(crate) struct Buttons<'w> {
+    pub mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
+    pub keys: Option<Res<'w, ButtonInput<KeyCode>>>,
 }
 
 /// Records an accepted command. A refused record is kept in `last_error`, not dropped.
-fn record_command(input: &mut CampaignInput, clock: Option<f64>, command: PlayerCommand) {
+pub(crate) fn record_command(
+    input: &mut CampaignInput,
+    clock: Option<f64>,
+    command: PlayerCommand,
+) {
     if let Err(error) = input.commands.record(clock, command) {
         input.last_error = Some(error.to_string());
     }
@@ -63,6 +79,13 @@ pub(crate) fn install(app: &mut App) {
                     (command_hotkey, load_circles)
                         .chain()
                         .before(crate::campaign_minimap::MinimapInputSet),
+                    (
+                        crate::campaign_box_select::load_parameters,
+                        crate::campaign_box_select::gesture_input,
+                    )
+                        .chain()
+                        .in_set(crate::campaign_box_select::BoxSelectInputSet)
+                        .after(crate::campaign_minimap::MinimapInputSet),
                     click.after(crate::campaign_minimap::MinimapInputSet),
                 )
                     .chain()
@@ -72,6 +95,7 @@ pub(crate) fn install(app: &mut App) {
                     .after(crate::campaign_inventory::CampaignInventorySet)
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
                 end_cinematic
+                    .after(crate::campaign_box_select::BoxSelectInputSet)
                     .after(crate::campaign_hud::CampaignHudSet)
                     .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
             ),
@@ -643,7 +667,9 @@ fn end_cinematic(
     mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
+    // Escape that cancelled a drag is consumed by the drag, as in the original.
     if !keys.is_some_and(|k| k.just_pressed(KeyCode::Escape))
+        || input.escape_cancelled_drag
         || !view.active()
         || view.menu_open()
         || hud.quest_log_open
@@ -673,7 +699,7 @@ fn end_cinematic(
 
 /// `Err` means the click must stop before a selection or order write.
 /// `Ok(None)` is an unadmitted world and keeps the previous pick.
-fn pick_sight(
+pub(crate) fn pick_sight(
     objects: &pcx_play::playercolor_host::ObjectHost,
     input: &mut CampaignInput,
 ) -> Result<Option<(HandleId, bool, bool)>, ()> {
@@ -1012,9 +1038,9 @@ fn letter_key(letter: char) -> Option<KeyCode> {
 }
 
 #[derive(SystemParam)]
-struct Picking<'w, 's> {
-    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-    cameras: Query<
+pub(crate) struct Picking<'w, 's> {
+    pub windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    pub cameras: Query<
         'w,
         's,
         (
@@ -1024,21 +1050,21 @@ struct Picking<'w, 's> {
         ),
         With<CampaignSceneCamera>,
     >,
-    view: Res<'w, CampaignCamera>,
-    ground: Res<'w, GroundPublication>,
-    dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
-    actors: Res<'w, crate::campaign_actors::UnitActors>,
-    inventory: Res<'w, crate::campaign_inventory::CampaignInventory>,
+    pub view: Res<'w, CampaignCamera>,
+    pub ground: Res<'w, GroundPublication>,
+    pub dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    pub actors: Res<'w, crate::campaign_actors::UnitActors>,
+    pub inventory: Res<'w, crate::campaign_inventory::CampaignInventory>,
 }
 
 fn click(
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-    keys: Option<Res<ButtonInput<KeyCode>>>,
+    buttons: Buttons,
     picking: Picking,
     hud: Res<crate::campaign_hud::CampaignHud>,
     mut input: ResMut<CampaignInput>,
     mut card: ResMut<crate::campaign_command_card::CommandCard>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut boxes: ResMut<crate::campaign_box_select::BoxSelect>,
 ) {
     let Picking {
         windows,
@@ -1048,18 +1074,25 @@ fn click(
         dialogs,
         actors,
         inventory,
-    } = picking;
-    let (Some(mouse), Some(circles)) = (mouse, input.circles.clone()) else {
+    } = &picking;
+    let (Some(mouse), Some(circles)) = (buttons.mouse, input.circles.clone()) else {
         return;
     };
-    let select = mouse.just_pressed(MouseButton::Left);
+    // A left press selects at once only while a command is armed or the box rules are
+    // unavailable. Otherwise the gesture ends in a click (or a box) at release.
+    let finished = boxes.take_click();
+    let armed = input.command.is_some() || input.build.is_some();
+    let immediate = mouse.just_pressed(MouseButton::Left) && (armed || !boxes.ready());
+    let select = immediate || finished.is_some();
     let order = mouse.just_pressed(MouseButton::Right);
+    // The press was gated when the gesture began; where it is released does not matter.
+    let pointer_blocked =
+        finished.is_none() && (hud.pointer_consumed || inventory.pointer_consumed);
     if !(select || order)
         || !view.active()
         || view.menu_open()
         || hud.quest_log_open
-        || hud.pointer_consumed
-        || inventory.pointer_consumed
+        || pointer_blocked
         || dialogs.input_blocked()
     {
         return;
@@ -1068,7 +1101,10 @@ fn click(
     else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(cursor) = finished
+        .map(|click| Vec2::from(click.at))
+        .or(window.cursor_position())
+    else {
         return;
     };
     if !camera
@@ -1087,8 +1123,14 @@ fn click(
     let Some(point) = ground_point(ray, &context.terrain, far) else {
         return;
     };
-    let additive =
-        keys.is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight));
+    let additive = finished.map_or_else(
+        || {
+            buttons
+                .keys
+                .is_some_and(|k| k.pressed(KeyCode::ShiftLeft) || k.pressed(KeyCode::ShiftRight))
+        },
+        |click| click.additive,
+    );
     let witness = session.session_witness();
     let Some(host) = session.host() else {
         return;
@@ -1243,6 +1285,21 @@ fn click(
     }
     if select {
         if let Some(unit) = picked {
+            if finished.is_some_and(|click| click.double)
+                && let Some(cap) = boxes.cap()
+            {
+                let view = crate::campaign_box_select::Projector {
+                    terrain: &context.terrain,
+                    camera,
+                    transform,
+                };
+                match crate::campaign_box_select::double_click_group(
+                    &view, &mut input, objects, unit, cap, additive,
+                ) {
+                    Ok(()) => return,
+                    Err(error) => input.last_error = Some(error),
+                }
+            }
             objects.select_units(&[unit], !additive);
             let clock = objects.timer_game_time();
             let command = PlayerCommand::Select {
@@ -2211,3 +2268,7 @@ endglobals
         assert!(input.commands.entries().is_empty());
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "campaign_box_select_tests.rs"]
+mod box_select_tests;

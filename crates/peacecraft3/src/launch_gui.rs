@@ -418,6 +418,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_actors::install(&mut app);
     crate::internal_resolution::install(&mut app);
     crate::campaign_input::install(&mut app);
+    crate::campaign_box_select::install(&mut app);
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
     crate::campaign_escape_menu::install(&mut app);

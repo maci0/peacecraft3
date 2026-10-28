@@ -12,6 +12,7 @@ mod button_actions;
 mod campaign_ack;
 mod campaign_actors;
 mod campaign_audio;
+mod campaign_box_select;
 mod campaign_build_ui;
 mod campaign_command_card;
 mod campaign_diagnostics;
