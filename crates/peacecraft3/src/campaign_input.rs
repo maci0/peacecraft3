@@ -722,7 +722,7 @@ pub(crate) fn pick_sight(
 
 /// Ground point under the cursor, in game coordinates (x, y), by marching the
 /// view ray down to the sampled terrain surface.
-fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32; 2]> {
+pub(crate) fn ground_point(ray: Ray3d, terrain: &pcx_map::Terrain, far: f32) -> Option<[f32; 2]> {
     let height = |p: Vec3| pcx_tera::world::sample_world_z(terrain, p.x, -p.z).map(|z| p.y - z);
     if !far.is_finite() || far <= 0.0 {
         return None;

@@ -15,6 +15,11 @@ pub use debug::DebugOverlay;
 mod history;
 use history::{History, SAMPLES as GRAPH_SAMPLES};
 
+/// Shows and hides the FPS overlay. F8 is the original client's idle-worker key
+/// (`docs/re-notes/input-camera.md`), so the overlay does not use it; the original
+/// binds nothing to F6 in the camera and selection handlers audited.
+const FPS_KEY: KeyCode = KeyCode::F6;
+
 pub struct PerformanceOverlayPlugin;
 
 impl Plugin for PerformanceOverlayPlugin {
@@ -148,7 +153,7 @@ fn setup(mut commands: Commands) {
                         Pickable::IGNORE,
                     ))
                     .with_children(|row| {
-                        for text in ["PERFORMANCE", "F8"] {
+                        for text in ["PERFORMANCE", format!("{FPS_KEY:?}").as_str()] {
                             row.spawn((
                                 Text::new(text),
                                 TextFont {
@@ -385,7 +390,7 @@ fn fit_debug(
         if node.max_width != width {
             node.max_width = width;
         }
-        // Wrapped F7 uses only the space below F8; keyboard paging keeps every row reachable.
+        // Wrapped F7 uses only the space below the FPS overlay; keyboard paging keeps every row reachable.
         let height = ((window.physical_height() as f32 - top) * scale - 10.0).max(0.0);
         let limit = Val::Px(height);
         if node.max_height != limit {
@@ -409,10 +414,10 @@ fn toggle(
     mut roots: OverlayPanels,
     mut cameras: Query<&mut Camera, With<OverlayCamera>>,
 ) {
-    if !keys.just_pressed(KeyCode::F8) && !keys.just_pressed(KeyCode::F7) {
+    if !keys.just_pressed(FPS_KEY) && !keys.just_pressed(KeyCode::F7) {
         return;
     }
-    if keys.just_pressed(KeyCode::F8) {
+    if keys.just_pressed(FPS_KEY) {
         state.visible = !state.visible;
         state.history.clear();
     }
@@ -570,8 +575,8 @@ mod tests {
             .id();
         for (key, fps, debugging) in [
             (KeyCode::F7, false, true),
-            (KeyCode::F8, true, true),
-            (KeyCode::F8, false, true),
+            (FPS_KEY, true, true),
+            (FPS_KEY, false, true),
             (KeyCode::F7, false, false),
         ] {
             world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
@@ -601,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn f8_toggles_visibility_and_camera_without_repeating_while_held() {
+    fn fps_key_toggles_visibility_and_camera_without_repeating_while_held() {
         let mut world = World::new();
         world.init_resource::<OverlayState>();
         world.init_resource::<DebugOverlay>();
@@ -616,9 +621,7 @@ mod tests {
                 },
             ))
             .id();
-        world
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::F8);
+        world.resource_mut::<ButtonInput<KeyCode>>().press(FPS_KEY);
         world.run_system_once(toggle).unwrap();
         assert_eq!(*world.get::<Visibility>(root).unwrap(), Visibility::Visible);
         assert!(world.get::<Camera>(camera).unwrap().is_active);
@@ -627,10 +630,8 @@ mod tests {
         assert!(world.resource::<OverlayState>().visible);
         world
             .resource_mut::<ButtonInput<KeyCode>>()
-            .release(KeyCode::F8);
-        world
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::F8);
+            .release(FPS_KEY);
+        world.resource_mut::<ButtonInput<KeyCode>>().press(FPS_KEY);
         world.run_system_once(toggle).unwrap();
         assert_eq!(*world.get::<Visibility>(root).unwrap(), Visibility::Hidden);
         assert!(!world.get::<Camera>(camera).unwrap().is_active);

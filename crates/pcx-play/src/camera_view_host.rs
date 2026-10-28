@@ -221,7 +221,10 @@ impl ObjectHost {
             ("CAMERA_FIELD_ANGLE_OF_ATTACK", pose.angle_of_attack),
             ("CAMERA_FIELD_ROTATION", pose.rotation),
         ]
-        .map(|(global, value)| self.camera_field_constant(global).map(|field| (field, value)))
+        .map(|(global, value)| {
+            self.camera_field_constant(global)
+                .map(|field| (field, value))
+        })
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
         let view = self.camera_view.as_mut().ok_or_else(|| fail("no camera"))?;

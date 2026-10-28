@@ -98,6 +98,11 @@ impl CampaignCamera {
         self.menu_open = false;
     }
 
+    /// Zoom level the game camera starts at.
+    pub fn zoom(&self) -> usize {
+        self.zoom
+    }
+
     pub fn menu_open(&self) -> bool {
         self.menu_open
     }
@@ -159,13 +164,7 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
     })
     .add_systems(
         Update,
-        (
-            menu_keys,
-            sync_session_closers,
-            scroll_camera,
-            apply_camera,
-            pause_view,
-        )
+        (menu_keys, sync_session_closers, apply_camera, pause_view)
             .chain()
             .in_set(CampaignCameraSet)
             .after(CampaignStartupSet),
@@ -210,55 +209,6 @@ fn sync_session_closers(
 ) {
     for (closer, closed) in session_closers(&view, session.host().map(|host| &*host)) {
         input.set_closer(closer, closed);
-    }
-}
-
-/// Arrow-key scrolling at the selected `[CameraRates]` speeds, along the live
-/// camera rotation, clamped to the executed camera bounds. Real time paces it;
-/// it is off while game input is closed.
-fn scroll_camera(
-    keys: Option<Res<ButtonInput<KeyCode>>>,
-    time: Option<Res<Time<Real>>>,
-    input: Res<GameInput>,
-    mut session: ResMut<MapScriptSession<MapStartupHost>>,
-    mut view: ResMut<CampaignCamera>,
-) {
-    let (Some(keys), Some(time)) = (keys, time) else {
-        return;
-    };
-    let axis = |plus, minus| f32::from(keys.pressed(plus)) - f32::from(keys.pressed(minus));
-    let (forward, strafe) = (
-        axis(KeyCode::ArrowUp, KeyCode::ArrowDown),
-        axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
-    );
-    if !input.open() || (forward == 0.0 && strafe == 0.0) {
-        return;
-    }
-    let rotation = session.global("CAMERA_FIELD_ROTATION");
-    let Some(host) = session.host() else {
-        return;
-    };
-    let objects = host.objects_mut();
-    let (Some([x, y]), Some([forward_rate, strafe_rate])) =
-        (objects.camera_target(), objects.camera_scroll_rates())
-    else {
-        return;
-    };
-    let angle = match rotation {
-        Some(Value::Handle(field)) => objects.camera_field(field).ok().flatten(),
-        _ => None,
-    };
-    let Some(angle) = angle else {
-        return;
-    };
-    let (sin, cos) = angle.to_radians().sin_cos();
-    let dt = time.delta_secs();
-    let target = [
-        x + (cos * forward * forward_rate + sin * strafe * strafe_rate) * dt,
-        y + (sin * forward * forward_rate - cos * strafe * strafe_rate) * dt,
-    ];
-    if let Err(error) = scroll_to(objects, target) {
-        view.last_error = Some(error);
     }
 }
 

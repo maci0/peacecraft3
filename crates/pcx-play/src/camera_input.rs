@@ -97,8 +97,9 @@ const DISCOVERY: DiscoveryBudget = DiscoveryBudget {
 };
 
 /// Which camera pose a rotation state holds: the base state, Insert held, Delete held.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Swing {
+    #[default]
     Normal,
     Insert,
     Delete,
@@ -115,7 +116,7 @@ impl Swing {
 }
 
 /// Zoom level and rotation state, the two selectors of the camera table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct View {
     pub level: usize,
     pub swing: Swing,
@@ -233,6 +234,43 @@ impl CameraInputRules {
             scroll: decoded.scroll,
             fallback,
         })
+    }
+
+    /// Rules shaped like the reviewed client's six levels and three rotation states, for
+    /// tests that never read an image.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn fixture() -> Self {
+        let mut rotation = vec![90.0; 6];
+        rotation.extend([20.0; 6]);
+        rotation.extend([160.0; 6]);
+        Self {
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
+            image_sha256: [0; 32],
+            distance: vec![1650.0, 1600.0, 1500.0, 1400.0, 1275.0, 1200.0],
+            angle_of_attack: vec![304.0, 311.0, 318.0, 325.0, 332.0, 335.0],
+            rotation,
+            top_level: 5,
+            zoom_ease: 1.0,
+            rotation_ease: 0.5,
+            wheel_unit: 120,
+            repeat_window: 1.0,
+            scroll: ScrollRule {
+                slider_max: 100,
+                divisor: 100.0,
+                ceiling: 1.0,
+                offset: 0.5,
+                default: 1.0,
+            },
+            fallback: ScrollOptions {
+                mouse: 50,
+                key: 50,
+                mouse_disable: 0,
+            },
+        }
     }
 
     /// Number of zoom levels.

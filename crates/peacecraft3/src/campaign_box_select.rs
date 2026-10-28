@@ -118,7 +118,11 @@ pub(crate) fn load_parameters(
 
 /// Everything that must let a press reach the session. The press position is the
 /// cursor, which must lie in the scene viewport.
-fn pointer_open(picking: &Picking, hud: &crate::campaign_hud::CampaignHud, pressed: bool) -> bool {
+pub(crate) fn pointer_open(
+    picking: &Picking,
+    hud: &crate::campaign_hud::CampaignHud,
+    pressed: bool,
+) -> bool {
     picking.game_input.open()
         && !(pressed && (hud.pointer_consumed || picking.inventory.pointer_consumed))
 }

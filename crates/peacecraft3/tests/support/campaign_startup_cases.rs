@@ -1947,6 +1947,9 @@ mod unit_range_cases;
 #[path = "box_select_cases.rs"]
 pub(crate) mod box_select_cases;
 
+#[path = "camera_input_cases.rs"]
+pub(crate) mod camera_input_cases;
+
 #[cfg(feature = "test-fixtures")]
 #[test]
 fn campaign_ai_nested_pause_native_preserves_session_timers_and_resume_deadline() {

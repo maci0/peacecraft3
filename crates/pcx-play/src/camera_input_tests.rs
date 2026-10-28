@@ -320,6 +320,30 @@ fn rules() -> CameraInputRules {
 }
 
 #[test]
+fn the_test_fixture_matches_the_decoded_original_shaped_image() {
+    let (fixture, decoded) = (CameraInputRules::fixture(), rules());
+    assert_eq!(fixture.distance, decoded.distance);
+    assert_eq!(fixture.angle_of_attack, decoded.angle_of_attack);
+    assert_eq!(fixture.rotation, decoded.rotation);
+    assert_eq!(fixture.top_level, decoded.top_level);
+    assert_eq!(
+        (
+            fixture.zoom_ease,
+            fixture.rotation_ease,
+            fixture.wheel_unit,
+            fixture.repeat_window
+        ),
+        (
+            decoded.zoom_ease,
+            decoded.rotation_ease,
+            decoded.wheel_unit,
+            decoded.repeat_window
+        )
+    );
+    assert_eq!(fixture.scroll, decoded.scroll);
+}
+
+#[test]
 fn instruction_operands_supply_every_table_and_constant() {
     let o = Operands {
         distance: [11.0, 12.0, 13.0, 14.0, 15.0, 16.0],

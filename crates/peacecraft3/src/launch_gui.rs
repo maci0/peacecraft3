@@ -420,6 +420,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_input::install(&mut app);
     crate::campaign_box_select::install(&mut app);
     crate::campaign_game_input::install(&mut app);
+    crate::campaign_camera_input::install(&mut app);
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
     crate::campaign_escape_menu::install(&mut app);
@@ -1469,7 +1470,7 @@ fn asset_revision() -> u32 {
 /// The art and frame caches are cleared here; the logo and the 3D scene rebuild
 /// themselves because their own systems re-run once their entity and resource are
 /// gone, which is why this only marks them stale rather than reconstructing them.
-/// Nothing restarts the app: the F8 overlay, the settings, the input state and the
+/// Nothing restarts the app: the FPS overlay, the settings, the input state and the
 /// Edition selection are all untouched.
 /// The current asset-store generation, refreshed from the platform once a frame.
 ///
