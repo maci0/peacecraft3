@@ -35,6 +35,8 @@ mod campaign_visibility;
 mod internal_resolution;
 use peacecraft3::fdf;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+mod campaign_audio_probe;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod campaign_human_route;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod campaign_mission_objectives;
