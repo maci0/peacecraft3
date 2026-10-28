@@ -168,6 +168,8 @@ struct Model {
     camera: Entity,
     /// Sequence name and its interval, in model order.
     sequences: Vec<(String, [u32; 2])>,
+    /// What spawning the model created, released when the session ends.
+    handles: campaign_score_model::ScoreSceneHandles,
 }
 
 #[derive(Resource, Default)]
@@ -338,6 +340,12 @@ fn load(
         if let Some(model) = cursor.model.take() {
             commands.entity(model.root).try_despawn();
             commands.entity(model.camera).try_despawn();
+            campaign_score_model::release_handles(
+                &model.handles,
+                &mut stores.meshes,
+                &mut stores.materials,
+                &mut stores.images,
+            );
         }
         *cursor = CampaignCursor {
             witness: witness.clone(),
@@ -437,11 +445,14 @@ fn load(
         vec![plan],
         CURSOR_LAYER,
     );
-    if let Err(error) = spawned {
-        commands.entity(root).try_despawn();
-        cursor.last_error = Some(error);
-        return;
-    }
+    let handles = match spawned {
+        Ok(handles) => handles,
+        Err(error) => {
+            commands.entity(root).try_despawn();
+            cursor.last_error = Some(error);
+            return;
+        }
+    };
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -469,6 +480,7 @@ fn load(
         root,
         camera,
         sequences,
+        handles,
     });
 }
 

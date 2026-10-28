@@ -202,6 +202,7 @@ fn present_world(active: bool, position: Option<Vec2>) -> (World, Entity, Entity
             root,
             camera,
             sequences: Vec::new(),
+            handles: default(),
         }),
         position,
         ..default()
