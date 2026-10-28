@@ -19,8 +19,8 @@ pub(super) struct Layout {
 impl Layout {
     pub(super) fn read(image: &[u8], identity: AssetIdentity) -> Result<Self, String> {
         let rules = group_panel_layout::Rules::reviewed_legacy(image, identity.clone())?;
-        let info = pcx_play::inventory_layout::Rules::reviewed_legacy(image, identity)?
-            .info_panel();
+        let info =
+            pcx_play::inventory_layout::Rules::reviewed_legacy(image, identity)?.info_panel();
         if rules.highlight_blend != ADDITIVE_BLEND_MODE {
             return Err("group panel highlight blend mode is not the additive value".into());
         }
@@ -120,11 +120,7 @@ fn view(objects: &ObjectHost, capacity: usize) -> Result<Vec<(Cell, [f32; 2])>, 
         return Ok(Vec::new());
     }
     let mut cells = Vec::new();
-    for (unit, highlighted) in order(
-        &objects.subgroups()?,
-        objects.active_subgroup()?,
-        capacity,
-    ) {
+    for (unit, highlighted) in order(&objects.subgroups()?, objects.active_subgroup()?, capacity) {
         let record = objects.executed_unit(unit).map_err(|e| e.to_string())?;
         let vitals = record
             .vitals
@@ -166,15 +162,24 @@ fn tinted(image: &Image, argb: u32) -> Result<Image, String> {
         .data
         .as_mut()
         .ok_or("group panel highlight has no pixel data")?;
-    if data.len() % 4 != 0 {
+    let (pixels, rest) = data.as_chunks_mut::<4>();
+    if !rest.is_empty() {
         return Err("group panel highlight is not RGBA8".into());
     }
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in pixels {
         for (channel, tint) in pixel.iter_mut().zip([r, g, b]) {
             *channel = (u16::from(*channel) * u16::from(tint) / 255) as u8;
         }
     }
     Ok(tinted)
+}
+
+/// The session state a frame of [`sync`] reads.
+pub(super) struct Live<'a> {
+    pub(super) objects: &'a ObjectHost,
+    pub(super) witness: &'a Weak<()>,
+    /// The scene camera is active, so the interface is shown.
+    pub(super) active: bool,
 }
 
 /// Mounts the group buttons under the console parent and follows the units' live vitals.
@@ -185,10 +190,13 @@ pub(super) fn sync(
     card: &mut CommandCard,
     source: &mut super::Source,
     reader: &pcx_assets::Resolver,
-    objects: &ObjectHost,
-    witness: &Weak<()>,
-    active: bool,
+    live: Live<'_>,
 ) -> Result<(), String> {
+    let Live {
+        objects,
+        witness,
+        active,
+    } = live;
     let Some(parent) = card.parent else {
         return Ok(());
     };
@@ -320,9 +328,7 @@ pub(super) fn sync(
                 .mana_bar(info, index)
                 .map(|bar| (bar, &bars.mana, &fill_art[1], live[1]))
         });
-        for (bar, style, texture, value) in
-            std::iter::once(health).chain(mana.transpose()?.into_iter())
-        {
+        for (bar, style, texture, value) in std::iter::once(health).chain(mana.transpose()?) {
             let outset = Rect {
                 x: bar.x - bars.inset,
                 y: bar.y - bars.inset,
@@ -357,7 +363,9 @@ pub(super) fn sync(
         }
         let mut bar_fills = bar_fills.into_iter();
         group.fills.push(Fills {
-            health: bar_fills.next().ok_or("group panel health bar is missing")?,
+            health: bar_fills
+                .next()
+                .ok_or("group panel health bar is missing")?,
             mana: bar_fills.next(),
         });
     }
@@ -458,8 +466,10 @@ mod tests {
 
     #[test]
     fn highlight_tint_multiplies_colour_and_keeps_alpha() {
-        let mut image = Image::default();
-        image.data = Some(vec![200, 100, 50, 77]);
+        let mut image = Image {
+            data: Some(vec![200, 100, 50, 77]),
+            ..Image::default()
+        };
         let tinted_image = tinted(&image, 0xff80_ff00).unwrap();
         assert_eq!(tinted_image.data.unwrap(), [100, 100, 0, 77]);
         image.data = Some(vec![1, 2, 3]);
@@ -577,14 +587,12 @@ mod tests {
         println!("subgroups {groups:?}\nbefore {before:?}\nafter {after:?}");
         assert_eq!(after.len(), before.len());
         if groups.len() > 1 {
-            assert_ne!(after, before, "Tab moves the highlight to the next subgroup");
+            assert_ne!(
+                after, before,
+                "Tab moves the highlight to the next subgroup"
+            );
         }
-        assert!(
-            app.world()
-                .resource::<CommandCard>()
-                .last_error
-                .is_none()
-        );
+        assert!(app.world().resource::<CommandCard>().last_error.is_none());
     }
 
     #[test]

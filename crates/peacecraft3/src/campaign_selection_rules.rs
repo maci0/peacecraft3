@@ -196,9 +196,8 @@ mod tests {
 
     /// Runs a group-button click on the synthetic session, as the panel's system would.
     fn group_click(rig: &mut Rig, unit: HandleId, modifiers: Modifiers) {
-        rig.app
-            .world_mut()
-            .resource_scope(|world, mut session: Mut<MapScriptSession<MapStartupHost>>| {
+        rig.app.world_mut().resource_scope(
+            |world, mut session: Mut<MapScriptSession<MapStartupHost>>| {
                 let mut input = world.resource_mut::<CampaignInput>();
                 click_group_button(
                     session.host().unwrap().objects_mut(),
@@ -208,7 +207,8 @@ mod tests {
                     Some(12),
                 )
                 .unwrap();
-            });
+            },
+        );
     }
 
     #[test]
@@ -333,11 +333,25 @@ mod tests {
         assert_eq!(rig.selection(), [foot2]);
         // Shift removes the unit.
         rig.select(&[peon, foot, foot2]);
-        group_click(&mut rig, foot, Modifiers { shift: true, ctrl: false });
+        group_click(
+            &mut rig,
+            foot,
+            Modifiers {
+                shift: true,
+                ctrl: false,
+            },
+        );
         assert_eq!(rig.selection(), [peon, foot2]);
         // Ctrl takes the unit's subgroup out of the selection.
         rig.select(&[peon, foot, foot2]);
-        group_click(&mut rig, foot2, Modifiers { shift: false, ctrl: true });
+        group_click(
+            &mut rig,
+            foot2,
+            Modifiers {
+                shift: false,
+                ctrl: true,
+            },
+        );
         assert_eq!(rig.selection(), [foot, foot2]);
     }
 }

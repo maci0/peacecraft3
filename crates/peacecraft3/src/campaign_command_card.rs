@@ -1464,9 +1464,11 @@ fn project(
         &mut card,
         &mut source,
         &reader,
-        host.objects(),
-        &witness,
-        inputs.camera.active(),
+        group_panel::Live {
+            objects: host.objects(),
+            witness: &witness,
+            active: inputs.camera.active(),
+        },
     )
     .err();
     card.source = Some(source);

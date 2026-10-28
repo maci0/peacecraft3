@@ -61,7 +61,7 @@ impl ObjectHost {
         }
         Some(
             self.active_subgroup
-                .and_then(|kind| groups.iter().position(|g| g.kind == kind))
+                .and_then(|unit| groups.iter().position(|g| g.units.contains(&unit)))
                 .unwrap_or(0),
         )
     }
@@ -82,7 +82,8 @@ impl ObjectHost {
             return Ok(());
         };
         if groups.len() > 1 {
-            self.active_subgroup = Some(groups[cycle(groups.len(), active, forward)].kind);
+            let next = &groups[cycle(groups.len(), active, forward)];
+            self.active_subgroup = next.units.first().copied();
         }
         Ok(())
     }
@@ -90,13 +91,11 @@ impl ObjectHost {
     /// Makes the subgroup holding `unit` active. `false` when `unit` is not selected.
     pub fn activate_subgroup_of(&mut self, unit: HandleId) -> Result<bool, String> {
         let groups = self.subgroups()?;
-        match groups.iter().find(|g| g.units.contains(&unit)) {
-            Some(found) => {
-                self.active_subgroup = Some(found.kind);
-                Ok(true)
-            }
-            None => Ok(false),
+        let selected = groups.iter().any(|g| g.units.contains(&unit));
+        if selected {
+            self.active_subgroup = Some(unit);
         }
+        Ok(selected)
     }
 
     /// The selected units of `unit`'s subgroup, selection order. Empty when `unit` is not selected.

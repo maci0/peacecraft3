@@ -45,9 +45,9 @@
   12 units the original keeps past the cap, rules for several other-player
   units and Shift mixes, hero/`prio` order, unit selectability flag,
   `EnableDragSelect`/`EnableSelect` natives, live preselect circles during the
-  drag, outline width at other resolutions, native pick geometry (the
-  recreation tests projected selection circles) and the multi-unit group HUD
-  (the unit panel and command card still read a single selection).
+  drag, outline width at other resolutions and native pick geometry (the
+  recreation tests projected selection circles). The multi-unit group HUD is in
+  [selection rules](docs/re-notes/input-selection-rules.md).
 
 - [x] Release 0.6.0: Human01 and Human02 earned Victory verified at pinned
   gameplay snapshots; construction controls, campaign AI, Mirror Image,
@@ -5680,3 +5680,23 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   with warnings denied. The simulation budget check passed with the previous Human03 allocation
   and allocated-byte counts. Human03, Human04 and Human05 route runs were not repeated because
   production placement remains disconnected.
+
+### 2026-10-28: Selection rules (input slice 7)
+
+- [~] Several selected units now have subgroups and a group panel: the portrait, command
+  card, inventory and build menu follow the active subgroup (heroes first, then `prio`);
+  Tab and Shift+Tab cycle it and wrap; Shift+click toggles a unit (a building replaces the
+  units); Ctrl+click takes the same-type own units on screen; the cap of 12 comes from the
+  client image. The 6 by 2 group button grid, its sizes, anchors and highlight are decoded
+  from the client, not an FDF. A plain group-button click selects the unit only inside the
+  active subgroup and otherwise switches subgroup (static read of `0x5fc020`). Evidence,
+  recreation choices and open measurements: [selection rules](docs/re-notes/input-selection-rules.md).
+- [ ] Open: F1 to F5 hero keys (key to index decoded, hero array order not), live checks of
+  the group-button click and of three or more subgroups, whether the unit detail text hides
+  with several units, panel cell order, orders limited to the active subgroup, the
+  `GroupButtonBorder`/`CommandButtonHeroGlow` art, a rendered comparison.
+- Checks: `pcx-play` lib 2,259 passed (87 ignored); `peacecraft3` bins 835 passed (98 ignored)
+  and its other targets pass, all with `test-fixtures`; native all-target Clippy for both
+  crates and WASM Clippy for `pcx-play` and `peacecraft3` with warnings denied; the ignored
+  Human01 group-panel mount test and the decoder test against the selected client pass. The
+  WASM all-target app build already fails at baseline in tests that use `native_campaign`.

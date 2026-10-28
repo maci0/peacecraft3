@@ -10,7 +10,8 @@ pub struct ObjectHost {
     fog_modifiers: bool,
     shared_vision: Option<vision::VisionSlot>,
     selection: Option<Vec<HandleId>>,
-    active_subgroup: Option<[u8; 4]>,
+    /// A unit of the subgroup the player last chose; see `subgroups` in `selection_subgroup_host.rs`.
+    active_subgroup: Option<HandleId>,
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
     dialogs: Option<dialogs::DialogState>,

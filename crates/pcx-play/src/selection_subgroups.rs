@@ -23,12 +23,15 @@ pub struct Subgroup {
 }
 
 /// Splits `members` (selection order) into subgroups, highest first: heroes, then descending
-/// priority, then ascending type rawcode as a big-endian number. Ordering of the same type
-/// is selection order.
+/// priority, then ascending type rawcode as a big-endian number. Units of one type share a
+/// subgroup in selection order, except heroes: each hero is a subgroup of its own.
 pub fn group(members: &[Member]) -> Vec<Subgroup> {
     let mut ranked: Vec<(Member, Vec<HandleId>)> = Vec::new();
     for member in members {
-        match ranked.iter_mut().find(|(first, _)| first.kind == member.kind) {
+        let shared = ranked
+            .iter_mut()
+            .find(|(first, _)| !member.hero && !first.hero && first.kind == member.kind);
+        match shared {
             Some((_, units)) => units.push(member.id),
             None => ranked.push((*member, vec![member.id])),
         }
@@ -111,6 +114,20 @@ mod tests {
     fn equal_priority_orders_by_rawcode_not_by_selection_order() {
         let groups = group(&[member(0, b"hrif", false, 6), member(1, b"hfoo", false, 6)]);
         assert_eq!(groups[0].kind, *b"hfoo");
+    }
+
+    #[test]
+    fn every_hero_is_its_own_subgroup() {
+        let groups = group(&[
+            member(0, b"Hpal", true, 9),
+            member(1, b"hfoo", false, 6),
+            member(2, b"Hpal", true, 9),
+            member(3, b"hfoo", false, 6),
+        ]);
+        let sizes: Vec<_> = groups.iter().map(|g| (g.kind, g.units.len())).collect();
+        assert_eq!(sizes, [(*b"Hpal", 1), (*b"Hpal", 1), (*b"hfoo", 2)]);
+        assert_eq!(groups[0].units, [handle(0)]);
+        assert_eq!(groups[1].units, [handle(2)]);
     }
 
     #[test]

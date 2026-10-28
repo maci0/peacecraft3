@@ -107,9 +107,10 @@ original. This note records where each rule comes from. Evidence classes:
 ## Interactions left alone
 
 - Ctrl groups are untouched (`CNetCommandUnitDefineControlGroup` paths are not used).
-- The command card, unit panel and portrait read `selection().first()` or a single
-  selection. The multi-unit group HUD is not implemented, so a multi-unit selection
-  shows an empty panel (tracked in `TRACKER.md`).
+- The portrait, command card, inventory and build menu follow the active subgroup of a
+  multi-unit selection, and the group panel shows the selected units; see
+  [selection rules](input-selection-rules.md). Shift on a click now toggles the unit; Shift
+  with a rectangle still only adds.
 
 ## Verification
 
