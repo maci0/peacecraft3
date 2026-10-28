@@ -115,6 +115,16 @@ pub fn exclude_unit(
 
 #[cfg(feature = "test-fixtures")]
 impl crate::playercolor_host::ObjectHost {
+    /// Return the buff identities retained for a diagnostic unit.
+    pub fn diagnostic_ai_buffs(&self, unit: HandleId) -> Result<Vec<[u8; 4]>, ExclusionError> {
+        self.unit_buffs(unit)
+            .map(|buffs| buffs.into_iter().map(|buff| buff.rawcode()).collect())
+            .map_err(|_| ExclusionError::Unavailable {
+                unit,
+                source_name: "active buffs",
+            })
+    }
+
     /// Evaluate exclusion using live state, refusing where movement evidence is absent.
     pub fn diagnostic_ai_exclusion(
         &self,

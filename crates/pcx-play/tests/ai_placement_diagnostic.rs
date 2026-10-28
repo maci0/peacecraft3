@@ -411,6 +411,15 @@ fn human05_placement_diagnostic() {
             }
             println!("farm recreated worker positions {actual:?}");
         }
+        for &handle in &workers {
+            let record = objects.executed_unit(handle).unwrap();
+            let buffs = objects.diagnostic_ai_buffs(handle).unwrap();
+            println!(
+                "fixture blocked={blocked} unit={handle:?} paused={} sleeping={} buffs={buffs:?}",
+                record.paused_since.is_some(),
+                record.is_sleeping(),
+            );
+        }
         let worker_point = objects.executed_unit(worker).unwrap().position.unwrap();
         println!("probe-sampled first worker {worker_point:?}, collision radius {worker_radius}");
         let mut origins = vec![

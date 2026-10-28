@@ -5405,3 +5405,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   events and positional attenuation), `CreateMIDISound` ambients, 3D and EAX script
   sounds, `Pissed`/`Ready`/error/alert voices, the other music natives, fades. Findings
   table and evidence classes: [campaign audio](docs/re-notes/campaign-audio.md).
+
+### 2026-10-28: Placement pause and buff observations
+
+- [~] Classified the selected map's explicit pause calls, the neutral `ACen` source and the
+  `Bprg` and `Bchd` table identities in [AI construction](docs/re-notes/ai-construction.md).
+  The local fixture now reports each worker's retained buffs, pause and sleep state; all four
+  are unpaused, awake and buff-free in both layouts. The original route log does not supply
+  per-handle pause or buff history.
+- [ ] The remaining counter writers and original order-time history are unqualified. The
+  local-input comparison still refuses at baseline dequeue 1 and farm dequeue 5, with native
+  reach bypassed. Production placement, reach tables, town selection and the victory path remain
+  unverified. No campaign route was rerun.
+- Gate: the new synthetic buff-query test passed; headless `cargo test -p pcx-play --lib`
+  passed 2187 tests with 84 ignored. Native and WASM Clippy passed with `-D warnings`, and
+  the locked, offline simulation budget check passed with unchanged allocation counts.

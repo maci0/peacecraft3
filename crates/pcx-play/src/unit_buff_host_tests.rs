@@ -25,6 +25,18 @@ fn negative(rawcode: [u8; 4]) -> ActiveBuff {
     )
 }
 
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn placement_diagnostic_reports_live_buff_ids() {
+    let (mut vm, a, _) = open_clocked(&armed("64", "normal"), rules());
+    let h = &mut vm.host().inner;
+    assert!(h.diagnostic_ai_buffs(a).unwrap().is_empty());
+    h.attach_unit_buff(a, negative(*b"Bxyz")).unwrap();
+    assert_eq!(h.diagnostic_ai_buffs(a).unwrap(), vec![*b"Bxyz"]);
+    assert!(h.detach_unit_buff(a, *b"Bxyz"));
+    assert!(h.diagnostic_ai_buffs(a).unwrap().is_empty());
+}
+
 #[test]
 fn unit_remove_buffs_maps_bool_arguments_to_polarity() {
     let (mut vm, a, b) = open_clocked(&armed("64", "normal"), rules());

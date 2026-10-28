@@ -143,6 +143,8 @@ details in [AI construction](ai-construction.md).
 - The placement exclusion diagnostic still refuses the orange acolyte before selecting either
   oracle site. Unit-wide ability-disable counts and effect writers are not yet reconstructed;
   the separate diagnostic reach check is bypassed and does not validate native reach behavior.
+  Its directly created fixture workers are unpaused, awake and have no retained buffs; the
+  recorded Human05 route does not include per-handle pause or buff history.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

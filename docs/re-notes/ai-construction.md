@@ -833,6 +833,37 @@ out an effect from another unit or a unit-wide engine transition. Consequently n
 script search nor the absence of a recreation buff proves zero for every writer at the order
 instant. The previously captured zero values remain observations for the sampled native unit only.
 
+### Probe pause and effect inputs, 2026-10-28
+
+The map script's only direct pause-all call is in ending cinematic C; its three direct
+single-unit pause wrappers resume the named heroes, not the acolytes. The selected Blizzard
+helper enumerates player units for the pause-all call, while cinematic mode itself does not
+call that helper. Ending C is reached from ending cinematic A, which has several sequential
+authored waits before the call. The ending can also start from structure-death triggers, so
+the survival timer alone does not prove that the ending path is unreachable. The orange AI,
+campaign common AI and probe helper have no explicit `PauseUnit` call. The Human05 route logs
+do not record per-handle pause calls; absence of such a line is not a pause history.
+
+The selected `ACen` record uses the `Aens` Ensnare class, lists a target filter and a
+500-unit cast range, and has no area value. The map creates two `nmrr` units with that
+ability. Their creation points are about 9,032 and 9,335 units from the nearest sampled farm
+worker. These are initial separations, not proof of their later positions or of the absence of
+an order. The `Bprg` buff is associated with Purge in the selected tables. The `Bchd` buff's
+table label is CargoHoldDeath; its native constructor installs a subclass of the `Bprg` class
+(`0xb9f5e0`, `0xb9fd30`). The label does not by itself establish every transition that can
+create it. A literal-unit scan of this map script found no unit with the two selected stock
+transport rows carrying `Achd` and `Aloa`; this is not a proof about dynamic or modified units.
+
+The local comparison creates four recreation acolytes directly, then places them at sampled
+positions. Its new fixture-only query reads the retained buff host and reports pause, sleep and
+buff identities for each worker. In both layouts all four report unpaused, awake and no
+retained buffs. This establishes their current recreation state, not a complete original-client
+event history or absence of unmodelled effects. The known pause and active-buff checks continue
+to refuse when active; the remaining generic writer and unit-wide count paths still prevent a
+zero-counter conclusion. The qualified scan still refuses handle 4612 at (6208, 2752), dequeue
+1, without the farm and at (6272, 2752), dequeue 5, with it. Native reach is bypassed in that
+scan; neither site is a successful oracle comparison.
+
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open
 cell it climbs through open parents before resolving or creating the search node. The edge
