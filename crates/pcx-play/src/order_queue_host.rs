@@ -61,9 +61,7 @@ impl ObjectHost {
         if self.order_queue.is_some() || budget.units == 0 || budget.orders_per_unit == 0 {
             return Err(self.inner.error(
                 "QueueOrder",
-                super::Failure::UnitActivity(
-                    "admit order queues once with positive bounds".into(),
-                ),
+                super::Failure::UnitActivity("admit order queues once with positive bounds".into()),
             ));
         }
         self.order_queue = Some(State {
@@ -178,7 +176,11 @@ impl ObjectHost {
                 ),
             };
             if gone {
-                self.order_queue.as_mut().expect("admitted").queues.remove(&unit);
+                self.order_queue
+                    .as_mut()
+                    .expect("admitted")
+                    .queues
+                    .remove(&unit);
             }
             if gone || paused {
                 continue;

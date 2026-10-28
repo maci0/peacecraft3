@@ -664,11 +664,20 @@ impl ObjectHost {
             .executed_unit(target)
             .is_ok_and(|record| record.resource_amount.is_some())
         {
-            return Ok((rules.gold_capacity > 0 && self.gold_mine(target)?.is_some())
-                .then_some(SmartHarvest::GoldMine));
+            return Ok(
+                (rules.gold_capacity > 0 && self.gold_mine(target)?.is_some())
+                    .then_some(SmartHarvest::GoldMine),
+            );
         }
-        Ok((rules.lumber_capacity > 0 && self.explicit_tree_is_harvestable(target)?)
-            .then_some(SmartHarvest::Tree))
+        Ok(
+            (rules.lumber_capacity > 0 && self.explicit_tree_is_harvestable(target)?)
+                .then_some(SmartHarvest::Tree),
+        )
+    }
+
+    /// Whether the destructable is a living, shown tree, whoever would harvest it.
+    pub(crate) fn smart_is_tree(&self, target: HandleId) -> Result<bool, Error> {
+        self.explicit_tree_is_harvestable(target)
     }
 
     /// Whether `depot` takes what `worker` carries, so a smart order on it returns the cargo.
@@ -685,7 +694,12 @@ impl ObjectHost {
             .workers
             .iter()
             .find(|task| task.unit == worker)
-            .map(|task| (task.carrying >= 1.0, task.gold.as_ref().is_some_and(|g| g.carrying > 0)))
+            .map(|task| {
+                (
+                    task.carrying >= 1.0,
+                    task.gold.as_ref().is_some_and(|g| g.carrying > 0),
+                )
+            })
             .or_else(|| {
                 state.cargo.get(&worker).map(|cargo| {
                     (
