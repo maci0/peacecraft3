@@ -5229,3 +5229,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the local-input
   diagnostic and synthetic probe parser tests passed, native and WASM Clippy passed with
   `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed without raised budgets.
+
+### 2026-10-28: Controlled AI placement origins
+
+- [~] Four isolated original-client runs vary worker spawn, orange start or mine position one
+  at a time. The near-mine worker run selects a site outside a grid centered on the assigned
+  start; native initialization confirms that the grid is centered on the town coordinate.
+  Changing the mine's creation coordinate yields no observed opening structure through 28 s. Recorded sites,
+  order-time workers and exhaustive diagnostic traversal ranks: [AI construction](docs/re-notes/ai-construction.md).
+- [~] Mine-centered and worker-centered town hypotheses remain unresolved. The native
+  hierarchical reach check, dynamic occupancy and temporary rectangle inputs are not yet
+  implemented, so neither hypothesis reproduces all observations in the recreation.
+- [ ] Production remains disconnected, with the last reproducible Human05 pair at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the local-input
+  diagnostic and synthetic parser tests passed, native and WASM Clippy passed with
+  `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed without raised budgets.

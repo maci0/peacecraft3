@@ -40,6 +40,30 @@ fn probe_order_worker(log: &str, kind: [u8; 4], owner: i32) -> [f32; 2] {
     probe_point(event.split_once("/point").expect("probe point order").0)
 }
 
+fn probe_order_site(log: &str, kind: [u8; 4], owner: i32) -> Option<[f32; 2]> {
+    let marker = format!("/id{}/p{owner}@", i32::from_be_bytes(kind));
+    let event = log.split_once(&marker)?.1;
+    let point = event.split_once("/point")?.1.split_once("/target")?.0;
+    Some(probe_point(point))
+}
+
+fn probe_start(log: &str) -> Option<[f32; 2]> {
+    let start = log.split_once("start index=")?.1;
+    let point = start.split_once('@')?.1;
+    Some(probe_point(point.split_once('"')?.0))
+}
+
+fn sample_index(path: &std::path::Path) -> Option<usize> {
+    if path.extension()? != "txt" {
+        return None;
+    }
+    path.file_stem()?
+        .to_str()?
+        .strip_prefix("PCXO-")?
+        .parse()
+        .ok()
+}
+
 fn probe_sample_workers(log: &str) -> Vec<[f32; 2]> {
     log.split(" A:")
         .skip(1)
@@ -69,6 +93,84 @@ fn order_and_sample_inputs_read_the_observed_worker_coordinates() {
         probe_sample_workers("acolytes A:12.5,-3/o42 A:9,8/o0"),
         [[12.5, -3.], [9., 8.]]
     );
+    assert_eq!(
+        probe_order_site(
+            " E:t2/id1094861636/p7@12.5,-3/point4,5/targetnone",
+            *b"ABCD",
+            7
+        ),
+        Some([4., 5.])
+    );
+    assert_eq!(probe_start("start index=9@14,-8\""), Some([14., -8.]));
+    assert_eq!(sample_index(std::path::Path::new("PCXO-11.txt")), Some(11));
+    assert_eq!(sample_index(std::path::Path::new("other.txt")), None);
+}
+
+fn variant_ranks(
+    root: &std::path::Path,
+    rules: &Rules,
+    bounds: [[f32; 2]; 2],
+    dims: [u32; 2],
+    quarter: u8,
+    mine: [f32; 2],
+    baseline_start: [f32; 2],
+) {
+    let mut paths: Vec<_> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect();
+    paths.sort();
+    for path in paths {
+        let data = path.join("run/prefix/drive_c/users/wine/Documents/Warcraft III/CustomMapData");
+        if !data.is_dir() {
+            continue;
+        }
+        let mut samples: Vec<_> = std::fs::read_dir(data)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                Some((sample_index(&path)?, path))
+            })
+            .collect();
+        samples.sort();
+        let log = samples
+            .into_iter()
+            .map(|(_, path)| std::fs::read_to_string(path).unwrap())
+            .find(|log| probe_order_site(log, *b"unpl", 5).is_some());
+        let Some(log) = log else {
+            println!("variant={} no_necropolis_order", path.display());
+            continue;
+        };
+        let site = probe_order_site(&log, *b"unpl", 5).unwrap();
+        let worker = probe_order_worker(&log, *b"unpl", 5);
+        let start = probe_start(&log).unwrap_or_else(|| {
+            assert_eq!(path.file_name().unwrap(), "baseline");
+            baseline_start
+        });
+        for (name, origin) in [("mine", mine), ("start", start), ("worker", worker)] {
+            let grid = Grid::sample(rules, origin, |_| Ok((0, false))).unwrap();
+            let mut rank = 0_usize;
+            let mut found = None;
+            grid.search(
+                |point| {
+                    rank += 1;
+                    let point = rules.snap(point, bounds, dims, quarter)?;
+                    if point == site && found.is_none() && grid.diagnostic_cell(point).is_some() {
+                        found = Some(rank);
+                    }
+                    Ok((point, grid.diagnostic_indices(point)))
+                },
+                |_| Ok(true),
+                |_| Ok(false),
+            )
+            .unwrap();
+            println!(
+                "variant={} site={site:?} worker={worker:?} start={start:?} origin={name} bfs_rank={found:?}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]
@@ -208,6 +310,19 @@ fn human05_placement_diagnostic() {
     let quarter = (facing / 90.).rem_euclid(4.) as u8;
     assert_eq!(text(&necropolis, "preventPlace"), "unbuildable");
     assert!(matches!(text(&necropolis, "requirePlace"), "_" | "" | "-"));
+
+    if let Ok(root) = std::env::var("PCX_HUMAN05_VARIANTS") {
+        let bounds = objects.diagnostic_placement().unwrap().world_bounds();
+        variant_ranks(
+            std::path::Path::new(&root),
+            &rules,
+            bounds,
+            dims,
+            quarter,
+            mine,
+            start_point,
+        );
+    }
 
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
         if blocked {

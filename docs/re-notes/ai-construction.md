@@ -296,6 +296,48 @@ acolyte at (5488, 2736), targeting the player 15 gold mine at (5696, 3456). The 
 for the first two ziggurats target (5664, 2912) and (5472, 2592). These API observations do
 not expose the worker's native town association or either temporary pathing rectangle.
 
+### Controlled origin experiments
+
+Four additional network-isolated, muted reference runs copied the order-event probe. Each
+changes one scenario input: the four acolytes' spawn location, the orange player's start
+coordinate, or the original mine's creation position. Each still issues the same rally order,
+records point-order events and samples once per game second. The per-run maps, preparation
+receipts, input modifications and samples remain under `.scratch/ai-placement/origin-experiments/`.
+The event instrumentation is common to the runs, but moving objects can change their subsequent
+movement, occupancy, unit ordering or random state; the experiments do not isolate those effects.
+
+| Scenario | Orange start | First `unpl` order time | Builder at order | Site | Mine / start / worker BFS rank |
+| --- | --- | --- | --- | --- | --- |
+| Baseline | (7488, 2752) | 8.211 s | (5467.445, 2808.107) | (6208, 2752) | 1760 / 5930 / 2076 |
+| Four workers spawned at orange start | (7488, 2752) | 10.211 s | (5465.512, 2815.238) | (6336, 2752) | 1846 / 4762 / 2814 |
+| Four workers spawned near mine | (7488, 2752) | 2.211 s | (5455.982, 2828.664) | (5248, 2944) | 872 / outside / 85 |
+| Orange start changed | (6208, 2880) | 8.211 s | (5467.445, 2808.107) | (6208, 2752) | 1760 / 34 / 2076 |
+| Mine creation requested at (1792, 3456) | (7488, 2752) | no event recorded through 28 s | no builder order recorded | no structure through 28 s | not applicable |
+
+Ranks are one-based dequeues in the decoded grid traversal to the first occurrence of the
+snapped observed point. The rank diagnostic reads the executable operands, selected Necropolis
+texture and map bounds, exhausts the traversal, and rejects every candidate so no early result
+distorts ranks. Its terrain scores and reach checks are deliberately not represented; these are
+not ranks of accepted candidates. The event log for the initial simultaneous movement orders
+is truncated, but later mine-moved samples show no structures or build orders. No subsequent
+order event was recorded through 28 s. A separate repeat retained the mine handle for
+observation: the requested (1792, 3456) position resolved to (2176, 2880), with neutral owner 15,
+and that repeat also recorded no build order or structure through 28 s. The blocked-farm probe's 9 s sampled worker produced
+mine / start / worker ranks 3822 / 8667 / 557; its exact order-time worker was not recorded.
+
+The near-mine run's site is outside a grid centered on the assigned start. Native
+`0xac2c9a` through `0xac2cc1` supplies the town coordinates to `0xad4970`, and `0xad3eab`
+through `0xad3ede` initializes the raster origin by subtracting the search margin from those
+coordinates, without shifting the entire grid to the map edge. The subsequent snap
+(`0xad430e` through `0xad4367`, `0x4e00f0`) cannot move a cell from that start-centered grid
+to (5248, 2944). Thus the assigned start coordinate is not the town search center in that run.
+The unchanged result when only the start coordinate changes is consistent with a separately
+associated town, but does not identify it. Mine-centered and worker-centered towns remain
+possible; neither is an implemented explanation for all sites. Changing the mine's creation
+coordinate produced no observed opening build in this window, but does not prove which AI gate or
+town association caused that outcome. The 15-removal reach query and temporary rectangle clearing remain decoded
+only in part; the probes do not establish that the mine is among the cleared rectangles.
+
 ### Local-input search diagnostic
 
 The ignored `ai_placement_diagnostic.rs` test starts the selected Human05 map headlessly,
@@ -311,6 +353,8 @@ not prove native dynamic pathing parity. Set `PCX_STARTUP_INSTALL`, `PCX_STARTUP
 `PCX_HUMAN05_DECISION_LOG` and `PCX_HUMAN05_ORDER_PROBE` to the selected install, Human05 map,
 recorded route log and new probe's `CustomMapData` directory, respectively, and run the ignored
 test with `--features test-fixtures`. The route log was `.scratch/human05/placement-evidence-1.log`.
+Set the optional `PCX_HUMAN05_VARIANTS` to the experiments directory to print the traversal
+ranks in the table above.
 
 The diagnostic now tries four origins: mine; assigned player start; the original-probe worker;
 and the worker at the recreation's 1223 s refusal, read from the saved route log. The
@@ -405,7 +449,9 @@ record. That transition adds one to the search cost instead of the ordinary dist
 path length handles it separately (`0x8a4200`, `0x8a4f70`, `0x8a3130`). A registration path
 allocates an index, writes it across a clipped rectangle, and removes that index on teardown
 (`0x7f6eb0`, `0x7f6d00`, `0x8b66c0`, `0xb2ef00`, `0xb33177`). The lookup checks an active
-bit and a destination in the indexed record (`0x8a4371`, `0x8b73e0`). A nearby native class
+bit and a destination in the indexed record (`0x8a4371`, `0x8b73e0`). The index is stored in
+byte 6 of each covered base cell; an otherwise open child with a nonzero index makes its parent
+mixed, requiring finer search expansion (`0x8b6784`, `0x8b7990`, `0x8a3b50`). A nearby native class
 identifier reports `Awrp`, which the selected ability table calls Warp; associating that class
 with this registration is an inference until its vtable relationship is checked. The
 recreation's movement router is a
@@ -448,7 +494,7 @@ connected, and the Human05 route was not rerun.
 ## Not established
 
 - The Human05 town record's actual mine and hall associations and the route metric used to select
-  among towns; the initial grid's edge normalization and the enumerator's boundary/state behavior;
+  among towns; terrain sampling at grid edges and the enumerator's boundary/state behavior;
   live texture dimension mapping, blight and the shared validator's detailed
   checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
