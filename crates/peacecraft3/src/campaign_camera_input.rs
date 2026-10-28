@@ -71,12 +71,18 @@ pub(crate) struct CameraInput {
     idle: Cycle,
     /// Ground point held by a middle-button drag.
     grab: Option<[f32; 2]>,
+    /// Edge directions the pointer is in this frame (`edge`), for the scroll cursor.
+    pub(crate) edges: u8,
     pub alerts: AlertHistory,
     pub last_error: Option<String>,
 }
 
 #[cfg(test)]
 impl CameraInput {
+    pub(crate) fn with_edges(edges: u8) -> Self {
+        Self { edges, ..default() }
+    }
+
     pub(crate) fn with_rules(rules: CameraInputRules) -> Self {
         Self {
             rules: Some(Ok(rules)),
@@ -356,6 +362,7 @@ fn scroll(
     mut state: ResMut<CameraInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
+    state.edges = 0;
     let (Some(keys), Some(mouse)) = (buttons.keys.as_deref(), buttons.mouse.as_deref()) else {
         return;
     };
@@ -383,6 +390,7 @@ fn scroll(
         Some((at, size)) if edges_on => edge_mask(at.to_array(), size.to_array()),
         _ => 0,
     };
+    state.edges = edges;
     let [up, down, left, right] = directions(keys, edges, key, mouse_speed);
     let (forward, strafe) = (up - down, right - left);
     if !mouse.pressed(MouseButton::Middle) {

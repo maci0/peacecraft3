@@ -1713,7 +1713,9 @@ fn required_texture_images<'a>(
                 .get(id as usize)
                 .ok_or_else(|| fail(Some((id, "")), "absent TEXS record"))?;
             let fail = |reason| fail(Some((id, authored.path.as_str())), reason);
-            if authored.path.is_empty() {
+            // A caller that supplies the pixels of an unnamed texture (a replaceable slot
+            // it fills itself) passes them as an image whose source is empty.
+            if authored.path.is_empty() && !textures.iter().any(|image| image.source.is_empty()) {
                 return Err(fail("empty texture path; no replacement source supplied"));
             }
             if authored.flags & !(pcx_mdl::TEXTURE_WRAP_WIDTH | pcx_mdl::TEXTURE_WRAP_HEIGHT) != 0 {
