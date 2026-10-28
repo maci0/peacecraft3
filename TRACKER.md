@@ -5341,3 +5341,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
   WASM Clippy passed with `-D warnings`. The locked, offline simulation check passed without
   changing budgets. No campaign route was rerun.
+
+### 2026-10-28: Placement movement and player inputs
+
+- [x] The native player-mask test is the unit owner's directed shared-control setting toward
+  the querying player. Native initialization enables that relationship to self; the recreation
+  retains explicit directed assignments but does not yet bind this startup category.
+- [~] Movement-counter constructors, shared disable paths, movement-specific paths and several
+  effect callers are traced in [AI construction](docs/re-notes/ai-construction.md). A bounded
+  farm capture confirms both counters are zero on the exact acolyte whose temporary exclusion
+  is restored. Other effect callers, counter adjustments and the separate visibility branch
+  remain unmapped to live recreation state.
+- [ ] The diagnostic's experimental mobile switch remains unchanged, so its baseline and farm
+  positions are not validation of a derived exclusion rule. Production still refuses; no
+  campaign route was rerun.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
+  WASM Clippy passed with `-D warnings`. The locked, offline simulation check passed with
+  unchanged budgets.

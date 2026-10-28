@@ -695,8 +695,8 @@ is adjusted using two ability or buff lookups, unit flags at `+0x164`, and a uni
 `+0x15c` before acceptance. The recreation has ownership, source definitions, activity,
 pause and some buff state, but no established mapping from those fields to both native
 counters and all of their adjustments. In particular, an absent recreation pause is not proof
-that those native counters are zero. The exact directed player-mask category also needs a
-source-backed mapping to the recreation's alliance records.
+that those native counters are zero. The directed player-mask category and the counter writers
+are qualified further below.
 
 Another context branch uses CUnit vtable slot `+0xfc` (`0x66d280`) for a player-dependent
 result and slot `+0xf0` (`0x666e90`) for a unit-flag predicate. The former reaches native
@@ -714,6 +714,52 @@ selects (6208, 2752) at rank 1 without the farm and (5952, 2432) at rank 280 wit
 for both tested texture-axis readings. The diagnostic asserts those results. It bypasses the
 native reach check and disables all four mobile stamps rather than deriving each object's native
 state, so it is not a production implementation or validation of the complete search.
+
+### Movement and alliance inputs, 2026-10-28
+
+The directed mask is the unit owner's shared-control relationship toward the querying player.
+The `GetPlayerAlliance` implementation at `0x4944c0` indexes the same player record by an
+alliance-type value with a 16-byte stride, starting at `+0x38`. The placement helper at
+`0x47fa31` uses the record at `+0x98`, corresponding to the shared-control value in the selected
+script declarations. `SetPlayerAlliance` writes the same directed record (`0x4a94a0`,
+`0x4c1f70`, `0x4c21e0`). Player initialization enables shared control from each player to
+itself (`0x47ce30` through `0x47ceab`). The observed own-player acolyte passes the mask. For
+other players the answer depends on the directed shared-control state, not simply on passive
+alliance, enemy status or neutrality. The recreation retains explicit directed assignments, but
+its startup-alliance reader currently binds the passive category, not this self default. It
+cannot yet supply the full shared-control answer without extending the selected-image rules.
+
+The movement ability initializes `+0x3c` in its shared base constructor (`0x46d05c`) and
+`+0x80` in its own constructor (`0xb663b8`). The shared ability-disable paths increment or
+add to `+0x3c` at `0x46ca26` and `0x46e0d9`, and subtract at `0x46e651`; their movement
+ability virtual check admits this class (`0x46a490`). The movement-specific path increments
+`+0x80` at `0xb666bc` and decrements it at `0xb665f9`. Effect code can choose between the
+two counters based on its own state: examples include `0xb8ec16`/`0xb8ec2b` and
+`0xb9d839`/`0xb9d844`, with corresponding removal paths. The native effect classes identified
+by `Bens` and `BEer` also call the movement-specific increment and decrement paths
+(`0xc1a019`, `0xc1a656`, `0xc4866e`, `0xc48873`). These examples do not establish an
+exhaustive mapping of every caller or effect transition.
+
+For the placement call's two zero arguments, `0xb66f10` rejects a positive `+0x80`. If
+`+0x3c` is positive, it subtracts at most one when either the sleep buff is present or the
+sleep-always ability has its `0x80` state bit, then subtracts at most one when any of the two
+unit flags or the positive unit counter tested at `0xb66fb5` through `0xb66fd4` is present.
+The resulting positive count rejects. The selected ability data identifies the first two
+lookups as sleep-related; the two native unit flags and counter have not been fully mapped to
+recreation state. A second isolated farm capture reads the movement component of the exact
+non-builder acolyte whose spatial exclusion is restored after the (5776, 2512) query. Both
+component counters were zero at that instant. This observation does not establish the absence
+of every possible effect in other units or at other times.
+
+The recreation records natural sleep, explicit pause and a bounded collection of active buffs,
+but it does not maintain the native movement-disable reference counts and their effect-specific
+transitions. Its buff records contain removal traits, not the native movement counter
+contributions. Supporting the general predicate needs source-backed apply/remove handling for
+the relevant effects and other remaining callers, the two unit flags and unit counter, and the
+shared-control startup state. The `+0xc` visibility branch also still needs the native
+player-dependent fog, concealment and detection conditions mapped to available live vision
+state; a shown unit or a vision source alone does not establish that result. The diagnostic
+continues to use its explicitly experimental mobile switch, and production still refuses.
 
 ## Not established
 
