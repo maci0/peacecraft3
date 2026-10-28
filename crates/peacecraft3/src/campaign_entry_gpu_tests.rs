@@ -26,6 +26,8 @@ use peacecraft3::{
 };
 use std::{path::Path, time::Duration};
 
+mod bench;
+
 /// Virtual time per fixture update.
 const STEP_SECONDS: f64 = 1.0 / 64.0;
 
@@ -326,22 +328,28 @@ fn item_visibility_roundtrip(app: &mut App, output: &Path) {
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_menu_enters_the_rendered_campaign() {
-    check_mounted_campaign(false, false);
+    check_mounted_campaign(false, false, false);
 }
 
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_campaign_hud_and_research_states() {
-    check_mounted_campaign(true, false);
+    check_mounted_campaign(true, false, false);
 }
 
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_campaign_rendering_state() {
-    check_mounted_campaign(false, true);
+    check_mounted_campaign(false, true, false);
 }
 
-fn check_mounted_campaign(hud_only: bool, render_only: bool) {
+#[test]
+#[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
+fn mounted_campaign_render_cpu_workload() {
+    check_mounted_campaign(false, false, true);
+}
+
+fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool) {
     let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
     let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
     let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
@@ -379,6 +387,16 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool) {
         })
         .disable::<WinitPlugin>()
         .disable::<bevy::audio::AudioPlugin>();
+    // The CPU workload keeps the render world on the update thread so one
+    // counter window covers extraction and render-graph preparation.
+    let plugins = if cpu_workload {
+        plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+    } else {
+        plugins
+    };
+    if cpu_workload {
+        bench::install_span_profile();
+    }
     let mut app = crate::launch_gui::app_with_plugins(plugins, |_| {});
     app.init_asset::<AudioSource>();
     app.world_mut()
@@ -425,6 +443,10 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool) {
     // The game main menu follows the intro; the launcher is only setup.
     screen(&mut app, crate::menu_screens::Screen::Main);
     capture(&mut app, &output.join("main-menu.png"));
+    let mut workload = cpu_workload.then(bench::Harness::new);
+    if let Some(workload) = workload.as_mut() {
+        workload.menu(&mut app, &output);
+    }
     let button = frame_button(&mut app, "SinglePlayerButton");
     activate(&mut app, button);
     screen(&mut app, crate::menu_screens::Screen::SinglePlayer);
@@ -554,6 +576,11 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool) {
         unit
     };
     let selected_image = capture(&mut app, &output.join("selected-unit.png"));
+    if let Some(mut workload) = workload {
+        workload.campaign(&mut app, &output, selected);
+        workload.finish(&mut app, &output);
+        return;
+    }
     if render_only {
         let scene_image = app.world_mut().query_filtered::<&RenderTarget, With<peacecraft3::campaign_camera::CampaignSceneCamera>>()
             .single(app.world()).unwrap().as_image().unwrap().clone();

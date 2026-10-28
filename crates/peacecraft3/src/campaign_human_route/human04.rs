@@ -73,6 +73,7 @@ fn selected_human04_route_reaches_authored_victory() {
     let mut farming: Option<HandleId> = None;
     let mut last = String::new();
     let mut outcome_waits = 0;
+    super::sim_bench::counters("human04-start");
     for batch in 0..decisions {
         let state = observe(&mut app, footman);
         last = format!(
@@ -154,6 +155,10 @@ fn selected_human04_route_reaches_authored_victory() {
             diagnostics(&mut app);
             panic!("{error}; last_completed_observation={last}");
         }
+    }
+    if super::sim_bench::enabled() {
+        super::sim_bench::finish("human04-end", &mut app, &last);
+        return;
     }
     panic!("Human04 exhausted the decision budget: {last}");
 }

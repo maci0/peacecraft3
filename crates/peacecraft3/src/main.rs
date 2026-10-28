@@ -165,3 +165,5 @@ mod view_format_guard_tests {
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 mod campaign_entry_gpu_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod counting_allocator;

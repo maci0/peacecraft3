@@ -1,0 +1,27 @@
+[package]
+name = "peacecraft-sim-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace]
+
+[dependencies]
+pcx-assets = { path = "../../../crates/pcx-assets" }
+pcx-play = { path = "../../../crates/pcx-play" }
+pcx-script = { path = "../../../crates/pcx-script" }
+pcx-map = { path = "../../../crates/pcx-map" }
+pcx-mpq = { path = "../../../crates/pcx-mpq" }
+sha2 = { version = "0.11.1", default-features = false }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+debug = 1
+strip = false
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "deny"

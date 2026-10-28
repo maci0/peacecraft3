@@ -129,21 +129,47 @@ fn order_backgrounds(
 ) {
     reported.retain(|owner| views.iter().any(|(_, view)| view.owners.contains(owner)));
     for (view, source) in &views {
-        let Some(phase) = phases.get_mut(&view.retained_view_entity) else {
+        if let Some(phase) = phases.get_mut(&view.retained_view_entity) {
+            order_view(phase, source, &mut reported);
+        }
+    }
+}
+
+/// Orders every owner's slots of one view's phase. An owner with no item in the phase
+/// reorders nothing, so only owners present in it need a pass; a refused budget or a
+/// repeated entity fails every owner, which is reported for each.
+fn order_view(
+    phase: &mut SortedRenderPhase<Transparent3d>,
+    source: &SourceOrderView,
+    reported: &mut HashSet<MainEntity>,
+) {
+    let mut present = HashSet::new();
+    let mut repeated = false;
+    for item in phase.items.values() {
+        repeated |= !present.insert(item.entity.1);
+    }
+    let all_owners = phase.items.len() > source.max_phase_items
+        || source.orders.len() > source.max_phase_items
+        || repeated;
+    let item_owners: HashSet<MainEntity> = present
+        .iter()
+        .filter_map(|entity| source.orders.get(entity))
+        .map(|order| order.owner)
+        .collect();
+    for &owner in source.owners.iter() {
+        if !all_owners && !item_owners.contains(&owner) {
             continue;
-        };
-        for &owner in source.owners.iter() {
-            if let Err(failure) = order_phase(phase, owner, &source.orders, source.max_phase_items)
-            {
-                // Keep geometry; a refused particle batch must never fall back to Bevy's distance-only submission.
-                phase.items.retain(|_, item| {
-                    !source.orders.get(&item.entity.1).is_some_and(|order| {
-                        order.owner == owner && order.kind == SourceKind::Particle
-                    })
-                });
-                if reported.insert(owner) {
-                    error!("{}: PRE2 submission disabled: {:?}", source.source, failure);
-                }
+        }
+        if let Err(failure) = order_phase(phase, owner, &source.orders, source.max_phase_items) {
+            // Keep geometry; a refused particle batch must never fall back to Bevy's distance-only submission.
+            phase.items.retain(|_, item| {
+                !source
+                    .orders
+                    .get(&item.entity.1)
+                    .is_some_and(|order| order.owner == owner && order.kind == SourceKind::Particle)
+            });
+            if reported.insert(owner) {
+                error!("{}: PRE2 submission disabled: {:?}", source.source, failure);
             }
         }
     }
@@ -220,6 +246,42 @@ mod tests {
                     .distance,
                 distance
             );
+        }
+    }
+    #[test]
+    fn view_pass_matches_ordering_every_owner_including_absent_ones() {
+        let (_world, e) = entities();
+        let owners = [e[6], e[7]];
+        let build = || {
+            let mut phase = SortedRenderPhase::default();
+            add(&mut phase, &e[..5]);
+            phase
+        };
+        let orders = MainEntityHashMap::from_iter([
+            (e[0], key(e[7], i32::MAX, SourceKind::Particle, 9)),
+            (e[2], key(e[7], i32::MIN, SourceKind::Geometry, 3)),
+            (e[4], key(e[7], 0, SourceKind::Particle, 1)),
+        ]);
+        for max_phase_items in [8, 2] {
+            let source = SourceOrderView {
+                owners: owners.as_slice().into(),
+                source: "test".into(),
+                orders: Arc::new(orders.clone()),
+                max_phase_items,
+            };
+            let mut expected = build();
+            for owner in owners {
+                if order_phase(&mut expected, owner, &orders, max_phase_items).is_err() {
+                    expected.items.retain(|_, item| {
+                        !orders.get(&item.entity.1).is_some_and(|order| {
+                            order.owner == owner && order.kind == SourceKind::Particle
+                        })
+                    });
+                }
+            }
+            let mut actual = build();
+            order_view(&mut actual, &source, &mut HashSet::new());
+            assert_eq!(ids(&actual), ids(&expected), "budget {max_phase_items}");
         }
     }
     #[test]

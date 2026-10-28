@@ -319,7 +319,7 @@ fn show(
             assets,
             (&mut queries.visibility, &mut queries.transforms),
             input.terrain,
-            sun.as_ref().map(|sun| (sun, input.parameters)),
+            (sun.as_ref().map(|sun| (sun, input.parameters)), None),
         )
     {
         state.last_error = Some(format!("sky: {error}"));
@@ -783,14 +783,16 @@ mod production {
     fn seed(app: &mut App) {
         let mut state = app.world_mut().resource_mut::<UnitActors>();
         state.parameters_attempted = true;
-        state.parameters = Some(crate::menu_lighting::tests::parameters());
-        state.palette = Some(TeamPalette {
+        state.parameters = Some(std::sync::Arc::new(
+            crate::menu_lighting::tests::parameters(),
+        ));
+        state.palette = Some(std::sync::Arc::new(TeamPalette {
             prefixes: [
                 "ReplaceableTextures\\TeamColor\\TeamColor".into(),
                 "ReplaceableTextures\\TeamGlow\\TeamGlow".into(),
             ],
             count: 1,
-        });
+        }));
     }
 
     /// Publish a session through the production map request path, then seed the lighting

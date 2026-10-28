@@ -1,4 +1,5 @@
 //! Menu Gouraud lighting in numeric source channels, before texture modulation.
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use pcx_play::menu_lighting::Parameters;
 
@@ -466,15 +467,18 @@ pub(crate) fn apply_sun(
         &[crate::mainmenu_scene::BoundGeoset],
         &[bool],
     ),
+    tints: &[[f32; 4]],
     (direction, sun, parameters): (Vec3, &pcx_play::day_night::Sun, &Parameters),
-    (meshes, materials): (
+    (meshes, materials, colours): (
         &mut Assets<Mesh>,
         &mut Assets<crate::menu_material::MenuMaterial>,
+        &mut Vec<[f32; 4]>,
     ),
 ) -> Result<(), String> {
     if model.meshes.len() != handles.len()
         || handles.len() != bound.len()
         || bound.len() != lit.len()
+        || lit.len() != tints.len()
     {
         return Err(format!("{source}: sun lighting binding count mismatch"));
     }
@@ -487,26 +491,38 @@ pub(crate) fn apply_sun(
         if !lit[index] {
             continue;
         }
-        let mut material = materials
-            .get_mut(material)
-            .ok_or("sun lighting material ownership lost")?;
-        let colour = material.base.base_color.to_linear().to_f32_array();
-        let mut mesh = meshes
-            .get_mut(handle)
+        if materials.get(material).is_none() {
+            return Err("sun lighting material ownership lost".into());
+        }
+        let current = meshes
+            .get(handle)
             .ok_or("sun lighting mesh ownership lost")?;
         let normals = normals(rest, skeleton).map_err(|e| format!("{source}: {e}"))?;
-        let tint = Vec3::from_array([colour[0], colour[1], colour[2]]);
-        let colours: Vec<[f32; 4]> = normals
-            .iter()
-            .map(|n| {
-                let rgb = ((ambient + diffuse * n.dot(towards).max(0.0)) * tint)
-                    .clamp(Vec3::ZERO, Vec3::ONE);
-                [rgb.x, rgb.y, rgb.z, 1.0]
-            })
-            .collect();
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
-        material.base.base_color = crate::menu_composition::colour([1.0, 1.0, 1.0, colour[3]]);
-        material.base.unlit = true;
+        let [red, green, blue, alpha] = tints[index];
+        let tint = Vec3::new(red, green, blue);
+        colours.clear();
+        colours.extend(normals.iter().map(|n| {
+            let rgb =
+                ((ambient + diffuse * n.dot(towards).max(0.0)) * tint).clamp(Vec3::ZERO, Vec3::ONE);
+            [rgb.x, rgb.y, rgb.z, 1.0]
+        }));
+        let unchanged = matches!(
+            current.attribute(Mesh::ATTRIBUTE_COLOR),
+            Some(VertexAttributeValues::Float32x4(old)) if old == colours
+        );
+        if !unchanged {
+            meshes
+                .get_mut(handle)
+                .expect("checked mesh")
+                .insert_attribute(Mesh::ATTRIBUTE_COLOR, colours.clone());
+        }
+        let white = crate::menu_composition::colour([1.0, 1.0, 1.0, alpha]);
+        let material_current = materials.get(material).expect("checked material");
+        if material_current.base.base_color != white || !material_current.base.unlit {
+            let mut material = materials.get_mut(material).expect("checked material");
+            material.base.base_color = white;
+            material.base.unlit = true;
+        }
     }
     Ok(())
 }

@@ -12,6 +12,8 @@ pub(super) struct Markers {
     draw: Draw,
     border_color: [u8; 4],
     colors: BTreeMap<i32, [u8; 4]>,
+    /// Definition columns read per unit and definition revision; the lookup scans every field.
+    scalars: std::collections::HashMap<(pcx_script::HandleId, u64, &'static str), f32>,
 }
 /// One marker: its centre in image pixels, colour and size class.
 struct Marker {
@@ -39,6 +41,7 @@ impl Markers {
             draw,
             border_color,
             colors: BTreeMap::new(),
+            scalars: Default::default(),
         })
     }
     fn player_color(&mut self, index: i32) -> Result<[u8; 4], String> {
@@ -62,6 +65,20 @@ impl Markers {
         self.colors.insert(index, color);
         Ok(color)
     }
+    fn scalar(
+        &mut self,
+        id: pcx_script::HandleId,
+        unit: &pcx_play::playercolor_host::ExecutedUnit,
+        column: &'static str,
+    ) -> Result<f32, String> {
+        let key = (id, unit.definition_revision, column);
+        if let Some(value) = self.scalars.get(&key) {
+            return Ok(*value);
+        }
+        let value = crate::campaign_actors::scalar(&unit.definition, column)?;
+        self.scalars.insert(key, value);
+        Ok(value)
+    }
     pub(super) fn draw(
         &mut self,
         host: &ObjectHost,
@@ -73,14 +90,14 @@ impl Markers {
             .vision_world_bounds()
             .ok_or("minimap marker world extent absent")?;
         let mut plan = Vec::new();
-        for (_, unit) in host.executed_units() {
+        for (id, unit) in host.executed_units() {
             if !unit.shown
                 || unit.combat.as_ref().is_some_and(|c| c.dead)
                 || unit.vitals.as_ref().is_some_and(|v| v.life <= 0.)
             {
                 continue;
             }
-            match crate::campaign_actors::scalar(&unit.definition, "hideOnMinimap")? {
+            match self.scalar(id, unit, "hideOnMinimap")? {
                 1. => continue,
                 0. => {}
                 _ => return Err("unsupported hideOnMinimap value".into()),
@@ -122,7 +139,7 @@ impl Markers {
                 }
             };
             // shortcut: the client's class is a unit-type flag set from a type record; isbldg is the matching UnitBalance column.
-            let class = match crate::campaign_actors::scalar(&unit.definition, "isbldg")? {
+            let class = match self.scalar(id, unit, "isbldg")? {
                 1. => 1,
                 0. => 0,
                 _ => return Err("unsupported isbldg value".into()),

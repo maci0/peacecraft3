@@ -209,7 +209,7 @@ pub(super) fn project(
                 assets,
                 (&mut queries.visibility, &mut queries.transforms),
                 input.terrain,
-                input.sun.map(|sun| (sun, input.parameters)),
+                (input.sun.map(|sun| (sun, input.parameters)), input.view),
             )?;
             Ok(())
         })();

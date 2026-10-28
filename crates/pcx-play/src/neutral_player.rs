@@ -5,7 +5,7 @@ use crate::{
 };
 use pcx_script::{Host, Value, ast::TypeKind};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub const NATIVE_NAME: &str = "GetPlayerNeutralPassive";
 pub const AGGRESSIVE_NATIVE_NAME: &str = "GetPlayerNeutralAggressive";
@@ -14,8 +14,33 @@ pub const BJ_NEUTRAL_VICTIM_NATIVE_NAME: &str = "GetBJPlayerNeutralVictim";
 pub const BJ_NEUTRAL_EXTRA_NATIVE_NAME: &str = "GetBJPlayerNeutralExtra";
 pub const BJ_MAX_PLAYER_SLOTS_NATIVE_NAME: &str = "GetBJMaxPlayerSlots";
 pub type Sha256Digest = [u8; 32];
+/// Inputs from this size on are remembered by content. Every rule reader hashes the same
+/// executable image to check its identity, so the digest of the latest such input is reused
+/// when its bytes are equal, instead of hashing the image once per reader.
+const MEMO_MIN_BYTES: usize = 8 << 20;
+
+struct LargeInput {
+    bytes: Vec<u8>,
+    digest: Sha256Digest,
+}
+
+static LARGE_INPUT: Mutex<Option<LargeInput>> = Mutex::new(None);
+
 pub(crate) fn sha256(bytes: &[u8]) -> Sha256Digest {
-    Sha256::digest(bytes).into()
+    if bytes.len() < MEMO_MIN_BYTES {
+        return Sha256::digest(bytes).into();
+    }
+    // A poisoned lock still holds a complete entry or none: it is replaced whole under the lock.
+    let mut memo = LARGE_INPUT.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(known) = memo.as_ref().filter(|known| known.bytes == bytes) {
+        return known.digest;
+    }
+    let digest: Sha256Digest = Sha256::digest(bytes).into();
+    *memo = Some(LargeInput {
+        bytes: bytes.to_vec(),
+        digest,
+    });
+    digest
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleProblem {

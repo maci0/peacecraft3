@@ -1454,7 +1454,11 @@ pub fn apply_opacity<F: bevy::ecs::query::QueryFilter>(
         let Some(alpha) = opacity.sample(*geoset, frame, elapsed_ms) else {
             continue;
         };
-        if let Some(mut material) = materials.get_mut(handle) {
+        // Assigning an unchanged value would still raise an asset-modified event.
+        if let Some(material) = materials.get(handle)
+            && material.base.base_color.with_alpha(alpha) != material.base.base_color
+        {
+            let mut material = materials.get_mut(handle).expect("checked material");
             material.base.base_color = material.base.base_color.with_alpha(alpha);
         }
         if let Ok(mut visibility) = visibility.get_mut(*entity) {
@@ -1489,17 +1493,25 @@ pub fn apply_geoset_colour(
         let rgb = opacity
             .sample_material_colour(*geoset, frame, elapsed_ms)
             .expect("validated colour sample");
-        let mut material = materials
-            .get_mut(handle)
-            .expect("validated colour material");
-        let alpha = material.base.base_color.alpha();
-        material.base.base_color =
-            checked_geoset_colour(*geoset, rgb, alpha).expect("validated representable colour");
+        let current = materials.get(handle).expect("validated colour material");
+        let colour = checked_geoset_colour(*geoset, rgb, current.base.base_color.alpha())
+            .expect("validated representable colour");
+        if current.base.base_color != colour {
+            materials
+                .get_mut(handle)
+                .expect("validated colour material")
+                .base
+                .base_color = colour;
+        }
     }
     Ok(())
 }
 
-fn checked_geoset_colour(geoset: usize, rgb: [f32; 3], alpha: f32) -> Result<Color, SceneError> {
+pub(crate) fn checked_geoset_colour(
+    geoset: usize,
+    rgb: [f32; 3],
+    alpha: f32,
+) -> Result<Color, SceneError> {
     let colour = crate::menu_composition::colour([rgb[0], rgb[1], rgb[2], alpha]);
     let linear = colour.to_linear();
     if [linear.red, linear.green, linear.blue, linear.alpha]

@@ -497,9 +497,9 @@ fn scripted_unit_opacity_reaches_solid_cutout_and_additive_layers() {
                 .bind_native_cutout(&mut material.base, 0.37)
                 .unwrap();
         }
-        material
+        (material.base.alpha_mode, material.extension) = material
             .extension
-            .apply_unit_opacity(&mut material.base, unit_alpha);
+            .with_unit_opacity(material.base.alpha_mode, unit_alpha);
         let handle = app
             .world_mut()
             .resource_mut::<Assets<MenuMaterial>>()

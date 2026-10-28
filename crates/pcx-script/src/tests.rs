@@ -1215,7 +1215,7 @@ fn sweep_every_real_script() {
                 }
                 for f in program.functions() {
                     if let Some(body) = &f.body {
-                        for st in body {
+                        for st in body.iter() {
                             reals_in_stmt(st, &mut reals, &mut reals_lossy);
                         }
                     }

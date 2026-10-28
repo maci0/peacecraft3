@@ -1,6 +1,7 @@
 //! Read-only vision inputs from the canonical live world.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisionState {
@@ -168,7 +169,9 @@ impl ObjectHost {
         night: bool,
         limit: usize,
     ) -> Result<Vec<VisionSource>, Error> {
-        Ok(self.list_vision_sources(viewer, night, limit)?.sources)
+        Ok(self
+            .list_vision_sources(viewer, night, limit, &mut SightRadii::default())?
+            .sources)
     }
 
     pub(super) fn list_vision_sources(
@@ -176,6 +179,7 @@ impl ObjectHost {
         viewer: HandleId,
         night: bool,
         limit: usize,
+        radii: &mut SightRadii,
     ) -> Result<ListedVision, Error> {
         let fail = |detail| self.inner.error("vision", Failure::UnitActivity(detail));
         self.player_settings(viewer)?;
@@ -237,6 +241,8 @@ impl ObjectHost {
         sources.sort_by_key(|circle| circle.after_units);
         let after = sources.partition_point(|circle| !circle.after_units);
         let mut units = Vec::new();
+        // Whether each unit owner shares vision with `viewer`; the answer depends on the owner only.
+        let mut shares: Vec<(HandleId, bool)> = Vec::new();
         for (unit_id, unit) in self.executed_units() {
             scanned = scanned.saturating_add(1);
             if scanned > limit {
@@ -245,20 +251,29 @@ impl ObjectHost {
             if !unit.shown
                 || unit.combat.as_ref().is_some_and(|c| c.dead)
                 || unit.vitals.is_some_and(|v| v.life <= 0.)
-                || !(unit.vision_viewers.contains(&viewer)
-                    || self.shares_vision(unit.owner, viewer)?)
             {
                 continue;
+            }
+            if !unit.vision_viewers.contains(&viewer) {
+                let shared = match shares.iter().find(|(owner, _)| *owner == unit.owner) {
+                    Some(&(_, shared)) => shared,
+                    None => {
+                        let shared = self.shares_vision(unit.owner, viewer)?;
+                        shares.push((unit.owner, shared));
+                        shared
+                    }
+                };
+                if !shared {
+                    continue;
+                }
             }
             let center = unit
                 .position
                 .ok_or_else(|| fail("unit has no accepted vision position".into()))?;
             // shortcut: base day/night sight only; apply sight-changing upgrades and effects when their live consumers are modeled.
-            let radius = super::unit_activity::balance_real(
-                &unit.definition,
-                if night { "nsight" } else { "sight" },
-            )
-            .map_err(fail)?;
+            let radius = radii
+                .of(unit_id, unit.definition_revision, &unit.definition, night)
+                .map_err(fail)?;
             units
                 .try_reserve(1)
                 .map_err(|_| fail("vision allocation failed".into()))?;
@@ -278,6 +293,45 @@ impl ObjectHost {
             sources,
             candidates_scanned: scanned,
         })
+    }
+}
+
+/// Sight radius of a unit's definition at day or night. A unit's definition changes only with
+/// `definition_revision`, so one entry serves every viewer and every later sample until then.
+/// Entries not read in a sample are dropped when the sample ends, so removed units do not linger.
+#[derive(Default)]
+pub(super) struct SightRadii {
+    kept: BTreeMap<SightKey, Result<f32, String>>,
+    read: BTreeMap<SightKey, Result<f32, String>>,
+}
+
+type SightKey = (HandleId, u64, bool);
+
+impl SightRadii {
+    fn of(
+        &mut self,
+        unit: HandleId,
+        revision: u64,
+        definition: &pcx_sim::world::Definition,
+        night: bool,
+    ) -> Result<f32, String> {
+        let key = (unit, revision, night);
+        if let Some(known) = self.read.get(&key) {
+            return known.clone();
+        }
+        let radius = self.kept.remove(&key).unwrap_or_else(|| {
+            super::unit_activity::balance_real(definition, if night { "nsight" } else { "sight" })
+        });
+        self.read.insert(key, radius.clone());
+        radius
+    }
+
+    /// The entries this sample read, ready for the next sample.
+    pub(super) fn retained(self) -> Self {
+        Self {
+            kept: self.read,
+            read: BTreeMap::new(),
+        }
     }
 }
 

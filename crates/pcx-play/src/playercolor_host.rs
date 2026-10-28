@@ -378,6 +378,10 @@ pub struct EnumHost {
     source_context: String,
     conversions: BTreeMap<String, Conversion>,
     arena: Vec<Entry>,
+    /// Arena positions that hold a unit or an item. An entry never becomes a unit or an item
+    /// after it is allocated, so these cover every live one in arena order.
+    unit_slots: Vec<usize>,
+    item_slots: Vec<usize>,
     max_handles: usize,
 }
 pub type ColorHost = EnumHost;
@@ -587,6 +591,8 @@ impl EnumHost {
             source_context: context.into(),
             conversions,
             arena: Vec::new(),
+            unit_slots: Vec::new(),
+            item_slots: Vec::new(),
             max_handles: limits.max_handles,
         })
     }
@@ -645,6 +651,22 @@ impl EnumHost {
         self.arena
             .try_reserve(1)
             .map_err(|_| self.error(name, Failure::Capacity))?;
+        let at = self.arena.len();
+        match entry {
+            Entry::Unit { .. } => {
+                self.unit_slots
+                    .try_reserve(1)
+                    .map_err(|_| self.error(name, Failure::Capacity))?;
+                self.unit_slots.push(at);
+            }
+            Entry::Item { .. } => {
+                self.item_slots
+                    .try_reserve(1)
+                    .map_err(|_| self.error(name, Failure::Capacity))?;
+                self.item_slots.push(at);
+            }
+            _ => {}
+        }
         self.arena.push(entry);
         Ok(id)
     }

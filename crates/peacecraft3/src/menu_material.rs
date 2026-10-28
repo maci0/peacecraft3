@@ -22,7 +22,7 @@ pub(crate) type MenuMaterial = ExtendedMaterial<StandardMaterial, MenuBlend>;
 pub(crate) const NO_DEPTH_TEST: u32 = 0x40;
 pub(crate) const NO_DEPTH_SET: u32 = 0x80;
 
-#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default, PartialEq, Eq)]
 #[bind_group_data(MenuBlendKey)]
 pub(crate) struct MenuBlend {
     no_depth_test: bool,
@@ -103,11 +103,19 @@ pub(crate) fn checked_source_mode(
 }
 
 impl MenuBlend {
-    pub(crate) fn apply_unit_opacity(&mut self, base: &mut StandardMaterial, alpha: f32) {
+    /// The alpha mode and blend a unit fade to `alpha` gives a layer authored with `mode`.
+    pub(crate) fn with_unit_opacity(&self, mode: AlphaMode, alpha: f32) -> (AlphaMode, Self) {
         // A unit fade must blend its solid layers instead of discarding their scaled alpha.
-        if alpha < 1.0 && matches!(base.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
-            base.alpha_mode = AlphaMode::Blend;
-            self.native_cutout = false;
+        if alpha < 1.0 && matches!(mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
+            (
+                AlphaMode::Blend,
+                Self {
+                    native_cutout: false,
+                    ..self.clone()
+                },
+            )
+        } else {
+            (mode, self.clone())
         }
     }
 
@@ -212,26 +220,26 @@ mod tests {
                     .unwrap();
             }
             let original = material.clone();
-            material
+            (material.base.alpha_mode, material.extension) = material
                 .extension
-                .apply_unit_opacity(&mut material.base, 0.23);
+                .with_unit_opacity(material.base.alpha_mode, 0.23);
             assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
             assert!(!material.extension.native_cutout);
             assert!(material.extension.no_depth_set);
             assert_eq!(material.base.base_color, original.base.base_color);
             material.base.alpha_mode = original.base.alpha_mode;
             material.extension = original.extension.clone();
-            material
+            (material.base.alpha_mode, material.extension) = material
                 .extension
-                .apply_unit_opacity(&mut material.base, 1.0);
+                .with_unit_opacity(material.base.alpha_mode, 1.0);
             assert_eq!(material.base.alpha_mode, source);
             assert_eq!(material.extension.native_cutout, mode == 1);
         }
         for (mode, source) in [(2, AlphaMode::Blend), (3, AlphaMode::Add)] {
             let mut material = checked_source_mode(base(source), mode, 0).unwrap();
-            material
+            (material.base.alpha_mode, material.extension) = material
                 .extension
-                .apply_unit_opacity(&mut material.base, 0.23);
+                .with_unit_opacity(material.base.alpha_mode, 0.23);
             assert_eq!(material.base.alpha_mode, source);
         }
     }

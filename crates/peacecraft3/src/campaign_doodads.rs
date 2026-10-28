@@ -36,6 +36,8 @@ pub(super) struct Input<'a> {
     pub parameters: &'a pcx_play::menu_lighting::Parameters,
     pub now: f64,
     pub sun: Option<&'a pcx_play::day_night::Sun>,
+    /// Camera frustum; actors outside it skip pose and material updates.
+    pub view: Option<&'a bevy::camera::primitives::Frustum>,
 }
 
 pub(super) fn project<'a>(
@@ -104,7 +106,7 @@ pub(super) fn project<'a>(
                 assets,
                 (&mut queries.visibility, &mut queries.transforms),
                 input.terrain,
-                input.sun.map(|sun| (sun, input.parameters)),
+                (input.sun.map(|sun| (sun, input.parameters)), input.view),
             ) {
                 state.last_error = Some(format!("doodad {id}: {error}"));
             }

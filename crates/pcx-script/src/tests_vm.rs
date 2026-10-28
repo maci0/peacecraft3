@@ -121,7 +121,7 @@ fn a_forward_declaration_links_to_a_later_body() {
         program
             .function("Later")
             .and_then(|f| f.body.as_ref())
-            .map(Vec::len),
+            .map(|body| body.len()),
         Some(1)
     );
 }
@@ -1566,7 +1566,7 @@ endfunction
 }
 
 #[test]
-fn returning_calls_copy_only_linear_statement_work() {
+fn returning_calls_share_one_function_body() {
     for calls in [32, 128] {
         let mut source = "globals\ninteger total = 0\nendglobals\nfunction child takes nothing returns integer\nreturn 1\nendfunction\nfunction main takes nothing returns nothing\n".to_owned();
         for _ in 0..calls {
@@ -1577,10 +1577,14 @@ fn returning_calls_copy_only_linear_statement_work() {
         let mut vm = Vm::new(&program, NullHost);
         vm.call("main", &[]).unwrap();
         assert_eq!(vm.global("total"), Value::Int(calls as i32));
-        assert!(
-            vm.copied_body_statements() <= 4 * (calls + 1),
-            "{calls} calls copied {} statements",
-            vm.copied_body_statements()
+        let body = program
+            .function("child")
+            .and_then(|f| f.body.as_ref())
+            .unwrap();
+        assert_eq!(
+            Arc::strong_count(body),
+            1,
+            "activations released the shared body"
         );
     }
 }

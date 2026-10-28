@@ -389,8 +389,6 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     parked: BTreeMap<u64, Thread>,
     spawn_depth: u32,
     #[cfg(test)]
-    copied_body_statements: usize,
-    #[cfg(test)]
     copied_argument_expressions: usize,
 }
 
@@ -436,8 +434,6 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             parked: BTreeMap::new(),
             spawn_depth: 0,
             #[cfg(test)]
-            copied_body_statements: 0,
-            #[cfg(test)]
             copied_argument_expressions: 0,
         }
     }
@@ -476,11 +472,6 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     #[cfg(test)]
     pub(crate) fn set_busy_for_test(&mut self, busy: bool) {
         self.busy = busy;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn copied_body_statements(&self) -> usize {
-        self.copied_body_statements
     }
 
     #[cfg(test)]
@@ -830,16 +821,11 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 format!("`{name}` recursed past {MAX_CALL_DEPTH} frames"),
             ));
         }
-        let body = self
+        let body: Arc<[Stmt]> = self
             .program
             .function(name)
-            .and_then(|f| f.body.as_deref())
+            .and_then(|f| f.body.clone())
             .unwrap_or_default();
-        #[cfg(test)]
-        {
-            self.copied_body_statements += body.len();
-        }
-        let body = Arc::from(body);
         let mut frame = Frame::new();
         let report = if span == Span::EMPTY { func_span } else { span };
         for (p, v) in params.iter().zip(&argv) {

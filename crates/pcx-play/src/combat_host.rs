@@ -395,12 +395,24 @@ pub struct HeroAttributeStat {
 
 impl ObjectHost {
     pub(super) fn combat_step_eligible(&self, unit: HandleId, record: &ExecutedUnit) -> bool {
+        self.combat_eligible(unit, record, |unit| {
+            self.unit_construction_order(unit).ok().flatten().is_some()
+        })
+    }
+
+    /// `constructing` says whether the unit has a construction order.
+    fn combat_eligible(
+        &self,
+        unit: HandleId,
+        record: &ExecutedUnit,
+        constructing: impl Fn(HandleId) -> bool,
+    ) -> bool {
         !self.mirror_busy(unit)
             && self.summon_current_order(unit).is_none()
             && self.curse_current_order(unit).is_none()
             && record.construction.is_none()
             && record.construction_request.is_none()
-            && self.unit_construction_order(unit).ok().flatten().is_none()
+            && !constructing(unit)
             && record.combat.as_ref().is_some_and(|combat| {
                 record.paused_since.is_none()
                     && !record.is_sleeping()
@@ -1690,9 +1702,14 @@ impl ObjectHost {
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
+        let workers = self.construction_site_workers();
         let units: Vec<_> = self
             .executed_units()
-            .map(|(id, unit)| (id, self.combat_step_eligible(id, unit)))
+            .map(|(id, unit)| {
+                let eligible =
+                    self.combat_eligible(id, unit, |worker| workers.binary_search(&worker).is_ok());
+                (id, eligible)
+            })
             .collect();
         // A missing ledger refuses only a new acquisition. Missiles, expirations,
         // casts, and units that keep an existing target still advance this tick.

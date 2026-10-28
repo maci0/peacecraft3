@@ -845,10 +845,9 @@ impl ObjectHost {
 
     pub fn executed_units(&self) -> impl Iterator<Item = (HandleId, &ExecutedUnit)> {
         self.inner
-            .arena
+            .unit_slots
             .iter()
-            .enumerate()
-            .filter_map(|(i, entry)| match entry {
+            .filter_map(|&i| match &self.inner.arena[i] {
                 Entry::Unit { record } => Some((
                     self.inner.id(i, NATIVE).expect("allocated identity"),
                     &**record,

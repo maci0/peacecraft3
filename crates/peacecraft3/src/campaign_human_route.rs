@@ -2833,3 +2833,6 @@ mod human04;
 
 #[cfg(feature = "test-fixtures")]
 mod human05;
+
+#[cfg(feature = "test-fixtures")]
+mod sim_bench;

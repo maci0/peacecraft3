@@ -284,10 +284,9 @@ impl ObjectHost {
 
     pub fn executed_items(&self) -> impl Iterator<Item = (HandleId, &ExecutedItem)> {
         self.inner
-            .arena
+            .item_slots
             .iter()
-            .enumerate()
-            .filter_map(|(at, entry)| match entry {
+            .filter_map(|&at| match &self.inner.arena[at] {
                 Entry::Item { record } if !record.consumed => {
                     Some((self.inner.id(at, CREATE).ok()?, record))
                 }

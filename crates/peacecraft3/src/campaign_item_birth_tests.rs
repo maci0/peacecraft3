@@ -119,6 +119,7 @@ fn project(
             parameters: &birth.parameters,
             now: 0.1,
             sun: None,
+            view: None,
         },
         "test",
         birth.items.iter().map(|(id, item)| (*id, item)),

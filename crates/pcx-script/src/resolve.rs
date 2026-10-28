@@ -48,6 +48,7 @@ use crate::span::Span;
 use crate::text::trigstr_id;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 /// One source the map's script is loaded with. `label` appears in diagnostics
 /// that cite a declaration from this source, where a byte span into it is not a
@@ -74,7 +75,7 @@ pub struct Function {
     pub is_constant: bool,
     /// `None` for an empty body, which is how the parser spells both an empty
     /// function and a body-less declaration.
-    pub body: Option<Vec<Stmt>>,
+    pub body: Option<Arc<[Stmt]>>,
     pub span: Span,
     pub source: String,
 }
@@ -561,7 +562,7 @@ impl<'a> Resolver<'a> {
             params: f.params.clone(),
             ret: f.ret.clone(),
             is_constant: f.is_constant,
-            body: f.body.clone(),
+            body: f.body.as_deref().map(Arc::from),
             span: f.span,
             source: source.to_string(),
         });
@@ -1081,7 +1082,7 @@ fn declared_function(f: &FunctionDecl, source: &str) -> Function {
         params: f.params.clone(),
         ret: f.ret.clone(),
         is_constant: f.is_constant,
-        body: f.body.clone(),
+        body: f.body.as_deref().map(Arc::from),
         span: f.span,
         source: source.to_string(),
     }

@@ -8,7 +8,6 @@
 //! `L` is the number of cells the shop object holds.
 use crate::item_class_table::{Image, ItemClassError};
 use crate::scripts::AssetIdentity;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 const NAME: &[u8] = b"\0SetItemTypeSlots\0";
@@ -132,7 +131,7 @@ pub fn derive(exe: &[u8], origin: AssetIdentity) -> Result<ShopTable, ShopTableE
     }
     Ok(ShopTable {
         origin,
-        image_sha256: Sha256::digest(exe).into(),
+        image_sha256: crate::neutral_player::sha256(exe),
         slot_ceiling,
         entries,
     })

@@ -38,6 +38,8 @@ struct FogImage {
     alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha,
     original_alpha: Vec<u8>,
     original_pixels: Vec<u8>,
+    /// The pixels the image should hold after this frame's fog and markers.
+    composed: Vec<u8>,
     viewer: Option<pcx_script::HandleId>,
     width: u32,
     height: u32,
@@ -372,7 +374,7 @@ fn publish_minimap_alpha(pixels: &mut [u8], base: &[u8], alpha: &[u8], terrain_h
 fn update_fog(
     state: &mut CampaignMinimap,
     host: &pcx_play::playercolor_host::ObjectHost,
-    images: &mut Assets<Image>,
+    images: &Assets<Image>,
 ) -> Result<(), String> {
     let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
     let terrain_hidden = state.terrain_hidden;
@@ -394,16 +396,13 @@ fn update_fog(
     }
     // Both switches off restores the authored alpha without a ledger.
     if !settings.fog_enabled && !settings.fog_mask_enabled {
-        let original_alpha = fog.original_alpha.clone();
-        let original_pixels = fog.original_pixels.clone();
-        let mut image = images
-            .get_mut(image_id)
-            .ok_or("minimap CPU pixels unavailable")?;
-        let pixels = image
-            .data
-            .as_mut()
-            .ok_or("minimap CPU pixels unavailable")?;
-        publish_minimap_alpha(pixels, &original_pixels, &original_alpha, terrain_hidden);
+        fog.composed.resize(pixel_len, 0);
+        publish_minimap_alpha(
+            &mut fog.composed,
+            &fog.original_pixels,
+            &fog.original_alpha,
+            terrain_hidden,
+        );
         return Ok(());
     }
     // Stage the ledger projection before replacing accepted pixels. A refusal
@@ -428,32 +427,28 @@ fn update_fog(
         )?)
     };
     let raster = staged_raster.as_mut().unwrap_or(&mut fog.raster);
-    let alpha = raster
-        .project(bounds, fog.alpha, VISION_WORK, |point| {
-            Ok(host
-                .vision_presented(
-                    viewer,
-                    [point[0] as f32, point[1] as f32],
-                    fog_enabled,
-                    mask_enabled,
-                )
-                .map_err(|error| error.to_string())?
-                .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
-        })?
-        .to_vec();
+    let alpha = raster.project(bounds, fog.alpha, VISION_WORK, |point| {
+        Ok(host
+            .vision_presented(
+                viewer,
+                [point[0] as f32, point[1] as f32],
+                fog_enabled,
+                mask_enabled,
+            )
+            .map_err(|error| error.to_string())?
+            .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
+    })?;
+    fog.composed.resize(pixel_len, 0);
+    publish_minimap_alpha(
+        &mut fog.composed,
+        &fog.original_pixels,
+        alpha,
+        terrain_hidden,
+    );
     if let Some(raster) = staged_raster {
         fog.raster = raster;
         fog.viewer = Some(viewer);
     }
-    let original_pixels = fog.original_pixels.clone();
-    let mut image = images
-        .get_mut(image_id)
-        .ok_or("minimap CPU pixels unavailable")?;
-    let pixels = image
-        .data
-        .as_mut()
-        .ok_or("minimap CPU pixels unavailable")?;
-    publish_minimap_alpha(pixels, &original_pixels, &alpha, terrain_hidden);
     Ok(())
 }
 fn project(
@@ -488,32 +483,38 @@ fn project(
     let fog_result = if state.fog.is_some() {
         session
             .host()
-            .map(|h| update_fog(&mut state, h.objects(), &mut images))
+            .map(|h| update_fog(&mut state, h.objects(), &images))
     } else {
         None
     };
     let marker_error = {
         let state = &mut *state;
-        match (&mut state.markers, &state.fog, &state.image) {
-            (Some(Err(error)), _, _) => Some(error.clone()),
-            (Some(Ok(markers)), Some(fog), Some(image)) if matches!(fog_result, Some(Ok(()))) => {
-                session.host().and_then(|host| {
-                    images
-                        .get_mut(image)
-                        .ok_or("minimap marker pixels unavailable".to_string())
-                        .and_then(|mut image| {
-                            let pixels = image
-                                .data
-                                .as_mut()
-                                .ok_or("minimap marker pixels unavailable")?;
-                            markers.draw(host.objects(), fog, pixels)
-                        })
-                        .err()
-                })
+        match (&mut state.markers, &mut state.fog) {
+            (Some(Err(error)), _) => Some(error.clone()),
+            (Some(Ok(markers)), Some(fog)) if matches!(fog_result, Some(Ok(()))) => {
+                let mut composed = std::mem::take(&mut fog.composed);
+                let drawn = session
+                    .host()
+                    .and_then(|host| markers.draw(host.objects(), fog, &mut composed).err());
+                fog.composed = composed;
+                drawn
             }
             _ => None,
         }
     };
+    // Upload only when the composed pixels differ from the image's, so an unchanged
+    // minimap raises no asset event and no texture write.
+    if matches!(fog_result, Some(Ok(())))
+        && let (Some(fog), Some(image_id)) = (&state.fog, &state.image)
+        && images
+            .get(image_id)
+            .and_then(|image| image.data.as_deref())
+            .is_some_and(|pixels| pixels != fog.composed.as_slice())
+        && let Some(mut image) = images.get_mut(image_id)
+        && let Some(pixels) = image.data.as_mut()
+    {
+        pixels.copy_from_slice(&fog.composed);
+    }
     let visible = input.camera.active()
         && (matches!(visibility, Some(Ok(()))) || matches!(fog_result, Some(Ok(()))));
     for (part, mut node) in &mut parts {
@@ -697,6 +698,7 @@ fn project(
                     raster,
                     alpha,
                     original_pixels: pixels.clone(),
+                    composed: Vec::new(),
                     original_alpha,
                     viewer: None,
                     width,
@@ -941,6 +943,7 @@ endglobals
                 },
                 original_alpha: vec![255],
                 original_pixels: vec![1, 2, 3, 255],
+                composed: Vec::new(),
                 viewer: None,
                 width: 1,
                 height: 1,
@@ -952,7 +955,7 @@ endglobals
                 .world_mut()
                 .resource_mut::<MapScriptSession<MapStartupHost>>();
             let host = session.host().expect("published host");
-            update_fog(&mut state, host.objects(), &mut images).unwrap_err()
+            update_fog(&mut state, host.objects(), &images).unwrap_err()
         };
         state.last_error = Some(error);
         assert_eq!(
@@ -976,7 +979,7 @@ endglobals
                 .world_mut()
                 .resource_mut::<MapScriptSession<MapStartupHost>>();
             let host = session.host().expect("published host");
-            assert!(update_fog(&mut state, host.objects(), &mut images).is_err());
+            assert!(update_fog(&mut state, host.objects(), &images).is_err());
         }
         assert_eq!(
             images
@@ -998,16 +1001,9 @@ endglobals
             host.objects_mut()
                 .native("FogMaskEnable", &[Value::Bool(false)])
                 .unwrap();
-            update_fog(&mut state, host.objects(), &mut images).unwrap();
+            update_fog(&mut state, host.objects(), &images).unwrap();
         }
-        assert_eq!(
-            images
-                .get(state.image.as_ref().unwrap())
-                .unwrap()
-                .data
-                .as_deref(),
-            Some(&[1, 2, 3, 255][..])
-        );
+        assert_eq!(state.fog.as_ref().unwrap().composed, [1, 2, 3, 255]);
     }
     #[test]
     fn minimap_press_batches_are_bounded_and_cannot_leak_into_a_missing_scene() {
@@ -1213,6 +1209,7 @@ endglobals
             },
             original_alpha: Vec::new(),
             original_pixels: Vec::new(),
+            composed: Vec::new(),
             viewer: None,
             width: 80,
             height: 40,

@@ -39,6 +39,8 @@ pub(crate) struct Raster {
     width: usize,
     height: usize,
     alpha: Vec<u8>,
+    /// The previous projection's buffer, reused so a refused projection keeps `alpha`.
+    scratch: Vec<u8>,
 }
 
 impl Raster {
@@ -79,6 +81,7 @@ impl Raster {
             width,
             height,
             alpha: filled(count, 0)?,
+            scratch: Vec::new(),
         })
     }
 
@@ -147,7 +150,8 @@ impl Raster {
         if self.alpha.len() > work_limit {
             return Err("minimap visibility work budget".into());
         }
-        let mut alpha = Vec::new();
+        let mut alpha = std::mem::take(&mut self.scratch);
+        alpha.clear();
         alpha
             .try_reserve_exact(self.alpha.len())
             .map_err(|_| "minimap visibility allocation")?;
@@ -167,7 +171,8 @@ impl Raster {
                 });
             }
         }
-        self.alpha = alpha;
+        std::mem::swap(&mut self.alpha, &mut alpha);
+        self.scratch = alpha;
         Ok(&self.alpha)
     }
 }
@@ -216,6 +221,34 @@ mod tests {
             &[241, 71, 3, 3]
         );
         assert!(Raster::new(u32::MAX, u32::MAX, 16).is_err());
+    }
+
+    #[test]
+    fn a_failed_projection_keeps_the_last_alpha_and_buffers_are_reused() {
+        let mut raster = Raster::new(2, 2, 4).unwrap();
+        let bounds = [[0., 0.], [2., 2.]];
+        let visible = |_: [f64; 2]| Ok(VisionState::Visible);
+        assert_eq!(
+            raster.project(bounds, OPACITY, 4, visible).unwrap(),
+            [241; 4]
+        );
+        let mut seen = 0;
+        let failing = |_: [f64; 2]| {
+            seen += 1;
+            if seen == 3 {
+                Err("vision refused".to_owned())
+            } else {
+                Ok(VisionState::Masked)
+            }
+        };
+        assert!(raster.project(bounds, OPACITY, 4, failing).is_err());
+        assert_eq!(raster.alpha, [241; 4]);
+        let masked = |_: [f64; 2]| Ok(VisionState::Masked);
+        assert_eq!(raster.project(bounds, OPACITY, 4, masked).unwrap(), [3; 4]);
+        assert_eq!(
+            raster.project(bounds, OPACITY, 4, visible).unwrap(),
+            [241; 4]
+        );
     }
 
     #[test]

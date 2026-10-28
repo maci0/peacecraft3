@@ -49,3 +49,21 @@ Outputs are `.scratch/perf/results/gate.json`, `timing.json`, `instructions.json
 The initial fixed workload passed with 2,000 allocations, zero reallocations, 64,000 requested bytes on x86_64, and state digest `867f3f6327d60281`. Five additional executions with a concurrent CPU-busy process produced identical gate metrics and passed. The optional timing path also passed; its elapsed value was reported only.
 
 The installed Valgrind 3.25.1 could not profile this host: its decoder rejected instruction bytes beginning `62 F1 7F 48` inside the system dynamic loader's `_dl_start`, before the workload started, and terminated with SIGILL. The resulting zero collected instructions is **not** a benchmark result. The instruction command correctly failed; no baseline or speed claim was derived from it. Use a compatible Valgrind/system runtime combination for instruction collection. The allocation/state gate works independently of that profiler. Profiler subprocess core dumps are disabled so a failed engine does not leave binary dumps in the source tree.
+
+## Asset loading and decode workloads
+
+```sh
+python3 tools/perf/assets.py list
+python3 tools/perf/assets.py run --label before --repeat 3
+python3 tools/perf/assets.py compare .scratch/perf-assets/results/before.json .scratch/perf-assets/results/after.json
+```
+
+The `peacecraft-assets-perf` binary (own manifest and lockfile in `tools/perf/assets/`, built into ignored `.scratch/perf-assets/`) runs 20 versioned workloads over the real archive, texture, model, table, map and terrain code: MPQ open, extraction (unchecked, bounded and checked readers), codec table, listfile union, speech sectors, BLP JPEG and palette decode, MDX parse and pose sampling, SLK parse and lookup, object-editor catalog admission, W3M member parsing, terrain mesh and ground selection, and resolver mounting. Each name carries a version (`slk-parse-v1`); changing its inputs or iteration count makes a new name. Inputs are read from the Legacy install at run time (`--install` or `PEACECRAFT3_LEGACY_DIR`) and never copied into the repository.
+
+Each run reports user-mode instructions from `perf stat -e instructions:u`, allocation calls and requested bytes from a counting allocator, fixed-work counters, an input digest and an output digest. Inputs are read before the measured window, and the program opens the counters over `perf stat --control` FIFOs only around the workload (std only, no unsafe code). Decoded results stay alive until the window closes, so hashing them for the digest adds no instructions. Elapsed time is printed for orientation and never decides the exit status.
+
+`compare` exits 1 when an input digest differs (not a comparison), an output digest or fixed-work counter changed (behaviour changed), allocation calls grew, or instructions grew past the tolerance (default 2%). Repeated identical runs differ by tens to thousands of instructions out of millions to billions, independent of host load. Compare only results from the same compiler, perf version and `release` profile; the result file records them. The details, baseline and optimization results are in [asset loading performance](performance/assets.md).
+
+## Simulation, script VM and campaign workloads
+
+`python3 tools/perf/sim_run.py` (manifest `tools/perf/sim_bench/`, built into ignored `.scratch/perf-sim/`) reports user-mode instructions, allocation counters and output digests for the synthetic script VM program, the `common.j`/`Blizzard.j`/map script front end, and the Human03 headless startup plus 4,096 ticks. The Human03 and Human04 route tests in the `peacecraft3` test binary provide the longer fixed-work runs. Setup-only sibling runs are subtracted to isolate the measured work. Digests and route checkpoints must be equal across a change; instruction counts and allocation counts are compared for the same compiler and profile. Workloads, baseline, results and remaining hotspots are in [simulation and script CPU](performance/sim-script.md).

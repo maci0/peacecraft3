@@ -450,6 +450,19 @@ impl ObjectHost {
             .map(|_| record.construction_revision))
     }
 
+    /// Sorted workers that have a positioned construction site, one scan for the whole roster.
+    /// A worker is in the list exactly when `unit_construction_order` finds the site by its
+    /// worker, which is the order it reports for a unit without a construction request.
+    pub(super) fn construction_site_workers(&self) -> Vec<HandleId> {
+        let mut workers: Vec<HandleId> = self
+            .executed_units()
+            .filter(|(_, record)| record.position.is_some())
+            .filter_map(|(_, record)| record.construction.as_ref()?.worker)
+            .collect();
+        workers.sort_unstable();
+        workers
+    }
+
     pub fn unit_construction_order(
         &self,
         worker: HandleId,

@@ -5,7 +5,6 @@
 //! in this crate. The table keeps the image identity it was derived from.
 use crate::pe_image::{PeSections, RDATA, Section, TEXT, i32_at, u32_at};
 use crate::scripts::AssetIdentity;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
@@ -254,7 +253,7 @@ pub fn derive(exe: &[u8], origin: AssetIdentity) -> Result<ItemClassTable, ItemC
     let default = null_default(code, start).ok_or(ItemClassError::Default)?;
     Ok(ItemClassTable {
         origin,
-        image_sha256: Sha256::digest(exe).into(),
+        image_sha256: crate::neutral_player::sha256(exe),
         ordinals,
         default,
     })

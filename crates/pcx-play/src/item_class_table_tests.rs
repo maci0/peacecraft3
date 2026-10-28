@@ -1,5 +1,6 @@
 use super::*;
 use crate::pe_image::{PE_OFFSET_AT, PE32_MAGIC, SECTION_LEN};
+use sha2::{Digest, Sha256};
 
 const IMAGE_BASE: u32 = 0x40_0000;
 const TEXT_RVA: u32 = 0x1000;

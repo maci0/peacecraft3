@@ -38,6 +38,7 @@ fn draw(
             parameters: &source.parameters,
             now: source.now,
             sun: None,
+            view: None,
         },
         std::iter::once(&source.row),
     );

@@ -1,6 +1,13 @@
 //! Render the published session's executed unit handles and their selected source clips.
 use crate::{mainmenu_scene as model_scene, menu_material::MenuMaterial};
-use bevy::{camera::visibility::RenderLayers, ecs::system::SystemParam, prelude::*};
+use bevy::{
+    camera::{
+        primitives::{Frustum, Sphere},
+        visibility::RenderLayers,
+    },
+    ecs::system::SystemParam,
+    prelude::*,
+};
 use pcx_assets::Resolver;
 use pcx_play::{map_startup_host::MapStartupHost, playercolor_host::ExecutedUnit};
 use pcx_script::HandleId;
@@ -55,6 +62,26 @@ struct Actor {
     particle_orders: Option<crate::menu_particle_order::SourceOrderView>,
     particle_clock: std::time::Duration,
     particle_started: f64,
+    /// Inputs of the last full update, when it was cacheable.
+    update_key: Option<UpdateKey>,
+    key_scratch: UpdateKey,
+    /// Linear tinted colour per geoset, rebuilt by each full update.
+    tints: Vec<[f32; 4]>,
+    /// Reused vertex colour buffer for sun lighting.
+    colours: Vec<[f32; 4]>,
+    /// A full update has run, so culling may skip later ones.
+    posed: bool,
+}
+
+/// An actor is updated while its bounding sphere, inflated by this factor to cover animation
+/// beyond the rest extents, touches the camera frustum.
+const CULL_RADIUS_FACTOR: f32 = 2.0;
+
+struct OrderCache {
+    fingerprint: u64,
+    owners: Arc<[bevy::render::sync_world::MainEntity]>,
+    orders:
+        Arc<bevy::render::sync_world::MainEntityHashMap<crate::menu_particle_order::SourceOrder>>,
 }
 
 #[derive(Resource, Default)]
@@ -68,12 +95,14 @@ pub(crate) struct UnitActors {
     failed: BTreeMap<HandleId, Option<(i32, u64)>>,
     image_bytes: usize,
     vertices: usize,
-    parameters: Option<pcx_play::menu_lighting::Parameters>,
+    parameters: Option<Arc<pcx_play::menu_lighting::Parameters>>,
     parameters_attempted: bool,
-    palette: Option<TeamPalette>,
+    palette: Option<Arc<TeamPalette>>,
     water: Option<Result<WaterSurface, String>>,
     sky: sky::Sky,
     doodads: doodads::Doodads,
+    /// Source order of the actor geometry and particles; rebuilt only when the actors change.
+    order_view: Option<OrderCache>,
     destructables: destructables::Draw,
     pub last_error: Option<String>,
 }
@@ -207,7 +236,15 @@ struct ActorQueries<'w, 's> {
     visibility: Query<'w, 's, &'static mut Visibility>,
     transforms: Query<'w, 's, &'static mut Transform, Without<CampaignSceneCamera>>,
     actors: Query<'w, 's, Entity, With<CampaignActor>>,
-    cameras: Query<'w, 's, Entity, With<CampaignSceneCamera>>,
+    cameras: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Option<&'static crate::menu_particle_order::SourceOrderView>,
+        ),
+        With<CampaignSceneCamera>,
+    >,
     scene: sky::SceneCameras<'w, 's>,
 }
 
@@ -1019,11 +1056,27 @@ impl Actor {
                 particle_orders,
                 particle_clock,
                 particle_started: animation.started,
+                update_key: None,
+                key_scratch: UpdateKey::default(),
+                tints: Vec::new(),
+                colours: Vec::new(),
+                posed: false,
             },
             available_images - remaining,
             vertices,
         ))
     }
+    /// True when the actor's inflated bounding sphere can touch the view; an actor outside it
+    /// is not drawn this frame, so its pose and materials may stay stale until it returns.
+    fn in_view(&self, view: &Frustum) -> bool {
+        extent_in_view(
+            view,
+            self.model.minimum_extent,
+            self.model.maximum_extent,
+            &self.world_transform,
+        )
+    }
+
     fn update(
         &mut self,
         visual: Visual,
@@ -1034,10 +1087,13 @@ impl Actor {
             &mut Query<&mut Transform, Without<CampaignSceneCamera>>,
         ),
         terrain: &pcx_map::Terrain,
-        light: Option<(
-            &pcx_play::day_night::Sun,
-            &pcx_play::menu_lighting::Parameters,
-        )>,
+        (light, view): (
+            Option<(
+                &pcx_play::day_night::Sun,
+                &pcx_play::menu_lighting::Parameters,
+            )>,
+            Option<&Frustum>,
+        ),
     ) -> Result<(), String> {
         let animation = visual.animation()?;
         let sample = animation
@@ -1072,46 +1128,82 @@ impl Actor {
         if let Ok(mut transform) = transforms.get_mut(self.root) {
             *transform = self.world_transform;
         }
+        if self.posed && view.is_some_and(|view| !self.in_view(view)) {
+            return Ok(());
+        }
+        let blend = animation.blend_sample(now)?;
+        let tint = match visual {
+            Visual::Unit(unit, ..) => unit_tint(unit, self.tint, self.channel_scale),
+            _ => [self.tint[0], self.tint[1], self.tint[2], 1.0],
+        };
+        if tint[3] < 1.0
+            && self
+                .material_modes
+                .iter()
+                .any(|(mode, _)| *mode == AlphaMode::Multiply)
+        {
+            return Err("scripted unit opacity on modulate layers is not qualified".into());
+        }
+        let elapsed_ms =
+            u32::try_from(sample.elapsed_ms).map_err(|_| "unit global animation clock overflow")?;
+        let look_at = match visual {
+            Visual::Unit(_, Some((bone, target)), _) => Some((bone, target)),
+            _ => None,
+        };
+        // The model faces +X at zero facing: undo the unit's facing around Z.
+        let lighting =
+            light
+                .filter(|_| self.lit.iter().any(|lit| *lit))
+                .map(|(sun, parameters)| {
+                    let (sin, cos) = visual.face().to_radians().sin_cos();
+                    let [x, y, z] = sun.direction;
+                    (
+                        Vec3::new(x * cos + y * sin, -x * sin + y * cos, z),
+                        sun,
+                        parameters,
+                    )
+                });
+        // Every output below is a pure function of this key, so an unchanged key leaves the
+        // meshes and materials exactly as the previous update wrote them.
+        let previous = self.update_key.take();
+        let mut key = std::mem::take(&mut self.key_scratch);
+        key.fill(
+            &sample,
+            &self.runtime.global_sequences,
+            tint,
+            look_at.map(|(_, target)| (target, &self.world_transform)),
+            lighting
+                .as_ref()
+                .map(|(direction, sun, _)| (*direction, **sun)),
+        );
+        if blend.is_none() && previous.as_ref() == Some(&key) {
+            self.key_scratch = key;
+            self.update_key = previous;
+            return Ok(());
+        }
         let skeleton = model_scene::skin_geosets(
             model_scene::Rig {
-                blend: animation.blend_sample(now)?,
+                blend,
                 interval: self.interval,
                 model: &self.model,
                 bones: self.runtime.joints.joints(),
                 pivots: self.runtime.joints.pivots(),
                 global_durations: &self.runtime.global_sequences,
                 camera_pose: None,
-                look_at: match visual {
-                    Visual::Unit(_, Some((bone, target)), _) => Some((
+                look_at: look_at.map(|(bone, target)| {
+                    (
                         bone,
                         self.world_transform
                             .compute_affine()
                             .inverse()
                             .transform_point3(target),
-                    )),
-                    _ => None,
-                },
+                    )
+                }),
             },
             &self.geosets.handles,
             sample.frame,
-            u32::try_from(sample.elapsed_ms).map_err(|_| "unit global animation clock overflow")?,
+            elapsed_ms,
             &mut assets.meshes,
-        )
-        .map_err(|e| e.to_string())?;
-        model_scene::apply_opacity(
-            &self.opacity,
-            &self.geosets.bound,
-            sample.frame,
-            sample.elapsed_ms,
-            &mut assets.materials,
-            visibility,
-        );
-        model_scene::apply_geoset_colour(
-            &self.opacity,
-            &self.geosets.bound,
-            sample.frame,
-            sample.elapsed_ms,
-            &mut assets.materials,
         )
         .map_err(|e| e.to_string())?;
         model_scene::apply_texture_selection(
@@ -1130,58 +1222,148 @@ impl Actor {
             &mut assets.materials,
         )
         .map_err(|e| e.to_string())?;
-        let tint = match visual {
-            Visual::Unit(unit, ..) => unit_tint(unit, self.tint, self.channel_scale),
-            _ => [self.tint[0], self.tint[1], self.tint[2], 1.0],
-        };
-        if tint[3] < 1.0
-            && self
-                .material_modes
-                .iter()
-                .any(|(mode, _)| *mode == AlphaMode::Multiply)
+        // Opacity, colour and tint compose into one value per geoset; a material is only
+        // written when that value differs, so unchanged geosets raise no asset event.
+        self.tints.clear();
+        for (index, ((geoset, entity, handle), (mode, blend))) in self
+            .geosets
+            .bound
+            .iter()
+            .zip(&self.material_modes)
+            .enumerate()
         {
-            return Err("scripted unit opacity on modulate layers is not qualified".into());
-        }
-        for ((_, entity, handle), (mode, blend)) in
-            self.geosets.bound.iter().zip(&self.material_modes)
-        {
-            if let Some(material) = assets.materials.get_mut(handle).as_deref_mut() {
-                let c = material.base.base_color.to_linear();
-                material.base.base_color = Color::linear_rgba(
-                    c.red * tint[0],
-                    c.green * tint[1],
-                    c.blue * tint[2],
-                    c.alpha * tint[3],
-                );
-                material.base.alpha_mode = *mode;
-                material.extension = blend.clone();
-                material
-                    .extension
-                    .apply_unit_opacity(&mut material.base, tint[3]);
-                if let Ok(mut visible) = visibility.get_mut(*entity) {
-                    *visible = if c.alpha * tint[3] <= 0.0 {
-                        Visibility::Hidden
-                    } else {
-                        Visibility::Inherited
-                    };
+            let current = assets
+                .materials
+                .get(handle)
+                .ok_or_else(|| format!("geoset {geoset}: missing bound colour material"))?;
+            let alpha = self
+                .opacity
+                .sample(*geoset, sample.frame, sample.elapsed_ms)
+                .unwrap_or_else(|| current.base.base_color.alpha());
+            let rgb = self
+                .opacity
+                .sample_material_colour(*geoset, sample.frame, sample.elapsed_ms)
+                .map_err(|error| error.to_string())?;
+            let colour = model_scene::checked_geoset_colour(*geoset, rgb, alpha)
+                .map_err(|error| error.to_string())?;
+            let c = colour.to_linear();
+            let tinted = Color::linear_rgba(
+                c.red * tint[0],
+                c.green * tint[1],
+                c.blue * tint[2],
+                c.alpha * tint[3],
+            );
+            let (mode, blend) = blend.with_unit_opacity(*mode, tint[3]);
+            self.tints.push(tinted.to_linear().to_f32_array());
+            // Sun-lit geosets get their colour from the lighting pass below.
+            let sunlit = lighting.is_some() && self.lit[index];
+            if (!sunlit && current.base.base_color != tinted)
+                || current.base.alpha_mode != mode
+                || current.extension != blend
+            {
+                let mut material = assets.materials.get_mut(handle).expect("checked material");
+                if !sunlit {
+                    material.base.base_color = tinted;
+                }
+                material.base.alpha_mode = mode;
+                material.extension = blend;
+            }
+            if let Ok(mut visible) = visibility.get_mut(*entity) {
+                let wanted = if c.alpha * tint[3] <= 0.0 {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                };
+                if *visible != wanted {
+                    *visible = wanted;
                 }
             }
         }
-        if let Some((sun, parameters)) = light {
-            // The model faces +X at zero facing: undo the unit's facing around Z.
-            let (sin, cos) = visual.face().to_radians().sin_cos();
-            let [x, y, z] = sun.direction;
-            let direction = Vec3::new(x * cos + y * sin, -x * sin + y * cos, z);
+        if let Some((direction, sun, parameters)) = lighting {
             crate::menu_lighting::apply_sun(
                 &animation.model.member,
                 &self.model,
                 &skeleton,
                 (&self.geosets.handles, &self.geosets.bound, &self.lit),
+                &self.tints,
                 (direction, sun, parameters),
-                (&mut assets.meshes, &mut assets.materials),
+                (&mut assets.meshes, &mut assets.materials, &mut self.colours),
             )?;
         }
+        self.key_scratch = previous.unwrap_or_default();
+        self.update_key = blend.is_none().then_some(key);
+        self.posed = true;
         Ok(())
+    }
+}
+
+/// True when the sphere around a model's extents, placed by `transform` and inflated by
+/// [`CULL_RADIUS_FACTOR`], can touch the view. Extents with no usable size always count.
+fn extent_in_view(
+    view: &Frustum,
+    minimum: [f32; 3],
+    maximum: [f32; 3],
+    transform: &Transform,
+) -> bool {
+    let (minimum, maximum) = (Vec3::from(minimum), Vec3::from(maximum));
+    let half = (maximum - minimum) / 2.0;
+    let scale = transform.scale.abs().max_element();
+    let radius = half.length() * scale * CULL_RADIUS_FACTOR;
+    if !(radius.is_finite() && radius > 0.0) {
+        return true;
+    }
+    let center = transform.transform_point((minimum + maximum) / 2.0);
+    view.intersects_sphere(
+        &Sphere {
+            center: center.into(),
+            radius,
+        },
+        true,
+    )
+}
+
+/// Inputs of one actor update beyond the unchanging model. Equal keys produce equal assets.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct UpdateKey {
+    interval: [u32; 2],
+    frame: u32,
+    /// Each global sequence's phase: tracks on it sample `elapsed_ms % duration`.
+    phases: Vec<u32>,
+    tint: [u32; 4],
+    /// Look-at target and the world transform it is expressed through, as bits.
+    look_at: Option<[u32; 13]>,
+    /// Sun direction in model space and the sun, present only for lit geosets.
+    light: Option<([u32; 3], pcx_play::day_night::Sun)>,
+}
+
+impl UpdateKey {
+    fn fill(
+        &mut self,
+        sample: &pcx_play::unit_model::Sample,
+        global_sequences: &[u32],
+        tint: [f32; 4],
+        look_at: Option<(Vec3, &Transform)>,
+        light: Option<(Vec3, pcx_play::day_night::Sun)>,
+    ) {
+        self.interval = sample.interval;
+        self.frame = sample.frame;
+        self.phases.clear();
+        self.phases.extend(global_sequences.iter().map(|&duration| {
+            if duration == 0 {
+                0
+            } else {
+                (sample.elapsed_ms % u64::from(duration)) as u32
+            }
+        }));
+        self.tint = tint.map(f32::to_bits);
+        self.look_at = look_at.map(|(target, transform)| {
+            let [rx, ry, rz, rw] = transform.rotation.to_array();
+            let [tx, ty, tz] = transform.translation.to_array();
+            let [sx, sy, sz] = transform.scale.to_array();
+            let [x, y, z] = target.to_array();
+            [x, y, z, tx, ty, tz, rx, ry, rz, rw, sx, sy, sz].map(f32::to_bits)
+        });
+        self.light = light.map(|(direction, sun)| (direction.to_array().map(f32::to_bits), sun));
     }
 }
 
@@ -1422,7 +1604,7 @@ fn project(
         state.parameters_attempted = true;
         let install = crate::launch_gui::selected_install(&sources.launcher);
         match crate::menu_lighting::parameters(install.as_deref()) {
-            Ok(v) => state.parameters = Some(v),
+            Ok(v) => state.parameters = Some(Arc::new(v)),
             Err(e) => state.last_error = Some(e),
         }
         match reader
@@ -1430,7 +1612,7 @@ fn project(
             .map_err(|e| e.to_string())
             .and_then(|asset| TeamPalette::read(&asset.bytes))
         {
-            Ok(palette) => state.palette = Some(palette),
+            Ok(palette) => state.palette = Some(Arc::new(palette)),
             Err(e) => state.last_error = Some(format!("UI/war3skins.txt: {e}")),
         }
     }
@@ -1463,6 +1645,14 @@ fn project(
         }
     };
     let (channel_scale, cutout) = (parameters.channel_scale, parameters.cutout_reference);
+    // The camera was placed earlier this frame; the frustum component still holds the last one.
+    let view = queries
+        .scene
+        .single()
+        .ok()
+        .map(|(_, transform, projection, ..)| {
+            projection.compute_frustum(&GlobalTransform::from(*transform))
+        });
     let sight = if objects.executed_units().next().is_none() {
         None
     } else {
@@ -1611,7 +1801,7 @@ fn project(
                 &mut assets,
                 (&mut queries.visibility, &mut queries.transforms),
                 &context.terrain,
-                sun.as_ref().map(|s| (s, &parameters)),
+                (sun.as_ref().map(|s| (s, &*parameters)), view.as_ref()),
             )
         {
             state.last_error = Some(format!("unit {id:?}: {e}"));
@@ -1624,6 +1814,7 @@ fn project(
         parameters: &parameters,
         now,
         sun: sun.as_ref(),
+        view: view.as_ref(),
     };
     project_ground_items(
         &mut commands,
@@ -1674,42 +1865,73 @@ fn project(
             parameters: &parameters,
         },
     );
-    let mut owners = Vec::new();
-    let mut orders = bevy::render::sync_world::MainEntityHashMap::default();
-    for actor in state.actors.values().chain(state.doodads.actors.values()) {
-        let owner = actor.root.into();
-        owners.push(owner);
-        if let Some(particles) = &actor.particle_orders {
-            orders.extend(
-                particles
-                    .orders
-                    .iter()
-                    .map(|(entity, order)| (*entity, *order)),
-            );
+    // Each actor's roots, particle orders and geoset count are fixed from spawn, so a
+    // fingerprint of them identifies the previous frame's order tables.
+    let fingerprint = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        for actor in state.actors.values().chain(state.doodads.actors.values()) {
+            actor.root.hash(&mut hasher);
+            actor
+                .particle_orders
+                .as_ref()
+                .map(|particles| Arc::as_ptr(&particles.orders) as usize)
+                .hash(&mut hasher);
+            actor.geosets.bound.len().hash(&mut hasher);
         }
-        for (ordinal, entity, _) in &actor.geosets.bound {
-            let binding = &actor.runtime.geosets[*ordinal];
-            orders.insert(
-                (*entity).into(),
-                crate::menu_particle_order::SourceOrder {
-                    owner,
-                    priority_plane: actor.runtime.materials[binding.material_id].priority_plane,
-                    kind: crate::menu_particle_order::SourceKind::Geometry,
-                    ordinal: *ordinal as u32,
-                    sort_far_z: false,
-                },
-            );
+        hasher.finish()
+    };
+    if state
+        .order_view
+        .as_ref()
+        .is_none_or(|cache| cache.fingerprint != fingerprint)
+    {
+        let mut owners = Vec::new();
+        let mut orders = bevy::render::sync_world::MainEntityHashMap::default();
+        for actor in state.actors.values().chain(state.doodads.actors.values()) {
+            let owner = actor.root.into();
+            owners.push(owner);
+            if let Some(particles) = &actor.particle_orders {
+                orders.extend(
+                    particles
+                        .orders
+                        .iter()
+                        .map(|(entity, order)| (*entity, *order)),
+                );
+            }
+            for (ordinal, entity, _) in &actor.geosets.bound {
+                let binding = &actor.runtime.geosets[*ordinal];
+                orders.insert(
+                    (*entity).into(),
+                    crate::menu_particle_order::SourceOrder {
+                        owner,
+                        priority_plane: actor.runtime.materials[binding.material_id].priority_plane,
+                        kind: crate::menu_particle_order::SourceKind::Geometry,
+                        ordinal: *ordinal as u32,
+                        sort_far_z: false,
+                    },
+                );
+            }
         }
+        state.order_view = Some(OrderCache {
+            fingerprint,
+            owners: owners.into(),
+            orders: Arc::new(orders),
+        });
     }
-    let orders = Arc::new(orders);
-    let owners: Arc<[_]> = owners.into();
-    for entity in &queries.cameras {
+    let cache = state.order_view.as_ref().expect("order tables built");
+    for (entity, current) in &queries.cameras {
+        if current.is_some_and(|view| {
+            Arc::ptr_eq(&view.owners, &cache.owners) && Arc::ptr_eq(&view.orders, &cache.orders)
+        }) {
+            continue;
+        }
         commands
             .entity(entity)
             .insert(crate::menu_particle_order::SourceOrderView {
-                owners: Arc::clone(&owners),
+                owners: Arc::clone(&cache.owners),
                 source: "executed campaign actors".into(),
-                orders: Arc::clone(&orders),
+                orders: Arc::clone(&cache.orders),
                 max_phase_items: 65536,
             });
     }
@@ -1818,7 +2040,7 @@ fn project_ground_items<'a>(
                 assets,
                 (&mut queries.visibility, &mut queries.transforms),
                 draw.terrain,
-                draw.sun.map(|sun| (sun, draw.parameters)),
+                (draw.sun.map(|sun| (sun, draw.parameters)), draw.view),
             )
         {
             state.last_error = Some(format!("item {id:?}: {error}"));
@@ -1840,6 +2062,61 @@ fn retire(commands: &mut Commands, state: &mut UnitActors, id: HandleId) {
 mod tests {
     use super::*;
     use pcx_objects::editor::{FieldDef, FieldKind, FieldSource, ObjectKind, SlkId};
+    #[test]
+    fn extents_outside_the_inflated_view_are_culled_and_degenerate_ones_never() {
+        let view = Projection::from(PerspectiveProjection::default())
+            .compute_frustum(&GlobalTransform::default());
+        let unit = ([-1.0; 3], [1.0; 3]);
+        let at = |x: f32, z: f32| Transform::from_xyz(x, 0.0, z);
+        // Straight ahead (-Z), and far to the side where even the doubled radius misses.
+        assert!(extent_in_view(&view, unit.0, unit.1, &at(0.0, -5.0)));
+        assert!(!extent_in_view(&view, unit.0, unit.1, &at(1000.0, -5.0)));
+        // Behind the eye.
+        assert!(!extent_in_view(&view, unit.0, unit.1, &at(0.0, 50.0)));
+        // The doubled radius keeps a model whose centre is just off-screen.
+        let edge = 5.0 * (PerspectiveProjection::default().fov / 2.0).tan() * 1.6;
+        assert!(extent_in_view(&view, unit.0, unit.1, &at(edge, -5.0)));
+        // Zero or nonfinite extents have no radius to test.
+        assert!(extent_in_view(&view, [0.0; 3], [0.0; 3], &at(1000.0, 50.0)));
+        assert!(extent_in_view(
+            &view,
+            [f32::NAN; 3],
+            [1.0; 3],
+            &at(1000.0, 50.0)
+        ));
+    }
+
+    #[test]
+    fn update_key_tracks_only_the_inputs_the_outputs_depend_on() {
+        let sample = |frame, elapsed_ms| pcx_play::unit_model::Sample {
+            interval: [0, 1000],
+            frame,
+            elapsed_ms,
+        };
+        let key = |sample: &pcx_play::unit_model::Sample, tint: [f32; 4]| {
+            let mut key = UpdateKey::default();
+            key.fill(sample, &[400, 0], tint, None, None);
+            key
+        };
+        let base = key(&sample(10, 5000), [1.0; 4]);
+        // Global tracks sample elapsed % duration: 5000 % 400 == 6200 % 400, and a zero-length
+        // sequence is never sampled, so neither clock difference changes the outputs.
+        assert_eq!(base, key(&sample(10, 6200), [1.0; 4]));
+        assert_eq!(base, key(&sample(10, 5000 + 400 * 17), [1.0; 4]));
+        assert_ne!(base, key(&sample(10, 5001), [1.0; 4]));
+        assert_ne!(base, key(&sample(11, 5000), [1.0; 4]));
+        assert_ne!(base, key(&sample(10, 5000), [1.0, 1.0, 1.0, 0.5]));
+        let mut moved = UpdateKey::default();
+        moved.fill(
+            &sample(10, 5000),
+            &[400, 0],
+            [1.0; 4],
+            Some((Vec3::X, &Transform::IDENTITY)),
+            None,
+        );
+        assert_ne!(base, moved);
+    }
+
     #[test]
     fn live_vertex_color_replaces_source_tint_and_preserves_authored_opacity_multiplier() {
         let mut unit = unit();

@@ -31,6 +31,8 @@ pub struct Launcher {
     staging: bool,
     /// Local browser demo restrictions; `None` leaves native/dev mode unchanged.
     content_editions: Option<crate::local_demo::MenuEditions>,
+    /// The last install found for `source` and `mode`; classifying one opens its archives.
+    install: std::sync::Mutex<Option<(String, GameMode, std::path::PathBuf)>>,
 }
 
 impl Default for Launcher {
@@ -41,6 +43,7 @@ impl Default for Launcher {
             log: Vec::new(),
             staging: false,
             content_editions: None,
+            install: Default::default(),
         }
     }
 }
@@ -56,6 +59,7 @@ impl Launcher {
             log: Vec::new(),
             staging: false,
             content_editions: None,
+            install: Default::default(),
         }
     }
 
@@ -353,7 +357,7 @@ pub(crate) fn app_with_plugins(
                     sync_control_transition,
                     show_menu_or_launcher.after(peacecraft3::campaign_camera::CampaignCameraSet),
                     scroll_launcher,
-                    refresh,
+                    refresh.run_if(launcher_is_shown),
                     crate::button_actions::clear,
                 )
                     .chain(),
@@ -672,13 +676,28 @@ fn default_source() -> String {
 }
 
 pub(crate) fn selected_install(launcher: &Launcher) -> Option<std::path::PathBuf> {
-    match classify(&launcher.source).ok()? {
+    let mut cached = launcher
+        .install
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((source, mode, path)) = cached.as_ref()
+        && *source == launcher.source
+        && *mode == launcher.mode
+    {
+        return Some(path.clone());
+    }
+    let found = match classify(&launcher.source).ok()? {
         crate::launch::Source::Directory(path) => Some(path),
         crate::launch::Source::BattleNet(path) => {
             crate::launch::pick_product(&path, &launcher.mode).ok()
         }
         crate::launch::Source::Iso(_) => None,
-    }
+    };
+    // A missing install is not cached, so one that appears is found on the next call.
+    *cached = found
+        .clone()
+        .map(|path| (launcher.source.clone(), launcher.mode, path));
+    found
 }
 
 fn setup(
@@ -4079,6 +4098,13 @@ type ModeSummaryFilter = (
     Without<SourcePath>,
     Without<DetectedAs>,
 );
+
+/// The launcher panel reads the install and its log only while it is on screen.
+fn launcher_is_shown(panels: Query<&Visibility, With<LauncherPanel>>) -> bool {
+    panels
+        .iter()
+        .any(|visibility| *visibility == Visibility::Visible)
+}
 
 fn refresh(
     mut l: ResMut<Launcher>,
