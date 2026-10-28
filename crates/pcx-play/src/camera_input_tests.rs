@@ -603,32 +603,46 @@ fn scroll_multiplier_follows_the_slider_and_keeps_the_default_out_of_range() {
 #[test]
 fn edge_margins_reproduce_the_measured_boundaries_at_three_resolutions() {
     use edge::*;
-    // (size, scrolling left x, right x, top y, bottom y) from the live capture.
-    let measured: [([f32; 2], [f32; 2], [f32; 2], [f32; 2], [f32; 2]); 3] = [
-        (
-            [1280.0, 960.0],
-            [0.0, 6.0],
-            [1274.0, 1279.0],
-            [0.0, 6.0],
-            [954.0, 959.0],
-        ),
-        (
-            [1024.0, 768.0],
-            [0.0, 5.0],
-            [1019.0, 1023.0],
-            [0.0, 5.0],
-            [763.0, 767.0],
-        ),
+    /// Inclusive pixel ranges that scrolled in the live capture, per window size.
+    struct Measured {
+        size: [f32; 2],
+        left: [f32; 2],
+        right: [f32; 2],
+        top: [f32; 2],
+        bottom: Option<[f32; 2]>,
+    }
+    let measured = [
+        Measured {
+            size: [1280.0, 960.0],
+            left: [0.0, 6.0],
+            right: [1274.0, 1279.0],
+            top: [0.0, 6.0],
+            bottom: Some([954.0, 959.0]),
+        },
+        Measured {
+            size: [1024.0, 768.0],
+            left: [0.0, 5.0],
+            right: [1019.0, 1023.0],
+            top: [0.0, 5.0],
+            bottom: Some([763.0, 767.0]),
+        },
         // 1920x1080: the bottom boundary was not measured, so it is not asserted.
-        (
-            [1920.0, 1080.0],
-            [0.0, 9.0],
-            [1911.0, 1919.0],
-            [0.0, 7.0],
-            [0.0, 0.0],
-        ),
+        Measured {
+            size: [1920.0, 1080.0],
+            left: [0.0, 9.0],
+            right: [1911.0, 1919.0],
+            top: [0.0, 7.0],
+            bottom: None,
+        },
     ];
-    for (size, left, right, top, bottom) in measured {
+    for Measured {
+        size,
+        left,
+        right,
+        top,
+        bottom,
+    } in measured
+    {
         let mid = [size[0] / 2.0, size[1] / 2.0];
         for x in left[0] as u32..=left[1] as u32 {
             assert_eq!(edge_mask([x as f32, mid[1]], size), LEFT, "{size:?} {x}");
@@ -642,7 +656,7 @@ fn edge_margins_reproduce_the_measured_boundaries_at_three_resolutions() {
             assert_eq!(edge_mask([mid[0], y as f32], size), UP, "{size:?} {y}");
         }
         assert_eq!(edge_mask([mid[0], top[1] + 1.0], size), 0, "{size:?}");
-        if bottom[1] > 0.0 {
+        if let Some(bottom) = bottom {
             for y in bottom[0] as u32..=bottom[1] as u32 {
                 assert_eq!(edge_mask([mid[0], y as f32], size), DOWN, "{size:?} {y}");
             }
