@@ -85,7 +85,7 @@ Delete, which always end their state.
 | 4 | Space, Backspace and Page keys act on key repeats; F8 and backtick do not. | EX for the first group (no repeat test); handler of the second unread |
 | 5 | Modifiers are ignored for these keys. | EX switch on the key only; the action hash table behind `0x7cd160` was not recovered |
 | 6 | A held arrow wins over the pointer in the same direction. The client shares one slot per direction and the last writer wins. | EX slot; INF for the order |
-| 7 | Edge scroll needs a focused window with the pointer inside it; HUD panels do not block it (the arrow cursor shows over the HUD). The 0.004 margin is the named constant `EDGE_MARGIN_UI`. | RO fit |
+| 7 | Edge scroll needs a focused window with the pointer inside it; HUD panels do not block it (the arrow cursor shows over the HUD and is drawn from `CameraInput::edges`, see [input cursor](input-cursor.md)). The 0.004 margin is the named constant `EDGE_MARGIN_UI`. | RO fit |
 | 8 | Scroll speed is the `[CameraRates]` value times the option multiplier. The executable multiplies a literal `3000.0`, which equals the file value. | SB and EX agree |
 | 9 | The scroll options are the descriptor fallbacks (50, 50, 0). No saved-preference store exists in the recreation yet, so nothing overrides them. | See [original options initialization](original-options-initialization.md) |
 | 10 | Middle drag keeps the grabbed ground point under the pointer: each frame the camera target moves by the grabbed point minus the ground point now under the cursor. | INF from the stored target and screen point |
