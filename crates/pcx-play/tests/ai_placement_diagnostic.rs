@@ -593,7 +593,7 @@ fn human05_placement_diagnostic() {
         panic!("player handle")
     };
     if let Ok(expected) = std::env::var("PCX_TOWN_EXPECT") {
-        use pcx_play::ai_placement::{TownUnitClass, select_town_reference};
+        use pcx_play::ai_placement::{TownUnitClass, select_registered_town_reference};
         let map_script = pcx_map::Map::parse(&bytes)
             .unwrap()
             .extract_checked(&map.display().to_string(), "war3map.j", map_budget)
@@ -638,15 +638,16 @@ fn human05_placement_diagnostic() {
             };
             units.push((id, unit.position.unwrap(), class));
         }
-        let selected =
-            select_town_reference(units.iter().rev().map(|(id, _, class)| (*id, true, *class)))
-                .unwrap();
+        let selected = select_registered_town_reference(
+            units.iter().map(|(id, _, class)| (*id, true, *class)),
+        )
+        .unwrap();
         let position = units.iter().find(|(id, _, _)| *id == selected).unwrap().1;
         let center = rules
             .town_center(spawn, Some(mine), Some(position))
             .unwrap();
         println!(
-            "town snapshot spawn={spawn:?} candidates={units:?} selected={position:?} center={center:?} (reverse creation order hypothesis)"
+            "town snapshot spawn={spawn:?} candidates={units:?} selected={position:?} center={center:?} (fixture assumes registration in creation order)"
         );
         assert_eq!(center, probe_point(&expected));
         return;

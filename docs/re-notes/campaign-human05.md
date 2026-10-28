@@ -112,16 +112,21 @@ checkpoint `fnv64=d42949ae424eb960`. At 1218 s the party holds 26 units (18 foot
 Two fresh release runs, `placement-evidence-1` and `placement-evidence-2`, reached the same
 1223 s refusal. Their Human05 checkpoints, RNG checkpoints and refusal text match each other
 and `r14`; both tests exit 101 because the victory path is not reached. No gameplay code was
-changed by those runs. The placement search remains disconnected from orders. The snapshot
-diagnostic now reproduces both Necropolis sites with the recorded town coordinate and
-source-derived exclusion evidence, while bypassing native reach. The recreation still lacks
-the live town list, complete hierarchical reach search and undead construction path. See
+changed by those runs. At that time the snapshot diagnostic reproduced both Necropolis sites
+with the recorded town coordinate and source-derived exclusion evidence while bypassing native
+reach. Subsequent snapshot checks include reach, but the placement search remains disconnected
+from orders. The recreation still lacks the live town list, live reach inputs and undead construction path. See
 [AI construction](ai-construction.md) for the evidence and limitations. No later Human05 state
 has been verified.
 
 Release runs `snapshotproof-1` and `snapshotproof-2` also stop at 1223 s with exit 101.
 Their Human05 and RNG checkpoint lines match each other and `r14`, including the final RNG
 checkpoint `d42949ae424eb960`. Their refusal includes the remaining placement inputs.
+
+Release runs `town-order-1` and `town-order-2` again stop at 1223 s with exit 101.
+All 98 Human05 and RNG checkpoint lines match each other and `r14`, including the final RNG
+checkpoint `d42949ae424eb960`. The refusal now identifies live town registration and eligibility,
+reach occupancy and links, effect-source evidence and undead construction as missing inputs.
 
 The diagnostic applies the per-unit exclusion predicate and source-derived enumeration
 rectangle with snapshot-specific effect evidence. This does not change the 1223 s production
@@ -144,7 +149,7 @@ details in [AI construction](ai-construction.md).
   sites at their recorded dequeue counts with the hierarchical reach check enabled. Its
   sampled workers and supplied town origins do not replay movement or timer callbacks;
   general live reach inputs, effect-source qualification and town selection remain open.
-  The 1223 s Human05 refusal has not been rerun or removed by this diagnostic work.
+  The 1223 s Human05 refusal remains in both `town-order` runs.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

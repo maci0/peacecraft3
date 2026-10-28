@@ -598,21 +598,41 @@ The selected reference is not the worker that issues the first order. The prefer
 native peon class: `UnitAddType` and `UnitRemoveType` use the type-to-mask table through
 `0x48a660` and write the field at `0x4aed27` and `0x4af739`. The table at `0xe6eb00` maps
 the selected script's `UNIT_TYPE_PEON` enumerand to that bit. The recreation can read the
-initial peon class from `UnitBalance/type`; runtime type changes and native list ordering still
-need qualification. The standalone town-reference selector implements the first eligible peon,
+initial peon class from `UnitBalance/type`; runtime type changes still need qualification.
+The standalone town-reference selector implements the first eligible peon,
 then last eligible structure, then last eligible other unit rule for a caller-supplied list and
-eligibility; synthetic tests cover each branch. It is not wired to live towns. Generalizing the
-observed fourth-created worker into a selection rule would be unsupported. Other refresh
+eligibility; synthetic tests cover each branch. It is not wired to live towns. Other refresh
 triggers also remain open.
+
+Native list insertion is now established independently of the captures. The AI player constructor
+initializes its list head at `0xab9523`. Unit registration `0xab4550` finds the owner's AI state
+and calls `0xabb260`; at `0xabb2d7` the new unit reference is initialized with the prior head,
+and `0xabb31f` installs it as the new head. The selector follows the links at `0xac3fd5`, so it
+visits surviving registrations in reverse registration order. Removal at `0xac4ba7` finds the
+unit; `0xac4c3b` replaces the head or reconnects its predecessor to its successor. This preserves
+the relative order of the other entries. A later registration is therefore newer even when its
+unit was created earlier. Synthetic tests cover removal, re-registration and ineligibility.
+The recreation does not yet record native-equivalent registration events, and creation order
+alone does not establish list order after transfers or re-registration.
+The ownership-change path emits event `0xd01a2` before calling `0xab4550` again at `0x69d795`;
+the prior AI's event dispatcher `0xac09d0` routes that event to removal. The same dispatcher
+also removes on events `0xd01a0` and `0xd01a4`; their complete lifecycle meanings have not
+been established here.
+
+The `+0x20` eligibility bit also has multiple state paths: `0x66714a`, `0x6945ff` and
+`0x6a019c` set it, and `0x6a2600` clears it. The latter two are reached by internal transitions
+as well as visible-unit operations. The host's `shown` field alone has not been established as a
+complete mapping of that bit. The source of every registration and transition, including AI
+activation, ownership and type changes, still needs to be mapped before live selection.
 
 An ignored recreation snapshot now reads each probe's spawn point, facing and worker count
 from its script, creates those workers, reads their peon class from selected unit data and
-supplies them in reverse creation order to that selector. The resulting selected positions and
+supplies them in creation order as the fixture's assumed registration order. The resulting selected positions and
 mine midpoints are (6832, 2096) and (6264, 2776) for baseline, (7568, 2768) and (6632, 3112)
 for workers at start, and (5488, 3216) and (5592, 3336) for workers near the mine. These
-match the three captures. Reverse creation order is a hypothesis for these initial lists, not
-a decoded rule for ownership changes, removals or later type and eligibility updates; the
-diagnostic supplies eligibility as true and does not attach a town to the live AI host.
+match the three captures. Head insertion explains the reversal when creation and registration
+orders coincide; the diagnostic does not establish that correspondence in the live host, supplies
+eligibility as true and does not attach a town to the live AI host.
 
 The isolated bounded breakpoint logs capture every dequeue through the selected candidate and
 the result of every reach query that actually occurred. Empty reach fields in the local trace
@@ -1061,17 +1081,18 @@ deterministically sampled unsigned words; that is not a comparison of full reach
 
 ## Not established
 
-- The recreation mapping of native acolyte list order, eligibility and live type changes, other refresh triggers, and
-  the route metric used to select among towns;
-  terrain sampling at grid edges and the enumerator's boundary/state behavior;
-  live texture dimension mapping, blight and the shared validator's detailed
-  checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
+- Live registration history, the full eligibility bit and type changes, town refresh triggers
+  and the route metric used to select among towns. The diagnostic matches the recorded sites
+  using supplied town origins, eligibility and order-time snapshots; it does not derive those
+  inputs from a running game.
+- Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
+  boundary cases and placement requirements such as blight. The shared validator and the
+  recorded reach cases are implemented for the qualified snapshot inputs described above.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
 - Cost charging for AI construction (the human construction path charges when the structure is
   placed), refund on cancel, and retry cadence when a site or the builder is not ready.
 - The early false answers listed above, and the upgrade fallback.
 
-What would settle placement: map the remaining validator and town state and the hierarchical
-reach search, then rerun the layouts at exact order-time state. Until then
-Human05's orange AI refuses at its first structure, which is the 1223 s stop.
+Production placement needs those live inputs and a construction lifecycle for an undead builder.
+Until then Human05's orange AI refuses at its first structure, at the recorded 1223 s stop.

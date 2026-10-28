@@ -51,6 +51,16 @@ pub fn select_town_reference(
     structure.or(other)
 }
 
+/// Select from surviving registrations in their registration order.
+/// A removed and subsequently registered unit belongs at the end of that order.
+pub fn select_registered_town_reference<I>(units: I) -> Option<HandleId>
+where
+    I: IntoIterator<Item = (HandleId, bool, TownUnitClass)>,
+    I::IntoIter: DoubleEndedIterator,
+{
+    select_town_reference(units.into_iter().rev())
+}
+
 /// Result of the optional player-dependent visibility check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExclusionVisibility {
@@ -845,6 +855,37 @@ mod tests {
         assert_eq!(
             select_town_reference([(id(1), false, TownUnitClass::Peon)]),
             None
+        );
+    }
+
+    #[test]
+    fn town_reference_uses_latest_surviving_registration() {
+        let id = |number| HandleId::new(std::num::NonZeroU64::new(number).unwrap());
+        let peon = TownUnitClass::Peon;
+        let mut registrations = vec![
+            (id(1), true, peon),
+            (id(2), true, peon),
+            (id(3), true, peon),
+        ];
+        assert_eq!(
+            select_registered_town_reference(registrations.iter().copied()),
+            Some(id(3))
+        );
+        registrations.retain(|(unit, _, _)| *unit != id(3));
+        assert_eq!(
+            select_registered_town_reference(registrations.iter().copied()),
+            Some(id(2))
+        );
+        registrations.retain(|(unit, _, _)| *unit != id(1));
+        registrations.push((id(1), true, peon));
+        assert_eq!(
+            select_registered_town_reference(registrations.iter().copied()),
+            Some(id(1))
+        );
+        registrations[1].1 = false;
+        assert_eq!(
+            select_registered_town_reference(registrations.iter().copied()),
+            Some(id(2))
         );
     }
 

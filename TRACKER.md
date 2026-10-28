@@ -5628,3 +5628,24 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Checks: 2,254 `pcx-play` library tests passed; the reach-stamp fixture and four diagnostic
   parser tests passed; native and WASM Clippy passed with warnings denied. The simulation budget
   check passed without raising budgets.
+
+### 2026-10-28: AI town registration ordering
+
+- [~] The native registration path inserts references at the AI list head, and removal
+  reconnects the remaining list without reordering it. Ownership-change events remove the
+  old registration before the unit is registered again. The selector therefore visits
+  surviving registrations in reverse registration order, which need not be reverse creation
+  order after transfers. The reusable selector and synthetic removal, re-registration and
+  ineligibility tests cover this ordering. See [AI construction](docs/re-notes/ai-construction.md).
+- Live registration history, the complete eligibility state, reach occupancy and links,
+  effect-source qualification and unattended undead construction are not connected. The
+  `SetProduce` refusal now names those inputs rather than treating the verified snapshot
+  search as an undecoded search.
+- Local-input snapshots reproduce the three recorded town origins with the fixture's assumed
+  registration sequence. Two release Human05 runs stop at 1223 s; their 98 checkpoint and
+  RNG lines match each other and `r14`. The simulation budget check passes with exactly the
+  previous Human03 allocation and byte counts. The `pcx-play` library suite passes 2,255
+  tests with 87 ignored; native and WASM Clippy pass with warnings denied.
+- Human03 and Human04 route runs pass; all 45 and 72 checkpoint and RNG lines respectively
+  match their `g1` logs. Two initial attempts failed to compile against stale shared target
+  artifacts; rebuilding the affected dependencies cleared those errors.

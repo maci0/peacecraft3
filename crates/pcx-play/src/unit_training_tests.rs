@@ -2157,6 +2157,15 @@ fn ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_wit
         error.to_string().contains("placement is not admitted"),
         "{error}"
     );
+    assert!(
+        error.to_string().contains("live town registration"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("reach occupancy and links"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("undead construction"), "{error}");
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
     // A unit that upgrades into the kind also routes the request (the executable's fallback).
     let (mut vm, actor, _) =
