@@ -8,6 +8,8 @@ mod follow;
 pub(super) mod gathering;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
+#[path = "order_queue_tests.rs"]
+mod queue;
 #[path = "vision_host_tests.rs"]
 mod vision;
 type Vm = pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>;

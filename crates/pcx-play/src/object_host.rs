@@ -48,6 +48,7 @@ pub struct ObjectHost {
     timer_dialogs: bool,
     unit_activity: Option<unit_activity::State>,
     harvest: Option<harvest_runtime::State>,
+    order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -280,6 +281,7 @@ impl ObjectHost {
             order_registry: None,
             unit_activity: None,
             harvest: None,
+            order_queue: None,
             locations: false,
             time_of_day: None,
             threads: thread::Threads::default(),
@@ -896,6 +898,7 @@ impl Host for ObjectHost {
 
     #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.order_queue_observe(name, args);
         if let Some(result) = self.doodad_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1427,6 +1430,12 @@ pub use messages::{MessageBudget, MessageState, TimedMessage};
 
 #[path = "harvest_runtime.rs"]
 pub(crate) mod harvest_runtime;
+#[path = "smart_order.rs"]
+mod smart_order;
+pub use smart_order::{OrderForm, SmartRefusal, SmartTarget};
+#[path = "order_queue_host.rs"]
+mod order_queue;
+pub use order_queue::{QueueBudget, QueueOutcome, QueueRefusal};
 #[path = "unit_activity_host.rs"]
 mod unit_activity;
 pub use unit_activity::{AcceptedSpan, UnitActivity};

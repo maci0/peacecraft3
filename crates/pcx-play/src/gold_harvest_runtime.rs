@@ -632,3 +632,74 @@ impl ObjectHost {
         Ok(())
     }
 }
+
+/// What a smart order from a worker can harvest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmartHarvest {
+    Tree,
+    GoldMine,
+}
+
+impl ObjectHost {
+    /// The harvest `target` is for `worker`, when the worker carries the `Ahar` harvest
+    /// rules and the target is a harvestable tree or a usable gold mine with that capacity.
+    pub(crate) fn smart_harvest_target(
+        &self,
+        worker: HandleId,
+        target: HandleId,
+    ) -> Result<Option<SmartHarvest>, Error> {
+        let Some(state) = self.harvest.as_ref() else {
+            return Ok(None);
+        };
+        let Some(rules) = HarvestRules::from_definition(
+            &state.tables,
+            &state.abilities,
+            &self.executed_unit(worker)?.definition,
+        )
+        .map_err(|error| self.harvest_read_error("Ahar", error))?
+        else {
+            return Ok(None);
+        };
+        if self
+            .executed_unit(target)
+            .is_ok_and(|record| record.resource_amount.is_some())
+        {
+            return Ok((rules.gold_capacity > 0 && self.gold_mine(target)?.is_some())
+                .then_some(SmartHarvest::GoldMine));
+        }
+        Ok((rules.lumber_capacity > 0 && self.explicit_tree_is_harvestable(target)?)
+            .then_some(SmartHarvest::Tree))
+    }
+
+    /// Whether `depot` takes what `worker` carries, so a smart order on it returns the cargo.
+    pub(crate) fn smart_returns_cargo(
+        &mut self,
+        worker: HandleId,
+        depot: HandleId,
+    ) -> Result<bool, Error> {
+        let owner = self.executed_unit(worker)?.owner;
+        let Some(state) = self.harvest.as_ref() else {
+            return Ok(false);
+        };
+        let carried = state
+            .workers
+            .iter()
+            .find(|task| task.unit == worker)
+            .map(|task| (task.carrying >= 1.0, task.gold.as_ref().is_some_and(|g| g.carrying > 0)))
+            .or_else(|| {
+                state.cargo.get(&worker).map(|cargo| {
+                    (
+                        cargo.lumber >= 1.0,
+                        cargo.gold.as_ref().is_some_and(|g| g.carrying > 0),
+                    )
+                })
+            });
+        let Some((lumber, gold)) = carried else {
+            return Ok(false);
+        };
+        if gold && self.depot_accepts(depot, owner, true)? {
+            return Ok(true);
+        }
+        Ok(lumber && self.depot_accepts(depot, owner, false)?)
+    }
+}

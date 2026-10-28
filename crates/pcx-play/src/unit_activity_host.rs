@@ -1245,6 +1245,7 @@ impl ObjectHost {
             self.advance_inventory(work)?;
             self.advance_sound_environments();
             self.advance_construction(now, work)?;
+            self.advance_order_queue();
             self.defer_optional_routes(blocked, refresh)?;
             Ok(moved)
         });
