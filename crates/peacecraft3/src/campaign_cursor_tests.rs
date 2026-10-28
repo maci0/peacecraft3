@@ -111,6 +111,11 @@ fn only_commands_waiting_for_a_target_arm_the_cursor() {
     assert_eq!(Armed::of(Kind::Standard(StandardKind::Attack)), Armed::Attack);
     assert_eq!(Armed::of(Kind::Standard(StandardKind::Move)), Armed::Target);
     assert_eq!(Armed::of(Kind::Standard(StandardKind::Patrol)), Armed::Target);
+    assert_eq!(
+        Armed::of(Kind::Standard(StandardKind::AttackGround)),
+        Armed::Target
+    );
+    assert_eq!(Armed::of(Kind::Standard(StandardKind::Rally)), Armed::Target);
     assert_eq!(Armed::of(Kind::TargetUnit), Armed::Target);
     assert_eq!(Armed::of(Kind::Standard(StandardKind::Stop)), Armed::Nothing);
     assert_eq!(Armed::of(Kind::Immediate), Armed::Nothing);

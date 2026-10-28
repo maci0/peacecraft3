@@ -91,9 +91,13 @@ impl Armed {
     fn of(kind: Kind) -> Self {
         match kind {
             Kind::Standard(StandardKind::Attack) => Self::Attack,
-            Kind::TargetUnit | Kind::Standard(StandardKind::Move | StandardKind::Patrol) => {
-                Self::Target
-            }
+            Kind::TargetUnit
+            | Kind::Standard(
+                StandardKind::Move
+                | StandardKind::Patrol
+                | StandardKind::AttackGround
+                | StandardKind::Rally,
+            ) => Self::Target,
             Kind::Standard(StandardKind::Stop | StandardKind::Hold)
             | Kind::Immediate
             | Kind::Train(_)

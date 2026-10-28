@@ -185,111 +185,123 @@ fn command_button(
         {
             continue;
         }
-        input.build = None;
-        let result = match button.kind {
-            crate::campaign_command_card::Kind::CancelConstruction => {
-                cancel_construction(host, &mut input, button.unit);
-                continue;
+        activate_button(host, &mut input, &mut card, button);
+    }
+}
+
+/// What a card button does when it is activated. A click and the button's hotkey share this
+/// path, so the key reaches exactly the buttons the card shows.
+pub(crate) fn activate_button(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    card: &mut crate::campaign_command_card::CommandCard,
+    button: &crate::campaign_command_card::ButtonOrder,
+) {
+    let objects = host.objects();
+    input.build = None;
+    let result = match button.kind {
+        crate::campaign_command_card::Kind::CancelConstruction => {
+            cancel_construction(host, input, button.unit);
+            return;
+        }
+        crate::campaign_command_card::Kind::BuildMenu
+        | crate::campaign_command_card::Kind::Build(_)
+        | crate::campaign_command_card::Kind::BuildCancel => {
+            if let Err(error) = activate_build(
+                host,
+                input,
+                card,
+                button.unit,
+                button.kind,
+                button.session.clone(),
+            ) {
+                input.last_error = Some(error);
             }
-            crate::campaign_command_card::Kind::BuildMenu
-            | crate::campaign_command_card::Kind::Build(_)
-            | crate::campaign_command_card::Kind::BuildCancel => {
-                if let Err(error) = activate_build(
-                    host,
-                    &mut input,
-                    &mut card,
-                    button.unit,
-                    button.kind,
-                    button.session.clone(),
-                ) {
-                    input.last_error = Some(error);
-                }
-                continue;
-            }
-            crate::campaign_command_card::Kind::TargetUnit => {
-                match (
-                    objects.holy_light_command(button.unit),
-                    objects.chain_lightning_command(button.unit),
-                ) {
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                    (Ok(holy), Ok(chain)) => {
-                        let mut found = Vec::new();
-                        if let Some(command) = holy {
-                            found.push(command);
-                        }
-                        if let Some(command) = chain {
-                            found.push(command);
-                        }
-                        Ok(match button.order {
-                            Some(order) => found.into_iter().find(|command| command.order == order),
-                            None => found.into_iter().next(),
-                        })
+            return;
+        }
+        crate::campaign_command_card::Kind::TargetUnit => {
+            match (
+                objects.holy_light_command(button.unit),
+                objects.chain_lightning_command(button.unit),
+            ) {
+                (Err(error), _) | (_, Err(error)) => Err(error),
+                (Ok(holy), Ok(chain)) => {
+                    let mut found = Vec::new();
+                    if let Some(command) = holy {
+                        found.push(command);
                     }
+                    if let Some(command) = chain {
+                        found.push(command);
+                    }
+                    Ok(match button.order {
+                        Some(order) => found.into_iter().find(|command| command.order == order),
+                        None => found.into_iter().next(),
+                    })
                 }
+            }
+        }
+        crate::campaign_command_card::Kind::Immediate => {
+            objects.water_elemental_command(button.unit)
+        }
+        crate::campaign_command_card::Kind::Train(kind) => {
+            input.command = None;
+            immediate_command(host, input, button.unit, kind, false);
+            return;
+        }
+        crate::campaign_command_card::Kind::Standard(kind) => {
+            if let Err(error) =
+                activate_standard(host, input, button.unit, kind, button.session.clone())
+            {
+                input.last_error = Some(error);
+            }
+            return;
+        }
+        crate::campaign_command_card::Kind::SkillMenu => {
+            card.open_skills();
+            if let Err(error) = host.objects_mut().fire_game_event("EVENT_GAME_SHOW_SKILL") {
+                input.last_error = Some(error.to_string());
+            }
+            return;
+        }
+        crate::campaign_command_card::Kind::SkillCancel => {
+            card.close_skills();
+            return;
+        }
+        crate::campaign_command_card::Kind::Learn(ability) => {
+            learn_skill(host, input, button.unit, ability);
+            return;
+        }
+        // No order exists for this ability yet; the press only stays off the world.
+        crate::campaign_command_card::Kind::DisplayOnly => return,
+    };
+    match result {
+        Ok(Some(command)) => match button.kind {
+            crate::campaign_command_card::Kind::TargetUnit => {
+                input.command = Some(ArmedCommand {
+                    order: command.order,
+                    kind: crate::campaign_command_card::Kind::TargetUnit,
+                    session: button.session.clone(),
+                });
             }
             crate::campaign_command_card::Kind::Immediate => {
-                objects.water_elemental_command(button.unit)
-            }
-            crate::campaign_command_card::Kind::Train(kind) => {
                 input.command = None;
-                immediate_command(host, &mut input, button.unit, kind, false);
-                continue;
+                immediate_command(host, input, button.unit, command.order, true);
             }
-            crate::campaign_command_card::Kind::Standard(kind) => {
-                if let Err(error) =
-                    activate_standard(host, &mut input, button.unit, kind, button.session.clone())
-                {
-                    input.last_error = Some(error);
-                }
-                continue;
+            crate::campaign_command_card::Kind::Standard(_)
+            | crate::campaign_command_card::Kind::Train(_)
+            | crate::campaign_command_card::Kind::SkillMenu
+            | crate::campaign_command_card::Kind::SkillCancel
+            | crate::campaign_command_card::Kind::Learn(_)
+            | crate::campaign_command_card::Kind::DisplayOnly
+            | crate::campaign_command_card::Kind::BuildMenu
+            | crate::campaign_command_card::Kind::Build(_)
+            | crate::campaign_command_card::Kind::BuildCancel
+            | crate::campaign_command_card::Kind::CancelConstruction => {
+                unreachable!("handled above")
             }
-            crate::campaign_command_card::Kind::SkillMenu => {
-                card.open_skills();
-                if let Err(error) = host.objects_mut().fire_game_event("EVENT_GAME_SHOW_SKILL") {
-                    input.last_error = Some(error.to_string());
-                }
-                continue;
-            }
-            crate::campaign_command_card::Kind::SkillCancel => {
-                card.close_skills();
-                continue;
-            }
-            crate::campaign_command_card::Kind::Learn(ability) => {
-                learn_skill(host, &mut input, button.unit, ability);
-                continue;
-            }
-            // No order exists for this ability yet; the press only stays off the world.
-            crate::campaign_command_card::Kind::DisplayOnly => continue,
-        };
-        match result {
-            Ok(Some(command)) => match button.kind {
-                crate::campaign_command_card::Kind::TargetUnit => {
-                    input.command = Some(ArmedCommand {
-                        order: command.order,
-                        kind: crate::campaign_command_card::Kind::TargetUnit,
-                        session: button.session.clone(),
-                    });
-                }
-                crate::campaign_command_card::Kind::Immediate => {
-                    input.command = None;
-                    immediate_command(host, &mut input, button.unit, command.order, true);
-                }
-                crate::campaign_command_card::Kind::Standard(_)
-                | crate::campaign_command_card::Kind::Train(_)
-                | crate::campaign_command_card::Kind::SkillMenu
-                | crate::campaign_command_card::Kind::SkillCancel
-                | crate::campaign_command_card::Kind::Learn(_)
-                | crate::campaign_command_card::Kind::DisplayOnly
-                | crate::campaign_command_card::Kind::BuildMenu
-                | crate::campaign_command_card::Kind::Build(_)
-                | crate::campaign_command_card::Kind::BuildCancel
-                | crate::campaign_command_card::Kind::CancelConstruction => {
-                    unreachable!("handled above")
-                }
-            },
-            Err(error) => input.last_error = Some(error.to_string()),
-            Ok(None) => {}
-        }
+        },
+        Err(error) => input.last_error = Some(error.to_string()),
+        Ok(None) => {}
     }
 }
 
@@ -588,6 +600,11 @@ pub(crate) fn standard_target(
     use pcx_play::standard_command::Kind;
     if target.is_some() && kind == Kind::Patrol {
         return Err("Patrol imitation is not supported yet. Choose a ground point.".into());
+    }
+    if target.is_some() && kind == Kind::Rally {
+        return Err(
+            "A rally point on a unit or item is not simulated yet. Choose a ground point.".into(),
+        );
     }
     for (unit, order) in owned_standard_orders(objects, kind)? {
         let form = match target.filter(|_| matches!(kind, Kind::Attack | Kind::Move)) {
@@ -918,8 +935,8 @@ pub(crate) fn commands_available(
     gate.open()
 }
 
-/// Dispatches authored standard and learned hotkeys. Closed input disarms targeting.
-/// The command card ignores a key pressed with Ctrl or Alt held.
+/// Dispatches the hotkeys of the command card's buttons. Closed input disarms targeting.
+/// The card ignores a key pressed with Ctrl or Alt held (`docs/re-notes/input-command-keys.md`).
 fn command_hotkey(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     controls: CommandControls,
@@ -969,135 +986,25 @@ fn command_hotkey(
             }
         }
     }
-    if let Some(unit) = primary {
-        if card
-            .construction_cancel_hotkey(unit)
-            .and_then(menu_key)
-            .is_some_and(|key| keys.just_pressed(key))
-        {
-            cancel_construction(host, &mut input, unit);
-            return;
-        }
-        let build = card
-            .build_hotkeys(unit)
-            .find(|(_, hotkey)| letter_key(*hotkey).is_some_and(|key| keys.just_pressed(key)));
-        if let (Some((kind, _)), Some(witness)) = (build, witness.clone()) {
-            if let Err(error) = activate_build(host, &mut input, &mut card, unit, kind, witness) {
-                input.last_error = Some(error);
-            }
-            return;
-        }
-        for (kind, hotkey) in card.training_hotkeys(unit) {
-            if letter_key(hotkey).is_some_and(|key| keys.just_pressed(key)) {
-                input.command = None;
-                input.build = None;
-                immediate_command(host, &mut input, unit, kind, false);
-                return;
-            }
-        }
-        for profile in card.standard_profiles().filter(|_| !card.build_page_open()) {
-            if letter_key(profile.hotkey).is_some_and(|key| keys.just_pressed(key))
-                && host
-                    .objects()
-                    .standard_command_order(unit, profile.kind)
-                    .ok()
-                    .flatten()
-                    .is_some()
-                && let Some(session) = witness.clone()
-            {
-                if let Err(error) = activate_standard(host, &mut input, unit, profile.kind, session)
-                {
-                    input.last_error = Some(error);
-                }
-                return;
-            }
-        }
+    let (Some(unit), Some(session)) = (primary, witness) else {
+        return;
+    };
+    let pressed: Vec<u32> = keys
+        .get_just_pressed()
+        .filter_map(|&key| crate::virtual_keys::code(key))
+        .collect();
+    if pressed.is_empty() {
+        return;
     }
-    let objects = host.objects();
-    if let Some(unit) = primary {
-        match objects.water_elemental_command(unit) {
-            Ok(Some(command))
-                if letter_key(command.hotkey).is_some_and(|key| keys.just_pressed(key)) =>
-            {
-                input.command = None;
-                input.build = None;
-                immediate_command(host, &mut input, unit, command.order, true);
-                return;
-            }
-            Err(error) => input.last_error = Some(error.to_string()),
-            _ => {}
-        }
-    }
-    let armed = objects
-        .selection()
-        .iter()
-        .copied()
-        .filter(|&u| {
-            objects
-                .executed_unit(u)
-                .ok()
-                .and_then(|r| objects.player_settings(r.owner).ok())
-                .is_some_and(|p| Some(p.number) == local)
-        })
-        .filter_map(|u| {
-            objects
-                .holy_light_command(u)
-                .inspect_err(|error| input.last_error = Some(error.to_string()))
-                .ok()
-                .flatten()
-        })
-        .find(|command| letter_key(command.hotkey).is_some_and(|k| keys.just_pressed(k)));
-    if let (Some(command), Some(session)) = (armed, witness) {
-        input.command = Some(ArmedCommand {
-            order: command.order,
-            kind: crate::campaign_command_card::Kind::TargetUnit,
+    if let Some(press) = card.button_for_keys(unit, &pressed) {
+        let button = crate::campaign_command_card::ButtonOrder {
+            unit,
+            kind: press.kind,
             session,
-        });
+            order: press.order,
+        };
+        activate_button(host, &mut input, &mut card, &button);
     }
-}
-
-fn menu_key(key: pcx_play::standard_command::MenuHotkey) -> Option<KeyCode> {
-    use pcx_play::standard_command::MenuHotkey;
-    match key {
-        MenuHotkey::Letter(letter) => letter_key(letter),
-        MenuHotkey::Code(code) if code == i32::from(b'\x1b') => Some(KeyCode::Escape),
-        MenuHotkey::Code(_) => None,
-    }
-}
-
-/// Keyboard key of an ASCII letter hotkey from the ability's `Hotkey` profile.
-fn letter_key(letter: char) -> Option<KeyCode> {
-    const LETTERS: [KeyCode; 26] = [
-        KeyCode::KeyA,
-        KeyCode::KeyB,
-        KeyCode::KeyC,
-        KeyCode::KeyD,
-        KeyCode::KeyE,
-        KeyCode::KeyF,
-        KeyCode::KeyG,
-        KeyCode::KeyH,
-        KeyCode::KeyI,
-        KeyCode::KeyJ,
-        KeyCode::KeyK,
-        KeyCode::KeyL,
-        KeyCode::KeyM,
-        KeyCode::KeyN,
-        KeyCode::KeyO,
-        KeyCode::KeyP,
-        KeyCode::KeyQ,
-        KeyCode::KeyR,
-        KeyCode::KeyS,
-        KeyCode::KeyT,
-        KeyCode::KeyU,
-        KeyCode::KeyV,
-        KeyCode::KeyW,
-        KeyCode::KeyX,
-        KeyCode::KeyY,
-        KeyCode::KeyZ,
-    ];
-    letter
-        .is_ascii_uppercase()
-        .then(|| LETTERS[usize::from(letter as u8 - b'A')])
 }
 
 #[derive(SystemParam)]
@@ -2085,24 +1992,6 @@ mod tests {
         assert!(input.command.is_none());
     }
 
-    #[test]
-    fn hotkey_letters_map_to_keys_and_other_characters_do_not() {
-        assert_eq!(letter_key('T'), Some(KeyCode::KeyT));
-        assert_eq!(letter_key('Z'), Some(KeyCode::KeyZ));
-        assert_eq!(letter_key('1'), None);
-        assert_eq!(letter_key('t'), None);
-        assert_eq!(
-            menu_key(pcx_play::standard_command::MenuHotkey::Code(i32::from(
-                b'\x1b'
-            ))),
-            Some(KeyCode::Escape)
-        );
-        assert_eq!(
-            menu_key(pcx_play::standard_command::MenuHotkey::Code(999)),
-            None
-        );
-    }
-
     #[cfg(all(not(target_arch = "wasm32"), feature = "test-fixtures"))]
     #[test]
     fn unavailable_ledger_refuses_a_pick_before_an_order() {
@@ -2217,3 +2106,7 @@ pub(crate) mod box_select_tests;
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_smart_order_tests.rs"]
 mod smart_order_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
+#[path = "campaign_command_keys_tests.rs"]
+mod command_keys_tests;

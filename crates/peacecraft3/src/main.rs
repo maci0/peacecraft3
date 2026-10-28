@@ -41,6 +41,7 @@ mod campaign_unit_panel;
 mod campaign_unit_shadows;
 mod campaign_visibility;
 mod internal_resolution;
+mod virtual_keys;
 use peacecraft3::fdf;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod campaign_audio_probe;

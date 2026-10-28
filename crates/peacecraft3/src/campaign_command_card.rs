@@ -4,7 +4,11 @@ use bevy::{
     ecs::system::SystemParam, picking::events::PointerPress, prelude::*, ui_widgets::Button,
 };
 use pcx_play::{
-    ability_profile, command_layout::Rules, hero_bar_layout, map_startup_host::MapStartupHost,
+    ability_profile,
+    command_hotkey::{CustomKeys, Field, Hotkey, at_rank},
+    command_layout::Rules,
+    hero_bar_layout,
+    map_startup_host::MapStartupHost,
     playercolor_host::ObjectHost,
 };
 use pcx_script::HandleId;
@@ -67,6 +71,13 @@ pub(crate) struct ButtonOrder {
     pub order: Option<i32>,
 }
 
+/// A card button a key press reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ButtonPress {
+    pub kind: Kind,
+    pub order: Option<i32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Icon {
     active: bool,
@@ -82,7 +93,7 @@ struct Icon {
 struct IconData {
     art: String,
     position: [usize; 2],
-    hotkey: Option<char>,
+    hotkey: Option<Hotkey>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct View {
@@ -235,6 +246,8 @@ struct Source {
     skill: (pcx_play::standard_command::MenuButton, String),
     cancel: (pcx_play::standard_command::MenuButton, String),
     cancel_build: (pcx_play::standard_command::MenuButton, String),
+    /// `CustomKeys.txt` entries; empty when the option is off or no file exists.
+    custom_keys: CustomKeys,
     /// Independent of the command grid: a failure here leaves the card mounted.
     hero_bar: Result<HeroBarSource, String>,
     /// Independent of the grid and the hero rows; draws its bars in the hero bar's styling.
@@ -243,6 +256,55 @@ struct Source {
     failed: HashMap<String, String>,
     retained: usize,
     receipts: Vec<AssetReceipt>,
+}
+
+/// A button's hotkey: the `CustomKeys.txt` entry of its section when one exists, else the
+/// profile's own. `section` is the object code or `Cmd` profile name, `rank` the zero-based
+/// level the button stands for.
+fn resolve_hotkey(
+    custom: &CustomKeys,
+    section: &str,
+    field: Field,
+    rank: usize,
+    profile: Option<Hotkey>,
+) -> Option<Hotkey> {
+    match custom.get(section, field) {
+        Some(custom) => at_rank(custom, rank),
+        None => profile,
+    }
+}
+
+impl Source {
+    fn hotkey(
+        &self,
+        section: &str,
+        field: Field,
+        rank: usize,
+        profile: Option<Hotkey>,
+    ) -> Option<Hotkey> {
+        resolve_hotkey(&self.custom_keys, section, field, rank, profile)
+    }
+
+    /// As [`Self::hotkey`] for sources that hold a letter.
+    fn letter_hotkey(
+        &self,
+        section: &str,
+        field: Field,
+        rank: usize,
+        letter: Option<char>,
+    ) -> Option<Hotkey> {
+        self.hotkey(
+            section,
+            field,
+            rank,
+            letter.and_then(|letter| Hotkey::letter(letter).ok()),
+        )
+    }
+}
+
+/// The `CustomKeys.txt` section of an object code.
+fn section_of(code: [u8; 4]) -> String {
+    pcx_objects::fourcc_text(code)
 }
 
 /// Hero-bar layout from the client and the skin art for its two status bars.
@@ -307,67 +369,68 @@ impl CommandCard {
         ])
     }
 
-    pub(crate) fn training_hotkeys(
-        &self,
-        unit: HandleId,
-    ) -> impl Iterator<Item = (i32, char)> + '_ {
-        self.view
-            .iter()
-            .filter(move |view| view.unit == unit && self.last_error.is_none())
-            .flat_map(|view| view.icons.iter())
-            .filter_map(|icon| {
-                if let Kind::Train(kind) = icon.kind {
-                    icon.data.hotkey.map(|key| (kind, key))
-                } else {
-                    None
-                }
-            })
-    }
-    pub(crate) fn standard_profiles(
-        &self,
-    ) -> impl Iterator<Item = &pcx_play::standard_command::Command> {
-        self.source
-            .iter()
-            .flat_map(|source| source.standard.iter().map(|(profile, _)| profile))
-    }
     pub fn receipt_count(&self) -> usize {
         self.source
             .as_ref()
             .map_or(0, |source| source.receipts.len())
     }
 
-    pub(crate) fn build_hotkeys(&self, unit: HandleId) -> impl Iterator<Item = (Kind, char)> + '_ {
+    /// The enabled button of `unit`'s card that a pressed key triggers, first in card order.
+    /// `keys` are virtual-key codes. Only the buttons on the shown page count, as on the
+    /// client's card (`0x638ed0` walks the button grid).
+    pub(crate) fn button_for_keys(&self, unit: HandleId, keys: &[u32]) -> Option<ButtonPress> {
+        if self.last_error.is_some() {
+            return None;
+        }
         self.view
             .iter()
-            .filter(move |view| view.unit == unit && self.last_error.is_none())
+            .filter(|view| view.unit == unit)
             .flat_map(|view| &view.icons)
-            .filter(|icon| icon.unavailable.is_none())
-            .filter_map(|icon| match icon.kind {
-                Kind::BuildMenu | Kind::Build(_) | Kind::BuildCancel => {
-                    icon.data.hotkey.map(|key| (icon.kind, key))
-                }
-                _ => None,
+            .filter(|icon| icon.unavailable.is_none() && !icon.blocked_learning)
+            .find(|icon| {
+                icon.data
+                    .hotkey
+                    .is_some_and(|hotkey| keys.iter().any(|&key| hotkey.matches(key)))
+            })
+            .map(|icon| ButtonPress {
+                kind: icon.kind,
+                order: icon.order,
             })
     }
 
-    pub(crate) fn construction_cancel_hotkey(
-        &self,
-        unit: HandleId,
-    ) -> Option<pcx_play::standard_command::MenuHotkey> {
-        self.view
-            .as_ref()
-            .filter(|view| view.unit == unit && self.last_error.is_none())
-            .filter(|view| {
-                view.icons
-                    .iter()
-                    .any(|icon| icon.kind == Kind::CancelConstruction)
-            })
-            .and(self.source.as_ref())
-            .map(|source| source.cancel_build.0.hotkey)
-    }
-
+    #[cfg(test)]
     pub(crate) fn build_page_open(&self) -> bool {
         self.page == SkillPage::Builds
+    }
+
+    #[cfg(test)]
+    pub(crate) fn skill_page_open(&self) -> bool {
+        self.page == SkillPage::Skills
+    }
+
+    /// Shows `buttons` for `unit` without a mounted console, for input tests.
+    #[cfg(test)]
+    pub(crate) fn show_buttons(&mut self, unit: HandleId, buttons: &[(Kind, Option<Hotkey>)]) {
+        self.view = Some(View {
+            unit,
+            icons: buttons
+                .iter()
+                .map(|&(kind, hotkey)| Icon {
+                    active: false,
+                    rank: None,
+                    blocked_learning: false,
+                    unavailable: None,
+                    kind,
+                    data: IconData {
+                        art: String::new(),
+                        position: [0, 0],
+                        hotkey,
+                    },
+                    tooltip: Err("input test".into()),
+                    order: None,
+                })
+                .collect(),
+        });
     }
 
     pub(crate) fn open_builds(&mut self) {
@@ -481,7 +544,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 data: IconData {
                     art: art.clone(),
                     position: cancel.position,
-                    hotkey: menu_letter(cancel.hotkey),
+                    hotkey: source.hotkey("CmdCancelBuild", Field::Hotkey, 0, Some(cancel.hotkey)),
                 },
                 tooltip: Ok(cancel.tooltip.clone()),
                 order: None,
@@ -528,7 +591,12 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 data: IconData {
                     art: art.clone(),
                     position: profile.position,
-                    hotkey: None,
+                    hotkey: source.hotkey(
+                        profile.kind.profile(),
+                        Field::Hotkey,
+                        0,
+                        Some(profile.hotkey),
+                    ),
                 },
                 tooltip: Ok(profile.tooltip.clone()),
                 order: None,
@@ -567,7 +635,12 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                 data: IconData {
                     art: data.art,
                     position: data.position,
-                    hotkey: None,
+                    hotkey: source.letter_hotkey(
+                        &section_of(command.ability),
+                        Field::Hotkey,
+                        usize::try_from(data.rank.saturating_sub(1)).unwrap_or(0),
+                        Some(command.hotkey),
+                    ),
                 },
                 tooltip,
                 order: Some(command.order),
@@ -596,7 +669,12 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             data: IconData {
                 art: command.art,
                 position: command.position,
-                hotkey: command.hotkey,
+                hotkey: source.letter_hotkey(
+                    &section_of(command.kind.to_be_bytes()),
+                    Field::Hotkey,
+                    0,
+                    command.hotkey,
+                ),
             },
             tooltip: command.tooltip,
             order: None,
@@ -621,7 +699,12 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             data: IconData {
                 art: command.art,
                 position: command.position,
-                hotkey: command.hotkey,
+                hotkey: source.letter_hotkey(
+                    &section_of(command.ability),
+                    Field::Hotkey,
+                    0,
+                    command.hotkey,
+                ),
             },
             tooltip: command.tooltip,
             order: None,
@@ -647,7 +730,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             data: IconData {
                 art: art.clone(),
                 position: button.position,
-                hotkey: menu_letter(button.hotkey),
+                hotkey: source.hotkey("CmdSelectSkill", Field::Hotkey, 0, Some(button.hotkey)),
             },
             tooltip: Ok(button.tooltip.clone()),
             order: None,
@@ -735,7 +818,12 @@ fn building_page(
             data: IconData {
                 art: command.art,
                 position: command.position,
-                hotkey: command.hotkey,
+                hotkey: source.letter_hotkey(
+                    &section_of(command.kind.to_be_bytes()),
+                    Field::Hotkey,
+                    0,
+                    command.hotkey,
+                ),
             },
             tooltip: command.tooltip,
             order: None,
@@ -757,7 +845,7 @@ fn building_page(
         data: IconData {
             art: art.clone(),
             position: cancel.position,
-            hotkey: menu_letter(cancel.hotkey),
+            hotkey: source.hotkey("CmdCancel", Field::Hotkey, 0, Some(cancel.hotkey)),
         },
         tooltip: Ok(cancel.tooltip.clone()),
         order: None,
@@ -796,7 +884,12 @@ fn research_page(
             data: IconData {
                 art: icon.art,
                 position: icon.position,
-                hotkey: Some(icon.hotkey),
+                hotkey: source.letter_hotkey(
+                    &section_of(icon.ability),
+                    Field::Researchhotkey,
+                    usize::try_from(icon.rank.saturating_sub(1)).unwrap_or(0),
+                    Some(icon.hotkey),
+                ),
             },
             tooltip: Ok(pcx_play::ability_profile::Tooltip {
                 title: icon.title,
@@ -821,19 +914,12 @@ fn research_page(
         data: IconData {
             art: art.clone(),
             position: button.position,
-            hotkey: menu_letter(button.hotkey),
+            hotkey: source.hotkey("CmdCancel", Field::Hotkey, 0, Some(button.hotkey)),
         },
         tooltip: Ok(button.tooltip.clone()),
         order: None,
     });
     Ok(Some(View { unit, icons }))
-}
-
-fn menu_letter(hotkey: pcx_play::standard_command::MenuHotkey) -> Option<char> {
-    match hotkey {
-        pcx_play::standard_command::MenuHotkey::Letter(letter) => Some(letter),
-        pcx_play::standard_command::MenuHotkey::Code(_) => None,
-    }
 }
 
 fn read_standard_profiles(
@@ -1317,6 +1403,7 @@ fn project(
                 skill,
                 cancel,
                 cancel_build,
+                custom_keys: CustomKeys::default(),
                 hero_bar,
                 group_panel,
                 receipts,
@@ -1770,7 +1857,7 @@ mod tests {
             pcx_play::standard_command::MenuButton {
                 art_key: "fixture".into(),
                 position: [0, 0],
-                hotkey: pcx_play::standard_command::MenuHotkey::Letter('o'),
+                hotkey: Hotkey::letter('O').unwrap(),
                 tooltip: pcx_play::ability_profile::Tooltip {
                     title: "fixture".into(),
                     description: "fixture".into(),
@@ -1851,6 +1938,7 @@ mod tests {
                 skill: fixture_menu(),
                 cancel: fixture_menu(),
                 cancel_build: fixture_menu(),
+                custom_keys: CustomKeys::default(),
                 hero_bar: Err("fixture".into()),
                 group_panel: Err("fixture".into()),
                 images: HashMap::new(),
@@ -2491,6 +2579,7 @@ mod tests {
             skill: fixture_menu(),
             cancel: fixture_menu(),
             cancel_build: fixture_menu(),
+            custom_keys: CustomKeys::default(),
             hero_bar: Err("fixture".into()),
             group_panel: Err("fixture".into()),
             images: HashMap::from([("fixture".into(), owned.clone())]),
@@ -2691,75 +2780,157 @@ mod tests {
                 .pointer_consumed
         );
     }
+    fn icon(kind: Kind, hotkey: Option<Hotkey>) -> Icon {
+        Icon {
+            active: false,
+            rank: None,
+            blocked_learning: false,
+            unavailable: None,
+            kind,
+            data: IconData {
+                art: "fixture/icon.blp".into(),
+                position: [0, 0],
+                hotkey,
+            },
+            tooltip: Err("fixture".into()),
+            order: None,
+        }
+    }
+
+    fn letter(letter: char) -> Option<Hotkey> {
+        Some(Hotkey::letter(letter).unwrap())
+    }
+
+    const KEY_Q: u32 = 0x51;
+    const KEY_W: u32 = 0x57;
+    const KEY_ESCAPE: u32 = 0x1B;
+
     #[test]
-    fn training_hotkeys_belong_to_the_current_valid_selection() {
+    fn a_key_reaches_the_enabled_button_of_the_shown_unit_with_that_hotkey() {
         let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
         let other = HandleId::new(std::num::NonZeroU64::new(8).unwrap());
+        let train = Kind::Train(i32::from_be_bytes(*b"uNEW"));
         let mut card = CommandCard {
             view: Some(View {
                 unit,
-                icons: vec![Icon {
-                    active: false,
-                    rank: None,
-                    blocked_learning: false,
-                    unavailable: None,
-                    kind: Kind::Train(i32::from_be_bytes(*b"uNEW")),
-                    data: IconData {
-                        art: "fixture/icon.blp".into(),
-                        position: [0, 0],
-                        hotkey: Some('Q'),
-                    },
-                    tooltip: Ok(ability_profile::Tooltip {
-                        title: "Source title".into(),
-                        description: "Source text".into(),
-                    }),
-                    order: None,
-                }],
+                icons: vec![icon(train, letter('Q'))],
             }),
             ..Default::default()
         };
+        let press = |card: &CommandCard, unit, keys: &[u32]| card.button_for_keys(unit, keys);
         assert_eq!(
-            card.training_hotkeys(unit).collect::<Vec<_>>(),
-            vec![(i32::from_be_bytes(*b"uNEW"), 'Q')]
+            press(&card, unit, &[KEY_Q]),
+            Some(ButtonPress {
+                kind: train,
+                order: None
+            })
         );
-        assert!(card.training_hotkeys(other).next().is_none());
+        assert_eq!(press(&card, unit, &[KEY_W]), None);
+        assert_eq!(press(&card, unit, &[]), None);
+        assert_eq!(press(&card, other, &[KEY_Q]), None);
         card.last_error = Some("source mismatch".into());
-        assert!(card.training_hotkeys(unit).next().is_none());
+        assert_eq!(press(&card, unit, &[KEY_Q]), None);
     }
+
     #[test]
-    fn building_hotkeys_follow_source_readiness_and_page_changes() {
+    fn unavailable_and_blocked_buttons_ignore_their_key_and_icons_without_one_never_match() {
         let unit = HandleId::new(std::num::NonZeroU64::new(51).unwrap());
-        let kind = Kind::Build(i32::from_be_bytes(*b"bNEW"));
+        let build = Kind::Build(i32::from_be_bytes(*b"bNEW"));
+        let learn = Kind::Learn(i32::from_be_bytes(*b"AHhb"));
         let mut card = CommandCard {
             view: Some(View {
                 unit,
-                icons: vec![Icon {
-                    active: false,
-                    rank: None,
-                    blocked_learning: false,
-                    unavailable: Some(pcx_play::playercolor_host::BuildUnavailable::Resources),
-                    kind,
-                    data: IconData {
-                        art: "fixture/build.blp".into(),
-                        position: [2, 1],
-                        hotkey: Some('Q'),
-                    },
-                    tooltip: Err("fixture".into()),
-                    order: None,
-                }],
+                icons: vec![
+                    icon(Kind::DisplayOnly, None),
+                    icon(build, letter('Q')),
+                    icon(learn, letter('W')),
+                ],
             }),
             ..default()
         };
-        card.open_builds();
-        assert!(card.build_page_open());
-        assert!(card.build_hotkeys(unit).next().is_none());
-        card.view.as_mut().unwrap().icons[0].unavailable = None;
+        {
+            let icons = &mut card.view.as_mut().unwrap().icons;
+            icons[1].unavailable = Some(pcx_play::playercolor_host::BuildUnavailable::Resources);
+            icons[2].blocked_learning = true;
+        }
+        assert_eq!(card.button_for_keys(unit, &[KEY_Q, KEY_W]), None);
+        {
+            let icons = &mut card.view.as_mut().unwrap().icons;
+            icons[1].unavailable = None;
+            icons[2].blocked_learning = false;
+        }
+        assert_eq!(card.button_for_keys(unit, &[KEY_Q]).unwrap().kind, build);
+        assert_eq!(card.button_for_keys(unit, &[KEY_W]).unwrap().kind, learn);
+        // Two keys in one frame: the first button in card order wins.
         assert_eq!(
-            card.build_hotkeys(unit).collect::<Vec<_>>(),
-            vec![(kind, 'Q')]
+            card.button_for_keys(unit, &[KEY_W, KEY_Q]).unwrap().kind,
+            build
         );
-        card.close_skills();
-        assert!(!card.build_page_open());
+    }
+
+    #[test]
+    fn both_stored_cancel_codes_reach_the_cancel_button_with_escape() {
+        let unit = HandleId::new(std::num::NonZeroU64::new(9).unwrap());
+        for stored in ["27", "512"] {
+            let hotkey = pcx_play::command_hotkey::parse_ranked(stored).unwrap()[0];
+            let card = CommandCard {
+                view: Some(View {
+                    unit,
+                    icons: vec![icon(Kind::SkillCancel, hotkey)],
+                }),
+                ..default()
+            };
+            assert_eq!(
+                card.button_for_keys(unit, &[KEY_ESCAPE]).unwrap().kind,
+                Kind::SkillCancel,
+                "{stored}"
+            );
+            assert_eq!(card.button_for_keys(unit, &[KEY_Q]), None, "{stored}");
+        }
+    }
+
+    #[test]
+    fn custom_keys_replace_the_profile_hotkey_per_section_field_and_rank() {
+        let custom = CustomKeys::parse(
+            "[hfoo]\nHotkey=T\n[Rhme]\nHotkey=X,Y,Z\n[AHre]\nResearchhotkey=U\n[CmdMove]\nHotkey=\n",
+        )
+        .unwrap();
+        let key = |letter| Hotkey::letter(letter).ok();
+        let resolve = |custom: &CustomKeys, section, field, rank, profile| {
+            resolve_hotkey(custom, section, field, rank, profile)
+        };
+        // An overridden section replaces the profile; others keep it.
+        assert_eq!(
+            resolve(&custom, "hfoo", Field::Hotkey, 0, key('F')),
+            key('T')
+        );
+        assert_eq!(
+            resolve(&custom, "hpea", Field::Hotkey, 0, key('P')),
+            key('P')
+        );
+        // The field matters: `Researchhotkey` does not touch `Hotkey`.
+        assert_eq!(
+            resolve(&custom, "AHre", Field::Hotkey, 0, key('R')),
+            key('R')
+        );
+        assert_eq!(
+            resolve(&custom, "AHre", Field::Researchhotkey, 0, key('R')),
+            key('U')
+        );
+        // One entry per rank, the last one serving higher ranks.
+        for (rank, expected) in [(0, 'X'), (1, 'Y'), (2, 'Z'), (5, 'Z')] {
+            assert_eq!(
+                resolve(&custom, "Rhme", Field::Hotkey, rank, key('M')),
+                key(expected)
+            );
+        }
+        // An empty override removes the hotkey.
+        assert_eq!(
+            resolve(&custom, "CmdMove", Field::Hotkey, 0, key('M')),
+            None
+        );
+        let none = CustomKeys::default();
+        assert_eq!(resolve(&none, "hfoo", Field::Hotkey, 0, key('F')), key('F'));
     }
 }
 

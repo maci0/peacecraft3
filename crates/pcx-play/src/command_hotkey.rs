@@ -144,10 +144,7 @@ impl CustomKeys {
             }
             let ranked = parse_ranked(value).map_err(fail)?;
             if entries.insert((section.clone(), field), ranked).is_some() {
-                return Err(fail(format!(
-                    "[{section}] {} is set twice",
-                    field.name()
-                )));
+                return Err(fail(format!("[{section}] {} is set twice", field.name())));
             }
         }
         Ok(Self { entries })
@@ -174,7 +171,10 @@ mod tests {
         assert_eq!(parse_ranked("Q").unwrap(), [key(0x51)]);
         assert_eq!(parse_ranked("27").unwrap(), [key(27)]);
         assert_eq!(parse_ranked("512").unwrap(), [key(512)]);
-        assert_eq!(parse_ranked("X, Y,Z").unwrap(), [key(0x58), key(0x59), key(0x5A)]);
+        assert_eq!(
+            parse_ranked("X, Y,Z").unwrap(),
+            [key(0x58), key(0x59), key(0x5A)]
+        );
         assert_eq!(parse_ranked("").unwrap(), [None]);
         assert_eq!(parse_ranked("B,,C").unwrap(), [key(0x42), None, key(0x43)]);
         // The client does not fold case: lowercase `s` is the code of F4.
@@ -216,7 +216,10 @@ mod tests {
             Some(&[key(0x58), key(0x59), key(0x5A)][..])
         );
         assert_eq!(keys.get("Adef", Field::Unhotkey), Some(&[key(0x42)][..]));
-        assert_eq!(keys.get("AHre", Field::Researchhotkey), Some(&[key(0x55)][..]));
+        assert_eq!(
+            keys.get("AHre", Field::Researchhotkey),
+            Some(&[key(0x55)][..])
+        );
         assert_eq!(keys.get("CmdCancel", Field::Hotkey), Some(&[key(512)][..]));
         assert_eq!(keys.get("ogru", Field::Unhotkey), None);
         assert_eq!(keys.get("hfoo", Field::Hotkey), None);
