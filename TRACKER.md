@@ -16,9 +16,10 @@
   follows progress. `cargo test -p pcx-map -p pcx-play -p peacecraft3` passes with
   zero failures (pcx-play 2,062, application binary 580, local-input gates
   ignored); strict native all-target and wasm32 library/binary Clippy are clean.
-  Open: the emblem and location icons draw on black rectangles
-  (source layers are Blend over alpha-less BLPs, cause not established), colour is
-  not qualified, the screen has not been compared with an original capture, and
+  The emblem and icons now blend correctly (an earlier black-rectangle capture
+  predated the BLP alpha fix). A map that sets no camera still ends its load on
+  published terrain, and script audio is not gated behind the screen because the
+  original's sound natives have no loading check. Open: colour is not qualified, the screen has not been compared with an original capture, and
   the melee panel, network wait, custom map-supplied loading models, continuation
   and browser launches have no loading screen.
 

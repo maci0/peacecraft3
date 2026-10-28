@@ -137,7 +137,7 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   network game.
 - **Recreation choice.** Progress reports come from the recreation's own load
   stages, each worth an equal share (`STAGES` in `campaign_loading.rs`): map bindings
-  published, host inputs prepared, script session running, campaign view active.
+  published, host inputs prepared, script session running, terrain published.
   They are not the original's immediates.
 - **Recreation choice.** The bar eases once per presented frame, the closest
   observable to the original's per-update callback.
@@ -145,8 +145,6 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   from the launch until a press ends the loaded screen, the stand-in for the
   original's load hold token. The campaign view, input and menu are blocked
   meanwhile.
-- **Recreation choice.** Escape ends a screen whose load never completes. The
-  original has no such key.
 - **Recreation choice.** Sprite models are drawn without scene lighting, and the
   background sequence loops by the real-time clock; whether the original plays
   these sequences once is not established.
@@ -158,6 +156,27 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   the screen refuses loudly and the mission loads without it), and a loading screen
   for next-level continuation or the browser path, which do not go through the
   chapter launch.
+
+## Load end without a camera, and audio
+
+**exe.** The load-complete event comes from the game start sequence (the stage
+reports above), not from a camera: nothing in `0x572b90` or its callers reads a
+camera or view state. The recreation therefore ends the load when the session is
+published and its terrain is mounted (`CampaignCamera::view_ready`), and cancels it
+when startup, admission or the terrain for this load is refused. A map that never
+sets a camera ends its screen and waits for the key like any other; whether the
+view then draws is the existing camera consumer's behavior.
+
+**exe.** No loading gate on script audio was found. `StartSound` (`0x4ac260`) is
+skipped only when `0x5add50` is non-zero, which reads two session counters and the
+flag at session `+0x898` (a replay fast-forward predicate, not a loading one);
+`PlayThematicMusic` (`0x4a4200`) forwards straight to the music player (`0x5d9170`)
+with no condition. The loading screen global (`0x113cb30`) is read only by the
+screen's own progress functions. So a sound or music started by `main` plays during
+the load in the original's call path, and the recreation keeps that: script audio is
+not gated behind the screen. Sounds the script starts from timers or dialogs wait
+because the simulation is held. This is static evidence; whether the audio engine
+itself is idle during the load was not observed.
 
 ## Verification
 
@@ -184,21 +203,25 @@ members listed. Nothing here is a runtime observation of the original.
   follows the bar's progress (empty at no stages, about half at two). The capture
   target is plain `Rgba8UnormSrgb`, not the menu's colour working space, so colour is
   not qualified. The frames are local files under `.scratch/` and are not committed.
-- **Unresolved rendering difference.** The shield emblem and the location icons draw
-  on opaque black rectangles in that capture. Their source layers are filter mode 2
-  (Blend) over `HumanSymbol.blp` and `LordaeronLocationIcons.blp`, both JPEG-content
-  BLP1 files whose header alpha bits are 0. Whether the original blends them some
-  other way, or the BLP decode or the capture harness drops information, is not
-  established. The screen is not claimed to match the original until this is
-  resolved.
+- **Resolved: black rectangles.** An earlier capture, taken before `pcx-blp` honoured
+  the fourth JPEG component regardless of `alpha_bits`, drew the emblem and location
+  icons on opaque black rectangles. Both textures are JPEG-content BLP1 files with
+  header alpha bits 0 whose fourth component is real coverage (the emblem has partial
+  alpha at 52,006 of 65,536 pixels, 31,409 fully transparent); their layers are filter
+  mode 2 (Blend), unshaded. Materials, blend mode and uploaded image alpha were
+  checked on the loading screen path and were correct. With the fixed decoder the
+  same render shows the emblem and icons blended over the map. Regression gate:
+  `pcx-blp` `an_alpha_less_header_still_decodes_its_fourth_component_as_alpha`
+  (`PEACECRAFT3_LEGACY_DIR`). The layers' static alpha tracks and the sequence
+  clock were not compared with the original.
 - Not compared against a capture of the original loading screen.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
     Idle --> Loading: mission launched
-    Loading --> AwaitKey: view active
-    Loading --> Idle: stage failed or Escape
+    Loading --> AwaitKey: terrain published
+    Loading --> Idle: stage refused
     AwaitKey --> Idle: key or pointer press
     Idle --> [*]
 ```

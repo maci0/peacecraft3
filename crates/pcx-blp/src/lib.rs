@@ -1867,6 +1867,30 @@ mod logo_alpha_tests {
 }
 
 #[cfg(test)]
+mod loading_screen_alpha_tests {
+    use super::*;
+
+    /// `HumanSymbol.blp` declares no alpha (`alpha_bits` 0) but its fourth JPEG component
+    /// is the emblem's coverage, which the Lordaeron loading screen blends with. Dropping it
+    /// drew the emblem on an opaque black rectangle. Same input rules as the logo test.
+    #[test]
+    #[ignore = "needs a local Warcraft III install; set PEACECRAFT3_LEGACY_DIR"]
+    fn an_alpha_less_header_still_decodes_its_fourth_component_as_alpha() {
+        let root = std::env::var_os("PEACECRAFT3_LEGACY_DIR")
+            .expect("set PEACECRAFT3_LEGACY_DIR to the selected install");
+        let mut set = pcx_mpq::MpqSet::open_wc3(&root).unwrap();
+        let bytes = set
+            .extract(r"UI\Glues\Loading\Backgrounds\Campaigns\HumanSymbol.blp")
+            .unwrap();
+        let (h, px) = decode(&bytes).unwrap();
+        assert_eq!((h.content, h.alpha_bits), (0, 0));
+        let pixels = px.as_chunks::<4>().0;
+        assert!(pixels.iter().any(|p| p[3] == 0), "transparent field");
+        assert!(pixels.iter().any(|p| p[3] == 255), "opaque emblem");
+    }
+}
+
+#[cfg(test)]
 mod bounded_jpeg_tests {
     use super::*;
     // Synthetic two-pixel grayscale JPEG; no supplied game content.
