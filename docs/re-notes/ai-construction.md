@@ -215,7 +215,7 @@ Its caller must supply terrain samples, texture dimensions, complete texture-rec
 the extra check and the shared build validator; it propagates errors from those inputs. Synthetic
 tests exercise these pieces. Production does not yet obtain those inputs or issue a build order.
 The diagnostic below supplies provisional inputs from the local map. The caller must resolve the
-special buffer-radius branch before scoring, and the `0x7fd6b0` check is still unidentified.
+special buffer-radius branch before scoring, and the `0x7fd6b0` reach check is not fully decoded.
 
 The ignored local-input test `ai_placement_original.rs` reads the selected executable, the
 Human05 terrain and pathing bounds, and the stock Necropolis texture from the selected install.
@@ -356,6 +356,63 @@ two individual masked high-bit states (`0x8a20c4` through `0x8a211d`). Mapping t
 the temporary rectangle operations to live placement data remains open, so ordinary reachability is not
 an equivalent replacement. The recreation's route cannot substitute a stationary mine as its moving
 unit: it refuses moving pathing textures. No production placement is admitted on these results.
+
+### Reach search and temporary occupancy cache
+
+The native search behind that check is a bounded, priority-ordered search over four levels of
+spatial cells, not the recreation's unit route. The placement caller supplies the town coordinate
+as its start, the snapped candidate as its goal, movement argument 1 and a work limit of 15
+(`0xad43ee` through `0xad4458`, `0x7fd8a5` through `0x7fd8cb`). The search converts the
+coordinates to its map-relative grid and floors them (`0x7fd6b0`, `0x8a4a60`, `0x9a1520`). It
+uses a priority queue keyed by accumulated cost plus a goal estimate. The ordinary edge cost and
+estimate use the client's integer square-root routine on coordinate differences scaled by 24
+(`0x8a3d00`, `0x99b740`); the queue has its own equal-key ordering (`0x8a3090`, `0x8a2d20`).
+Insertion promotes a new equal-key entry above its parent; removal favors the right child when
+child keys are equal (`0x8a3090`, `0x8a2d20`). It allows at most 15 queue removals, including stale entries, and succeeds when the goal node is
+removed (`0x8a3bf0`). This is a work limit, not a distance or path-length bound. The caller tests
+only whether the result is different from -1 and does not compare the returned distance to a
+threshold (`0xad4442` through `0xad4458`).
+
+At the finest search level the routine considers cardinal and diagonal neighbors; diagonal
+admission depends on the adjoining cardinal checks. The movement argument selects additional
+two-cell-wide clearance checks (`0x8a4200`, `0x8a2e50`, `0x8a4680`). Larger cells use separate
+edge and corner expansion routines and descend into mixed cells (`0x8a43c0`, `0x8a3830`,
+`0x8a2ed0`). A path search over only the recreation's ordinary 32-unit cells therefore does not
+reproduce the native work budget or necessarily the result. Exact edge expansion, integer cost
+rounding, dynamic occupancy flags and worker-reference contents remain to be mapped before this
+search can be implemented faithfully.
+
+The rectangle updates above have a more specific meaning than cache invalidation alone. Each
+base entry contains four two-bit occupancy classifications in byte 7. A pre-search update
+clears that entire byte for each covered cell, temporarily marking those classifications open;
+it also recomputes the parent levels (`0x8b781e` through `0x8b7826`, `0x8b7c50`, `0x8b7990`).
+Consequently this clears any overlapping blocker in those cache cells, not just the referenced
+object. After the search, the base classifications are rebuilt by sampling each corresponding
+two-by-two set of underlying spatial cells, then the parent levels are recomputed
+(`0x8b7835` through `0x8b7877`, `0x8b78b0`, `0x8b7c50`). Zero blocked samples is open, four
+is blocked, and an intermediate count is mixed. The underlying spatial query combines a mask
+with a bounded object chain (`0x8be420`). Which placed structures, mines, trees, destructables
+and mobile units contribute under the selected mask has not yet been reconciled with the
+recreation's pathing layers. The selected first classification uses the image mask at
+`0x10e92a8`: the spatial query rejects matching high-byte cell flags, then follows at most 49
+object-chain links and applies object-state and lower-mask tests (`0x8b7835`, `0x8be420`).
+Those native object-state bits do not by themselves identify the corresponding recreation
+objects. The first builder reference is a position-bearing handle resolved
+through `0x4707f0`; the second is a container resolved through `0x804ad0`. Their actual objects
+and rectangles at the first Human05 order remain unobserved.
+
+The blocked-start early result is an acceptance, not a route: when an in-bounds starting-cell
+lookup returns -1, the initializer returns its immediate-result status and `0x8a2270` returns a
+finite coordinate-based value (`0x8a4b59` through `0x8a4b9e`, `0x8a22a3` through `0x8a232d`).
+The same immediate status is used for matching start and goal cells or matching resolved
+hierarchy nodes. This cannot be replaced by a conventional reachability query. The exact
+order-time state of the cache, including the temporary rectangles, is needed to determine whether
+this branch applies to the mine-centered town.
+
+The local-input diagnostic was rerun after this trace. Its no-reach and movement-route surrogate
+results remain the table above; it does not implement the native queue or cache, so it cannot
+report full-selection ranks. The two oracle positions remain unmatched. No production search was
+connected, and the Human05 route was not rerun.
 
 ## Not established
 

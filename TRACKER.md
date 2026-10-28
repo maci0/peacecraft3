@@ -5198,3 +5198,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored. The synthetic
   facing and grid tests, ignored local-input diagnostic, native and WASM Clippy with
   `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed; budgets were unchanged.
+
+### 2026-10-28: Native placement reach search
+
+- [~] The additional check starts at the town coordinate and searches toward the snapped site
+  with a priority queue limited to 15 removals, not a distance limit. Temporary builder-associated
+  rectangles clear packed occupancy classifications before the search and restore them from
+  spatial queries afterward. The blocked-start branch returns a finite result without a route.
+  Addresses, scope and unresolved dynamic occupancy and expansion details:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The full check and the Human05 order-time town and rectangle states remain unresolved.
+  The repeated local-input diagnostic still misses both Necropolis oracles. Production remains
+  disconnected and refuses; the last reproducible Human05 pair stops at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the ignored
+  local-input diagnostic, native and WASM Clippy with `-D warnings`, and
+  `python3 tools/perf/sim_run.py --check` passed. No budget was raised.

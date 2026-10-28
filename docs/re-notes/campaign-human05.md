@@ -120,7 +120,10 @@ origins. None of the completed variants selects either recorded Necropolis posit
 town-origin route variants exhaust their diagnostic work bound. The native search returns the
 first accepted immediate-score candidate, and a refreshed diagnostic using the selected building
 angle did not change these results. Its inputs and limitations are
-recorded in [AI construction](ai-construction.md).
+recorded in [AI construction](ai-construction.md). Further tracing established the native reach
+search's bounded priority queue and temporary occupancy-cache clearing, but the diagnostic still
+does not implement the complete check. A repeat produced the same mismatches, so no later Human05
+state has been verified.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
