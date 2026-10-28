@@ -39,6 +39,9 @@ const HOVER_NEUTRAL: u32 = 0x5fbf97;
 const HOVER_ENEMY: u32 = 0x5fbfa3;
 /// The same neutral mode, pushed for an object carrying flag `0x100`.
 const HOVER_FLAGGED: u32 = 0x5fbf7b;
+/// The hold-item case replaces texture slot `imm8` of the sprite with the carried item's
+/// icon: `push 0x15; push icon; push sprite; call 0x967800`.
+const ITEM_ICON_SLOT: u32 = 0x616881;
 /// Targeting mode pushes in `0x643280`.
 const TARGET_PLAIN: u32 = 0x64358c;
 const TARGET_NEUTRAL: u32 = 0x64357a;
@@ -80,6 +83,8 @@ pub struct CursorRules {
     target: Modes,
     /// Mode per edge mask; `None` where the client keeps the previous cursor.
     scroll: [Option<u8>; 16],
+    /// The model texture slot the client fills with the carried item's icon.
+    pub item_icon_slot: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -134,12 +139,12 @@ impl CursorRules {
         }
     }
 
-    /// Every sequence name any mode asks the model for, without repeats.
-    pub fn sequences(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.modes.iter().map(|(name, _)| name.as_str()).collect();
-        names.sort_unstable();
-        names.dedup();
-        names
+    /// Every mode the client has and the sequence name it asks the model for.
+    pub fn modes(&self) -> impl Iterator<Item = (u8, &str)> {
+        self.modes
+            .iter()
+            .enumerate()
+            .map(|(mode, (name, _))| (mode as u8, name.as_str()))
     }
 
     /// Rules shaped like the reviewed client's, for tests that never read an image.
@@ -203,6 +208,7 @@ impl CursorRules {
                 ally: 7,
             },
             scroll,
+            item_icon_slot: 21,
         }
     }
 }
@@ -233,7 +239,7 @@ fn decode(image: &[u8], origin: AssetIdentity) -> Result<CursorRules, String> {
     let jump_table = imm32(&pe, GROUP_JUMP, &[0xff, 0x24, 0x85])?;
     let tints = tint_table(&pe, count)?;
     let mut modes = Vec::with_capacity(count);
-    for mode in 0..count {
+    for (mode, tint) in tints.into_iter().enumerate() {
         let group = *code(&pe, group_table + mode as u32, 1)?.first().expect("one byte");
         let entry = word(&pe, jump_table + 4 * u32::from(group))?;
         let indices = tag_indices(&pe, entry, mode as u32)?;
@@ -245,7 +251,7 @@ fn decode(image: &[u8], origin: AssetIdentity) -> Result<CursorRules, String> {
                     .ok_or_else(|| format!("mode {mode} names tag {index}, which is not registered"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        modes.push((names.join(" "), tints[mode]));
+        modes.push((names.join(" "), tint));
     }
     let mode = |site: u32| -> Result<u8, String> {
         let value = imm8(&pe, site, &[0x6a])?;
@@ -276,6 +282,7 @@ fn decode(image: &[u8], origin: AssetIdentity) -> Result<CursorRules, String> {
         hover,
         target,
         scroll: scroll_modes(&pe, count)?,
+        item_icon_slot: u32::from(imm8(&pe, ITEM_ICON_SLOT, &[0x6a])?),
     })
 }
 
@@ -367,10 +374,7 @@ fn tint_table(pe: &Pe<'_>, count: usize) -> Result<Vec<[u8; 3]>, String> {
     }
     let base = base.expect("three loads");
     let bytes = data(pe, base, 3 * count)?;
-    Ok(bytes
-        .chunks_exact(3)
-        .map(|rgb| [rgb[0], rgb[1], rgb[2]])
-        .collect())
+    Ok(bytes.as_chunks::<3>().0.to_vec())
 }
 
 /// Mode per edge mask from the edge-scroll switch.

@@ -202,7 +202,7 @@ fn image() -> Vec<u8> {
     let palette: [[u8; 3]; 4] = [[255, 255, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0]];
     for mode in 0..18usize {
         let tint = match mode {
-            0..=3 | 4..=7 => palette[mode % 4],
+            0..=7 => palette[mode % 4],
             8 => [255, 10, 32],
             _ => [255, 255, 255],
         };
@@ -229,6 +229,7 @@ fn image() -> Vec<u8> {
     ] {
         put(&mut image, site, &[0x6a, mode]);
     }
+    put(&mut image, ITEM_ICON_SLOT, &[0x6a, 0x15]);
     // Edge masks: 1 up, 2 down, 4 left, 8 right and the corner sums; 3 and 7 share a default.
     put(&mut image, SCROLL_MASK_BOUND, &[0x83, 0xfb, 0x09]);
     put(
@@ -276,6 +277,7 @@ fn sequences_are_the_registered_tag_names_each_mode_passes() {
 
 #[test]
 fn tints_follow_the_relation_of_the_hovered_unit() {
+    assert_eq!(rules().item_icon_slot, 21);
     let rules = rules();
     let tint = |pointer| rules.look(pointer).tint;
     assert_eq!(tint(Pointer::Normal), [255, 255, 255]);
@@ -304,7 +306,7 @@ fn every_scroll_mode_is_named_by_distinct_tags() {
     names.sort();
     names.dedup();
     assert_eq!(names.len(), 8);
-    assert!(rules.sequences().contains(&"Scroll Down Left"));
+    assert!(rules.modes().any(|(_, name)| name == "Scroll Down Left"));
 }
 
 #[test]
@@ -356,6 +358,7 @@ fn reviewed_client_yields_the_documented_cursor_rules() {
         let look = rules.look(pointer);
         (look.mode, look.sequence.to_string(), look.tint)
     };
+    assert_eq!(rules.item_icon_slot, 21);
     assert_eq!(look(Pointer::Normal), (0, "Normal".into(), [255, 255, 255]));
     assert_eq!(
         look(Pointer::Hover(Relation::Friend)),
@@ -378,5 +381,9 @@ fn reviewed_client_yields_the_documented_cursor_rules() {
         look(Pointer::Scroll(edge::UP | edge::LEFT)).1,
         "Scroll Up Left"
     );
-    assert_eq!(rules.sequences().len(), 13);
+    let mut names: Vec<_> = rules.modes().map(|(_, name)| name).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), 13);
+    assert_eq!(rules.modes().count(), 18);
 }
