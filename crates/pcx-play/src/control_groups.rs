@@ -174,7 +174,8 @@ impl ControlGroups {
     /// then cleared. A press whose time is not a number never counts as a second.
     pub fn press(&mut self, group: Group, now: f32, window: f32) -> bool {
         let repeated = self.last_press.is_some_and(|last| {
-            last.group == group && (last.at + window).partial_cmp(&now) == Some(std::cmp::Ordering::Greater)
+            last.group == group
+                && (last.at + window).partial_cmp(&now) == Some(std::cmp::Ordering::Greater)
         });
         self.last_press = (!repeated).then_some(Press { group, at: now });
         repeated
@@ -228,14 +229,26 @@ mod tests {
         assert_eq!(groups.members(group(4)), handles(&[3, 1, 2]));
         let big = handles(&(1..=20).collect::<Vec<_>>());
         groups.define(group(4), &big, &world, 12).unwrap();
-        assert_eq!(groups.members(group(4)), handles(&(1..=12).collect::<Vec<_>>()));
+        assert_eq!(
+            groups.members(group(4)),
+            handles(&(1..=12).collect::<Vec<_>>())
+        );
     }
 
     #[test]
     fn define_refuses_in_the_originals_three_cases_and_keeps_the_old_group() {
-        let world = world(2, &[(5, Standing::Foreign), (6, Standing::NotUnit), (7, Standing::Gone)]);
+        let world = world(
+            2,
+            &[
+                (5, Standing::Foreign),
+                (6, Standing::NotUnit),
+                (7, Standing::Gone),
+            ],
+        );
         let mut groups = ControlGroups::default();
-        groups.define(group(0), &handles(&[1, 2]), &world, 12).unwrap();
+        groups
+            .define(group(0), &handles(&[1, 2]), &world, 12)
+            .unwrap();
         for (selection, refusal) in [
             (vec![], Refusal::EmptySelection),
             (handles(&[7]), Refusal::EmptySelection),
@@ -256,9 +269,13 @@ mod tests {
     fn extend_appends_new_units_after_the_kept_members() {
         let world = world(8, &[(9, Standing::Foreign), (10, Standing::Gone)]);
         let mut groups = ControlGroups::default();
-        groups.define(group(1), &handles(&[4, 2, 10]), &world, 12).unwrap();
+        groups
+            .define(group(1), &handles(&[4, 2, 10]), &world, 12)
+            .unwrap();
         // 10 is gone: the define already skipped it. Add 2 (present), 5 and a foreign unit.
-        groups.extend(group(1), &handles(&[2, 5, 9]), &world, 12).unwrap();
+        groups
+            .extend(group(1), &handles(&[2, 5, 9]), &world, 12)
+            .unwrap();
         assert_eq!(groups.members(group(1)), handles(&[4, 2, 5]));
     }
 
@@ -266,9 +283,13 @@ mod tests {
     fn extend_drops_dead_members_and_cuts_at_the_cap() {
         let mut world = world(6, &[]);
         let mut groups = ControlGroups::default();
-        groups.define(group(1), &handles(&[1, 2, 3]), &world, 4).unwrap();
+        groups
+            .define(group(1), &handles(&[1, 2, 3]), &world, 4)
+            .unwrap();
         world.0.insert(handle(2), Standing::Gone);
-        groups.extend(group(1), &handles(&[4, 5, 6]), &world, 4).unwrap();
+        groups
+            .extend(group(1), &handles(&[4, 5, 6]), &world, 4)
+            .unwrap();
         assert_eq!(groups.members(group(1)), handles(&[1, 3, 4, 5]));
     }
 
@@ -295,7 +316,9 @@ mod tests {
     fn recall_returns_controlled_members_and_forgets_the_dead() {
         let mut world = world(5, &[]);
         let mut groups = ControlGroups::default();
-        groups.define(group(7), &handles(&[1, 2, 3, 4]), &world, 12).unwrap();
+        groups
+            .define(group(7), &handles(&[1, 2, 3, 4]), &world, 12)
+            .unwrap();
         world.0.insert(handle(2), Standing::Gone);
         world.0.insert(handle(3), Standing::Foreign);
         assert_eq!(groups.recall(group(7), &world, 12), handles(&[1, 4]));
@@ -318,7 +341,10 @@ mod tests {
         assert!(!groups.press(one, 10.3, 0.5), "memory was reset");
         assert!(!groups.press(two, 10.4, 0.5), "another group starts afresh");
         assert!(!groups.press(one, 10.5, 0.5));
-        assert!(!groups.press(one, 11.0, 0.5), "exactly one window later is outside");
+        assert!(
+            !groups.press(one, 11.0, 0.5),
+            "exactly one window later is outside"
+        );
         assert!(groups.press(one, 11.49, 0.5));
     }
 

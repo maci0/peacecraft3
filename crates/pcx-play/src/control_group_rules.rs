@@ -150,8 +150,22 @@ fn digit_groups<'a>(
         return Err("missing virtual-key limit instruction".into());
     };
     let limit = u32::from_le_bytes([l0, l1, l2, l3]);
-    let &[0x0f, 0xb6, 0x80, a0, a1, a2, a3, 0xff, 0x24, 0x85, b0, b1, b2, b3] =
-        code(KEY_SWITCH, 14)?
+    let &[
+        0x0f,
+        0xb6,
+        0x80,
+        a0,
+        a1,
+        a2,
+        a3,
+        0xff,
+        0x24,
+        0x85,
+        b0,
+        b1,
+        b2,
+        b3,
+    ] = code(KEY_SWITCH, 14)?
     else {
         return Err("missing virtual-key switch instructions".into());
     };
@@ -186,7 +200,9 @@ fn digit_groups<'a>(
     Ok(groups)
 }
 
-fn selection_cap<'a>(code: &impl Fn(u32, usize) -> Result<&'a [u8], String>) -> Result<usize, String> {
+fn selection_cap<'a>(
+    code: &impl Fn(u32, usize) -> Result<&'a [u8], String>,
+) -> Result<usize, String> {
     let &[0xbb, d0, d1, d2, d3, 0x39, 0x1f, 0x0f, 0x42, 0x1f] = code(CAP_DEFINE, 10)? else {
         return Err("missing define cap instructions".into());
     };
@@ -264,13 +280,35 @@ fn error_keys<'a>(
     else {
         return Err("missing selection-empty error code".into());
     };
-    let &[0xf7, 0xd9, 0x6a, 0x00, 0x1b, 0xc9, 0x6a, 0x00, 0x83, 0xc1, merged] =
-        code(CODE_MERGED_EMPTY, 11)?
+    let &[
+        0xf7,
+        0xd9,
+        0x6a,
+        0x00,
+        0x1b,
+        0xc9,
+        0x6a,
+        0x00,
+        0x83,
+        0xc1,
+        merged,
+    ] = code(CODE_MERGED_EMPTY, 11)?
     else {
         return Err("missing merged-empty error code".into());
     };
-    let &[0xf7, 0xdb, 0x6a, 0x00, 0x1b, 0xdb, 0x6a, 0x00, 0x83, 0xc3, filtered] =
-        code(CODE_FILTERED_EMPTY, 11)?
+    let &[
+        0xf7,
+        0xdb,
+        0x6a,
+        0x00,
+        0x1b,
+        0xdb,
+        0x6a,
+        0x00,
+        0x83,
+        0xc3,
+        filtered,
+    ] = code(CODE_FILTERED_EMPTY, 11)?
     else {
         return Err("missing filtered-empty error code".into());
     };
