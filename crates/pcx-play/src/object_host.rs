@@ -10,6 +10,7 @@ pub struct ObjectHost {
     fog_modifiers: bool,
     shared_vision: Option<vision::VisionSlot>,
     selection: Option<Vec<HandleId>>,
+    active_subgroup: Option<[u8; 4]>,
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
     dialogs: Option<dialogs::DialogState>,
@@ -310,6 +311,7 @@ impl ObjectHost {
             leaderboards: None,
             pings: Vec::new(),
             selection: None,
+            active_subgroup: None,
             fog_modifiers: false,
             shared_vision: None,
             effects: false,
@@ -1484,6 +1486,8 @@ pub use vision::{
 
 #[path = "selection_host.rs"]
 mod selection;
+#[path = "selection_subgroup_host.rs"]
+mod subgroup_host;
 
 #[path = "dialog_host.rs"]
 mod dialogs;

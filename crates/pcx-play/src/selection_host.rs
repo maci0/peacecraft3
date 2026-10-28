@@ -66,6 +66,7 @@ impl ObjectHost {
                     if record.shown && record.combat.as_ref().is_none_or(|c| !c.dead))
             })
             .collect();
+        self.active_subgroup = None;
         let Some(selection) = &mut self.selection else {
             return;
         };
@@ -131,6 +132,7 @@ impl ObjectHost {
         self.inner.program.natives().get(name)?;
         Some(match (name, args) {
             ("ClearSelection", []) => {
+                self.active_subgroup = None;
                 self.selection.as_mut().expect("admitted").clear();
                 Ok(Value::Null)
             }

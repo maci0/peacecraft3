@@ -91,6 +91,7 @@ pub mod game_cache;
 pub mod generator;
 pub mod group_order_rules;
 pub mod headless_startup;
+pub mod group_panel_layout;
 pub mod hero_bar_layout;
 pub mod hero_experience;
 pub mod hero_skills;
@@ -191,7 +192,9 @@ pub mod inventory;
 pub mod player_command_log;
 pub mod player_removal_rules;
 pub mod selection_box;
+pub mod selection_click;
 pub mod selection_circle;
+pub mod selection_subgroups;
 
 pub mod harvest_rules;
 
