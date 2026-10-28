@@ -478,6 +478,19 @@ objects. The first builder reference is a position-bearing handle resolved
 through `0x4707f0`; the second is a container resolved through `0x804ad0`. Their actual objects
 and rectangles at the first Human05 order remain unobserved.
 
+The unit constructor initializes the `+0x26c` field as an embedded position handle with an
+empty reference (`0x6759c8` through `0x6759e6`). Its methods resolve a spatial object through
+the handle's two stored words (`0x801cc0`), and another method follows that object's owner
+link (`0x801ce0`). Unit position and facing operations use the same field (`0x690e7e`,
+`0x4ab4d0`). This establishes a unit-associated spatial handle, but the identity reached in
+the farm trace has not yet been read from its owner link. The first reach classification's
+selected image mask contains both low bits 2 and 4 as well as their corresponding high-byte
+cell bits (`0x10e92a8`). The recreation's aggregate ground occupancy alone does not expose
+the native per-entry state filter, so this mask cannot yet be mapped by counting all mobile
+or footprint stamps as blockers. The test-only hierarchy module now classifies four supplied
+spatial results and models clearing without dropping the auxiliary link; it does not derive
+the four results from live objects.
+
 The blocked-start early result is an acceptance, not a route: when an in-bounds starting-cell
 lookup returns -1, the initializer returns its immediate-result status and `0x8a2270` returns a
 finite coordinate-based value (`0x8a4b59` through `0x8a4b9e`, `0x8a22a3` through `0x8a232d`).
@@ -969,9 +982,16 @@ blocked or outside the grid, open when all four are open without links, and mixe
 an open child with an auxiliary link also makes the parent mixed (`0x8b7990`). The node
 created for an open hierarchy cell stores the base-grid coordinate of the first lookup, not
 the geometric center (`0x8a3b50`, `0x8a48f0`). Subsequent lookups reuse that cell's node.
-The test-only `native_path_hierarchy` module implements the aggregation and lookup pieces on
-caller-supplied classifications, with synthetic boundary and link tests. It does not create
-or cache search nodes, expand edges, compute costs or build the native occupancy cache.
+The test-only `native_path_hierarchy` module implements aggregation, lookup and a search-local
+node cache on caller-supplied classifications. It recursively splits mixed edges in their
+decoded order, tracks the two corner-admission flags, and descends a mixed corner at the same
+coordinate. It can run the priority queue against caller-supplied expansions; the synthetic
+tests cover a successful route, a work-limited failure and a stale removal. The search takes
+already resolved open start and goal nodes; its caller must handle the native blocked-start
+early result. Self-edges refuse until their native update behavior is qualified. A separate
+caller-supplied edge work bound refuses an incomplete diagnostic expansion; it is not the
+native queue-removal budget. The module does not build the native occupancy cache or connect
+the supplied expansions to a live placement query.
 At a coarse node, `0x8a43c0` visits the negative-y, positive-x, positive-y and negative-x
 edges in that order, then tests the four corners in the corresponding order. The edge walkers
 can emit multiple lower-level nodes when a neighboring cell is mixed, so a single coarse
@@ -982,16 +1002,29 @@ At the end of that edge it also requires `(x+1, y+1)` and either `(x+1, y+2)` or
 corresponding transposed checks (`0x8a4f00`, `0x8a5200`). The other two edge-end helpers
 have additional alternative clearance patterns (`0x8a32d0`, `0x8a4c20`); these checks read
 the base occupancy classifications, so their results still depend on the missing cache input.
-The two negative-edge predicates have synthetic tests in the test-only hierarchy module.
+All four edge-clearance predicates have synthetic tests in the test-only hierarchy module.
+Each coarse corner is considered only when its two adjoining edge flags are set; a mixed
+corner descends at the same coordinate until it is blocked or resolves to an open node.
+For class 2, the corner checks require respectively the positive-x neighbor, the three other
+cells of its positive-x/positive-y square, the positive-y neighbor, and no additional base
+cells (`0x8a3620`, `0x8a4190`, `0x8a45a0`, `0x8a3710`). Their clearance predicates and
+descent have synthetic tests in the hierarchy module.
 For internal movement class 2, the finest-level positive-x check also requires the cells one
 step farther in positive x, with the second at positive y; the positive-y check similarly
 requires the next row at the current and positive-x columns (`0x8a2e50`, `0x8a4680`). The
 relationship between this internal class and every recreation movement state remains open.
+The base expansion also preserves the parity-dependent extra clearance before entering a
+coarse neighbor (`0x8a3760`, `0x8a3980`, `0x8a4d50`, `0x8a5170`). For a special link, the
+native path-length walk checks the parent node's link marker, rather than the current node's
+marker (`0x8a3130`). The diagnostic follows that ordering and refuses an unqualified link.
 The distance helper `0x99b740` chooses an initial integer estimate from three input ranges,
 then repeatedly averages the estimate with integer division of the input by that estimate.
-It stops when half the signed difference is zero. A replacement must preserve that termination
-and integer arithmetic, rather than assume a host floating-point square root has identical
-rounding.
+It stops when half the signed difference is zero. At termination its integer average is the
+floor of the square root, so the test-only distance helper uses integer square root after
+checking that the squared input fits the native unsigned word; it refuses larger inputs. The
+coordinate scale remains a caller-supplied source value. A local comparison of the decoded
+iteration and integer square root agreed over one million consecutive inputs and 100,000
+deterministically sampled unsigned words; that is not a comparison of full reach searches.
 
 ## Not established
 

@@ -5554,3 +5554,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   [AI construction](docs/re-notes/ai-construction.md).
 - Checks: 2,210 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
   denied; the simulation budget check passed without raising budgets.
+
+### 2026-10-28: Reach traversal and position-handle trace
+
+- [~] Extended the test-only reach diagnostic with bounded node caching, base and coarse
+  neighbor expansion, mixed-edge splitting, corner and width checks, integer path costs and
+  priority-queue removal accounting. Synthetic tests exercise a route, stale entries, links
+  and refusal cases. Source-qualified live occupancy and the 100 and 12 recorded reach results
+  remain unvalidated; production construction remains refused.
+- The builder's `+0x26c` field is an embedded position handle whose resolved spatial object
+  has an owner link. A read-only farm debugger harness is prepared under `.scratch/` to identify
+  that owner and its cleared rectangle; it has not been launched. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Checks: 2,239 `pcx-play` library tests passed; native and WASM Clippy passed with warnings
+  denied; the simulation budget check passed without raising budgets. The recorded reach
+  tables and original-client debugger capture were not run.
