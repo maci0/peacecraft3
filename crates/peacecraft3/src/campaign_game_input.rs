@@ -89,7 +89,7 @@ pub(crate) fn sync_gate(
     }
 }
 
-fn refresh_gate(
+pub(crate) fn refresh_gate(
     view: Res<CampaignCamera>,
     hud: Res<crate::campaign_hud::CampaignHud>,
     dialogs: Res<crate::campaign_script_dialogs::CampaignScriptDialogs>,

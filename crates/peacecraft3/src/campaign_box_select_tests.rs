@@ -91,12 +91,14 @@ impl Rig {
             .add_systems(
                 Update,
                 (
+                    crate::campaign_game_input::refresh_gate,
                     crate::campaign_box_select::gesture_input,
                     click,
                     crate::campaign_box_select::draw_outline,
                 )
                     .chain(),
             );
+        peacecraft3::game_input::install(&mut app);
         app.world_mut().resource_mut::<GroundPublication>().context = Some(context.clone());
         let window = app
             .world_mut()
