@@ -28,6 +28,7 @@ fn negative(rawcode: [u8; 4]) -> ActiveBuff {
 #[cfg(feature = "test-fixtures")]
 #[test]
 fn placement_diagnostic_reports_live_buff_ids() {
+    use crate::ai_placement::PlacementEventKind;
     let (mut vm, a, _) = open_clocked(&armed("64", "normal"), rules());
     let h = &mut vm.host().inner;
     assert!(h.diagnostic_ai_buffs(a).unwrap().is_empty());
@@ -35,6 +36,21 @@ fn placement_diagnostic_reports_live_buff_ids() {
     assert_eq!(h.diagnostic_ai_buffs(a).unwrap(), vec![*b"Bxyz"]);
     assert!(h.detach_unit_buff(a, *b"Bxyz"));
     assert!(h.diagnostic_ai_buffs(a).unwrap().is_empty());
+    assert!(
+        h.placement_events(a)
+            .unwrap()
+            .all(|event| event.game_time == h.timer_game_time().unwrap())
+    );
+    assert_eq!(
+        h.placement_events(a)
+            .unwrap()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        [
+            PlacementEventKind::BuffApplied(*b"Bxyz"),
+            PlacementEventKind::BuffRemoved(*b"Bxyz")
+        ]
+    );
 }
 
 #[test]

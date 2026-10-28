@@ -458,28 +458,62 @@ fn queued_animation_advances_on_the_simulation_clock_with_one_work_unit() {
 
 #[test]
 fn pause_request_history_tracks_only_successful_requests() {
+    use crate::ai_placement::PlacementEventKind;
     let mut vm = open();
     let a = unit(&vm, "A");
     let b = unit(&vm, "B");
     let host = &mut vm.host().inner;
-    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    assert_eq!(host.placement_events(a).unwrap().count(), 0);
     host.native("IsUnitPaused", &[Value::Handle(a)]).unwrap();
-    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    assert_eq!(host.placement_events(a).unwrap().count(), 0);
     assert!(
         host.native("PauseUnit", &[Value::Handle(a), Value::Int(1)])
             .is_err()
     );
-    assert!(!host.executed_unit(a).unwrap().pause_requested);
+    assert_eq!(host.placement_events(a).unwrap().count(), 0);
     host.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
         .unwrap();
-    assert!(host.executed_unit(a).unwrap().pause_requested);
-    assert!(!host.executed_unit(b).unwrap().pause_requested);
+    let a_events: Vec<_> = host.placement_events(a).unwrap().collect();
+    assert_eq!(a_events.len(), 1);
+    assert_eq!(a_events[0].kind, PlacementEventKind::PauseUnit(false));
+    assert_eq!(a_events[0].game_time, host.timer_game_time().unwrap());
+    assert_eq!(host.placement_events(b).unwrap().count(), 0);
     host.native("PauseUnit", &[Value::Handle(b), Value::Bool(true)])
         .unwrap();
     host.native("PauseUnit", &[Value::Handle(b), Value::Bool(false)])
         .unwrap();
-    assert!(host.executed_unit(b).unwrap().pause_requested);
+    assert_eq!(
+        host.placement_events(b)
+            .unwrap()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        [
+            PlacementEventKind::PauseUnit(true),
+            PlacementEventKind::PauseUnit(false)
+        ]
+    );
     assert!(host.executed_unit(b).unwrap().paused_since.is_none());
+}
+
+#[test]
+fn exhausted_placement_history_refuses_without_blocking_pause() {
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let host = &mut vm.host().inner;
+    for _ in 0..12 {
+        host.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+            .unwrap();
+    }
+    assert_eq!(host.placement_events(a).unwrap().count(), 12);
+    for _ in 12..1024 {
+        host.native("PauseUnit", &[Value::Handle(a), Value::Bool(false)])
+            .unwrap();
+    }
+    assert!(host.placement_events(a).is_err());
+    assert_eq!(
+        host.native("IsUnitPaused", &[Value::Handle(a)]).unwrap(),
+        Value::Bool(false)
+    );
 }
 
 #[test]

@@ -180,6 +180,10 @@ impl ObjectHost {
                 .error("unit buff", Failure::Budget("unit buff capacity")));
         }
         active.push(buff);
+        self.record_placement_event(
+            unit,
+            crate::ai_placement::PlacementEventKind::BuffApplied(buff.rawcode),
+        );
         Ok(())
     }
 
@@ -206,11 +210,25 @@ impl ObjectHost {
         };
         let before = active.len();
         active.retain(|buff| buff.rawcode != rawcode);
-        before != active.len()
+        let removed = before != active.len();
+        if removed {
+            self.record_placement_event(
+                unit,
+                crate::ai_placement::PlacementEventKind::BuffRemoved(rawcode),
+            );
+        }
+        removed
     }
 
     pub(super) fn forget_unit_buffs(&mut self, unit: HandleId) {
-        self.unit_buffs.active.remove(&unit);
+        if let Some(buffs) = self.unit_buffs.active.remove(&unit) {
+            for buff in buffs {
+                self.record_placement_event(
+                    unit,
+                    crate::ai_placement::PlacementEventKind::BuffRemoved(buff.rawcode),
+                );
+            }
+        }
     }
 
     pub(super) fn unit_buff_native(
@@ -277,6 +295,12 @@ impl ObjectHost {
                     }
                     !remove
                 });
+            }
+            for &rawcode in &removed {
+                self.record_placement_event(
+                    id,
+                    crate::ai_placement::PlacementEventKind::BuffRemoved(rawcode),
+                );
             }
             for rawcode in removed {
                 self.curse_buff_removed(id, rawcode)?;

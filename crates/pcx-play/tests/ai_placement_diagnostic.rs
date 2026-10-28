@@ -43,6 +43,30 @@ fn probe_order_worker(log: &str, kind: [u8; 4], owner: i32) -> [f32; 2] {
     probe_point(event.split_once("/point").expect("probe point order").0)
 }
 
+fn probe_order_elapsed(log: &str, kind: [u8; 4], owner: i32) -> f64 {
+    let marker = format!("/id{}/p{owner}@", i32::from_be_bytes(kind));
+    let prefix = log.split_once(&marker).expect("probe order").0;
+    prefix
+        .rsplit_once(" E:t")
+        .expect("probe time")
+        .1
+        .parse()
+        .expect("elapsed time")
+}
+
+fn probe_clock_delay(script: &str) -> f64 {
+    script
+        .lines()
+        .find_map(|line| {
+            let args = line
+                .trim()
+                .strip_prefix("call TimerStart(CreateTimer(), ")?;
+            let value = args.strip_suffix(", false, function PCXO_Start)")?;
+            Some(value.parse().expect("probe clock delay"))
+        })
+        .expect("probe clock start")
+}
+
 fn probe_order_site(log: &str, kind: [u8; 4], owner: i32) -> Option<[f32; 2]> {
     let marker = format!("/id{}/p{owner}@", i32::from_be_bytes(kind));
     let event = log.split_once(&marker)?.1;
@@ -84,6 +108,18 @@ fn building_facing_truncates_before_normalizing() {
 
 #[test]
 fn order_and_sample_inputs_read_the_observed_worker_coordinates() {
+    assert_eq!(
+        probe_order_elapsed(
+            " E:t2/id1094861636/p7@12.5,-3/point4,5/targetnone",
+            *b"ABCD",
+            7
+        ),
+        2.
+    );
+    assert_eq!(
+        probe_clock_delay(" call TimerStart(CreateTimer(), 3., false, function PCXO_Start)"),
+        3.
+    );
     assert_eq!(
         probe_order_worker(
             " E:t2/id1094861636/p7@12.5,-3/point4,5/targetnone",
@@ -177,7 +213,7 @@ fn variant_ranks(
 }
 
 #[test]
-#[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP, PCX_HUMAN05_DECISION_LOG and PCX_HUMAN05_ORDER_PROBE"]
+#[ignore = "requires PCX_STARTUP_INSTALL, PCX_STARTUP_MAP, PCX_HUMAN05_DECISION_LOG, PCX_HUMAN05_ORDER_PROBE and PCX_HUMAN05_PROBE_SCRIPT"]
 fn human05_placement_diagnostic() {
     println!("native reach is bypassed in the exclusion scan");
     let install = PathBuf::from(std::env::var("PCX_STARTUP_INSTALL").unwrap());
@@ -199,6 +235,10 @@ fn human05_placement_diagnostic() {
     ];
     let probe = PathBuf::from(std::env::var("PCX_HUMAN05_ORDER_PROBE").unwrap());
     let order_log = std::fs::read_to_string(probe.join("PCXO-11.txt")).unwrap();
+    let probe_script =
+        std::fs::read_to_string(std::env::var("PCX_HUMAN05_PROBE_SCRIPT").unwrap()).unwrap();
+    let nominal_time =
+        probe_clock_delay(&probe_script) + probe_order_elapsed(&order_log, *b"unpl", 5);
     let sample_log = std::fs::read_to_string(probe.join("PCXO-10.txt")).unwrap();
     let order_worker = probe_order_worker(&order_log, *b"unpl", 5);
     let sample_workers = probe_sample_workers(&sample_log);
@@ -253,8 +293,9 @@ fn human05_placement_diagnostic() {
     let facing = building_facing(angle);
     let mut startup = start(&install, mode, &map.display().to_string(), &bytes, 1, None).unwrap();
     let objects = startup.session.host().unwrap().objects_mut();
+    objects.diagnostic_set_snapshot_time(nominal_time).unwrap();
     println!(
-        "fixture recreation game clock {:?}",
+        "snapshot game clock {:?}; nominal order time, timer callbacks and movement were not replayed",
         objects.timer_game_time()
     );
     let player = objects.native("Player", &[Value::Int(5)]).unwrap();
@@ -418,10 +459,16 @@ fn human05_placement_diagnostic() {
         for &handle in &workers {
             let record = objects.executed_unit(handle).unwrap();
             let buffs = objects.diagnostic_ai_buffs(handle).unwrap();
+            let pause_requested = objects.placement_events(handle).unwrap().any(|event| {
+                matches!(
+                    event.kind,
+                    pcx_play::ai_placement::PlacementEventKind::PauseUnit(_)
+                )
+            });
             println!(
                 "fixture blocked={blocked} unit={handle:?} paused={} pause_requested={} sleeping={} buffs={buffs:?}",
                 record.paused_since.is_some(),
-                record.pause_requested,
+                pause_requested,
                 record.is_sleeping(),
             );
         }

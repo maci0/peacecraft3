@@ -68,6 +68,22 @@ pub enum ExclusionError {
     },
 }
 
+/// An observed unit operation relevant to placement exclusion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlacementEventKind {
+    PauseUnit(bool),
+    BuffApplied([u8; 4]),
+    BuffRemoved([u8; 4]),
+}
+
+/// One successful operation at the recreation's game time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacementEvent {
+    pub unit: HandleId,
+    pub game_time: f64,
+    pub kind: PlacementEventKind,
+}
+
 /// A qualified movement interval with no unbounded relocation or speed changes.
 #[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Debug)]
@@ -220,7 +236,10 @@ impl crate::playercolor_host::ObjectHost {
         }
         let source_name = if record.paused_since.is_some() {
             "explicit pause and its native movement-counter contribution"
-        } else if record.pause_requested {
+        } else if self
+            .placement_events(unit)?
+            .any(|event| matches!(event.kind, PlacementEventKind::PauseUnit(_)))
+        {
             "prior PauseUnit request and its native movement-counter contribution"
         } else if record.is_sleeping() {
             "sleep and its native movement-counter contribution"

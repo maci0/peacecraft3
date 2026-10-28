@@ -881,19 +881,30 @@ bound proves no exclusion. Both histories must cover scripted relocation and spe
 Bounding only the caster against the target's final position would miss a cast earlier in the
 target's own movement. The calculation is not connected to placement: the current host does not
 retain a complete movement and relocation history or enumerate every relevant effect source.
-The fixture creates workers directly at recorded positions with its recreation game clock at
-zero, rather than replaying the probe's clock and unit histories. The recorded 8.211-second
+The fixture creates workers directly at recorded positions rather than replaying the probe's
+unit histories. The recorded 8.211-second
 order timestamp is measured from the probe's own clock, which starts in a callback scheduled
 three seconds after initialization;
 the map's initial neutral units existed before that clock started. It is therefore not their
 full movement interval since map startup.
 
-In fixture builds, each executed unit now records successful `PauseUnit` requests, including
-idempotent requests; queries and rejected calls do not set the flag. The placement diagnostic
-refuses a unit with such a history because the corresponding native counter adjustment is not
-yet represented. This flag is not present in production builds and does not record other native
-disable paths or unmodelled effects. A production placement integration needs its own qualified
-history without increasing the simulation budgets.
+### Recreation event history, 2026-10-28
+
+The host records successful `PauseUnit` requests, including idempotent requests, and actual
+buff attachments and removals with the handle and recreation game time in production. Queries
+and rejected calls do not add pause events. History uses inline storage and a bounded spill;
+missing game time, allocation failure or exhaustion of the handle-derived budget marks the
+history incomplete, and a placement query refuses rather than treating it as empty. This records
+all implemented buff transitions, not an established classification of counter-raising buffs.
+Other unit-wide disable sources and unimplemented effects are not yet covered. The exclusion
+diagnostic still refuses their unknown contribution.
+
+The local fixture sets a snapshot clock from the probe script's scheduled clock-start delay
+and its printed order elapsed time. The sum, 11.211 seconds for this probe, is nominal: callback
+delivery time and the unrounded order timestamp were not recorded. Timer callbacks and movement
+are not replayed when the snapshot clock is set, so this is not a complete recreation history or
+an exact order-time proof. The kinematic bound remains disconnected until caster capabilities,
+creation times, relocation and speed histories are qualified for the live world.
 
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open

@@ -206,9 +206,6 @@ pub struct ExecutedUnit {
     pub activity: Option<super::unit_activity::UnitActivity>,
     /// Runtime ShowUnit state, independent of fog, invisibility and explicit pause.
     pub shown: bool,
-    /// Whether a successful explicit PauseUnit request has addressed this unit.
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub pause_requested: bool,
     /// Start of an explicit PauseUnit interval on host game time.
     pub paused_since: Option<f64>,
     /// Natural sleep state when admitted from the selected unit definition.
@@ -2479,8 +2476,6 @@ impl ObjectHost {
                 ai_harvest_flags: None,
                 activity: None,
                 shown: true,
-                #[cfg(any(test, feature = "test-fixtures"))]
-                pause_requested: false,
                 paused_since: None,
                 sleep: None,
                 vitals: None,

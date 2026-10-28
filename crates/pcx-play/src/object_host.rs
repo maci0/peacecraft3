@@ -30,6 +30,11 @@ pub struct ObjectHost {
     unit_decay: Option<crate::unit_decay::Rules>,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
+    placement_events:
+        [Option<crate::ai_placement::PlacementEvent>; placement_events::INLINE_CAPACITY],
+    placement_events_spill: Vec<crate::ai_placement::PlacementEvent>,
+    placement_events_len: usize,
+    placement_events_incomplete: bool,
     divine_shield: divine_shield::State,
     volume_groups: Option<volume_groups::State>,
     camera_view: Option<camera_view::CameraView>,
@@ -286,6 +291,10 @@ impl ObjectHost {
             unit_decay: None,
             unit_vitals: None,
             unit_buffs: unit_buff::State::default(),
+            placement_events: [None; placement_events::INLINE_CAPACITY],
+            placement_events_spill: Vec::new(),
+            placement_events_len: 0,
+            placement_events_incomplete: false,
             divine_shield: divine_shield::State::default(),
             events: event_delivery::Delivery::default(),
             combat: None,
@@ -1434,6 +1443,9 @@ pub use unit_look_at::UnitLookAt;
 
 #[path = "unit_pause_host.rs"]
 mod unit_pause;
+
+#[path = "placement_events_host.rs"]
+mod placement_events;
 
 #[path = "unit_sleep_host.rs"]
 mod unit_sleep;

@@ -5460,3 +5460,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2201 tests with 85 ignored, including
   the new bound and pause-history tests. Native and WASM Clippy passed with `-D warnings`;
   the locked, offline simulation check passed with the previous counts, bytes and digests.
+
+### 2026-10-28: Placement runtime event history
+
+- [~] The production host records timestamped pause requests and implemented buff transitions.
+  An incomplete history refuses placement queries. The local diagnostic seeds a nominal probe
+  order clock without replaying the timers or movement. See [AI construction](docs/re-notes/ai-construction.md).
+- [ ] Effect-source enumeration and complete motion history are still absent. The comparison
+  refuses baseline (6208, 2752) at dequeue 1 and farm (6272, 2752) at dequeue 5; native reach
+  is bypassed. Production placement remains disconnected, and the reach tables, town selection
+  and later Human05 state remain unverified. No campaign route was rerun.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2202 tests with 85 ignored. The focused
+  buff and diagnostic parser tests passed. Native and WASM Clippy passed with `-D warnings`.
+  The simulation budget check passed with unchanged allocation and reallocation counts and
+  digests; allocated bytes increased by 224 for each Human03 workload, within the existing budget.

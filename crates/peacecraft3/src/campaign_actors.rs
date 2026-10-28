@@ -2251,7 +2251,6 @@ mod tests {
             ai_harvest_flags: None,
             activity: None,
             shown: true,
-            pause_requested: false,
             paused_since: None,
             sleep: None,
             vitals: None,

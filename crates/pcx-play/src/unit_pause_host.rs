@@ -58,10 +58,10 @@ impl ObjectHost {
                 return Ok(Value::Bool(since.is_some()));
             };
             if pause == since.is_some() {
-                #[cfg(any(test, feature = "test-fixtures"))]
-                if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                    record.pause_requested = true;
-                }
+                self.record_placement_event(
+                    unit,
+                    crate::ai_placement::PlacementEventKind::PauseUnit(pause),
+                );
                 return Ok(Value::Null);
             }
             self.require_morph_interruption(unit, "PauseUnit")?;
@@ -86,11 +86,11 @@ impl ObjectHost {
                     }
                 }
                 record.paused_since = pause.then_some(now);
-                #[cfg(any(test, feature = "test-fixtures"))]
-                {
-                    record.pause_requested = true;
-                }
             }
+            self.record_placement_event(
+                unit,
+                crate::ai_placement::PlacementEventKind::PauseUnit(pause),
+            );
             if let Some(since) = since {
                 self.resume_summon_cast(unit, now - since);
                 self.resume_curse_cast(unit, now - since);
