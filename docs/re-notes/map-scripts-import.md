@@ -56,6 +56,13 @@ default policy. It preserves the script importer's version-zero, self-consistent
 end-table profile; this does not expand supported MPQ formats. Existing
 `Map::extract` and archive APIs retain their behavior.
 
+A `Map` keeps the decrypted tables of its last checked read (keyed by source label
+and budget, so every error still names its own label and limits) and of its first
+`Map::extract`; later reads skip the table decryption. `Map::checked_archive`
+returns the same reusable `CheckedArchive`. A clone starts without them, equality
+ignores them, and a failed parse is never kept. The unchecked path holds a copy of
+the archive bytes while the `Map` lives.
+
 Missing members return `None`; matching malformed references and conflicting
 locale/platform/block identities return contextual errors. A decoded member's
 bytes are still owned. Table buffers and decoder temporaries still allocate.

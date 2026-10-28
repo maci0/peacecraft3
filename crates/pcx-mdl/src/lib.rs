@@ -1625,13 +1625,9 @@ pub fn bone_matrices_from_poses(
         // Compose root-down so each parent exists before its child.
         for &i in chain.iter().rev() {
             let pose = poses.get(i).copied().unwrap_or_default();
-            let base = links[i]
-                .0
-                .filter(|&p| p != i)
-                .map(|p| world[p])
-                .unwrap_or_else(identity);
+            let base = links[i].0.filter(|&p| p != i).map(|p| &world[p]);
             let pivot = pivots.position(bones[i].object_id).unwrap_or([0.0; 3]);
-            world[i] = compose(base, pose, pivot);
+            world[i] = compose_onto(base.unwrap_or(&IDENTITY), pose, pivot);
             links[i].1 = true;
         }
     }
@@ -1652,6 +1648,11 @@ pub fn bone_matrices_from_poses(
 /// `parent * local` — **both** the 3×3 and the translation column, because a
 /// bone inside a rotated parent has to inherit that parent's rotation.
 pub fn compose(parent: [f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
+    compose_onto(&parent, pose, pivot)
+}
+
+/// [`compose`] reading the parent matrix in place.
+fn compose_onto(parent: &[f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
     let q = pose.rotation;
     let s = pose.scale;
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
@@ -1700,11 +1701,13 @@ pub fn compose(parent: [f32; 16], pose: Pose, pivot: [f32; 3]) -> [f32; 16] {
     out
 }
 
+const IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
 /// The identity matrix.
 pub fn identity() -> [f32; 16] {
-    [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+    IDENTITY
 }
 
 /// Applies a 4x4 matrix to a point.

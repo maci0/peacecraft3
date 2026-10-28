@@ -408,7 +408,9 @@ fn read_tables<R: Read + Seek>(
         })
         .collect();
 
-    let mut raw = vec![0u8; h.block_table_bytes() as usize];
+    // The hash table's buffer is reused; the block table is usually the smaller.
+    raw.clear();
+    raw.resize(h.block_table_bytes() as usize, 0);
     reader.seek(SeekFrom::Start(u64::from(h.block_table_pos)))?;
     reader.read_exact(&mut raw)?;
     crypt::decrypt(&mut raw, hash::block_table_key(), t);

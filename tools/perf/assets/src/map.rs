@@ -12,7 +12,7 @@ use crate::{
     input::{self, CHECKED_MAPS},
 };
 
-pub const WORKLOADS: [Workload; 2] = [
+pub const WORKLOADS: [Workload; 3] = [
     Workload {
         name: "map-load-v1",
         summary: "Map::parse, extract_checked and parse every gameplay member of four maps",
@@ -22,6 +22,11 @@ pub const WORKLOADS: [Workload; 2] = [
         name: "map-unchecked-v1",
         summary: "Map::terrain, shadows, doodads, info, units, regions and content_files",
         prepare: unchecked,
+    },
+    Workload {
+        name: "map-members-v1",
+        summary: "every gameplay member of four maps extracted three times, checked and unchecked, from one parsed Map",
+        prepare: members,
     },
 ];
 
@@ -162,6 +167,76 @@ fn unchecked(ctx: &Context) -> Result<Prepared, Failure> {
             Ok(Outcome {
                 work: vec![("maps", all.len() as u64)],
                 fold: Box::new(move |out| out.debug(&all)),
+            })
+        }),
+    })
+}
+
+/// Members extracted repeatedly from one parsed map (absent ones are reported as such).
+const REPEATED_MEMBERS: [&str; 15] = [
+    "war3map.w3i",
+    "war3map.w3e",
+    "war3map.shd",
+    "war3map.doo",
+    "war3map.wpm",
+    "war3map.wts",
+    "war3map.j",
+    "war3mapUnits.doo",
+    "war3map.w3r",
+    "war3map.w3u",
+    "war3map.w3t",
+    "war3map.w3a",
+    "war3map.w3b",
+    "war3map.w3d",
+    "war3map.w3q",
+];
+
+/// Passes over the member list per map; each pass uses both extraction paths.
+const MEMBER_ROUNDS: usize = 3;
+
+/// One extracted member: the result of each path, `None` when the map lacks it.
+type Extracted = (&'static str, Option<Vec<u8>>, Option<Vec<u8>>);
+
+fn members(ctx: &Context) -> Result<Prepared, Failure> {
+    let maps = input::read_maps(&ctx.install, &CHECKED_MAPS)?;
+    let mut input_digest = Fnv::default();
+    for (name, bytes) in &maps {
+        input_digest.text(name);
+        input_digest.bytes(bytes);
+    }
+    Ok(Prepared {
+        input: input_digest,
+        run: Box::new(move || {
+            let mut all: Vec<(String, Vec<Extracted>)> = Vec::new();
+            for (name, bytes) in &maps {
+                let map = Map::parse(bytes).map_err(|e| format!("{name}: container: {e}"))?;
+                let mut extracted = Vec::new();
+                for _ in 0..MEMBER_ROUNDS {
+                    for member in REPEATED_MEMBERS {
+                        extracted.push((
+                            member,
+                            read(&map, name, member)?,
+                            map.extract(member).ok(),
+                        ));
+                    }
+                }
+                all.push((name.clone(), extracted));
+            }
+            let calls: usize = all.iter().map(|(_, e)| e.len() * 2).sum();
+            Ok(Outcome {
+                work: vec![("maps", all.len() as u64), ("extractions", calls as u64)],
+                fold: Box::new(move |out| {
+                    for (name, extracted) in &all {
+                        out.text(name);
+                        for (member, checked, unchecked) in extracted {
+                            out.text(member);
+                            for bytes in [checked, unchecked] {
+                                out.u64(bytes.as_ref().map_or(u64::MAX, |b| b.len() as u64));
+                                out.bytes(bytes.as_deref().unwrap_or_default());
+                            }
+                        }
+                    }
+                }),
             })
         }),
     })

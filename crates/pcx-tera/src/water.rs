@@ -236,9 +236,9 @@ impl<'a> WaterProfile<'a> {
     pub fn fields(&self) -> impl Iterator<Item = (&'a str, &'a str)> {
         let table = self.table;
         let row = self.row;
-        table.row_cells(row).filter_map(move |(column, value)| {
-            table.header(column).map(|header| (header, value.as_str()))
-        })
+        table
+            .row_cells(row)
+            .filter_map(move |(column, value)| table.header(column).map(|header| (header, value)))
     }
 }
 

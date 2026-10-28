@@ -125,6 +125,7 @@
 //! this crate is derived from a filename that does not ship.
 
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 pub mod cameras;
 pub mod doodads;
@@ -348,6 +349,46 @@ pub struct ContentFiles {
 pub struct Map<'a> {
     pub header: MapHeader,
     data: &'a [u8],
+    members: MemberCache,
+}
+
+/// Archive tables parsed by the first extraction from a [`Map`] and reused by the
+/// rest. They are a function of the map bytes (and, for the checked path, the
+/// source label and budget), so a clone starts empty and two maps compare equal
+/// whether or not either has extracted anything. Failed parses are not kept.
+#[derive(Default)]
+struct MemberCache(Mutex<MemberTables>);
+
+#[derive(Default)]
+struct MemberTables {
+    /// Holds a copy of the archive bytes for as long as the map lives.
+    unchecked: Option<pcx_mpq::MpqArchive>,
+    /// Source label and tables of the last checked parse.
+    checked: Option<(String, Arc<pcx_mpq::checked::CheckedTables>)>,
+}
+
+impl MemberCache {
+    fn lock(&self) -> MutexGuard<'_, MemberTables> {
+        // Poisoning is ignored: a panic cannot leave a half-built entry behind,
+        // each field is replaced whole or not at all.
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+impl Clone for MemberCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+impl PartialEq for MemberCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for MemberCache {}
+impl std::fmt::Debug for MemberCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MemberCache")
+    }
 }
 
 impl<'a> Map<'a> {
@@ -436,6 +477,7 @@ impl<'a> Map<'a> {
                 trailer,
             },
             data,
+            members: MemberCache::default(),
         })
     }
 
@@ -449,9 +491,15 @@ impl<'a> Map<'a> {
         self.data
     }
 
-    /// Extract `name` from the embedded archive.
+    /// Extract `name` from the embedded archive. The tables are parsed by the first
+    /// call and reused by later ones.
     pub fn extract(&self, name: &str) -> Result<Vec<u8>, pcx_mpq::Error> {
-        pcx_mpq::MpqArchive::from_bytes(self.archive().to_vec(), "map")?.extract(name)
+        let mut tables = self.members.lock();
+        let archive = match &mut tables.unchecked {
+            Some(archive) => archive,
+            empty => empty.insert(self.open_archive()?),
+        };
+        archive.extract(name)
     }
 
     /// Extract one named member with explicit source and allocation policy.
@@ -463,10 +511,38 @@ impl<'a> Map<'a> {
         budget: pcx_mpq::checked::ReadBudget,
     ) -> Result<Option<Vec<u8>>, MapMemberError> {
         let extract = || {
-            pcx_mpq::checked::CheckedArchive::parse(self.archive(), source_label, budget)?
+            self.checked_archive(source_label, budget)?
                 .extract(member, budget.max_decoded_bytes)
         };
         extract().map_err(|source| MapMemberError { member, source })
+    }
+
+    /// The checked archive for `source_label` and `budget`. The tables are parsed
+    /// by the first call and reused while the label and budget stay the same, so
+    /// extracting several members decrypts them once.
+    pub fn checked_archive<'s>(
+        &self,
+        source_label: &'s str,
+        budget: pcx_mpq::checked::ReadBudget,
+    ) -> Result<pcx_mpq::checked::CheckedArchive<'s>, pcx_mpq::checked::ReadError>
+    where
+        'a: 's,
+    {
+        use pcx_mpq::checked::CheckedArchive;
+        let mut cache = self.members.lock();
+        if let Some(archive) = cache
+            .checked
+            .as_ref()
+            .filter(|(label, tables)| label == source_label && tables.budget() == budget)
+            .and_then(|(_, tables)| {
+                CheckedArchive::from_tables(self.archive(), source_label, Arc::clone(tables))
+            })
+        {
+            return Ok(archive);
+        }
+        let archive = CheckedArchive::parse(self.archive(), source_label, budget)?;
+        cache.checked = Some((source_label.to_owned(), Arc::clone(archive.tables())));
+        Ok(archive)
     }
 
     /// Open the embedded archive for name-based lookup.

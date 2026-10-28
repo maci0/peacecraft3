@@ -1,0 +1,217 @@
+{
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+  "version": 1,
+  "workloads": {
+    "blp-jpeg-v1": {
+      "allocated_bytes": 48808337,
+      "allocation_calls": 41617,
+      "input_digest": "a7ad56ff4b7cfffa",
+      "output_digest": "3ab9eaeaff22ff4a",
+      "work": {
+        "mips": 119,
+        "pixels": 1627477
+      }
+    },
+    "blp-palette-v1": {
+      "allocated_bytes": 2381376,
+      "allocation_calls": 64,
+      "input_digest": "04e312c841b73b40",
+      "output_digest": "e7af4a30e494190b",
+      "work": {
+        "mips": 57,
+        "pixels": 594582
+      }
+    },
+    "editor-open-install-v1": {
+      "allocated_bytes": 45620716,
+      "allocation_calls": 172097,
+      "input_digest": "94ffa5ad151ec302",
+      "output_digest": "94e6001f7fc37d54",
+      "work": {
+        "profiles": 1120,
+        "table_rows": 7764
+      }
+    },
+    "editor-open-v1": {
+      "allocated_bytes": 31225908,
+      "allocation_calls": 103485,
+      "input_digest": "7cef5f5ae5a3d4be",
+      "output_digest": "57363b62cab25f63",
+      "work": {
+        "profiles": 1120,
+        "table_rows": 7764
+      }
+    },
+    "map-load-v1": {
+      "allocated_bytes": 9771373,
+      "allocation_calls": 1155,
+      "input_digest": "6330a0b5fa39d640",
+      "output_digest": "6b41cd2437b1fa3b",
+      "work": {
+        "corners": 97508,
+        "doodads": 14890,
+        "maps": 4
+      }
+    },
+    "map-members-v1": {
+      "allocated_bytes": 45152552,
+      "allocation_calls": 2223,
+      "input_digest": "6330a0b5fa39d640",
+      "output_digest": "7ebc7c9be26eaf37",
+      "work": {
+        "extractions": 360,
+        "maps": 4
+      }
+    },
+    "map-unchecked-v1": {
+      "allocated_bytes": 13470991,
+      "allocation_calls": 1184,
+      "input_digest": "6330a0b5fa39d640",
+      "output_digest": "25b8e80c9f405d03",
+      "work": {
+        "maps": 4
+      }
+    },
+    "mdx-parse-v1": {
+      "allocated_bytes": 4802492,
+      "allocation_calls": 5001,
+      "input_digest": "c42f2abfd79a194f",
+      "output_digest": "051625113566033c",
+      "work": {
+        "bones": 785,
+        "models": 8,
+        "vertices": 17379
+      }
+    },
+    "mdx-sample-v1": {
+      "allocated_bytes": 247525172,
+      "allocation_calls": 101596,
+      "input_digest": "c42f2abfd79a194f",
+      "output_digest": "bb5ad97536192f1b",
+      "work": {
+        "frames": 20316,
+        "poses": 1756231
+      }
+    },
+    "mpq-audio-v1": {
+      "allocated_bytes": 11383465,
+      "allocation_calls": 1055,
+      "input_digest": "24a7217a9bf162c8",
+      "output_digest": "eb29c3042736f9d2",
+      "work": {
+        "decoded_bytes": 1306320,
+        "members": 24
+      }
+    },
+    "mpq-checked-v1": {
+      "allocated_bytes": 6704336,
+      "allocation_calls": 286,
+      "input_digest": "6330a0b5fa39d640",
+      "output_digest": "065ff2dbd1509923",
+      "work": {
+        "decoded_bytes": 5294202,
+        "members_read": 32
+      }
+    },
+    "mpq-codec-table-v1": {
+      "allocated_bytes": 132819,
+      "allocation_calls": 10,
+      "input_digest": "3e84d171f1c7a5e5",
+      "output_digest": "68aee5c94cb480fa",
+      "work": {
+        "image_bytes": 14858960
+      }
+    },
+    "mpq-extract-bounded-v1": {
+      "allocated_bytes": 12372259,
+      "allocation_calls": 394,
+      "input_digest": "1b993049a11af258",
+      "output_digest": "1e3c26ede74e27aa",
+      "work": {
+        "decoded_bytes": 7234712,
+        "members": 24
+      }
+    },
+    "mpq-extract-v1": {
+      "allocated_bytes": 12374624,
+      "allocation_calls": 496,
+      "input_digest": "1b993049a11af258",
+      "output_digest": "1e3c26ede74e27aa",
+      "work": {
+        "decoded_bytes": 7234712,
+        "members": 24
+      }
+    },
+    "mpq-listfile-v1": {
+      "allocated_bytes": 6364391,
+      "allocation_calls": 34239,
+      "input_digest": "94ffa5ad151ec302",
+      "output_digest": "3b03bcf0d5e29359",
+      "work": {
+        "paths": 16960
+      }
+    },
+    "mpq-open-v1": {
+      "allocated_bytes": 3773992,
+      "allocation_calls": 27,
+      "input_digest": "9a7b4c811a0f4788",
+      "output_digest": "824b211ea7e43355",
+      "work": {
+        "archives": 4,
+        "table_entries": 127239
+      }
+    },
+    "resolver-mount-v1": {
+      "allocated_bytes": 39371339,
+      "allocation_calls": 90371,
+      "input_digest": "b1ee953d0486dc6e",
+      "output_digest": "78e2c3ab095fdb54",
+      "work": {
+        "mounted": 5981,
+        "paths": 4424,
+        "resolved": 128
+      }
+    },
+    "slk-lookup-v1": {
+      "allocated_bytes": 56,
+      "allocation_calls": 2,
+      "input_digest": "06f10364156e375f",
+      "output_digest": "7f6a8642d819ec71",
+      "work": {
+        "hits": 235330,
+        "lookups": 237424
+      }
+    },
+    "slk-parse-v1": {
+      "allocated_bytes": 23051349,
+      "allocation_calls": 1566,
+      "input_digest": "aeaa469b12f8f035",
+      "output_digest": "2dfae7bf5da15d0a",
+      "work": {
+        "cells": 300598,
+        "source_bytes": 3807043,
+        "tables": 11
+      }
+    },
+    "terrain-ground-v1": {
+      "allocated_bytes": 3737696,
+      "allocation_calls": 616,
+      "input_digest": "931806d5fed71612",
+      "output_digest": "5a8eefb5f2263ef6",
+      "work": {
+        "height_samples": 65536,
+        "tiles": 96256
+      }
+    },
+    "terrain-mesh-v1": {
+      "allocated_bytes": 14866800,
+      "allocation_calls": 31,
+      "input_digest": "3e25ec974837fec9",
+      "output_digest": "4f74887d68714893",
+      "work": {
+        "maps": 4,
+        "vertices": 97508
+      }
+    }
+  }
+}

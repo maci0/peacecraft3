@@ -1,7 +1,7 @@
 //! Explicit input allocation policy reused by map member consumers.
 //! No archive clone, locale priority, default budget or total-memory guarantee.
 use crate::{BlockEntry, Error, HashEntry, Header};
-use std::{alloc::Layout, io::Cursor};
+use std::{alloc::Layout, io::Cursor, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadBudget {
@@ -110,15 +110,33 @@ pub(crate) fn sector_size(header: Header) -> Option<u32> {
         .filter(|n| *n != 0)
 }
 
-/// Table buffers are decoded after their caller budget and span checks.
-/// The member payload stays borrowed until its own packed/decoded preflight.
-pub struct CheckedArchive<'a> {
-    raw: &'a [u8],
-    source: &'a str,
+/// The decrypted hash and block tables of one archive, parsed under a budget.
+///
+/// Shared by every [`CheckedArchive`] built from it, so a caller that extracts
+/// several members decrypts the tables once. It holds no archive bytes: pass the
+/// bytes it was parsed from to [`CheckedArchive::from_tables`].
+#[derive(Debug)]
+pub struct CheckedTables {
+    raw_len: usize,
     header: Header,
     hashes: Vec<HashEntry>,
     blocks: Vec<BlockEntry>,
     budget: ReadBudget,
+}
+impl CheckedTables {
+    pub fn budget(&self) -> ReadBudget {
+        self.budget
+    }
+}
+
+/// Table buffers are decoded after their caller budget and span checks.
+/// The member payload stays borrowed until its own packed/decoded preflight.
+#[derive(Debug, Clone)]
+pub struct CheckedArchive<'a> {
+    raw: &'a [u8],
+    /// Names the archive in every error.
+    source: &'a str,
+    tables: Arc<CheckedTables>,
 }
 impl<'a> CheckedArchive<'a> {
     pub fn parse(raw: &'a [u8], source: &'a str, budget: ReadBudget) -> Result<Self, ReadError> {
@@ -185,16 +203,36 @@ impl<'a> CheckedArchive<'a> {
         Ok(Self {
             raw,
             source,
-            header: h,
-            hashes,
-            blocks,
-            budget,
+            tables: Arc::new(CheckedTables {
+                raw_len: raw.len(),
+                header: h,
+                hashes,
+                blocks,
+                budget,
+            }),
         })
+    }
+    /// Pairs tables from [`CheckedArchive::tables`] with the bytes and source label
+    /// they were parsed from; `None` when `raw` has a different length than those bytes.
+    pub fn from_tables(raw: &'a [u8], source: &'a str, tables: Arc<CheckedTables>) -> Option<Self> {
+        (raw.len() == tables.raw_len).then_some(Self {
+            raw,
+            source,
+            tables,
+        })
+    }
+    /// The source label named in every error.
+    pub fn source(&self) -> &str {
+        self.source
+    }
+    /// The tables, for building further archives over the same bytes.
+    pub fn tables(&self) -> &Arc<CheckedTables> {
+        &self.tables
     }
     /// Bounded Storm probe; identical keys are allowed, distinct candidates refused.
     pub fn selected_block(&self, member: &'static str) -> Result<Option<BlockEntry>, ReadError> {
-        crate::extraction::selected_block(&self.hashes, &self.blocks, member).map_err(|error| {
-            match error {
+        crate::extraction::selected_block(&self.tables.hashes, &self.tables.blocks, member).map_err(
+            |error| match error {
                 crate::extraction::SelectionError::Mpq(error) => {
                     member_error(self.source, member, error)
                 }
@@ -205,8 +243,8 @@ impl<'a> CheckedArchive<'a> {
                         count,
                     }
                 }
-            }
-        })
+            },
+        )
     }
 
     pub fn preflight_member(
@@ -222,16 +260,16 @@ impl<'a> CheckedArchive<'a> {
             self.source,
             member,
             u64::from(block.file_size),
-            self.budget.max_decoded_bytes,
+            self.tables.budget.max_decoded_bytes,
         )?;
         check_bytes(
             self.source,
             member,
             u64::from(block.compressed_size),
-            self.budget.max_raw_packed_bytes,
+            self.tables.budget.max_raw_packed_bytes,
         )?;
         if u64::from(block.file_pos) + u64::from(block.compressed_size)
-            > u64::from(self.header.archive_size)
+            > u64::from(self.tables.header.archive_size)
         {
             return Err(member_error(
                 self.source,
@@ -262,7 +300,7 @@ impl<'a> CheckedArchive<'a> {
             key,
             block.file_size,
             block.flags,
-            self.header.sector_size(),
+            self.tables.header.sector_size(),
             None,
         )
         .map(Some)

@@ -130,6 +130,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
+mod cells;
+
+use cells::{CellBuilder, Cells};
+
 /// The eleven bytes every shipped `.slk` starts with.
 ///
 /// Verified as the exact opening line of all 124 `.slk` members in 1.28c
@@ -322,7 +326,7 @@ pub struct Anomaly {
 /// none.
 #[derive(Debug, Clone, Default)]
 pub struct Table {
-    cells: BTreeMap<(u32, u32), String>,
+    cells: Cells,
     headers: BTreeMap<u32, String>,
     /// Row-1 name to its lowest column, built once so name lookups do not scan.
     columns: BTreeMap<String, u32>,
@@ -349,10 +353,7 @@ impl<'a> Row<'a> {
 
     /// This row's cell for a 1-based column, if it has one.
     pub fn get(&self, column: u32) -> Option<&'a str> {
-        self.table
-            .cells
-            .get(&(self.index, column))
-            .map(String::as_str)
+        self.table.cells.get((self.index, column))
     }
 
     /// This row's cell for a column named in row 1, if both exist.
@@ -362,9 +363,7 @@ impl<'a> Row<'a> {
 
     /// This row's populated cells in column order.
     pub fn cells(&self) -> impl Iterator<Item = (u32, &'a str)> {
-        self.table
-            .row_cells(self.index)
-            .map(|(c, v)| (c, v.as_str()))
+        self.table.row_cells(self.index)
     }
 
     /// True when the row has no cells at all.
@@ -442,7 +441,7 @@ impl Table {
         let mut cursor_seen = false;
         let mut record = 1usize;
         let mut terminated = false;
-        let mut staged = StagedCells::default();
+        let mut staged = CellBuilder::default();
         let mut fields = Fields::default();
 
         while offset < data.len() {
@@ -588,14 +587,14 @@ impl Table {
             return Err(Error::NoTerminator);
         }
 
-        t.flush_staged(&mut staged);
+        t.cells = staged.finish();
         t.finish();
         Ok(t)
     }
 
     fn insert(
         &mut self,
-        staged: &mut StagedCells,
+        staged: &mut CellBuilder,
         row: u32,
         column: u32,
         value: &str,
@@ -603,7 +602,7 @@ impl Table {
         record: usize,
     ) {
         // The first value of a repeated coordinate wins and the repeat is recorded.
-        if !staged.store(&mut self.cells, (row, column), value) {
+        if !staged.store((row, column), value) {
             self.duplicate_cell(row, column, record);
         }
         self.max_row = self.max_row.max(row);
@@ -624,11 +623,6 @@ impl Table {
                 detail: format!("row {row} col {column} carries an E formula"),
             });
         }
-    }
-
-    /// Moves cells still waiting in ascending order into the map.
-    fn flush_staged(&mut self, staged: &mut StagedCells) {
-        staged.drain_into(&mut self.cells);
     }
 
     fn duplicate_cell(&mut self, row: u32, column: u32, record: usize) {
@@ -656,7 +650,7 @@ impl Table {
                 continue;
             }
             let filled = match (a.row, a.column) {
-                (Some(row), Some(column)) => self.cells.contains_key(&(row, column)),
+                (Some(row), Some(column)) => self.cells.contains((row, column)),
                 _ => false,
             };
             if filled {
@@ -664,8 +658,10 @@ impl Table {
                 a.detail.push_str(" (a later record supplies the value)");
             }
         }
-        for (&(_, column), value) in self.cells.range((1, 0)..=(1, u32::MAX)) {
-            self.headers.entry(column).or_insert_with(|| value.clone());
+        for (column, value) in self.cells.row(1) {
+            self.headers
+                .entry(column)
+                .or_insert_with(|| value.to_string());
         }
         for (&column, name) in &self.headers {
             self.columns.entry(name.clone()).or_insert(column);
@@ -765,7 +761,7 @@ impl Table {
 
     /// One cell by 1-based coordinates.
     pub fn get(&self, row: u32, column: u32) -> Option<&str> {
-        self.cells.get(&(row, column)).map(String::as_str)
+        self.cells.get((row, column))
     }
 
     /// One cell by row and row-1 name.
@@ -780,16 +776,12 @@ impl Table {
 
     /// Every populated cell in `(row, column)` order.
     pub fn cells(&self) -> impl Iterator<Item = (&(u32, u32), &str)> {
-        self.cells.iter().map(|(k, v)| (k, v.as_str()))
+        self.cells.iter()
     }
 
     /// The populated cells of one row, in column order.
-    pub fn row_cells(&self, row: u32) -> impl Iterator<Item = (u32, &String)> {
-        let lo = (row, 0);
-        let hi = (row, u32::MAX);
-        self.cells
-            .range(lo..=hi)
-            .filter_map(move |(k, v)| (k.0 == row).then_some((k.1, v)))
+    pub fn row_cells(&self, row: u32) -> impl Iterator<Item = (u32, &str)> {
+        self.cells.row(row)
     }
 
     /// Rows 1..=`row_count`, including any that turned out to be empty.
@@ -828,8 +820,8 @@ impl Table {
     /// Every populated cell as a [`Cell`].
     pub fn cell_list(&self) -> Vec<Cell> {
         self.cells
-            .keys()
-            .filter_map(|&(r, c)| self.cell(r, c))
+            .iter()
+            .filter_map(|(&(r, c), _)| self.cell(r, c))
             .collect()
     }
 
@@ -841,7 +833,7 @@ impl Table {
     /// on anything but this format.
     pub fn canonical(&self) -> Vec<u8> {
         let mut out = String::with_capacity(self.cells.len() * 24);
-        for (&(row, column), value) in &self.cells {
+        for (&(row, column), value) in self.cells.iter() {
             let _ = writeln!(out, "Y{row};X{column};K{value}");
         }
         out.into_bytes()
@@ -924,16 +916,57 @@ pub fn fnv1a64(data: &[u8]) -> u64 {
 struct Fields {
     /// Tag with the value's byte range in `text`, in record order.
     spans: Vec<(char, usize, usize)>,
+    /// The values of the tagged fields back to back, checked once per record.
     text: String,
-    /// The field being scanned, before it is checked as UTF-8.
-    value: Vec<u8>,
+    /// The same buffer while the record is scanned, before it is checked as UTF-8.
+    bytes: Vec<u8>,
 }
 
 impl Fields {
     fn clear(&mut self) {
         self.spans.clear();
-        self.text.clear();
-        self.value.clear();
+        // The checked buffer from the last record becomes this record's scratch.
+        self.bytes = std::mem::take(&mut self.text).into_bytes();
+        self.bytes.clear();
+    }
+
+    /// Ends the field that began at byte `start` of the buffer. A value without a
+    /// tag is discarded.
+    fn end_field(&mut self, tag: Option<char>, start: usize) -> usize {
+        match tag {
+            Some(tag) => self.spans.push((tag, start, self.bytes.len())),
+            None => self.bytes.truncate(start),
+        }
+        self.bytes.len()
+    }
+
+    /// Checks the tagged values as UTF-8. Every value must be valid on its own:
+    /// one that only becomes valid next to its neighbour is refused.
+    fn check(&mut self, line: &[u8], index: usize) -> Result<(), Error> {
+        let bytes = std::mem::take(&mut self.bytes);
+        let valid = match String::from_utf8(bytes) {
+            Ok(text) => {
+                let whole = self.spans.iter().all(|&(_, start, end)| {
+                    text.is_char_boundary(start) && text.is_char_boundary(end)
+                });
+                self.text = text;
+                whole
+            }
+            Err(error) => {
+                self.bytes = error.into_bytes();
+                false
+            }
+        };
+        if valid {
+            return Ok(());
+        }
+        Err(Error::Unsupported {
+            what: "field value is not UTF-8",
+            detail: Some(format!(
+                "record {index}: {:?}",
+                truncate(&String::from_utf8_lossy(line), 48)
+            )),
+        })
     }
 
     /// The first value carried under `tag`.
@@ -966,6 +999,7 @@ fn find_crlf(bytes: &[u8]) -> Option<usize> {
 
 fn split_fields(out: &mut Fields, line: &[u8], index: usize, offset: usize) -> Result<(), Error> {
     out.clear();
+    let mut start = 0usize;
     let mut tag: Option<char> = None;
     let mut quoted = false;
     let mut i = 0usize;
@@ -974,11 +1008,11 @@ fn split_fields(out: &mut Fields, line: &[u8], index: usize, offset: usize) -> R
             // Everything up to the next quote is value text.
             let stop = line[i..].iter().position(|&b| b == b'"');
             let end = stop.map_or(line.len(), |p| i + p);
-            out.value.extend_from_slice(&line[i..end]);
+            out.bytes.extend_from_slice(&line[i..end]);
             i = end;
             if i < line.len() {
                 if line.get(i + 1) == Some(&b'"') {
-                    out.value.push(b'"');
+                    out.bytes.push(b'"');
                     i += 2;
                 } else {
                     quoted = false;
@@ -994,7 +1028,7 @@ fn split_fields(out: &mut Fields, line: &[u8], index: usize, offset: usize) -> R
                 i += 1;
             }
             b';' => {
-                push_field(out, tag, line, index)?;
+                start = out.end_field(tag, start);
                 tag = None;
                 i += 1;
             }
@@ -1007,80 +1041,19 @@ fn split_fields(out: &mut Fields, line: &[u8], index: usize, offset: usize) -> R
             _ => {
                 let stop = line[i..].iter().position(|&b| b == b'"' || b == b';');
                 let end = stop.map_or(line.len(), |p| i + p);
-                out.value.extend_from_slice(&line[i..end]);
+                out.bytes.extend_from_slice(&line[i..end]);
                 i = end;
             }
         }
     }
     if quoted {
+        // The unfinished field is not a value; fields before it are checked first.
+        out.bytes.truncate(start);
+        out.check(line, index)?;
         return Err(Error::UnterminatedQuote { index, offset });
     }
-    push_field(out, tag, line, index)
-}
-
-/// Ends the field being scanned: checks it as UTF-8 and appends it under `tag`.
-/// A value without a tag is discarded.
-fn push_field(out: &mut Fields, tag: Option<char>, line: &[u8], index: usize) -> Result<(), Error> {
-    if let Some(t) = tag {
-        let Ok(text) = std::str::from_utf8(&out.value) else {
-            return Err(Error::Unsupported {
-                what: "field value is not UTF-8",
-                detail: Some(format!(
-                    "record {index}: {:?}",
-                    truncate(&String::from_utf8_lossy(line), 48)
-                )),
-            });
-        };
-        let start = out.text.len();
-        out.text.push_str(text);
-        out.spans.push((t, start, out.text.len()));
-    }
-    out.value.clear();
-    Ok(())
-}
-
-/// Cells collected while they arrive in ascending coordinate order, which every
-/// shipped table does. They then enter the map as one sorted bulk build instead
-/// of one tree descent per cell. The first out-of-order or repeated coordinate
-/// moves everything into the map and later cells are inserted individually.
-#[derive(Default)]
-struct StagedCells {
-    ascending: Vec<((u32, u32), String)>,
-    in_map: bool,
-}
-
-impl StagedCells {
-    /// Stores `value` unless the coordinate is already present; false when it was.
-    fn store(
-        &mut self,
-        cells: &mut BTreeMap<(u32, u32), String>,
-        key: (u32, u32),
-        value: &str,
-    ) -> bool {
-        if !self.in_map {
-            if self.ascending.last().is_none_or(|(last, _)| *last < key) {
-                self.ascending.push((key, value.to_string()));
-                return true;
-            }
-            self.drain_into(cells);
-            self.in_map = true;
-        }
-        match cells.entry(key) {
-            std::collections::btree_map::Entry::Occupied(_) => false,
-            std::collections::btree_map::Entry::Vacant(slot) => {
-                slot.insert(value.to_string());
-                true
-            }
-        }
-    }
-
-    fn drain_into(&mut self, cells: &mut BTreeMap<(u32, u32), String>) {
-        if !self.ascending.is_empty() {
-            // `cells` is empty here: staging only holds cells while nothing is in the map.
-            debug_assert!(cells.is_empty());
-            *cells = self.ascending.drain(..).collect();
-        }
-    }
+    out.end_field(tag, start);
+    out.check(line, index)
 }
 
 fn parse_index(v: &str, tag: char, index: usize) -> Result<u32, Error> {

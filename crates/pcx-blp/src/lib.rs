@@ -699,9 +699,7 @@ pub fn decode_jpeg_with_limit(
         PixelFormat::RGB24 => {
             fill_rgba::<3>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::RGB24, p));
         }
-        PixelFormat::CMYK32 => {
-            fill_rgba::<4>(&mut out, &rgb, |p| rgba_from_jpeg(PixelFormat::CMYK32, p));
-        }
+        PixelFormat::CMYK32 => fill_rgba::<4>(&mut out, &rgb, |p| inverted_bgra(*p)),
     }
     Ok(out)
 }
@@ -737,8 +735,17 @@ fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8]) -> [u8; 4] {
             [s, s, s, 255]
         }
         jpeg_decoder::PixelFormat::RGB24 => [p[2], p[1], p[0], 255],
-        jpeg_decoder::PixelFormat::CMYK32 => [255 - p[2], 255 - p[1], 255 - p[0], 255 - p[3]],
+        jpeg_decoder::PixelFormat::CMYK32 => inverted_bgra([p[0], p[1], p[2], p[3]]),
     }
+}
+
+/// `[255 - p[2], 255 - p[1], 255 - p[0], 255 - p[3]]` as word operations, which
+/// vectorize where the per-byte form does not.
+fn inverted_bgra(p: [u8; 4]) -> [u8; 4] {
+    let word = u32::from_le_bytes(p);
+    // Bytes 0 and 2 trade places, then every byte is inverted.
+    let swapped = (word & 0xFF00_FF00) | (word << 16 & 0x00FF_0000) | (word >> 16 & 0x0000_00FF);
+    (!swapped).to_le_bytes()
 }
 
 /// Convenience: decode mip 0.
@@ -1757,6 +1764,20 @@ mod jpeg_component_tests {
             rgba_from_jpeg(PixelFormat::CMYK32, &[40, 66, 67, 0]),
             [188, 189, 215, 255]
         );
+    }
+
+    /// The word form matches the per-byte definition for every pair of leading bytes.
+    #[test]
+    fn word_inversion_matches_the_byte_definition() {
+        for a in 0..=255u8 {
+            for b in 0..=255u8 {
+                let p = [a, b, a.wrapping_mul(7).wrapping_add(b), !a ^ b];
+                assert_eq!(
+                    inverted_bgra(p),
+                    [255 - p[2], 255 - p[1], 255 - p[0], 255 - p[3]]
+                );
+            }
+        }
     }
 
     /// Three-component color is reordered; grayscale stays grayscale; both are opaque.
