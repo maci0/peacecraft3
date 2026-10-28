@@ -5105,3 +5105,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   because neither oracle position was reproduced. The 1800 s victory path is unverified.
 - Gate: headless, muted `cargo test -p pcx-play --lib` 2165 passed and 83 ignored; native and
   WASM Clippy with `-D warnings` passed. These gates do not validate the research findings.
+
+### 2026-10-28: AI placement search components
+
+- [~] Added source-qualified raster scoring, texture-rectangle buffer caps, queue traversal,
+  candidate selection, conditional retry and town-coordinate refresh with nonstock synthetic
+  tests. The reviewed local executable passes the explicit operand-reader test. Worker search
+  follows a worker-held association to a town; its initialization and clearing paths are now
+  traced, but how Human05 assigns the town remains open. Details:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The search is not connected to AI construction orders. Live town association, native
+  snapping, the extra check and rectangle enumeration remain unresolved, and neither Human05
+  oracle layout has a recreation result. The refusal now names the unresolved inputs. No new
+  Human05 route was run; the previous two runs stop identically at 1223 s, before the 1800 s
+  victory path. See [Human05](docs/re-notes/campaign-human05.md).
+- Gate: headless, muted `cargo test -p pcx-play --lib` passed 2180 tests, with 84 ignored;
+  native and WASM Clippy with `-D warnings` passed. `python3 tools/perf/sim_run.py --check`
+  passed all deterministic budgets using the selected local install and Human03 map. These
+  checks do not establish original placement parity.

@@ -902,11 +902,16 @@ impl ObjectHost {
             // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
             // whose build ability lists the kind) and, failing that, for an idle unit that
             // upgrades into the kind. With neither the request answers false and orders nothing.
-            // Placement (0xad4970) and the upgrade order are not decoded, so either route refuses.
+            // The search is not yet connected to a qualified town, snap or reach check.
             for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
                 if let Some((rawcode, position)) = self.ai_unit_lists(owner, requested, key)? {
+                    let reason = if key == "Builds" {
+                        "; town association, snapping and reach check are not admitted"
+                    } else {
+                        ""
+                    };
                     return Err(fail(format!(
-                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}",
+                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}{reason}",
                         String::from_utf8_lossy(&rawcode)
                     )));
                 }

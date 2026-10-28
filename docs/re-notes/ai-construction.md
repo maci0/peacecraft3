@@ -77,6 +77,16 @@ initialized from supplied coordinates by `0xac7e90`; `CreateCaptains` can supply
 player start coordinates when it creates a record (`0xabd160` through `0xabd1e0`). These paths
 do not prove which record the Human05 builder selects, or when its mine and hall are associated.
 
+The worker search also resolves a reference held by the worker at `+0x510` using `0x6933c0`,
+then resolves the reference at `+0x48` of that associated object (`0xac2bd8` through
+`0xac2c04`). A missing reference skips that worker. For a nonnegative town argument,
+`0xac2b1c` first resolves the indexed town entry, and the worker-associated town must match it
+when the player-unit iterator is present (`0xac2c25` through `0xac2c3b`). One initialization
+path allocates the worker-associated object with its town reference initially empty, then
+attaches it to the unit (`0xabb34f` through `0xabb3ea`, setter `0x69dd10`). The removal path
+clears that attachment (`0xac4c9a` through `0xac4ccf`). These do not yet establish when or how
+Human05 fills the town reference, or which town is selected when the argument is -1.
+
 For `ugol`, the caller resolves one of the town's two mine references before searching; a successful order
 passes that resolved handle to `0x69f760`, whereas an ordinary build order passes the selected
 coordinates to `0x698f60` (`0xac2c3d` through `0xac2c89`, `0xac2d92` through `0xac2de1`).
@@ -106,17 +116,30 @@ Both AI candidate paths call `0x67ecd0` and accept only a zero result. The regis
 `IssueBuildOrderById` wrapper (`0x49a550`) calls the same routine before issuing its build order
 through `0x698f60` (`0x49a5ab` through `0x49a5ea`). It passes a worker and different flags, and
 continues for result 0 or `0x45`, subject to another check at `0x6a1790`. The AI call passes a
-null worker and requires result 0. This establishes a shared validator, not equivalent inputs or
-complete parity with the recreation's player preview.
+null worker and requires result 0. Counting arguments from one in call order, the worker is
+argument 6; argument 10 is zero for the AI and one for the public order. Argument 7 comes from
+the search object for the AI and from the selected worker for the public order. The meanings of
+the flags remain unqualified (`0xad4471`, `0xad453b`, `0x49a576`). The recreation's existing
+player-build placement rules implement the shared validator for this work, subject to the
+specific limitations below.
 
 `0x67ecd0` consults the building's pathing-texture object, transforms coordinates through
 `0x4e00f0`, and uses masks and further callbacks. `0x4e00f0` depends on texture dimensions,
 orientation and coordinate sign, including 64-unit alignment and parity adjustments. The
 recreation's current `construction_position` explicitly uses a source-grid anchor as an
 unqualified snap, and its construction host supports only the Human worker style and a subset of
-placement tokens. Those limitations preclude treating it as a complete port of `0x67ecd0`.
+placement tokens. Those limitations remain fidelity questions for this shared path.
 
 ## Recreation
+
+`ai_placement.rs` implements the decoded score raster, clipping of texture-rectangle buffers,
+queue order, candidate classes, tie-break and conditional second pass, and town-coordinate
+refresh. It reads grid and score operands from the fingerprinted executable. Its caller must
+supply terrain samples, complete texture-rectangle cells, snapping, the extra check and the
+shared build validator; it propagates errors from those inputs. Synthetic tests exercise these
+pieces. The module does not yet obtain those inputs from a live map or issue a build order, and
+there is no original-map placement comparison. In particular, the caller must resolve the
+special buffer-radius branch before scoring, and the `0x7fd6b0` check is still unidentified.
 
 `set_ai_produce` (`unit_training_host.rs`) for a structure kind:
 

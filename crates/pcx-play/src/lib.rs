@@ -54,6 +54,7 @@
 //! emitted in sorted order with no map iteration anywhere near the output.
 
 pub mod ability_profile;
+pub mod ai_placement;
 pub mod camera_margins;
 pub mod campaign;
 pub mod campaign_ai;
