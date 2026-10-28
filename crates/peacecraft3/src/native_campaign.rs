@@ -85,6 +85,8 @@ pub(crate) struct Chapters {
     /// Configuration request in flight and the binding revision it carries.
     pending: Option<(u32, u64)>,
     revision: u64,
+    /// The loading screen of the mission just launched, handed to [`begin_loading`].
+    loading: Option<peacecraft3::campaign_loading::LoadingRequest>,
 }
 
 /// Selection state for the real `CampaignMenu` screen.
@@ -135,6 +137,7 @@ pub(crate) fn install(app: &mut App) {
     let inbox = ConfigurationInbox::default();
     peacecraft3::browser_configuration::install(app, inbox);
     app.init_resource::<Chapters>()
+        .init_resource::<peacecraft3::campaign_loading::CampaignLoading>()
         .init_resource::<CampaignMenuState>()
         .add_systems(
             Update,
@@ -154,6 +157,7 @@ pub(crate) fn install(app: &mut App) {
                 mission_scroll,
                 select_campaign,
                 launch_mission,
+                begin_loading,
             )
                 .chain()
                 .run_if(crate::button_actions::input_allowed)
@@ -515,11 +519,65 @@ fn enqueue_chapter(
     };
     chapters.revision += 1;
     let revision = chapters.revision;
+    let screen = loading_request(&recipe, chapter);
     match configuration(recipe, launcher.mode(), chapter, revision)
         .and_then(|request| inbox.enqueue(request).map_err(|e| e.to_string()))
     {
-        Ok(id) => chapters.pending = Some((id, revision)),
+        Ok(id) => {
+            chapters.pending = Some((id, revision));
+            // A screen that cannot be built is reported; the mission still loads.
+            match screen {
+                Ok(screen) => chapters.loading = screen,
+                Err(error) => warn!("campaign loading screen unavailable: {error}"),
+            }
+        }
         Err(error) => chapters.error = Some(error),
+    }
+}
+
+/// The loading screen a mission's header selects, built from the base mounts of the
+/// selected install. A mission that is not a map has none.
+fn loading_request(
+    recipe: &CampaignRecipe,
+    chapter: &Chapter,
+) -> Result<Option<peacecraft3::campaign_loading::LoadingRequest>, String> {
+    if target_kind(&chapter.map)? != TargetKind::Map {
+        return Ok(None);
+    }
+    let base = Arc::new(recipe.base_resolver().map_err(|e| e.to_string())?);
+    let asset = base
+        .resolve_bounded(&chapter.map, MAX_ASSET_BYTES as u64)
+        .map_err(|e| format!("{}: {e}", chapter.map))?;
+    let map = pcx_map::Map::parse(&asset.bytes).map_err(|e| format!("{}: {e}", chapter.map))?;
+    let member = |name: &'static str| {
+        map.extract_checked(&chapter.map, name, map_read_budget())
+            .map_err(|e| format!("{}: {name}: {e}", chapter.map))
+    };
+    let info = member("war3map.w3i")?.ok_or_else(|| format!("{}: no war3map.w3i", chapter.map))?;
+    let info = pcx_map::info::MapInfo::from_bytes(info).map_err(|e| e.to_string())?;
+    let strings = member("war3map.wts")?
+        .map(|bytes| {
+            pcx_play::campaign_loading::StringTable::parse(&bytes).map_err(|e| e.to_string())
+        })
+        .transpose()?;
+    let rules = pcx_play::campaign_loading::ProgressRules::read(recipe.image())
+        .map_err(|e| e.to_string())?;
+    peacecraft3::campaign_loading::LoadingRequest::read(base, &info, strings.as_ref(), rules)
+}
+
+/// Open the loading screen once the mission's launch is under way.
+fn begin_loading(
+    mut chapters: ResMut<Chapters>,
+    mut loading: ResMut<peacecraft3::campaign_loading::CampaignLoading>,
+    requests: Res<MapRequests>,
+    session: Res<
+        peacecraft3::map_script_session::MapScriptSession<
+            pcx_play::map_startup_host::MapStartupHost,
+        >,
+    >,
+) {
+    if let Some(request) = chapters.loading.take() {
+        loading.begin(request, &requests, session.session_witness());
     }
 }
 
@@ -1527,6 +1585,68 @@ pub(crate) mod tests {
             "campaign post-control horizon={}s; canonical corpse snapshot (at most8): {corpses:?}",
             f64::from(gameplay_ticks) * 0.25
         );
+    }
+
+    /// Writes `PCX_LOADING_CAPTURE_DIR/<map>-<stages>.ppm` for the selected chapter at no, half and
+    /// full progress. Offscreen on a Vulkan adapter, no window.
+    #[test]
+    #[ignore = "requires a Vulkan adapter, PCX_NATIVE_CHAPTER_* and PCX_LOADING_CAPTURE_DIR"]
+    fn selected_chapter_loading_screen_renders_offscreen() {
+        let install =
+            std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL");
+        let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("set PCX_NATIVE_CHAPTER_MAP");
+        let out = std::env::var_os("PCX_LOADING_CAPTURE_DIR").expect("set PCX_LOADING_CAPTURE_DIR");
+        let expansion = std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() == Ok("tft");
+        let launcher = crate::launch_gui::Launcher::test_source(install.clone(), expansion);
+        let chapters = read_campaigns(Path::new(&install), &launcher.mode()).unwrap();
+        let recipe = chapters.recipe.expect("source recipe");
+        let chapter = chapters
+            .entries
+            .iter()
+            .find(|c| c.map.eq_ignore_ascii_case(&map))
+            .expect("map is in the selected install's index");
+        let name = map.rsplit(['\\', '/']).next().unwrap().to_owned();
+        for stages in [0, 2, 3] {
+            let request = loading_request(&recipe, chapter).unwrap().unwrap();
+            let file = Path::new(&out).join(format!("{name}-{stages}.ppm"));
+            crate::campaign_loading_view::harness::capture(request, stages, &file).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL with original RoC and TFT campaign assets"]
+    fn selected_install_every_indexed_map_builds_its_loading_screen() {
+        let install =
+            std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("set PCX_NATIVE_CHAPTER_INSTALL");
+        for expansion in [false, true] {
+            let launcher = crate::launch_gui::Launcher::test_source(install.clone(), expansion);
+            let chapters = read_campaigns(Path::new(&install), &launcher.mode()).unwrap();
+            let recipe = chapters.recipe.expect("source recipe");
+            let (mut screens, mut skipped) = (0, 0);
+            for chapter in &chapters.entries {
+                if target_kind(&chapter.map).unwrap() != TargetKind::Map {
+                    skipped += 1;
+                    continue;
+                }
+                let request = loading_request(&recipe, chapter)
+                    .unwrap_or_else(|e| panic!("{}: {e}", chapter.map))
+                    .unwrap_or_else(|| panic!("{}: header selects the melee panel", chapter.map));
+                let shown = crate::campaign_loading_view::harness::show(request)
+                    .unwrap_or_else(|e| panic!("{}: {e}", chapter.map));
+                assert!(
+                    shown.texts.len() >= 2,
+                    "{}: bar text and at least one header string, got {:?}",
+                    chapter.map,
+                    shown.texts
+                );
+                assert!(shown.bar_frames[0] < shown.bar_frames[2]);
+                screens += 1;
+            }
+            println!(
+                "edition expansion={expansion}: {screens} loading screens built, {skipped} entries are not maps"
+            );
+            assert!(screens > 0);
+        }
     }
 
     #[test]

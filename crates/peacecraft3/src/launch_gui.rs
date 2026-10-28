@@ -446,6 +446,8 @@ pub(crate) fn app_with_plugins(
             4096,
         ),
     );
+    peacecraft3::campaign_loading::install(&mut app);
+    crate::campaign_loading_view::install(&mut app);
     peacecraft3::campaign_score::install(&mut app);
     peacecraft3::campaign_score_assets::install(&mut app);
     crate::campaign_score_view::install(&mut app);
@@ -2032,6 +2034,23 @@ struct MenuUiCameraState<'w, 's> {
         Query<'w, 's, (Entity, &'static mut Camera, Has<MenuColourCamera>), MenuUiCameraFilter>,
 }
 
+/// The authored 4:3 frame's pixel box in a window of `full` pixels.
+pub(crate) fn frame_viewport(full: UVec2) -> bevy::camera::Viewport {
+    // Classic square/5:4 displays use the original direct conversion.
+    // Portrait browser windows contain the authored UI to keep it usable.
+    let (width, height) = if full.x >= full.y && u64::from(full.x) * 3 <= u64::from(full.y) * 4 {
+        (full.x.max(1), full.y.max(1))
+    } else {
+        let height = full.y.min((full.x as u64 * 3 / 4) as u32).max(1);
+        (full.x.min((height as u64 * 4 / 3) as u32).max(1), height)
+    };
+    bevy::camera::Viewport {
+        physical_position: (full.saturating_sub(UVec2::new(width, height))) / 2,
+        physical_size: UVec2::new(width, height),
+        ..default()
+    }
+}
+
 fn show_menu_or_launcher(
     intro: Res<crate::intro::Intro>,
     windows: Query<&Window>,
@@ -2063,21 +2082,10 @@ fn show_menu_or_launcher(
     // live flags are unmeasured; keep the authored extent without stretching.
     let viewport = if !menu.is_empty() {
         windows.single().ok().map(|window| {
-            let full = UVec2::new(window.physical_width(), window.physical_height());
-            // Classic square/5:4 displays use the original direct conversion.
-            // Portrait browser windows contain the authored UI to keep it usable.
-            let (width, height) =
-                if full.x >= full.y && u64::from(full.x) * 3 <= u64::from(full.y) * 4 {
-                    (full.x.max(1), full.y.max(1))
-                } else {
-                    let height = full.y.min((full.x as u64 * 3 / 4) as u32).max(1);
-                    (full.x.min((height as u64 * 4 / 3) as u32).max(1), height)
-                };
-            bevy::camera::Viewport {
-                physical_position: (full.saturating_sub(UVec2::new(width, height))) / 2,
-                physical_size: UVec2::new(width, height),
-                ..default()
-            }
+            frame_viewport(UVec2::new(
+                window.physical_width(),
+                window.physical_height(),
+            ))
         })
     } else {
         None

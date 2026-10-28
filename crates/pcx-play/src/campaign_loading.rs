@@ -11,6 +11,7 @@ use crate::{
     neutral_rule_input::Pe,
 };
 use pcx_map::info::LoadingScreenFields;
+pub use pcx_trig::wts::Table as StringTable;
 use pcx_trig::wts::Table as Wts;
 
 /// Selected path of the game table that lists the loading screens.
@@ -84,9 +85,10 @@ impl ScreenTable {
             };
             let key = key.trim();
             if key.eq_ignore_ascii_case(COUNT_KEY) {
-                let n = value.trim().parse::<usize>().map_err(|_| {
-                    record_error(COUNT_KEY, "count is not a number")
-                })?;
+                let n = value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| record_error(COUNT_KEY, "count is not a number"))?;
                 count = Some(n);
             } else {
                 rows.push((key.to_owned(), value.trim().to_owned()));
@@ -455,7 +457,8 @@ NumScreens=1
     }
 
     fn strings() -> Wts {
-        Wts::parse(b"STRING 7\r\n{\r\nThe Defense\r\n}\r\n\r\nSTRING 8\r\n{\r\n\xff\r\n}\r\n").unwrap()
+        Wts::parse(b"STRING 7\r\n{\r\nThe Defense\r\n}\r\n\r\nSTRING 8\r\n{\r\n\xff\r\n}\r\n")
+            .unwrap()
     }
 
     #[test]
@@ -475,7 +478,10 @@ NumScreens=1
         let mut f = fields(None, None, "TRIGSTR_9");
         assert!(matches!(
             resolve_text(&f, Some(&wts)),
-            Err(LoadingError::MissingString { field: "loading text", .. })
+            Err(LoadingError::MissingString {
+                field: "loading text",
+                ..
+            })
         ));
         assert!(matches!(
             resolve_text(&f, None),

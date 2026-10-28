@@ -154,12 +154,24 @@ pub struct BackgroundPlan {
     pub uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
     pub rect: Rect,
     pub unlit: bool,
+    /// A caller poses this background itself, so the real-time clock leaves it alone.
+    pub driven: bool,
 }
 
 /// Reads one authored background through `resolver` and checks it, without spawning anything.
 pub fn prepare(
     resolver: &pcx_assets::Resolver,
     background: &AuthoredBackground,
+) -> Result<BackgroundPlan, String> {
+    prepare_sequence(resolver, background, None)
+}
+
+/// [`prepare`] with an explicit sequence index. `None` takes the first sequence; an index the
+/// model does not have is refused.
+pub fn prepare_sequence(
+    resolver: &pcx_assets::Resolver,
+    background: &AuthoredBackground,
+    sequence: Option<usize>,
 ) -> Result<BackgroundPlan, String> {
     let source = pcx_mdl::binary_model_path(&background.model);
     let bytes = resolver
@@ -173,9 +185,16 @@ pub fn prepare(
     // The first authored sequence. The score models' original initializer is not yet traced:
     // the shipped `ScoreScreen-Background` and `Tabs` models carry no `Stand` name, so `Stand`
     // is not required. A model without sequences holds its first frame.
-    let interval = sequences
-        .first()
-        .map_or([0, 0], |first| [first.interval_start, first.interval_end]);
+    let chosen = match sequence {
+        None => sequences.first(),
+        Some(index) => Some(sequences.get(index).ok_or_else(|| {
+            format!(
+                "{source}: sequence {index} requested, the model has {}",
+                sequences.len()
+            )
+        })?),
+    };
+    let interval = chosen.map_or([0, 0], |first| [first.interval_start, first.interval_end]);
     let model = pcx_gfx::load_model(&bytes, &source).map_err(|e| format!("{source}: {e}"))?;
     let runtime =
         pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).map_err(|e| format!("{source}: {e}"))?;
@@ -209,6 +228,7 @@ pub fn prepare(
         uv,
         rect: background.rect,
         unlit: background.unlit,
+        driven: false,
     })
 }
 
@@ -231,6 +251,17 @@ pub fn spawn_backgrounds(
     assets: crate::mainmenu_scene::GeosetAssets,
     root: Entity,
     plans: Vec<BackgroundPlan>,
+) -> Result<ScoreSceneHandles, String> {
+    spawn_backgrounds_on(commands, assets, root, plans, SCORE_RENDER_LAYER)
+}
+
+/// [`spawn_backgrounds`] drawing on `layer`, for a screen with its own model camera.
+pub fn spawn_backgrounds_on(
+    commands: &mut Commands,
+    assets: crate::mainmenu_scene::GeosetAssets,
+    root: Entity,
+    plans: Vec<BackgroundPlan>,
+    layer: usize,
 ) -> Result<ScoreSceneHandles, String> {
     let crate::mainmenu_scene::GeosetAssets {
         meshes,
@@ -274,7 +305,7 @@ pub fn spawn_backgrounds(
             (
                 ChildOf(frame_root),
                 bevy::render::batching::NoAutomaticBatching,
-                RenderLayers::layer(SCORE_RENDER_LAYER),
+                RenderLayers::layer(layer),
             ),
         )
         .map_err(|e| format!("{}: {e}", plan.source))?;
@@ -302,6 +333,7 @@ pub fn spawn_backgrounds(
             uv: plan.uv,
             bound: geosets.bound,
             textures: geosets.textures,
+            driven: plan.driven,
         });
     }
     Ok(handles)
@@ -338,6 +370,7 @@ pub struct ScoreBackgroundState {
     pub uv: pcx_gfx::mdx_uv_translation::UvTranslationPlan,
     pub bound: Vec<crate::mainmenu_scene::BoundGeoset>,
     pub textures: crate::mainmenu_scene::TextureBindings,
+    pub driven: bool,
 }
 
 /// Advances every spawned background on the real clock and applies its opacity, texture and
@@ -350,19 +383,42 @@ pub fn animate_backgrounds(
     mut visibility: Query<&mut Visibility>,
 ) {
     for mut state in &mut states {
+        if state.driven {
+            continue;
+        }
         state.elapsed += time.delta();
         let Ok(elapsed_ms) = crate::mainmenu_scene::elapsed_millis(&state.source, state.elapsed)
         else {
             continue;
         };
         let frame = frame_for(state.interval, elapsed_ms);
-        let state = &mut *state;
+        pose(
+            &mut state,
+            frame,
+            elapsed_ms,
+            &mut meshes,
+            &mut materials,
+            &mut visibility,
+        );
+    }
+}
+
+/// Poses one background at `frame`, `elapsed_ms` into its clock.
+pub fn pose(
+    state: &mut ScoreBackgroundState,
+    frame: u32,
+    elapsed_ms: u64,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<MenuMaterial>,
+    visibility: &mut Query<&mut Visibility>,
+) {
+    {
         let Ok(elapsed_ms32) = u32::try_from(elapsed_ms) else {
             warn_once!(
                 "score background {}: clock exceeds the sequence range",
                 state.source
             );
-            continue;
+            return;
         };
         // Bones pose the mesh from the models' own bones and pivots; the score models have no
         // authored camera, so they take the default pose path (`camera_pose: None`).
@@ -382,7 +438,7 @@ pub fn animate_backgrounds(
             &state.handles,
             frame,
             elapsed_ms32,
-            &mut meshes,
+            meshes,
         ) {
             warn_once!("score background {} ({}): {e}", state.frame, state.source);
         }
@@ -391,15 +447,15 @@ pub fn animate_backgrounds(
             &state.bound,
             frame,
             elapsed_ms,
-            &mut materials,
-            &mut visibility,
+            materials,
+            visibility,
         );
         if let Err(e) = crate::mainmenu_scene::apply_texture_selection(
             &state.selection,
             &mut state.textures,
             frame,
             elapsed_ms,
-            &mut materials,
+            materials,
         )
         .and_then(|()| {
             crate::mainmenu_scene::apply_uv_translation(
@@ -407,7 +463,7 @@ pub fn animate_backgrounds(
                 &state.textures,
                 frame,
                 elapsed_ms,
-                &mut materials,
+                materials,
             )
         }) {
             warn_once!("score background {} ({}): {e}", state.frame, state.source);

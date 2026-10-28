@@ -327,10 +327,12 @@ fn menu_keys(keys: Option<ResMut<ButtonInput<KeyCode>>>, mut view: ResMut<Campai
 fn pause_view(
     view: Res<CampaignCamera>,
     runtime: Option<ResMut<crate::campaign_runtime::CampaignRuntime>>,
+    loading: Option<Res<crate::campaign_loading::CampaignLoading>>,
     mut cameras: Query<&mut Camera, With<CampaignSceneCamera>>,
 ) {
     if let Some(mut runtime) = runtime {
-        runtime.view_paused = view.entity.is_some() && (!view.visible || view.menu_open());
+        runtime.view_paused = loading.is_some_and(|l| l.holds_simulation())
+            || view.entity.is_some() && (!view.visible || view.menu_open());
     }
     for mut camera in &mut cameras {
         camera.is_active = view.active();

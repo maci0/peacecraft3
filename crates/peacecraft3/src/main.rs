@@ -20,6 +20,7 @@ mod campaign_hud;
 mod campaign_input;
 mod campaign_inventory;
 mod campaign_leaderboards;
+mod campaign_loading_view;
 mod campaign_messages;
 mod campaign_minimap;
 mod campaign_minimap_buttons;

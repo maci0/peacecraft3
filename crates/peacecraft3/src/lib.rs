@@ -6,6 +6,7 @@
 
 pub mod campaign_boundary;
 pub mod campaign_camera;
+pub mod campaign_loading;
 pub mod campaign_presentation;
 pub mod campaign_runtime;
 pub mod campaign_score;

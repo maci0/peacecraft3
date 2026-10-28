@@ -96,6 +96,7 @@ struct ViewAssets<'w> {
     materials: ResMut<'w, Assets<FilterMaterial>>,
     sources: Res<'w, SelectedMapSources>,
     requests: Res<'w, MapRequests>,
+    loading: Option<Res<'w, crate::campaign_loading::CampaignLoading>>,
 }
 fn interface_visibility(
     mut commands: Commands,
@@ -184,10 +185,13 @@ fn project(
     let now = objects.and_then(|o| o.timer_game_time());
     let presentation = objects.and_then(|o| o.presentation());
     let active = view.active();
-    state.blocked = active
-        && (view.menu_open()
-            || presentation
-                .is_some_and(|p| p.ui_enabled == Some(false) || p.control_enabled == Some(false)));
+    // The loading screen covers the menu and the held game, so neither takes input.
+    state.blocked = assets.loading.as_ref().is_some_and(|l| l.shown())
+        || active
+            && (view.menu_open()
+                || presentation.is_some_and(|p| {
+                    p.ui_enabled == Some(false) || p.control_enabled == Some(false)
+                }));
     state.hide_interface = presentation.is_some_and(|p| p.interface_visible == Some(false));
     let has_filter = presentation.is_some_and(|p| p.filter.is_some());
     let changed = presentation
