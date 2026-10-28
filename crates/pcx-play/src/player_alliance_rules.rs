@@ -1,4 +1,4 @@
-//! Selected-client startup passive alliances; explicit script writes take precedence.
+//! Selected-client startup alliances; explicit script writes take precedence.
 use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
@@ -11,7 +11,8 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     neutral: [i32; 2],
     active: [i32; 2],
-    pub(crate) kind: i32,
+    pub(crate) kind: i8,
+    pub(crate) shared_control_kind: i8,
 }
 
 impl Rules {
@@ -33,56 +34,77 @@ impl Rules {
             },
         )
         .map_err(|e| e.to_string())?;
-        Self::decode(origin, sha256(image), |va, n| {
-            pe.read_from(va, true)
+        let shared_control = pe
+            .read_from(0x47cea6, true)
+            .map_err(|e| e.to_string())?
+            .get(..10)
+            .ok_or("truncated startup shared-control instructions")?;
+        Self::decode(origin, sha256(image), shared_control, |va, n| {
+            let source = pe
+                .read_from(va, true)
                 .map_err(|e| e.to_string())?
                 .get(..n)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| "truncated startup alliance instructions".into())
+                .ok_or_else(|| "truncated startup alliance instructions".to_string())?;
+            let mut window = [0; 10];
+            window[..n].copy_from_slice(source);
+            Ok(window)
         })
     }
 
     fn decode(
         origin: AssetIdentity,
         image_sha256: Sha256Digest,
-        mut read: impl FnMut(u32, usize) -> Result<Vec<u8>, String>,
+        shared_control: &[u8],
+        mut read: impl FnMut(u32, usize) -> Result<[u8; 10], String>,
     ) -> Result<Self, String> {
         let neutral = read(0x47e82c, 10)?;
         let active = read(0x47e8da, 9)?;
-        if neutral.len() != 10
-            || neutral[..2] != [0x83, 0xf8]
+        if neutral[..2] != [0x83, 0xf8]
             || neutral[3..7] != [0x74, 5, 0x83, 0xf8]
             || neutral[8..] != [0x75, 0x4a]
-            || active.len() != 9
             || active[..6] != [0x85, 0xc0, 0x74, 5, 0x83, 0xf8]
-            || active[7..] != [0x75, 0x6a]
+            || active[7..9] != [0x75, 0x6a]
         {
             return Err("unsupported startup controller branches".into());
         }
+        if shared_control.len() != 10
+            || shared_control[..2] != [0x53, 0x6a]
+            || shared_control[3..6] != [0x8b, 0xce, 0xe8]
+        {
+            return Err("unsupported startup shared-control call".into());
+        }
+        let delta = i32::from_le_bytes(
+            shared_control[6..10]
+                .try_into()
+                .map_err(|_| "shared-control call displacement")?,
+        );
+        if 0x47cea6_i64 + 10 + i64::from(delta) != 0x4c1f70 {
+            return Err("startup shared-control setter differs".into());
+        }
+        let shared_control_kind = shared_control[2] as i8;
         let mut kind = None;
         for (va, prefix) in [
-            (0x47e923, vec![]),
-            (0x47e933, vec![0x8b, 0xc8]),
-            (0x47e9d2, vec![0x8b, 0xc8]),
-            (0x47e9e7, vec![]),
+            (0x47e923, &[][..]),
+            (0x47e933, &[0x8b, 0xc8][..]),
+            (0x47e9d2, &[0x8b, 0xc8][..]),
+            (0x47e9e7, &[][..]),
         ] {
             let bytes = read(va, 7 + prefix.len())?;
-            if bytes.len() != 7 + prefix.len()
-                || bytes[0] != 0x6a
-                || bytes[2..2 + prefix.len()] != prefix
+            if bytes[0] != 0x6a
+                || bytes[2..2 + prefix.len()] != *prefix
                 || bytes[2 + prefix.len()] != 0xe8
             {
                 return Err("unsupported startup alliance call".into());
             }
             let delta = i32::from_le_bytes(
-                bytes[3 + prefix.len()..]
+                bytes[3 + prefix.len()..7 + prefix.len()]
                     .try_into()
                     .map_err(|_| "call displacement")?,
             );
-            if i64::from(va) + bytes.len() as i64 + i64::from(delta) != 0x4c1f70 {
+            if i64::from(va) + (7 + prefix.len()) as i64 + i64::from(delta) != 0x4c1f70 {
                 return Err("startup alliance setter differs".into());
             }
-            let value = i32::from(bytes[1] as i8);
+            let value = bytes[1] as i8;
             if kind.is_some_and(|k| k != value) {
                 return Err("startup alliance kinds differ".into());
             }
@@ -90,9 +112,11 @@ impl Rules {
         }
         let neutral = [i32::from(neutral[2] as i8), i32::from(neutral[7] as i8)];
         let active = [0, i32::from(active[6] as i8)]; // `test eax,eax; je` admits zero.
+        let kind = kind.ok_or("alliance kind absent")?;
         if neutral[0] == neutral[1]
             || active[0] == active[1]
             || neutral.iter().any(|v| active.contains(v))
+            || kind == shared_control_kind
         {
             return Err("ambiguous startup controller classes".into());
         }
@@ -101,7 +125,8 @@ impl Rules {
             image_sha256,
             neutral,
             active,
-            kind: kind.ok_or("alliance kind absent")?,
+            kind,
+            shared_control_kind,
         })
     }
 
@@ -115,6 +140,19 @@ impl Rules {
 pub(crate) mod tests {
     use super::*;
     pub(crate) fn fixture(neutral: [u8; 2], active: u8, kind: u8) -> Result<Rules, String> {
+        let mut shared_control = [
+            0x53,
+            0x6a,
+            kind.wrapping_add(1),
+            0x8b,
+            0xce,
+            0xe8,
+            0,
+            0,
+            0,
+            0,
+        ];
+        shared_control[6..].copy_from_slice(&(0x4c1f70_i32 - 0x47cea6 - 10).to_le_bytes());
         Rules::decode(
             AssetIdentity {
                 source: "synthetic:alliances".into(),
@@ -122,6 +160,7 @@ pub(crate) mod tests {
                 version: "1".into(),
             },
             sha256(&[]),
+            &shared_control,
             |va, n| {
                 let bytes = match va {
                     0x47e82c => vec![
@@ -144,7 +183,9 @@ pub(crate) mod tests {
                 if bytes.len() != n {
                     return Err("fixture length".into());
                 }
-                Ok(bytes)
+                let mut window = [0; 10];
+                window[..n].copy_from_slice(&bytes);
+                Ok(window)
             },
         )
     }
@@ -152,7 +193,8 @@ pub(crate) mod tests {
     fn classes_and_alliance_kind_follow_source_operands() {
         for (neutral, active, kind) in [([2, 3], 1, 0), ([7, 9], 5, 11)] {
             let r = fixture(neutral, active, kind).unwrap();
-            assert_eq!(r.kind, i32::from(kind));
+            assert_eq!(r.kind, kind as i8);
+            assert_eq!(r.shared_control_kind, kind.wrapping_add(1) as i8);
             for n in neutral {
                 assert!(r.allied(i32::from(n), i32::from(active)));
                 assert!(r.allied(0, i32::from(n)));
@@ -171,8 +213,8 @@ pub(crate) mod tests {
             edition: "synthetic".into(),
             version: "1".into(),
         };
-        assert!(Rules::decode(origin.clone(), sha256(&[]), |_, _| Ok(Vec::new())).is_err());
-        assert!(Rules::decode(origin, sha256(&[]), |_, n| Ok(vec![0; n])).is_err());
+        assert!(Rules::decode(origin.clone(), sha256(&[]), &[], |_, _| Ok([0; 10])).is_err());
+        assert!(Rules::decode(origin, sha256(&[]), &[0; 10], |_, _| Ok([0; 10])).is_err());
     }
     #[test]
     #[ignore = "requires explicit PCX_ALLIANCE_IMAGE selected original executable"]

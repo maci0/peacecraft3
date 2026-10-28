@@ -616,6 +616,56 @@ impl Placement {
         self.construction_position(None, point, face, path, prevent, require)
     }
 
+    /// Validate with the supplied unit stamps temporarily excluded.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_construction_position_excluding(
+        &mut self,
+        point: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+        excluded: &[HandleId],
+    ) -> Result<Option<[f32; 2]>, Error> {
+        let mut indices = Vec::new();
+        indices
+            .try_reserve(excluded.len())
+            .map_err(|_| fail("exclusion storage"))?;
+        for unit in excluded {
+            let index = self
+                .stamps
+                .iter()
+                .position(|(id, _)| id == unit)
+                .ok_or_else(|| fail("excluded unit occupancy is missing"))?;
+            if self.stamps[index].1.active && !indices.contains(&index) {
+                indices.push(index);
+            }
+        }
+        for &index in &indices {
+            let id = self.stamps[index].0;
+            self.hide(id).expect("preflighted unit occupancy");
+        }
+        let result = self.construction_position(None, point, face, path, prevent, require);
+        for index in indices {
+            let stamp = &mut self.stamps[index].1;
+            if stamp.movement != Movement::Air {
+                for &cell in &stamp.cells {
+                    if stamp.movement.ground() {
+                        self.occupied[cell] += 1;
+                    }
+                    if stamp.movement.water() {
+                        self.water_occupied[cell] += 1;
+                    }
+                }
+                for &cell in &stamp.footprint {
+                    self.footprint_occupied[cell] += 1;
+                }
+            }
+            stamp.active = true;
+        }
+        result
+    }
+
     #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_reach(
         &self,

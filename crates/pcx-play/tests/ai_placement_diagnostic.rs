@@ -2,7 +2,10 @@
 #![cfg(feature = "test-fixtures")]
 
 use pcx_assets::{Addon, AssetMode, Behaviour, Build, GameMode, Resolver};
-use pcx_play::ai_placement::{BuffType, Grid, Rules};
+use pcx_play::ai_placement::{
+    BuffType, ExclusionContext, ExclusionError, ExclusionVisibility, Grid, MovementEvidence, Rules,
+    exclude_unit,
+};
 use pcx_play::headless_startup::start;
 use pcx_script::{Host, Value};
 use pcx_sim::world::{Definition, FieldValue};
@@ -300,7 +303,6 @@ fn human05_placement_diagnostic() {
         let index = blocked_sample.iter().position(|p| *p == issuer).unwrap();
         blocked_sample.swap(0, index);
     }
-    let ignore_mobile = std::env::var_os("PCX_HUMAN05_DIAGNOSTIC_NO_MOBILE").is_some();
     let mut workers = Vec::new();
     for point in std::iter::once(order_worker).chain(sample_workers.into_iter().take(3)) {
         let created = objects
@@ -324,6 +326,7 @@ fn human05_placement_diagnostic() {
     let necropolis = catalog.resolve(*b"unpl").unwrap();
     let path = text(&necropolis, "pathTex");
     let dims = dimensions(&resolver, path);
+    println!("construction footprint {path} dimensions {dims:?}");
     let quarter = (facing / 90.).rem_euclid(4.) as u8;
     assert_eq!(text(&necropolis, "preventPlace"), "unbuildable");
     assert!(matches!(text(&necropolis, "requirePlace"), "_" | "" | "-"));
@@ -341,17 +344,16 @@ fn human05_placement_diagnostic() {
         );
     }
 
+    let mut refusals = Vec::new();
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
         if blocked {
-            if exact_farm.is_some() || ignore_mobile {
-                for &handle in &workers {
-                    objects
-                        .native(
-                            "SetUnitPathing",
-                            &[Value::Handle(handle), Value::Bool(false)],
-                        )
-                        .unwrap();
-                }
+            for &handle in &workers {
+                objects
+                    .native(
+                        "SetUnitPathing",
+                        &[Value::Handle(handle), Value::Bool(false)],
+                    )
+                    .unwrap();
             }
             for (&handle, &point) in workers.iter().zip(&blocked_sample) {
                 objects
@@ -365,15 +367,13 @@ fn human05_placement_diagnostic() {
                     )
                     .unwrap();
             }
-            if exact_farm.is_some() && !ignore_mobile {
-                for &handle in &workers {
-                    objects
-                        .native(
-                            "SetUnitPathing",
-                            &[Value::Handle(handle), Value::Bool(true)],
-                        )
-                        .unwrap();
-                }
+            for &handle in &workers {
+                objects
+                    .native(
+                        "SetUnitPathing",
+                        &[Value::Handle(handle), Value::Bool(true)],
+                    )
+                    .unwrap();
             }
             let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
             objects
@@ -400,9 +400,7 @@ fn human05_placement_diagnostic() {
                     )
                     .unwrap();
             }
-            println!(
-                "farm order sample {blocked_sample:?}; diagnostic mobile collision disabled={ignore_mobile}"
-            );
+            println!("farm order sample {blocked_sample:?}");
             let actual = workers
                 .iter()
                 .map(|handle| objects.executed_unit(*handle).unwrap().position.unwrap())
@@ -454,6 +452,40 @@ fn human05_placement_diagnostic() {
                 ))
             })
             .collect();
+        let unit_evidence = objects
+            .executed_units()
+            .filter(|(id, _)| *id != worker)
+            .map(|(id, record)| {
+                let position = record.position.ok_or(ExclusionError::Unavailable {
+                    unit: id,
+                    source_name: "accepted unit position",
+                })?;
+                let evidence_rectangle = rules
+                    .exclusion_rectangle(position.map(f32::floor), dims, quarter)
+                    .map_err(|_| ExclusionError::Unavailable {
+                        unit: id,
+                        source_name: "unit evidence rectangle",
+                    })?;
+                let (shared, evidence) = match objects.diagnostic_ai_exclusion(
+                    id,
+                    player_handle,
+                    evidence_rectangle,
+                    ExclusionVisibility::NotChecked,
+                ) {
+                    Ok(true) => (true, MovementEvidence::CountersZero),
+                    Ok(false) => (false, MovementEvidence::UnknownSource("movement ability")),
+                    Err(ExclusionError::UnknownMovement { source_name, .. }) => {
+                        (true, MovementEvidence::UnknownSource(source_name))
+                    }
+                    Err(ExclusionError::UnknownBuff { rawcode, .. }) => {
+                        (true, MovementEvidence::UnknownBuff(rawcode))
+                    }
+                    Err(error) => return Err(error),
+                };
+                Ok((id, position, shared, evidence, record.definition.rawcode))
+            })
+            .collect::<Result<Vec<_>, ExclusionError>>()
+            .unwrap();
         let placement = objects.diagnostic_placement().unwrap();
         let bounds = placement.world_bounds();
         if let Ok(point) = std::env::var("PCX_HUMAN05_TRACE_CELL") {
@@ -522,7 +554,38 @@ fn human05_placement_diagnostic() {
                 let first_valid = std::cell::Cell::new(None);
                 let first_same_score_valid = std::cell::Cell::new(None);
                 let oracle_score = grid.diagnostic_cell(oracle).map(|(_, score)| score);
-                grid.search(
+                let validate = |p| -> Result<bool, String> {
+                    let rectangle = rules.exclusion_rectangle(p, dims, quarter)?;
+                    let mut excluded = vec![worker];
+                    for &(id, position, shared, evidence, rawcode) in &unit_evidence {
+                        if exclude_unit(
+                            id,
+                            position,
+                            rectangle,
+                            ExclusionContext::AiPlacement,
+                            shared,
+                            ExclusionVisibility::NotChecked,
+                            evidence,
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "candidate {p:?} dequeue {} unit {}: {error}",
+                                rank.get(),
+                                String::from_utf8_lossy(&rawcode)
+                            )
+                        })? {
+                            excluded.push(id);
+                        }
+                    }
+                    placement
+                        .borrow_mut()
+                        .diagnostic_construction_position_excluding(
+                            p, facing, path, 0x08, 0, &excluded,
+                        )
+                        .map(|value| value.is_some())
+                        .map_err(|error| error.to_string())
+                };
+                let scan = grid.search(
                     |p| {
                         rank.set(rank.get() + 1);
                         let p = rules.snap(p, bounds, dims, quarter)?;
@@ -536,11 +599,7 @@ fn human05_placement_diagnostic() {
                     },
                     |_| Ok(true),
                     |p| {
-                        let valid = placement
-                            .borrow_mut()
-                            .diagnostic_construction_position(p, facing, path, 0x08, 0)
-                            .map_err(|e| e.to_string())?
-                            .is_some();
+                        let valid = validate(p)?;
                         if valid && first_valid.get().is_none() {
                             first_valid.set(Some((p, rank.get())));
                         }
@@ -552,9 +611,15 @@ fn human05_placement_diagnostic() {
                         }
                         Ok(false)
                     },
-                )
-                .unwrap();
-                if exact_farm.is_some() && ignore_mobile && origin_name == "native-trace" {
+                );
+                if let Err(error) = scan {
+                    println!(
+                        "blocked={blocked} origin={origin_name} axis_swap={swap} unresolved={error}"
+                    );
+                    refusals.push(error);
+                    continue;
+                }
+                if exact_farm.is_some() && origin_name == "native-trace" {
                     assert_eq!(
                         first_same_score_valid.get(),
                         Some((oracle, if blocked { 280 } else { 1 }))
@@ -595,13 +660,7 @@ fn human05_placement_diagnostic() {
                                 Ok(true)
                             }
                         },
-                        |p| {
-                            placement
-                                .borrow_mut()
-                                .diagnostic_construction_position(p, facing, path, 0x08, 0)
-                                .map(|v| v.is_some())
-                                .map_err(|e| e.to_string())
-                        },
+                        validate,
                     );
                     let oracle_cell = grid.diagnostic_cell(oracle);
                     let chosen = match result {
@@ -616,11 +675,7 @@ fn human05_placement_diagnostic() {
                     };
                     let chosen_cell = chosen.and_then(|p| grid.diagnostic_cell(p));
                     let distance = chosen.map(|p| (p[0] - oracle[0]).hypot(p[1] - oracle[1]));
-                    let oracle_valid = placement
-                        .borrow_mut()
-                        .diagnostic_construction_position(oracle, facing, path, 0x08, 0)
-                        .unwrap()
-                        .is_some();
+                    let oracle_valid = validate(oracle).unwrap();
                     println!(
                         "blocked={blocked} origin={origin_name} axis_swap={swap} reach_variant={reach} chosen={chosen:?} chosen_cell={chosen_cell:?} oracle={oracle:?} oracle_cell={oracle_cell:?} oracle_bfs_rank={:?} oracle_valid={oracle_valid} distance={distance:?}",
                         oracle_rank.get()
@@ -631,4 +686,9 @@ fn human05_placement_diagnostic() {
     }
     println!("mine oracle {mine:?}: mine-target order is not a decoded grid search");
     println!("ziggurats: validator refuses the source blighted requirement");
+    assert!(
+        refusals.is_empty(),
+        "AI placement exclusions unresolved: {}",
+        refusals.join("; ")
+    );
 }

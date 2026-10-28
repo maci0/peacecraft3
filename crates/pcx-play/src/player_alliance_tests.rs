@@ -39,7 +39,7 @@ fn fixture(common: &str, map: &str, selected: bool) -> (Arc<ParsedMapContext>, O
 }
 #[test]
 fn startup_alliances_use_source_classes_and_explicit_false_overrides_only_its_direction() {
-    let common = common().replacen("globals\n", "globals\nconstant mapcontrol Rescue = ConvertMapControl(92)\nconstant mapcontrol Active = ConvertMapControl(93)\nconstant mapcontrol Unused = ConvertMapControl(94)\n", 1);
+    let common = common().replacen("globals\n", "globals\nconstant alliancetype Shared = ConvertAllianceType(-16)\nconstant mapcontrol Rescue = ConvertMapControl(92)\nconstant mapcontrol Active = ConvertMapControl(93)\nconstant mapcontrol Unused = ConvertMapControl(94)\n", 1);
     let (ctx, host) = fixture(&common, "// map", true);
     let mut host = host
         .with_player_alliances(PlayerAllianceBudget { max_records: 2 })
@@ -98,6 +98,27 @@ fn startup_alliances_use_source_classes_and_explicit_false_overrides_only_its_di
     )
     .unwrap();
     assert!(read(&host, &a, &b));
+
+    let shared_kind = host
+        .native("ConvertAllianceType", &[Value::Int(-16)])
+        .unwrap();
+    let shared = |host: &ObjectHost, source: &Value, target: &Value| {
+        host.effective_alliance(
+            host.player_settings(id(source)).unwrap(),
+            host.player_settings(id(target)).unwrap(),
+            -16,
+        )
+    };
+    assert!(shared(&host, &a, &a));
+    assert!(!shared(&host, &a, &b));
+    assert!(!shared(&host, &b, &a));
+    host.native(
+        "SetPlayerAlliance",
+        &[a.clone(), b.clone(), shared_kind, Value::Bool(true)],
+    )
+    .unwrap();
+    assert!(shared(&host, &a, &b));
+    assert!(!shared(&host, &b, &a));
 }
 
 #[test]

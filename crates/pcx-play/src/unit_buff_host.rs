@@ -66,7 +66,7 @@ impl ActiveBuff {
         Self { rawcode, traits }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) const fn rawcode(&self) -> [u8; 4] {
         self.rawcode
     }
@@ -185,7 +185,7 @@ impl ObjectHost {
 
     /// The active buffs attached to a unit, in application order. A removed unit
     /// reports an empty set (its buffs are forgotten on `RemoveUnit`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn unit_buffs(&self, unit: HandleId) -> Result<Vec<ActiveBuff>, Error> {
         if self.unit_liveness("unit buff", unit)?.is_none() {
             return Ok(Vec::new());

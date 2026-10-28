@@ -1282,6 +1282,56 @@ fn construction_uses_full_authored_footprint_without_relocating_blocked_cells() 
     );
 }
 
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn diagnostic_exclusions_restore_occupancy_after_success_and_error() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "exclusions".into(),
+        },
+        100,
+    );
+    p.footprints.insert(
+        "build.tga".into(),
+        Footprint {
+            origin: AssetIdentity {
+                edition: "synthetic".into(),
+                version: "test".into(),
+                source: "build.tga".into(),
+            },
+            cells: vec![[0, 0]],
+        },
+    );
+    let stamp = p.prepare([32., 32.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(3), stamp);
+    let before = p.occupied.clone();
+    assert!(
+        p.diagnostic_construction_position([32., 32.], 0., "build.tga", 8, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        p.diagnostic_construction_position_excluding([32., 32.], 0., "build.tga", 8, 0, &[id(3)])
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(p.occupied, before);
+    assert!(
+        p.diagnostic_construction_position_excluding(
+            [f32::NAN, 32.],
+            0.,
+            "build.tga",
+            8,
+            0,
+            &[id(3)]
+        )
+        .is_err()
+    );
+    assert_eq!(p.occupied, before);
+}
+
 #[test]
 fn construction_uses_its_own_rotated_footprint() {
     let mut p = placement(

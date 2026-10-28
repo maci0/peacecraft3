@@ -205,6 +205,14 @@ same Human03 inputs, `python3 tools/perf/sim_run.py --check` reports 5 fewer all
 1,392 fewer requested bytes in both the startup and 4,096-tick workloads. Their digests and vision
 work are unchanged; the recorded budgets were not raised.
 
+The startup-alliance reader now validates its instruction windows in fixed-size stack storage
+and borrows the additional shared-control window from the selected image. The same locked,
+offline `python3 tools/perf/sim_run.py --check` measured 8 fewer allocations and 50 fewer
+requested bytes in both Human03 workloads than the preceding local run. Digests, reallocations
+and vision work are unchanged; no budget was raised. The shared-control default adds the
+selected client's self relationship to startup state. The placement search remains diagnostic;
+the Human03 and Human04 route harnesses were not rerun.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

@@ -711,7 +711,7 @@ local-input diagnostic can load that local event record. With the recorded town 
 those exact positions, the ordinary recreation validator selects (6144, 2432), rank 283, in
 the farm layout. An experimental run that disables the recreation's mobile occupancy
 selects (6208, 2752) at rank 1 without the farm and (5952, 2432) at rank 280 with the farm,
-for both tested texture-axis readings. The diagnostic asserts those results. It bypasses the
+for both tested texture-axis readings. The diagnostic asserted those results. It bypassed the
 native reach check and disables all four mobile stamps rather than deriving each object's native
 state, so it is not a production implementation or validation of the complete search.
 
@@ -758,8 +758,67 @@ contributions. Supporting the general predicate needs source-backed apply/remove
 the relevant effects and other remaining callers, the two unit flags and unit counter, and the
 shared-control startup state. The `+0xc` visibility branch also still needs the native
 player-dependent fog, concealment and detection conditions mapped to available live vision
-state; a shown unit or a vision source alone does not establish that result. The diagnostic
-continues to use its explicitly experimental mobile switch, and production still refuses.
+state; a shown unit or a vision source alone does not establish that result. At this stage the
+diagnostic used its experimental mobile switch, and production still refused.
+
+### Candidate exclusion preconditions, 2026-10-28
+
+The validator builds its enumeration rectangle from the selected texture dimensions and
+candidate position (`0x67f2e6`, `0x4dffc0`), then expands each edge by the product of two
+client-initialized operands (`0x67f2eb` through `0x67f3bb`, `0x40a860`, `0x401610`). The
+texture scale is initialized at `0x403b40`; a quarter turn swaps the axes. A read-only isolated
+farm capture observed a 16-by-16 texture and the resulting rectangle at the same validation
+call. The local-input test compares the decoded calculation against that captured rectangle.
+The recreation admits integral candidate coordinates only while every resulting integer is
+exactly representable; other coordinate cases refuse pending the client's real arithmetic.
+
+The startup-alliance reader now derives the self shared-control kind from the selected client
+call at `0x47cea6`. Explicit directed assignments take precedence. The diagnostic uses the
+expanded rectangle, the directed relation and the decoded visibility branch to qualify each
+unit. It temporarily excludes the builder and the qualified units, then restores their collision
+stamps. It no longer provides the blanket mobile-occupancy switch used for the historical
+experiment above. The predicate requires the observed AI context with nonzero `+0` and `+0x58`;
+an unqualified context refuses instead of using the separate fallback branch.
+
+This is a preconditioned diagnostic, not an admitted production search. For a unit inside the
+rectangle with shared control, live explicit pause, sleep or an active buff cannot yet be mapped
+to the native movement counters and cause a typed refusal naming the unit and source. Even when
+those records are absent, the host does not track all writers of the counters, so it refuses
+with `untracked native movement-counter writers`. The known write paths are `0x46ca26`,
+`0x46e0d9`, `0x46e651`, `0xb666bc` and `0xb665f9`; identified effect calls include
+`0xb8ec16`, `0xb8ec2b`, `0xb8f2e6`, `0xb8f2fb`, `0xb9d839`, `0xb9d844`, `0xb9dc0c`,
+`0xb9dc17`, `0xb9dd66`, `0xb9dd71`, `0xba0f79`, `0xba0f84`, `0xc1a019`, `0xc1a656`,
+`0xc4866e` and `0xc48873`. These are not an exhaustive classification of all possible
+callers. The other visibility branch refuses if its player-dependent result is unavailable.
+An empty retained buff list alone is not evidence that all native counter writers were absent.
+With the recorded town origin and order-time farm workers, the qualified local-input diagnostic
+refuses at the unblocked oracle candidate (6208, 2752), dequeue 1, and at (6272, 2752),
+dequeue 5, in the farm layout. Both refusals identify a unit with untracked movement-counter
+writers. Thus neither selected site has been reproduced under the qualified rule.
+The complete hierarchy edge expansion and its occupancy mapping remain open for the two
+recorded reach tables; neither the recreation's ordinary router nor the historical no-reach
+diagnostic is a validation of those tables.
+
+The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
+the former returns -1, while a mixed cell above the base level returns -2. For an open
+cell it climbs through open parents before resolving or creating the search node. The edge
+walkers at `0x8a3830` and `0x8a2ed0` descend into a mixed neighbor, splitting its edge and
+recursing on the two portions before adding traversable nodes. This narrows the remaining edge
+work, but does not by itself map the occupancy classifications or establish the clearance
+and corner helpers needed to replay the recorded reach decisions.
+At a coarse node, `0x8a43c0` visits the negative-y, positive-x, positive-y and negative-x
+edges in that order, then tests the four corners in the corresponding order. The edge walkers
+can emit multiple lower-level nodes when a neighboring cell is mixed, so a single coarse
+neighbor cannot be substituted for this traversal.
+For internal movement class 2, the finest-level positive-x check also requires the cells one
+step farther in positive x, with the second at positive y; the positive-y check similarly
+requires the next row at the current and positive-x columns (`0x8a2e50`, `0x8a4680`). The
+relationship between this internal class and every recreation movement state remains open.
+The distance helper `0x99b740` chooses an initial integer estimate from three input ranges,
+then repeatedly averages the estimate with integer division of the input by that estimate.
+It stops when half the signed difference is zero. A replacement must preserve that termination
+and integer arithmetic, rather than assume a host floating-point square root has identical
+rounding.
 
 ## Not established
 

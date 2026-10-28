@@ -122,6 +122,11 @@ town list and hierarchical reach search. See
 [AI construction](ai-construction.md) for the evidence and limitations. No later Human05 state
 has been verified.
 
+The current diagnostic replaces the blanket mobile-occupancy experiment with the decoded
+per-unit exclusion predicate and the source-derived enumeration rectangle. It refuses when
+the live movement-counter sources cannot be qualified. The reach search and town association
+remain open, so this does not change the 1223 s production refusal or establish a later run.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

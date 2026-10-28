@@ -582,13 +582,36 @@ impl ObjectHost {
         else {
             return false;
         };
-        if kind != initial.rules.kind {
-            return false;
-        }
         let (Ok(a), Ok(b)) = (usize::try_from(a.number), usize::try_from(b.number)) else {
             return false;
         };
+        if kind == i32::from(initial.rules.shared_control_kind) {
+            return a < initial.slots && a == b;
+        }
+        if kind != i32::from(initial.rules.kind) {
+            return false;
+        }
         a < initial.slots && b < initial.slots && initial.values[a * initial.slots + b]
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub(crate) fn diagnostic_shared_control(
+        &self,
+        owner: HandleId,
+        viewer: HandleId,
+    ) -> Result<bool, &'static str> {
+        let initial = self
+            .players
+            .as_ref()
+            .and_then(|players| players.initial_alliances.as_ref())
+            .ok_or("startup shared control is not admitted")?;
+        let owner = self
+            .player_settings(owner)
+            .map_err(|_| "unit owner is absent")?;
+        let viewer = self
+            .player_settings(viewer)
+            .map_err(|_| "query player is absent")?;
+        Ok(self.effective_alliance(owner, viewer, i32::from(initial.rules.shared_control_kind)))
     }
 
     fn set_player_alliance(&mut self, args: &[Value]) -> Result<Value, Error> {

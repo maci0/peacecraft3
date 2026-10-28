@@ -1,4 +1,4 @@
-//! Local-input check of snap compatibility with the two recorded Necropolis positions.
+//! Local-input checks of snap and the captured validator enumeration rectangle.
 //! This does not run the placement search or establish the native texture-axis mapping.
 use pcx_assets::ContentSource;
 use pcx_objects::editor::{
@@ -71,6 +71,12 @@ fn recorded_necropolis_sites_are_snap_stable_with_stock_texture() {
         .expect("texture exists");
     let header = pcx_tga::Header::parse(&asset.bytes).expect("pathing texture header");
     let dimensions = [u32::from(header.width), u32::from(header.height)];
+    assert_eq!(
+        rules
+            .exclusion_rectangle([6272., 2752.], dimensions, 3)
+            .expect("validator enumeration rectangle"),
+        [[5504., 1984.], [7040., 3520.]]
+    );
     for site in [[6208., 2752.], [5952., 2432.]] {
         assert_eq!(rules.snap(site, bounds, dimensions, 0).expect("snap"), site);
     }

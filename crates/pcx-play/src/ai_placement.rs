@@ -3,6 +3,7 @@
 //! The caller must supply terrain sampling, texture dimensions, object enumeration,
 //! reach check and shared building validator. This module alone does
 //! not admit an AI construction order.
+use pcx_script::HandleId;
 use std::collections::VecDeque;
 
 use crate::{
@@ -12,6 +13,169 @@ use crate::{
     scripts::AssetIdentity,
     unit_panel_layout::Reader,
 };
+
+/// Evidence for the movement ability's placement check on one unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovementEvidence {
+    Absent,
+    CountersZero,
+    ActiveSource(&'static str),
+    UnknownSource(&'static str),
+    UnknownBuff([u8; 4]),
+}
+
+/// Result of the optional player-dependent visibility check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExclusionVisibility {
+    NotChecked,
+    Visible,
+    Hidden,
+    Unknown,
+}
+
+/// The selected validator branch must be established by its caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExclusionContext {
+    AiPlacement,
+    Unqualified,
+}
+
+/// A placement exclusion cannot proceed without the named unit's state.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ExclusionError {
+    #[error("AI placement exclusion: invalid candidate rectangle or unit position")]
+    InvalidGeometry,
+    #[error("AI placement exclusion: unit {unit:?} has active movement source {source_name}")]
+    ActiveMovement {
+        unit: HandleId,
+        source_name: &'static str,
+    },
+    #[error("AI placement exclusion: unit {unit:?} has unknown movement source {source_name}")]
+    UnknownMovement {
+        unit: HandleId,
+        source_name: &'static str,
+    },
+    #[error("AI placement exclusion: unit {unit:?} has unqualified active buff {rawcode:?}")]
+    UnknownBuff { unit: HandleId, rawcode: [u8; 4] },
+    #[error("AI placement exclusion: unit {unit:?} has unknown player visibility")]
+    UnknownVisibility { unit: HandleId },
+    #[error("AI placement exclusion: unit {unit:?} has unqualified validator context")]
+    UnknownContext { unit: HandleId },
+    #[error("AI placement exclusion: unit {unit:?} state unavailable: {source_name}")]
+    Unavailable {
+        unit: HandleId,
+        source_name: &'static str,
+    },
+}
+
+/// Apply the tests for the observed AI branch with nonzero context fields `+0` and `+0x58`.
+pub fn exclude_unit(
+    unit: HandleId,
+    center: [f32; 2],
+    rectangle: [[f32; 2]; 2],
+    context: ExclusionContext,
+    shared_control: bool,
+    visibility: ExclusionVisibility,
+    movement: MovementEvidence,
+) -> Result<bool, ExclusionError> {
+    if !center.iter().all(|v| v.is_finite())
+        || !rectangle.iter().flatten().all(|v| v.is_finite())
+        || (0..2).any(|axis| rectangle[0][axis] >= rectangle[1][axis])
+    {
+        return Err(ExclusionError::InvalidGeometry);
+    }
+    if (0..2).any(|axis| center[axis] <= rectangle[0][axis] || center[axis] >= rectangle[1][axis]) {
+        return Ok(false);
+    }
+    if context != ExclusionContext::AiPlacement {
+        return Err(ExclusionError::UnknownContext { unit });
+    }
+    match visibility {
+        ExclusionVisibility::Hidden => return Ok(true),
+        ExclusionVisibility::Unknown => return Err(ExclusionError::UnknownVisibility { unit }),
+        ExclusionVisibility::NotChecked | ExclusionVisibility::Visible => {}
+    }
+    if !shared_control {
+        return Ok(false);
+    }
+    match movement {
+        MovementEvidence::Absent => Ok(false),
+        MovementEvidence::CountersZero => Ok(true),
+        MovementEvidence::ActiveSource(source_name) => {
+            Err(ExclusionError::ActiveMovement { unit, source_name })
+        }
+        MovementEvidence::UnknownSource(source_name) => {
+            Err(ExclusionError::UnknownMovement { unit, source_name })
+        }
+        MovementEvidence::UnknownBuff(rawcode) => {
+            Err(ExclusionError::UnknownBuff { unit, rawcode })
+        }
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+impl crate::playercolor_host::ObjectHost {
+    /// Evaluate exclusion using live state, refusing where movement evidence is absent.
+    pub fn diagnostic_ai_exclusion(
+        &self,
+        unit: HandleId,
+        viewer: HandleId,
+        rectangle: [[f32; 2]; 2],
+        visibility: ExclusionVisibility,
+    ) -> Result<bool, ExclusionError> {
+        let record = self
+            .executed_unit(unit)
+            .map_err(|_| ExclusionError::Unavailable {
+                unit,
+                source_name: "unit record",
+            })?;
+        let center = record.position.ok_or(ExclusionError::Unavailable {
+            unit,
+            source_name: "accepted unit position",
+        })?;
+        let pending = MovementEvidence::UnknownSource("native movement counters");
+        match exclude_unit(
+            unit,
+            center,
+            rectangle,
+            ExclusionContext::AiPlacement,
+            true,
+            visibility,
+            pending,
+        ) {
+            Ok(result) => return Ok(result),
+            Err(ExclusionError::UnknownMovement { .. }) => {}
+            Err(error) => return Err(error),
+        }
+        let shared = self
+            .diagnostic_shared_control(record.owner, viewer)
+            .map_err(|source_name| ExclusionError::Unavailable { unit, source_name })?;
+        if !shared {
+            return Ok(false);
+        }
+        let source_name = if record.paused_since.is_some() {
+            "explicit pause and its native movement-counter contribution"
+        } else if record.is_sleeping() {
+            "sleep and its native movement-counter contribution"
+        } else {
+            if let Some(buff) = self
+                .unit_buffs(unit)
+                .map_err(|_| ExclusionError::Unavailable {
+                    unit,
+                    source_name: "active buffs",
+                })?
+                .first()
+            {
+                return Err(ExclusionError::UnknownBuff {
+                    unit,
+                    rawcode: buff.rawcode(),
+                });
+            }
+            "untracked native movement-counter writers"
+        };
+        Err(ExclusionError::UnknownMovement { unit, source_name })
+    }
+}
 
 /// Operands from the reviewed Legacy client, with their input identity.
 #[derive(Clone, Debug)]
@@ -34,6 +198,7 @@ pub struct Rules {
     snap_half: i32,
     snap_odd: f32,
     snap_edge: f32,
+    exclusion_margin: f32,
 }
 
 impl Rules {
@@ -125,6 +290,11 @@ impl Rules {
         let snap_half = 1_i32 << shift;
         let snap_odd = f32::from(byte(&mut r, 0x403b40, &[0x6a])?);
         let snap_edge = f32::from(byte(&mut r, 0x4015b0, &[0x6a])?);
+        let exclusion_margin = r
+            .word(0x40a860, &[0x68])?
+            .checked_mul(u32::from(byte(&mut r, 0x401610, &[0x6a])?))
+            .filter(|&v| v <= 1_u32 << f32::MANTISSA_DIGITS)
+            .ok_or("invalid exclusion margin operands")? as f32;
         if width == 0
             || width > 4096
             || center >= width
@@ -140,6 +310,8 @@ impl Rules {
             || snap_period != snap_half * 2
             || snap_odd <= 0.
             || snap_edge <= 0.
+            || !exclusion_margin.is_finite()
+            || exclusion_margin <= 0.
         {
             return Err("inconsistent search operands".into());
         }
@@ -171,7 +343,42 @@ impl Rules {
             snap_half,
             snap_odd,
             snap_edge,
+            exclusion_margin,
         })
+    }
+
+    /// The validator's expanded object-enumeration rectangle for a snapped candidate.
+    pub fn exclusion_rectangle(
+        &self,
+        point: [f32; 2],
+        mut dimensions: [u32; 2],
+        quarter: u8,
+    ) -> Result<[[f32; 2]; 2], String> {
+        if quarter > 3
+            || dimensions.contains(&0)
+            || dimensions.iter().any(|&v| v > u32::from(u16::MAX))
+            || point.iter().any(|p| !p.is_finite() || p.fract() != 0.)
+        {
+            return Err("invalid AI exclusion rectangle input".into());
+        }
+        if !quarter.is_multiple_of(2) {
+            dimensions.swap(0, 1);
+        }
+        let half = dimensions
+            .map(|v| f64::from(v) * f64::from(self.snap_odd) + f64::from(self.exclusion_margin));
+        let exact_integer_limit = f64::from(1_u32 << f32::MANTISSA_DIGITS);
+        if (0..2).any(|axis| f64::from(point[axis].abs()) + half[axis] > exact_integer_limit) {
+            return Err("AI exclusion rectangle exceeds exact integer range".into());
+        }
+        let half = half.map(|value| value as f32);
+        let result = [
+            [point[0] - half[0], point[1] - half[1]],
+            [point[0] + half[0], point[1] + half[1]],
+        ];
+        if result.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("AI exclusion rectangle overflow".into());
+        }
+        Ok(result)
     }
 
     /// Snap a point using the selected texture dimensions and map bounds.
@@ -466,6 +673,101 @@ impl<'a> Grid<'a> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn exclusion_checks_center_directed_control_and_missing_state() {
+        let unit = HandleId::new(std::num::NonZeroU64::new(71).unwrap());
+        let rectangle = [[-3., 2.], [9., 13.]];
+        let check = |center, shared, movement| {
+            exclude_unit(
+                unit,
+                center,
+                rectangle,
+                ExclusionContext::AiPlacement,
+                shared,
+                ExclusionVisibility::NotChecked,
+                movement,
+            )
+        };
+        assert_eq!(
+            check([4., 7.], true, MovementEvidence::CountersZero),
+            Ok(true)
+        );
+        assert_eq!(
+            check([-3., 7.], true, MovementEvidence::CountersZero),
+            Ok(false)
+        );
+        assert_eq!(
+            check([9.1, 7.], true, MovementEvidence::CountersZero),
+            Ok(false)
+        );
+        assert_eq!(
+            check([4., 7.], false, MovementEvidence::CountersZero),
+            Ok(false)
+        );
+        assert_eq!(check([4., 7.], true, MovementEvidence::Absent), Ok(false));
+        assert_eq!(
+            check([4., 7.], true, MovementEvidence::ActiveSource("root")),
+            Err(ExclusionError::ActiveMovement {
+                unit,
+                source_name: "root"
+            })
+        );
+        assert_eq!(
+            check(
+                [4., 7.],
+                true,
+                MovementEvidence::UnknownSource("counter writers")
+            ),
+            Err(ExclusionError::UnknownMovement {
+                unit,
+                source_name: "counter writers"
+            })
+        );
+        assert_eq!(
+            check([4., 7.], true, MovementEvidence::UnknownBuff(*b"Bxyz")),
+            Err(ExclusionError::UnknownBuff {
+                unit,
+                rawcode: *b"Bxyz"
+            })
+        );
+        assert_eq!(
+            exclude_unit(
+                unit,
+                [4., 7.],
+                rectangle,
+                ExclusionContext::AiPlacement,
+                false,
+                ExclusionVisibility::Hidden,
+                MovementEvidence::Absent
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            exclude_unit(
+                unit,
+                [4., 7.],
+                rectangle,
+                ExclusionContext::AiPlacement,
+                true,
+                ExclusionVisibility::Unknown,
+                MovementEvidence::CountersZero
+            ),
+            Err(ExclusionError::UnknownVisibility { unit })
+        );
+        assert_eq!(
+            exclude_unit(
+                unit,
+                [4., 7.],
+                rectangle,
+                ExclusionContext::Unqualified,
+                true,
+                ExclusionVisibility::NotChecked,
+                MovementEvidence::CountersZero
+            ),
+            Err(ExclusionError::UnknownContext { unit })
+        );
+    }
+
     fn rules() -> Rules {
         Rules {
             origin: AssetIdentity {
@@ -499,6 +801,7 @@ mod tests {
             snap_half: 8,
             snap_odd: 4.,
             snap_edge: 8.,
+            exclusion_margin: 11.,
         }
     }
 
@@ -520,6 +823,25 @@ mod tests {
             [7., 11.]
         );
         assert!(r.town_center([f32::NAN, 0.], None, None).is_err());
+    }
+
+    #[test]
+    fn exclusion_rectangle_uses_texture_axes_and_source_margin() {
+        let r = rules();
+        assert_eq!(
+            r.exclusion_rectangle([10., 20.], [2, 3], 0).unwrap(),
+            [[-9., -3.], [29., 43.]]
+        );
+        assert_eq!(
+            r.exclusion_rectangle([10., 20.], [2, 3], 1).unwrap(),
+            [[-13., 1.], [33., 39.]]
+        );
+        assert!(r.exclusion_rectangle([0., 0.], [0, 2], 0).is_err());
+        assert!(r.exclusion_rectangle([0.25, 0.], [2, 3], 0).is_err());
+        assert!(
+            r.exclusion_rectangle([(1_u32 << f32::MANTISSA_DIGITS) as f32, 0.], [2, 3], 0)
+                .is_err()
+        );
     }
 
     #[test]

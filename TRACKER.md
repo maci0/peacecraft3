@@ -5358,3 +5358,23 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
   WASM Clippy passed with `-D warnings`. The locked, offline simulation check passed with
   unchanged budgets.
+
+### 2026-10-28: Qualified placement exclusions
+
+- [~] The selected-image startup rules now supply the self shared-control default, with
+  explicit directed assignments taking precedence. A read-only farm capture and native code
+  establish the expanded validator enumeration rectangle:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] The diagnostic now applies the rectangle and exclusion predicate per unit, with typed
+  refusals for unavailable movement and visibility state. It restores temporary collision
+  exclusions and no longer uses the blanket mobile switch. Live counter writers remain
+  incomplete, so no zero-counter state is inferred merely from an empty buff list.
+- [ ] Both oracle sites, the recorded reach tables and town selection still require validation
+  under fully sourced live state. Production continues to refuse; campaign routes were not rerun.
+- The qualified local-input comparison refuses for an acolyte with untracked counter writers:
+  at (6208, 2752), dequeue 1, in the baseline and at (6272, 2752), dequeue 5, in the farm
+  layout. The original-input rectangle and synthetic collision-restoration tests passed.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2187 tests with 84 ignored; native and
+  WASM Clippy passed with `-D warnings` after rebuilding stale dependency metadata. The locked,
+  offline simulation check passed with 8 fewer allocations and 50 fewer requested bytes in both
+  Human03 workloads; digests and budgets are unchanged.
