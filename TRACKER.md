@@ -5649,3 +5649,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Human03 and Human04 route runs pass; all 45 and 72 checkpoint and RNG lines respectively
   match their `g1` logs. Two initial attempts failed to compile against stale shared target
   artifacts; rebuilding the affected dependencies cleared those errors.
+### 2026-10-28: Camera input
+
+- [~] Slices 4, 8 and the camera part of 10 of the input audit: wheel and Page Up/Down zoom
+  over six levels (1.0 s), Insert/Delete rotation states (0.5 s), arrow-key, screen-edge
+  and middle-button scrolling with the `mousescroll`/`keyscroll`/`mousescrolldisable`
+  multipliers, and the Space, Backspace, F8 and backtick jump keys. The zoom and rotation
+  tables, ease times, wheel unit, repeat window and scroll constants are read from the
+  reviewed client image; the live camera therefore settles at 1200 and 335 on the last
+  level. See [camera input](docs/re-notes/input-camera.md).
+- The FPS overlay moved from F8 to F6 because F8 is the original idle-worker key.
+- [ ] Open: the edge-scroll margin is still the live fit (producer not located), the
+  middle-drag ratio, the Backspace sort key, an alert producer for Space, saved scroll
+  preferences, Ctrl/Alt+C, the arrow cursors, and per-level near clip.

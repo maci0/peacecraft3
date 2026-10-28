@@ -411,11 +411,11 @@ async function runFocusHandoff() {
         assert.equal(completion.scrollX, before.scrollX); assert.equal(completion.scrollY, before.scrollY);
         const immediateFocus = await page.evaluate(() => document.activeElement?.id); assert.equal(immediateFocus, 'launcher-canvas');
         // Deliberately no canvas.focus(), pointer interaction or screenshot scrolling before this key.
-        await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+        await page.keyboard.down('F6'); await page.waitForTimeout(100); await page.keyboard.up('F6'); await page.waitForTimeout(300);
         const visible = await captureFps(page, `${method}-direct-f8-visible`, true);
-        await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+        await page.keyboard.down('F6'); await page.waitForTimeout(100); await page.keyboard.up('F6'); await page.waitForTimeout(300);
         const hidden = await captureFps(page, `${method}-direct-f8-hidden`, false);
-        outcomes.push({ method, before, completion, immediateFocus, visible, hidden, input: 'Real Escape key or real rendered Skip button; F8 directly without canvas refocus', limitation: 'Skip/focus/key path proof, not original movie decoding/end-of-movie runtime proof' });
+        outcomes.push({ method, before, completion, immediateFocus, visible, hidden, input: 'Real Escape key or real rendered Skip button; F6 directly without canvas refocus', limitation: 'Skip/focus/key path proof, not original movie decoding/end-of-movie runtime proof' });
       } finally { await context.close(); }
     }
     const unexpected = requests.filter(r => !r.url.startsWith('blob:') && (!r.url.startsWith(`${origin}/`) || r.verb !== 'GET' || r.body || /\.(iso|mpq)(?:[?#]|$)/i.test(r.url)));
@@ -427,7 +427,7 @@ async function runFocusHandoff() {
 }
 async function toggleFps(page) {
   await page.locator('#launcher-canvas').focus();
-  await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8'); await page.waitForTimeout(300);
+  await page.keyboard.down('F6'); await page.waitForTimeout(100); await page.keyboard.up('F6'); await page.waitForTimeout(300);
 }
 async function captureFps(page, name, visible) {
   const canvas = page.locator('#launcher-canvas');
@@ -437,7 +437,7 @@ async function captureFps(page, name, visible) {
   // Source overlay is top-right; a relative quadrant is an inspection region, not an authored layout replacement.
   await page.screenshot({ path: roi, clip: { x: bounds.x + bounds.width / 2, y: bounds.y, width: bounds.width / 2, height: bounds.height / 4 } });
   const { stdout } = await exec('/usr/bin/tesseract', [roi, 'stdout', '--psm', '6'], { maxBuffer: 4 * 1024 * 1024 });
-  const recognized = /\bFPS\b/.test(stdout); assert.equal(recognized, visible, `${name}: rendered F8 glyph visibility mismatch: ${stdout}`);
+  const recognized = /\bFPS\b/.test(stdout); assert.equal(recognized, visible, `${name}: rendered F6 glyph visibility mismatch: ${stdout}`);
   return { name, visible, recognized, ocr: stdout, capture, roi, limitation: 'Readable FPS glyph and preserved toggle state; exact font-handle identity remains source/ECS proof' };
 }
 async function poll(predicate, message) { const deadline = Date.now() + 120000; while (!predicate()) { if (Date.now() > deadline) throw Error(message); await new Promise(r => setTimeout(r, 250)); } }

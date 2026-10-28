@@ -1,13 +1,13 @@
 # FPS and bottleneck profiling
 
-Press **F8** to show or hide FPS, smoothed frame time in milliseconds and a
+Press **F6** to show or hide FPS, smoothed frame time in milliseconds and a
 compressed frame-time history. The newest band keeps up to 32 individual samples
 at the right edge; older pairs fold into peak buckets spanning 2, 4, 8, 16 and
 32 frames toward the left. Peaks preserve stutters rather than averaging them
 away. At most 192 buckets retain up to 2,016 frames, independent of uptime.
 The graph redraws every frame, with a faint reference grid and a white current-value
 marker; numeric labels refresh four times per second. Its labelled vertical range
-adapts to the retained peaks. Reopening F8 starts a new contiguous history.
+adapts to the retained peaks. Reopening F6 starts a new contiguous history.
 These are real frame timings, independent of accelerated simulation ticks.
 
 This follows the logarithmic-age history principle in the local
@@ -28,9 +28,9 @@ expose whole-GPU VRAM used/total through read-only sysfs for the selected PCI
 adapter; those totals include other apps.
 Unavailable memory reports are labelled rather than replaced with zero.
 
-Both panels start hidden and do not intercept input. F8 stays on the right;
+Both panels start hidden and do not intercept input. F6 stays on the right;
 F7 uses the left side. If the window cannot fit both widths, F7 wraps beneath
-F8 instead of overlapping it.
+F6 instead of overlapping it.
 The compact panels use a translucent charcoal background, quiet borders and
 aligned frame metrics. F7 separates renderer/scene data from campaign data and
 reports total mesh assets alongside CPU-retained vertices and indices; these
@@ -168,7 +168,7 @@ gate passes under concurrent CPU load. Native `perf` instructions and a CPU stac
 on this host. Installed Valgrind cannot decode an instruction in the system loader
 and fails before the workload; no Callgrind baseline is claimed. RADV produced a 9,079,804-byte RGP capture from the cached native Vulkan
 launcher at frame 61. This verifies hardware capture infrastructure, not the
-latest gameplay performance or viewer analysis. F8 was visually verified in the rendered browser app at wide and portrait
+latest gameplay performance or viewer analysis. The FPS overlay (then bound to F8) was visually verified in the rendered browser app at wide and portrait
 viewport sizes, before and after resize. Changed pixels stay at the canvas
 top right, and hiding the counter restores the prior image exactly. No FPS
 threshold is used. Native profiling executables remain a separate check.

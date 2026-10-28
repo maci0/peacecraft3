@@ -73,7 +73,7 @@ identification or a completed gameplay/campaign entitlement layer.
 This proves the executable import/storage/extraction/audio pipeline. It does
 not prove the file-input UI or rendered menu fidelity: the synthetic font and
 texture bytes are placeholders, and the model is a minimal authored fixture.
-Actual renderer/F8/resolution checks are separate. Original ISO
+Actual renderer/F6/resolution checks are separate. Original ISO
 filesystem/installer limitations remain explicit; no executable runs and no
 remote extraction fallback exists. Edition/build/priority are never inferred
 from ISO/archive filenames. Original campaigns remain blocked on real game
@@ -112,7 +112,7 @@ archives locally and caches extracted bytes; it has no HTTP fallback.
 `app-import-runtime.mjs --run` uses a locally repacked fixture with original
 members and explicit source choices. It checks file-input import, fresh authored
 labels/scene/font aliases, click audio, resize, conflicting-member rollback and
-six captured F8 visibility states. This is not retail installer ISO acceptance
+six captured FPS overlay visibility states. This is not retail installer ISO acceptance
 or proof of original archive precedence. Capture review remains required;
 full menu rendering and two-face GPU behavior are not certified.
 
@@ -120,6 +120,6 @@ With matching generated WASM served locally, run
 `PCX_APP_IMPORT_WASM_READY=1 node tests/browser-iso/app-import-runtime.mjs --focus-handoff`.
 Fresh browser contexts exercise real Escape and the visible Skip button. The
 completion event must observe focus on the visible canvas with unchanged scroll;
-direct F8 must show and hide without a canvas click or manual refocus. Both paths
+direct F6 must show and hide without a canvas click or manual refocus. Both paths
 pass. Natural movie completion, original movie decoding and unavailable-movie
 handling are not verified by this check. Outputs stay in `.scratch` or `/tmp`.
