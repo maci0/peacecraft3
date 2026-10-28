@@ -2,8 +2,6 @@ use super::ObjectHost;
 use crate::ai_placement::{ExclusionError, PlacementEvent, PlacementEventKind};
 use pcx_script::HandleId;
 
-pub(super) const INLINE_CAPACITY: usize = 8;
-
 impl ObjectHost {
     /// Set the clock for a diagnostic snapshot without replaying timer callbacks.
     #[cfg(feature = "test-fixtures")]
@@ -30,9 +28,7 @@ impl ObjectHost {
         Ok(self
             .placement_events
             .iter()
-            .flatten()
             .copied()
-            .chain(self.placement_events_spill.iter().copied())
             .filter(move |event| event.unit == unit))
     }
 
@@ -41,7 +37,14 @@ impl ObjectHost {
             self.placement_events_incomplete = true;
             return;
         };
-        if self.placement_events_len >= self.inner.max_handles {
+        let reserve = if self.placement_events.is_empty() {
+            self.inner.max_handles.min(8)
+        } else {
+            1
+        };
+        if self.placement_events.len() >= self.inner.max_handles
+            || self.placement_events.try_reserve(reserve).is_err()
+        {
             self.placement_events_incomplete = true;
             return;
         }
@@ -50,14 +53,6 @@ impl ObjectHost {
             game_time,
             kind,
         };
-        if self.placement_events_len < self.placement_events.len() {
-            self.placement_events[self.placement_events_len] = Some(event);
-        } else if self.placement_events_spill.try_reserve(1).is_ok() {
-            self.placement_events_spill.push(event);
-        } else {
-            self.placement_events_incomplete = true;
-            return;
-        }
-        self.placement_events_len += 1;
+        self.placement_events.push(event);
     }
 }

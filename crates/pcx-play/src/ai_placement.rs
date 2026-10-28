@@ -74,6 +74,7 @@ pub enum PlacementEventKind {
     PauseUnit(bool),
     BuffApplied([u8; 4]),
     BuffRemoved([u8; 4]),
+    Relocated,
 }
 
 /// One successful operation at the recreation's game time.
@@ -85,7 +86,6 @@ pub struct PlacementEvent {
 }
 
 /// A qualified movement interval with no unbounded relocation or speed changes.
-#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Debug)]
 pub struct KinematicWindow {
     pub origin: [f32; 2],
@@ -96,7 +96,6 @@ pub struct KinematicWindow {
 /// Prove that a targeted effect cannot reach the other unit during the interval.
 /// Both origins must describe the same instant and both windows must cover the
 /// entire interval, including scripted displacement and speed changes.
-#[cfg(any(test, feature = "test-fixtures"))]
 pub fn beyond_cast_reach(
     source: Option<KinematicWindow>,
     target: Option<KinematicWindow>,
@@ -121,10 +120,17 @@ pub fn beyond_cast_reach(
     {
         return Err("invalid movement or effect bounds");
     }
-    let lower_distance = (0..2)
-        .map(|axis| (f64::from(source.origin[axis]) - f64::from(target.origin[axis])).abs())
-        .fold(0., f64::max)
-        .next_down();
+    let mut distance_squared = 0.0_f64;
+    for axis in 0..2 {
+        let distance = (f64::from(source.origin[axis]) - f64::from(target.origin[axis]))
+            .abs()
+            .next_down()
+            .max(0.);
+        distance_squared = (distance_squared + (distance * distance).next_down())
+            .next_down()
+            .max(0.);
+    }
+    let lower_distance = distance_squared.sqrt().next_down();
     let mut upper_distance = f64::from(range);
     for radius in collision_radii {
         upper_distance = (upper_distance + f64::from(radius)).next_up();
@@ -186,6 +192,13 @@ pub fn exclude_unit(
 
 #[cfg(feature = "test-fixtures")]
 impl crate::playercolor_host::ObjectHost {
+    /// Read a ranked cast range from the selected ability tables and map overlay.
+    pub fn diagnostic_ai_cast_range(&self, ability: [u8; 4], rank: i32) -> Result<f32, String> {
+        self.hero_ability_level_cell(ability, "Rng", rank, pcx_objects::editor::FieldKind::Unreal)?
+            .parse::<f32>()
+            .map_err(|error| format!("invalid cast range: {error}"))
+    }
+
     /// Return the buff identities retained for a diagnostic unit.
     pub fn diagnostic_ai_buffs(&self, unit: HandleId) -> Result<Vec<[u8; 4]>, ExclusionError> {
         self.unit_buffs(unit)
@@ -241,6 +254,11 @@ impl crate::playercolor_host::ObjectHost {
             .any(|event| matches!(event.kind, PlacementEventKind::PauseUnit(_)))
         {
             "prior PauseUnit request and its native movement-counter contribution"
+        } else if self
+            .placement_events(unit)?
+            .any(|event| matches!(event.kind, PlacementEventKind::Relocated))
+        {
+            "scripted relocation invalidates the movement bound"
         } else if record.is_sleeping() {
             "sleep and its native movement-counter contribution"
         } else {
@@ -788,6 +806,12 @@ mod tests {
         assert_eq!(
             beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
             Err("invalid movement or effect bounds")
+        );
+        target.elapsed = 2.;
+        target.origin = [10., 10.];
+        assert_eq!(
+            beyond_cast_reach(Some(source), Some(target), 4., [1., 1.]),
+            Ok(true)
         );
     }
 

@@ -3,8 +3,8 @@
 
 use pcx_assets::{Addon, AssetMode, Behaviour, Build, GameMode, Resolver};
 use pcx_play::ai_placement::{
-    BuffType, ExclusionContext, ExclusionError, ExclusionVisibility, Grid, MovementEvidence, Rules,
-    exclude_unit,
+    BuffType, ExclusionContext, ExclusionError, ExclusionVisibility, Grid, KinematicWindow,
+    MovementEvidence, Rules, beyond_cast_reach, exclude_unit,
 };
 use pcx_play::headless_startup::start;
 use pcx_script::{Host, Value};
@@ -35,6 +35,22 @@ fn building_facing(angle: f32) -> f32 {
 fn probe_point(value: &str) -> [f32; 2] {
     let (x, y) = value.split_once(',').expect("probe coordinates");
     [x.parse().expect("probe x"), y.parse().expect("probe y")]
+}
+
+fn scripted_spawns(script: &str, kind: &str) -> Vec<[f32; 2]> {
+    let marker = format!("CreateUnit( p, '{kind}', ");
+    script
+        .lines()
+        .filter_map(|line| {
+            let coordinates = line.split_once(&marker)?.1;
+            let (x, tail) = coordinates.split_once(',')?;
+            let (y, _) = tail.split_once(',')?;
+            Some([
+                x.trim().parse().expect("spawn x"),
+                y.trim().parse().expect("spawn y"),
+            ])
+        })
+        .collect()
 }
 
 fn probe_order_worker(log: &str, kind: [u8; 4], owner: i32) -> [f32; 2] {
@@ -108,6 +124,10 @@ fn building_facing_truncates_before_normalizing() {
 
 #[test]
 fn order_and_sample_inputs_read_the_observed_worker_coordinates() {
+    assert_eq!(
+        scripted_spawns("set u = CreateUnit( p, 'X001', 13.0, -2.0, 0.0 )", "X001"),
+        [[13., -2.]]
+    );
     assert_eq!(
         probe_order_elapsed(
             " E:t2/id1094861636/p7@12.5,-3/point4,5/targetnone",
@@ -327,6 +347,83 @@ fn human05_placement_diagnostic() {
     let catalog = objects.unit_catalog().unwrap();
     let acolyte = catalog.resolve(*b"uaco").unwrap();
     let worker_radius = text(&acolyte, "collision").parse::<f32>().unwrap();
+    let caster = catalog.resolve(*b"nmrr").unwrap();
+    let caster_radius = text(&caster, "collision").parse::<f32>().unwrap();
+    let game_misc = resolver
+        .resolve_bounded("Units/MiscGame.txt", 4 << 20)
+        .unwrap();
+    let mut game_profiles = vec![("Units/MiscGame.txt", game_misc.bytes.as_slice())];
+    if let Some(ref map_misc) = map_misc {
+        game_profiles.push(("war3mapMisc.txt", map_misc.as_slice()));
+    }
+    let limits = pcx_objects::editor::misc::MoveSpeedLimits::read(&game_profiles, 8 << 20).unwrap();
+    let source_speed = text(&caster, "spd")
+        .parse::<f32>()
+        .unwrap()
+        .max(limits.max_unit);
+    let target_speed = text(&acolyte, "spd")
+        .parse::<f32>()
+        .unwrap()
+        .max(limits.max_unit);
+    let range = objects.diagnostic_ai_cast_range(*b"ACen", 1).unwrap();
+    let map_script = pcx_map::Map::parse(&bytes)
+        .unwrap()
+        .extract_checked(&map.display().to_string(), "war3map.j", map_budget)
+        .unwrap()
+        .unwrap();
+    let spawns = scripted_spawns(std::str::from_utf8(&map_script).unwrap(), "nmrr");
+    assert_eq!(spawns.len(), 2);
+    let mut observed_starts = vec![(
+        "baseline",
+        nominal_time,
+        probe_sample_workers(&std::fs::read_to_string(probe.join("PCXO-2.txt")).unwrap()),
+    )];
+    if let Ok(path) = std::env::var("PCX_HUMAN05_FARM_ORDER") {
+        let path = PathBuf::from(path);
+        let order = std::fs::read_to_string(&path).unwrap();
+        let elapsed = order
+            .split_once("tag=order t=")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        let initial = std::fs::read_to_string(path.with_file_name("PCXO-2.txt")).unwrap();
+        observed_starts.push((
+            "farm",
+            probe_clock_delay(&probe_script) + elapsed,
+            probe_sample_workers(&initial),
+        ));
+    }
+    for (layout, elapsed, starts) in observed_starts {
+        assert_eq!(starts.len(), 4);
+        for origin in &spawns {
+            for initial in &starts {
+                let source = KinematicWindow {
+                    origin: *origin,
+                    maximum_speed: source_speed,
+                    elapsed,
+                };
+                let target = KinematicWindow {
+                    origin: *initial,
+                    maximum_speed: target_speed,
+                    elapsed,
+                };
+                let outside = beyond_cast_reach(
+                    Some(source),
+                    Some(target),
+                    range,
+                    [caster_radius, worker_radius],
+                );
+                println!(
+                    "{layout} observed-start cast bound source={origin:?} target={initial:?} outside={outside:?}"
+                );
+                assert_eq!(outside, Ok(true));
+            }
+        }
+    }
     let mut blocked_sample = vec![
         [5611.785, 2795.562],
         [5676.686, 2656.12],

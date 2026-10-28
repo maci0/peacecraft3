@@ -1962,6 +1962,12 @@ impl ObjectHost {
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.position = Some(relocated);
                 }
+                if relocated != position {
+                    self.record_placement_event(
+                        unit,
+                        crate::ai_placement::PlacementEventKind::Relocated,
+                    );
+                }
             } else {
                 placement.hide(unit).map_err(|e| {
                     self.inner
@@ -2034,6 +2040,9 @@ impl ObjectHost {
             if let (true, Some(activity), Some(now)) = (moving, &mut record.activity, now) {
                 activity.relocated(position, now);
             }
+        }
+        if previous != Some(position) {
+            self.record_placement_event(unit, crate::ai_placement::PlacementEventKind::Relocated);
         }
         Ok(Value::Null)
     }

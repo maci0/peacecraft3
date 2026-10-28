@@ -190,6 +190,9 @@ impl ObjectHost {
                 }
             }
         }
+        if prepared.relocated {
+            self.record_placement_event(unit, crate::ai_placement::PlacementEventKind::Relocated);
+        }
         if !shown {
             self.forget_hidden_unit_ranges(unit);
         }

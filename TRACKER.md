@@ -5474,3 +5474,19 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   buff and diagnostic parser tests passed. Native and WASM Clippy passed with `-D warnings`.
   The simulation budget check passed with unchanged allocation and reallocation counts and
   digests; allocated bytes increased by 224 for each Human03 workload, within the existing budget.
+
+### 2026-10-28: Placement recorded-start bound
+
+- [~] The source-derived Ensnare bound passes for every recorded caster and initial worker
+  pair in the baseline and farm layouts. The host records position-native relocations and
+  placement adjustments, and the diagnostic refuses when those invalidate a movement history.
+  The finite selected-table carrier scan and its limits are in [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The bound is not connected to production placement: live counter-effect coverage and
+  qualified starting histories are missing. The comparison refuses baseline (6208, 2752) at
+  dequeue 1 and farm (6272, 2752) at dequeue 5, the latter because fixture setup relocates the
+  workers. Native reach is bypassed. No campaign route was rerun.
+- Headless `cargo test -p pcx-play --lib` passed 2203 tests with 85 ignored. Native and WASM
+  Clippy passed with `-D warnings`. The simulation budget check passed with unchanged digests
+  and reallocations, but one extra allocation and
+  216 extra requested bytes per Human03 workload relative to the pre-history measurement;
+  the no-increase requirement remains unmet.

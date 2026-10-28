@@ -146,7 +146,9 @@ details in [AI construction](ai-construction.md).
   Its directly created fixture workers are unpaused, awake and have no retained buffs; the
   recorded Human05 route does not include per-handle pause or buff history. The host now records
   such events during simulation, but the fixture seeds a nominal snapshot clock without replaying
-  timer callbacks or the original probe's movement histories.
+  timer callbacks or the original probe's movement histories. The recorded-start Ensnare bound
+  passes for both layouts, but the farm fixture's own position-setting calls are now recorded as
+  relocations and refuse the live-history check.
 - AI structure placement. The grid, visitation order, terrain classification and nearby-object
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI

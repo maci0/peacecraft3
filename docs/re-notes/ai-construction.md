@@ -873,9 +873,9 @@ probe map script finds `nmrr` with `ACen`. That join does not enumerate runtime-
 identifiers, restored hero inventories, map overrides or all native paths to `Bchd`, and is
 not a proof that no other source exists.
 
-A fixture-only kinematic calculation accepts qualified origins, maximum speeds and elapsed
+A kinematic calculation accepts qualified origins, maximum speeds and elapsed
 time for both the caster and target, together with range and collision radii. It uses an
-axis-distance lower bound and outward-rounded travel and range bounds. A passing result proves
+outward-rounded Euclidean distance lower bound and outward-rounded travel and range bounds. A passing result proves
 that the supplied two movement windows could not reach cast range; a failed or unavailable
 bound proves no exclusion. Both histories must cover scripted relocation and speed changes.
 Bounding only the caster against the target's final position would miss a cast earlier in the
@@ -892,7 +892,7 @@ full movement interval since map startup.
 
 The host records successful `PauseUnit` requests, including idempotent requests, and actual
 buff attachments and removals with the handle and recreation game time in production. Queries
-and rejected calls do not add pause events. History uses inline storage and a bounded spill;
+and rejected calls do not add pause events. History allocates lazily and is bounded;
 missing game time, allocation failure or exhaustion of the handle-derived budget marks the
 history incomplete, and a placement query refuses rather than treating it as empty. This records
 all implemented buff transitions, not an established classification of counter-raising buffs.
@@ -905,6 +905,30 @@ delivery time and the unrounded order timestamp were not recorded. Timer callbac
 are not replayed when the snapshot clock is set, so this is not a complete recreation history or
 an exact order-time proof. The kinematic bound remains disconnected until caster capabilities,
 creation times, relocation and speed histories are qualified for the live world.
+
+### Recorded-start cast bound, 2026-10-28
+
+The selected `MiscGame` cap is 400, the selected `nmrr` and `uaco` speeds are 270 and 220,
+their collision radii are 31 and 16, and the selected `ACen` range is 500. The map script
+places two `nmrr` units, and the probe's start sample records all four acolytes. Using the cap
+for both units throughout the nominal 11.211 seconds, the closest recorded pair retains about
+758 units of separation after subtracting both maximum travel distances, exceeding the 547-unit
+range plus radii. The diagnostic evaluates all eight pairs in each layout using selected tables,
+map script, probe samples and the conservative bound; all sixteen pass. This establishes that
+specific calculation for the recorded starting points, subject to the nominal clock and absence
+of unbounded relocation, not the missing live-world history.
+
+The selected unit ability table assigns Purge aliases to `oshm`, `nfor`, `ngnw`, `nltl`, `nrvl`,
+`nsat`, `nsrh` and `nwzg`, and the transport abilities to `nzep` and `uarb`. None of those unit
+identifiers occurs as a literal in the map script. The existing ability and item literal scan
+finds `nmrr` with `ACen` as the only listed carrier of the selected movement-effect buffs. This
+scan does not establish dynamic identifiers, all item paths or map ability overrides.
+
+The host now records successful position changes from the position natives, and any placement
+adjustment when showing a unit or re-enabling pathing. The exclusion diagnostic refuses a unit
+with such a relocation in its history. The farm fixture itself calls position natives to place
+sampled workers; it therefore refuses that recorded setup relocation, separately from the
+unqualified baseline effect sources. Native reach is still bypassed in both scans.
 
 The hierarchy lookup at `0x8a20a0` distinguishes blocked cells from mixed coarse cells:
 the former returns -1, while a mixed cell above the base level returns -2. For an open

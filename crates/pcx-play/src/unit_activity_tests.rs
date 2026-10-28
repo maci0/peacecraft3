@@ -517,6 +517,31 @@ fn exhausted_placement_history_refuses_without_blocking_pause() {
 }
 
 #[test]
+fn placement_history_records_successful_relocation() {
+    use crate::ai_placement::PlacementEventKind;
+    let mut vm = open();
+    let a = unit(&vm, "A");
+    let host = &mut vm.host().inner;
+    host.native(
+        "SetUnitPosition",
+        &[Value::Handle(a), Value::Real(48.), Value::Real(16.)],
+    )
+    .unwrap();
+    let events: Vec<_> = host.placement_events(a).unwrap().collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, PlacementEventKind::Relocated);
+    assert_eq!(events[0].game_time, host.timer_game_time().unwrap());
+    assert!(
+        host.native(
+            "SetUnitPosition",
+            &[Value::Handle(a), Value::Real(f32::NAN), Value::Real(16.)]
+        )
+        .is_err()
+    );
+    assert_eq!(host.placement_events(a).unwrap().count(), 1);
+}
+
+#[test]
 fn pause_preserves_the_route_and_repeated_pause_does_not_stack_or_catch_up() {
     let mut vm = open();
     let a = unit(&vm, "A");
