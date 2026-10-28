@@ -5,7 +5,11 @@ use crate::{
 };
 use bevy::{
     ecs::system::SystemParam,
-    picking::{events::PointerPress, hover::Hovered},
+    picking::{
+        events::{PointerClick, PointerDragDrop, PointerDragEnd, PointerDragStart, PointerPress},
+        hover::Hovered,
+        pointer::PointerButton,
+    },
     prelude::*,
 };
 use pcx_play::{
@@ -54,8 +58,11 @@ pub(crate) struct CampaignInventory {
     pub pointer_consumed: bool,
     pub last_error: Option<String>,
     pub receipts: Vec<AssetReceipt>,
-    /// Holder and slot index of a slot press that asks to activate the slot's item.
+    /// Holder and slot index of a left click or NumPad key that asks to use the slot's item.
     pub use_request: Option<(HandleId, usize)>,
+    /// A finished item drag for the input layer to carry out.
+    pub release: Option<Release>,
+    drag: Option<Drag>,
     pending_pointer: bool,
     witness: Option<Weak<()>>,
     attempted: bool,
@@ -66,6 +73,51 @@ pub(crate) struct CampaignInventory {
     tooltip: Option<TooltipView>,
     action_error: Option<String>,
 }
+impl CampaignInventory {
+    /// The shown holder and the first occupied slot whose client key is among `keys`
+    /// (virtual-key codes). An empty slot has no enabled button to press.
+    pub(crate) fn slot_for_keys(&self, keys: &[u32]) -> Option<(HandleId, usize)> {
+        let (source, view) = (self.source.as_ref()?, self.view.as_ref()?);
+        view.items
+            .iter()
+            .take(view.capacity)
+            .enumerate()
+            .filter(|(_, item)| item.is_some())
+            .find(|(slot, _)| {
+                source
+                    .rules
+                    .slot_key(*slot)
+                    .is_some_and(|key| keys.contains(&key))
+            })
+            .map(|(slot, _)| (view.unit, slot))
+    }
+}
+
+/// An item drag from a slot, until the button is released.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Drag {
+    unit: HandleId,
+    slot: usize,
+    /// The slot the pointer was released over, if any.
+    onto: Option<usize>,
+}
+
+/// Where a dragged item was released.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ReleaseAt {
+    Slot(usize),
+    /// A window position outside the slots: the world, or elsewhere on the interface.
+    Window(Vec2),
+}
+
+/// A finished drag of the item in `slot` of `unit`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Release {
+    pub unit: HandleId,
+    pub slot: usize,
+    pub at: ReleaseAt,
+}
+
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CampaignInventorySet;
 #[derive(Component)]
@@ -137,6 +189,10 @@ struct Assets<'w> {
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<CampaignInventory>()
         .add_observer(capture_press)
+        .add_observer(capture_click)
+        .add_observer(drag_start)
+        .add_observer(drag_drop)
+        .add_observer(drag_end)
         .add_systems(
             Update,
             (capture, project, refresh_tooltip)
@@ -154,22 +210,92 @@ pub(crate) fn install(app: &mut App) {
 fn capture(mut state: ResMut<CampaignInventory>) {
     state.pointer_consumed = std::mem::take(&mut state.pending_pointer);
 }
+/// Any button pressed on a slot stays off the world.
 fn capture_press(
     event: On<PointerPress>,
+    slots: Query<(), With<InventorySlot>>,
+    mut state: ResMut<CampaignInventory>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+) {
+    if slots.contains(event.entity) && crate::button_actions::input_allowed(presentation) {
+        state.pending_pointer = true;
+    }
+}
+
+/// A left click on a slot with an item uses it ("Left-Click to Use", `ITEM_USE_TOOLTIP`).
+/// The client's activation timing is not established; a click is press and release on the
+/// slot, so a drag does not use the item.
+fn capture_click(
+    event: On<PointerClick>,
     slots: Query<(Option<&ControlTooltip>, &InventorySlot)>,
     mut state: ResMut<CampaignInventory>,
     presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
 ) {
-    let Ok((item, slot)) = slots.get(event.entity) else {
+    let Ok((Some(_), slot)) = slots.get(event.entity) else {
         return;
     };
-    if crate::button_actions::input_allowed(presentation) {
-        state.pending_pointer = true;
-        if item.is_some()
-            && let Some(unit) = state.view.as_ref().map(|view| view.unit)
-        {
-            state.use_request = Some((unit, slot.0));
-        }
+    if event.button == PointerButton::Primary
+        && crate::button_actions::input_allowed(presentation)
+        && let Some(unit) = state.view.as_ref().map(|view| view.unit)
+    {
+        state.use_request = Some((unit, slot.0));
+    }
+}
+
+/// A left-button drag starts from a slot that holds an item.
+fn drag_start(
+    event: On<PointerDragStart>,
+    slots: Query<(Option<&ControlTooltip>, &InventorySlot)>,
+    mut state: ResMut<CampaignInventory>,
+    presentation: Option<Res<peacecraft3::campaign_presentation::CampaignPresentation>>,
+) {
+    let Ok((Some(_), slot)) = slots.get(event.entity) else {
+        return;
+    };
+    if event.button == PointerButton::Primary
+        && crate::button_actions::input_allowed(presentation)
+        && let Some(unit) = state.view.as_ref().map(|view| view.unit)
+    {
+        state.drag = Some(Drag {
+            unit,
+            slot: slot.0,
+            onto: None,
+        });
+    }
+}
+
+/// Released over another slot of the same inventory.
+fn drag_drop(
+    event: On<PointerDragDrop>,
+    slots: Query<&InventorySlot>,
+    mut state: ResMut<CampaignInventory>,
+) {
+    let (Ok(onto), Ok(from)) = (slots.get(event.entity), slots.get(event.dropped)) else {
+        return;
+    };
+    if let Some(drag) = state.drag.as_mut().filter(|drag| drag.slot == from.0) {
+        drag.onto = Some(onto.0);
+    }
+}
+
+/// The release ends the drag. The input layer resolves a release off the slots against the
+/// world, since only it holds the camera and the units.
+fn drag_end(
+    event: On<PointerDragEnd>,
+    slots: Query<&InventorySlot>,
+    mut state: ResMut<CampaignInventory>,
+) {
+    if event.button != PointerButton::Primary || slots.get(event.entity).is_err() {
+        return;
+    }
+    if let Some(drag) = state.drag.take() {
+        state.release = Some(Release {
+            unit: drag.unit,
+            slot: drag.slot,
+            at: drag
+                .onto
+                .map_or(ReleaseAt::Window(event.pointer.position), ReleaseAt::Slot),
+        });
     }
 }
 fn image(
@@ -1853,5 +1979,262 @@ mod tests {
             assert!(state.tooltip.is_none());
             assert!(state.last_error.as_ref().unwrap().contains("<TEST,DataA1>"));
         }
+    }
+}
+
+/// Slot clicks, NumPad keys and drags on the synthetic layout, driven by injected pointer
+/// events. There is no window, pointer device or audio.
+#[cfg(all(test, feature = "test-fixtures"))]
+pub(crate) mod slot_input_tests {
+    use super::*;
+    use bevy::picking::{backend::HitData, events::Pointer};
+    use pcx_play::inventory_layout::fixtures;
+
+    const UNIT: u64 = 7;
+
+    fn unit() -> HandleId {
+        HandleId::new(std::num::NonZeroU64::new(UNIT).unwrap())
+    }
+
+    fn card(id: u64) -> Option<ItemCard> {
+        Some(ItemCard {
+            id: HandleId::new(std::num::NonZeroU64::new(id).unwrap()),
+            art: "art".into(),
+            name: "Item".into(),
+            ubertip: "Text".into(),
+        })
+    }
+
+    /// The inventory of `holder` as the card shows it on the synthetic layout: the first
+    /// `capacity` of its four slots are usable, and `filled[i]` puts an item in slot `i`.
+    pub(crate) fn shown(holder: HandleId, capacity: usize, filled: [bool; 4]) -> CampaignInventory {
+        CampaignInventory {
+            view: Some(View {
+                unit: holder,
+                capacity,
+                items: filled
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, filled)| filled.then(|| card(11 + slot as u64)).flatten())
+                    .collect(),
+            }),
+            source: Some(Source {
+                rules: fixtures::synthetic(),
+                console_frame: String::new(),
+                label: String::new(),
+                font: Handle::default(),
+                font_height: 0.02,
+                disabled: String::new(),
+                cover: String::new(),
+                images: HashMap::new(),
+                sizes: HashMap::new(),
+                failed_images: HashMap::new(),
+                tooltip_font: Handle::default(),
+                tooltip_name_height: 0.02,
+                tooltip_description_height: 0.015,
+                tooltip_background: String::new(),
+                tooltip_edge: String::new(),
+                tooltip_materials: HashMap::new(),
+                tooltip_seed: Ok(true),
+                retained: 0,
+                receipts: Vec::new(),
+            }),
+            ..default()
+        }
+    }
+
+    /// Four slots (capacity three), items in slots 0, 1 and 3. Slot 3 is past the capacity.
+    fn world() -> (World, [Entity; 4]) {
+        let mut world = World::new();
+        world.add_observer(capture_press);
+        world.add_observer(capture_click);
+        world.add_observer(drag_start);
+        world.add_observer(drag_drop);
+        world.add_observer(drag_end);
+        let filled = [true, true, false, true];
+        world.insert_resource(shown(unit(), 3, filled));
+        let slots = [0, 1, 2, 3].map(|index| {
+            let mut slot = world.spawn(InventorySlot(index));
+            if filled[index] {
+                slot.insert(ControlTooltip {
+                    name: "Item".into(),
+                    ubertip: "Text".into(),
+                });
+            }
+            slot.id()
+        });
+        (world, slots)
+    }
+
+    fn pointer(at: Vec2) -> Pointer {
+        Pointer::new(
+            bevy::picking::pointer::PointerId::Mouse,
+            bevy::picking::pointer::Location {
+                target: bevy::camera::NormalizedRenderTarget::None {
+                    width: 1,
+                    height: 1,
+                },
+                position: at,
+            },
+        )
+    }
+
+    fn hit(entity: Entity) -> HitData {
+        HitData::new(entity, 0., None, None)
+    }
+
+    fn click(world: &mut World, slot: Entity, button: PointerButton) {
+        world.trigger(PointerPress {
+            entity: slot,
+            pointer: pointer(Vec2::ZERO),
+            button,
+            hit: hit(slot),
+            count: 1,
+        });
+        world.trigger(PointerClick {
+            entity: slot,
+            pointer: pointer(Vec2::ZERO),
+            button,
+            hit: hit(slot),
+            count: 1,
+            duration: std::time::Duration::from_millis(1),
+        });
+    }
+
+    /// Press, move, optionally release over `onto`, then end at `at`.
+    fn drag(
+        world: &mut World,
+        from: Entity,
+        onto: Option<Entity>,
+        at: Vec2,
+        button: PointerButton,
+    ) {
+        world.trigger(PointerDragStart {
+            entity: from,
+            pointer: pointer(Vec2::ZERO),
+            button,
+            hit: hit(from),
+        });
+        if let Some(onto) = onto {
+            world.trigger(PointerDragDrop {
+                entity: onto,
+                pointer: pointer(at),
+                button,
+                dropped: from,
+                hit: hit(onto),
+            });
+        }
+        world.trigger(PointerDragEnd {
+            entity: from,
+            pointer: pointer(at),
+            button,
+            distance: at,
+        });
+    }
+
+    fn state(world: &World) -> &CampaignInventory {
+        world.resource::<CampaignInventory>()
+    }
+
+    #[test]
+    fn only_a_left_click_on_an_item_uses_it_and_any_press_stays_off_the_world() {
+        let (mut world, [full, _, empty, _]) = world();
+        for button in [
+            PointerButton::Secondary,
+            PointerButton::Middle,
+            PointerButton::Primary,
+        ] {
+            world.resource_mut::<CampaignInventory>().use_request = None;
+            click(&mut world, full, button);
+            assert_eq!(
+                state(&world).use_request,
+                (button == PointerButton::Primary).then_some((unit(), 0)),
+                "{button:?}"
+            );
+            assert!(state(&world).pending_pointer, "{button:?}");
+            world.resource_mut::<CampaignInventory>().pending_pointer = false;
+        }
+        // A slot with no item is not usable, but the press is still consumed.
+        world.resource_mut::<CampaignInventory>().use_request = None;
+        click(&mut world, empty, PointerButton::Primary);
+        assert_eq!(state(&world).use_request, None);
+        assert!(state(&world).pending_pointer);
+    }
+
+    #[test]
+    fn dragging_to_another_slot_releases_a_trade_and_does_not_use_the_item() {
+        let (mut world, [first, second, ..]) = world();
+        drag(
+            &mut world,
+            first,
+            Some(second),
+            Vec2::ONE,
+            PointerButton::Primary,
+        );
+        assert_eq!(
+            state(&world).release,
+            Some(Release {
+                unit: unit(),
+                slot: 0,
+                at: ReleaseAt::Slot(1)
+            })
+        );
+        assert_eq!(state(&world).use_request, None);
+        assert_eq!(state(&world).drag, None);
+    }
+
+    #[test]
+    fn dragging_off_the_slots_releases_the_window_position() {
+        let (mut world, [first, ..]) = world();
+        let at = Vec2::new(300., 120.);
+        drag(&mut world, first, None, at, PointerButton::Primary);
+        assert_eq!(
+            state(&world).release,
+            Some(Release {
+                unit: unit(),
+                slot: 0,
+                at: ReleaseAt::Window(at)
+            })
+        );
+    }
+
+    #[test]
+    fn right_drags_and_drags_from_empty_slots_release_nothing() {
+        let (mut world, [first, second, empty, _]) = world();
+        drag(
+            &mut world,
+            first,
+            Some(second),
+            Vec2::ONE,
+            PointerButton::Secondary,
+        );
+        drag(
+            &mut world,
+            empty,
+            Some(second),
+            Vec2::ONE,
+            PointerButton::Primary,
+        );
+        drag(&mut world, empty, None, Vec2::ONE, PointerButton::Primary);
+        assert_eq!(state(&world).release, None);
+        assert_eq!(state(&world).drag, None);
+    }
+
+    #[test]
+    fn a_numpad_key_picks_the_occupied_slot_it_belongs_to() {
+        let (world, _) = world();
+        let keys = |slot| [fixtures::synthetic().slot_key(slot).unwrap()];
+        assert_eq!(state(&world).slot_for_keys(&keys(0)), Some((unit(), 0)));
+        assert_eq!(state(&world).slot_for_keys(&keys(1)), Some((unit(), 1)));
+        // An empty slot, a slot past the unit's capacity and an unrelated key do nothing.
+        assert_eq!(state(&world).slot_for_keys(&keys(2)), None);
+        assert_eq!(state(&world).slot_for_keys(&keys(3)), None);
+        assert_eq!(state(&world).slot_for_keys(&[0x1B]), None);
+        assert_eq!(state(&world).slot_for_keys(&[]), None);
+        // With several keys down the lowest occupied slot answers.
+        assert_eq!(
+            state(&world).slot_for_keys(&[keys(1)[0], keys(0)[0]]),
+            Some((unit(), 0))
+        );
     }
 }

@@ -17,7 +17,8 @@ use pcx_play::{
     map_startup_host::MapStartupHost,
     player_command_log::{PlayerCommand, PlayerCommandLog},
     playercolor_host::{
-        ObjectHost, OrderForm, QueueOutcome, SmartTarget, VisionCapability, VisionState,
+        ItemCommand, ItemDrop, ObjectHost, OrderForm, QueueOutcome, SmartTarget, VisionCapability,
+        VisionState,
     },
 };
 use pcx_script::{HandleId, Host, Value};
@@ -121,7 +122,8 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(Update, hud_menu.before(CampaignCameraSet))
         .add_systems(
             Update,
-            use_inventory_slot
+            (inventory_hotkey, use_inventory_slot, release_inventory_drag)
+                .chain()
                 .after(crate::campaign_hud::CampaignHudSet)
                 .after(crate::campaign_inventory::CampaignInventorySet)
                 .after(crate::campaign_script_dialogs::CampaignScriptDialogSet),
@@ -616,6 +618,127 @@ pub(crate) fn standard_target(
     Ok(())
 }
 
+/// The NumPad keys of the inventory slots use the item in the slot, as a click does. The keys
+/// come from the client image; like the command card, the slots ignore a key pressed with Ctrl
+/// or Alt held.
+fn inventory_hotkey(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    game_input: Res<GameInput>,
+    mut inventory: ResMut<crate::campaign_inventory::CampaignInventory>,
+) {
+    let Some(keys) = keys else {
+        return;
+    };
+    if !game_input.open() || game_input.ctrl.held() || game_input.alt.held() {
+        return;
+    }
+    let pressed: Vec<u32> = keys
+        .get_just_pressed()
+        .filter_map(|&key| crate::virtual_keys::code(key))
+        .collect();
+    if let Some(request) = inventory.slot_for_keys(&pressed) {
+        inventory.use_request = Some(request);
+    }
+}
+
+#[derive(SystemParam)]
+struct DragWorld<'w, 's> {
+    view: Res<'w, CampaignCamera>,
+    hud: Res<'w, crate::campaign_hud::CampaignHud>,
+    dialogs: Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>,
+    cameras: Query<
+        'w,
+        's,
+        (
+            &'static Camera,
+            &'static GlobalTransform,
+            &'static Projection,
+        ),
+        With<CampaignSceneCamera>,
+    >,
+    ground: Res<'w, GroundPublication>,
+}
+
+/// Carries out a finished item drag. Slots trade places; a release over the world drops the
+/// item on the ground point, or gives it to the unit under the pointer. A release elsewhere
+/// on the interface does nothing.
+fn release_inventory_drag(
+    world: DragWorld,
+    mut inventory: ResMut<crate::campaign_inventory::CampaignInventory>,
+    mut input: ResMut<CampaignInput>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+) {
+    use crate::campaign_inventory::ReleaseAt;
+    let DragWorld {
+        view,
+        hud,
+        dialogs,
+        cameras,
+        ground,
+    } = world;
+    let Some(release) = inventory.release.take() else {
+        return;
+    };
+    if !view.active() || view.menu_open() || hud.quest_log_open || dialogs.input_blocked() {
+        return;
+    }
+    let Some(host) = session.host() else {
+        return;
+    };
+    let objects = host.objects_mut();
+    if objects
+        .presentation()
+        .is_some_and(|p| p.control_enabled == Some(false))
+    {
+        return;
+    }
+    let Some(local) = objects.local_player_number() else {
+        return;
+    };
+    let to = match release.at {
+        ReleaseAt::Slot(slot) => ItemDrop::Slot(slot),
+        ReleaseAt::Window(cursor) => {
+            let (Ok((camera, transform, projection)), Some(context)) =
+                (cameras.single(), ground.context.as_ref())
+            else {
+                return;
+            };
+            if !camera
+                .logical_viewport_rect()
+                .is_some_and(|rect| rect.contains(cursor))
+            {
+                return;
+            }
+            let Some(point) = camera
+                .viewport_to_world(transform, cursor)
+                .ok()
+                .and_then(|ray| ground_point(ray, &context.terrain, projection.far()))
+            else {
+                return;
+            };
+            let Some(circles) = input.circles.clone() else {
+                return;
+            };
+            let Ok(visibility) = pick_sight(objects, &mut input) else {
+                return;
+            };
+            match unit_at(objects, &circles, visibility, point) {
+                Ok(Some(unit)) => ItemDrop::Unit(unit),
+                Ok(None) => ItemDrop::Ground(point),
+                Err(error) => {
+                    input.last_error = Some(error);
+                    return;
+                }
+            }
+        }
+    };
+    match objects.player_move_item(local, release.unit, release.slot, to) {
+        Ok(ItemCommand::Refused(why)) => input.last_error = Some(why.into()),
+        Ok(ItemCommand::Done | ItemCommand::Walking) => {}
+        Err(error) => input.last_error = Some(error.to_string()),
+    }
+}
+
 /// Applies a pressed inventory slot as the local player's activation of the slot's held item.
 /// The dialog, control and quest-log gates match the order path; the core command checks the
 /// owner, the holder and the item's use.
@@ -802,6 +925,39 @@ pub(crate) fn pick_sight(
             }
         },
     }
+}
+
+/// The nearest shown, living unit the viewer sees whose selection circle covers `point`.
+/// `Err` is a vision read that failed; the pick must stop there.
+fn unit_at(
+    objects: &ObjectHost,
+    circles: &SelectionCircles,
+    visibility: Option<(HandleId, bool, bool)>,
+    point: [f32; 2],
+) -> Result<Option<HandleId>, String> {
+    let mut vision_error = None;
+    let picked = objects
+        .executed_units()
+        .filter(|(_, unit)| unit.shown && unit.combat.as_ref().is_none_or(|c| !c.dead))
+        .filter_map(|(id, unit)| {
+            let [x, y] = unit.position?;
+            if let Some((viewer, fog, mask)) = visibility {
+                match objects.vision_presented(viewer, [x, y], fog, mask) {
+                    Ok(Some(VisionState::Visible)) => {}
+                    Ok(_) => return None,
+                    Err(error) => {
+                        vision_error = Some(error.to_string());
+                        return None;
+                    }
+                }
+            }
+            let scale = crate::campaign_actors::scalar(&unit.definition, "scale").ok()?;
+            let distance = ((x - point[0]).powi(2) + (y - point[1]).powi(2)).sqrt();
+            (distance <= scale * circles.scale_factor * 0.5).then_some((id, distance))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id);
+    vision_error.map_or(Ok(picked), Err)
 }
 
 /// Ground point under the cursor, in game coordinates (x, y), by marching the
@@ -1115,32 +1271,13 @@ fn click(
         Ok(gate) => gate,
         Err(()) => return,
     };
-    let mut vision_error = None;
-    let picked = objects
-        .executed_units()
-        .filter(|(_, unit)| unit.shown && unit.combat.as_ref().is_none_or(|c| !c.dead))
-        .filter_map(|(id, unit)| {
-            let [x, y] = unit.position?;
-            if let Some((viewer, fog, mask)) = visibility {
-                match objects.vision_presented(viewer, [x, y], fog, mask) {
-                    Ok(Some(VisionState::Visible)) => {}
-                    Ok(_) => return None,
-                    Err(error) => {
-                        vision_error = Some(error.to_string());
-                        return None;
-                    }
-                }
-            }
-            let scale = crate::campaign_actors::scalar(&unit.definition, "scale").ok()?;
-            let distance = ((x - point[0]).powi(2) + (y - point[1]).powi(2)).sqrt();
-            (distance <= scale * circles.scale_factor * 0.5).then_some((id, distance))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(id, _)| id);
-    if let Some(error) = vision_error {
-        input.last_error = Some(error);
-        return;
-    }
+    let picked = match unit_at(objects, &circles, visibility, point) {
+        Ok(picked) => picked,
+        Err(error) => {
+            input.last_error = Some(error);
+            return;
+        }
+    };
     debug!(?point, ?picked, select, "campaign pointer hit");
     let standard = input
         .command
