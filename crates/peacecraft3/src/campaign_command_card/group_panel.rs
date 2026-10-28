@@ -514,6 +514,7 @@ mod tests {
             .init_resource::<crate::campaign_minimap::CampaignMinimap>()
             .init_resource::<crate::campaign_messages::MessageHistory>()
             .init_resource::<crate::button_actions::ButtonActions>()
+            .init_resource::<peacecraft3::game_input::GameInput>()
             .init_resource::<crate::campaign_box_select::BoxSelect>()
             .init_resource::<crate::campaign_input::CampaignInput>()
             .init_resource::<ButtonInput<KeyCode>>();
@@ -606,6 +607,7 @@ mod tests {
         let mut rig = Rig::new(&specs, SCREEN);
         rig.app
             .init_resource::<crate::button_actions::ButtonActions>()
+            .init_resource::<peacecraft3::game_input::GameInput>()
             .add_systems(Update, click);
         let [peon, foot, foot2, foreign] = [0, 1, 2, 3].map(|i| rig.units[i]);
         rig.select(&[peon, foot, foot2]);

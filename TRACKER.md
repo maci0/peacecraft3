@@ -5695,7 +5695,7 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   the group-button click and of three or more subgroups, whether the unit detail text hides
   with several units, panel cell order, orders limited to the active subgroup, the
   `GroupButtonBorder`/`CommandButtonHeroGlow` art, a rendered comparison.
-- Checks: `pcx-play` lib 2,259 passed (87 ignored); `peacecraft3` bins 835 passed (98 ignored)
+- Checks: `pcx-play` lib 2,291 passed (89 ignored); `peacecraft3` bins 863 passed (98 ignored)
   and its other targets pass, all with `test-fixtures`; native all-target Clippy for both
   crates and WASM Clippy for `pcx-play` and `peacecraft3` with warnings denied; the ignored
   Human01 group-panel mount test and the decoder test against the selected client pass. The
