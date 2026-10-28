@@ -63,6 +63,43 @@ animation-driven have no consumer, so a map that starts no dialogue is silent.
   `Units\Human\Arthas\ArthasWhat1.wav` and `Sound\Interface\Error.wav` are 16-bit
   mono 22050 Hz PCM.
 
+## Music (`campaign_audio.rs`)
+
+`drive_music` reads the Host's `thematic_music()` and `map_music_selection()` each
+frame and keeps at most one `CampaignMusic` track entity.
+
+- `PlayThematicMusic(path)`: the path is read from the session resolver and played
+  once. While it is requested it covers map music; when the file ends the map
+  playlist resumes at its next track, and the file is not restarted until
+  `EndThematicMusic` clears the request. Playing once and resuming the map list are
+  inferences; the native thematic path is not read.
+- `SetMapMusic(name, random, index)`: the playlist is the skin key
+  `<name>_V<edition>` in the local player's race section, then `[Default]`
+  (`V0` for the Reign of Chaos mode, `V1` for the Frozen Throne mode, the suffix
+  the menu already uses). The race section is the one the HUD uses
+  (`RACE_PREF_*` of the local player). An indexed request starts at `index` and
+  follows list order; a random request draws, never repeating the previous track,
+  from a splitmix64 stream seeded with the campaign seed. A missing key, a
+  repeated key, an empty list or an index outside the list is a loud error, not
+  silence. The key convention and the list-order/draw policy are inferences: the
+  native resolver was not read. `ClearMapMusic` stops the track.
+- Volume is the user's music setting (`CampaignMusic` shares the menu music bus in
+  `apply_user_volume`) at authored gain 1.0. `MusicFadeRate`/`MusicFadeInterval` from
+  `MiscData.txt` are not applied: tracks start and stop instantly.
+- Not implemented: `PlayMusic`, `PlayMusicEx`, `StopMusic`, `ResumeMusic`,
+  `SetMusicVolume`, `PlayThematicMusicEx`, `SetMusicPlayPosition`,
+  `SetThematicMusicPlayPosition` (no Host handler).
+
+Verification: ten synthetic unit tests (`campaign_audio::tests`: skin lookup,
+edition suffix, duplicates, playlist order, seeded draws, thematic cover and
+hand-back, clear, failure latch, bounded reads) and the Human01 probe
+(`human01_opening_audio_reaches_entities`), which asserts that the retained
+`Comradeship.mp3` request becomes a `CampaignMusic` entity at once, that the
+`[Human]` `Music_V0` entry `Human1.mp3` follows when the dialogue ends, and that no
+second track overlaps. Entities are checked, not a device.
+
 ## Status
 
-Updated per commit below.
+| Category | State |
+|---|---|
+| Map and thematic music | connected (this section) |

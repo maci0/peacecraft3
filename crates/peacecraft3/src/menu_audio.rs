@@ -94,6 +94,7 @@ type UserVolumeQuery<'w, 's> = Query<
         Option<&'static peacecraft3::script_audio::ScriptAudioGain>,
         Option<&'static peacecraft3::script_audio::ScriptAudioCategory>,
         Has<MenuMusic>,
+        Has<CampaignMusic>,
     ),
     Or<(
         With<AuthoredVolume>,
@@ -103,8 +104,9 @@ type UserVolumeQuery<'w, 's> = Query<
 
 fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: UserVolumeQuery) {
     use bevy::audio::AudioSinkPlayback;
-    for (sink, mut playback, base, script_gain, category, music) in &mut sinks {
-        let gain = if music {
+    for (sink, mut playback, base, script_gain, category, menu_music, campaign_music) in &mut sinks
+    {
+        let gain = if menu_music || campaign_music {
             settings.audio.effective_music()
         } else {
             settings.audio.effective_effects()
@@ -180,6 +182,13 @@ struct ClickSound;
 
 #[derive(Component)]
 struct MenuMusic;
+
+/// One campaign music track on the user's music volume. It keeps playing under the
+/// campaign camera, unlike [`MenuMusic`].
+#[derive(Component)]
+pub(crate) struct CampaignMusic {
+    pub member: String,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn pause_for_movie(
