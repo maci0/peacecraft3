@@ -5490,3 +5490,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   and reallocations, but one extra allocation and
   216 extra requested bytes per Human03 workload relative to the pre-history measurement;
   the no-increase requirement remains unmet.
+### 2026-10-28: Input behaviour audit
+
+- [~] Evidence-labelled inventory of the original game's in-game mouse and keyboard
+  behaviour against the recreation, with a ranked gap list and ordered
+  implementation slices: [input behaviour audit](docs/re-notes/input-behaviour-audit.md).
+  Static analysis only (shipped data files and the selected Legacy 1.29.2.9231
+  executable); no original client run. Established from the executable: platform
+  button and modifier model, camera keys, wheel zoom steps, Insert/Delete rotation
+  states, scroll multipliers, control-group digit/modifier handling and its 0.5 s
+  double-tap, selection cap, right-click as the smart order with a queue flag,
+  Space/Backspace 1.0 s cycling windows, inventory NumPad slot labels. Not
+  established: edge-scroll margin, drag threshold, double-click window, Tab
+  handler, smart-order target table, cursor mode to sequence mapping, and which
+  source drives the last zoom level. Drag-box selection is tracked separately.
