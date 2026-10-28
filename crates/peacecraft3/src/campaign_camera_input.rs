@@ -360,10 +360,10 @@ fn scroll(
         return;
     };
     let rotation = session.global("CAMERA_FIELD_ROTATION");
-    let Some(host) = session.host() else {
+    if session.host().is_none() {
         return;
-    };
-    if !commands_available(&picking.view, &hud, &picking.dialogs, host) {
+    }
+    if !picking.game_input.open() {
         state.grab = None;
         return;
     }
