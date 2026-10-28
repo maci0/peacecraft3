@@ -32,7 +32,7 @@ pub struct ObjectHost {
     unit_decay: Option<crate::unit_decay::Rules>,
     unit_vitals: Option<unit_vitals::Rules>,
     unit_buffs: unit_buff::State,
-    placement_events_inline: [Option<crate::ai_placement::PlacementEvent>; 8],
+    placement_events_inline: [Option<placement_events::PackedEvent>; 8],
     placement_events: Vec<crate::ai_placement::PlacementEvent>,
     placement_events_incomplete: bool,
     divine_shield: divine_shield::State,

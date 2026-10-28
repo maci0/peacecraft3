@@ -545,9 +545,18 @@ to recreation movement and placement queries is not yet established. The
 chain helper implements this compaction for supplied entries, using reusable caller scratch;
 it does not represent live registration or establish the cleanup schedule.
 
-A set-based query is exact when its caller supplies the current object entries and a proven
-upper bound on every native link in the cell does not exceed the visit limit. The bounded
-helper refuses a larger bound or an inconsistent object set. It does not derive that bound:
+A set-based query also requires proof that no newer non-object link suppresses an older object
+link for a live entry. At `0x8be4c3` through `0x8be50e`, a removal link can consume an
+identity before its older object link, even when the chain has fewer links than the visit
+limit. The bounded helper refuses when that ordering is unproved, the bound reaches the
+limit, or the object set is inconsistent. A preallocated saturating
+counter records supplied rectangle changes and region changes without per-update allocation.
+For a cell an object leaves, it counts both the retained prior link and the removal link
+(`0x8c3170` through `0x8c3177`); counting just the removal would underestimate a chain after
+the object is no longer in the current set. Only removal links mark cells dirty, so a cleanup
+does not clear the counter for insertion-only cells: repeated additions can survive it. The
+caller must drive the counter at native registration and cleanup times. It does not yet derive
+that bound from the live world:
 the live event log retains births, relocations and other selected operations, but not ordinary
 movement across spatial cells. A valid bound must also include repeated region rectangle
 additions (`0x801a50` and `0x8c23f0`) and removal links (`0x8c25d0`), not just moving

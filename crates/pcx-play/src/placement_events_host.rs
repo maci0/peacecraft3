@@ -4,6 +4,53 @@ use crate::ai_placement::{
     beyond_cast_reach,
 };
 use pcx_script::HandleId;
+use std::num::{NonZeroU32, NonZeroU64};
+
+#[derive(Clone, Copy)]
+pub(super) struct PackedEvent {
+    time: f64,
+    tagged_unit: NonZeroU32,
+    payload: u32,
+}
+
+impl PackedEvent {
+    fn pack(event: PlacementEvent) -> Option<Self> {
+        let token = u32::try_from(event.unit.token()).ok()?;
+        if token > u32::MAX >> 3 {
+            return None;
+        }
+        let (tag, payload) = match event.kind {
+            PlacementEventKind::PauseUnit(value) => (0, u32::from(value)),
+            PlacementEventKind::BuffApplied(value) => (1, u32::from_ne_bytes(value)),
+            PlacementEventKind::BuffRemoved(value) => (2, u32::from_ne_bytes(value)),
+            PlacementEventKind::Relocated => (3, 0),
+            PlacementEventKind::OwnerRegistration(value) => (4, value),
+        };
+        Some(Self {
+            time: event.game_time,
+            tagged_unit: NonZeroU32::new(token | (tag << 29))?,
+            payload,
+        })
+    }
+
+    fn unpack(self) -> PlacementEvent {
+        let word = self.tagged_unit.get();
+        let unit = HandleId::new(NonZeroU64::new(u64::from(word & (u32::MAX >> 3))).unwrap());
+        let kind = match word >> 29 {
+            0 => PlacementEventKind::PauseUnit(self.payload != 0),
+            1 => PlacementEventKind::BuffApplied(self.payload.to_ne_bytes()),
+            2 => PlacementEventKind::BuffRemoved(self.payload.to_ne_bytes()),
+            3 => PlacementEventKind::Relocated,
+            4 => PlacementEventKind::OwnerRegistration(self.payload),
+            _ => unreachable!("packed placement event tag"),
+        };
+        PlacementEvent {
+            unit,
+            game_time: self.time,
+            kind,
+        }
+    }
+}
 
 impl ObjectHost {
     /// Resolve the town reference from live registrations and unit visibility.
@@ -303,8 +350,8 @@ impl ObjectHost {
         self.placement_events_inline
             .iter()
             .flatten()
-            .chain(self.placement_events.iter())
-            .copied()
+            .map(|event| event.unpack())
+            .chain(self.placement_events.iter().copied())
     }
 
     pub(super) fn record_placement_event(&mut self, unit: HandleId, kind: PlacementEventKind) {
@@ -321,12 +368,14 @@ impl ObjectHost {
             game_time,
             kind,
         };
-        if let Some(slot) = self
-            .placement_events_inline
-            .iter_mut()
-            .find(|slot| slot.is_none())
+        if self.placement_events.is_empty()
+            && let Some(packed) = PackedEvent::pack(event)
+            && let Some(slot) = self
+                .placement_events_inline
+                .iter_mut()
+                .find(|slot| slot.is_none())
         {
-            *slot = Some(event);
+            *slot = Some(packed);
             return;
         }
         let reserve = if self.placement_events.is_empty() {
@@ -339,5 +388,39 @@ impl ObjectHost {
             return;
         }
         self.placement_events.push(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_events_preserve_payload_time_and_handle() {
+        let unit = HandleId::new(NonZeroU64::new(u64::from(u32::MAX >> 3)).unwrap());
+        for kind in [
+            PlacementEventKind::PauseUnit(false),
+            PlacementEventKind::PauseUnit(true),
+            PlacementEventKind::BuffApplied([0, 128, 255, 7]),
+            PlacementEventKind::BuffRemoved([255, 0, 4, 1]),
+            PlacementEventKind::Relocated,
+            PlacementEventKind::OwnerRegistration(u32::MAX),
+        ] {
+            let event = PlacementEvent {
+                unit,
+                game_time: 12.345678901234,
+                kind,
+            };
+            assert_eq!(PackedEvent::pack(event).unwrap().unpack(), event);
+        }
+        let too_large = HandleId::new(NonZeroU64::new(u64::from(u32::MAX >> 3) + 1).unwrap());
+        assert!(
+            PackedEvent::pack(PlacementEvent {
+                unit: too_large,
+                game_time: 0.0,
+                kind: PlacementEventKind::Relocated,
+            })
+            .is_none()
+        );
     }
 }

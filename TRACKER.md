@@ -5827,3 +5827,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   matching their `g1` runs. Two Human05 runs both stopped at the existing 1223 s refusal; their
   98 checkpoint and RNG lines matched each other and `r14`. The 112 reach queries and five
   placement sites have not been verified through live bounded sets.
+
+### 2026-10-29: Reach-set ordering and crossing bounds
+
+- [~] The supplied-rectangle crossing counter accounts for retained removal links and does
+  not clear insertion-only cells on cleanup. A set-based query also refuses unless link order
+  is established: an earlier removal can suppress a live object link below the visit limit.
+  Live rectangle registration, region events, cleanup scheduling and ordering evidence are
+  still missing; structure production remains refused. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Placement event records now use a compact inline representation with a full-width fallback.
+  Standalone tests for its round trip, the crossing counter and the ordering refusal pass.
+  The requested Cargo, campaign and allocation checks are waiting for the shared Cargo lock; the memory change
+  has not yet been measured against the Human03 budget.

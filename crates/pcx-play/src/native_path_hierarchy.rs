@@ -29,7 +29,7 @@ pub struct ChainEntry {
 /// A set-based reach query cannot prove that it sees all native links.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ChainBoundError {
-    #[error("reach cell {cell:?}: chain bound {bound} exceeds visit limit {limit}")]
+    #[error("reach cell {cell:?}: chain bound {bound} reaches visit limit {limit}")]
     Limit {
         cell: [i32; 2],
         bound: usize,
@@ -43,6 +43,106 @@ pub enum ChainBoundError {
     },
     #[error("reach cell {cell:?}: live entry set is not canonical")]
     NonCanonical { cell: [i32; 2] },
+    #[error("reach cell {cell:?}: native link order is not established")]
+    UnprovenOrder { cell: [i32; 2] },
+}
+
+/// A half-open rectangle in the spatial grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellRect {
+    pub lower: [usize; 2],
+    pub upper: [usize; 2],
+}
+
+/// Per-cell upper bounds on links retained since the last known cleanup.
+pub struct CellCrossings {
+    size: [usize; 2],
+    links: Vec<u16>,
+}
+
+impl CellCrossings {
+    const DIRTY: u16 = 1 << 15;
+    const COUNT: u16 = Self::DIRTY - 1;
+
+    /// Allocate the grid once, before any recorded changes.
+    pub fn new(size: [usize; 2]) -> Result<Self, String> {
+        let count = size[0]
+            .checked_mul(size[1])
+            .filter(|_| size[0] != 0 && size[1] != 0)
+            .ok_or("invalid reach history grid dimensions")?;
+        let mut links = Vec::new();
+        links.try_reserve_exact(count).map_err(|e| e.to_string())?;
+        links.resize(count, 0);
+        Ok(Self { size, links })
+    }
+
+    fn validate(&self, rect: CellRect) -> Result<(), &'static str> {
+        if (0..2)
+            .any(|axis| rect.lower[axis] > rect.upper[axis] || rect.upper[axis] > self.size[axis])
+        {
+            Err("reach history rectangle outside grid")
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Record only the cells entering or leaving a changed rectangle.
+    pub fn moved(&mut self, old: CellRect, new: CellRect) -> Result<(), &'static str> {
+        self.validate(old)?;
+        self.validate(new)?;
+        if old == new {
+            return Ok(());
+        }
+        for (from, to, increment, dirty) in [(old, new, 2, true), (new, old, 1, false)] {
+            for y in from.lower[1]..from.upper[1] {
+                for x in from.lower[0]..from.upper[0] {
+                    if x < to.lower[0] || x >= to.upper[0] || y < to.lower[1] || y >= to.upper[1] {
+                        let counter = &mut self.links[y * self.size[0] + x];
+                        Self::record(counter, increment, dirty);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record(counter: &mut u16, increment: u16, dirty: bool) {
+        let count = (*counter & Self::COUNT)
+            .saturating_add(increment)
+            .min(Self::COUNT);
+        *counter = count | (*counter & Self::DIRTY) | if dirty { Self::DIRTY } else { 0 };
+    }
+
+    /// Bound links added by a region registration or removal.
+    pub fn region_change(&mut self, rect: CellRect, removed: bool) -> Result<(), &'static str> {
+        self.validate(rect)?;
+        for y in rect.lower[1]..rect.upper[1] {
+            for x in rect.lower[0]..rect.upper[0] {
+                let counter = &mut self.links[y * self.size[0] + x];
+                Self::record(counter, if removed { 2 } else { 1 }, removed);
+            }
+        }
+        Ok(())
+    }
+
+    /// Add the live-set count to the retained-link upper bound.
+    pub fn bound(&self, cell: [usize; 2], live: usize) -> Option<usize> {
+        if cell[0] >= self.size[0] || cell[1] >= self.size[1] {
+            return None;
+        }
+        Some(live.saturating_add(usize::from(
+            self.links[cell[1] * self.size[0] + cell[0]] & Self::COUNT,
+        )))
+    }
+
+    /// Native cleanup compacts only cells marked dirty by a removal.
+    pub fn cleaned(&mut self) {
+        for counter in &mut self.links {
+            if *counter & Self::DIRTY != 0 {
+                *counter = 0;
+            }
+        }
+    }
 }
 
 impl EntryRules {
@@ -167,7 +267,8 @@ impl EntryRules {
     }
 
     /// Evaluate the current object set when `bound` covers every native link
-    /// in the cell, including stale, duplicate, and non-object links.
+    /// in the cell, including stale, duplicate, and non-object links, and the
+    /// caller proves no newer non-object link suppresses a live object link.
     pub fn bounded_cell_blocked(
         self,
         cell: [i32; 2],
@@ -175,13 +276,17 @@ impl EntryRules {
         selected_mask: u32,
         entries: &[ChainEntry],
         bound: usize,
+        order_proven: bool,
     ) -> Result<bool, ChainBoundError> {
         if cell_word & selected_mask & self.class_mask != 0 {
             return Ok(true);
         }
         let limit = usize::from(self.max_entries);
-        if bound > limit {
+        if bound >= limit {
             return Err(ChainBoundError::Limit { cell, bound, limit });
+        }
+        if !order_proven {
+            return Err(ChainBoundError::UnprovenOrder { cell });
         }
         if entries.len() > bound {
             return Err(ChainBoundError::Inconsistent {
@@ -1301,23 +1406,23 @@ mod tests {
         };
         let cell = [12, 34];
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 3),
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 2, true),
             Ok(true)
         );
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0, 2, &[entry], 3),
+            rules.bounded_cell_blocked(cell, 0, 2, &[entry], 2, true),
             Ok(false)
         );
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 4),
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 3, true),
             Err(ChainBoundError::Limit {
                 cell,
-                bound: 4,
+                bound: 3,
                 limit: 3
             })
         );
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 0),
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 0, true),
             Err(ChainBoundError::Inconsistent {
                 cell,
                 bound: 0,
@@ -1325,13 +1430,78 @@ mod tests {
             })
         );
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0, 4, &[entry, entry], 2),
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry, entry], 2, true),
             Err(ChainBoundError::NonCanonical { cell })
         );
         assert_eq!(
-            rules.bounded_cell_blocked(cell, 0x1000, 0x1004, &[], 4),
+            rules.bounded_cell_blocked(cell, 0x1000, 0x1004, &[], 4, false),
             Ok(true)
         );
+        let removal = ChainEntry { class: 0, ..entry };
+        assert!(!rules.cell_blocked(0, 4, [removal, entry]));
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 2, false),
+            Err(ChainBoundError::UnprovenOrder { cell })
+        );
+    }
+
+    #[test]
+    fn crossing_bounds_include_the_old_link_and_reset_only_at_cleanup() {
+        let mut history = CellCrossings::new([5, 4]).unwrap();
+        let old = CellRect {
+            lower: [1, 1],
+            upper: [3, 3],
+        };
+        let new = CellRect {
+            lower: [2, 1],
+            upper: [4, 3],
+        };
+        history.moved(old, old).unwrap();
+        assert_eq!(history.bound([1, 1], 1), Some(1));
+        history.moved(old, new).unwrap();
+        assert_eq!(history.bound([1, 1], 0), Some(2));
+        assert_eq!(history.bound([2, 1], 1), Some(1));
+        assert_eq!(history.bound([3, 1], 1), Some(2));
+        history
+            .region_change(
+                CellRect {
+                    lower: [1, 1],
+                    upper: [2, 2],
+                },
+                true,
+            )
+            .unwrap();
+        assert_eq!(history.bound([1, 1], 0), Some(4));
+        let invalid = CellRect {
+            lower: [4, 0],
+            upper: [6, 1],
+        };
+        assert!(history.moved(new, invalid).is_err());
+        assert_eq!(history.bound([1, 1], 0), Some(4));
+        history.cleaned();
+        assert_eq!(history.bound([1, 1], 0), Some(0));
+        assert_eq!(history.bound([3, 1], 1), Some(2));
+        assert_eq!(history.bound([5, 1], 0), None);
+    }
+
+    #[test]
+    fn crossing_counter_saturates_without_wrapping() {
+        let mut history = CellCrossings::new([1, 1]).unwrap();
+        let rect = CellRect {
+            lower: [0, 0],
+            upper: [1, 1],
+        };
+        for _ in 0..usize::from(u16::MAX) {
+            history.region_change(rect, false).unwrap();
+        }
+        history.cleaned();
+        assert_eq!(
+            history.bound([0, 0], 0),
+            Some(usize::from(CellCrossings::COUNT))
+        );
+        history.region_change(rect, true).unwrap();
+        history.cleaned();
+        assert_eq!(history.bound([0, 0], 0), Some(0));
     }
 
     #[test]
