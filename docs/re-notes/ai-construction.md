@@ -666,9 +666,44 @@ the (5776, 2512) validator query observed `0x20000001` become `0x20000000` at `0
 The stack passes through `0x697f0d` after the footprint check, confirming that the observed
 count belongs to the validator's temporary exclusion list. The native object passed to the
 decrement is different from the builder pointer captured at the placement driver in that same
-run. This identifies the writer and its placement lifetime, but not the object's rawcode or
-the full selection predicate. A fixed address observed in three earlier captures shifted in a
-later run, so the watchpoint was attached to the entry resolved at the query in the same run.
+run. A subsequent read-only capture of that same query and decrement identifies the object as
+an orange acolyte: its unit rawcode is `uaco`, its owner is player 5, and its vtable is the
+reviewed CUnit table at `0xe9c504`. A fixed address observed in three earlier captures shifted
+in a later run, so the watchpoint was attached to the entry resolved at the query in the same run.
+
+### Placement exclusion selection, 2026-10-28
+
+`0x697940` conditionally enumerates objects in the candidate rectangle with the selected-image
+mask and callback (`0x697a3a`, `0x7f4d30`, `0x698520`). In the applicable enumeration branch,
+`0x808480` requires the object's center to be strictly inside the rectangle and checks the
+underlying object's state before passing its reference to the callback. The validator checks the
+object's native class and resolved state before either exclusion branch (`0x697a83` to
+`0x697adf`). This is a candidate-rectangle selection, not a rule that ignores all mobile units.
+
+For the observed AI placement context, `+0` is nonzero, `+0xc` is zero, and `+0x58` is
+nonzero. The relevant branch obtains the candidate unit's owner through CUnit vtable slot
+`+0xec` (`0x6736a0`), tests a directed player mask (`0x47f9f0`), and requires a non-null
+unit component at `+0x3f8` whose call to `0xb66f10(0, 0)` succeeds (`0x697b91` to
+`0x697bc7`). The component is the unit's movement ability: its captured class identifier
+agrees with the native lookup at `0x6d6570`. One captured player 5 acolyte passed the player
+test and returned true from that component check. Its movement-component counters at `+0x3c`
+and `+0x80` were zero. The branch then temporarily excludes the selected unit at `0x697c1a`.
+
+The movement check is not determined solely by movement type or an active move order. At
+`0xb66f10`, a positive component counter at `+0x80` rejects; a positive count at `+0x3c`
+is adjusted using two ability or buff lookups, unit flags at `+0x164`, and a unit value at
+`+0x15c` before acceptance. The recreation has ownership, source definitions, activity,
+pause and some buff state, but no established mapping from those fields to both native
+counters and all of their adjustments. In particular, an absent recreation pause is not proof
+that those native counters are zero. The exact directed player-mask category also needs a
+source-backed mapping to the recreation's alliance records.
+
+Another context branch uses CUnit vtable slot `+0xfc` (`0x66d280`) for a player-dependent
+result and slot `+0xf0` (`0x666e90`) for a unit-flag predicate. The former reaches native
+player and visibility checks (`0x475150`, `0x4758d0`, `0x4757a0`); its complete mapping to
+the recreation's vision and detection state is not established. The captured acolyte's
+`+0x164` value makes the latter predicate false. These unresolved branches prevent replacing
+the diagnostic's mobile-occupancy switch with the full decoded rule.
 
 An order-event probe records all four acolyte positions at 8.211 s, when the site is issued.
 Two acolytes occupy cells selected by the Necropolis construction texture. The ignored

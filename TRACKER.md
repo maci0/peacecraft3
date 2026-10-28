@@ -5327,3 +5327,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
   WASM Clippy passed with `-D warnings`. The locked, offline simulation performance check passed
   without changing budgets. No campaign route was rerun.
+
+### 2026-10-28: Placement exclusion selection
+
+- [~] A read-only farm capture identifies the skipped entry as an orange acolyte and confirms
+  the CUnit vtable. Another acolyte passes the player-mask and movement-component checks in
+  the AI placement branch. Native enumeration and the two CUnit virtual-method targets are
+  traced in [AI construction](docs/re-notes/ai-construction.md).
+- [ ] The movement ability's two exclusion-related counters and buff adjustments are not
+  mapped to recreation state. The directed player mask and the other branch's visibility
+  predicate also need qualification. The diagnostic switch remains unchanged and production
+  continues to refuse; oracle positions have not been revalidated under a derived rule.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2185 tests with 84 ignored; native and
+  WASM Clippy passed with `-D warnings`. The locked, offline simulation check passed without
+  changing budgets. No campaign route was rerun.
