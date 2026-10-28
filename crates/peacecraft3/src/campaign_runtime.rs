@@ -3,6 +3,7 @@ use crate::{
     browser_configuration::SelectedMapSources,
     campaign_camera::CampaignCamera,
     campaign_startup::CampaignStartupSet,
+    game_input::GameInput,
     map_binding::BindingInputs,
     map_requests::{MapRequestSet, MapRequests},
     map_script_session::{MapScriptSession, TimerSessionError},
@@ -269,6 +270,7 @@ impl CampaignRuntime {
 }
 
 pub fn install(app: &mut App, runtime: CampaignRuntime) {
+    crate::game_input::install(app);
     // Time<Real> is sampled before startup. Bind on the following frame so loading is excluded.
     app.insert_resource(runtime)
         .init_resource::<CampaignExitResult>()
@@ -304,15 +306,14 @@ pub struct CampaignAdvanceSet;
 fn advance_campaign(
     time: Res<Time<Real>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    input: Res<GameInput>,
     mut runtime: ResMut<CampaignRuntime>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
     if session.session_witness().is_some()
-        && keys.is_some_and(|keys| {
-            keys.just_pressed(KeyCode::F9)
-                && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
-                && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
-        })
+        && keys.is_some_and(|keys| keys.just_pressed(KeyCode::F9))
+        && input.ctrl.held()
+        && input.shift.held()
     {
         let speed = match runtime.speed().get() {
             1 => 2,

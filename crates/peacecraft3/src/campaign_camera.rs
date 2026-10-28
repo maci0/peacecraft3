@@ -2,6 +2,7 @@
 use crate::{
     browser_configuration::SelectedMapSources,
     campaign_startup::CampaignStartupSet,
+    game_input::{Closer, GameInput},
     map_binding::{AssetReceipt, receipt},
     map_ground::GroundPublication,
     map_requests::MapRequests,
@@ -140,6 +141,7 @@ impl CampaignCamera {
 pub struct CampaignCameraSet;
 
 pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
+    crate::game_input::install(app);
     app.insert_resource(CampaignCamera {
         zoom,
         read_limit,
@@ -157,19 +159,67 @@ pub fn install(app: &mut App, zoom: usize, read_limit: usize) {
     })
     .add_systems(
         Update,
-        (menu_keys, scroll_camera, apply_camera, pause_view)
+        (
+            menu_keys,
+            sync_session_closers,
+            scroll_camera,
+            apply_camera,
+            pause_view,
+        )
             .chain()
             .in_set(CampaignCameraSet)
             .after(CampaignStartupSet),
     );
 }
 
+/// The reasons the view, the session and the scripts close game input, as
+/// (reason, closed) pairs. The UI-owned reasons are set by the application.
+pub fn session_closers(
+    view: &CampaignCamera,
+    host: Option<&MapStartupHost>,
+) -> [(Closer, bool); 5] {
+    let objects = host.map(MapStartupHost::objects);
+    [
+        (Closer::View, !view.active()),
+        (Closer::NoSession, host.is_none()),
+        (Closer::Menu, view.menu_open()),
+        (
+            Closer::ControlDisabled,
+            objects
+                .and_then(|o| o.presentation())
+                .is_some_and(|p| p.control_enabled == Some(false)),
+        ),
+        (
+            Closer::PlayerLeft,
+            objects.is_some_and(|objects| {
+                objects.local_player_settings().is_some_and(|local| {
+                    objects
+                        .player_removal_state()
+                        .and_then(|state| state.get(local.identity))
+                        .is_some_and(|result| result.left)
+                })
+            }),
+        ),
+    ]
+}
+
+fn sync_session_closers(
+    view: Res<CampaignCamera>,
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    mut input: ResMut<GameInput>,
+) {
+    for (closer, closed) in session_closers(&view, session.host().map(|host| &*host)) {
+        input.set_closer(closer, closed);
+    }
+}
+
 /// Arrow-key scrolling at the selected `[CameraRates]` speeds, along the live
 /// camera rotation, clamped to the executed camera bounds. Real time paces it;
-/// it is off while scripts disable user control.
+/// it is off while game input is closed.
 fn scroll_camera(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     time: Option<Res<Time<Real>>>,
+    input: Res<GameInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut view: ResMut<CampaignCamera>,
 ) {
@@ -181,7 +231,7 @@ fn scroll_camera(
         axis(KeyCode::ArrowUp, KeyCode::ArrowDown),
         axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
     );
-    if !view.active() || view.menu_open() || (forward == 0.0 && strafe == 0.0) {
+    if !input.open() || (forward == 0.0 && strafe == 0.0) {
         return;
     }
     let rotation = session.global("CAMERA_FIELD_ROTATION");
@@ -189,12 +239,6 @@ fn scroll_camera(
         return;
     };
     let objects = host.objects_mut();
-    if objects
-        .presentation()
-        .is_some_and(|p| p.control_enabled == Some(false))
-    {
-        return;
-    }
     let (Some([x, y]), Some([forward_rate, strafe_rate])) =
         (objects.camera_target(), objects.camera_scroll_rates())
     else {

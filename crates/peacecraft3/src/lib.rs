@@ -6,6 +6,7 @@
 
 pub mod campaign_boundary;
 pub mod campaign_camera;
+pub mod campaign_control_groups;
 pub mod campaign_loading;
 pub mod campaign_presentation;
 pub mod campaign_runtime;
@@ -14,6 +15,7 @@ pub mod campaign_score_assets;
 pub mod campaign_score_layout;
 pub mod campaign_startup;
 pub mod fdf;
+pub mod game_input;
 pub mod global_strings;
 pub mod map_admission;
 pub mod map_binding;
