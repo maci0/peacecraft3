@@ -38,11 +38,11 @@ const DIGIT_KEYS: [KeyCode; 10] = [
 
 /// Shift+digit adds the selection to the group.
 ///
-/// Decision: the client's key handler builds the union of the group and the
-/// selection and redefines the group from it (executable evidence). That this is
-/// the intended "add" is inferred from the shape of that code and from the usual
-/// description of the key; no running client was observed. Change only this
-/// function if a live capture shows otherwise.
+/// The client's key handler builds the union of the group and the selection and
+/// redefines the group from it (executable evidence); a live capture saw the group
+/// gain the selection and the selection stay as it was
+/// (`docs/re-notes/input-live-capture.md`). Change only this function if the
+/// behaviour is ever shown to differ.
 fn shift_digit(
     groups: &mut ControlGroups,
     group: Group,

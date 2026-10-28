@@ -5605,8 +5605,8 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `[Errors]` texts. Digit binding, cap, window and the three key names are decoded from the
   Legacy executable at runtime. Evidence and decisions:
   [input control groups](docs/re-notes/input-control-groups.md).
-- [~] Shift+digit as "add" is inferred from the executable's merge branch, not observed. The
-  refusal text is held in state; the error line that draws it is not built. No saved
+- [~] Shift+digit as "add", Ctrl+Shift as define and the 0.5 s window agree with the
+  [live capture](docs/re-notes/input-live-capture.md); the refusals were not observed live.
+  The refusal text is held in state; the error line that draws it is not built. No saved
   Gameplay option value exists to override the executable fallbacks (the settings store
-  binds audio only), and the camera does not apply the scroll values yet. No original
-  client was run.
+  binds audio only), and the camera does not apply the scroll values yet.

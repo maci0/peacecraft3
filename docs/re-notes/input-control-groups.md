@@ -16,8 +16,8 @@ Evidence and decisions for the modifier/gate foundation and the control groups
   ignored `.scratch/`. Nothing from the client is copied into the repository except
   addresses and short facts.
 - Static analysis only. No original client was run, so no row is a runtime
-  observation. The live-capture note (`input-live-capture.md`) had not landed when
-  this was written; the inferred rows below are the ones it should settle.
+  observation. The [live capture](input-live-capture.md) (runtime observations under
+  Wine, run3) settles the rows marked RO below.
 
 Evidence tags as in the audit: SB shipped data, SS string in the executable, EX
 executable code read here, DOC widely documented behaviour not verified here, INF
@@ -49,8 +49,8 @@ modifier mask at `+0x14` (bit 1 Ctrl, bit 2 Alt).
 
 | # | Row | Status |
 | --- | --- | --- |
-| D1 | Shift+digit adds the selection to the group (G6). The branch builds the union and redefines the group; calling that the intended "add" rests on that shape and on the usual description (DOC), not on a running client. Isolated in `campaign_control_groups::shift_digit`. | INF |
-| D2 | Ctrl+Shift+digit defines (G2). | EX |
+| D1 | Shift+digit adds the selection to the group (G6); the current selection does not change. The branch builds the union and redefines the group, and the live capture saw the group gain the selection. Isolated in `campaign_control_groups::shift_digit`. | EX; RO |
+| D2 | Ctrl+Shift+digit defines (G2); the live capture saw it replace a non-empty group. | EX; RO |
 | D3 | The primary unit of a selection (G8) is the first selected unit of the recreation's selection. The client's field name and update rule are not read. | INF |
 | D4 | The wall clock is `Time<Real>` seconds as `f32`; the compare is done in `f32` as the client does. Key auto-repeat is not distinguished: Bevy delivers one press, and the client's treatment of repeated key messages in this handler is not read. | INF |
 | D5 | Dead or removed units leave the group when it is selected, extended or defined (a unit that fails the validity checks of G7 is not selected). Whether the client removes them from its stored group at that moment or elsewhere is not established; the effect on what a digit selects is the same. | INF |
@@ -134,8 +134,7 @@ audio device is opened.
 
 ## Not established
 
-- Shift+digit behaviour in a running client (D1), and whether Ctrl+Shift is
-  distinct (the code says no, G2).
+- Live observations of the empty-selection and foreign-unit refusals (G5, G6).
 - The meaning of the G12 preconditions and of the selection object's `+0x1e0` and
   `+0x1e4` slots beyond their use here.
 - Whether the client prunes dead members from the stored group on select (D5).
