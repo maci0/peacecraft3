@@ -27,9 +27,15 @@ const SMART: &str = "smart";
 pub enum SmartTarget {
     Ground([f32; 2]),
     /// A destructable; `at` is the clicked ground point the ground rules fall back to.
-    Destructable { target: HandleId, at: [f32; 2] },
+    Destructable {
+        target: HandleId,
+        at: [f32; 2],
+    },
     /// An item on the ground; `at` as for a destructable.
-    Item { target: HandleId, at: [f32; 2] },
+    Item {
+        target: HandleId,
+        at: [f32; 2],
+    },
     Unit(HandleId),
 }
 
@@ -218,20 +224,27 @@ pub(crate) fn classify_item(
     }
 }
 
+/// What a destructable is to the unit: a tree, and whether this unit can harvest it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Destructable {
+    pub tree: bool,
+    pub harvestable: bool,
+}
+
 pub(crate) fn classify_destructable(
     unit: &Capabilities,
     ids: &Ids,
     target: HandleId,
     at: [f32; 2],
-    harvestable: bool,
+    facts: Destructable,
 ) -> Result<OrderForm, SmartRefusal> {
-    if unit.rally {
-        return classify_ground(unit, ids, at);
-    }
-    if unit.harvest {
-        return match (harvestable, ids.harvest) {
+    if unit.harvest && !unit.rally && facts.tree {
+        return match (facts.harvestable, ids.harvest) {
             (true, Some(order)) => Ok(OrderForm::Target { order, target }),
-            _ => classify_ground(unit, ids, at),
+            // A harvest ability whose rules the runtime does not read (Wisp, Acolyte).
+            _ => Err(SmartRefusal::NotSimulated(
+                "harvesting with this unit's harvest ability",
+            )),
         };
     }
     classify_ground(unit, ids, at)
@@ -266,6 +279,14 @@ impl ObjectHost {
                 .ok()
                 .is_some_and(|policy| policy.slots > 0),
             ..Capabilities::default()
+        };
+        // The shipped barracks lists no rally ability; the client gives one to every unit
+        // that trains (`Trains` in the unit profile). Some rows list `ARal` themselves.
+        found.rally = match super::unit_training::profile(&record.definition, "Trains", "unitList")
+        {
+            Ok(list) => list.split(',').any(|token| !token.trim().is_empty()),
+            Err(why) if why.ends_with("metadata is not admitted") => false,
+            Err(why) => return Err(data(why)),
         };
         let Some(abilities) = record.abilities.as_ref() else {
             return Ok(found);
@@ -314,13 +335,17 @@ impl ObjectHost {
     ) -> Result<UnitTarget, SmartRefusal> {
         let data = |e: String| SmartRefusal::Data(e);
         let relation = self.smart_relation(unit, target)?;
-        let record = self.executed_unit(target).map_err(|e| data(e.to_string()))?;
+        let record = self
+            .executed_unit(target)
+            .map_err(|e| data(e.to_string()))?;
         let structure = super::unit_types::structure(&record.definition).map_err(data)?;
         // Only the repair rule reads it, so a unit that cannot repair needs no `type` data.
         let mechanical = caps.repair
             && super::unit_types::class(&record.definition, "UNIT_TYPE_MECHANICAL")
                 .map_err(data)?;
-        let damaged = record.vitals.is_some_and(|vitals| vitals.life < vitals.max_life);
+        let damaged = record
+            .vitals
+            .is_some_and(|vitals| vitals.life < vitals.max_life);
         let under_construction = record.construction.is_some();
         let resource = record.resource_amount.is_some();
         let mut transport = false;
@@ -371,12 +396,16 @@ impl ObjectHost {
             SmartTarget::Ground(at) => classify_ground(&caps, &ids, at),
             SmartTarget::Item { target, at } => classify_item(&caps, &ids, target, at),
             SmartTarget::Destructable { target, at } => {
-                let harvestable = caps.harvest
-                    && self
-                        .smart_harvest_target(unit, target)
-                        .map_err(|e| SmartRefusal::Data(e.to_string()))?
-                        .is_some();
-                classify_destructable(&caps, &ids, target, at, harvestable)
+                let data = |e: Error| SmartRefusal::Data(e.to_string());
+                let facts = Destructable {
+                    tree: self.smart_is_tree(target).map_err(data)?,
+                    harvestable: caps.harvest
+                        && self
+                            .smart_harvest_target(unit, target)
+                            .map_err(data)?
+                            .is_some(),
+                };
+                classify_destructable(&caps, &ids, target, at, facts)
             }
             SmartTarget::Unit(target) => {
                 if target == unit {
@@ -407,7 +436,11 @@ impl ObjectHost {
             ),
             OrderForm::Target { order, target } => self.native(
                 "IssueTargetOrderById",
-                &[Value::Handle(unit), Value::Int(order), Value::Handle(target)],
+                &[
+                    Value::Handle(unit),
+                    Value::Int(order),
+                    Value::Handle(target),
+                ],
             ),
         }?;
         match result {
@@ -478,11 +511,17 @@ mod tests {
     fn ground_moves_a_walker_and_sets_the_rally_of_a_structure() {
         assert_eq!(
             classify_ground(&walker(), &ids(), GROUND),
-            Ok(OrderForm::Point { order: 100, at: GROUND })
+            Ok(OrderForm::Point {
+                order: 100,
+                at: GROUND
+            })
         );
         assert_eq!(
             classify_ground(&hall(), &ids(), GROUND),
-            Ok(OrderForm::Point { order: 851974, at: GROUND })
+            Ok(OrderForm::Point {
+                order: 851974,
+                at: GROUND
+            })
         );
         assert!(matches!(
             classify_ground(&Capabilities::default(), &ids(), GROUND),
@@ -492,7 +531,10 @@ mod tests {
 
     #[test]
     fn a_rally_structure_without_the_registry_order_refuses_with_data() {
-        let none = Ids { set_rally: None, ..ids() };
+        let none = Ids {
+            set_rally: None,
+            ..ids()
+        };
         let refusal = classify_ground(&hall(), &none, GROUND).unwrap_err();
         assert!(matches!(refusal, SmartRefusal::Data(_)));
         assert!(refusal.shown());
@@ -503,12 +545,21 @@ mod tests {
         let enemy = handle(7);
         assert_eq!(
             classify_unit(&walker(), &ids(), enemy, &unit(Relation::Enemy)),
-            Ok(OrderForm::Target { order: 101, target: enemy })
+            Ok(OrderForm::Target {
+                order: 101,
+                target: enemy
+            })
         );
-        let unarmed = Capabilities { attack_order: None, ..walker() };
+        let unarmed = Capabilities {
+            attack_order: None,
+            ..walker()
+        };
         assert_eq!(
             classify_unit(&unarmed, &ids(), enemy, &unit(Relation::Enemy)),
-            Ok(OrderForm::Target { order: 100, target: enemy })
+            Ok(OrderForm::Target {
+                order: 100,
+                target: enemy
+            })
         );
     }
 
@@ -518,7 +569,10 @@ mod tests {
         for relation in [Relation::Own, Relation::Friend, Relation::Neutral] {
             assert_eq!(
                 classify_unit(&walker(), &ids(), other, &unit(relation)),
-                Ok(OrderForm::Target { order: 100, target: other })
+                Ok(OrderForm::Target {
+                    order: 100,
+                    target: other
+                })
             );
         }
     }
@@ -526,27 +580,48 @@ mod tests {
     #[test]
     fn a_worker_harvests_returns_cargo_and_resumes_construction() {
         let target = handle(9);
-        let harvestable = UnitTarget { resource: true, harvestable: true, ..unit(Relation::Neutral) };
+        let harvestable = UnitTarget {
+            resource: true,
+            harvestable: true,
+            ..unit(Relation::Neutral)
+        };
         assert_eq!(
             classify_unit(&worker(), &ids(), target, &harvestable),
-            Ok(OrderForm::Target { order: 851970, target })
+            Ok(OrderForm::Target {
+                order: 851970,
+                target
+            })
         );
-        let depot = UnitTarget { takes_cargo: true, structure: true, ..unit(Relation::Own) };
+        let depot = UnitTarget {
+            takes_cargo: true,
+            structure: true,
+            ..unit(Relation::Own)
+        };
         assert_eq!(
             classify_unit(&worker(), &ids(), target, &depot),
             Ok(OrderForm::Immediate { order: 851973 })
         );
-        let site = UnitTarget { structure: true, under_construction: true, ..unit(Relation::Own) };
+        let site = UnitTarget {
+            structure: true,
+            under_construction: true,
+            ..unit(Relation::Own)
+        };
         assert_eq!(
             classify_unit(&worker(), &ids(), target, &site),
-            Ok(OrderForm::Target { order: 851972, target })
+            Ok(OrderForm::Target {
+                order: 851972,
+                target
+            })
         );
     }
 
     #[test]
     fn a_worker_without_cargo_follows_a_full_health_hall() {
         let target = handle(9);
-        let hall = UnitTarget { structure: true, ..unit(Relation::Own) };
+        let hall = UnitTarget {
+            structure: true,
+            ..unit(Relation::Own)
+        };
         assert_eq!(
             classify_unit(&worker(), &ids(), target, &hall),
             Ok(OrderForm::Target { order: 100, target })
@@ -556,9 +631,19 @@ mod tests {
     #[test]
     fn classes_the_simulation_lacks_refuse_loudly() {
         let target = handle(9);
-        let damaged = UnitTarget { structure: true, damaged: true, ..unit(Relation::Own) };
-        let transport = UnitTarget { transport: true, ..unit(Relation::Own) };
-        let odd_mine = UnitTarget { resource: true, ..unit(Relation::Neutral) };
+        let damaged = UnitTarget {
+            structure: true,
+            damaged: true,
+            ..unit(Relation::Own)
+        };
+        let transport = UnitTarget {
+            transport: true,
+            ..unit(Relation::Own)
+        };
+        let odd_mine = UnitTarget {
+            resource: true,
+            ..unit(Relation::Neutral)
+        };
         for (caps, facts) in [
             (worker(), damaged),
             (walker(), transport),
@@ -566,7 +651,10 @@ mod tests {
             (hall(), unit(Relation::Own)),
         ] {
             let refusal = classify_unit(&caps, &ids(), target, &facts).unwrap_err();
-            assert!(matches!(refusal, SmartRefusal::NotSimulated(_)), "{refusal:?}");
+            assert!(
+                matches!(refusal, SmartRefusal::NotSimulated(_)),
+                "{refusal:?}"
+            );
             assert!(refusal.shown());
         }
     }
@@ -574,14 +662,23 @@ mod tests {
     #[test]
     fn items_need_an_inventory_and_otherwise_fall_back_to_the_ground_point() {
         let item = handle(5);
-        let hero = Capabilities { inventory: true, ..walker() };
+        let hero = Capabilities {
+            inventory: true,
+            ..walker()
+        };
         assert_eq!(
             classify_item(&hero, &ids(), item, GROUND),
-            Ok(OrderForm::Target { order: 851971, target: item })
+            Ok(OrderForm::Target {
+                order: 851971,
+                target: item
+            })
         );
         assert_eq!(
             classify_item(&walker(), &ids(), item, GROUND),
-            Ok(OrderForm::Point { order: 100, at: GROUND })
+            Ok(OrderForm::Point {
+                order: 100,
+                at: GROUND
+            })
         );
         assert!(matches!(
             classify_item(&hall(), &ids(), item, GROUND),
@@ -590,18 +687,45 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_is_harvested_by_a_harvester_and_otherwise_falls_back_to_the_ground_point() {
+    fn a_tree_is_harvested_by_a_harvester_and_anything_else_falls_back_to_the_ground_point() {
         let tree = handle(6);
+        let tree_for = |harvestable| Destructable {
+            tree: true,
+            harvestable,
+        };
         assert_eq!(
-            classify_destructable(&worker(), &ids(), tree, GROUND, true),
-            Ok(OrderForm::Target { order: 851970, target: tree })
+            classify_destructable(&worker(), &ids(), tree, GROUND, tree_for(true)),
+            Ok(OrderForm::Target {
+                order: 851970,
+                target: tree
+            })
         );
-        for (caps, harvestable) in [(worker(), false), (walker(), true)] {
-            assert_eq!(
-                classify_destructable(&caps, &ids(), tree, GROUND, harvestable),
-                Ok(OrderForm::Point { order: 100, at: GROUND })
-            );
-        }
+        let ground = Ok(OrderForm::Point {
+            order: 100,
+            at: GROUND,
+        });
+        assert_eq!(
+            classify_destructable(&walker(), &ids(), tree, GROUND, tree_for(false)),
+            ground
+        );
+        let rock = Destructable {
+            tree: false,
+            harvestable: false,
+        };
+        assert_eq!(
+            classify_destructable(&worker(), &ids(), tree, GROUND, rock),
+            ground
+        );
+    }
+
+    #[test]
+    fn a_harvest_ability_the_runtime_does_not_read_refuses_on_a_tree() {
+        let tree = Destructable {
+            tree: true,
+            harvestable: false,
+        };
+        let refusal = classify_destructable(&worker(), &ids(), handle(6), GROUND, tree);
+        assert!(matches!(refusal, Err(SmartRefusal::NotSimulated(_))));
     }
 
     #[test]

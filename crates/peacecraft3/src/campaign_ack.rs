@@ -223,6 +223,26 @@ mod tests {
     }
 
     #[test]
+    fn work_orders_and_queued_orders_speak_like_the_order_they_carry() {
+        let unit = id(1);
+        for order in ["harvest", "repair"] {
+            assert_eq!(
+                ack_for(&target(order), |_, _| false),
+                Some((unit, Ack::Yes)),
+                "{order}"
+            );
+        }
+        for (inner, expected) in [
+            (target("attack"), Some((unit, Ack::YesAttack))),
+            (point("move"), Some((unit, Ack::Yes))),
+            (point("setrally"), None),
+        ] {
+            let queued = PlayerCommand::Queued(Box::new(inner));
+            assert_eq!(ack_for(&queued, |_, _| false), expected);
+        }
+    }
+
+    #[test]
     fn other_commands_are_silent() {
         let learn = PlayerCommand::Learn {
             unit: id(1),

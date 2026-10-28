@@ -1324,7 +1324,10 @@ fn click(
             .executed_item(id)
             .is_ok_and(|item| item.visible() == Some(true))
     }) {
-        SmartTarget::Item { target: item, at: point }
+        SmartTarget::Item {
+            target: item,
+            at: point,
+        }
     } else if let Some(unit) = picked {
         SmartTarget::Unit(unit)
     } else if let Some(target) = tree_hit {
