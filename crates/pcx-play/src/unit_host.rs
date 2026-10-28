@@ -1695,6 +1695,7 @@ impl ObjectHost {
             }
             _ => unreachable!("validated unit identity"),
         }
+        self.record_town_registration(*unit);
         self.publish_unit_guard(*unit, guard);
         Ok(Value::Null)
     }

@@ -112,6 +112,7 @@ pub enum PlacementEventKind {
     BuffApplied([u8; 4]),
     BuffRemoved([u8; 4]),
     Relocated,
+    OwnerRegistration(u32),
 }
 
 /// One successful operation at the recreation's game time.

@@ -256,6 +256,12 @@ start. Map SHA-256 `7513e385...`.
 | 31, 36, 40, 47 s | Altar of Darkness `uaod` (4832, 2784), graveyard `ugrv` (5184, 1984), crypts `usep` (5568, 1984) and (5376, 2944). |
 | 79 to 108 s | Six more ziggurats, then a sacrificial pit `usap` (181 s) and a temple of the damned `utod` (188 s). |
 
+The same samples report four acolytes at 11 s, before the first structure appears, and still
+four at 12 through 17 s as the Necropolis and first ziggurat appear. The 13 s sample lists
+the original builder at (6064, 2800) with no current order. In this observed sequence the
+builder remains after starting the structure. The later build lifecycle and other builder
+classes require separate qualification.
+
 All sites are multiples of 32 world units. Player 5's start location (`DefineStartLocation` 4) is
 (7488, 2752), start location 0 is (6208, 2880); the Necropolis stands 128 from the latter on the
 y axis, which is a coincidence until a second sample says otherwise. Up to two structures were under
@@ -599,6 +605,12 @@ native peon class: `UnitAddType` and `UnitRemoveType` use the type-to-mask table
 `0x48a660` and write the field at `0x4aed27` and `0x4af739`. The table at `0xe6eb00` maps
 the selected script's `UNIT_TYPE_PEON` enumerand to that bit. The recreation can read the
 initial peon class from `UnitBalance/type`; runtime type changes still need qualification.
+The structure fallback calls `0x696b50` with a nonzero argument: it tests unit state bit
+`0x10000` and rejects the combination where `0x80` is set without `0x8000000`. The root ability
+class identifies itself at `0xb8d9d0`; its paths set `0x80` at `0xb8db63`, set `0x8000000` at
+`0xb8e916` and `0xb8f537`, and clear the latter at `0xb8ea78`. These changes suggest the
+rooted and uprooted building states, but their complete mapping to live ability state remains
+unproven. The recreation does not implement that ability state.
 The standalone town-reference selector implements the first eligible peon,
 then last eligible structure, then last eligible other unit rule for a caller-supplied list and
 eligibility; synthetic tests cover each branch. It is not wired to live towns. Other refresh
@@ -612,18 +624,24 @@ visits surviving registrations in reverse registration order. Removal at `0xac4b
 unit; `0xac4c3b` replaces the head or reconnects its predecessor to its successor. This preserves
 the relative order of the other entries. A later registration is therefore newer even when its
 unit was created earlier. Synthetic tests cover removal, re-registration and ineligibility.
-The recreation does not yet record native-equivalent registration events, and creation order
-alone does not establish list order after transfers or re-registration.
+The `StartCampaignAI` path at `0xab77c0` resolves an existing player AI object before loading
+the program; this path does not itself rebuild the unit list. Creation order alone does not
+establish list order after transfers or re-registration.
 The ownership-change path emits event `0xd01a2` before calling `0xab4550` again at `0x69d795`;
 the prior AI's event dispatcher `0xac09d0` routes that event to removal. The same dispatcher
 also removes on events `0xd01a0` and `0xd01a4`; their complete lifecycle meanings have not
-been established here.
+been established here. The recreation tracks creation order by allocated unit identity and
+records subsequent successful ownership changes in its existing lazy event history. It
+excludes dead and removed records from registration queries. Missing history or liveness
+refuses. A live selector uses these sequences, the selected unit's peon type and its shown
+state. It refuses the unresolved structure fallback and is not connected to the town record.
 
 The `+0x20` eligibility bit also has multiple state paths: `0x66714a`, `0x6945ff` and
 `0x6a019c` set it, and `0x6a2600` clears it. The latter two are reached by internal transitions
-as well as visible-unit operations. The host's `shown` field alone has not been established as a
-complete mapping of that bit. The source of every registration and transition, including AI
-activation, ownership and type changes, still needs to be mapped before live selection.
+as well as visible-unit operations. The `IsUnitHidden` registration names handler `0x499af0`
+at `0x49dc76`; that handler returns this same bit. The recreation's `shown` state is the
+corresponding public hidden state, including its implemented gold-mine and mirror-image
+transitions. Other native registration and type-change paths still need to be qualified.
 
 An ignored recreation snapshot now reads each probe's spawn point, facing and worker count
 from its script, creates those workers, reads their peon class from selected unit data and
@@ -1081,10 +1099,11 @@ deterministically sampled unsigned words; that is not a comparison of full reach
 
 ## Not established
 
-- Live registration history, the full eligibility bit and type changes, town refresh triggers
-  and the route metric used to select among towns. The diagnostic matches the recorded sites
-  using supplied town origins, eligibility and order-time snapshots; it does not derive those
-  inputs from a running game.
+- The structure fallback's root-ability state, native registration and type-change paths beyond
+  the tracked creation, ownership and death cases, town refresh triggers and the route metric used
+  to select among towns. The live selector is not connected to a town. The diagnostic matches the
+  recorded sites using supplied town origins, eligibility and order-time snapshots; it does not
+  derive those inputs from a running game.
 - Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
   boundary cases and placement requirements such as blight. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.

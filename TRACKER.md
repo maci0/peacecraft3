@@ -5662,3 +5662,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - [ ] Open: the edge-scroll margin is still the live fit (producer not located), the
   middle-drag ratio, the Backspace sort key, an alert producer for Space, saved scroll
   preferences, Ctrl/Alt+C, the arrow cursors, and per-level near clip.
+
+### 2026-10-28: Live town registration and eligibility
+
+- [~] Live unit identities supply creation order; successful ownership transfers are recorded
+  in the existing lazy event history. Queries exclude dead and removed units and refuse
+  incomplete history. The live selector prefers the latest visible peon and retains the
+  decoded other-unit fallback. Synthetic tests cover creation, transfer, visibility and death.
+- The native `IsUnitHidden` handler reads the same bit tested by the selector. The structure
+  fallback also depends on root-ability state; that state is not implemented and the fallback
+  refuses. The selector is not yet connected to a town or to `SetProduce`. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- The original orange probe retains four acolytes as the Necropolis and first ziggurat appear,
+  so consuming the builder would disagree with this observation. The unattended construction
+  lifecycle remains unimplemented.
+- Checks: 2,270 `pcx-play` library tests passed with 88 ignored; native and WASM Clippy passed
+  with warnings denied. The simulation budget check passed with the previous Human03 allocation
+  and allocated-byte counts. Human03, Human04 and Human05 route runs were not repeated because
+  production placement remains disconnected.

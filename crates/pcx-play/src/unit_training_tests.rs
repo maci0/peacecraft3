@@ -1594,6 +1594,85 @@ fn ai_production_rejects_invalid_quantity_and_unsupported_requests_without_spend
 }
 
 #[test]
+fn ai_registration_tracks_creation_transfer_and_death() {
+    let (mut vm, actor, producer) = ai_production_fixture_with(&[column(
+        b"F002",
+        SlkId::UnitBalance,
+        "type",
+        FieldKind::Token,
+        "peon",
+    )]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let first = h.town_registration_sequence(actor).unwrap().unwrap();
+    let second = h.town_registration_sequence(producer).unwrap().unwrap();
+    assert!(first < second);
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(producer));
+    h.native("ShowUnit", &[Value::Handle(producer), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(actor));
+    h.native("ShowUnit", &[Value::Handle(producer), Value::Bool(true)])
+        .unwrap();
+    let other = h.native("Player", &[Value::Int(3)]).unwrap();
+    let controller = h
+        .native("GetPlayerController", &[Value::Handle(owner)])
+        .unwrap();
+    h.native("SetPlayerController", &[other.clone(), controller])
+        .unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(actor), other, Value::Bool(false)],
+    )
+    .unwrap();
+    let moved = h.town_registration_sequence(actor).unwrap().unwrap();
+    assert!(moved > second);
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(actor),
+            Value::Handle(owner),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    let returned = h.town_registration_sequence(actor).unwrap().unwrap();
+    assert!(returned > moved);
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(actor));
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    assert_eq!(h.town_registration_sequence(actor).unwrap(), None);
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(producer));
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    assert_eq!(h.town_registration_sequence(producer).unwrap(), None);
+    assert_eq!(h.ai_town_reference(owner).unwrap(), None);
+}
+
+#[test]
+fn ai_town_reference_refuses_unqualified_structure_fallback() {
+    let (mut vm, actor, producer) = ai_production_fixture_with(&[column(
+        b"F001",
+        SlkId::UnitBalance,
+        "isbldg",
+        FieldKind::Bool,
+        "1",
+    )]);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let error = h.ai_town_reference(owner).unwrap_err();
+    assert!(error.to_string().contains("town structure state bits"));
+    h.fixture_gathering_class(producer, "peon");
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(producer));
+    h.native("ShowUnit", &[Value::Handle(producer), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(actor));
+    h.native("ShowUnit", &[Value::Handle(actor), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(h.ai_town_reference(owner).unwrap(), None);
+    h.native("ShowUnit", &[Value::Handle(producer), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(h.ai_town_reference(owner).unwrap(), Some(producer));
+}
+
+#[test]
 fn ai_production_skips_paused_dead_and_foreign_producers() {
     let (mut vm, actor, producer) = ai_production_fixture();
     let h = &mut vm.host().inner;

@@ -1,8 +1,119 @@
-use super::ObjectHost;
+use super::{Entry, ObjectHost};
 use crate::ai_placement::{ExclusionError, PlacementEvent, PlacementEventKind};
 use pcx_script::HandleId;
 
 impl ObjectHost {
+    /// Resolve the town reference from live registrations and unit visibility.
+    pub fn ai_town_reference(&self, owner: HandleId) -> Result<Option<HandleId>, ExclusionError> {
+        self.player_settings(owner)
+            .map_err(|_| ExclusionError::Unavailable {
+                unit: owner,
+                source_name: "town owner",
+            })?;
+        let mut peon: Option<((u64, usize), HandleId)> = None;
+        let mut other: Option<((u64, usize), HandleId)> = None;
+        let mut unqualified_structure = None;
+        for (unit, record) in self.executed_units() {
+            if record.owner != owner || !record.shown {
+                continue;
+            }
+            let Some(sequence) = self.town_registration_sequence(unit)? else {
+                continue;
+            };
+            let is_peon =
+                super::unit_types::class(&record.definition, "UNIT_TYPE_PEON").map_err(|_| {
+                    ExclusionError::Unavailable {
+                        unit,
+                        source_name: "town peon class",
+                    }
+                })?;
+            if is_peon {
+                if peon.is_none_or(|(old, _)| sequence > old) {
+                    peon = Some((sequence, unit));
+                }
+            } else if super::unit_types::structure(&record.definition).map_err(|_| {
+                ExclusionError::Unavailable {
+                    unit,
+                    source_name: "town structure class",
+                }
+            })? {
+                unqualified_structure = Some(unit);
+            } else if other.is_none_or(|(old, _)| sequence < old) {
+                other = Some((sequence, unit));
+            }
+        }
+        if let Some((_, unit)) = peon {
+            return Ok(Some(unit));
+        }
+        if let Some(unit) = unqualified_structure {
+            return Err(ExclusionError::Unavailable {
+                unit,
+                source_name: "town structure state bits 0x80 and 0x8000000",
+            });
+        }
+        Ok(other.map(|(_, unit)| unit))
+    }
+
+    /// The registration order of a living unit, or `None` after death or removal.
+    pub fn town_registration_sequence(
+        &self,
+        unit: HandleId,
+    ) -> Result<Option<(u64, usize)>, ExclusionError> {
+        let entry = self
+            .inner
+            .entry(unit)
+            .map_err(|_| ExclusionError::Unavailable {
+                unit,
+                source_name: "unit record",
+            })?;
+        let record = match entry {
+            Entry::RemovedUnit { .. } => return Ok(None),
+            Entry::Unit { record } => record,
+            _ => {
+                return Err(ExclusionError::Unavailable {
+                    unit,
+                    source_name: "unit record",
+                });
+            }
+        };
+        if record.vitals.is_some_and(|v| !v.life.is_finite())
+            || (record.vitals.is_none() && record.combat.is_none())
+        {
+            return Err(ExclusionError::Unavailable {
+                unit,
+                source_name: "unit liveness",
+            });
+        }
+        if record.combat.as_ref().is_some_and(|c| c.dead)
+            || record.vitals.is_some_and(|v| v.life <= 0.)
+        {
+            return Ok(None);
+        }
+        if self.placement_events_incomplete {
+            return Err(ExclusionError::Unavailable {
+                unit,
+                source_name: "town registration history",
+            });
+        }
+        let mut sequence = (unit.token(), 0);
+        for (index, event) in self.placement_event_history().enumerate() {
+            if event.unit == unit
+                && let PlacementEventKind::OwnerRegistration(handles) = event.kind
+            {
+                sequence = (u64::from(handles), index + 1);
+            }
+        }
+        Ok(Some(sequence))
+    }
+
+    pub(super) fn record_town_registration(&mut self, unit: HandleId) {
+        let Ok(handles) = u32::try_from(self.inner.handles()) else {
+            self.placement_events_incomplete = true;
+            return;
+        };
+        self.record_placement_event(unit, PlacementEventKind::OwnerRegistration(handles));
+    }
+
     /// Set the clock for a diagnostic snapshot without replaying timer callbacks.
     #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_set_snapshot_time(&mut self, at: f64) -> Result<(), super::Error> {

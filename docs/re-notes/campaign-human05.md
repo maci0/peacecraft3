@@ -132,6 +132,11 @@ The diagnostic applies the per-unit exclusion predicate and source-derived enume
 rectangle with snapshot-specific effect evidence. This does not change the 1223 s production
 refusal or establish a later run.
 
+The live host now records ownership re-registrations and can select a visible peon using
+registration order. The structure fallback still refuses because its native root-ability state
+is not represented, and the selector is not connected to production placement. Human05 was not
+rerun for this change; the `town-order` runs remain the latest verified production state.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one
