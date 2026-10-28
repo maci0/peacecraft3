@@ -33,6 +33,29 @@ impl ObjectHost {
         self.selection.as_deref().unwrap_or(&[])
     }
 
+    /// The local player's drag-box view of `id`: `None` for a unit that is not live and
+    /// shown. Visibility to the local player and screen position are the caller's.
+    pub fn box_candidate(
+        &self,
+        id: HandleId,
+    ) -> Result<Option<crate::selection_box::Candidate>, String> {
+        let record = self.executed_unit(id).map_err(|e| e.to_string())?;
+        if !record.shown || record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(None);
+        }
+        let local = self
+            .local_player_settings()
+            .ok_or("box selection has no local player")?;
+        let owner = self
+            .player_settings(record.owner)
+            .map_err(|e| e.to_string())?;
+        Ok(Some(crate::selection_box::Candidate {
+            id,
+            own: owner.identity == local.identity,
+            structure: super::unit_types::structure(&record.definition)?,
+        }))
+    }
+
     /// Player input: replace or extend the local selection with live, shown units.
     pub fn select_units(&mut self, units: &[HandleId], replace: bool) {
         let live: Vec<HandleId> = units

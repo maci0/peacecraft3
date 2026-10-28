@@ -187,6 +187,7 @@ pub mod dialog_layout;
 pub mod inventory;
 pub mod player_command_log;
 pub mod player_removal_rules;
+pub mod selection_box;
 pub mod selection_circle;
 
 pub mod harvest_rules;
