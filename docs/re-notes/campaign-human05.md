@@ -126,7 +126,12 @@ does not implement the complete check. An isolated order-event probe now identif
 builder's original order-time position and confirms the haunted mine's target, but the refreshed
 diagnostic still misses both sites. Controlled worker, start and mine variations rule out the
 assigned start as the search center in one run but do not yet identify the town or reproduce the
-native reach check. No later Human05 state has been verified.
+native reach check. A subsequent live debugger trace found the actual town center and identifies
+an acolyte and the primary mine as its two references in the baseline and blocked probes. With the recorded
+center, the diagnostic matches the unblocked Necropolis site but still chooses an earlier site
+in the farm layout. The client rejects that earlier site because of a blocked texture cell; the
+diagnostic records the same occupancy yet accepts it. Town association, texture validation and
+the native reach search remain open. No later Human05 state has been verified.
 
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
@@ -145,7 +150,7 @@ details in [AI construction](ai-construction.md).
   score caps have a separately tested implementation, as do town-coordinate refresh and
   native snap arithmetic. The AI
   search and player orders share a validator, for which the existing player-placement code is
-  the current implementation. Live town association, texture dimensions, the additional reach check and
+  the current implementation, with the blocked-cell discrepancy above. Live town association, texture dimensions, the additional reach check and
   complete texture-rectangle enumeration remain open; undead construction, cost charging,
   worker choice and script retry timing are also open
   ([AI construction](ai-construction.md)). The recreation's human construction path

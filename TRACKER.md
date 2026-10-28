@@ -5244,3 +5244,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored; the local-input
   diagnostic and synthetic parser tests passed, native and WASM Clippy passed with
   `-D warnings`, and `python3 tools/perf/sim_run.py --check` passed without raised budgets.
+
+### 2026-10-28: Live AI placement inputs
+
+- [~] Isolated Wine debugger traces record the actual town coordinate for the baseline,
+  worker-spawn, changed-start and farm scenarios. In the baseline and farm runs the town references resolve
+  to an acolyte and the primary gold mine. The recorded centers match the midpoint of the mine
+  and an initial acolyte position. The selection and refresh timing remain open:
+  [AI construction](docs/re-notes/ai-construction.md).
+- [~] The diagnostic matches the unblocked site with the recorded center. In the farm layout
+  it accepts an earlier candidate which the client rejects at a blue-only texture cell flagged
+  `0x08`; the recreation records the farm's occupancy there but its construction raster retains
+  red cells only. The full texture flag mapping and native hierarchical reach search remain open.
+- [ ] Production remains disconnected and refuses. No new Human05 route was run; the last
+  reproducible pair stops at 1223 s.
+- Gate: headless `cargo test -p pcx-play --lib` passed 2182 tests with 84 ignored. The ignored
+  local-input diagnostic, native and WASM Clippy with `-D warnings`, and
+  `python3 tools/perf/sim_run.py --check` passed; budgets were unchanged.

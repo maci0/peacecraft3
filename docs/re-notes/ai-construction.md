@@ -89,13 +89,13 @@ gold-mine implementation class `Agmb` (`0xab4550`, `0xac7000`, `0xac7070`; see
 [unit resource amount](unit-resource-amount.md)). `+0x60` is the second mine reference; its
 selection and replacement rules need further tracing.
 
-`0xac80a0` refreshes the search coordinates from the primary mine and hall. If both references
+`0xac80a0` refreshes the search coordinates from the primary mine and the `+0x48` reference. If both references
 resolve, it takes their positions and computes the midpoint with the executable's float helpers
 and its half operand at `0x10db0a8`. If only one resolves, it copies that object's position. If
 neither resolves, it leaves the previous coordinates in place. A newly allocated record is
 initialized from supplied coordinates by `0xac7e90`; `CreateCaptains` can supply the selected
-player start coordinates when it creates a record (`0xabd160` through `0xabd1e0`). These paths
-do not prove which record the Human05 builder selects, or when its mine and hall are associated.
+player start coordinates when it creates a record (`0xabd160` through `0xabd1e0`). Despite the
+native's name, the first reference can resolve to an acolyte; see the runtime trace below.
 
 The start-location path first calls `0xac8290` with no hall and the selected start coordinate.
 That calls `0xac7450`, which considers existing global town records only when their primary
@@ -486,15 +486,64 @@ hierarchy nodes. This cannot be replaced by a conventional reachability query. T
 order-time state of the cache, including the temporary rectangles, is needed to determine whether
 this branch applies to the mine-centered town.
 
-The local-input diagnostic was rerun after this trace. Its no-reach and movement-route surrogate
-results remain the table above; it does not implement the native queue or cache, so it cannot
-report full-selection ranks. The two oracle positions remain unmatched. No production search was
-connected, and the Human05 route was not rerun.
+### Live town and validator trace, 2026-10-28
+
+The isolated Wine reference image has `winedbg` and needs no extra packages to debug its own
+child under the existing capability and network restrictions. A synthetic 32-bit program first
+verified conditional breakpoints and output capture. The reference session used the original
+private Xvfb, null sink and software renderer. The executable hash was the pinned 1.29 image.
+The copied harness and raw logs are local to `.scratch/ai-placement/debug-harness/`.
+
+At the first Necropolis placement call, `0xac2c9a` through `0xac2cc1` pass the selected town's
+stored coordinate to `0xad4970`. A breakpoint at that call and the following search recorded:
+
+| Scenario | Town coordinate | First reach candidate | Chosen site | Native queue removals at choice |
+| --- | --- | --- | --- | --- |
+| Baseline | (6264, 2776) | (6208, 2752) | (6208, 2752) | 1 |
+| Workers spawned at start | (6632, 3112) | (6592, 3072) | (6336, 2752) | 355 |
+| Workers spawned near mine | (5592, 3336) | (5184, 3328) | (5248, 2944) | 419 |
+| Start coordinate changed | (6264, 2776) | (6208, 2752) | (6208, 2752) | 1 |
+| Neutral farm at baseline site | (6264, 2776) | (6464, 2752) | (5952, 2432) | 280 |
+
+In the baseline and farm traces the resolved `+0x48` object is an orange `uaco`, and `+0x54` resolves to
+the neutral gold mine. The initial samples show an acolyte at (6832, 2096); its midpoint
+with the mine at (5696, 3456) is the captured town coordinate. The same calculation with
+initial acolyte positions (7568, 2768) and (5488, 3216) gives the captured worker-spawn
+variant coordinates. This matches the existing midpoint code, but which acolyte is associated,
+when the record refreshes, and how to reproduce its selection remain open. The result corrects
+the earlier inference that the absence of a completed hall implies a mine-centered town.
+
+The first reach call in all five traces used a
+nonempty handle at builder `+0x26c` and an empty reference at `+0x13c`. The handle resolved
+to a spatial object with a rectangle, which `0x7fd84b` through `0x7fd85d` clears before the
+query. In native rectangle coordinates the baseline and farm captured (398, 505, 400, 507),
+while the near-mine trace captured (399, 505, 401, 507). Its exact object identity and mapping
+to recreation occupancy are still open. For the first candidates the inner query returned
+0, 0, 12, 0 and 8 respectively; these finite results
+pass the native reach test. They do not prove that all later candidates pass it.
+
+With the captured baseline origin supplied through `PCX_HUMAN05_TRACE_ORIGIN`, the ignored
+diagnostic selects (6208, 2752) at traversal rank 1 in both texture-axis variants. In the farm
+layout it selects (6464, 2752), rank 189, instead of (5952, 2432), rank 280. Both cells score
+5 and the diagnostic accepts both; the town-origin route surrogate exhausts its own work bound.
+The native farm trace accepts the earlier candidate's reach query, then the shared validator
+returns `0x44` (`0xad4458`, `0xad449d`, `0xad44a2`). The validator's texture-cell callback
+queries pathing at (6224, 2800) with mask `0x08` and reports a blocked cell (`0x690386` through
+`0x69039f`, `0x7f69d0`). The diagnostic reports an occupied structure footprint at that exact
+cell, but its construction validator still accepts the candidate. A further trace identifies
+the native texture index as (6, 0), with texture flag `0x08`; that selected Necropolis pixel is
+blue-only. The current footprint raster retains red pixels only, so this border cell is absent
+from its construction check. This establishes the discrepancy for that cell, not the full
+mapping of texture channels to native flags or every validator branch.
+
+The native hierarchical queue and its occupancy mapping remain incomplete. The diagnostic
+surrogate is not that search, and the strict production refusal remains. Human05 was not rerun
+because both layouts are not reproduced by the recreation.
 
 ## Not established
 
-- The Human05 town record's actual mine and hall associations and the route metric used to select
-  among towns; terrain sampling at grid edges and the enumerator's boundary/state behavior;
+- The acolyte association and refresh timing, and the route metric used to select among towns;
+  terrain sampling at grid edges and the enumerator's boundary/state behavior;
   live texture dimension mapping, blight and the shared validator's detailed
   checks; and the two-pass check's meaning. The decoded buffer layer alone cannot reproduce a site.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
@@ -503,6 +552,6 @@ connected, and the Human05 route was not rerun.
   placed), refund on cancel, and retry cadence when a site or the builder is not ready.
 - The early false answers listed above, and the upgrade fallback.
 
-What would settle placement: decode the builder-associated route inputs and the town-object
-initialization, then rerun both layouts at exact order-time state. Until then Human05's orange AI refuses
-at its first structure, which is the 1223 s stop.
+What would settle placement: decode the texture-channel validation difference, town association,
+and the hierarchical reach search, then rerun the layouts at exact order-time state. Until then
+Human05's orange AI refuses at its first structure, which is the 1223 s stop.

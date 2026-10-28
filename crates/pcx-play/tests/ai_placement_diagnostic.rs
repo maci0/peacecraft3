@@ -364,12 +364,15 @@ fn human05_placement_diagnostic() {
         }
         let worker_point = objects.executed_unit(worker).unwrap().position.unwrap();
         println!("probe-sampled first worker {worker_point:?}, collision radius {worker_radius}");
-        let origins = [
+        let mut origins = vec![
             ("mine", center),
             ("start", start_point),
             ("probe-worker", worker_point),
             ("route-worker", route_worker),
         ];
+        if let Ok(observed) = std::env::var("PCX_HUMAN05_TRACE_ORIGIN") {
+            origins.push(("native-trace", probe_point(&observed)));
+        }
         let structures: Vec<_> = objects
             .executed_units()
             .filter_map(|(_, unit)| {
@@ -403,6 +406,13 @@ fn human05_placement_diagnostic() {
             .collect();
         let placement = objects.diagnostic_placement().unwrap();
         let bounds = placement.world_bounds();
+        if let Ok(point) = std::env::var("PCX_HUMAN05_TRACE_CELL") {
+            let point = probe_point(&point);
+            println!(
+                "blocked={blocked} native trace cell {point:?}: {:?}",
+                placement.diagnostic_cell_state(point).unwrap()
+            );
+        }
         if blocked {
             let cell_size = placement.rules().cell_size();
             let mask = placement.rules().ground_mask() | 0x08;
