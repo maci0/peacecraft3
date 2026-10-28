@@ -26,6 +26,25 @@ pub struct ChainEntry {
     pub class: u32,
 }
 
+/// A set-based reach query cannot prove that it sees all native links.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ChainBoundError {
+    #[error("reach cell {cell:?}: chain bound {bound} exceeds visit limit {limit}")]
+    Limit {
+        cell: [i32; 2],
+        bound: usize,
+        limit: usize,
+    },
+    #[error("reach cell {cell:?}: chain bound {bound} is smaller than {entries} live entries")]
+    Inconsistent {
+        cell: [i32; 2],
+        bound: usize,
+        entries: usize,
+    },
+    #[error("reach cell {cell:?}: live entry set is not canonical")]
+    NonCanonical { cell: [i32; 2] },
+}
+
 impl EntryRules {
     /// Decode the tests from the same verified image used by placement.
     pub fn reviewed_legacy(
@@ -145,6 +164,51 @@ impl EntryRules {
             }
         }
         false
+    }
+
+    /// Evaluate the current object set when `bound` covers every native link
+    /// in the cell, including stale, duplicate, and non-object links.
+    pub fn bounded_cell_blocked(
+        self,
+        cell: [i32; 2],
+        cell_word: u32,
+        selected_mask: u32,
+        entries: &[ChainEntry],
+        bound: usize,
+    ) -> Result<bool, ChainBoundError> {
+        if cell_word & selected_mask & self.class_mask != 0 {
+            return Ok(true);
+        }
+        let limit = usize::from(self.max_entries);
+        if bound > limit {
+            return Err(ChainBoundError::Limit { cell, bound, limit });
+        }
+        if entries.len() > bound {
+            return Err(ChainBoundError::Inconsistent {
+                cell,
+                bound,
+                entries: entries.len(),
+            });
+        }
+        for (index, entry) in entries.iter().enumerate() {
+            if !entry.present
+                || entry.class & self.class_mask != self.object_class
+                || entries[..index]
+                    .iter()
+                    .any(|other| other.identity == entry.identity)
+            {
+                return Err(ChainBoundError::NonCanonical { cell });
+            }
+        }
+        Ok(entries.iter().any(|entry| {
+            self.blocks(
+                entry.present,
+                entry.flags,
+                entry.state,
+                entry.class,
+                selected_mask,
+            )
+        }))
     }
 
     /// Compact one newest-first chain when the spatial grid runs its cleanup.
@@ -1214,6 +1278,60 @@ mod tests {
         assert_eq!(entries, [other, object]);
         assert!(seen.is_empty());
         assert!(rules.cell_blocked(0, 4, entries));
+    }
+
+    #[test]
+    fn bounded_set_query_refuses_unproved_or_inconsistent_chains() {
+        let rules = EntryRules {
+            active: 0x100,
+            registered: 0x200,
+            forbidden: 0x40,
+            class_mask: 0xf000,
+            object_class: 0x3000,
+            skipped_class: 0x4000,
+            pathing_mask: 0xff,
+            max_entries: 3,
+        };
+        let entry = ChainEntry {
+            identity: 7,
+            present: true,
+            flags: 0x104,
+            state: 0x200,
+            class: 0x3000,
+        };
+        let cell = [12, 34];
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 3),
+            Ok(true)
+        );
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 2, &[entry], 3),
+            Ok(false)
+        );
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 4),
+            Err(ChainBoundError::Limit {
+                cell,
+                bound: 4,
+                limit: 3
+            })
+        );
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry], 0),
+            Err(ChainBoundError::Inconsistent {
+                cell,
+                bound: 0,
+                entries: 1
+            })
+        );
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0, 4, &[entry, entry], 2),
+            Err(ChainBoundError::NonCanonical { cell })
+        );
+        assert_eq!(
+            rules.bounded_cell_blocked(cell, 0x1000, 0x1004, &[], 4),
+            Ok(true)
+        );
     }
 
     #[test]

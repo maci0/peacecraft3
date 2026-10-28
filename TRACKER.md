@@ -5808,3 +5808,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   The simulation budget check passed and Human03 allocation and reallocation counts were
   unchanged from the prior placement run. Allocated bytes increased by 72 in each Human03
   workload after the intervening input merge; that change has not been isolated.
+
+### 2026-10-29: Bounded reach-set query and lazy order queues
+
+- [~] A set-based reach-cell query now refuses when a caller's complete link bound exceeds
+  the source-derived visit limit or the supplied live set is inconsistent. The client creates
+  a recurring cleanup timer from a one-tenth interval, subject to a minimum, but the ordering
+  of that timer against the recreation's movement is not established. Ordinary movement,
+  repeated region additions and removals are not yet counted by the live cache. The query
+  is not connected to placement; the Human05 structure refusal remains.
+- Queued orders allocate their data only when an order actually waits. The `pcx-play` library
+  suite passed 2,323 tests with 90 ignored, and native and WASM Clippy passed with warnings
+  denied. The simulation budget check passed with the same allocation and reallocation counts
+  as the preceding run and 48 fewer requested bytes in both Human03 workloads. Requested bytes
+  remain 24 above the earlier pre-input placement measurement; no budget was raised. See
+  [simulation performance](docs/performance/sim-script.md).
+- Human03 and Human04 reached victory at 279.02 s and 449.02 s, with checkpoint and RNG lines
+  matching their `g1` runs. Two Human05 runs both stopped at the existing 1223 s refusal; their
+  98 checkpoint and RNG lines matched each other and `r14`. The 112 reach queries and five
+  placement sites have not been verified through live bounded sets.

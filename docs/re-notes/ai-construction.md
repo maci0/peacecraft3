@@ -536,10 +536,23 @@ visits dirty cells and compacts their chains through `0x8c2c20`: it retains only
 valid object-class link for each entry, with a newer removal link suppressing an older object
 link. Skipped-class links and entries no longer present are discarded. Cleanup does not use
 the reach query's active or pathing filters, and can change which links fall within its visit
-limit. The same cleanup is called from scheduled paths at `0x7f979c` and `0x7fb07f`; their
-schedule relative to recreation movement and placement queries is not yet established. The
+limit. The same cleanup is called from scheduled paths at `0x7f979c` and `0x7fb07f`. The
+spatial-grid initializer (`0x8c149c` through `0x8c1505`) registers a recurring event whose
+interval is the larger of a global value and the minimum at `0x10db050`. The global value is
+initialized by the client's arithmetic from one divided by ten (`0x411900` through `0x411929`).
+The event is rescheduled after cleanup (`0x7f979c` through `0x7f97e0`). Its ordering relative
+to recreation movement and placement queries is not yet established. The
 chain helper implements this compaction for supplied entries, using reusable caller scratch;
 it does not represent live registration or establish the cleanup schedule.
+
+A set-based query is exact when its caller supplies the current object entries and a proven
+upper bound on every native link in the cell does not exceed the visit limit. The bounded
+helper refuses a larger bound or an inconsistent object set. It does not derive that bound:
+the live event log retains births, relocations and other selected operations, but not ordinary
+movement across spatial cells. A valid bound must also include repeated region rectangle
+additions (`0x801a50` and `0x8c23f0`) and removal links (`0x8c25d0`), not just moving
+objects. The cleanup ordering and the mapping of live stamps to native entry state remain
+unqualified, so the helper is not connected to production placement.
 
 The selected Human05 `war3map.w3r` contains 311 authored rectangles. Comparing their bounds
 with the 1600-unit search half-width gives 24, 18 and 23 intersections for the baseline,

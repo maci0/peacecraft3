@@ -221,6 +221,12 @@ allocates a bounded overflow only when needed. With both changes, the locked off
 pre-history Human03 measurements at both checkpoints; reallocations and digests were unchanged.
 No budget was raised.
 
+Queued-order admission now keeps the two bounds inline and allocates queue data only when an
+order waits. After the input changes, the locked offline check measured 48 fewer requested
+bytes in each Human03 workload, with allocation counts, reallocations, digests and vision work
+unchanged. That leaves 24 bytes above the earlier pre-input placement measurement; the budget
+was not raised.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

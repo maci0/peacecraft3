@@ -10,6 +10,7 @@
 //! The length the client allows a queue to grow to is not established. The bounds here
 //! are the host's resource bounds and the caller's admission decides them.
 use std::collections::{BTreeMap, VecDeque};
+use std::num::NonZeroUsize;
 
 use pcx_script::{HandleId, Host, Value};
 
@@ -48,7 +49,13 @@ pub enum QueueRefusal {
 
 #[derive(Debug)]
 pub(super) struct State {
-    budget: QueueBudget,
+    units: NonZeroUsize,
+    orders_per_unit: usize,
+    data: Option<Box<QueueData>>,
+}
+
+#[derive(Debug, Default)]
+struct QueueData {
     queues: BTreeMap<HandleId, VecDeque<OrderForm>>,
     /// Set while the queue itself issues, so its own order does not clear the queue.
     issuing: bool,
@@ -56,6 +63,13 @@ pub(super) struct State {
 }
 
 impl ObjectHost {
+    #[cfg(test)]
+    pub(crate) fn queue_has_data(&self) -> bool {
+        self.order_queue
+            .as_ref()
+            .is_some_and(|state| state.data.is_some())
+    }
+
     /// Admit order queues once. Both bounds must be positive.
     pub fn admit_order_queue(&mut self, budget: QueueBudget) -> Result<(), Error> {
         if self.order_queue.is_some() || budget.units == 0 || budget.orders_per_unit == 0 {
@@ -65,10 +79,9 @@ impl ObjectHost {
             ));
         }
         self.order_queue = Some(State {
-            budget,
-            queues: BTreeMap::new(),
-            issuing: false,
-            refused: Vec::new(),
+            units: NonZeroUsize::new(budget.units).expect("checked positive"),
+            orders_per_unit: budget.orders_per_unit,
+            data: None,
         });
         Ok(())
     }
@@ -77,7 +90,8 @@ impl ObjectHost {
     pub fn queued_orders(&self, unit: HandleId) -> Vec<OrderForm> {
         self.order_queue
             .as_ref()
-            .and_then(|state| state.queues.get(&unit))
+            .and_then(|state| state.data.as_ref())
+            .and_then(|data| data.queues.get(&unit))
             .map(|queue| queue.iter().copied().collect())
             .unwrap_or_default()
     }
@@ -86,7 +100,8 @@ impl ObjectHost {
     pub fn take_queue_refusals(&mut self) -> Vec<String> {
         self.order_queue
             .as_mut()
-            .map(|state| std::mem::take(&mut state.refused))
+            .and_then(|state| state.data.as_mut())
+            .map(|data| std::mem::take(&mut data.refused))
             .unwrap_or_default()
     }
 
@@ -98,8 +113,16 @@ impl ObjectHost {
         form: OrderForm,
     ) -> Result<QueueOutcome, QueueRefusal> {
         let state = self.order_queue.as_ref().ok_or(QueueRefusal::NotAdmitted)?;
-        let waiting = state.queues.get(&unit).map_or(0, VecDeque::len);
-        let (budget, queued_units) = (state.budget, state.queues.len());
+        let waiting = state
+            .data
+            .as_ref()
+            .and_then(|data| data.queues.get(&unit))
+            .map_or(0, VecDeque::len);
+        let queued_units = state.data.as_ref().map_or(0, |data| data.queues.len());
+        let budget = QueueBudget {
+            units: state.units.get(),
+            orders_per_unit: state.orders_per_unit,
+        };
         if waiting == 0 && self.unit_order_idle(unit).map_err(QueueRefusal::Host)? {
             return self
                 .issue_order_form(unit, form)
@@ -120,6 +143,8 @@ impl ObjectHost {
             .order_queue
             .as_mut()
             .expect("checked above")
+            .data
+            .get_or_insert_with(|| Box::new(QueueData::default()))
             .queues
             .entry(unit)
             .or_default();
@@ -147,7 +172,11 @@ impl ObjectHost {
 
     /// An order issued to a unit by any route but the queue replaces its queue.
     pub(super) fn order_queue_observe(&mut self, name: &str, args: &[Value]) {
-        let Some(state) = self.order_queue.as_mut() else {
+        let Some(state) = self
+            .order_queue
+            .as_mut()
+            .and_then(|state| state.data.as_mut())
+        else {
             return;
         };
         if state.issuing || state.queues.is_empty() {
@@ -163,7 +192,11 @@ impl ObjectHost {
 
     /// Issues the next waiting order of each unit that has become idle.
     pub(super) fn advance_order_queue(&mut self) {
-        let Some(state) = self.order_queue.as_ref() else {
+        let Some(state) = self
+            .order_queue
+            .as_ref()
+            .and_then(|state| state.data.as_ref())
+        else {
             return;
         };
         let units: Vec<HandleId> = state.queues.keys().copied().collect();
@@ -179,6 +212,9 @@ impl ObjectHost {
                 self.order_queue
                     .as_mut()
                     .expect("admitted")
+                    .data
+                    .as_mut()
+                    .expect("queued data")
                     .queues
                     .remove(&unit);
             }
@@ -196,18 +232,31 @@ impl ObjectHost {
             let Some(form) = self
                 .order_queue
                 .as_mut()
-                .and_then(|state| state.queues.get_mut(&unit))
+                .and_then(|state| state.data.as_mut())
+                .and_then(|data| data.queues.get_mut(&unit))
                 .and_then(VecDeque::pop_front)
             else {
                 continue;
             };
-            let state = self.order_queue.as_mut().expect("admitted");
+            let state = self
+                .order_queue
+                .as_mut()
+                .expect("admitted")
+                .data
+                .as_mut()
+                .expect("queued data");
             if state.queues.get(&unit).is_some_and(VecDeque::is_empty) {
                 state.queues.remove(&unit);
             }
             state.issuing = true;
             let result = self.issue_order_form(unit, form);
-            let state = self.order_queue.as_mut().expect("admitted");
+            let state = self
+                .order_queue
+                .as_mut()
+                .expect("admitted")
+                .data
+                .as_mut()
+                .expect("queued data");
             state.issuing = false;
             match result {
                 Ok(true) => {}
@@ -221,7 +270,13 @@ impl ObjectHost {
     }
 
     fn drop_queue(&mut self, unit: HandleId, reason: String) {
-        let state = self.order_queue.as_mut().expect("admitted");
+        let state = self
+            .order_queue
+            .as_mut()
+            .expect("admitted")
+            .data
+            .as_mut()
+            .expect("queued data");
         state.queues.remove(&unit);
         state.refused.push(reason);
     }

@@ -144,6 +144,11 @@ The reach-chain cleanup helper was subsequently checked against the selected exe
 the baseline and farm snapshot sites. Live chains and their cleanup schedule remain unconnected,
 so no later Human05 state was tested in that change.
 
+Release runs `bounded-set-20261029-a` and `bounded-set-20261029-b` both reach the same
+1223 s placement refusal. Their 98 Human05 and RNG checkpoint lines match each other and
+`r14`. The bounded set evaluator is not connected to production placement, so these runs
+do not validate live reach inputs.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

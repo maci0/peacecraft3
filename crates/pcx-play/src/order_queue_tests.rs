@@ -23,6 +23,19 @@ fn go(at: [f32; 2]) -> OrderForm {
 }
 
 #[test]
+fn queue_storage_is_allocated_only_when_an_order_waits() {
+    let (mut vm, a) = queued_vm(3);
+    let host = &mut vm.host().inner;
+    assert!(!host.queue_has_data());
+    assert!(host.queued_orders(a).is_empty());
+    assert!(host.take_queue_refusals().is_empty());
+    assert_eq!(host.queue_order(a, go(FAR)), Ok(QueueOutcome::Issued(true)));
+    assert!(!host.queue_has_data());
+    assert_eq!(host.queue_order(a, go(HOME)), Ok(QueueOutcome::Queued(1)));
+    assert!(host.queue_has_data());
+}
+
+#[test]
 fn a_queued_order_starts_when_the_current_one_finishes() {
     let (mut vm, a) = queued_vm(3);
     let host = &mut vm.host().inner;
