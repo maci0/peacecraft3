@@ -171,8 +171,11 @@ pub(crate) fn gesture_input(
         input.escape_cancelled_drag = true;
     }
     let additive = picking.game_input.shift.held();
+    // The select mode takes a left press with Alt held as the minimap signal and
+    // returns handled (`0x5fd170`), so it starts no selection and no box.
     if mouse.just_pressed(MouseButton::Left)
         && !armed
+        && !picking.game_input.alt.held()
         && state.ready()
         && let Some(cursor) = window.cursor_position()
         && viewport.contains(cursor)

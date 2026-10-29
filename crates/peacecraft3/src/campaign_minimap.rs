@@ -181,6 +181,7 @@ struct PointerControls<'w> {
     mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
     presentation: Option<Res<'w, peacecraft3::campaign_presentation::CampaignPresentation>>,
     dialogs: Option<Res<'w, crate::campaign_script_dialogs::CampaignScriptDialogs>>,
+    game_input: Option<Res<'w, peacecraft3::game_input::GameInput>>,
 }
 
 fn consume_pointer(
@@ -230,9 +231,18 @@ fn consume_pointer(
         state.pending_pointer = requests;
         return;
     }
+    // Alt + left click signals allies instead of moving the camera
+    // (`MINIMAPSIGNALTOOLTIP_UBER`); the signal itself is not drawn yet.
+    let signal = controls
+        .game_input
+        .as_ref()
+        .is_some_and(|input| input.alt.held());
     while let Some(request) = requests.pop_front() {
         if pressed {
             state.drag = None;
+        }
+        if pressed && signal && request.button == PointerButton::Primary {
+            continue;
         }
         let result = (|| -> Result<(), String> {
             if !state
@@ -1158,6 +1168,44 @@ endglobals
                 .resource::<crate::campaign_hud::CampaignHud>()
                 .pointer_consumed
         );
+    }
+    #[test]
+    fn a_left_press_with_alt_held_is_the_signal_and_never_reaches_the_camera() {
+        for alt_held in [false, true] {
+            let mut world = World::new();
+            let camera = world.spawn_empty().id();
+            world.insert_resource(CampaignCamera::active_for_test(camera));
+            world.init_resource::<CampaignMinimap>();
+            world.init_resource::<crate::campaign_hud::CampaignHud>();
+            world.init_resource::<crate::campaign_input::CampaignInput>();
+            world.init_resource::<MapScriptSession<MapStartupHost>>();
+            world.init_resource::<ButtonInput<MouseButton>>();
+            let mut input = peacecraft3::game_input::GameInput::default();
+            input.alt.right = alt_held;
+            world.insert_resource(input);
+            let surface = world
+                .spawn((MinimapPart::Surface, RelativeCursorPosition::default()))
+                .id();
+            world
+                .resource_mut::<CampaignMinimap>()
+                .pending_pointer
+                .push_back(MinimapPress {
+                    surface,
+                    button: PointerButton::Primary,
+                    fraction: Some(Vec2::splat(0.25)),
+                });
+            world.run_system_once(consume_pointer).unwrap();
+            let state = world.resource::<CampaignMinimap>();
+            assert!(state.drag.is_none());
+            // Without Alt the press is a camera request, which this empty world refuses.
+            assert_eq!(state.last_error.is_none(), alt_held);
+            assert!(
+                world
+                    .resource::<crate::campaign_hud::CampaignHud>()
+                    .pointer_consumed,
+                "the press stays off the world either way"
+            );
+        }
     }
     #[test]
     fn retiring_the_session_removes_the_tree_and_owned_image() {

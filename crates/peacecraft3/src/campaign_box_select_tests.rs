@@ -585,3 +585,38 @@ fn without_the_client_rules_a_press_selects_at_once_and_no_box_is_offered() {
     rig.release(max);
     assert_eq!(rig.selection(), [rig.units[1]]);
 }
+
+#[test]
+fn a_left_press_with_alt_held_is_consumed_and_selects_nothing() {
+    let mut rig = Rig::new(&row(), SCREEN);
+    let first = rig.units[0];
+    rig.select(&[first]);
+    rig.hold(KeyCode::AltRight, true);
+    let at = rig.screen([40.0, 40.0]);
+    rig.click(at);
+    let (min, max) = rig.around([24.0, 40.0], [88.0, 40.0], 6.0);
+    rig.sweep(min, max);
+    assert_eq!(rig.selection(), [first], "neither a click nor a box acts");
+    assert_eq!(rig.selects_journaled(), 0);
+    assert!(rig.outlines().is_empty());
+    rig.hold(KeyCode::AltRight, false);
+    rig.click(at);
+    assert_eq!(
+        rig.selection(),
+        [rig.units[1]],
+        "the same click works without Alt"
+    );
+}
+
+#[test]
+fn alt_also_holds_back_the_immediate_press_when_no_box_rules_exist() {
+    let mut rig = Rig::new(&row(), SCREEN);
+    rig.app.insert_resource(BoxSelect::default());
+    rig.hold(KeyCode::AltLeft, true);
+    let at = rig.screen([40.0, 40.0]);
+    rig.click(at);
+    assert!(rig.selection().is_empty());
+    rig.hold(KeyCode::AltLeft, false);
+    rig.click(at);
+    assert_eq!(rig.selection(), [rig.units[1]]);
+}

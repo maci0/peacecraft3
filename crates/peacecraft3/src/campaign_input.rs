@@ -1206,7 +1206,10 @@ fn click(
     // unavailable. Otherwise the gesture ends in a click (or a box) at release.
     let finished = boxes.take_click();
     let armed = input.command.is_some() || input.build.is_some();
-    let immediate = mouse.just_pressed(MouseButton::Left) && (armed || !boxes.ready());
+    // The select mode consumes a left press with Alt held (`0x5fd170`); an armed
+    // command belongs to the target mode, which this does not change.
+    let immediate = mouse.just_pressed(MouseButton::Left)
+        && (armed || (!boxes.ready() && !game_input.alt.held()));
     let select = immediate || finished.is_some();
     let order = mouse.just_pressed(MouseButton::Right);
     // The press was gated when the gesture began; where it is released does not matter.
