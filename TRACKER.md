@@ -6078,3 +6078,23 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   not been reduced or remeasured.
 - Human05 runs `live-reach-a-20261030` and `live-reach-b-20261030` stop at the existing
   1223 s construction refusal, with 98 matching checkpoint and RNG lines.
+
+### 2026-10-30: Initial-town structure production
+
+- [~] `SetProduce` now searches live placement inputs and submits the chosen site to the
+  existing construction host for the qualified initial-town case. Live effect qualification
+  and Warp-link refusals are described in [AI construction](docs/re-notes/ai-construction.md#initial-town-production-path-2026-10-30).
+  The full town lifecycle, blight placement and other named cases remain unimplemented.
+- The local-input selector comparison reproduces all five recorded sites and dequeue counts:
+  1, 280, 355, 419 and 1. It injects worker positions and does not replay their movement or
+  issue construction orders.
+- Two Human05 runs of the same release test binary accept the Necropolis order at 1223.211 s,
+  site (6144, 2752), after 10 dequeues. The next Ziggurat request refuses blight before a
+  construction-start event; their 98 checkpoint and RNG lines and order trace match. See
+  [Human05](docs/re-notes/campaign-human05.md).
+- Human03 and Human04 `connected-v1-20261030` reach victory with their checkpoint and RNG
+  lines matching `g1`. The previously recorded Human04 startup allocation increase has not
+  been reduced or remeasured.
+- The simulation allocation and deterministic-work budget check passes for Human03.
+- The `pcx-play` library suite passes 2,391 tests with 92 ignored. Native and WASM Clippy
+  pass with warnings denied.

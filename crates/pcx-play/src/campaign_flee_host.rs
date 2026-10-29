@@ -14,6 +14,14 @@ const GROUPS_FLEE_NATIVE: &str = "SetGroupsFlee";
 const TARGETING_NATIVE: &str = "SetTargetHeroes";
 const START_CAMPAIGN_AI: &str = "StartCampaignAI";
 
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TownReference {
+    pub unit: HandleId,
+    pub position: [f32; 2],
+    pub mines: Vec<(HandleId, [f32; 2])>,
+    pub center: Result<[f32; 2], String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct PlayerFlags {
     target_heroes: Option<bool>,
@@ -27,6 +35,7 @@ struct PlayerFlags {
     gathering: Option<bool>,
     gathering_unit: Option<HandleId>,
     captains_created: bool,
+    town_reference: Option<TownReference>,
     captain_homes: [Option<[f32; 2]>; 2],
     group_timed_life: Option<bool>,
     captain_members: [Vec<HandleId>; 2],
@@ -67,6 +76,7 @@ impl Registry {
                 gathering: None,
                 gathering_unit: None,
                 captains_created: false,
+                town_reference: None,
                 captain_homes: [None; 2],
                 group_timed_life: None,
                 captain_members: [Vec::new(), Vec::new()],
@@ -375,6 +385,16 @@ impl Registry {
         flags.captains_created = true;
         flags.captain_homes = [home; 2];
         true
+    }
+
+    pub(super) fn set_town_reference(&mut self, player: i32, reference: Option<TownReference>) {
+        if let Some(flags) = self.players.get_mut(&player) {
+            flags.town_reference = reference;
+        }
+    }
+
+    pub(super) fn town_reference(&self, player: i32) -> Option<&TownReference> {
+        self.players.get(&player)?.town_reference.as_ref()
     }
 
     pub(super) fn set_captain_home(

@@ -1469,15 +1469,51 @@ choose their mine, hall or stored coordinate, with a different work limit and co
 midpoint from a worker's later live position is not equivalent. The recreation still needs the
 town-record lifecycle, refresh events and both association paths before it can derive those
 coordinates from a running game. The live caller must also qualify Warp links and the unit
-effect-source evidence. Production structure orders remain refused.
+effect-source evidence. The following section describes the later bounded production path.
+
+### Initial-town production path, 2026-10-30
+
+At captain initialization the host retains the first eligible peon reference, its position,
+and the then-live resource positions. It evaluates the two association queries while the
+initial spatial pool is current. The supported case has one mine that can satisfy both the
+start and peon searches, separated initial mine records, and no nearby hall that may change
+the association. The lower bound uses the decoded cell conversion and ordinary edge costs;
+it is used only after excluding Warp links. The candidate must pass both reach searches with
+the minimum work budget guaranteed by the source's adaptive rule. The mine's texture and
+movement rectangles must be covered by the retained texture rectangle; other shapes refuse.
+The retained town center is not recomputed from the peon's later position. A changed peon,
+mine registration or owned hall refuses rather than silently changing the town record.
+
+The tracked pool reads the Warp, Ensnare, root, Purge and cargo effect class identifiers from
+the reviewed image. The live qualification checks current buffs and pause state, the event
+history, selected ability and buff data, held-item ability lists, and the creation and current
+position bounds. It refuses a live Warp ability because Warp supplies auxiliary reach links
+that the fine-grid hierarchy does not yet model. A possible counter-raising effect refuses
+when its source cannot be proved out of reach. The supported structure request samples live
+terrain and structure scores, searches the live hierarchy, applies the shared validator with
+qualified unit exclusions, and passes the selected site to the existing construction request.
+Mine-targeted builds, blight requirements, non-square scoring textures and the special buffer
+count branch still refuse when encountered.
+
+The live spatial owner previously refused whenever a moving unit had any buff. The implemented
+slow host updates the admitted order speed, conversion leaves that motion unchanged, and
+polymorph stops the old order and installs the replacement form. Those retained effect states
+therefore use the existing commanded-velocity update. An attached buff without one of those
+qualified producer states still refuses as an unknown movement contribution. Synthetic tests
+cover the slow and unknown-buff cases.
+
+The ignored local-input comparison initializes the town from the live peon and mine records,
+then injects the recorded worker positions at the comparison time. It selects the baseline,
+farm, workers-at-start, workers-near-mine and changed-start sites at dequeue counts 1, 280,
+355, 419 and 1. For the farm comparison the farm is registered before the peons and town
+capture. The fixture rebases the position-injection events as snapshot setup; it does not
+replay the original units' full movement histories or issue a construction order.
 
 ## Not established
 
 - The structure fallback's root-ability state, native registration and type-change paths beyond
-  the tracked creation, ownership and death cases, town refresh triggers and the route metric used
-  to select among towns. The live selector is not connected to a town. The diagnostic matches the
-  recorded sites using supplied town origins, eligibility and order-time snapshots; it does not
-  derive those inputs from a running game.
+  the tracked cases, and later town refresh triggers. Multiple potentially associated initial
+  records and later changes refuse rather than using the initial-town rule.
 - Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
   boundary cases and placement requirements such as blight. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.
@@ -1486,16 +1522,16 @@ effect-source evidence. Production structure orders remain refused.
   when those systems were admitted, including after removal. The live separation helper uses
   those records, selected movement limits, collision sizes and the placement event log; it
   refuses when inputs are unavailable, a scripted relocation occurred, or a form change may
-  have changed collision and speed data. It still requires
-  the caller to qualify non-script displacement and enumerate all possible effect sources.
+  have changed collision and speed data. The live caller enumerates selected unit and held-item
+  abilities; other unmodelled displacement sources remain a fidelity question.
   Its creation-position test bounds each unit using its own elapsed lifetime. If that is
   inconclusive, it also bounds backward from the two current positions over the period in
   which both units existed. Both tests round toward a larger possible reach.
 - Worker choice beyond "an idle acolyte in the rally area": the state filter of `0xac2b00` and
   the arena or list order among equals.
-- Cost charging for AI construction (the human construction path charges when the structure is
-  placed), refund on cancel, and retry cadence when a site or the builder is not ready.
+- Exact native AI cost timing and retry cadence remain unqualified. The connected request uses
+  the existing construction debit and cancellation path.
 - The early false answers listed above, and the upgrade fallback.
 
-Production placement needs those live inputs and an admitted site selection.
-Until then Human05's orange AI refuses at its first structure, at the recorded 1223 s stop.
+The production path admits the bounded initial-town case described above; it refuses inputs
+outside that case.

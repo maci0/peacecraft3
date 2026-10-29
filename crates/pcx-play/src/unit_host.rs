@@ -865,6 +865,20 @@ impl ObjectHost {
         }
     }
 
+    #[cfg(feature = "test-fixtures")]
+    pub(crate) fn diagnostic_rebase_unit_birth(&mut self, id: HandleId) -> Result<(), Error> {
+        let now = self.timer_game_time();
+        let record = match self.inner.entry_mut(id)? {
+            Entry::Unit { record } => record,
+            _ => return Err(self.inner.error(NATIVE, Failure::WrongFamily)),
+        };
+        record.birth = crate::playercolor_host::UnitBirth {
+            game_time: now,
+            position: record.position,
+        };
+        Ok(())
+    }
+
     /// Count of unit allocations and mutable accesses to unit records. While it is equal, no
     /// unit's position, definition, owner, visibility, vitals or other record field has
     /// changed, so a consumer can reuse what it derived from them. It is a superset: an

@@ -39,6 +39,8 @@ pub struct SpatialRules {
     movement_masks: [u8; 5],
     cleanup: CleanupOperands,
     texture_masks: TextureMasks,
+    placement_classes: [[u8; 4]; 8],
+    town_operands: Option<(u32, usize, usize, u32)>,
     placement: Option<std::sync::Arc<crate::ai_placement::Rules>>,
     reach: Option<ReachOperands>,
 }
@@ -110,6 +112,8 @@ impl SpatialRules {
             movement_masks: movement_masks(image)?,
             cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
             texture_masks: texture_masks(image)?,
+            placement_classes: placement_classes(image)?,
+            town_operands: Some(town_operands(image)?),
             placement: Some(std::sync::Arc::new(rules.clone())),
             reach: Some(crate::native_path_hierarchy::reviewed_operands(
                 image, rules,
@@ -142,10 +146,96 @@ impl SpatialRules {
                 plain: [1, 2, 4],
                 green: [1, 2, 4, 8],
             },
+            placement_classes: [[0; 4]; 8],
+            town_operands: None,
             placement: None,
             reach: None,
         }
     }
+}
+
+fn placement_classes(image: &[u8]) -> Result<[[u8; 4]; 8], String> {
+    use crate::neutral_player::RuleInputBudget;
+    use crate::neutral_rule_input::Pe;
+
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let mut classes = [[0; 4]; 8];
+    for (class, address) in classes.iter_mut().zip([
+        0xb2ed80, 0xc19fc0, 0xc485a0, 0xb9d5e0, 0xb9e8c0, 0xb9e5f0, 0xb4b780, 0xc1b3e0,
+    ]) {
+        let bytes = pe
+            .read_from(address, true)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() < 6 || bytes[0] != 0xb8 || bytes[5] != 0xc3 {
+            return Err(format!(
+                "unrecognized placement class getter at {address:#x}"
+            ));
+        }
+        *class = u32::from_le_bytes(bytes[1..5].try_into().unwrap()).to_be_bytes();
+    }
+    Ok(classes)
+}
+
+fn town_operands(image: &[u8]) -> Result<(u32, usize, usize, u32), String> {
+    use crate::neutral_player::RuleInputBudget;
+    use crate::neutral_rule_input::Pe;
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let threshold = pe
+        .read_from(0xac745b, true)
+        .map_err(|error| error.to_string())?;
+    let work = pe
+        .read_from(0xac7467, true)
+        .map_err(|error| error.to_string())?;
+    let increment = pe
+        .read_from(0xac7518, true)
+        .map_err(|error| error.to_string())?;
+    let merge = pe
+        .read_from(0xac757d, true)
+        .map_err(|error| error.to_string())?;
+    decode_town_operands(threshold, work, increment, merge)
+}
+
+fn decode_town_operands(
+    threshold: &[u8],
+    work: &[u8],
+    increment: &[u8],
+    merge: &[u8],
+) -> Result<(u32, usize, usize, u32), String> {
+    if threshold.len() < 7
+        || threshold[..3] != [0xc7, 0x45, 0xf8]
+        || work.len() < 5
+        || work[0] != 0xbb
+        || increment.len() < 3
+        || increment[..2] != [0x83, 0xc0]
+        || increment[2] >= 0x80
+        || merge.len() < 7
+        || merge[..3] != [0xc7, 0x45, 0xe0]
+    {
+        return Err("unrecognized town-association search operands".into());
+    }
+    Ok((
+        u32::from_le_bytes(threshold[3..7].try_into().unwrap()),
+        usize::try_from(u32::from_le_bytes(work[1..5].try_into().unwrap()))
+            .map_err(|_| "town work limit")?,
+        usize::from(increment[2]),
+        u32::from_le_bytes(merge[3..7].try_into().unwrap()),
+    ))
 }
 
 fn movement_masks(image: &[u8]) -> Result<[u8; 5], String> {
@@ -453,6 +543,32 @@ impl PoolOwner {
 
     pub(crate) fn placement_rules(&self) -> Option<&crate::ai_placement::Rules> {
         self.rules.placement.as_deref()
+    }
+
+    pub(crate) fn placement_classes(&self) -> [[u8; 4]; 8] {
+        self.rules.placement_classes
+    }
+
+    pub(crate) fn town_operands(&self) -> Option<(u32, usize, usize, u32)> {
+        self.rules.town_operands
+    }
+
+    pub(crate) fn texture_rectangle(&self, unit: HandleId) -> Option<CellRect> {
+        let entries = self.texture_entries.get(&unit.token())?;
+        let mut lower = [usize::MAX; 2];
+        let mut upper = [0; 2];
+        for (entry, _) in entries {
+            let Tracked::Texture(runs) = self.tracked.get(entry)? else {
+                return None;
+            };
+            for run in runs {
+                for axis in 0..2 {
+                    lower[axis] = lower[axis].min(run.lower[axis]);
+                    upper[axis] = upper[axis].max(run.upper[axis]);
+                }
+            }
+        }
+        (lower[0] != usize::MAX).then_some(CellRect { lower, upper })
     }
 
     pub(crate) fn reach_inputs(&self) -> Option<(&pcx_map::Pathing, ReachOperands)> {

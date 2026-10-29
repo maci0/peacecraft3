@@ -594,7 +594,6 @@ impl ObjectHost {
         a < initial.slots && b < initial.slots && initial.values[a * initial.slots + b]
     }
 
-    #[cfg(feature = "test-fixtures")]
     pub(crate) fn diagnostic_shared_control(
         &self,
         owner: HandleId,

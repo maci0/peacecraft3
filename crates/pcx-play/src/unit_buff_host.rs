@@ -66,7 +66,6 @@ impl ActiveBuff {
         Self { rawcode, traits }
     }
 
-    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) const fn rawcode(&self) -> [u8; 4] {
         self.rawcode
     }
@@ -187,17 +186,17 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Whether any buff is attached to the unit.
-    pub(crate) fn has_active_buff(&self, unit: HandleId) -> bool {
-        self.unit_buffs
-            .active
-            .get(&unit)
-            .is_some_and(|buffs| !buffs.is_empty())
+    /// Whether a live buff has an unqualified movement-vector contribution.
+    pub(crate) fn has_unqualified_motion_buff(&self, unit: HandleId) -> bool {
+        self.unit_buffs.active.get(&unit).is_some_and(|buffs| {
+            buffs
+                .iter()
+                .any(|buff| !self.curse_buff_uses_order_motion(unit, buff.rawcode))
+        })
     }
 
     /// The active buffs attached to a unit, in application order. A removed unit
     /// reports an empty set (its buffs are forgotten on `RemoveUnit`).
-    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn unit_buffs(&self, unit: HandleId) -> Result<Vec<ActiveBuff>, Error> {
         if self.unit_liveness("unit buff", unit)?.is_none() {
             return Ok(Vec::new());

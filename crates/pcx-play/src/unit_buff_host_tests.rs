@@ -59,6 +59,8 @@ fn unit_remove_buffs_maps_bool_arguments_to_polarity() {
     let h = &mut vm.host().inner;
     h.attach_unit_buff(a, positive(*b"BHab")).unwrap();
     h.attach_unit_buff(b, negative(*b"Bcor")).unwrap();
+    assert!(h.has_unqualified_motion_buff(a));
+    assert!(h.has_unqualified_motion_buff(b));
 
     assert_eq!(
         h.native(

@@ -630,7 +630,6 @@ impl Prepared {
 pub(crate) mod tests;
 
 impl Placement {
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_sample(&self, point: [f32; 2]) -> Result<(i32, bool), Error> {
         let bounds = self.world_bounds();
         let point = std::array::from_fn(|axis| {
@@ -744,7 +743,6 @@ impl Placement {
     }
 
     /// Validate with the supplied unit stamps temporarily excluded.
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_construction_position_excluding(
         &mut self,
         point: [f32; 2],

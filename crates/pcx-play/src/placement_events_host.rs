@@ -53,6 +53,25 @@ impl PackedEvent {
 }
 
 impl ObjectHost {
+    /// Treat fixture positioning as the sampled initial state for later bounds.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_rebase_placement_unit(&mut self, unit: HandleId) -> Result<(), String> {
+        self.diagnostic_rebase_unit_birth(unit)
+            .map_err(|error| error.to_string())?;
+        for slot in &mut self.placement_events_inline {
+            if slot.is_some_and(|event| {
+                let event = event.unpack();
+                event.unit == unit && matches!(event.kind, PlacementEventKind::Relocated)
+            }) {
+                *slot = None;
+            }
+        }
+        self.placement_events.retain(|event| {
+            event.unit != unit || !matches!(event.kind, PlacementEventKind::Relocated)
+        });
+        Ok(())
+    }
+
     /// Resolve the town reference from live registrations and unit visibility.
     pub fn ai_town_reference(&self, owner: HandleId) -> Result<Option<HandleId>, ExclusionError> {
         self.player_settings(owner)

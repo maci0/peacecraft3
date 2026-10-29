@@ -260,7 +260,7 @@ impl ObjectHost {
             .map_err(|why| self.construction_error(why))
     }
 
-    fn construction_facing(&self) -> Result<f32, Error> {
+    pub(super) fn construction_facing(&self) -> Result<f32, Error> {
         // Source-authored default unit facing; native construction-facing equivalence remains unqualified.
         self.stock_real_constant("bj_UNIT_FACING")
             .map(|value| value as f32)
@@ -671,7 +671,7 @@ impl ObjectHost {
         }))
     }
 
-    fn request_unit_construction(
+    pub(super) fn request_unit_construction(
         &mut self,
         worker: HandleId,
         kind: i32,
@@ -1121,6 +1121,13 @@ impl ObjectHost {
         };
         let site = self.commit_unit_creation(prepared)?;
         self.commit_training_debit(debit);
+        #[cfg(feature = "test-fixtures")]
+        if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+            eprintln!(
+                "construction start: time={now} worker={worker:?} site={site:?} kind={:?} position={position:?} autonomous={autonomous}",
+                kind.to_be_bytes()
+            );
+        }
         if let Entry::Unit { record } = self.inner.entry_mut(worker)? {
             record.construction_revision = revision;
             record.construction_request = None;
@@ -1218,6 +1225,10 @@ impl ObjectHost {
             record.construction = (!complete).then_some(state);
         }
         if complete {
+            #[cfg(feature = "test-fixtures")]
+            if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                eprintln!("construction finish: time={now} site={site:?}");
+            }
             self.commit_construction_events(
                 events,
                 Context {

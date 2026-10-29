@@ -409,7 +409,6 @@ pub struct Rules {
 }
 
 impl Rules {
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_radius(&self) -> f32 {
         self.margin
     }
@@ -708,13 +707,11 @@ impl<'a> Grid<'a> {
     }
 
     /// Convert a snapped candidate point without clipping it to the search raster.
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_indices(&self, point: [f32; 2]) -> [i32; 2] {
         std::array::from_fn(|axis| ((point[axis] - self.origin[axis]) / self.rules.step) as i32)
     }
 
     /// The object callback scales each coordinate before subtracting the scaled origin.
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_object_indices(&self, point: [f32; 2]) -> Result<[i32; 2], String> {
         use crate::script_random::real;
         let scale = real::from_f32(self.rules.step.recip()).map_err(|e| e.to_string())?;
@@ -732,7 +729,6 @@ impl<'a> Grid<'a> {
         Ok(indices)
     }
 
-    #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_step(&self) -> f32 {
         self.rules.step
     }

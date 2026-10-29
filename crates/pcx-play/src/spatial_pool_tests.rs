@@ -16,6 +16,19 @@ const MOVING: u32 = 0x40;
 const GROUND: u32 = 8;
 const AIR: u32 = 4;
 
+#[test]
+fn town_search_operands_follow_selected_instructions() {
+    let threshold = [0xc7, 0x45, 0xf8, 17, 0, 0, 0];
+    let work = [0xbb, 29, 0, 0, 0];
+    let increment = [0x83, 0xc0, 7];
+    let merge = [0xc7, 0x45, 0xe0, 11, 0, 0, 0];
+    assert_eq!(
+        decode_town_operands(&threshold, &work, &increment, &merge),
+        Ok((17, 29, 7, 11))
+    );
+    assert!(decode_town_operands(&threshold, &work, &[0x83, 0xc1, 7], &merge).is_err());
+}
+
 fn id(n: u64) -> HandleId {
     HandleId::new(std::num::NonZeroU64::new(n).unwrap())
 }

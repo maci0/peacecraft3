@@ -194,6 +194,24 @@ impl ObjectHost {
         Ok(input.tables.object(Family::Buff, id).is_ok())
     }
 
+    pub(crate) fn placement_buff_code(&self, buff: [u8; 4]) -> Result<[u8; 4], String> {
+        let input = self.heroes_admission()?;
+        let id = std::str::from_utf8(&buff).map_err(|_| "buff rawcode is not text")?;
+        let object = input
+            .tables
+            .object(Family::Buff, id)
+            .map_err(|e| e.to_string())?;
+        let cell = object
+            .cell(SlkId::AbilityBuffData, "code")
+            .map_err(|e| e.to_string())?;
+        cell.typed(FieldKind::Token).map_err(|e| e.to_string())?;
+        cell.text
+            .trim()
+            .as_bytes()
+            .try_into()
+            .map_err(|_| format!("invalid buff code for {id}"))
+    }
+
     /// Non-empty profile values of a buff row under `key`, in authored order.
     pub(crate) fn buff_profiles(&self, buff: [u8; 4], key: &str) -> Result<Vec<String>, String> {
         let input = self.heroes_admission()?;

@@ -329,6 +329,24 @@ fn requirements(required: &[String], amounts: &[String]) -> Result<Vec<Requireme
 }
 
 impl ObjectHost {
+    /// These effects change the admitted order speed or unit form, not its motion vector.
+    pub(super) fn curse_buff_uses_order_motion(&self, unit: HandleId, rawcode: [u8; 4]) -> bool {
+        self.curses.as_ref().is_some_and(|state| {
+            state
+                .slows
+                .get(&unit)
+                .is_some_and(|effect| effect.buff == rawcode)
+                || state
+                    .polymorphs
+                    .get(&unit)
+                    .is_some_and(|effect| effect.buff == rawcode)
+                || state
+                    .conversions
+                    .get(&unit)
+                    .is_some_and(|effect| effect.buff == rawcode)
+        })
+    }
+
     fn curse_error(&self, reason: impl Into<String>) -> Error {
         self.inner.error(NATIVE, Failure::HeroSkills(reason.into()))
     }

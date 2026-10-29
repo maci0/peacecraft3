@@ -1332,7 +1332,7 @@ impl ObjectHost {
             Some("explicit pause")
         } else if record.is_sleeping() {
             Some("sleep")
-        } else if self.has_active_buff(unit) {
+        } else if self.has_unqualified_motion_buff(unit) {
             Some("active buff")
         } else {
             None

@@ -407,7 +407,38 @@ impl ObjectHost {
         let home = self
             .current_gathering_anchor(owner, CREATE)?
             .map(|(_, position)| position);
+        let mut town_reference = self
+            .unit_placement
+            .as_ref()
+            .and_then(|placement| placement.spatial())
+            .and_then(|_| self.ai_town_reference(owner).ok().flatten())
+            .and_then(|unit| {
+                let record = self.executed_unit(unit).ok()?;
+                if !super::unit_types::class(&record.definition, "UNIT_TYPE_PEON").ok()? {
+                    return None;
+                }
+                let position = record.position?;
+                let mines = self
+                    .executed_units()
+                    .filter(|(_, record)| {
+                        record.resource_amount.is_some()
+                            && record.shown
+                            && record.combat.as_ref().is_none_or(|combat| !combat.dead)
+                    })
+                    .map(|(unit, record)| Some((unit, record.position?)))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(super::campaign_flee::TownReference {
+                    unit,
+                    position,
+                    mines,
+                    center: Err("town center not evaluated".into()),
+                })
+            });
+        if let Some(reference) = town_reference.as_mut() {
+            reference.center = self.ai_capture_town_center(owner, reference);
+        }
         self.campaign_ai.create_captains(player, home);
+        self.campaign_ai.set_town_reference(player, town_reference);
         Ok(())
     }
 

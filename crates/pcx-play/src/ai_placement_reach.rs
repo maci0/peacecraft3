@@ -1,7 +1,7 @@
 //! Reach hierarchy built from a tracked session's current spatial chains.
 
 use crate::native_path_hierarchy::{
-    BaseLink, BaseNeighbor, Cell, CoarseInput, Lookup, Node, SearchInput, base, distance,
+    BaseLink, BaseNeighbor, Cell, CellRect, CoarseInput, Lookup, Node, SearchInput, base, distance,
     expand_base, expand_coarse, lookup, parent, search,
 };
 use crate::unit_placement::Placement;
@@ -34,6 +34,17 @@ impl Reach {
         worker: HandleId,
         links: LinkEvidence,
     ) -> Result<Self, String> {
+        let rectangle = placement
+            .movement_stamp_rectangle(worker)
+            .map_err(|error| error.to_string())?;
+        Self::from_rectangles(placement, &[rectangle], links)
+    }
+
+    pub(crate) fn from_rectangles(
+        placement: &Placement,
+        rectangles: &[CellRect],
+        links: LinkEvidence,
+    ) -> Result<Self, String> {
         if links != LinkEvidence::Absent {
             return Err("AI reach auxiliary warp-link state is not admitted".into());
         }
@@ -55,9 +66,6 @@ impl Reach {
         let bounds = placement.world_bounds();
         let cell_size = placement.rules().cell_size();
         let dimensions = [terrain.width as usize, terrain.height as usize];
-        let rectangle = placement
-            .movement_stamp_rectangle(worker)
-            .map_err(|error| error.to_string())?;
         let size = dimensions.map(|axis| axis.div_ceil(group));
         let mut levels = Vec::new();
         let mut cells = Vec::new();
@@ -80,11 +88,13 @@ impl Reach {
                                 .map_err(|error| error.to_string())?;
                     }
                 }
-                let cleared = (0..2).all(|axis| {
-                    let coordinate = [x, y][axis] * group;
-                    let native_axis = 1 - axis;
-                    coordinate < rectangle.upper[native_axis]
-                        && coordinate + group > rectangle.lower[native_axis]
+                let cleared = rectangles.iter().any(|rectangle| {
+                    (0..2).all(|axis| {
+                        let coordinate = [x, y][axis] * group;
+                        let native_axis = 1 - axis;
+                        coordinate < rectangle.upper[native_axis]
+                            && coordinate + group > rectangle.lower[native_axis]
+                    })
                 });
                 cells.push(base(samples, false, cleared));
             }
@@ -126,6 +136,15 @@ impl Reach {
 
     /// Return the selected distance and removal count, or `None` for the failure sentinel.
     pub fn query(&self, center: [f32; 2], point: [f32; 2]) -> Result<(Option<u32>, usize), String> {
+        self.query_with_limit(center, point, self.removal_limit)
+    }
+
+    pub(crate) fn query_with_limit(
+        &self,
+        center: [f32; 2],
+        point: [f32; 2],
+        removal_limit: usize,
+    ) -> Result<(Option<u32>, usize), String> {
         if center.iter().chain(&point).any(|value| !value.is_finite()) {
             return Err("nonfinite AI reach point".into());
         }
@@ -193,7 +212,7 @@ impl Reach {
             result_scale: self.result_scale,
             link_priority_cost: 0,
             link_result_cost: 0,
-            removal_limit: self.removal_limit,
+            removal_limit,
             node_limit,
         };
         let result = search(input, |node| {

@@ -2229,7 +2229,7 @@ fn ai_research_refunds_on_cancel_and_leaves_the_level_unchanged() {
 
 /// The second fixture gives every unit a `Builds` list with `b001`.
 #[test]
-fn ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_with_one() {
+fn ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_placement_data() {
     let structure = i32::from_be_bytes(*b"b001");
     let (mut vm, actor, producer) = ai_production_fixture();
     let h = &mut vm.host().inner;
@@ -2245,19 +2245,7 @@ fn ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_wit
     let owner = h.executed_unit(actor).unwrap().owner;
     let error = h.set_ai_produce(4, 1, structure, -1).unwrap_err();
     assert!(
-        error.to_string().contains("placement is not admitted"),
-        "{error}"
-    );
-    assert!(
-        error.to_string().contains("live town association"),
-        "{error}"
-    );
-    assert!(
-        error.to_string().contains("reach occupancy and links"),
-        "{error}"
-    );
-    assert!(
-        error.to_string().contains("effect-source evidence"),
+        error.to_string().contains("AI placement buffType: Missing"),
         "{error}"
     );
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);

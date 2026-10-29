@@ -500,6 +500,7 @@ fn human05_placement_diagnostic() {
     if !full_reach
         && std::env::var_os("PCX_REACH_TRACE").is_none()
         && std::env::var_os("PCX_TOWN_EXPECT").is_none()
+        && std::env::var_os("PCX_PRODUCTION_SITE").is_none()
     {
         println!("native reach is bypassed in the exclusion scan");
     }
@@ -764,6 +765,9 @@ fn human05_placement_diagnostic() {
         let live = objects.diagnostic_ai_town_hypothesis(player_handle, units[0].0);
         println!("town hypothesis expected={center:?} actual={live:?}");
         assert_eq!(live.unwrap(), center);
+        let captured = objects.diagnostic_ai_town_capture(player_handle);
+        println!("town capture expected={center:?} actual={captured:?}");
+        assert_eq!(captured.unwrap(), center);
         return;
     }
     let start_index = objects
@@ -917,8 +921,35 @@ fn human05_placement_diagnostic() {
             .0;
         sample_workers.remove(closest);
     }
+    let production = std::env::var_os("PCX_PRODUCTION_SITE").is_some();
+    let desired = std::iter::once(order_worker)
+        .chain(sample_workers.into_iter().take(3))
+        .collect::<Vec<_>>();
+    let initial = if production {
+        let (spawn, _, count) =
+            probe_spawn(&probe_script, std::str::from_utf8(&map_script).unwrap());
+        vec![spawn; count]
+    } else {
+        desired.clone()
+    };
+    let farm_first = production && std::env::var_os("PCX_PRODUCTION_FARM_ONLY").is_some();
+    if farm_first {
+        let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
+        objects
+            .native(
+                "CreateUnit",
+                &[
+                    passive,
+                    Value::Int(i32::from_be_bytes(*b"hhou")),
+                    Value::Real(6208.),
+                    Value::Real(2752.),
+                    Value::Real(facing),
+                ],
+            )
+            .unwrap();
+    }
     let mut workers = Vec::new();
-    for point in std::iter::once(order_worker).chain(sample_workers.into_iter().take(3)) {
+    for point in initial {
         let created = objects
             .native(
                 "CreateUnit",
@@ -936,7 +967,42 @@ fn human05_placement_diagnostic() {
         };
         workers.push(handle);
     }
+    if production {
+        assert_eq!(workers.len(), desired.len());
+        objects
+            .diagnostic_install_ai_town(5, player_handle)
+            .unwrap();
+        for &unit in &workers {
+            objects
+                .native("SetUnitPathing", &[Value::Handle(unit), Value::Bool(false)])
+                .unwrap();
+        }
+        for (&unit, &point) in workers.iter().zip(&desired) {
+            objects
+                .native(
+                    "SetUnitPosition",
+                    &[
+                        Value::Handle(unit),
+                        Value::Real(point[0]),
+                        Value::Real(point[1]),
+                    ],
+                )
+                .unwrap();
+        }
+        for &unit in &workers {
+            objects
+                .native("SetUnitPathing", &[Value::Handle(unit), Value::Bool(true)])
+                .unwrap();
+            objects.diagnostic_rebase_placement_unit(unit).unwrap();
+        }
+    }
     let worker = workers[0];
+    if std::env::var_os("PCX_LIVE_EFFECT_CHECK").is_some() {
+        let result = objects.diagnostic_ai_effect_evidence(worker);
+        println!("live effect qualification for {worker:?}: {result:?}");
+        assert!(result.is_ok(), "{result:?}");
+        return;
+    }
     if std::env::var_os("PCX_REACH_TRACE").is_none()
         && std::env::var_os("PCX_REACH_ORACLE_SITE").is_none()
     {
@@ -1023,6 +1089,9 @@ fn human05_placement_diagnostic() {
 
     let mut refusals = Vec::new();
     for (blocked, oracle) in [(false, [6208., 2752.]), (true, [5952., 2432.])] {
+        if farm_first && !blocked {
+            continue;
+        }
         if blocked && std::env::var_os("PCX_REACH_ORACLE_SITE").is_some() {
             continue;
         }
@@ -1058,19 +1127,21 @@ fn human05_placement_diagnostic() {
                     )
                     .unwrap();
             }
-            let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
-            objects
-                .native(
-                    "CreateUnit",
-                    &[
-                        passive,
-                        Value::Int(i32::from_be_bytes(*b"hhou")),
-                        Value::Real(6208.),
-                        Value::Real(2752.),
-                        Value::Real(facing),
-                    ],
-                )
-                .unwrap();
+            if !farm_first {
+                let passive = objects.native("Player", &[Value::Int(15)]).unwrap();
+                objects
+                    .native(
+                        "CreateUnit",
+                        &[
+                            passive,
+                            Value::Int(i32::from_be_bytes(*b"hhou")),
+                            Value::Real(6208.),
+                            Value::Real(2752.),
+                            Value::Real(facing),
+                        ],
+                    )
+                    .unwrap();
+            }
             if exact_farm.is_none() {
                 objects
                     .native(
@@ -1092,6 +1163,18 @@ fn human05_placement_diagnostic() {
                 assert_eq!(actual, blocked_sample);
             }
             println!("farm recreated worker positions {actual:?}");
+        }
+        if production {
+            for &unit in &workers {
+                objects.diagnostic_rebase_placement_unit(unit).unwrap();
+            }
+            let result = objects.diagnostic_ai_structure_site(5, player_handle, worker, *b"unpl");
+            println!("production site blocked={blocked} expected={oracle:?} actual={result:?}");
+            let expected_rank = std::env::var("PCX_REACH_ORACLE_RANK")
+                .map(|value| value.parse().unwrap())
+                .unwrap_or(if blocked { 280 } else { 1 });
+            assert_eq!(result.unwrap(), (Some(oracle), expected_rank));
+            continue;
         }
         let checkpoint = objects.diagnostic_placement_checkpoint();
         for &handle in &workers {

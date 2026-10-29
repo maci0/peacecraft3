@@ -6,8 +6,8 @@ use pcx_sim::world::{Definition, FieldProblem, FieldValue};
 
 const NATIVE: &str = "FillGuardPosts";
 
-/// A unit's rawcode and position.
-type ListingUnit = ([u8; 4], Option<[f32; 2]>);
+/// A listed unit and its source identity and position.
+type ListingUnit = (HandleId, [u8; 4], Option<[f32; 2]>);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GuardPost {
@@ -832,7 +832,7 @@ impl ObjectHost {
         kind: [u8; 4],
         key: &str,
     ) -> Result<Option<ListingUnit>, Error> {
-        for (_, record) in self.executed_units() {
+        for (unit, record) in self.executed_units() {
             if record.owner != owner || !live(record) {
                 continue;
             }
@@ -858,7 +858,7 @@ impl ObjectHost {
                 found |= token.as_bytes() == kind;
             }
             if found {
-                return Ok(Some((record.definition.rawcode, record.position)));
+                return Ok(Some((unit, record.definition.rawcode, record.position)));
             }
         }
         Ok(None)
@@ -902,16 +902,47 @@ impl ObjectHost {
             // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
             // whose build ability lists the kind) and, failing that, for an idle unit that
             // upgrades into the kind. With neither the request answers false and orders nothing.
-            // The snapshot search does not yet have qualified live town and reach inputs.
             for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
-                if let Some((rawcode, position)) = self.ai_unit_lists(owner, requested, key)? {
-                    let reason = if key == "Builds" {
-                        "; live town association, reach occupancy and links, and effect-source evidence are not admitted"
-                    } else {
-                        ""
-                    };
+                if let Some((worker, rawcode, position)) =
+                    self.ai_unit_lists(owner, requested, key)?
+                {
+                    if key == "Builds" {
+                        #[cfg(feature = "test-fixtures")]
+                        if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                            eprintln!(
+                                "AI build search: time={:?} player={player} kind={requested:?} worker={worker:?} position={position:?}",
+                                self.timer_game_time()
+                            );
+                        }
+                        let (site, _dequeues) = self
+                            .ai_structure_site(player, owner, worker, &definition)
+                            .map_err(|why| {
+                                self.inner.error(
+                                    "SetProduce",
+                                    Failure::UnitActivity(format!(
+                                        "AI structure {} by {worker:?}: {why}",
+                                        String::from_utf8_lossy(&requested)
+                                    )),
+                                )
+                            })?;
+                        return match site {
+                            Some(site) => {
+                                let accepted =
+                                    self.request_unit_construction(worker, kind, site)?;
+                                #[cfg(feature = "test-fixtures")]
+                                if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                                    eprintln!(
+                                        "AI build order: time={:?} player={player} kind={requested:?} worker={worker:?} site={site:?} dequeues={_dequeues} accepted={accepted}",
+                                        self.timer_game_time()
+                                    );
+                                }
+                                Ok(accepted)
+                            }
+                            None => Ok(false),
+                        };
+                    }
                     return Err(fail(format!(
-                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}{reason}",
+                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}",
                         String::from_utf8_lossy(&rawcode)
                     )));
                 }

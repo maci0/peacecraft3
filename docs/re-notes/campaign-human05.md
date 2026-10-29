@@ -210,10 +210,27 @@ Runs `live-reach-a-20261030` and `live-reach-b-20261030` both stop on the same c
 refusal at 1223 s, with 98 identical checkpoint and RNG lines. No state beyond that refusal is
 established ([AI construction](ai-construction.md#live-reach-inputs-and-town-selection-2026-10-30)).
 
-Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
+Earlier runs stopped at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one
 of the four acolytes `Trig_Corruption04` creates for player 5 (`war3map.j:7899`).
+
+With the initial-town production path connected and the known order-driven buff motions
+qualified, two headless runs of the same release test binary accept an orange Necropolis build
+order at 1223.211 s. The builder is handle 12407, the selected site is (6144, 2752), and the
+search visits 10 candidates. Both runs then refuse a subsequent structure's `blighted` placement
+requirement in the same script interval. Two further traced runs identify that request as a
+Ziggurat (`uzig`) by the same worker, at (6329.007, 2320.2185); their 101 checkpoint, RNG and
+search trace lines match. No construction-start or finish event was observed
+before the stop; the last completed checkpoint remains tick 78272 at 1223.00 s. Their 98
+checkpoint and RNG lines and the build-order trace match. The release test binary's SHA-256 is
+`856e9cc9165b3bfa3978fa1de7001a3b613e5806d63e78b69deb3772f70c5463`.
+
+The accepted point is 64 units west of the separate original-client probe's first Necropolis.
+The recreation order is issued with a different live worker and movement history from that
+probe, so this observation does not isolate a placement-rule difference. The five recorded
+site comparisons use the recorded worker positions and are reported in
+[AI construction](ai-construction.md#initial-town-production-path-2026-10-30).
 
 An original-client probe of exactly this scenario (the four acolytes, `Trig_ResourcesOrange`,
 `Trig_OrangeTown` run three seconds after start on a patched Human05) shows the original building
@@ -223,25 +240,13 @@ details in [AI construction](ai-construction.md).
 
 ## Open
 
-- The snapshot diagnostic now selects the baseline, farm and two worker-layout Necropolis
-  sites at their recorded dequeue counts with the hierarchical reach check enabled. Its
-  sampled workers and supplied town origins do not replay movement or timer callbacks;
-  general live reach inputs, effect-source qualification and town selection remain open.
-  The 1223 s Human05 refusal remains in both `birth-arena-20261029` runs, whose checkpoint and
-  RNG lines match each other and the prior `undead-lifecycle` run. A region registered by
-  the script overlaps the baseline candidate square. The entry tests and bounded chain query
-  are implemented for supplied links, but live cell-chain ordering remains unrepresented. See
-  [AI construction](ai-construction.md).
-- AI structure placement. The grid, visitation order, terrain classification and nearby-object
-  score caps have a separately tested implementation, as do town-coordinate refresh and
-  native snap arithmetic. The AI
-  search and player orders share a validator, for which the existing player-placement code is
-  the current implementation, with the sampled-state discrepancy above. Native town list and
-  state mapping, texture dimensions, the additional reach check and
-  complete texture-rectangle enumeration remain open; AI cost timing, worker choice and
-  script retry timing are also open ([AI construction](ai-construction.md)). The shared
-  construction path now supports an unattended Undead site, but AI placement does not call it.
-- The 1800 s survival timer and the ending are not reached; refusals after 1223 s are unknown.
+- The initial-town production path and live reach chains are connected to the shared
+  construction request. The five site comparisons inject recorded worker positions and do
+  not replay their original movement histories. Later town changes, some effect sources,
+  blight placement, mine-targeted construction and other cases still refuse; cost timing,
+  worker choice and script retry timing remain open ([AI construction](ai-construction.md)).
+- The 1800 s survival timer and the ending are not reached. The Ziggurat request at 1223.211 s
+  refuses its blighted placement requirement, before the accepted Necropolis order starts.
 - Gold return distance (no probe), the choice among several lumber depots, and path versus
   straight-line "nearest" are the recreation's, not measured.
 - The Human04 open item (the AI target scorer refuses a unit that ever carried an effect) did

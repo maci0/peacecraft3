@@ -772,6 +772,7 @@ fn removing_negative_buffs_ends_the_slow() {
     assert!(order(&mut vm, caster, SLOW_ORDER, enemy));
     step(&mut vm, 0.4);
     assert_ne!(speed(&mut vm, enemy), base);
+    assert!(!vm.host().inner.has_unqualified_motion_buff(enemy));
     vm.host()
         .inner
         .native(
