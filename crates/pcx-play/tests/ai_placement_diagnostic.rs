@@ -583,6 +583,14 @@ fn human05_placement_diagnostic() {
     };
     let facing = building_facing(angle);
     let mut startup = start(&install, mode, &map.display().to_string(), &bytes, 1, None).unwrap();
+    let terrain_pathing = startup
+        .session
+        .host()
+        .unwrap()
+        .context()
+        .world
+        .pathing
+        .clone();
     let objects = startup.session.host().unwrap().objects_mut();
     let region_additions = objects
         .region_registrations()
@@ -961,6 +969,7 @@ fn human05_placement_diagnostic() {
             &mobile,
             &image,
             &rules,
+            &terrain_pathing,
         );
         compare_reach_snapshot(&snapshot, center, &trace);
         return;
@@ -1171,13 +1180,28 @@ fn human05_placement_diagnostic() {
             .collect();
         let placement = objects.diagnostic_placement().unwrap();
         let bounds = placement.world_bounds();
-        let reach = full_reach.then(|| reach_snapshot(placement, worker, &mobile, &image, &rules));
+        let reach = full_reach
+            .then(|| reach_snapshot(placement, worker, &mobile, &image, &rules, &terrain_pathing));
         if let Ok(point) = std::env::var("PCX_HUMAN05_TRACE_CELL") {
             let point = probe_point(&point);
             println!(
                 "blocked={blocked} native trace cell {point:?}: {:?}",
                 placement.diagnostic_cell_state(point).unwrap()
             );
+            if let Some(pool) = placement.spatial() {
+                assert!(
+                    pool.refusal().is_none(),
+                    "live pool refused: {:?}",
+                    pool.refusal()
+                );
+                let cell = pool.cell_at(point).unwrap();
+                let links = pool
+                    .chain(cell)
+                    .unwrap()
+                    .map(|link| (link, pool.live().entry_state(link.identity)))
+                    .collect::<Vec<_>>();
+                println!("blocked={blocked} live chain cell {cell:?}: {links:?}");
+            }
         }
         if blocked {
             let cell_size = placement.rules().cell_size();
@@ -1414,6 +1438,7 @@ fn reach_snapshot(
     mobile: &[pcx_script::HandleId],
     image: &[u8],
     rules: &Rules,
+    terrain: &pcx_map::Pathing,
 ) -> ReachSnapshot {
     use pcx_play::native_path_hierarchy::{base, parent, reviewed_operands};
     let (mask, priority, result_scale, removal_limit, movement, count) =
@@ -1424,6 +1449,19 @@ fn reach_snapshot(
         ((bounds[1][axis] - bounds[0][axis]) / cell_size) as usize
     });
     let rectangle = placement.diagnostic_unit_rectangle(worker).unwrap();
+    let pool = std::env::var_os("PCX_REACH_LIVE_POOL")
+        .map(|_| placement.spatial().expect("tracked live pool"));
+    if let Some(pool) = pool {
+        assert!(
+            pool.refusal().is_none(),
+            "live pool refused: {:?}",
+            pool.refusal()
+        );
+        assert_eq!(
+            [terrain.width as usize, terrain.height as usize],
+            dimensions
+        );
+    }
     let group = result_scale as usize;
     assert_eq!(group, 2, "unrecognized spatial sample grouping");
     if let Ok(value) = std::env::var("PCX_REACH_INSPECT_CELL") {
@@ -1446,6 +1484,7 @@ fn reach_snapshot(
     let mut levels = Vec::new();
     let size = [dimensions[0].div_ceil(group), dimensions[1].div_ceil(group)];
     let mut cells = Vec::with_capacity(size[0] * size[1]);
+    let mut divergent_samples = 0;
     for y in 0..size[1] {
         for x in 0..size[0] {
             let mut samples = [true; 4];
@@ -1457,7 +1496,27 @@ fn reach_snapshot(
                     });
                     let (flags, units, footprints) =
                         placement.diagnostic_cell_excluding(point, mobile).unwrap();
-                    *sample = flags & mask != 0 || units != 0 || footprints != 0;
+                    let snapshot = flags & mask != 0 || units != 0 || footprints != 0;
+                    *sample = if let Some(pool) = pool {
+                        let static_flags = terrain.cell(p[0] as u32, p[1] as u32).unwrap();
+                        let result = static_flags & mask != 0
+                            || pool
+                                .live()
+                                .blocked([p[1], p[0]], 0, u32::from(mask))
+                                .unwrap();
+                        if result != snapshot {
+                            divergent_samples += 1;
+                            if divergent_samples <= 12 {
+                                println!(
+                                    "live reach cell {point:?}: static={static_flags:#x} snapshot={snapshot} live={result} links={:?}",
+                                    pool.chain([p[1], p[0]]).unwrap().collect::<Vec<_>>()
+                                );
+                            }
+                        }
+                        result
+                    } else {
+                        snapshot
+                    };
                 }
             }
             let cleared = (0..2).all(|axis| {
@@ -1485,7 +1544,8 @@ fn reach_snapshot(
         levels.push((next_size, next));
     }
     println!(
-        "reach snapshot bounds={bounds:?} builder={rectangle:?}; link and per-entry state unqualified"
+        "reach snapshot bounds={bounds:?} builder={rectangle:?}; live_pool={} divergent_samples={divergent_samples}; sampled state is not an order-time replay",
+        pool.is_some()
     );
     ReachSnapshot {
         levels,

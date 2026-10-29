@@ -32,6 +32,7 @@ pub struct SpatialRules {
     region_class: u32,
     link_limit: u32,
     movement: MovementStateRule,
+    movement_scale: u32,
     cleanup: CleanupOperands,
 }
 
@@ -49,6 +50,7 @@ impl SpatialRules {
             region_class: Chains::reviewed_region_class(image, rules)?,
             link_limit: Chains::reviewed_limit(image, rules)?,
             movement: MovementStateRule::reviewed_legacy(image, rules)?,
+            movement_scale: movement_scale(image)?,
             cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
         })
     }
@@ -66,9 +68,56 @@ impl SpatialRules {
             region_class: 0x2000,
             link_limit: 0xfffff,
             movement: MovementStateRule::synthetic(4.0, 0x40),
+            movement_scale: 1.0_f32.to_bits(),
             cleanup: CleanupOperands::synthetic(),
         }
     }
+}
+
+fn movement_scale(image: &[u8]) -> Result<u32, String> {
+    use crate::neutral_player::RuleInputBudget;
+    use crate::neutral_rule_input::Pe;
+
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let read = |address, len| -> Result<&[u8], String> {
+        pe.read_from(address, true)
+            .map_err(|error| error.to_string())?
+            .get(..len)
+            .ok_or_else(|| format!("truncated movement scaling at {address:#x}"))
+    };
+    let x = read(0x803f2e, 5)?;
+    let y = read(0x803f48, 6)?;
+    let limit = read(0x800586, 5)?;
+    movement_scale_operands(x, y, limit)
+}
+
+fn movement_scale_operands(x: &[u8], y: &[u8], limit: &[u8]) -> Result<u32, String> {
+    if x.len() != 5
+        || y.len() != 6
+        || limit.len() != 5
+        || x[0] != 0x05
+        || y[..2] != [0x81, 0xc1]
+        || limit[0] != 0x05
+        || x[1..] != y[2..]
+        || x[1..] != limit[1..]
+    {
+        return Err("unrecognized movement scaling instructions".into());
+    }
+    let delta = u32::from_le_bytes(x[1..].try_into().expect("checked width"));
+    let magnitude = delta.wrapping_neg();
+    let shift = magnitude >> 23;
+    if magnitude & ((1 << 23) - 1) != 0 || shift == 0 || shift >= 127 {
+        return Err("unsupported movement scaling operand".into());
+    }
+    Ok(1.0_f32.to_bits() - (shift << 23))
 }
 
 /// The pathing grid the chains cover. Native axis 0 is the world y axis.
@@ -132,8 +181,8 @@ pub struct PoolOwner {
     rules: SpatialRules,
     geometry: Geometry,
     tracked: BTreeMap<u64, Tracked>,
-    /// Last commanded velocity and whether a non-order contributor was present.
-    velocities: BTreeMap<HandleId, ([f32; 2], bool)>,
+    /// Last commanded velocity, limit and whether a non-order contributor was present.
+    velocities: BTreeMap<HandleId, ([f32; 2], f32, bool)>,
     refusal: Option<Refusal>,
 }
 
@@ -421,24 +470,34 @@ impl PoolOwner {
         {
             return;
         }
-        let key = (velocity, contributor.is_some());
+        let key = (velocity, limit, contributor.is_some());
         if self
             .velocities
             .get(&unit)
             .copied()
-            .unwrap_or(([0.; 2], false))
+            .unwrap_or(([0.; 2], 0., false))
             == key
         {
             return;
         }
-        let result = self.live.update_walking(
-            unit.token(),
-            self.rules.movement,
-            velocity,
-            limit,
-            contributor,
-        );
-        if key == ([0.; 2], false) {
+        let scale = |value| {
+            crate::script_random::real::from_f32(value)
+                .and_then(|bits| crate::script_random::real::mul(bits, self.rules.movement_scale))
+                .map(f32::from_bits)
+                .map_err(|_| ChainError::MovementState)
+        };
+        let result = scale(velocity[0]).and_then(|x| {
+            let y = scale(velocity[1])?;
+            let limit = scale(limit)?;
+            self.live.update_walking(
+                unit.token(),
+                self.rules.movement,
+                [x, y],
+                limit,
+                contributor,
+            )
+        });
+        if key == ([0.; 2], 0., false) {
             self.velocities.remove(&unit);
         } else {
             self.velocities.insert(unit, key);
@@ -446,7 +505,7 @@ impl PoolOwner {
         self.note(unit.token(), "movement state", result);
     }
 
-    /// Units whose last commanded velocity or contributor flag was not the idle default.
+    /// Units whose last commanded velocity, limit or contributor flag was not the idle default.
     pub(crate) fn moving_units(&self) -> impl Iterator<Item = HandleId> + '_ {
         self.velocities.keys().copied()
     }

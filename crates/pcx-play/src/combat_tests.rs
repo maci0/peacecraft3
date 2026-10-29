@@ -5789,6 +5789,9 @@ fn a_non_attack_target_order_at_nothing_or_a_removed_unit_issues_nothing() {
     // A live target still refuses loudly: the order has no implementation.
     let error = issue(h, Value::Handle(b)).unwrap_err();
     assert!(error.contains("only the attack target order"), "{error}");
+    assert!(error.contains("repair"), "{error}");
+    assert!(error.contains(&format!("{a:?}")), "{error}");
+    assert!(error.contains(&format!("{b:?}")), "{error}");
     assert_eq!(issue(h, Value::Null).unwrap(), Value::Bool(false));
     h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
     assert_eq!(issue(h, Value::Handle(b)).unwrap(), Value::Bool(false));

@@ -291,6 +291,10 @@ fn walking_state_follows_commanded_velocity_and_refuses_other_contributors() {
     let before = pool.live().entry_state(1);
     pool.command_velocity(id(1), [3., 0.], 3., None);
     assert_eq!(pool.live().entry_state(1), before);
+    pool.command_velocity(id(1), [3., 0.], 0., None);
+    assert_eq!(pool.live().entry_state(1).unwrap().1 & MOVING, 0);
+    pool.command_velocity(id(1), [3., 0.], 3., None);
+    assert_eq!(pool.live().entry_state(1).unwrap().1 & MOVING, MOVING);
     pool.command_velocity(id(1), [0., 0.], 0., None);
     assert_eq!(pool.live().entry_state(1).unwrap().1 & MOVING, 0);
     assert_eq!(pool.moving_units().count(), 0);
@@ -307,6 +311,35 @@ fn walking_state_follows_commanded_velocity_and_refuses_other_contributors() {
             contributor: "active buff"
         }
     );
+}
+
+#[test]
+fn walking_velocity_uses_the_selected_scale() {
+    let mut p = tracked("velocity scale");
+    let stamp = p.prepare([32., 40.], Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    let pool = p.spatial_mut().unwrap();
+    pool.rules.movement_scale = 0.25_f32.to_bits();
+    pool.command_velocity(id(1), [4., 0.], 4., None);
+    assert_eq!(pool.live().entry_state(1).unwrap().1 & MOVING, 0);
+    pool.command_velocity(id(1), [8., 0.], 8., None);
+    assert_eq!(pool.live().entry_state(1).unwrap().1 & MOVING, MOVING);
+    assert!(pool.refusal().is_none());
+}
+
+#[test]
+fn movement_scale_requires_matching_source_operands() {
+    let immediate = (0_u32.wrapping_sub(2 << 23)).to_le_bytes();
+    let mut x = [0_u8; 5];
+    x[0] = 0x05;
+    x[1..].copy_from_slice(&immediate);
+    let mut y = [0_u8; 6];
+    y[..2].copy_from_slice(&[0x81, 0xc1]);
+    y[2..].copy_from_slice(&immediate);
+    assert_eq!(movement_scale_operands(&x, &y, &x), Ok(0.25_f32.to_bits()));
+    y[2] ^= 1;
+    assert!(movement_scale_operands(&x, &y, &x).is_err());
+    assert!(movement_scale_operands(&[], &y, &x).is_err());
 }
 
 #[test]

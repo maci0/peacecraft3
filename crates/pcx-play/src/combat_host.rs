@@ -1277,7 +1277,10 @@ impl ObjectHost {
                 }
                 return Err(self.inner.error(
                     name,
-                    Failure::UnitActivity("only the attack target order is supported".into()),
+                    Failure::UnitActivity(format!(
+                        "only the attack target order is supported: unit={unit:?} order={:?} target={target:?}",
+                        args[1]
+                    )),
                 ));
             }
             let (Value::Handle(unit), Value::Handle(target)) = (unit, target) else {

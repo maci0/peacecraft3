@@ -6002,3 +6002,26 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `RemoveRegion` and `RegionClearRect` are not host natives, the coarse movement grid is not
   modeled, and the live recreation's ground mask (`0x02`) differs from the captured native
   intersection (`0x08`).
+
+### 2026-10-30: Live-pool reach diagnostic
+
+- [~] The sampled Human05 diagnostic now reads reach occupancy from the live chain owner,
+  refusing an incomplete pool. It matches the recorded 100 and 12 reach results and chooses
+  the baseline, farm, workers-at-start and near-mine sites at dequeues 1, 280, 355 and 419.
+  It does not replay native movement or establish the registration order. At (6160, 2800),
+  the farm entry still has low mask `0x02`
+  while the captured native entry intersects `0x08`. Native texture assignment uses separate
+  mask entries per owner, which the current pool does not implement. Production structure
+  placement remains refused. See [AI construction](docs/re-notes/ai-construction.md).
+- The pool reads the selected movement scale and applies it before the movement-state check;
+  it also rechecks when the velocity limit changes. Synthetic tests cover both. A headless
+  clock run reaches tick 2691 and then refuses the scripted Jaina `massteleport` target order.
+- Two Human05 runs using the same release test binary and separate earned profiles stop at the
+  1223 s construction refusal. Their 98 checkpoint and RNG lines are identical.
+- Human03 and Human04 reach their victory paths at 279.02 s and 449.02 s. Their 45 and 72
+  checkpoint and RNG lines match `g1`, respectively. The live pool clock test passes through
+  tick 2048 without an owner refusal. The `pcx-play` library suite passes 2,381 tests with
+  92 ignored.
+- Native and WASM Clippy pass with warnings denied. The Human03 simulation budget check passes;
+  requested bytes are 20 below the recorded plumbing measurement but four above its earlier
+  control, without a new paired control run. The startup allocation delta is not resolved.

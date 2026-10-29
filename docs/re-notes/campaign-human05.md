@@ -177,6 +177,15 @@ the live chain ordering or connects the construction search. Release runs
 `rectangle-lazy-20261029-a` and `rectangle-lazy-20261029-b` both stop at the 1223 s refusal,
 with their 98 checkpoint and RNG lines identical.
 
+The live-pool diagnostic now matches the 100 at-start and 12 near-mine recorded reach results,
+and selects the baseline and farm Necropolis sites at dequeues 1 and 280. It supplies sampled
+worker positions and town coordinates rather than replaying original movement. The live farm
+entry's mask still differs from the native capture, so the diagnostic does not admit production
+construction. See [AI construction](ai-construction.md#live-pool-plumbing-2026-10-30).
+Release run `live-pool-20261030-a` and a second run of the same compiled test with a separate
+earned profile both stop at 1223 s with the existing construction refusal. Their 98 checkpoint
+and RNG lines are identical.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

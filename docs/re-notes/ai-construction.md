@@ -1270,7 +1270,7 @@ deterministically sampled unsigned words; that is not a comparison of full reach
 ### Live pool plumbing, 2026-10-30
 
 The spatial chain owner is now connected to the live simulation. This is mechanical wiring of
-the decoded owner, not new decoding; the reach evaluator does not read it yet. Source:
+the decoded owner. The local diagnostic can read it; production placement does not. Source:
 `spatial_pool.rs` (owner, hooks' receiving side), `unit_placement.rs` (collision hooks),
 `region_host.rs`, `campaign_placement.rs` (session start), `unit_activity_host.rs` (movement
 state and cleanup tick). Evidence tier throughout: recreation wiring over native-code facts
@@ -1306,8 +1306,10 @@ capture above matched for the radius classes. Native axis 0 is the world y axis.
 - Region: constructor flags and state, link class from `0x801b75` (decoded earlier).
 - Texture entry: state has the registration bit (wrapper `0x8c19e0`, decoded earlier). The flags
   are the active bit plus the recreation's pathing mask (`solid_mask` for stationary layers,
-  the movement-class mask for a structure unit). The native per-cell mask assignment at
-  `0x805343` is not decoded, so the mask value is provisional.
+  the movement-class mask for a structure unit). This is provisional. The native path at
+  `0x6c0943` prepares three or four separately masked entries; `0x80535c` assigns their masks,
+  and `0x804be0` registers each pixel with every entry whose mask intersects that pixel's flags.
+  The live pool currently uses one entry per texture owner and cannot reproduce those links.
 - Movement entry: state zero (constructor `0x8c1950`, decoded earlier), which leaves the
   registration bit clear. Such an entry is never a blocker in `cell_blocked`, matching the
   snapshot diagnostic's rule that non-structure units do not block the reach query, but it
@@ -1316,12 +1318,13 @@ capture above matched for the radius classes. Native axis 0 is the world y axis.
   mask is `0x02` while the captured native acolyte entry intersected `0x08`, so the mask
   correspondence is unverified and probably differs.
 
-**Movement state.** Velocity is the unit's speed toward its next waypoint, in world units per
-second, with the speed as limit. The native updater adds contributor vectors in its own
-spatial units; whether the threshold applies to world units per second is not established, so
-the moving bit is provisional and is not evidence for the reach query. A paused unit, a
-sleeping unit and a unit with any retained buff pass a named contributor, which the owner
-refuses; the owner applies a velocity only when it or the contributor flag changes.
+**Movement state.** The host supplies the unit's speed toward its next waypoint and uses its
+speed as the limit. The selected image's vector and limit wrappers at `0x803f26` and `0x80057e`
+scale their inputs before updating the movement component. The owner reads that scale from the
+reviewed image and applies the selected real arithmetic. The correspondence of every live
+command and contributor to those wrappers is still unqualified. A paused unit, a sleeping unit
+and a unit with any retained buff pass a named contributor, which the owner refuses. The owner
+reapplies the state test when the velocity, limit or contributor flag changes.
 
 **Refusal.** The first operation the owner cannot apply (pool or entry exhaustion, duplicate
 entry, unconvertible region, unnamed contributor) is kept as `Refusal` and later operations are
@@ -1361,7 +1364,21 @@ mine hold its texture entry; the first worker's cells hold its movement entry (f
 empty. No region, decoration or other unit link falls in those windows. A second ignored test
 steps 2,048 ticks (game time 32 s) with the orange AI running: 14,511 operations, no refusal,
 next cleanup deadline 32.0997 s. Stepping past about 42 s stops at the existing unimplemented
-`IssueTargetOrder` native, unrelated to the pool.
+`IssueTargetOrder` native. The refused order is Jaina's scripted `massteleport` at tick 2691,
+not an identified orange AI build order.
+
+**Live-pool diagnostic, 2026-10-30.** With the recorded worker positions injected and the
+captured town centers supplied, the diagnostic builds the hierarchy from the live pool and
+the map's authored pathing raster. It checks the owner's refusal first. The at-start and
+near-mine tables agree on all 100 and 12 recorded reach results. The baseline and farm sites
+are (6208, 2752) at dequeue 1 and (5952, 2432) at dequeue 280. The workers-at-start and
+near-mine samples choose (6336, 2752) at dequeue 355 and (5248, 2944) at dequeue 419.
+These are prepared snapshots:
+the workers are created or relocated at sampled positions, and original movement and timer
+callbacks are not replayed. They do not qualify native registration history or the seven
+choices above. At farm cell (6160, 2800), the live chain has one texture link with low mask
+`0x02`; the captured native entry at that cell intersects `0x08`. The matching site result
+does not resolve that mismatch. Production construction remains refused.
 
 ## Not established
 

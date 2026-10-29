@@ -260,6 +260,13 @@ instructions rose 0.003% (17,638,122,871 to 17,638,601,658 at 0 ticks). `--check
 budget was raised. Tracked sessions (a map script that can start an AI) allocate the chain
 pool, entry table and operands, and are not part of this workload.
 
+The later live-pool reach diagnostic and movement-scale change leave the Human03 digests and
+allocation counts unchanged. The same check reports 1,039,365,977 and 1,756,596,749 requested
+bytes, respectively, 20 fewer than the plumbing measurements above and four more than their
+earlier control. This is not a new paired control measurement; the remaining startup allocation
+delta has not been isolated. Human03 and Human04 route checkpoints and RNG lines match `g1`.
+The budget check passes without raising limits.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in
