@@ -379,12 +379,23 @@ fn open_move_speed_with(profile: &'static str, authored_speed: &str) -> Vm {
 }
 fn open_admitting(
     fields: &[([u8; 4], ObjectField)],
-    (registry, rules): (
+    rules: (
         Arc<crate::order_registry::Registry>,
         crate::unit_activity::Rules,
     ),
 ) -> Vm {
+    open_admitting_with(fields, rules, |_| {})
+}
+fn open_admitting_with(
+    fields: &[([u8; 4], ObjectField)],
+    (registry, rules): (
+        Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+    before_setup: impl FnOnce(&mut ObjectHost),
+) -> Vm {
     let mut h = host_fields_with(65536, fields, (registry, rules));
+    before_setup(&mut h);
     let model = crate::unit_model::tests::model();
     let mut bytes = model.bytes.to_vec();
     let at = bytes
@@ -2691,4 +2702,52 @@ fn selected_removed_image_cleanup_wrapper_and_native_branches() {
         pe.va_bytes(0x49af37, 9).unwrap(),
         &[0x5f, 0x5e, 0x33, 0xc0, 0x5b, 0x8b, 0xe5, 0x5d, 0xc3]
     );
+}
+
+#[test]
+fn tracked_sessions_report_commanded_velocity_and_run_the_cleanup_clock() {
+    use crate::spatial_pool::{live_pool, tests::pool};
+    let mut vm = open_admitting_with(&[], rules(), |h| {
+        h.test_attach_spatial(pool());
+    });
+    let a = unit(&vm, "A");
+    let start = live_pool(&vm.host().inner).unwrap().live().sequence();
+    assert!(start > 0, "setup registered both units in creation order");
+    assert!(
+        live_pool(&vm.host().inner)
+            .unwrap()
+            .live()
+            .entry_state(a.token())
+            .is_some()
+    );
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 2.);
+    let owner = live_pool(&vm.host().inner).unwrap();
+    // The synthetic movement rule sets bit 0x40 above its squared-speed threshold.
+    let (_, state) = owner.live().entry_state(a.token()).unwrap();
+    assert_eq!(state & 0x40, 0x40);
+    assert_eq!(owner.moving_units().collect::<Vec<_>>(), [a]);
+    assert!(
+        owner.live().sequence() > start,
+        "motion re-registered the stamp"
+    );
+    assert!(
+        owner.live().next_cleanup() > 2.0,
+        "due deadlines were delivered"
+    );
+    assert!(owner.refusal().is_none());
+    assert_eq!(vm.call("hold", &[]).unwrap(), Value::Bool(true));
+    tick(&mut vm, 4.);
+    let owner = live_pool(&vm.host().inner).unwrap();
+    let (_, state) = owner.live().entry_state(a.token()).unwrap();
+    assert_eq!(state & 0x40, 0);
+    assert_eq!(owner.moving_units().count(), 0);
+    assert!(owner.refusal().is_none());
+}
+
+#[test]
+fn untracked_sessions_cost_no_owner() {
+    let mut vm = open();
+    tick(&mut vm, 1.);
+    assert!(crate::spatial_pool::live_pool(&vm.host().inner).is_none());
 }

@@ -8,6 +8,19 @@ use pcx_assets::Resolver;
 use pcx_script::value::FunctionId;
 use std::sync::Arc;
 
+/// The map script text can start an AI player, so the session tracks spatial history
+/// from its first registration. The AI script is chosen at run time, so the gate is
+/// textual and conservative.
+pub(crate) fn ai_possible(context: &ParsedMapContext, has_ai_source: bool) -> bool {
+    has_ai_source
+        && context
+            .scripts
+            .digests
+            .get(2)
+            .and_then(|digest| context.scripts.source(&digest.label))
+            .is_none_or(may_start_ai)
+}
+
 fn may_start_ai(source: &str) -> bool {
     [
         "StartCampaignAI",
@@ -69,13 +82,8 @@ pub fn create_host(
     let tables = Arc::clone(&inputs.defend.tables);
     let ai_source = inputs.ai_source.clone();
     let preload = inputs.preload.clone();
-    let ai_possible = ai_source.is_some()
-        && ctx
-            .scripts
-            .digests
-            .get(2)
-            .and_then(|digest| ctx.scripts.source(&digest.label))
-            .is_none_or(may_start_ai);
+    let spatial_rules = inputs.spatial_rules.clone();
+    let ai_possible = ai_possible(&ctx, ai_source.is_some());
     let mut host = map_startup_host::assemble(ctx, inputs)?;
     if ai_possible {
         host.objects_mut().enable_region_registration_order()?;
@@ -166,8 +174,11 @@ pub fn create_host(
                     Arc::clone(&placement_reader),
                     tables,
                     &catalog,
-                    objects,
-                    rules,
+                    crate::campaign_placement::Live {
+                        objects,
+                        rules,
+                        spatial: spatial_rules.as_deref(),
+                    },
                 )
             });
             if host.objects().timer_game_time().is_some() {

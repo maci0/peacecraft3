@@ -1255,6 +1255,7 @@ impl ObjectHost {
             self.advance_sound_environments();
             self.advance_construction(now, work)?;
             self.advance_order_queue();
+            self.advance_spatial_pool(now);
             self.defer_optional_routes(blocked, refresh)?;
             Ok(moved)
         });
@@ -1267,6 +1268,75 @@ impl ObjectHost {
             sink.spans.truncate(sink.base);
         }
         result
+    }
+
+    /// Tracked sessions only: report each moving unit's commanded velocity to the spatial
+    /// chain owner, then deliver the cleanup deadlines due at `now`. The velocity is the
+    /// unit's speed toward its next waypoint in world units per second; any other
+    /// movement contributor is named so the owner refuses it.
+    fn advance_spatial_pool(&mut self, now: f64) {
+        let Some(pool) = self
+            .unit_placement
+            .as_ref()
+            .and_then(crate::unit_placement::Placement::spatial)
+        else {
+            return;
+        };
+        let moving: Vec<HandleId> = pool.moving_units().collect();
+        let mut units = moving.clone();
+        if let Some(state) = &self.unit_activity {
+            units.extend_from_slice(&state.active);
+        }
+        units.sort_unstable();
+        units.dedup();
+        for unit in units {
+            let commanded = self.commanded_velocity(unit);
+            if commanded.is_none() && moving.binary_search(&unit).is_err() {
+                continue;
+            }
+            let (velocity, limit) = commanded.unwrap_or(([0.; 2], 0.));
+            let contributor = self.movement_contributor(unit);
+            if let Some(pool) = self
+                .unit_placement
+                .as_mut()
+                .and_then(crate::unit_placement::Placement::spatial_mut)
+            {
+                pool.command_velocity(unit, velocity, limit, contributor);
+            }
+        }
+        if let Some(pool) = self
+            .unit_placement
+            .as_mut()
+            .and_then(crate::unit_placement::Placement::spatial_mut)
+        {
+            pool.cleanup(now);
+        }
+    }
+
+    /// The unit's speed vector toward its next waypoint and its speed limit; `None`
+    /// while it follows no route.
+    fn commanded_velocity(&self, unit: HandleId) -> Option<([f32; 2], f32)> {
+        let record = self.executed_unit(unit).ok()?;
+        let activity = record.activity.as_ref()?;
+        let motion = activity.motion.as_ref().filter(|_| !activity.held)?;
+        let (position, speed) = (record.position?, activity.speed?);
+        let target = *motion.path.get(motion.next)?;
+        let delta = [target[0] - position[0], target[1] - position[1]];
+        let length = delta[0].hypot(delta[1]);
+        (length > 0.0 && speed > 0.0).then(|| (delta.map(|axis| axis / length * speed), speed))
+    }
+
+    fn movement_contributor(&self, unit: HandleId) -> Option<&'static str> {
+        let record = self.executed_unit(unit).ok()?;
+        if record.paused_since.is_some() {
+            Some("explicit pause")
+        } else if record.is_sleeping() {
+            Some("sleep")
+        } else if self.has_active_buff(unit) {
+            Some("active buff")
+        } else {
+            None
+        }
     }
 
     fn defer_optional_routes(

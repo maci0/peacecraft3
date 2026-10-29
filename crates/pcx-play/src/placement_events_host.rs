@@ -167,6 +167,18 @@ impl ObjectHost {
         self.record_placement_event(unit, PlacementEventKind::OwnerRegistration(handles));
     }
 
+    /// The spatial cleanup interval, divided with this session's numeric policy.
+    pub(crate) fn spatial_cleanup_interval(
+        &self,
+        rules: &crate::spatial_pool::SpatialRules,
+    ) -> Result<f32, String> {
+        rules.cleanup().interval(
+            self.numeric
+                .as_ref()
+                .ok_or("script numeric policy is missing")?,
+        )
+    }
+
     /// Set the clock for a diagnostic snapshot without replaying timer callbacks.
     #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_set_snapshot_time(&mut self, at: f64) -> Result<(), super::Error> {

@@ -5,6 +5,7 @@ use crate::{
         DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
         DestructableStats, ObjectHost, PlacedDestructable, PlacedSource,
     },
+    spatial_pool::{Geometry, PoolOwner, SpatialRules, Texture},
     unit_placement::{
         Budget, Footprint, FootprintLoader, Grid, NativeTexture, Placement, Rules, StationaryKey,
         StationaryStamp, TexturePolicy,
@@ -225,6 +226,14 @@ impl Catalog {
     }
 }
 
+/// The session state the first unit creation supplies to the placement cache.
+pub struct Live<'a> {
+    pub objects: &'a ObjectHost,
+    pub rules: &'a Rules,
+    /// Present exactly when the session is tracked (`campaign_host::ai_possible`).
+    pub spatial: Option<&'a SpatialRules>,
+}
+
 /// Called immediately before the first executed unit, after stationary creations.
 pub fn assemble(
     context: &Arc<ParsedMapContext>,
@@ -232,9 +241,13 @@ pub fn assemble(
     reader: Arc<Resolver>,
     tables: &DefaultTables,
     catalog: &Catalog,
-    objects: &ObjectHost,
-    rules: &Rules,
+    live: Live<'_>,
 ) -> Result<Placement, String> {
+    let Live {
+        objects,
+        rules,
+        spatial,
+    } = live;
     let map = pcx_map::Map::parse(map_bytes).map_err(|e| e.to_string())?;
     let extract = |member: &'static str| {
         map.extract_checked(
@@ -273,13 +286,15 @@ pub fn assemble(
         remaining_cells: FOOTPRINT_CELLS,
         remaining_source_attempts: FOOTPRINT_SOURCES,
     };
+    let mut pool = spatial_owner(objects, &grid, rules, spatial)?;
     let mut work = STATIONARY_WORK;
+    let mut decoration = 0u32;
     for instance in catalog.doodads() {
         if !matches!(catalog.role(instance)?, PlacedRole::Decoration) {
             continue;
         }
         let path = catalog.path(tables, instance.type_id, instance.life == 0)?;
-        stamp(
+        let cells = stamp(
             &mut grid,
             rules,
             &mut textures,
@@ -288,6 +303,10 @@ pub fn assemble(
             f64::from(instance.angle) / std::f64::consts::FRAC_PI_2,
             &mut work,
         )?;
+        if let Some(pool) = &mut pool {
+            pool.texture(Texture::Decoration(decoration), rules.solid_mask(), &cells);
+            decoration += 1;
+        }
     }
     let mut layers = Vec::new();
     for (id, instance, state) in objects.destructables_with_handles() {
@@ -325,9 +344,27 @@ pub fn assemble(
             active: !state.dead,
         });
     }
+    if let Some(pool) = &mut pool {
+        for layer in &layers {
+            let owner = match layer.key {
+                StationaryKey::Placed(creation) => Texture::Placed(creation),
+                StationaryKey::Destructable(id) => Texture::Destructable(id),
+            };
+            let cells = if layer.active {
+                &layer.live
+            } else {
+                &layer.dead
+            };
+            pool.texture(owner, layer.mask, cells);
+        }
+        for addition in objects.region_registrations().map_err(|e| e.to_string())? {
+            let (region, request) = addition.map_err(|e| e.to_string())?;
+            pool.region_added(region, request.bounds);
+        }
+    }
     let base = grid.pathing.clone();
     let script_paths = catalog.script_paths();
-    Placement::new(
+    let mut placement = Placement::new(
         grid,
         rules.clone(),
         BTreeMap::new(),
@@ -344,7 +381,37 @@ pub fn assemble(
         p.with_staged_footprint_loader(TextureLoader { textures })
             .with_script_paths(move |id, dead| script_paths.resolve(id, dead))
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if let Some(pool) = pool {
+        placement.attach_spatial(pool);
+    }
+    Ok(placement)
+}
+
+/// The chain owner for a tracked session, or `None` when region history was not enabled.
+fn spatial_owner(
+    objects: &ObjectHost,
+    grid: &Grid,
+    rules: &Rules,
+    spatial: Option<&SpatialRules>,
+) -> Result<Option<PoolOwner>, String> {
+    if !objects.region_registration_order_enabled() {
+        return Ok(None);
+    }
+    let spatial = spatial.ok_or("tracked session lacks the spatial chain operands")?;
+    let start = objects
+        .timer_game_time()
+        .ok_or("tracked session lacks the game clock for the spatial cleanup")?;
+    let interval = objects.spatial_cleanup_interval(spatial)?;
+    let geometry = Geometry {
+        origin: grid.origin,
+        cell_size: rules.cell_size(),
+        width: grid.pathing.width as usize,
+        height: grid.pathing.height as usize,
+    };
+    PoolOwner::new(spatial.clone(), geometry, start as f32, interval)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 fn placed_source(instance: &pcx_map::Doodad) -> PlacedSource {
@@ -819,12 +886,12 @@ fn stamp(
     point: [f32; 2],
     turns: f64,
     work: &mut usize,
-) -> Result<(), String> {
+) -> Result<Vec<usize>, String> {
     let cells = footprint_cells(grid, rules, textures, path, point, turns, work)?;
-    for i in cells {
+    for &i in &cells {
         grid.pathing.cells[i] |= rules.solid_mask();
     }
-    Ok(())
+    Ok(cells)
 }
 
 #[cfg(test)]

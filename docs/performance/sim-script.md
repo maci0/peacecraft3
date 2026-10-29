@@ -242,6 +242,24 @@ bytes, with unchanged reallocations and state digest. The two runs used differen
 The pre-sized region history accounts for 524,288 bytes; retained texture flags and tracking
 storage contribute to the remaining difference.
 
+The spatial chain owner hooks (collision commit and hide, stationary toggles, region
+additions, the activity tick) each start with an `Option` test on a field that is `None` in an
+untracked session. Baseline and candidate were measured in the same checkout path (HEAD
+`2b19328` against the working tree), locked, offline, same Human03 inputs:
+
+| Workload | Allocations | Reallocations | Requested bytes | Digest / visits |
+| --- | ---: | ---: | ---: | --- |
+| `human03 0` before | 1,597,968 | 43,177 | 1,039,365,973 | `a2517f75b75e84cf` |
+| `human03 0` after | 1,597,968 | 43,177 | 1,039,365,997 | equal |
+| `human03 4096` before | 3,375,515 | 406,994 | 1,756,596,745 | `97c1d17bf808534c`, 2,010,077 |
+| `human03 4096` after | 3,375,515 | 406,994 | 1,756,596,769 | equal |
+
+Allocation and reallocation counts are equal. The 24 extra requested bytes are the new
+`Placement` pointer and the captured spatial operands in the placement-loader closure. User
+instructions rose 0.003% (17,638,122,871 to 17,638,601,658 at 0 ticks). `--check` passes; no
+budget was raised. Tracked sessions (a map script that can start an AI) allocate the chain
+pool, entry table and operands, and are not part of this workload.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

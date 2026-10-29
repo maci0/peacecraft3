@@ -479,3 +479,41 @@ fn absence_of_leave_declaration_keeps_creation_and_enter_support() {
     );
     assert_eq!(h.inner().handles(), before);
 }
+
+#[test]
+fn rectangle_additions_reach_the_spatial_owner_once_the_placement_cache_exists() {
+    use crate::spatial_pool::{live_pool, tests::pool};
+    let mut h = host(limits());
+    let (region, rectangle, _) = inputs(&mut h);
+    h.native(ADD, &[region.clone(), rectangle.clone()]).unwrap();
+    assert!(live_pool(&h).is_none());
+
+    let mut placement = crate::unit_placement::tests::placement(
+        pcx_sim::world::Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "region pool".into(),
+        },
+        100,
+    );
+    placement.attach_spatial(pool());
+    h.test_attach_placement(placement);
+    h.native(
+        "MoveRectTo",
+        &[rectangle.clone(), Value::Int(20), Value::Int(30)],
+    )
+    .unwrap();
+    h.native(ADD, &[region.clone(), rectangle]).unwrap();
+    let owner = live_pool(&h).unwrap();
+    // Only the addition after the cache existed is delivered live.
+    assert_eq!(owner.live().sequence(), 1);
+    assert_eq!(
+        owner
+            .chain([6, 3])
+            .unwrap()
+            .next()
+            .map(|link| link.identity),
+        Some(id(&region).token())
+    );
+    assert!(owner.chain([0, 0]).unwrap().next().is_none());
+}

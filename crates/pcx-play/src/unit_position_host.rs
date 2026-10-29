@@ -31,6 +31,10 @@ impl ObjectHost {
         self.unit_placement.as_mut()
     }
 
+    pub(crate) fn placement_spatial(&self) -> Option<&crate::spatial_pool::PoolOwner> {
+        self.unit_placement.as_ref()?.spatial()
+    }
+
     pub fn unit_placement_rules(&self) -> Option<&crate::unit_placement::Rules> {
         self.unit_placement.as_ref().map(Placement::rules)
     }

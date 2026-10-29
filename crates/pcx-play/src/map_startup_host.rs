@@ -303,6 +303,9 @@ pub struct MapStartupInputs {
     pub weather: Option<crate::weather::Input>,
     pub ally_colors: Option<crate::ally_color::Input>,
     pub ai_source: Option<crate::campaign_ai::SourceNames>,
+    /// Image operands for the spatial chain owner; present exactly when the map script
+    /// can start an AI player (see `campaign_host::ai_possible`).
+    pub spatial_rules: Option<Arc<crate::spatial_pool::SpatialRules>>,
     /// Checked client operands used by campaign automatic target selection.
     pub targeting_policy: Option<crate::campaign_targeting_policy::TargetingPolicy>,
     /// Checked client operands used by ordinary campaign retreat decisions.
@@ -653,6 +656,7 @@ fn assemble_inner(
         weather,
         ally_colors,
         ai_source: _,
+        spatial_rules: _,
         targeting_policy,
         flee_policy,
         gathering_policy,

@@ -551,7 +551,8 @@ using the client's real addition, and refuses a nonfinite or nonadvancing clock.
 tests cover multiple due deadlines and recycling links at a deadline through the pool's
 single-event cleanup operation. The local-input test
 checks the interval and deadline arithmetic with the session's numeric policy. Neither test
-connects the clock or the pool to the live event scheduler.
+connects the clock or the pool to the live event scheduler; [Live pool plumbing](#live-pool-plumbing-2026-10-30)
+does that for tracked sessions.
 
 A set-based query also requires proof that no newer non-object link suppresses an older object
 link for a live entry. At `0x8be4c3` through `0x8be50e`, a removal link can consume an
@@ -583,10 +584,10 @@ interleaving. Its operations and exhaustion cases have synthetic tests. The sele
 diagnostic supplies executed region additions to this owner in their recorded order, using
 constructor flags and state read from `0x8c19b1`, `0x8c19c6` and `0x8c19ee`. This is a
 region-only check, not a replay of other live objects or of the full cell history.
-This component does not yet receive collision or region callbacks from the live host. A reader
+Tracked sessions now feed this component from the live host
+([Live pool plumbing](#live-pool-plumbing-2026-10-30)). A reader
 checks the interval initializer and minimum against
-the selected executable and uses the selected real-number arithmetic; the cleanup is not yet
-scheduled. The movement updater at `0x8bc810` updates two grids. The coarse update at
+the selected executable and uses the selected real-number arithmetic. The movement updater at `0x8bc810` updates two grids. The coarse update at
 `0x8bc840` scales position minus and plus radius. The fine update at `0x8bc900` instead
 classifies the normalized radius against the selected image's three thresholds and expands
 the lower and upper coordinates according to that class before flooring and transposition
@@ -626,7 +627,7 @@ The construction diagnostic now evaluates the supplied movement exclusions witho
 re-registering unit stamps. The native validator increments a movement-entry exclusion count
 at `0x7ffd2f` and restores it at `0x697f0d`; the diagnostic's query-local exclusion list does
 not yet represent that count in a live spatial entry. Stationary footprints are still composed
-into the pathing raster, and the pool and cleanup clock are not driven by the live world.
+into the pathing raster; the reach evaluator does not read the live pool yet.
 For a unit, `0x66e920` obtains the radius through its virtual method at offset `0x168`,
 applies the minimum at `0x112d810`, and passes it to `0x800340` for conversion before the
 movement object stores it. The captured acolyte's virtual target `0x66ec60` reads a field at
@@ -1265,6 +1266,102 @@ checking that the squared input fits the native unsigned word; it refuses larger
 coordinate scale remains a caller-supplied source value. A local comparison of the decoded
 iteration and integer square root agreed over one million consecutive inputs and 100,000
 deterministically sampled unsigned words; that is not a comparison of full reach searches.
+
+### Live pool plumbing, 2026-10-30
+
+The spatial chain owner is now connected to the live simulation. This is mechanical wiring of
+the decoded owner, not new decoding; the reach evaluator does not read it yet. Source:
+`spatial_pool.rs` (owner, hooks' receiving side), `unit_placement.rs` (collision hooks),
+`region_host.rs`, `campaign_placement.rs` (session start), `unit_activity_host.rs` (movement
+state and cleanup tick). Evidence tier throughout: recreation wiring over native-code facts
+quoted elsewhere in this note; nothing here was observed in the original client.
+
+**Gate.** A session is tracked when `campaign_host::ai_possible` holds: the selected common AI
+source is present and the map script text contains `StartCampaignAI`, `StartMeleeAI`,
+`MeleeStartingAI` or `ExecuteFunc`. The AI script is chosen at run time, so an exact gate
+(for example the first structure `SetProduce`) is not knowable at session start while the
+stream must begin there. The same predicate already enabled region and texture retention. An
+untracked session holds no owner: each hook is one `Option` test, with no allocation. Image
+operands (`SpatialRules`) are read only for tracked sessions.
+
+**One chronological stream.** The owner (`PoolOwner`) stamps its registration sequence; the
+hooks call it in simulation order.
+
+| Event | Hook | Owner operation |
+| --- | --- | --- |
+| Session start, decorations and destructables | `campaign_placement::assemble` | texture entry per object (decorations first, then destructable layers) |
+| Session start, region history | `assemble` replays `region_registrations()` | region entry, then rectangles in call order |
+| Region rectangle added later | `RegionAddRect` | `register` on first addition, `add_rectangle` after |
+| Unit created, moved, shown, relocated | `Placement::commit` | movement entry: `register`, `move_entry` when the fine rectangle changes |
+| Structure placed, relocated | `Placement::commit` (stamp has a pathing texture) | texture entry: row runs of the footprint |
+| Unit hidden, killed, removed | `Placement::hide` | movement entry: `retire_movement`; texture entry: removal links, active flag cleared |
+| Destructable dies or revives, script destructable created | `set_stationary_active`, `publish_script_destructable` | texture entry replaces its cells with the live or dead layer |
+| Commanded velocity changes | end of `advance_activity` | `update_walking` |
+| Game clock reaches a deadline | end of `advance_activity` | `cleanup_due`, once per due deadline |
+
+A unit's rectangle is the placement stamp's bounds in transposed order, which the fine-grid
+capture above matched for the radius classes. Native axis 0 is the world y axis.
+
+**Entry flags and state.** Documented tiers:
+- Region: constructor flags and state, link class from `0x801b75` (decoded earlier).
+- Texture entry: state has the registration bit (wrapper `0x8c19e0`, decoded earlier). The flags
+  are the active bit plus the recreation's pathing mask (`solid_mask` for stationary layers,
+  the movement-class mask for a structure unit). The native per-cell mask assignment at
+  `0x805343` is not decoded, so the mask value is provisional.
+- Movement entry: state zero (constructor `0x8c1950`, decoded earlier), which leaves the
+  registration bit clear. Such an entry is never a blocker in `cell_blocked`, matching the
+  snapshot diagnostic's rule that non-structure units do not block the reach query, but it
+  occupies chain positions and its removal links suppress older links. Flags are the active
+  bit plus the unit's movement-class mask. The live run below shows the recreation's ground
+  mask is `0x02` while the captured native acolyte entry intersected `0x08`, so the mask
+  correspondence is unverified and probably differs.
+
+**Movement state.** Velocity is the unit's speed toward its next waypoint, in world units per
+second, with the speed as limit. The native updater adds contributor vectors in its own
+spatial units; whether the threshold applies to world units per second is not established, so
+the moving bit is provisional and is not evidence for the reach query. A paused unit, a
+sleeping unit and a unit with any retained buff pass a named contributor, which the owner
+refuses; the owner applies a velocity only when it or the contributor flag changes.
+
+**Refusal.** The first operation the owner cannot apply (pool or entry exhaustion, duplicate
+entry, unconvertible region, unnamed contributor) is kept as `Refusal` and later operations are
+not applied. A consumer must check `PoolOwner::refusal()` before trusting a chain.
+
+**Choices without native evidence** (recreation decisions, for the reviewer to confirm):
+1. A hidden or dead unit retires its movement entry (removal links, entry dropped) and a show
+   registers a new one. Whether the native entry persists across hide is unread.
+2. A structure registers only its footprint, not a second movement entry for its radius stamp.
+3. Footprint cells register as row runs in chain order; the native per-cell order inside one
+   texture is unread.
+4. Decorations and destructables register before regions; script-created destructables before
+   the first unit are not separated from them.
+5. Cleanup runs after the tick's movement, combat and construction. The native order against
+   movement is the open question quoted earlier.
+6. A unit changing between movement and texture entries (morph) is refused.
+7. Link and entry budgets are session resource limits (`1 << 20` links bounded by the image
+   limit, `1 << 16` entries), not native values.
+
+**Not covered.** The coarse (scale 8) movement grid; the host has no `RemoveRegion` or
+`RegionClearRect` native, so no removal hook exists; ownership change does not alter any pool
+state (the entry carries no owner); items; doodad animation or sight blockers.
+
+**API.** `spatial_pool::live_pool(&ObjectHost) -> Option<&PoolOwner>` returns the owner in a
+tracked session after the placement cache is admitted (the first unit creation). `PoolOwner`
+exposes `refusal()`, `live()` (entry state, sequence, `blocked`), `chain(cell)` (newest first)
+and `cell_at(world point)`. The ignored test `live_pool_dumps_the_farm_layout_chains`
+(`crates/pcx-play/tests/spatial_pool_live.rs`) builds the Human05 farm layout and prints the
+chains around the farm site, the recorded farm-layout selection, the mine and the first worker.
+
+**Live run, Human05 farm layout (local assets, release build).** Map initialization registers
+12,919 operations with no refusal. After four orange acolytes and the passive farm are created
+at the recorded positions: the 3 by 3 cells around the farm site (6208, 2752) each hold one
+link, the farm's texture entry (flags `0x1000002`, state `0x10000000`); the cells around the
+mine hold its texture entry; the first worker's cells hold its movement entry (flags
+`0x1000002`, state `0`); the cells around the recorded farm-layout selection (5952, 2432) are
+empty. No region, decoration or other unit link falls in those windows. A second ignored test
+steps 2,048 ticks (game time 32 s) with the orange AI running: 14,511 operations, no refusal,
+next cleanup deadline 32.0997 s. Stepping past about 42 s stops at the existing unimplemented
+`IssueTargetOrder` native, unrelated to the pool.
 
 ## Not established
 

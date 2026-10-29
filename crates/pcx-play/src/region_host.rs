@@ -365,6 +365,14 @@ impl ObjectHost {
             None => {}
         }
         admission.additions += 1;
+        // Additions before the placement cache exists are replayed when it is built.
+        if let Some(pool) = self
+            .unit_placement
+            .as_mut()
+            .and_then(crate::unit_placement::Placement::spatial_mut)
+        {
+            pool.region_added(*region, bounds);
+        }
         Ok(Value::Null)
     }
     fn register_region_event(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {

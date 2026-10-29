@@ -654,6 +654,7 @@ pub(crate) fn host_inputs(
         weather: None,
         ally_colors: None,
         ai_source: None,
+        spatial_rules: None,
         targeting_policy: None,
         flee_policy: None,
         gathering_policy: None,

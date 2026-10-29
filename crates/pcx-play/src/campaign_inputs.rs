@@ -537,6 +537,14 @@ pub fn prepare(
             )?,
         }),
         ai_source: Some(crate::campaign_ai::SourceNames::selected(image)?),
+        spatial_rules: if crate::campaign_host::ai_possible(context, true) {
+            let rules = crate::ai_placement::Rules::reviewed_legacy(image, client.clone())?;
+            Some(Arc::new(
+                crate::spatial_pool::SpatialRules::reviewed_legacy(image, &rules)?,
+            ))
+        } else {
+            None
+        },
         targeting_policy: Some(
             crate::campaign_targeting_policy::TargetingPolicy::read(
                 image,

@@ -1,0 +1,481 @@
+//! Live owner of the native spatial chains for sessions where an AI player can place
+//! structures. One owner receives every collision registration in the order the
+//! simulation performs it; the chain pool stamps the sequence.
+//!
+//! Entry flags and state are provisional where the notes do not decode them:
+//! see "Live pool plumbing" in `docs/re-notes/ai-construction.md`. A refused
+//! operation leaves the pool incomplete for the rest of the session, and a
+//! consumer must check [`PoolOwner::refusal`] before trusting a chain.
+
+use crate::native_path_hierarchy::spatial_chains::{
+    ChainLink, Chains, CleanupClock, CleanupOperands, Error as ChainError, LiveChains,
+    MovementStateRule, region_cells,
+};
+use crate::native_path_hierarchy::{CellRect, EntryRules};
+use pcx_script::HandleId;
+use std::collections::BTreeMap;
+
+/// Session resource budget for chain links, bounded again by the image's index limit.
+const LINK_BUDGET: usize = 1 << 20;
+/// Session resource budget for registered entries.
+const ENTRY_BUDGET: usize = 1 << 16;
+/// Identity space above every arena handle token for objects the arena does not own.
+const DECORATION_TAG: u64 = 1 << 62;
+const PLACED_TAG: u64 = 1 << 63;
+
+/// Operands read once from the reviewed image for a tracked session.
+#[derive(Clone, Debug)]
+pub struct SpatialRules {
+    entries: EntryRules,
+    removal_class: u32,
+    object_class: u32,
+    region_class: u32,
+    link_limit: u32,
+    movement: MovementStateRule,
+    cleanup: CleanupOperands,
+}
+
+impl SpatialRules {
+    pub fn reviewed_legacy(
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<Self, String> {
+        let entries = EntryRules::reviewed_legacy(image, rules)?;
+        let (removal_class, object_class) = Chains::reviewed_classes(image, rules, entries)?;
+        Ok(Self {
+            entries,
+            removal_class,
+            object_class,
+            region_class: Chains::reviewed_region_class(image, rules)?,
+            link_limit: Chains::reviewed_limit(image, rules)?,
+            movement: MovementStateRule::reviewed_legacy(image, rules)?,
+            cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
+        })
+    }
+
+    pub(crate) fn cleanup(&self) -> &CleanupOperands {
+        &self.cleanup
+    }
+
+    #[cfg(test)]
+    pub(crate) fn synthetic(entries: EntryRules) -> Self {
+        Self {
+            entries,
+            removal_class: 0,
+            object_class: 0x3000,
+            region_class: 0x2000,
+            link_limit: 0xfffff,
+            movement: MovementStateRule::synthetic(4.0, 0x40),
+            cleanup: CleanupOperands::synthetic(),
+        }
+    }
+}
+
+/// The pathing grid the chains cover. Native axis 0 is the world y axis.
+#[derive(Clone, Copy, Debug)]
+pub struct Geometry {
+    pub origin: [f32; 2],
+    pub cell_size: f32,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Geometry {
+    fn size(self) -> [usize; 2] {
+        [self.height, self.width]
+    }
+}
+
+/// The first operation the owner could not apply. Later operations are not applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub identity: u64,
+    pub operation: &'static str,
+    pub error: ChainError,
+}
+
+/// Collision stamp fields the owner reads at a commit.
+pub(crate) struct Stamp<'a> {
+    pub active: bool,
+    pub mask: u8,
+    pub cells: &'a [usize],
+    pub footprint: &'a [usize],
+}
+
+/// A pathing-texture owner other than a unit.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Texture {
+    Decoration(u32),
+    Placed(u32),
+    Destructable(HandleId),
+}
+
+impl Texture {
+    fn identity(self) -> u64 {
+        match self {
+            Self::Decoration(index) => DECORATION_TAG | u64::from(index),
+            Self::Placed(creation) => PLACED_TAG | u64::from(creation),
+            Self::Destructable(id) => id.token(),
+        }
+    }
+}
+
+enum Tracked {
+    Mover(CellRect),
+    /// Row runs covering the entry's cells; empty while the object has no pathing texture.
+    Texture(Vec<CellRect>),
+    Region,
+}
+
+pub struct PoolOwner {
+    live: LiveChains,
+    rules: SpatialRules,
+    geometry: Geometry,
+    tracked: BTreeMap<u64, Tracked>,
+    /// Last commanded velocity and whether a non-order contributor was present.
+    velocities: BTreeMap<HandleId, ([f32; 2], bool)>,
+    refusal: Option<Refusal>,
+}
+
+impl PoolOwner {
+    /// Allocate the pool and entry table at game time `start`.
+    pub fn new(
+        rules: SpatialRules,
+        geometry: Geometry,
+        start: f32,
+        interval: f32,
+    ) -> Result<Self, ChainError> {
+        let capacity = LINK_BUDGET.min(usize::try_from(rules.link_limit).unwrap_or(usize::MAX));
+        let chains = Chains::new(
+            geometry.size(),
+            capacity,
+            rules.link_limit,
+            rules.removal_class,
+        )?;
+        let live = LiveChains::new(
+            chains,
+            CleanupClock::new(start, interval)?,
+            rules.entries,
+            ENTRY_BUDGET,
+        )?;
+        Ok(Self {
+            live,
+            rules,
+            geometry,
+            tracked: BTreeMap::new(),
+            velocities: BTreeMap::new(),
+            refusal: None,
+        })
+    }
+
+    /// The first refused operation, or `None` while every operation was applied.
+    pub fn refusal(&self) -> Option<&Refusal> {
+        self.refusal.as_ref()
+    }
+
+    /// Chains, entry states and the registration sequence.
+    pub fn live(&self) -> &LiveChains {
+        &self.live
+    }
+
+    /// The cell's links, newest first.
+    pub fn chain(
+        &self,
+        cell: [usize; 2],
+    ) -> Result<impl Iterator<Item = ChainLink> + '_, ChainError> {
+        self.live.chain(cell)
+    }
+
+    /// The chain cell containing a world point, clipped to the grid like a region rectangle.
+    pub fn cell_at(&self, point: [f32; 2]) -> Result<[usize; 2], ChainError> {
+        let rect = region_cells(
+            [point[0], point[1], point[0], point[1]],
+            self.geometry.origin,
+            self.geometry.cell_size,
+            self.geometry.size(),
+        )?;
+        Ok(rect.lower)
+    }
+
+    fn note(&mut self, identity: u64, operation: &'static str, result: Result<(), ChainError>) {
+        if let Err(error) = result {
+            self.refusal.get_or_insert(Refusal {
+                identity,
+                operation,
+                error,
+            });
+        }
+    }
+
+    fn chain_cell(&self, index: usize) -> [usize; 2] {
+        [index / self.geometry.width, index % self.geometry.width]
+    }
+
+    fn bounds(&self, cells: &[usize]) -> Option<CellRect> {
+        let mut lower = [usize::MAX; 2];
+        let mut upper = [0; 2];
+        for &index in cells {
+            let cell = self.chain_cell(index);
+            for axis in 0..2 {
+                lower[axis] = lower[axis].min(cell[axis]);
+                upper[axis] = upper[axis].max(cell[axis] + 1);
+            }
+        }
+        (lower[0] != usize::MAX).then_some(CellRect { lower, upper })
+    }
+
+    /// Row runs in chain order: native axis 1 major, axis 0 contiguous.
+    fn runs(&self, cells: &[usize]) -> Vec<CellRect> {
+        let mut native: Vec<[usize; 2]> = cells.iter().map(|&i| self.chain_cell(i)).collect();
+        native.sort_unstable_by_key(|cell| (cell[1], cell[0]));
+        native.dedup();
+        let mut runs: Vec<CellRect> = Vec::new();
+        for [x, y] in native {
+            match runs.last_mut() {
+                Some(run) if run.lower[1] == y && run.upper[0] == x => run.upper[0] += 1,
+                _ => runs.push(CellRect {
+                    lower: [x, y],
+                    upper: [x + 1, y + 1],
+                }),
+            }
+        }
+        runs
+    }
+
+    /// A unit's collision stamp was committed. A unit with a pathing texture is a
+    /// texture entry; any other stamped unit is a movement entry.
+    pub(crate) fn commit(&mut self, unit: HandleId, stamp: Stamp<'_>) {
+        if self.refusal.is_some() {
+            return;
+        }
+        if !stamp.active {
+            self.hide(unit);
+            return;
+        }
+        let identity = unit.token();
+        if !stamp.footprint.is_empty() {
+            let runs = self.runs(stamp.footprint);
+            self.set_texture(identity, stamp.mask, runs);
+        } else if let Some(rect) = self.bounds(stamp.cells) {
+            self.set_mover(identity, stamp.mask, rect);
+        } else {
+            self.hide(unit);
+        }
+    }
+
+    /// A unit left the collision cache: hidden, dead or removed.
+    pub(crate) fn hide(&mut self, unit: HandleId) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let identity = unit.token();
+        match self.tracked.get(&identity) {
+            Some(Tracked::Mover(_)) => {
+                let result = self.live.retire_movement(identity).map(drop);
+                self.tracked.remove(&identity);
+                self.velocities.remove(&unit);
+                self.note(identity, "retire movement", result);
+            }
+            Some(Tracked::Texture(runs)) if !runs.is_empty() => {
+                self.set_texture(identity, 0, Vec::new());
+            }
+            _ => {}
+        }
+    }
+
+    /// A stationary object's pathing cells changed, or it was created.
+    pub(crate) fn texture(&mut self, owner: Texture, mask: u8, cells: &[usize]) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let runs = self.runs(cells);
+        self.set_texture(owner.identity(), mask, runs);
+    }
+
+    fn set_mover(&mut self, identity: u64, mask: u8, rect: CellRect) {
+        let object_class = self.rules.object_class;
+        match self.tracked.get(&identity) {
+            None => {
+                let (flags, state) = self.rules.entries.movement_entry(mask);
+                let result = self
+                    .live
+                    .register(identity, flags, state, rect, object_class, true)
+                    .map(drop);
+                if result.is_ok() {
+                    self.tracked.insert(identity, Tracked::Mover(rect));
+                }
+                self.note(identity, "register movement", result);
+            }
+            Some(Tracked::Mover(old)) if *old != rect => {
+                let result = self.live.move_entry(identity, rect, object_class).map(drop);
+                if result.is_ok() {
+                    self.tracked.insert(identity, Tracked::Mover(rect));
+                }
+                self.note(identity, "move movement", result);
+            }
+            Some(Tracked::Mover(_)) => {}
+            Some(_) => self.note(
+                identity,
+                "register movement",
+                Err(ChainError::DuplicateEntry(identity)),
+            ),
+        }
+    }
+
+    fn set_texture(&mut self, identity: u64, mask: u8, runs: Vec<CellRect>) {
+        let object_class = self.rules.object_class;
+        let (flags, state) = self.rules.entries.texture_entry(mask);
+        match self.tracked.get(&identity) {
+            None if runs.is_empty() => {}
+            None => {
+                let mut result = self
+                    .live
+                    .register(identity, flags, state, runs[0], object_class, false)
+                    .map(drop);
+                for run in &runs[1..] {
+                    result = result.and_then(|()| {
+                        self.live
+                            .add_rectangle(identity, *run, object_class)
+                            .map(drop)
+                    });
+                }
+                self.tracked.insert(identity, Tracked::Texture(runs));
+                self.note(identity, "register texture", result);
+            }
+            Some(Tracked::Texture(old)) if *old == runs => {}
+            Some(Tracked::Texture(old)) => {
+                let old = old.clone();
+                let mut result = Ok(());
+                for run in &old {
+                    result =
+                        result.and_then(|()| self.live.remove_rectangle(identity, *run).map(drop));
+                }
+                if old.is_empty() != runs.is_empty() {
+                    let flags = if runs.is_empty() {
+                        let held = self
+                            .live
+                            .entry_state(identity)
+                            .map_or(flags, |(held, _)| held);
+                        self.rules.entries.without_active(held)
+                    } else {
+                        flags
+                    };
+                    result = result.and_then(|()| self.live.update_state(identity, flags, state));
+                }
+                for run in &runs {
+                    result = result.and_then(|()| {
+                        self.live
+                            .add_rectangle(identity, *run, object_class)
+                            .map(drop)
+                    });
+                }
+                self.tracked.insert(identity, Tracked::Texture(runs));
+                self.note(identity, "replace texture", result);
+            }
+            Some(_) => self.note(
+                identity,
+                "register texture",
+                Err(ChainError::DuplicateEntry(identity)),
+            ),
+        }
+    }
+
+    /// A rectangle was added to a region. The first addition registers the region.
+    pub(crate) fn region_added(&mut self, region: HandleId, bounds: [f32; 4]) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let identity = region.token();
+        let rect = region_cells(
+            bounds,
+            self.geometry.origin,
+            self.geometry.cell_size,
+            self.geometry.size(),
+        );
+        let class = self.rules.region_class;
+        let result = rect.and_then(|rect| {
+            if self.tracked.contains_key(&identity) {
+                self.live.add_rectangle(identity, rect, class).map(drop)
+            } else {
+                let (flags, state) = self.rules.entries.region_initial_state();
+                self.tracked.insert(identity, Tracked::Region);
+                self.live
+                    .register(identity, flags, state, rect, class, false)
+                    .map(drop)
+            }
+        });
+        self.note(identity, "add region rectangle", result);
+    }
+
+    /// Apply the commanded movement contribution of a moving unit. Only a change in
+    /// velocity or in the presence of a non-order contributor is applied.
+    pub(crate) fn command_velocity(
+        &mut self,
+        unit: HandleId,
+        velocity: [f32; 2],
+        limit: f32,
+        contributor: Option<&'static str>,
+    ) {
+        if self.refusal.is_some()
+            || !matches!(self.tracked.get(&unit.token()), Some(Tracked::Mover(_)))
+        {
+            return;
+        }
+        let key = (velocity, contributor.is_some());
+        if self
+            .velocities
+            .get(&unit)
+            .copied()
+            .unwrap_or(([0.; 2], false))
+            == key
+        {
+            return;
+        }
+        let result = self.live.update_walking(
+            unit.token(),
+            self.rules.movement,
+            velocity,
+            limit,
+            contributor,
+        );
+        if key == ([0.; 2], false) {
+            self.velocities.remove(&unit);
+        } else {
+            self.velocities.insert(unit, key);
+        }
+        self.note(unit.token(), "movement state", result);
+    }
+
+    /// Units whose last commanded velocity or contributor flag was not the idle default.
+    pub(crate) fn moving_units(&self) -> impl Iterator<Item = HandleId> + '_ {
+        self.velocities.keys().copied()
+    }
+
+    /// Deliver every cleanup deadline due at game time `now`.
+    pub(crate) fn cleanup(&mut self, now: f64) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let now = now as f32;
+        loop {
+            match self.live.cleanup_due(now) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    self.note(0, "cleanup", Err(error));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// The session's live chain owner. `None` in an untracked session and before the
+/// first unit creation admits the placement cache.
+pub fn live_pool(host: &crate::playercolor_host::ObjectHost) -> Option<&PoolOwner> {
+    host.placement_spatial()
+}
+
+#[cfg(test)]
+#[path = "spatial_pool_tests.rs"]
+pub(crate) mod tests;

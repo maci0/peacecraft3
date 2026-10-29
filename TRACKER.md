@@ -5982,3 +5982,23 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - The `pcx-play` library suite passed 2,365 tests with 92 ignored; the selected-image movement
   test passed separately. Native and WASM Clippy passed with warnings denied, and the Human03
   simulation budget check passed. Human04 and Human05 were not rerun.
+
+### 2026-10-30: Live pool plumbing
+
+- [~] Tracked sessions (the map script can start an AI) now feed the spatial chain owner from the
+  live host in one chronological stream: session-start decorations, destructables and region
+  history, then unit and structure collision commits, hides, stationary toggles, region
+  additions, commanded movement velocity, and the cleanup deadlines on the game clock.
+  `spatial_pool::live_pool(&ObjectHost)` returns the owner; it records the first refused
+  operation and stops. The reach evaluator does not read it yet, so AI structure placement is
+  still refused. Entry flags and several ordering choices are provisional and listed in
+  [AI construction](docs/re-notes/ai-construction.md#live-pool-plumbing-2026-10-30).
+- Untracked sessions hold no owner. The Human03 budget check passes with allocation and
+  reallocation counts equal to the pre-change run in the same checkout (1,597,968 and 3,375,515
+  allocations), 24 more requested bytes, equal digests; no budget was raised. See
+  [simulation performance](docs/performance/sim-script.md).
+- 14 new tests (owner, placement hooks, region host, activity tick) plus two ignored Human05
+  tests (`crates/pcx-play/tests/spatial_pool_live.rs`). Open: ownership change has no pool state,
+  `RemoveRegion` and `RegionClearRect` are not host natives, the coarse movement grid is not
+  modeled, and the live recreation's ground mask (`0x02`) differs from the captured native
+  intersection (`0x08`).

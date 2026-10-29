@@ -170,6 +170,14 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_attach_spatial(&mut self, owner: crate::spatial_pool::PoolOwner) {
+        self.unit_placement
+            .as_mut()
+            .expect("admitted placement")
+            .attach_spatial(owner);
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_placement_cell(&self, cell: usize) -> Option<u8> {
         self.unit_placement
             .as_ref()

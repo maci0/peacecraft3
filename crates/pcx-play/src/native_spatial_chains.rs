@@ -258,10 +258,7 @@ impl CleanupOperands {
     }
 
     /// Divide with the session's real arithmetic and apply the image's minimum.
-    pub fn interval(
-        &self,
-        numeric: &crate::script_numeric::NumericPolicy,
-    ) -> Result<f32, String> {
+    pub fn interval(&self, numeric: &crate::script_numeric::NumericPolicy) -> Result<f32, String> {
         use crate::script_random::real;
 
         if numeric.image_sha256() != &self.image_sha256 {
@@ -654,10 +651,7 @@ impl Chains {
     }
 
     /// The cell's links, newest first, without applying any query rule.
-    pub fn links(
-        &self,
-        cell: [usize; 2],
-    ) -> Result<impl Iterator<Item = ChainLink> + '_, Error> {
+    pub fn links(&self, cell: [usize; 2]) -> Result<impl Iterator<Item = ChainLink> + '_, Error> {
         if cell[0] >= self.size[0] || cell[1] >= self.size[1] {
             return Err(Error::Rectangle);
         }

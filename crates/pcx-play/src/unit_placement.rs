@@ -4,6 +4,7 @@ use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
 use crate::scripts::AssetIdentity;
+use crate::spatial_pool::{PoolOwner, Stamp, Texture};
 use pcx_assets::AssetPath;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
@@ -495,6 +496,8 @@ pub struct Placement {
     stationary_work: usize,
     base_pathing: Option<Pathing>,
     budget: Budget,
+    /// Present only in tracked sessions; see [`crate::spatial_pool`].
+    spatial: Option<Box<PoolOwner>>,
 }
 
 /// Source reader for lazily decoded footprints. Paths are canonical
@@ -852,7 +855,31 @@ impl Placement {
             stationary_work: budget.stationary_work,
             base_pathing: None,
             budget,
+            spatial: None,
         })
+    }
+
+    /// The live spatial chain owner, in tracked sessions.
+    pub fn spatial(&self) -> Option<&PoolOwner> {
+        self.spatial.as_deref()
+    }
+
+    pub(crate) fn spatial_mut(&mut self) -> Option<&mut PoolOwner> {
+        self.spatial.as_deref_mut()
+    }
+
+    /// Attach the owner after it has received the session-start registrations.
+    pub(crate) fn attach_spatial(&mut self, owner: PoolOwner) {
+        self.spatial = Some(Box::new(owner));
+    }
+
+    fn movement_mask(&self, movement: Movement) -> u8 {
+        match movement {
+            Movement::Ground => self.rules.ground_mask(),
+            Movement::Air => self.rules.fly_mask(),
+            Movement::Float => self.rules.float_mask(),
+            Movement::Amphibious => self.rules.amphibious_mask(),
+        }
     }
 
     /// Compose stationary destructables over an already decoration-stamped base.
@@ -951,7 +978,26 @@ impl Placement {
         }
         layer.active = active;
         self.recompose_key(key);
+        self.register_stationary(key);
         true
+    }
+
+    /// Give the spatial owner a layer's currently effective cells and mask.
+    fn register_stationary(&mut self, key: StationaryKey) {
+        let (Some(pool), Some(layer)) = (self.spatial.as_deref_mut(), self.stationary.get(&key))
+        else {
+            return;
+        };
+        let owner = match key {
+            StationaryKey::Placed(creation) => Texture::Placed(creation),
+            StationaryKey::Destructable(id) => Texture::Destructable(id),
+        };
+        let cells = if layer.active {
+            &layer.live
+        } else {
+            &layer.dead
+        };
+        pool.texture(owner, layer.mask, cells);
     }
 
     /// Recompose one layer over its retained cells without allocating.
@@ -1174,6 +1220,7 @@ impl Placement {
             },
         );
         self.recompose(&cells);
+        self.register_stationary(key);
     }
 
     fn script_footprint_cells(
@@ -1758,6 +1805,9 @@ impl Placement {
                 }
             }
             stamp.active = false;
+        }
+        if let Some(pool) = self.spatial.as_deref_mut() {
+            pool.hide(unit);
         }
         Ok(())
     }
@@ -2459,10 +2509,26 @@ impl Placement {
                 self.footprint_occupied[i] += 1;
             }
         }
-        if let Some(at) = old {
+        let at = old.unwrap_or(self.stamps.len());
+        if old.is_some() {
             self.stamps[at].1 = prepared;
         } else {
             self.stamps.push((unit, prepared));
+        }
+        if self.spatial.is_some() {
+            let mask = self.movement_mask(self.stamps[at].1.movement);
+            let stamp = &self.stamps[at].1;
+            if let Some(pool) = self.spatial.as_deref_mut() {
+                pool.commit(
+                    unit,
+                    Stamp {
+                        active: stamp.active,
+                        mask,
+                        cells: &stamp.cells,
+                        footprint: &stamp.footprint,
+                    },
+                );
+            }
         }
     }
 
