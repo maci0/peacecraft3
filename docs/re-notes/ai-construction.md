@@ -884,6 +884,23 @@ current order or its latest movement displacement alone is not evidence of the n
 state. Live chain registration must retain that distinction before it can supply the reach
 query.
 
+The chain owner now has a source-qualified state operation for a supplied sole walking
+contribution. It reads the squared-magnitude threshold and state-bit operands from the selected
+image, verifies the zero operand is in its zero-filled section, and uses the selected real
+arithmetic. A non-order contributor supplied by the caller produces a typed refusal. Synthetic
+tests cover the threshold boundary, a zero scalar, exclusion preservation and refusal. An
+ignored selected-input test checks the image reader. This operation does not derive the vector
+or scalar from a live unit and is not called by the host.
+
+The direct calls into `0x8bca70` are the add and subtract paths at `0x8bb1b9` and `0x8bb1e7`,
+the replacement wrapper at `0x8bbc75`, the limit-change path at `0x8bc3c2`, and the contributor
+update at `0x8bc628`. The wrapper is also reached at `0x8a156c`, `0x8a1ee7`, `0x8b027e`,
+`0x8b02d3`, `0x8b15fc` and `0x8c582f`. These call sites alone do not identify every gameplay
+trigger, including indirect calls. The live host exposes activity speed and rejects a new point
+order when an admitted active order may change speed, but that does not establish a complete
+classification of non-order vector contributors. The owner therefore cannot be wired to live
+state on this evidence without an additional source-qualified contributor check.
+
 An isolated Wine debugger run placed a hardware watchpoint on the state word of the first
 newly constructed movement entry after `0x8bafd6`. The watchpoint was accepted, but did not
 fire during the bounded observation window. That entry was not identified as the captured

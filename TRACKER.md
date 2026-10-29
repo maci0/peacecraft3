@@ -5971,3 +5971,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   their magnitude limit and live recreation activity remains unqualified. Live chain wiring,
   the scheduler and production construction remain open. See
   [AI construction](docs/re-notes/ai-construction.md).
+
+### 2026-10-29: Movement state operands
+
+- [~] The chain owner can apply the reviewed movement threshold to a supplied sole walking
+  contribution while preserving exclusion counts. It refuses named additional contributors.
+  The threshold and mask come from the selected image; the selected-input check and synthetic
+  tests pass. This is not live host wiring. Contributor classification, source-qualified live
+  velocity and limit inputs, scheduling and the live reach replay remain open.
+- The `pcx-play` library suite passed 2,365 tests with 92 ignored; the selected-image movement
+  test passed separately. Native and WASM Clippy passed with warnings denied, and the Human03
+  simulation budget check passed. Human04 and Human05 were not rerun.

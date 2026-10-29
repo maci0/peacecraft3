@@ -61,6 +61,23 @@ mod section_storage_tests {
             assert!(Pe::parse(&overlap, budget).is_err());
         }
     }
+
+    #[test]
+    fn zero_filled_range_must_fit_in_a_readable_virtual_tail() {
+        let mut data = image(1);
+        data[0xf8 + 8..0xf8 + 12].copy_from_slice(&32_u32.to_le_bytes());
+        let budget = RuleInputBudget {
+            image_bytes: 1 << 20,
+            profile_bytes: 1 << 10,
+            sections: 32,
+        };
+        let pe = Pe::parse(&data, budget).unwrap();
+        assert!(pe.zero_filled(0x301010, 16));
+        assert!(!pe.zero_filled(0x30100f, 2));
+        assert!(!pe.zero_filled(0x30101f, 2));
+        assert!(!pe.zero_filled(0x301010, 0));
+        assert!(!pe.zero_filled(u32::MAX, 2));
+    }
 }
 fn word(d: &[u8], at: usize) -> Result<u16, NeutralError> {
     Ok(u16::from_le_bytes(bytes(d, at, 2)?.try_into().unwrap()))
@@ -284,6 +301,20 @@ impl<'a> Pe<'a> {
             && s.flags & 0x80 == 0
             && (!code || s.flags & 0x2000_0020 == 0x2000_0020)
             && s.flags & 0x60 != 0
+    }
+    /// Whether the whole range is zero-filled by the PE loader rather than stored in the file.
+    pub(crate) fn zero_filled(&self, va: u32, len: u32) -> bool {
+        let Some(rva) = va.checked_sub(self.base) else {
+            return false;
+        };
+        let Some(end) = rva.checked_add(len).filter(|_| len != 0) else {
+            return false;
+        };
+        self.sections().iter().any(|section| {
+            rva >= section.rva + section.raw_size
+                && end <= section.rva + section.mapped
+                && section.flags & 0x4000_0000 != 0
+        })
     }
     /// The remaining initialized bytes in one section, never its virtual padding.
     pub(crate) fn read_from(&self, va: u32, code: bool) -> Result<&'a [u8], NeutralError> {

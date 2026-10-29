@@ -49,6 +49,101 @@ fn region_class_operand(call: &[u8], select: &[u8]) -> Result<u32, String> {
     Ok(class)
 }
 
+/// Selected movement-entry state test. Velocity is in the native spatial units.
+#[derive(Clone, Copy, Debug)]
+pub struct MovementStateRule {
+    threshold: f32,
+    moving_bit: u32,
+}
+
+impl MovementStateRule {
+    /// Read the movement threshold and state mask from the reviewed image.
+    pub fn reviewed_legacy(
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<Self, String> {
+        use crate::neutral_player::{RuleInputBudget, sha256};
+        use crate::neutral_rule_input::Pe;
+
+        if rules.image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
+            || sha256(image) != rules.image_sha256
+        {
+            return Err("spatial movement image identity mismatch".into());
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let read = |address, size, code| -> Result<&[u8], String> {
+            pe.read_from(address, code)
+                .map_err(|e| format!("spatial movement source at {address:#x}: {e}"))?
+                .get(..size)
+                .ok_or_else(|| format!("truncated spatial movement source at {address:#x}"))
+        };
+        let threshold_load = read(0x8bcae7, 8, true)?;
+        let zero_load = read(0x8bcad5, 5, true)?;
+        let set = read(0x8bcb6d, 7, true)?;
+        let clear = read(0x8bcb15, 7, true)?;
+        if threshold_load[..4] != [0xf3, 0x0f, 0x10, 0x05]
+            || zero_load[0] != 0x68
+            || set[..3] != [0x81, 0x48, 0x44]
+            || clear[..3] != [0x81, 0x60, 0x44]
+        {
+            return Err("unrecognized spatial movement test instructions".into());
+        }
+        let address = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().expect("checked width"));
+        let threshold = f32::from_le_bytes(
+            read(address(&threshold_load[4..]), 4, false)?
+                .try_into()
+                .expect("checked width"),
+        );
+        let zero_address = address(&zero_load[1..]);
+        let moving_bit = address(&set[3..]);
+        if !threshold.is_normal()
+            || threshold <= 0.0
+            || !pe.zero_filled(zero_address, 4)
+            || moving_bit.count_ones() != 1
+            || address(&clear[3..]) != !moving_bit
+        {
+            return Err("unsupported spatial movement threshold or state mask".into());
+        }
+        Ok(Self {
+            threshold,
+            moving_bit,
+        })
+    }
+
+    /// Apply the decoded state test to a qualified sole movement contribution.
+    pub fn apply(self, state: u32, velocity: [f32; 2], limit: f32) -> Result<u32, Error> {
+        use crate::script_random::real;
+
+        if !limit.is_finite() || limit < 0.0 {
+            return Err(Error::MovementState);
+        }
+        let [x, y] = velocity.map(real::from_f32);
+        let (x, y) = (
+            x.map_err(|_| Error::MovementState)?,
+            y.map_err(|_| Error::MovementState)?,
+        );
+        let magnitude = real::add(
+            real::mul(x, x).map_err(|_| Error::MovementState)?,
+            real::mul(y, y).map_err(|_| Error::MovementState)?,
+        )
+        .map_err(|_| Error::MovementState)?;
+        let moving = f32::from_bits(magnitude) >= self.threshold && limit > 0.0;
+        Ok(if moving {
+            state | self.moving_bit
+        } else {
+            state & !self.moving_bit
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("spatial chain grid dimensions are invalid")]
@@ -77,6 +172,13 @@ pub enum Error {
     EntryCapacity(usize),
     #[error("spatial registration sequence overflow")]
     Sequence,
+    #[error("spatial movement state has unsupported velocity or limit")]
+    MovementState,
+    #[error("spatial entry {identity} has an unqualified movement contributor: {contributor}")]
+    MovementContributor {
+        identity: u64,
+        contributor: &'static str,
+    },
 }
 
 /// Convert a world-space region to the native grid's clipped, transposed cells.
@@ -738,6 +840,30 @@ impl LiveChains {
         Ok(())
     }
 
+    /// Apply the walking contribution without changing links or exclusion counts.
+    pub fn update_walking(
+        &mut self,
+        identity: u64,
+        rule: MovementStateRule,
+        velocity: [f32; 2],
+        limit: f32,
+        other_contributor: Option<&'static str>,
+    ) -> Result<(), Error> {
+        let index = self.entry(identity)?;
+        if self.entries[index].movement.is_none() {
+            return Err(Error::MissingMovement(identity));
+        }
+        if let Some(contributor) = other_contributor {
+            return Err(Error::MovementContributor {
+                identity,
+                contributor,
+            });
+        }
+        let state = rule.apply(self.entries[index].state, velocity, limit)?;
+        self.entries[index].state = state;
+        Ok(())
+    }
+
     /// Retire a movement entry, inserting its removal links before removing its state.
     pub fn retire_movement(&mut self, identity: u64) -> Result<u64, Error> {
         let index = self.entry(identity)?;
@@ -842,6 +968,61 @@ mod tests {
         assert_eq!(live.retire_movement(9), Ok(3));
         assert!(!live.blocked([2, 0], 0, 4).unwrap());
         assert_eq!(live.cleanup_due(0.5), Ok(true));
+    }
+
+    #[test]
+    fn walking_state_uses_threshold_and_preserves_exclusions() {
+        let mut rules = rules(7);
+        rules.forbidden = 0x4f;
+        let chains = Chains::new([1, 1], 2, 4, 0).unwrap();
+        let clock = CleanupClock::new(0.0, 0.25).unwrap();
+        let mut live = LiveChains::new(chains, clock, rules, 1).unwrap();
+        let movement = MovementStateRule {
+            threshold: 4.0,
+            moving_bit: 0x40,
+        };
+        live.register(1, 0x104, 0x200, rect(0, 1), rules.object_class, true)
+            .unwrap();
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        live.update_walking(1, movement, [1.0, -1.0], 1.0, None)
+            .unwrap();
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        live.update_walking(1, movement, [2.0, 0.0], 1.0, None)
+            .unwrap();
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        live.exclusion(1, true).unwrap();
+        live.update_walking(1, movement, [0.0, 0.0], 1.0, None)
+            .unwrap();
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        live.exclusion(1, false).unwrap();
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        live.update_walking(1, movement, [4.0, 0.0], 0.0, None)
+            .unwrap();
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        assert_eq!(
+            live.update_walking(1, movement, [4.0, 0.0], 1.0, Some("knockback")),
+            Err(Error::MovementContributor {
+                identity: 1,
+                contributor: "knockback"
+            })
+        );
+        assert_eq!(
+            live.update_walking(1, movement, [f32::NAN, 0.0], 1.0, None),
+            Err(Error::MovementState)
+        );
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+    }
+
+    #[test]
+    #[ignore = "requires the selected local Warcraft III executable in PCX_CAMPAIGN_IMAGE"]
+    fn selected_movement_state_rule_reads_the_client() {
+        let path = std::env::var("PCX_CAMPAIGN_IMAGE").unwrap();
+        let image = std::fs::read(&path).unwrap();
+        let identity = crate::campaign_inputs::client_identity(&image, &path);
+        let placement = crate::ai_placement::Rules::reviewed_legacy(&image, identity).unwrap();
+        let rule = MovementStateRule::reviewed_legacy(&image, &placement).unwrap();
+        assert_eq!(rule.apply(rule.moving_bit, [0.0, 0.0], 1.0), Ok(0));
+        assert_eq!(rule.apply(0, [1.0, 0.0], 0.0), Ok(0));
     }
 
     #[test]
