@@ -166,6 +166,8 @@ fn region_registration_history_preserves_interleaved_call_order_and_bounds() {
     let mut h = host(limits());
     assert!(h.region_registrations().is_err());
     h.enable_region_registration_order().unwrap();
+    assert!(h.regions.as_ref().unwrap().registration_order.is_none());
+    assert_eq!(h.region_registrations().unwrap().count(), 0);
     assert!(h.enable_region_registration_order().is_err());
     let (first, rectangle, _) = inputs(&mut h);
     let second = h.native(CREATE, &[]).unwrap();
@@ -205,12 +207,12 @@ fn region_registration_history_supports_wide_handle_budgets() {
     let mut h = host(limits());
     h.inner.max_handles = u32::MAX as usize + 1;
     h.enable_region_registration_order().unwrap();
+    let (region, rectangle, _) = inputs(&mut h);
+    h.native(ADD, &[region.clone(), rectangle]).unwrap();
     assert!(matches!(
         h.regions.as_ref().unwrap().registration_order.as_deref(),
         Some(RegistrationOrder::Wide(_))
     ));
-    let (region, rectangle, _) = inputs(&mut h);
-    h.native(ADD, &[region.clone(), rectangle]).unwrap();
     let entries = h
         .region_registrations()
         .unwrap()

@@ -5924,3 +5924,28 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   post-change snapshot oracle passed, and both post-change Human03 and Human04 routes reached
   victory with checkpoints and RNG matching `g1`. Rebuilt Human05 runs `live-box-a` and
   `live-box-b` both stopped at 1223 s, matching the 98 previous checkpoint and RNG lines.
+
+### 2026-10-29: Fine movement rectangles and region storage
+
+- [~] The selected client's fine movement rectangle follows radius classes, separate from
+  its coarse position-and-radius rectangle. Three captured moving entries match the existing
+  placement stamp extents. The stamp bounds are exposed in transposed spatial-grid order;
+  real-arithmetic boundary cases and the live chain registration order remain open. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Region registration history now grows on demand rather than reserving the full admission
+  budget. The Human03 budget check passes with the same allocation and reallocation counts
+  as the earlier control and 16 additional requested bytes. Human04 startup retains the same
+  digest and uses 144 additional allocations, two additional reallocations and 33,776
+  additional requested bytes against the equal-path-length control; the requested allocation
+  parity is not reached. The AI script can request structures, so its tracking cannot simply
+  be disabled. Budgets were not raised.
+- The `pcx-play` library suite passes 2,361 tests with 91 ignored. Native and WASM Clippy
+  pass with warnings denied. AI placement remains refused until live chains and their cleanup
+  are connected and verified; snapshot results do not establish live occupancy.
+- Two release Human05 runs stop at 1223 s with the same placement refusal and 98 identical
+  checkpoint and RNG lines.
+- The local-input snapshot comparison selects (6208, 2752) at dequeue 1 and (5952, 2432)
+  at dequeue 280 in both texture-axis variants. All 100 at-start and 12 near-mine recorded
+  reach results match. These comparisons still use sampled occupancy.
+- The Human03 and Human04 routes reach victory at 279.02 s and 449.02 s; their 45 and 72
+  checkpoint and RNG lines respectively match `g1`.

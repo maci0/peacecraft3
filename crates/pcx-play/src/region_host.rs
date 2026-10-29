@@ -70,6 +70,7 @@ pub(super) struct Admission {
     regions: usize,
     additions: usize,
     events: usize,
+    retain_registration_order: bool,
     registration_order: Option<Box<RegistrationOrder>>,
 }
 
@@ -146,6 +147,7 @@ impl ObjectHost {
             regions: 0,
             additions: 0,
             events: 0,
+            retain_registration_order: false,
             registration_order: None,
         });
         Ok(self)
@@ -156,38 +158,23 @@ impl ObjectHost {
         let Some(admission) = self.regions.as_ref() else {
             return Ok(());
         };
-        if admission.additions != 0 || admission.registration_order.is_some() {
+        if admission.additions != 0 || admission.retain_registration_order {
             return Err(self.inner.error(
                 CREATE,
                 Failure::RegionState("region history must start before additions"),
             ));
         }
-        let compact = self.inner.max_handles as u64 <= u64::from(u32::MAX)
-            && admission.budget.max_rect_additions as u64 <= u64::from(u32::MAX);
-        let order = if compact {
-            let mut order = Vec::new();
-            order
-                .try_reserve_exact(admission.budget.max_rect_additions)
-                .map_err(|_| self.inner.error(CREATE, Failure::Capacity))?;
-            RegistrationOrder::Compact(order)
-        } else {
-            let mut order = Vec::new();
-            order
-                .try_reserve_exact(admission.budget.max_rect_additions)
-                .map_err(|_| self.inner.error(CREATE, Failure::Capacity))?;
-            RegistrationOrder::Wide(order)
-        };
         self.regions
             .as_mut()
             .expect("checked admission")
-            .registration_order = Some(Box::new(order));
+            .retain_registration_order = true;
         Ok(())
     }
 
     pub(crate) fn region_registration_order_enabled(&self) -> bool {
         self.regions
             .as_ref()
-            .is_some_and(|admission| admission.registration_order.is_some())
+            .is_some_and(|admission| admission.retain_registration_order)
     }
 
     /// Enumerate additions in execution order, retaining their call-time bounds.
@@ -195,29 +182,29 @@ impl ObjectHost {
         &self,
     ) -> Result<impl Iterator<Item = Result<(HandleId, RegionRectRequest), Error>> + '_, Error>
     {
-        let order = self
-            .region_admission()?
-            .registration_order
-            .as_ref()
-            .ok_or_else(|| {
-                self.inner.error(
-                    CREATE,
-                    Failure::RegionState("region registration history was not enabled"),
-                )
-            })?;
-        Ok((0..order.len()).map(|position| {
-            let (region, index) = order.get(position);
-            self.region_rect_requests(region)?
-                .get(index)
-                .copied()
-                .map(|request| (region, request))
-                .ok_or_else(|| {
-                    self.inner.error(
-                        CREATE,
-                        Failure::RegionState("region registration history is inconsistent"),
-                    )
-                })
-        }))
+        let admission = self.region_admission()?;
+        if !admission.retain_registration_order {
+            return Err(self.inner.error(
+                CREATE,
+                Failure::RegionState("region registration history was not enabled"),
+            ));
+        }
+        let order = admission.registration_order.as_deref();
+        Ok(
+            (0..order.map_or(0, RegistrationOrder::len)).map(move |position| {
+                let (region, index) = order.expect("nonempty history").get(position);
+                self.region_rect_requests(region)?
+                    .get(index)
+                    .copied()
+                    .map(|request| (region, request))
+                    .ok_or_else(|| {
+                        self.inner.error(
+                            CREATE,
+                            Failure::RegionState("region registration history is inconsistent"),
+                        )
+                    })
+            }),
+        )
     }
 
     fn region_admission(&self) -> Result<&Admission, Error> {
@@ -333,16 +320,33 @@ impl ObjectHost {
         if a.additions >= a.budget.max_rect_additions {
             return Err(fail(Failure::Budget("region rectangle additions")));
         }
-        let packed = if matches!(
-            a.registration_order.as_deref(),
-            Some(RegistrationOrder::Compact(_))
-        ) {
+        let retain = a.retain_registration_order;
+        let compact = self.inner.max_handles as u64 <= u64::from(u32::MAX)
+            && a.budget.max_rect_additions as u64 <= u64::from(u32::MAX);
+        let packed = if retain && compact {
             let token = u32::try_from(region.token()).map_err(|_| fail(Failure::Capacity))?;
             let index = u32::try_from(index).map_err(|_| fail(Failure::Capacity))?;
             Some((u64::from(token) << 32) | u64::from(index))
         } else {
             None
         };
+        if retain {
+            let admission = self.regions.as_mut().expect("checked admission");
+            let order = admission.registration_order.get_or_insert_with(|| {
+                Box::new(if compact {
+                    RegistrationOrder::Compact(Vec::new())
+                } else {
+                    RegistrationOrder::Wide(Vec::new())
+                })
+            });
+            let reserved = match order.as_mut() {
+                RegistrationOrder::Compact(order) => order.try_reserve(1),
+                RegistrationOrder::Wide(order) => order.try_reserve(1),
+            };
+            if reserved.is_err() {
+                return Err(self.inner.error(ADD, Failure::Capacity));
+            }
+        }
         let Entry::Region { additions } = self.inner.entry_mut(*region).expect("checked region")
         else {
             unreachable!("checked region")

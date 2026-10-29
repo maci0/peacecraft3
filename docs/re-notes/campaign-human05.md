@@ -171,6 +171,12 @@ Release runs `live-retention-a` and `prelatest-b` reached that same 1223 s refus
 preceded later allocation-only texture-loader and region-history storage edits. Rebuilt runs
 `live-box-a` and `live-box-b` also stopped there with the same 98 checkpoint and RNG lines.
 
+The fine movement-grid rectangle is now checked against three original-client observations;
+region registration history allocates as additions are recorded. Neither change supplies
+the live chain ordering or connects the construction search. Release runs
+`rectangle-lazy-20261029-a` and `rectangle-lazy-20261029-b` both stop at the 1223 s refusal,
+with their 98 checkpoint and RNG lines identical.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

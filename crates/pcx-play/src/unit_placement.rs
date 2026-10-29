@@ -651,28 +651,40 @@ impl Placement {
         ))
     }
 
-    /// The recreation's unit-stamp bounds, in underlying pathing cells.
-    #[cfg(feature = "test-fixtures")]
-    pub fn diagnostic_unit_rectangle(&self, unit: HandleId) -> Result<[[i32; 2]; 2], Error> {
+    /// The unit's movement-stamp bounds in transposed spatial-grid coordinates.
+    pub fn movement_stamp_rectangle(
+        &self,
+        unit: HandleId,
+    ) -> Result<crate::native_path_hierarchy::CellRect, Error> {
         let stamp = self
             .stamps
             .iter()
             .find(|(id, _)| *id == unit)
-            .ok_or_else(|| fail("diagnostic unit stamp missing"))?;
+            .ok_or_else(|| fail("unit movement stamp missing"))?;
         let width = self.grid.pathing.width as usize;
-        let mut lower = [i32::MAX; 2];
-        let mut upper = [i32::MIN; 2];
+        let mut lower = [usize::MAX; 2];
+        let mut upper = [0; 2];
         for &index in &stamp.1.cells {
-            let point = [(index % width) as i32, (index / width) as i32];
+            let point = [index / width, index % width];
             for axis in 0..2 {
                 lower[axis] = lower[axis].min(point[axis]);
                 upper[axis] = upper[axis].max(point[axis] + 1);
             }
         }
-        if lower[0] == i32::MAX {
-            return Err(fail("diagnostic unit stamp empty"));
+        if lower[0] == usize::MAX {
+            return Err(fail("unit movement stamp empty"));
         }
-        Ok([lower, upper])
+        Ok(crate::native_path_hierarchy::CellRect { lower, upper })
+    }
+
+    /// The recreation's unit-stamp bounds, in underlying pathing cells.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_unit_rectangle(&self, unit: HandleId) -> Result<[[i32; 2]; 2], Error> {
+        let rect = self.movement_stamp_rectangle(unit)?;
+        Ok([
+            [rect.lower[1] as i32, rect.lower[0] as i32],
+            [rect.upper[1] as i32, rect.upper[0] as i32],
+        ])
     }
 
     #[cfg(feature = "test-fixtures")]

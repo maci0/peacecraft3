@@ -87,6 +87,30 @@ fn live_motion_excludes_only_its_own_stamp_and_releases_the_previous_cells() {
     assert!(p.prepare_motion(id(3), [32., 32.], 2.).is_err());
 }
 
+#[test]
+fn movement_stamp_rectangle_uses_radius_class_and_transposes_axes() {
+    for (radius, lower, upper) in [
+        (1.0, [10, 8], [11, 9]),
+        (2.0, [9, 7], [11, 9]),
+        (4.0, [9, 7], [12, 10]),
+        (6.0, [8, 6], [12, 10]),
+    ] {
+        let mut p = placement(
+            Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "movement stamp".into(),
+            },
+            10000,
+        );
+        let stamp = p.prepare([32., 40.], Some(radius), "_", 0.).unwrap();
+        p.commit(id(1), stamp);
+        let rect = p.movement_stamp_rectangle(id(1)).unwrap();
+        assert_eq!((rect.lower, rect.upper), (lower, upper));
+        assert!(p.movement_stamp_rectangle(id(2)).is_err());
+    }
+}
+
 #[cfg(feature = "test-fixtures")]
 #[test]
 fn reach_cell_excludes_only_requested_ground_stamps() {

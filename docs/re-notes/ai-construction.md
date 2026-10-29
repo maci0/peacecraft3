@@ -579,23 +579,32 @@ exhaustion refuses before changing a rectangle. Entry state is resolved at query
 multiple links reference the same changing object. This component does not yet receive live
 collision or region registration. A reader checks the interval initializer and minimum against
 the selected executable and uses the selected real-number arithmetic; the cleanup is not yet
-scheduled. The movement updater at `0x8bc810` supplies its position and radius fields to
-`0x8bc840`; that routine forms position minus and plus radius, scales the bounds, floors
-them and makes the upper bounds exclusive (`0x808f40`, `0x801930`). The position getter
-`0x7fe810` scales the stored spatial position and adds map-owned origin fields to obtain the
-world position. The mapping of that origin and scale to the live placement stamp, and the
-event ordering, remain unqualified. In the farm capture, the resolved movement object holds
-position components approximately 506.858 and 399.753 and radius 0.5, while the linked
-rectangle is (398, 505, 400, 507). Directly flooring those position components plus and
-minus the radius would instead give (399, 506, 401, 508) after transposition. The selected
-spatial manager's scale at offset `+0x68` and the update timing at that capture must be
-accounted for before deriving the live rectangle from position alone. The manager initializes
-that scale from a real value created from integer one (`0x8c1422`, `0x401460`), but the
-capture did not read the manager field and a load path can also write it (`0x8c1bd8`).
+scheduled. The movement updater at `0x8bc810` updates two grids. The coarse update at
+`0x8bc840` scales position minus and plus radius. The fine update at `0x8bc900` instead
+classifies the normalized radius against the selected image's three thresholds and expands
+the lower and upper coordinates according to that class before flooring and transposition
+at `0x801930`. The class operands are read by the existing unit-placement rules. The
+position getter `0x7fe810` scales the stored spatial position and adds map-owned origin
+fields to obtain the world position.
+
+A farm-scenario debugger capture observed three distinct moving entries at `0x8bca54`.
+The acolyte's internal position was approximately (506.858, 399.753), its radius was 0.5,
+and the returned fine rectangle was (398, 505, 400, 507). Two other entries had radius 1
+and returned (131, 489, 134, 492) and (131, 480, 134, 483), respectively. The fine
+manager's captured scale and inverse were both 1; the coarse manager's were 8 and 0.125.
+These three observations agree with the existing radius-class extents and explain the
+acolyte's one-cell difference from direct position-plus-radius conversion. They do not
+establish every rounding boundary or the live ordering of registration and cleanup.
+The placement cache exposes its existing movement-stamp bounds in transposed grid order for
+the future live chain, with synthetic tests for all four radius classes. This does not yet
+drive the pool or establish that its existing stamp bounds match native real arithmetic at
+every boundary.
 
 The live host now retains region rectangle additions in global call order when the admitted
 map source contains an AI-start or dynamic-execution name, and the texture loader retains
-source-derived per-pixel flags in those sessions. The textual gate can enable tracking for a
+source-derived per-pixel flags in those sessions. Region history allocation now begins at the
+first recorded addition and grows with actual additions rather than the admitted maximum.
+The textual gate can enable tracking for a
 comment or unused call; a start through an unrecognized wrapper is not covered. The placement
 search must refuse if that history was not recorded.
 The Human05 initialization records 26 region additions. A region-only diagnostic evaluates
