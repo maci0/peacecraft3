@@ -584,16 +584,33 @@ scheduled. The movement updater at `0x8bc810` supplies its position and radius f
 them and makes the upper bounds exclusive (`0x808f40`, `0x801930`). The position getter
 `0x7fe810` scales the stored spatial position and adds map-owned origin fields to obtain the
 world position. The mapping of that origin and scale to the live placement stamp, and the
-event ordering, remain unqualified.
+event ordering, remain unqualified. In the farm capture, the resolved movement object holds
+position components approximately 506.858 and 399.753 and radius 0.5, while the linked
+rectangle is (398, 505, 400, 507). Directly flooring those position components plus and
+minus the radius would instead give (399, 506, 401, 508) after transposition. The selected
+spatial manager's scale at offset `+0x68` and the update timing at that capture must be
+accounted for before deriving the live rectangle from position alone. The manager initializes
+that scale from a real value created from integer one (`0x8c1422`, `0x401460`), but the
+capture did not read the manager field and a load path can also write it (`0x8c1bd8`).
 
-The current live cache cannot be replayed into these chains without retaining additional
-information. The ordinary footprint loader keeps walk-cell coordinates rather than each
-texture cell's full flags, and stationary footprints are composed into the pathing raster.
-Region rectangle additions are retained per region, while placement is loaded lazily on the
-first unit creation. The temporary construction diagnostic hides unit stamps and restores
-their aggregate counts; recording those operations as actual removals would change the chain
-history. Live wiring therefore needs texture-entry flags, chronological registration from
-before the lazy placement load, and a separate temporary exclusion operation.
+The live host now retains region rectangle additions in global call order when the admitted
+map source contains an AI-start or dynamic-execution name, and the texture loader retains
+source-derived per-pixel flags in those sessions. The textual gate can enable tracking for a
+comment or unused call; a start through an unrecognized wrapper is not covered. The placement
+search must refuse if that history was not recorded.
+The Human05 initialization records 26 region additions. A region-only diagnostic evaluates
+their coverage and inserts links for three cells using the selected add class at `0x801b75`,
+whose caller supplies the add flag at `0x4a4f16`. Its world-to-cell calculation follows the
+transposed, scaled rectangle and clipping at `0x801a50`, `0x801930` and `0x8c23f0`. The two
+oracle cells have no registered region links at initialization; a separate covered cell has
+one zero-flag link. This does not reconstruct unit or texture-entry link history, or its
+ordering relative to region additions.
+
+The construction diagnostic now evaluates the supplied movement exclusions without hiding or
+re-registering unit stamps. The native validator increments a movement-entry exclusion count
+at `0x7ffd2f` and restores it at `0x697f0d`; the diagnostic's query-local exclusion list does
+not yet represent that count in a live spatial entry. Stationary footprints are still composed
+into the pathing raster, and the pool and cleanup clock are not driven by the live world.
 For a unit, `0x66e920` obtains the radius through its virtual method at offset `0x168`,
 applies the minimum at `0x112d810`, and passes it to `0x800340` for conversion before the
 movement object stores it. The captured acolyte's virtual target `0x66ec60` reads a field at
@@ -609,8 +626,8 @@ intersecting rectangles for an enter event in each of the first two layouts and 
 third. Authored rectangles are not themselves equivalent to live registered regions, and the
 reach traversal can visit outside this candidate square. Those counts therefore do not prove a
 complete live occupancy cache. The region host now exposes its executed region handles and
-rectangle-addition requests without allocating; the requests still need native cell rasterization
-and insertion ordering before they can supply the reach query. The diagnostic applies
+rectangle-addition requests without allocating. The new ordered history and region-only cell
+conversion are not connected to the live reach query. The snapshot diagnostic applies
 this distinction to units whose selected data says they are not structures, while retaining
 structure footprint and terrain stamps.
 This class-to-entry association, absent auxiliary links and complete order-time object state
@@ -973,7 +990,7 @@ exactly representable; other coordinate cases refuse pending the client's real a
 The startup-alliance reader now derives the self shared-control kind from the selected client
 call at `0x47cea6`. Explicit directed assignments take precedence. The diagnostic uses the
 expanded rectangle, the directed relation and the decoded visibility branch to qualify each
-unit. It temporarily excludes the builder and the qualified units, then restores their collision
+unit. It evaluates the builder and qualified units as excluded without changing their collision
 stamps. It no longer provides the blanket mobile-occupancy switch used for the historical
 experiment above. The predicate requires the observed AI context with nonzero `+0` and `+0x58`;
 an unqualified context refuses instead of using the separate fallback branch.
@@ -1160,7 +1177,7 @@ blocked or outside the grid, open when all four are open without links, and mixe
 an open child with an auxiliary link also makes the parent mixed (`0x8b7990`). The node
 created for an open hierarchy cell stores the base-grid coordinate of the first lookup, not
 the geometric center (`0x8a3b50`, `0x8a48f0`). Subsequent lookups reuse that cell's node.
-The test-only `native_path_hierarchy` module implements aggregation, lookup and a search-local
+The `native_path_hierarchy` module implements aggregation, lookup and a search-local
 node cache on caller-supplied classifications. It recursively splits mixed edges in their
 decoded order, tracks the two corner-admission flags, and descends a mixed corner at the same
 coordinate. It can run the priority queue against caller-supplied expansions; the synthetic
@@ -1180,7 +1197,7 @@ At the end of that edge it also requires `(x+1, y+1)` and either `(x+1, y+2)` or
 corresponding transposed checks (`0x8a4f00`, `0x8a5200`). The other two edge-end helpers
 have additional alternative clearance patterns (`0x8a32d0`, `0x8a4c20`); these checks read
 the base occupancy classifications, so their results still depend on the missing cache input.
-All four edge-clearance predicates have synthetic tests in the test-only hierarchy module.
+All four edge-clearance predicates have synthetic tests in the hierarchy module.
 Each coarse corner is considered only when its two adjoining edge flags are set; a mixed
 corner descends at the same coordinate until it is blocked or resolves to an open node.
 For class 2, the corner checks require respectively the positive-x neighbor, the three other
@@ -1198,7 +1215,7 @@ marker (`0x8a3130`). The diagnostic follows that ordering and refuses an unquali
 The distance helper `0x99b740` chooses an initial integer estimate from three input ranges,
 then repeatedly averages the estimate with integer division of the input by that estimate.
 It stops when half the signed difference is zero. At termination its integer average is the
-floor of the square root, so the test-only distance helper uses integer square root after
+floor of the square root, so the distance helper uses integer square root after
 checking that the squared input fits the native unsigned word; it refuses larger inputs. The
 coordinate scale remains a caller-supplied source value. A local comparison of the decoded
 iteration and integer square root agreed over one million consecutive inputs and 100,000

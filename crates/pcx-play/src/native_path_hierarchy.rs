@@ -341,9 +341,8 @@ impl EntryRules {
     }
 }
 
-/// Reach operands from the same verified image used by the placement diagnostic.
-#[cfg(feature = "test-fixtures")]
-pub fn diagnostic_operands(
+/// Reach operands from the same verified image used by placement.
+pub fn reviewed_operands(
     image: &[u8],
     rules: &crate::ai_placement::Rules,
 ) -> Result<(u8, u32, u32, usize, i32, u32), String> {

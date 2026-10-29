@@ -5899,3 +5899,28 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - [ ] Open: order refusals (the client's `[Errors]` keys for them are unread), the error sounds, Enter family and
   the chat edit bar (submit path unread), the ping marker, Alt+T/A/R/G/F minimap button keys (decoded, not wired),
   quick keys, world health bars and their modifiers, hover highlight, formation toggle.
+
+### 2026-10-29: Placement input retention
+
+- [~] AI-start sessions retain source-derived texture flags and chronological region additions.
+  Diagnostic unit exclusions no longer hide and re-register collision stamps. A region-only
+  chain check and the sampled baseline and farm comparisons pass; live unit, structure and
+  texture link history and cleanup scheduling are still absent, and AI structure production
+  remains refused. See [AI construction](docs/re-notes/ai-construction.md).
+- The snapshot checks match all 100 at-start and 12 near-mine recorded reach
+  decisions and select the baseline and farm sites at dequeues 1 and 280. They do not replay
+  live link history.
+- The default `pcx-play` library suite passed 2,360 tests and the fixture suite passed 2,365,
+  each with 91 ignored. Native and WASM Clippy passed with warnings denied.
+  The Human03 budget check passed with allocation and reallocation counts equal to the
+  same-commit control, and 16 more requested bytes in each workload. Budgets were not raised.
+- The Human04 startup comparison against the same commit, with equal-length isolated profile
+  paths in different checkouts, measured 146 more allocations and 558,808 more requested bytes,
+  unchanged reallocations and state digest. The pre-sized region history uses 524,288 bytes.
+- Two release Human05 runs stopped at the same 1223 s refusal, matching all 98 prior checkpoint
+  and RNG lines. Human03 and Human04 release routes reached victory at 279.02 s and 449.02 s,
+  with checkpoint and RNG lines matching `g1`; both standard harnesses also matched. These route
+  and snapshot checks preceded the allocation-only texture-loader and region-history edits. The
+  post-change snapshot oracle passed, and both post-change Human03 and Human04 routes reached
+  victory with checkpoints and RNG matching `g1`. Rebuilt Human05 runs `live-box-a` and
+  `live-box-b` both stopped at 1223 s, matching the 98 previous checkpoint and RNG lines.

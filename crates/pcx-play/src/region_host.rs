@@ -2,6 +2,7 @@
 use super::super::{Entry, Error, Failure};
 use super::{ObjectHost, trigger_admission::loaded_type};
 use pcx_script::{HandleId, Value};
+use std::num::NonZeroU64;
 
 const CREATE: &str = "CreateRegion";
 const ADD: &str = "RegionAddRect";
@@ -37,11 +38,39 @@ pub struct RegionEventRegistration {
     pub kind: RegionEventKind,
 }
 
+enum RegistrationOrder {
+    Compact(Vec<u64>),
+    Wide(Vec<(HandleId, usize)>),
+}
+
+impl RegistrationOrder {
+    fn len(&self) -> usize {
+        match self {
+            Self::Compact(order) => order.len(),
+            Self::Wide(order) => order.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> (HandleId, usize) {
+        match self {
+            Self::Compact(order) => {
+                let packed = order[index];
+                (
+                    HandleId::new(NonZeroU64::new(packed >> 32).expect("recorded region")),
+                    packed as u32 as usize,
+                )
+            }
+            Self::Wide(order) => order[index],
+        }
+    }
+}
+
 pub(super) struct Admission {
     budget: RegionBudget,
     regions: usize,
     additions: usize,
     events: usize,
+    registration_order: Option<Box<RegistrationOrder>>,
 }
 
 impl ObjectHost {
@@ -117,8 +146,78 @@ impl ObjectHost {
             regions: 0,
             additions: 0,
             events: 0,
+            registration_order: None,
         });
         Ok(self)
+    }
+
+    /// Retain the global order of rectangle additions from before map initialization.
+    pub(crate) fn enable_region_registration_order(&mut self) -> Result<(), Error> {
+        let Some(admission) = self.regions.as_ref() else {
+            return Ok(());
+        };
+        if admission.additions != 0 || admission.registration_order.is_some() {
+            return Err(self.inner.error(
+                CREATE,
+                Failure::RegionState("region history must start before additions"),
+            ));
+        }
+        let compact = self.inner.max_handles as u64 <= u64::from(u32::MAX)
+            && admission.budget.max_rect_additions as u64 <= u64::from(u32::MAX);
+        let order = if compact {
+            let mut order = Vec::new();
+            order
+                .try_reserve_exact(admission.budget.max_rect_additions)
+                .map_err(|_| self.inner.error(CREATE, Failure::Capacity))?;
+            RegistrationOrder::Compact(order)
+        } else {
+            let mut order = Vec::new();
+            order
+                .try_reserve_exact(admission.budget.max_rect_additions)
+                .map_err(|_| self.inner.error(CREATE, Failure::Capacity))?;
+            RegistrationOrder::Wide(order)
+        };
+        self.regions
+            .as_mut()
+            .expect("checked admission")
+            .registration_order = Some(Box::new(order));
+        Ok(())
+    }
+
+    pub(crate) fn region_registration_order_enabled(&self) -> bool {
+        self.regions
+            .as_ref()
+            .is_some_and(|admission| admission.registration_order.is_some())
+    }
+
+    /// Enumerate additions in execution order, retaining their call-time bounds.
+    pub fn region_registrations(
+        &self,
+    ) -> Result<impl Iterator<Item = Result<(HandleId, RegionRectRequest), Error>> + '_, Error>
+    {
+        let order = self
+            .region_admission()?
+            .registration_order
+            .as_ref()
+            .ok_or_else(|| {
+                self.inner.error(
+                    CREATE,
+                    Failure::RegionState("region registration history was not enabled"),
+                )
+            })?;
+        Ok((0..order.len()).map(|position| {
+            let (region, index) = order.get(position);
+            self.region_rect_requests(region)?
+                .get(index)
+                .copied()
+                .map(|request| (region, request))
+                .ok_or_else(|| {
+                    self.inner.error(
+                        CREATE,
+                        Failure::RegionState("region registration history is inconsistent"),
+                    )
+                })
+        }))
     }
 
     fn region_admission(&self) -> Result<&Admission, Error> {
@@ -223,8 +322,10 @@ impl ObjectHost {
         let [Value::Handle(region), Value::Handle(rectangle)] = args else {
             return Err(fail(Failure::RegionState("expected region and rectangle")));
         };
-        self.region_rect_requests(*region)
-            .map_err(|e| fail(e.failure))?;
+        let index = self
+            .region_rect_requests(*region)
+            .map_err(|e| fail(e.failure))?
+            .len();
         let bounds = self
             .rectangle_bounds(*rectangle)
             .map_err(|e| fail(e.failure))?;
@@ -232,6 +333,16 @@ impl ObjectHost {
         if a.additions >= a.budget.max_rect_additions {
             return Err(fail(Failure::Budget("region rectangle additions")));
         }
+        let packed = if matches!(
+            a.registration_order.as_deref(),
+            Some(RegistrationOrder::Compact(_))
+        ) {
+            let token = u32::try_from(region.token()).map_err(|_| fail(Failure::Capacity))?;
+            let index = u32::try_from(index).map_err(|_| fail(Failure::Capacity))?;
+            Some((u64::from(token) << 32) | u64::from(index))
+        } else {
+            None
+        };
         let Entry::Region { additions } = self.inner.entry_mut(*region).expect("checked region")
         else {
             unreachable!("checked region")
@@ -243,7 +354,13 @@ impl ObjectHost {
             rectangle: *rectangle,
             bounds,
         });
-        self.regions.as_mut().expect("checked admission").additions += 1;
+        let admission = self.regions.as_mut().expect("checked admission");
+        match admission.registration_order.as_deref_mut() {
+            Some(RegistrationOrder::Compact(order)) => order.push(packed.expect("compact history")),
+            Some(RegistrationOrder::Wide(order)) => order.push((*region, index)),
+            None => {}
+        }
+        admission.additions += 1;
         Ok(Value::Null)
     }
     fn register_region_event(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {

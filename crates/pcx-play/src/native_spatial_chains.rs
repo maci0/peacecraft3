@@ -30,12 +30,33 @@ fn cleanup_operands(
     ))
 }
 
+fn region_class_operand(call: &[u8], select: &[u8]) -> Result<u32, String> {
+    if call.len() < 8
+        || call[..4] != [0x6a, 1, 0x50, 0xe8]
+        || select.len() < 12
+        || select[..8] != [0x8b, 0x45, 0x0c, 0xf7, 0xd8, 0x1b, 0xc0, 0x25]
+    {
+        return Err("unrecognized region link class instructions".into());
+    }
+    let displacement = i32::from_le_bytes(call[4..8].try_into().expect("checked width"));
+    if i64::from(0x4a4f1e) + i64::from(displacement) != 0x801a50 {
+        return Err("region addition calls a different target".into());
+    }
+    let class = u32::from_le_bytes(select[8..12].try_into().expect("checked width"));
+    if class == 0 {
+        return Err("region addition class is empty".into());
+    }
+    Ok(class)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("spatial chain grid dimensions are invalid")]
     Dimensions,
     #[error("spatial chain rectangle is outside the grid")]
     Rectangle,
+    #[error("spatial chain region coordinates cannot be converted")]
+    Coordinates,
     #[error("spatial chain capacity {capacity} exceeds native index limit {limit}")]
     Capacity { capacity: usize, limit: usize },
     #[error("spatial chain pool exhausted: need {needed} links, {available} available")]
@@ -44,6 +65,54 @@ pub enum Error {
     Allocation,
     #[error("spatial cleanup clock is invalid or cannot advance")]
     Clock,
+}
+
+/// Convert a world-space region to the native grid's clipped, transposed cells.
+pub fn region_cells(
+    bounds: [f32; 4],
+    origin: [f32; 2],
+    cell_size: f32,
+    size: [usize; 2],
+) -> Result<CellRect, Error> {
+    use crate::script_random::real;
+
+    if bounds
+        .iter()
+        .chain(origin.iter())
+        .any(|value| !value.is_finite())
+        || bounds[0] > bounds[2]
+        || bounds[1] > bounds[3]
+        || !cell_size.is_normal()
+        || cell_size <= 0.0
+        || cell_size.to_bits() & ((1 << 23) - 1) != 0
+        || size.contains(&0)
+        || size.iter().any(|&axis| axis > i32::MAX as usize)
+    {
+        return Err(Error::Coordinates);
+    }
+    let scale = real::from_f32(1.0 / cell_size).map_err(|_| Error::Coordinates)?;
+    let mut lower = [0; 2];
+    let mut upper = [0; 2];
+    for native_axis in 0..2 {
+        let world_axis = 1 - native_axis;
+        let offset = real::from_f32(origin[world_axis]).map_err(|_| Error::Coordinates)?;
+        let coordinate = |value: f32| -> Result<i64, Error> {
+            let value = real::from_f32(value).map_err(|_| Error::Coordinates)?;
+            let delta = real::sub(value, offset).map_err(|_| Error::Coordinates)?;
+            let cell = f64::from(f32::from_bits(
+                real::mul(delta, scale).map_err(|_| Error::Coordinates)?,
+            ))
+            .floor();
+            if cell < f64::from(i32::MIN) || cell >= f64::from(i32::MAX) {
+                return Err(Error::Coordinates);
+            }
+            Ok(cell as i64)
+        };
+        let limit = size[native_axis] as i64;
+        lower[native_axis] = coordinate(bounds[world_axis])?.clamp(0, limit) as usize;
+        upper[native_axis] = (coordinate(bounds[world_axis + 2])? + 1).clamp(0, limit) as usize;
+    }
+    Ok(CellRect { lower, upper })
 }
 
 /// A recurring cleanup deadline in the selected client's real arithmetic.
@@ -115,6 +184,33 @@ pub struct Chains {
 }
 
 impl Chains {
+    /// Read the link class used for an added region rectangle.
+    pub fn reviewed_region_class(
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<u32, String> {
+        use crate::neutral_player::{RuleInputBudget, sha256};
+        use crate::neutral_rule_input::Pe;
+
+        if rules.image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
+            || sha256(image) != rules.image_sha256
+        {
+            return Err("spatial chain image identity mismatch".into());
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        let call = pe.read_from(0x4a4f16, true).map_err(|e| e.to_string())?;
+        let select = pe.read_from(0x801b6e, true).map_err(|e| e.to_string())?;
+        region_class_operand(call, select)
+    }
+
     /// Read the cleanup interval using the selected client's real arithmetic.
     pub fn reviewed_cleanup_interval(
         image: &[u8],
@@ -494,6 +590,44 @@ mod tests {
             lower: [left, 0],
             upper: [right, 1],
         }
+    }
+
+    #[test]
+    fn region_link_class_requires_the_expected_call_and_selection() {
+        let mut call = [0x6a, 1, 0x50, 0xe8, 0, 0, 0, 0];
+        call[4..].copy_from_slice(&(0x801a50_i32 - 0x4a4f1e_i32).to_le_bytes());
+        let mut select = [0x8b, 0x45, 0x0c, 0xf7, 0xd8, 0x1b, 0xc0, 0x25, 0, 0, 0, 0];
+        select[8..].copy_from_slice(&0x2500_0000_u32.to_le_bytes());
+        assert_eq!(region_class_operand(&call, &select).unwrap(), 0x2500_0000);
+        call[4] ^= 1;
+        assert!(region_class_operand(&call, &select).is_err());
+        assert!(region_class_operand(&[], &select).is_err());
+    }
+
+    #[test]
+    fn region_cells_transpose_scale_and_clip_the_source_rectangle() {
+        assert_eq!(
+            region_cells([92., 208., 116., 224.], [100., 200.], 8., [8, 8]),
+            Ok(CellRect {
+                lower: [1, 0],
+                upper: [4, 3]
+            })
+        );
+        assert_eq!(
+            region_cells([60., 180., 220., 300.], [100., 200.], 8., [8, 8]),
+            Ok(CellRect {
+                lower: [0, 0],
+                upper: [8, 8]
+            })
+        );
+        assert_eq!(
+            region_cells([0., 0., 1., 1.], [0., 0.], 3., [8, 8]),
+            Err(Error::Coordinates)
+        );
+        assert_eq!(
+            region_cells([1., 0., 0., 1.], [0., 0.], 8., [8, 8]),
+            Err(Error::Coordinates)
+        );
     }
 
     #[test]

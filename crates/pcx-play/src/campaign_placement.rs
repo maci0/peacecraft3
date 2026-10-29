@@ -6,8 +6,8 @@ use crate::{
         DestructableStats, ObjectHost, PlacedDestructable, PlacedSource,
     },
     unit_placement::{
-        Budget, Footprint, FootprintLoader, Grid, Placement, Rules, StationaryKey, StationaryStamp,
-        TexturePolicy,
+        Budget, Footprint, FootprintLoader, Grid, NativeTexture, Placement, Rules, StationaryKey,
+        StationaryStamp, TexturePolicy,
     },
 };
 use pcx_assets::{AssetPath, Resolver};
@@ -266,6 +266,9 @@ pub fn assemble(
         policy: rules.texture_policy(),
         cache: BTreeMap::new(),
         staged: BTreeMap::new(),
+        native: objects
+            .region_registration_order_enabled()
+            .then(|| Box::new(NativeTextures::default())),
         remaining_bytes: 16 << 20,
         remaining_cells: FOOTPRINT_CELLS,
         remaining_source_attempts: FOOTPRINT_SOURCES,
@@ -476,12 +479,26 @@ struct Staged {
     cells: usize,
 }
 
+#[derive(Default)]
+struct NativeTextures {
+    committed: BTreeMap<String, NativeTexture>,
+    staged: BTreeMap<String, NativeTexture>,
+}
+
+struct Decoded {
+    footprint: Arc<Footprint>,
+    native: Option<NativeTexture>,
+    bytes: usize,
+    cells: usize,
+}
+
 struct Textures {
     reader: Arc<Resolver>,
     edition: String,
     policy: TexturePolicy,
     cache: BTreeMap<String, Arc<Footprint>>,
     staged: BTreeMap<String, Staged>,
+    native: Option<Box<NativeTextures>>,
     /// Retained-cache capacity. A rolled-back staged load returns its share.
     remaining_bytes: usize,
     /// Retained-cell capacity. A rolled-back staged load returns its share.
@@ -497,9 +514,15 @@ impl Textures {
         if let Some(cached) = self.cache.get(&key) {
             return Ok(Arc::clone(cached));
         }
-        let (footprint, _, _) = self.decode(path)?;
-        self.cache.insert(key, Arc::clone(&footprint));
-        Ok(footprint)
+        if self.native.is_some() && self.staged.contains_key(&key) {
+            return Err("native texture read while the same source is staged".into());
+        }
+        let decoded = self.decode(path)?;
+        if let (Some(native), Some(cache)) = (decoded.native, &mut self.native) {
+            cache.committed.insert(key.clone(), native);
+        }
+        self.cache.insert(key, Arc::clone(&decoded.footprint));
+        Ok(decoded.footprint)
     }
 
     fn stage(&mut self, path: &str) -> Result<Arc<Footprint>, String> {
@@ -510,16 +533,19 @@ impl Textures {
         if let Some(staged) = self.staged.get(&key) {
             return Ok(Arc::clone(&staged.footprint));
         }
-        let (footprint, bytes, cells) = self.decode(path)?;
+        let decoded = self.decode(path)?;
+        if let (Some(native), Some(cache)) = (decoded.native, &mut self.native) {
+            cache.staged.insert(key.clone(), native);
+        }
         self.staged.insert(
             key,
             Staged {
-                footprint: Arc::clone(&footprint),
-                bytes,
-                cells,
+                footprint: Arc::clone(&decoded.footprint),
+                bytes: decoded.bytes,
+                cells: decoded.cells,
             },
         );
-        Ok(footprint)
+        Ok(decoded.footprint)
     }
 
     fn commit(&mut self, paths: &[String]) {
@@ -528,6 +554,11 @@ impl Textures {
                 continue;
             };
             if let Some(staged) = self.staged.remove(&key) {
+                if let Some(cache) = &mut self.native
+                    && let Some(native) = cache.staged.remove(&key)
+                {
+                    cache.committed.insert(key.clone(), native);
+                }
                 self.cache.insert(key, staged.footprint);
             }
         }
@@ -539,6 +570,9 @@ impl Textures {
                 continue;
             };
             if let Some(staged) = self.staged.remove(&key) {
+                if let Some(cache) = &mut self.native {
+                    cache.staged.remove(&key);
+                }
                 self.remaining_bytes = self.remaining_bytes.saturating_add(staged.bytes);
                 self.remaining_cells = self.remaining_cells.saturating_add(staged.cells);
             }
@@ -555,15 +589,11 @@ impl Textures {
             .to_owned())
     }
 
-    fn decode(&mut self, path: &str) -> Result<(Arc<Footprint>, usize, usize), String> {
+    fn decode(&mut self, path: &str) -> Result<Decoded, String> {
         self.decode_kind(path, false)
     }
 
-    fn decode_kind(
-        &mut self,
-        path: &str,
-        building: bool,
-    ) -> Result<(Arc<Footprint>, usize, usize), String> {
+    fn decode_kind(&mut self, path: &str, building: bool) -> Result<Decoded, String> {
         if self.cache.len() + self.staged.len() >= FOOTPRINT_SOURCES {
             return Err("footprint source count budget".into());
         }
@@ -595,7 +625,36 @@ impl Textures {
         } else {
             raster(header.width, header.height, &rgba)?
         };
-        let cell_count = cells.len();
+        let retain_native = if let Some(cache) = &self.native {
+            let key = Self::key(path)?;
+            !cache.committed.contains_key(&key) && !cache.staged.contains_key(&key)
+        } else {
+            false
+        };
+        let native = if retain_native {
+            let mut flags = Vec::new();
+            flags
+                .try_reserve_exact(count)
+                .map_err(|_| "native texture flag allocation")?;
+            flags.extend(
+                rgba.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|pixel| self.policy.flags(*pixel)),
+            );
+            Some(NativeTexture {
+                origin: origin.clone(),
+                width: header.width,
+                height: header.height,
+                flags,
+            })
+        } else {
+            None
+        };
+        let cell_count = cells
+            .len()
+            .checked_add(native.as_ref().map_or(0, |native| native.flags.len()))
+            .ok_or("footprint aggregate cell count overflow")?;
         let remaining_cells = self
             .remaining_cells
             .checked_sub(cell_count)
@@ -607,7 +666,12 @@ impl Textures {
             .ok_or("footprint source byte budget")?;
         self.remaining_cells = remaining_cells;
         self.remaining_bytes = remaining_bytes;
-        Ok((Arc::new(Footprint { origin, cells }), bytes, cell_count))
+        Ok(Decoded {
+            footprint: Arc::new(Footprint { origin, cells }),
+            native,
+            bytes,
+            cells: cell_count,
+        })
     }
 }
 
@@ -621,9 +685,21 @@ impl FootprintLoader for TextureLoader {
     }
 
     fn load_building(&mut self, path: &str) -> Result<Option<Footprint>, String> {
-        self.textures
-            .decode_kind(path, true)
-            .map(|(f, _, _)| Some(f.as_ref().clone()))
+        if self.textures.native.is_some()
+            && self.textures.staged.contains_key(&Textures::key(path)?)
+        {
+            return Err("native building texture read while the source is staged".into());
+        }
+        let decoded = self.textures.decode_kind(path, true)?;
+        if let (Some(native), Some(cache)) = (decoded.native, &mut self.textures.native) {
+            cache.committed.insert(Textures::key(path)?, native);
+        }
+        Ok(Some(decoded.footprint.as_ref().clone()))
+    }
+
+    fn native_texture(&self, path: &str) -> Option<&NativeTexture> {
+        let key = Textures::key(path).ok()?;
+        self.textures.native.as_ref()?.committed.get(&key)
     }
 
     fn commit(&mut self, paths: &[String]) {
@@ -1243,11 +1319,43 @@ mod tests {
             policy: crate::unit_placement::tests::rules(2, 0.0).texture_policy(),
             cache: BTreeMap::new(),
             staged: BTreeMap::new(),
+            native: None,
             remaining_bytes: 4096,
             remaining_cells: 8,
             remaining_source_attempts: FOOTPRINT_SOURCES,
         };
         (textures, reads)
+    }
+
+    #[test]
+    fn native_texture_flags_follow_channels_and_staged_rollback() {
+        let pixels = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]];
+        let (mut textures, _) = textures_with_reads(&[("flags.tga", texture(2, 2, &pixels))]);
+        textures.native = Some(Box::new(NativeTextures::default()));
+        textures.remaining_cells = 16;
+        let before = textures.remaining_cells;
+        let expected: Vec<_> = pixels
+            .iter()
+            .map(|&[r, g, b]| textures.policy.flags([r, g, b, 255]))
+            .collect();
+        textures.stage("flags.tga").unwrap();
+        assert!(textures.native.as_ref().unwrap().committed.is_empty());
+        assert_eq!(
+            textures.native.as_ref().unwrap().staged["flags.tga"].flags,
+            expected
+        );
+        assert!(textures.read("FLAGS.TGA").is_err());
+        textures.rollback(&["flags.tga".into()]);
+        assert_eq!(textures.remaining_cells, before);
+        assert!(textures.staged.is_empty());
+        assert!(textures.native.as_ref().unwrap().staged.is_empty());
+        textures.stage("flags.tga").unwrap();
+        textures.commit(&["flags.tga".into()]);
+        let flags = &textures.native.as_ref().unwrap().committed["flags.tga"];
+        assert_eq!([flags.width, flags.height], [2, 2]);
+        assert_eq!(flags.flags, expected);
+        let loader = TextureLoader { textures };
+        assert_eq!(loader.native_texture("FLAGS.TGA").unwrap().flags, expected);
     }
 
     #[test]

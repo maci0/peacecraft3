@@ -1359,6 +1359,73 @@ fn diagnostic_exclusions_restore_occupancy_after_success_and_error() {
         .is_err()
     );
     assert_eq!(p.occupied, before);
+    assert!(
+        p.diagnostic_construction_position_excluding([32., 32.], 0., "build.tga", 8, 0, &[id(4)])
+            .is_err()
+    );
+    let first = &p.stamps[0].1;
+    let overlapping = Prepared {
+        position: first.position,
+        cells: first.cells.clone(),
+        footprint: vec![],
+        face: first.face,
+        active: true,
+        movement: first.movement,
+    };
+    p.commit(id(4), overlapping);
+    let before = p.occupied.clone();
+    assert!(
+        p.diagnostic_construction_position_excluding(
+            [32., 32.],
+            0.,
+            "build.tga",
+            8,
+            0,
+            &[id(3), id(3)]
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        p.diagnostic_construction_position_excluding(
+            [32., 32.],
+            0.,
+            "build.tga",
+            8,
+            0,
+            &[id(3), id(4)]
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert_eq!(p.occupied, before);
+    p.hide(id(4)).unwrap();
+    assert!(
+        p.diagnostic_construction_position_excluding(
+            [32., 32.],
+            0.,
+            "build.tga",
+            8,
+            0,
+            &[id(3), id(4)]
+        )
+        .unwrap()
+        .is_some()
+    );
+    let cell = 8 * 32 + 8;
+    p.footprint_occupied[cell] = 1;
+    assert!(
+        p.diagnostic_construction_position_excluding(
+            [32., 32.],
+            0.,
+            "build.tga",
+            8,
+            0,
+            &[id(3), id(4)]
+        )
+        .unwrap()
+        .is_none()
+    );
 }
 
 #[test]

@@ -584,6 +584,87 @@ fn human05_placement_diagnostic() {
     let facing = building_facing(angle);
     let mut startup = start(&install, mode, &map.display().to_string(), &bytes, 1, None).unwrap();
     let objects = startup.session.host().unwrap().objects_mut();
+    let region_additions = objects
+        .region_registrations()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        region_additions.len(),
+        objects.retained_region_rect_requests().unwrap()
+    );
+    println!(
+        "live region rectangle additions: {}",
+        region_additions.len()
+    );
+    let region_class =
+        pcx_play::native_path_hierarchy::spatial_chains::Chains::reviewed_region_class(
+            &image, &rules,
+        )
+        .unwrap();
+    println!("selected region link class: {region_class:#x}");
+    {
+        use pcx_play::native_path_hierarchy::spatial_chains::{Chains, region_cells};
+        use pcx_play::native_path_hierarchy::{CellRect, EntryRules, reviewed_operands};
+
+        let placement = objects.diagnostic_placement().unwrap();
+        let bounds = placement.world_bounds();
+        let cell_size = placement.rules().cell_size();
+        let size = [1, 0].map(|axis| ((bounds[1][axis] - bounds[0][axis]) / cell_size) as usize);
+        let entries = EntryRules::reviewed_legacy(&image, &rules).unwrap();
+        let limit = Chains::reviewed_limit(&image, &rules).unwrap();
+        let (removal, _) = Chains::reviewed_classes(&image, &rules, entries).unwrap();
+        let (mask, _, _, _, _, _) = reviewed_operands(&image, &rules).unwrap();
+        let sample = region_additions
+            .iter()
+            .map(|(_, request)| region_cells(request.bounds, bounds[0], cell_size, size).unwrap())
+            .find(|rect| (0..2).all(|axis| rect.lower[axis] < rect.upper[axis]))
+            .expect("at least one registered region intersects the grid")
+            .lower;
+        let sample_point = [
+            bounds[0][0] + (sample[1] as f32 + 0.5) * cell_size,
+            bounds[0][1] + (sample[0] as f32 + 0.5) * cell_size,
+        ];
+        for point in [[6208., 2752.], [5952., 2432.], sample_point] {
+            let cell = region_cells(
+                [point[0], point[1], point[0], point[1]],
+                bounds[0],
+                cell_size,
+                size,
+            )
+            .unwrap()
+            .lower;
+            let mut chains = Chains::new([1, 1], region_additions.len(), limit, removal).unwrap();
+            let mut count = 0;
+            for (region, request) in &region_additions {
+                let rect = region_cells(request.bounds, bounds[0], cell_size, size).unwrap();
+                if (0..2)
+                    .all(|axis| rect.lower[axis] <= cell[axis] && cell[axis] < rect.upper[axis])
+                {
+                    chains
+                        .region(
+                            CellRect {
+                                lower: [0, 0],
+                                upper: [1, 1],
+                            },
+                            region.token(),
+                            region_class,
+                        )
+                        .unwrap();
+                    count += 1;
+                }
+            }
+            if point == sample_point {
+                assert!(count > 0);
+            }
+            assert!(
+                !chains
+                    .blocked([0, 0], 0, u32::from(mask), entries, |_| Some((0, 0)))
+                    .unwrap()
+            );
+            println!("region-only chain point={point:?} links={count} blocked=false");
+        }
+    }
     let cleanup_interval = objects
         .diagnostic_spatial_cleanup_interval(&image, &rules)
         .unwrap();
@@ -879,6 +960,17 @@ fn human05_placement_diagnostic() {
     let necropolis = catalog.resolve(*b"unpl").unwrap();
     let path = text(&necropolis, "pathTex");
     let dims = dimensions(&resolver, path);
+    let retained = objects
+        .diagnostic_placement()
+        .unwrap()
+        .native_texture(path)
+        .unwrap();
+    assert_eq!(
+        [u32::from(retained.width), u32::from(retained.height)],
+        dims
+    );
+    assert_eq!(retained.flags.len(), dims[0] as usize * dims[1] as usize);
+    assert!(!retained.origin.source.is_empty());
     println!("construction footprint {path} dimensions {dims:?}");
     let quarter = (facing / 90.).rem_euclid(4.) as u8;
     assert_eq!(text(&necropolis, "preventPlace"), "unbuildable");
@@ -1315,9 +1407,9 @@ fn reach_snapshot(
     image: &[u8],
     rules: &Rules,
 ) -> ReachSnapshot {
-    use pcx_play::native_path_hierarchy::{base, diagnostic_operands, parent};
+    use pcx_play::native_path_hierarchy::{base, parent, reviewed_operands};
     let (mask, priority, result_scale, removal_limit, movement, count) =
-        diagnostic_operands(image, rules).unwrap();
+        reviewed_operands(image, rules).unwrap();
     let bounds = placement.world_bounds();
     let cell_size = placement.rules().cell_size();
     let dimensions = std::array::from_fn::<_, 2, _>(|axis| {

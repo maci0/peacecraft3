@@ -8,10 +8,10 @@
 //! number here is read from those instructions; the addresses only bind the reviewed
 //! image. Evidence labels are in `docs/re-notes/input-cursor.md`.
 use crate::{
-    playercolor_host::Relation,
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, sha256},
     neutral_rule_input::Pe,
+    playercolor_host::Relation,
     scripts::AssetIdentity,
 };
 use std::collections::BTreeMap;
@@ -150,12 +150,7 @@ impl CursorRules {
     /// Rules shaped like the reviewed client's, for tests that never read an image.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn fixture() -> Self {
-        let tints = [
-            [255, 255, 255],
-            [255, 255, 0],
-            [255, 0, 0],
-            [0, 255, 0],
-        ];
+        let tints = [[255, 255, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0]];
         let named = |name: &str, tint: [u8; 3]| (name.to_string(), tint);
         let mut modes = vec![named("Normal", tints[0])];
         modes.extend((1..=3).map(|i| named("Select", tints[i])));
@@ -240,15 +235,17 @@ fn decode(image: &[u8], origin: AssetIdentity) -> Result<CursorRules, String> {
     let tints = tint_table(&pe, count)?;
     let mut modes = Vec::with_capacity(count);
     for (mode, tint) in tints.into_iter().enumerate() {
-        let group = *code(&pe, group_table + mode as u32, 1)?.first().expect("one byte");
+        let group = *code(&pe, group_table + mode as u32, 1)?
+            .first()
+            .expect("one byte");
         let entry = word(&pe, jump_table + 4 * u32::from(group))?;
         let indices = tag_indices(&pe, entry, mode as u32)?;
         let names = indices
             .iter()
             .map(|&index| {
-                tags.get(index as usize)
-                    .map(String::as_str)
-                    .ok_or_else(|| format!("mode {mode} names tag {index}, which is not registered"))
+                tags.get(index as usize).map(String::as_str).ok_or_else(|| {
+                    format!("mode {mode} names tag {index}, which is not registered")
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         modes.push((names.join(" "), tint));
@@ -325,7 +322,11 @@ fn word(pe: &Pe<'_>, va: u32) -> Result<u32, String> {
 
 /// Tag names by index from the registration calls.
 fn tag_names(pe: &Pe<'_>) -> Result<Vec<String>, String> {
-    let body = code(pe, TAG_REGISTRATION.start, (TAG_REGISTRATION.end - TAG_REGISTRATION.start) as usize)?;
+    let body = code(
+        pe,
+        TAG_REGISTRATION.start,
+        (TAG_REGISTRATION.end - TAG_REGISTRATION.start) as usize,
+    )?;
     let mut names: BTreeMap<usize, String> = BTreeMap::new();
     // `push imm8 index; push imm32 name; push dword [abs]; call rel32`.
     for window in body.windows(14) {
@@ -423,7 +424,11 @@ fn tag_indices(pe: &Pe<'_>, entry: u32, mode: u32) -> Result<Vec<u32>, String> {
         let bytes = code(pe, at, 7).or_else(|_| code(pe, at, 1))?;
         let rel = |len: usize, delta: i64| -> u32 { (i64::from(at) + len as i64 + delta) as u32 };
         let signed = |i: usize| i64::from(bytes[i] as i8);
-        let long = |i: usize| i64::from(i32::from_le_bytes(bytes[i..i + 4].try_into().expect("four")));
+        let long = |i: usize| {
+            i64::from(i32::from_le_bytes(
+                bytes[i..i + 4].try_into().expect("four"),
+            ))
+        };
         let imm = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().expect("four"));
         match bytes {
             // mov dword [ebp+disp8], imm32
@@ -455,7 +460,11 @@ fn tag_indices(pe: &Pe<'_>, entry: u32, mode: u32) -> Result<Vec<u32>, String> {
                 let (Some(index), Some(bound)) = (index, bound) else {
                     return Err(format!("mode {mode}: range branch without a compare"));
                 };
-                at = if index > bound { rel(6, long(2)) } else { at + 6 };
+                at = if index > bound {
+                    rel(6, long(2))
+                } else {
+                    at + 6
+                };
             }
             // jmp dword [ecx*4 + table]
             [0xff, 0x24, 0x8d, ..] if bytes.len() >= 7 => {
@@ -481,8 +490,13 @@ fn tag_indices(pe: &Pe<'_>, entry: u32, mode: u32) -> Result<Vec<u32>, String> {
             [0xeb, ..] if bytes.len() >= 2 => at = rel(2, signed(1)),
             [0xe8, ..] if bytes.len() >= 5 => {
                 if rel(5, long(1)) == SPRITE_SET_TAGS {
-                    let [.., Value::Immediate(0), Value::Immediate(count), Value::Frame(first), Value::Opaque] =
-                        stack[..]
+                    let [
+                        ..,
+                        Value::Immediate(0),
+                        Value::Immediate(count),
+                        Value::Frame(first),
+                        Value::Opaque,
+                    ] = stack[..]
                     else {
                         return Err(format!("mode {mode}: unexpected tag call arguments"));
                     };
@@ -500,7 +514,9 @@ fn tag_indices(pe: &Pe<'_>, entry: u32, mode: u32) -> Result<Vec<u32>, String> {
             _ => return Err(format!("mode {mode}: unexpected instruction at {at:#x}")),
         }
     }
-    Err(format!("mode {mode}: no tag call within {STEP_LIMIT} steps"))
+    Err(format!(
+        "mode {mode}: no tag call within {STEP_LIMIT} steps"
+    ))
 }
 
 #[cfg(test)]

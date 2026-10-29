@@ -232,6 +232,16 @@ the full-width overflow path. The locked offline check reports 64 fewer requeste
 Human03 workload than the queued-order run, placing both 40 bytes below the earlier pre-input
 measurement. Allocation and reallocation counts are unchanged; no budget was raised.
 
+The placement-input retention adds two optional tracking pointers. When tracking is inactive,
+they allocate no separate storage. Against committed `9b93f69`, the locked offline Human03
+check has identical allocation and reallocation counts, digests and vision work, with 16 more
+requested bytes at each checkpoint. The extra bytes hold those inactive pointers; the budget
+was not raised. At Human04's first control checkpoint, a separate same-commit test with
+equal-length isolated profile paths measured 146 more allocations and 558,808 more requested
+bytes, with unchanged reallocations and state digest. The two runs used different checkout paths.
+The pre-sized region history accounts for 524,288 bytes; retained texture flags and tracking
+storage contribute to the remaining difference.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

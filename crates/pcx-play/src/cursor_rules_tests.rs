@@ -151,11 +151,18 @@ fn image() -> Vec<u8> {
     let mut jumps = [0u32; 6];
     for (group, jump) in jumps.iter_mut().enumerate().take(5) {
         *jump = case_at;
-        let mode = GROUPS.iter().position(|&g| usize::from(g) == group).unwrap();
+        let mode = GROUPS
+            .iter()
+            .position(|&g| usize::from(g) == group)
+            .unwrap();
         let tag = u32::from(tags_of(mode)[0]);
         if group == 0 {
             // mov ecx, edi; call elsewhere; store; jump to the shared tail.
-            case_at = put(&mut image, case_at, &[0x8b, 0xcf, 0xe8, 0x10, 0x00, 0x00, 0x00]);
+            case_at = put(
+                &mut image,
+                case_at,
+                &[0x8b, 0xcf, 0xe8, 0x10, 0x00, 0x00, 0x00],
+            );
         }
         case_at = store(&mut image, case_at, -0x14, tag);
         case_at = jump_short(&mut image, case_at, tail);
@@ -163,7 +170,11 @@ fn image() -> Vec<u8> {
     // Hold item has its own call sequence in the original; here it shares the tail.
     jumps[5] = SCROLL_PROLOGUE;
     for (index, jump) in jumps.iter().enumerate() {
-        put(&mut image, GROUP_JUMPS + 4 * index as u32, &jump.to_le_bytes());
+        put(
+            &mut image,
+            GROUP_JUMPS + 4 * index as u32,
+            &jump.to_le_bytes(),
+        );
     }
     // Scroll group: base tag, count 2, range check, table jump.
     let mut at = store(&mut image, SCROLL_PROLOGUE, -0x10, 6);
@@ -176,7 +187,11 @@ fn image() -> Vec<u8> {
         at,
         &[&[0xff, 0x24, 0x8d][..], &SCROLL_SUB_JUMPS.to_le_bytes()].concat(),
     );
-    let mut tail_at = put(&mut image, SCROLL_TAIL, &[0x6a, 0, 0x50, 0x8d, 0x45, 0xf0, 0x50, 0x56]);
+    let mut tail_at = put(
+        &mut image,
+        SCROLL_TAIL,
+        &[0x6a, 0, 0x50, 0x8d, 0x45, 0xf0, 0x50, 0x56],
+    );
     call_sink(&mut image, tail_at);
     tail_at = SCROLL_TAIL;
     for sub in 0..8usize {
@@ -208,11 +223,18 @@ fn image() -> Vec<u8> {
         };
         put(&mut image, TINTS + 3 * mode as u32, &tint);
     }
-    for (site, (modrm, offset)) in TINT_LOADS.into_iter().zip([(0x8c, 0), (0x84, 1), (0x84, 2)]) {
+    for (site, (modrm, offset)) in TINT_LOADS
+        .into_iter()
+        .zip([(0x8c, 0), (0x84, 1), (0x84, 2)])
+    {
         put(
             &mut image,
             site,
-            &[&[0x0f, 0xb6, modrm, 0x52][..], &(TINTS + offset).to_le_bytes()].concat(),
+            &[
+                &[0x0f, 0xb6, modrm, 0x52][..],
+                &(TINTS + offset).to_le_bytes(),
+            ]
+            .concat(),
         );
     }
     // Pointer-state pushes.
@@ -239,13 +261,26 @@ fn image() -> Vec<u8> {
     );
     put(&mut image, SCROLL_DEFAULT, &[0x8b, 0xcf]);
     let mut at: u32 = 0x5dfdfc;
-    for (mask, mode) in [(1u32, 12u32), (2, 13), (4, 10), (5, 14), (6, 16), (8, 11), (9, 15), (10, 17)] {
+    for (mask, mode) in [
+        (1u32, 12u32),
+        (2, 13),
+        (4, 10),
+        (5, 14),
+        (6, 16),
+        (8, 11),
+        (9, 15),
+        (10, 17),
+    ] {
         put(&mut image, MASK_JUMPS + 4 * (mask - 1), &at.to_le_bytes());
         at = put(&mut image, at, &[&[0xbe][..], &mode.to_le_bytes()].concat());
         at = jump_short(&mut image, at, SCROLL_DEFAULT);
     }
     for mask in [3u32, 7] {
-        put(&mut image, MASK_JUMPS + 4 * (mask - 1), &SCROLL_DEFAULT.to_le_bytes());
+        put(
+            &mut image,
+            MASK_JUMPS + 4 * (mask - 1),
+            &SCROLL_DEFAULT.to_le_bytes(),
+        );
     }
     image
 }
@@ -269,9 +304,18 @@ fn sequences_are_the_registered_tag_names_each_mode_passes() {
     assert_eq!(name(Pointer::Normal), "Normal");
     assert_eq!(name(Pointer::Hover(Relation::Enemy)), "Select");
     assert_eq!(name(Pointer::Target(None)), "Target");
-    assert_eq!(name(Pointer::Target(Some(Relation::Friend))), "TargetSelect");
-    assert_eq!(name(Pointer::Scroll(edge::UP | edge::LEFT)), "Scroll Up Left");
-    assert_eq!(name(Pointer::Scroll(edge::DOWN | edge::RIGHT)), "Scroll Down Right");
+    assert_eq!(
+        name(Pointer::Target(Some(Relation::Friend))),
+        "TargetSelect"
+    );
+    assert_eq!(
+        name(Pointer::Scroll(edge::UP | edge::LEFT)),
+        "Scroll Up Left"
+    );
+    assert_eq!(
+        name(Pointer::Scroll(edge::DOWN | edge::RIGHT)),
+        "Scroll Down Right"
+    );
     assert_eq!(name(Pointer::Scroll(edge::RIGHT)), "Scroll Right");
 }
 
@@ -372,7 +416,10 @@ fn reviewed_client_yields_the_documented_cursor_rules() {
         look(Pointer::Hover(Relation::Enemy)),
         (2, "Select".into(), [255, 0, 0])
     );
-    assert_eq!(look(Pointer::Target(None)), (4, "Target".into(), [255, 255, 255]));
+    assert_eq!(
+        look(Pointer::Target(None)),
+        (4, "Target".into(), [255, 255, 255])
+    );
     assert_eq!(
         look(Pointer::Target(Some(Relation::Enemy))),
         (6, "TargetSelect".into(), [255, 0, 0])

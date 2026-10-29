@@ -162,6 +162,64 @@ fn live_region_enumeration_includes_empty_and_added_regions() {
 }
 
 #[test]
+fn region_registration_history_preserves_interleaved_call_order_and_bounds() {
+    let mut h = host(limits());
+    assert!(h.region_registrations().is_err());
+    h.enable_region_registration_order().unwrap();
+    assert!(h.enable_region_registration_order().is_err());
+    let (first, rectangle, _) = inputs(&mut h);
+    let second = h.native(CREATE, &[]).unwrap();
+    h.native(ADD, &[second.clone(), rectangle.clone()]).unwrap();
+    h.native(ADD, &[first.clone(), rectangle.clone()]).unwrap();
+    h.native(
+        "MoveRectTo",
+        &[rectangle.clone(), Value::Int(20), Value::Int(30)],
+    )
+    .unwrap();
+    h.native(ADD, &[second.clone(), rectangle]).unwrap();
+    let registrations = h
+        .region_registrations()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        registrations
+            .iter()
+            .map(|entry| entry.0)
+            .collect::<Vec<_>>(),
+        [id(&second), id(&first), id(&second)]
+    );
+    assert_eq!(registrations[0].1.bounds, [-4., 2., 8., 10.]);
+    assert_eq!(registrations[2].1.bounds, [14., 26., 26., 34.]);
+
+    let mut late = host(limits());
+    let (region, rectangle, _) = inputs(&mut late);
+    late.native(ADD, &[region, rectangle]).unwrap();
+    assert!(late.enable_region_registration_order().is_err());
+    assert!(late.region_registrations().is_err());
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn region_registration_history_supports_wide_handle_budgets() {
+    let mut h = host(limits());
+    h.inner.max_handles = u32::MAX as usize + 1;
+    h.enable_region_registration_order().unwrap();
+    assert!(matches!(
+        h.regions.as_ref().unwrap().registration_order.as_deref(),
+        Some(RegistrationOrder::Wide(_))
+    ));
+    let (region, rectangle, _) = inputs(&mut h);
+    h.native(ADD, &[region.clone(), rectangle]).unwrap();
+    let entries = h
+        .region_registrations()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(entries[0].0, id(&region));
+}
+
+#[test]
 fn owned_vm_retains_call_time_bounds_and_both_subscription_kinds_without_evaluation() {
     let mut vm = host(limits()).into_vm();
     vm.init_globals().unwrap();

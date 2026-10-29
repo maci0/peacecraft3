@@ -160,6 +160,17 @@ Release runs `crossing-bound-20261029-a` and `crossing-bound-20261029-b` stopped
 1223 s refusal; their 98 checkpoint and RNG lines match each other and `r14`. The indexed
 chain component is not connected to the simulation, so these runs do not validate it.
 
+The selected-input diagnostic now retains texture pixel flags and the 26 region additions
+made during Human05 initialization. A region-only chain check leaves both Necropolis oracle
+cells open; the full comparison still uses sampled occupancy, choosing the baseline site at
+dequeue 1 and the farm site at dequeue 280. This does not validate a live chain or advance
+the production route beyond the existing refusal.
+Release runs `live-retention-a` and `prelatest-b` reached that same 1223 s refusal, with all
+98 checkpoint and RNG lines matching each other and `live-clock-a`. Release runs
+`live-retention-b` and `live-release-b` also stopped there with the same 98 lines. These runs
+preceded later allocation-only texture-loader and region-history storage edits. Rebuilt runs
+`live-box-a` and `live-box-b` also stopped there with the same 98 checkpoint and RNG lines.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

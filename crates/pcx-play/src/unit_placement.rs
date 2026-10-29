@@ -417,6 +417,14 @@ pub struct Footprint {
     pub cells: Vec<[i32; 2]>,
 }
 
+/// Source-derived placement flags in the original texture's pixel order.
+pub struct NativeTexture {
+    pub origin: AssetIdentity,
+    pub width: u16,
+    pub height: u16,
+    pub flags: Vec<u8>,
+}
+
 #[derive(Clone, Copy)]
 pub struct Budget {
     pub cells: usize,
@@ -498,6 +506,9 @@ pub trait FootprintLoader: Send + Sync {
     fn load(&mut self, path: &str) -> Result<Footprint, String>;
     fn load_building(&mut self, _path: &str) -> Result<Option<Footprint>, String> {
         Ok(None)
+    }
+    fn native_texture(&self, _path: &str) -> Option<&NativeTexture> {
+        None
     }
     fn commit(&mut self, _paths: &[String]) {}
     fn rollback(&mut self, _paths: &[String]) {}
@@ -687,43 +698,20 @@ impl Placement {
         require: u8,
         excluded: &[HandleId],
     ) -> Result<Option<[f32; 2]>, Error> {
-        let mut indices = Vec::new();
-        indices
-            .try_reserve(excluded.len())
-            .map_err(|_| fail("exclusion storage"))?;
         for unit in excluded {
-            let index = self
-                .stamps
+            self.stamps
                 .iter()
-                .position(|(id, _)| id == unit)
+                .find(|(id, _)| id == unit)
                 .ok_or_else(|| fail("excluded unit occupancy is missing"))?;
-            if self.stamps[index].1.active && !indices.contains(&index) {
-                indices.push(index);
-            }
         }
-        for &index in &indices {
-            let id = self.stamps[index].0;
-            self.hide(id).expect("preflighted unit occupancy");
-        }
-        let result = self.construction_position(None, point, face, path, prevent, require);
-        for index in indices {
-            let stamp = &mut self.stamps[index].1;
-            if stamp.movement != Movement::Air {
-                for &cell in &stamp.cells {
-                    if stamp.movement.ground() {
-                        self.occupied[cell] += 1;
-                    }
-                    if stamp.movement.water() {
-                        self.water_occupied[cell] += 1;
-                    }
-                }
-                for &cell in &stamp.footprint {
-                    self.footprint_occupied[cell] += 1;
-                }
-            }
-            stamp.active = true;
-        }
-        result
+        self.construction_position_inner(
+            (None, Some(excluded)),
+            point,
+            face,
+            path,
+            prevent,
+            require,
+        )
     }
 
     #[cfg(feature = "test-fixtures")]
@@ -749,6 +737,15 @@ impl Placement {
 
     pub fn rules(&self) -> &Rules {
         &self.rules
+    }
+
+    /// Resolve retained per-pixel flags, refusing when the session did not retain them.
+    pub fn native_texture(&mut self, path: &str) -> Result<&NativeTexture, Error> {
+        self.ensure_footprint(path)?;
+        self.footprint_loader
+            .as_ref()
+            .and_then(|loader| loader.native_texture(path))
+            .ok_or_else(|| fail(format!("native texture flags are not retained for {path}")))
     }
 
     pub fn source(&self) -> &Source {
@@ -1382,6 +1379,18 @@ impl Placement {
         prevent: u8,
         require: u8,
     ) -> Result<Option<[f32; 2]>, Error> {
+        self.construction_position_inner((worker, None), request, face, path, prevent, require)
+    }
+
+    fn construction_position_inner(
+        &mut self,
+        exclusions: (Option<HandleId>, Option<&[HandleId]>),
+        request: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+    ) -> Result<Option<[f32; 2]>, Error> {
         if !request.iter().all(|value| value.is_finite()) {
             return Err(fail("finite construction point required"));
         }
@@ -1432,7 +1441,7 @@ impl Placement {
             }
             anchor[axis] = cell as i64;
         }
-        let exclude = worker.and_then(|worker| {
+        let exclude = exclusions.0.and_then(|worker| {
             self.stamps
                 .iter()
                 .find(|(id, _)| *id == worker)
@@ -1449,10 +1458,27 @@ impl Placement {
                 return Ok(None);
             };
             let flags = self.grid.pathing.cells[index];
-            if flags & prevent != 0
-                || flags & require != require
-                || self.blocked_class(index, exclude, Movement::Ground)
-            {
+            let blocked = if let Some(excluded) = exclusions.1 {
+                let removed = self
+                    .stamps
+                    .iter()
+                    .filter(|(id, stamp)| {
+                        excluded.contains(id)
+                            && stamp.active
+                            && stamp.movement.ground()
+                            && stamp.cells.binary_search(&index).is_ok()
+                    })
+                    .count();
+                let remaining = (self.occupied[index] as usize)
+                    .checked_sub(removed)
+                    .ok_or_else(|| fail("excluded unit occupancy mismatch"))?;
+                flags & self.rules.ground_mask() != 0
+                    || remaining != 0
+                    || self.footprint_occupied[index] != 0
+            } else {
+                self.blocked_class(index, exclude, Movement::Ground)
+            };
+            if flags & prevent != 0 || flags & require != require || blocked {
                 return Ok(None);
             }
         }

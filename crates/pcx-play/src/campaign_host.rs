@@ -8,6 +8,26 @@ use pcx_assets::Resolver;
 use pcx_script::value::FunctionId;
 use std::sync::Arc;
 
+fn may_start_ai(source: &str) -> bool {
+    [
+        "StartCampaignAI",
+        "StartMeleeAI",
+        "MeleeStartingAI",
+        "ExecuteFunc",
+    ]
+    .iter()
+    .any(|name| source.contains(name))
+}
+
+#[cfg(test)]
+#[test]
+fn ai_tracking_gate_detects_direct_and_dynamic_starts() {
+    assert!(may_start_ai("call StartCampaignAI(p, script)"));
+    assert!(may_start_ai("call MeleeStartingAI()"));
+    assert!(may_start_ai("call ExecuteFunc(name)"));
+    assert!(!may_start_ai("call DisplayTextToPlayer(p, 0, 0, text)"));
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EntrypointError {
     #[error("{name} is not declared by the admitted map script")]
@@ -49,7 +69,17 @@ pub fn create_host(
     let tables = Arc::clone(&inputs.defend.tables);
     let ai_source = inputs.ai_source.clone();
     let preload = inputs.preload.clone();
+    let ai_possible = ai_source.is_some()
+        && ctx
+            .scripts
+            .digests
+            .get(2)
+            .and_then(|digest| ctx.scripts.source(&digest.label))
+            .is_none_or(may_start_ai);
     let mut host = map_startup_host::assemble(ctx, inputs)?;
+    if ai_possible {
+        host.objects_mut().enable_region_registration_order()?;
+    }
     crate::campaign_cache::attach(&mut host, cache)?;
     if no_occlusion {
         host.objects_mut().admit_no_occlusion_pass()?;

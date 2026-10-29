@@ -1,6 +1,6 @@
 //! The priority queue used by the selected-client reach search.
 //!
-//! The hierarchy and pathing inputs remain unimplemented; this queue is not used for placement.
+//! The live placement query is not connected to this queue.
 
 /// A queue entry carries the generation used to reject stale paths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
