@@ -19,6 +19,7 @@ mod campaign_command_card;
 mod campaign_cursor;
 mod campaign_custom_keys;
 mod campaign_diagnostics;
+mod campaign_error_view;
 mod campaign_escape_menu;
 mod campaign_game_input;
 mod campaign_hud;

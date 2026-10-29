@@ -87,6 +87,7 @@ pub mod default_difficulty_image;
 pub mod diff;
 pub mod editor_object_globals;
 pub mod editor_triggers;
+pub mod error_line_rules;
 pub mod file_sounds;
 pub mod game_cache;
 pub mod generator;

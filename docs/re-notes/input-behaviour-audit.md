@@ -138,7 +138,7 @@ Facts every later row relies on.
 | D3 | Hover states | `0x5fbdf0` and `0x5fda30` set modes 0-3 (`0x5fbdf0`) and 4, 6, 7 (`0x5fda30`) from the unit under the cursor and the armed command. Live: the gauntlet is green over own units and buildings, yellow over neutral, red over enemies, grey-blue elsewhere; with attack armed the crosshair is cyan over ground, green own, yellow neutral, red enemy; with a spell armed it stayed cyan over every target. Mode values map to sequence names and tints through the setter `0x616660` and the table at `0xe94210` ([input cursor](input-cursor.md)). | EX; RO ([live capture](input-live-capture.md)) | DONE for the pointer states the recreation has; build placement, items and the neutral house under attack are open |
 | D4 | Placement and area cursors | `PlacementCursor` texture per race in `war3skins.txt`; building placement colours `[Placement]` (SB). | SB | DIFF: `campaign_build_ui` handles building placement; spell area cursor MISS |
 | D5 | Selection circle colours | `[SelectionCircle]` friend/neutral/enemy colours and `[TargetingColors]`. | SB | other agent / selection circle note |
-| D6 | Error line | Order failures post `[Errors]` strings above the console. | SB, EX `0x5ecc20` | DIFF: `last_error` is a log field, not a world message |
+| D6 | Error line | Order failures post `[Errors]` strings above the console, gold, 10 s then a 3 s fade ([chat and overlays](input-chat-overlays.md)). | SB, EX `0x5ecc20`, `0x5ed6c0` | DIFF: drawn with the client's rules; only the control group refusals post (the other refusals are not client strings) |
 | D7 | Ping and waypoint colours | `[PingColor]` set. | SB | MISS (no ping) |
 
 ## E. Options and data that gate input

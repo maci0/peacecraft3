@@ -470,6 +470,7 @@ pub(crate) fn app_with_plugins(
     crate::glue_menu::install(&mut app);
     crate::hud_render::install(&mut app);
     crate::campaign_messages::install(&mut app);
+    crate::campaign_error_view::install(&mut app);
     crate::campaign_script_dialogs::install(&mut app);
     crate::campaign_leaderboards::install(&mut app);
     crate::tooltip::install(&mut app);

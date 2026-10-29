@@ -55,7 +55,7 @@ modifier mask at `+0x14` (bit 1 Ctrl, bit 2 Alt).
 | D4 | The wall clock is `Time<Real>` seconds as `f32`; the compare is done in `f32` as the client does. Key auto-repeat is not distinguished: Bevy delivers one press, and the client's treatment of repeated key messages in this handler is not read. | INF |
 | D5 | Dead or removed units leave the group when it is selected, extended or defined (a unit that fails the validity checks of G7 is not selected). Whether the client removes them from its stored group at that moment or elsewhere is not established; the effect on what a digit selects is the same. | INF |
 | D6 | A hidden (not shown) unit the player controls is skipped by a select and kept in the group. | INF |
-| D7 | The refusal text is held as `CampaignControlGroups::notice` and cleared by the next accepted key. The client's error line is audit row D6 and is not drawn yet. | recreation |
+| D7 | The refusal text is posted to the error line (`campaign_error_line::ErrorLine`) and drawn above the console with the client's colour and timers ([chat and overlays](input-chat-overlays.md), section 1). Only a newer post or the timers remove it; an accepted key does not. | EX `0x5ecc20`, `0x5ed6c0` |
 | D8 | The camera is centred with the same instant, bounds-clamped scroll the minimap uses. The client's pan call is `fcn.005e3e20`; its easing was not read. | UNK |
 | D9 | Groups are kept per local player number and are dropped with the script session. Saving across missions was not examined. | recreation |
 | D10 | Not modelled: G12 preconditions, G13 containers, transports, and the net-command synchronisation. | UNK |

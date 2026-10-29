@@ -67,7 +67,7 @@ impl Rules {
         .map_err(fail)
     }
 
-    fn decode(
+    pub(crate) fn decode(
         origin: AssetIdentity,
         image_sha256: Sha256Digest,
         mut read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
@@ -266,6 +266,17 @@ impl Rules {
             return Err("message initializer/consumer disagreement".into());
         }
         Ok(rules)
+    }
+
+    /// The `WorldFrameMessage` frame: the single error line above the console.
+    pub fn error_frame(&self) -> Placement {
+        Placement {
+            left: self.message.x,
+            bottom: self.message.y,
+            width: self.message.width,
+            height: self.message.height,
+            viewport: self.viewport,
+        }
     }
 
     /// Native placement of the unit message frame for a script `(x, y)` position.

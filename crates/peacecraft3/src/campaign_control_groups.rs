@@ -18,7 +18,8 @@ use pcx_play::{
 use pcx_script::HandleId;
 
 use crate::{
-    campaign_camera::scroll_to, game_input::GameInput, map_script_session::MapScriptSession,
+    campaign_camera::scroll_to, campaign_error_line::ErrorLine, game_input::GameInput,
+    map_script_session::MapScriptSession,
 };
 
 /// Digit keys in the order of the digits they type; the client binds the top-row
@@ -98,8 +99,6 @@ pub struct CampaignControlGroups {
     session: Option<Weak<()>>,
     source: Option<Result<Source, String>>,
     players: BTreeMap<i32, ControlGroups>,
-    /// Text of the last refusal; cleared by the next accepted key.
-    pub notice: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -124,6 +123,7 @@ impl CampaignControlGroups {
 pub fn install(app: &mut App) {
     crate::game_input::install(app);
     app.init_resource::<CampaignControlGroups>()
+        .init_resource::<ErrorLine>()
         .add_message::<ControlGroupSelected>()
         .add_message::<ControlGroupCentred>()
         .add_systems(
@@ -188,14 +188,21 @@ fn same_session(a: Option<&Weak<()>>, b: Option<&Weak<()>>) -> bool {
     }
 }
 
+/// What a group key tells the rest of the application.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Outputs<'w> {
+    selected: MessageWriter<'w, ControlGroupSelected>,
+    centred: MessageWriter<'w, ControlGroupCentred>,
+    errors: ResMut<'w, ErrorLine>,
+}
+
 fn control_group_keys(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     input: Res<GameInput>,
     time: Option<Res<Time<Real>>>,
     mut state: ResMut<CampaignControlGroups>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
-    mut selected: MessageWriter<ControlGroupSelected>,
-    mut centred: MessageWriter<ControlGroupCentred>,
+    mut out: Outputs,
 ) {
     let witness = session.session_witness();
     if !same_session(state.session.as_ref(), witness.as_ref()) {
@@ -203,6 +210,7 @@ fn control_group_keys(
             session: witness,
             ..default()
         };
+        out.errors.clear();
         return;
     }
     let (Some(keys), Some(time)) = (keys, time) else {
@@ -247,7 +255,7 @@ fn control_group_keys(
             let units = groups.recall(group, &roster, cap);
             if !units.is_empty() {
                 objects.select_units(&units, true);
-                selected.write(ControlGroupSelected { units });
+                out.selected.write(ControlGroupSelected { units });
                 let repeated = groups.press(
                     group,
                     time.elapsed_secs(),
@@ -260,15 +268,15 @@ fn control_group_keys(
                         .and_then(|&unit| objects.executed_unit(unit).ok())
                         .and_then(|unit| unit.position);
                     if let Some(position) = position {
-                        centred.write(ControlGroupCentred { position });
+                        out.centred.write(ControlGroupCentred { position });
                     }
                 }
             }
-            state.notice = None;
             continue;
         };
-        state.notice = outcome
-            .err()
-            .map(|refusal| source.texts.of(refusal).to_owned());
+        if let Err(refusal) = outcome {
+            out.errors
+                .post(source.texts.of(refusal), time.elapsed_secs_f64());
+        }
     }
 }

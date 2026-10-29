@@ -9,6 +9,7 @@ use pcx_script::{HandleId, Host};
 use peacecraft3::campaign_control_groups::{
     CampaignControlGroups, ControlGroupCentred, ControlGroupSelected, ErrorTexts, Source,
 };
+use peacecraft3::campaign_error_line::ErrorLine;
 use peacecraft3::game_input::{Closer, GameInput};
 use std::time::Duration;
 
@@ -254,12 +255,13 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    fn notice(&self) -> Option<String> {
+    /// The text on the error line and the time it was posted.
+    fn notice(&self) -> Option<(String, f64)> {
         self.app
             .world()
-            .resource::<CampaignControlGroups>()
-            .notice
-            .clone()
+            .resource::<ErrorLine>()
+            .current()
+            .map(|(text, at)| (text.to_owned(), at))
     }
 
     fn selected(&mut self) -> Vec<Vec<HandleId>> {
@@ -342,17 +344,24 @@ fn refusals_post_the_string_table_texts_and_keep_the_group() {
     let mut rig = rig();
     let (own, foreign) = (rig.own.clone(), rig.foreign);
     rig.digit(5, CTRL, 0.1);
-    assert_eq!(rig.notice().as_deref(), Some("synthetic: nothing selected"));
+    let (text, first) = rig.notice().unwrap();
+    assert_eq!(text, "synthetic: nothing selected");
     rig.select(&own[..2]);
     rig.digit(5, CTRL, 0.1);
-    assert_eq!(rig.notice(), None, "an accepted key clears the text");
+    assert_eq!(
+        rig.notice().unwrap(),
+        (text, first),
+        "an accepted key leaves the line to its own timers"
+    );
     rig.select(&[foreign]);
     rig.digit(5, CTRL, 0.1);
-    assert_eq!(rig.notice().as_deref(), Some("synthetic: not yours"));
+    let (text, second) = rig.notice().unwrap();
+    assert_eq!(text, "synthetic: not yours");
+    assert!(second > first, "a new refusal restarts the line");
     assert_eq!(rig.members(5), own[..2]);
     rig.digit(5, SHIFT, 0.1);
     assert_eq!(rig.members(5), own[..2], "the merge keeps the old members");
-    assert_eq!(rig.notice(), None);
+    assert_eq!(rig.notice().unwrap(), (text, second));
 }
 
 #[test]
@@ -439,9 +448,13 @@ fn a_new_session_starts_without_groups_and_without_the_old_source() {
     rig.select(&own[..2]);
     rig.digit(8, CTRL, 0.1);
     assert_eq!(rig.members(8), own[..2]);
+    rig.select(&[]);
+    rig.digit(9, CTRL, 0.1);
+    assert!(rig.notice().is_some());
     rig.app.insert_resource(session());
     rig.frame(0.1);
     let state = rig.app.world().resource::<CampaignControlGroups>();
     assert!(state.groups(0).is_none());
     assert!(state.needs_source());
+    assert_eq!(rig.notice(), None, "the old session's text is gone");
 }

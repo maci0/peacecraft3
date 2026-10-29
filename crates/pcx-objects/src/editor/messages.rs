@@ -1,6 +1,10 @@
 //! Programmatic trigger-message font settings in the selected UI profiles.
 use super::defaults::{parse_config_profile, profile_elements};
 
+/// `[FontHeights]` key of the unit message frame, and the skin key of the shared font.
+const UNIT_HEIGHT_KEY: &str = "WorldFrameUnitMessage";
+const FONT_KEY: &str = "MessageFont";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MessageStyle {
     pub font_path: String,
@@ -53,6 +57,16 @@ impl MessageFrame {
 }
 impl MessageStyle {
     pub fn read(misc: &[u8], skin: &[u8], max_bytes: usize) -> Result<Self, String> {
+        Self::read_keyed(misc, skin, UNIT_HEIGHT_KEY, FONT_KEY, max_bytes)
+    }
+    /// Reads the `[FontHeights]` entry `height_key` and the `[Default]` entry `font_key`.
+    pub fn read_keyed(
+        misc: &[u8],
+        skin: &[u8],
+        height_key: &str,
+        font_key: &str,
+        max_bytes: usize,
+    ) -> Result<Self, String> {
         fn field(
             bytes: &[u8],
             member: &str,
@@ -81,22 +95,22 @@ impl MessageStyle {
             misc,
             "UI\\MiscUI.txt",
             "fontheights",
-            "worldframeunitmessage",
+            &height_key.to_ascii_lowercase(),
             max_bytes,
         )?
         .parse::<f32>()
         .ok()
         .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or("UI\\MiscUI.txt: invalid WorldFrameUnitMessage height")?;
+        .ok_or_else(|| format!("UI\\MiscUI.txt: invalid {height_key} height"))?;
         let font_path = field(
             skin,
             "UI\\war3skins.txt",
             "default",
-            "messagefont",
+            &font_key.to_ascii_lowercase(),
             max_bytes,
         )?;
         if font_path.is_empty() || font_path.contains('\0') {
-            return Err("UI\\war3skins.txt: invalid MessageFont".into());
+            return Err(format!("UI\\war3skins.txt: invalid {font_key}"));
         }
         Ok(Self { font_path, height })
     }
@@ -117,6 +131,18 @@ mod tests {
         let low = MessageFrame::unit(0.0, 1.0);
         assert!((low.bottom - 0.092).abs() < 1e-6);
         assert_eq!(low.left, origin.left);
+    }
+    #[test]
+    fn the_height_and_font_keys_are_chosen_by_the_caller() {
+        let misc = b"[FontHeights]\nWorldFrameUnitMessage=0.037\nWorldFrameMessage=0.021\n";
+        let skin = b"[Default]\nMessageFont=Fonts\\a.ttf\nOtherFont=Fonts\\b.ttf\n";
+        let style =
+            MessageStyle::read_keyed(misc, skin, "WorldFrameMessage", "OtherFont", 128).unwrap();
+        assert_eq!(style.height, 0.021);
+        assert_eq!(style.font_path, "Fonts\\b.ttf");
+        let error =
+            MessageStyle::read_keyed(misc, skin, "Missing", "MessageFont", 128).unwrap_err();
+        assert!(error.contains("missing"), "{error}");
     }
     #[test]
     fn font_and_height_follow_the_selected_profiles_and_refuse_ambiguity() {
