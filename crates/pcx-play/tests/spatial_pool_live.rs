@@ -170,7 +170,14 @@ fn live_pool_dumps_the_farm_layout_chains() {
         .iter()
         .map(|&at| create(objects, &orange, b"uaco", at))
         .collect();
-    let farm = create(objects, &passive, b"hhou", FARM_SITE);
+    let before_farm: Vec<_> = {
+        let pool = live_pool(objects).unwrap();
+        pool.chain(pool.cell_at([6160., 2800.]).unwrap())
+            .unwrap()
+            .map(|link| link.identity)
+            .collect()
+    };
+    let _farm = create(objects, &passive, b"hhou", FARM_SITE);
 
     let pool = live_pool(objects).unwrap();
     assert!(pool.refusal().is_none(), "{:?}", pool.refusal());
@@ -180,10 +187,20 @@ fn live_pool_dumps_the_farm_layout_chains() {
         .unwrap()
         .map(|link| link.identity)
         .collect();
-    assert_eq!(
-        at_farm.first(),
-        Some(&farm.token()),
-        "the farm is the newest link at its own cell"
+    assert!(
+        !at_farm.is_empty(),
+        "the farm has texture entries at its site"
+    );
+    let captured_cell = pool.cell_at([6160., 2800.]).unwrap();
+    assert!(
+        pool.chain(captured_cell).unwrap().any(|link| {
+            !before_farm.contains(&link.identity)
+                && pool
+                    .live()
+                    .entry_state(link.identity)
+                    .is_some_and(|(flags, _)| flags & 0x08 != 0)
+        }),
+        "the captured farm cell has a blue-channel entry"
     );
     for (worker, &at) in workers.iter().zip(&FARM_WORKERS) {
         assert!(

@@ -294,7 +294,7 @@ pub fn assemble(
             continue;
         }
         let path = catalog.path(tables, instance.type_id, instance.life == 0)?;
-        let cells = stamp(
+        stamp(
             &mut grid,
             rules,
             &mut textures,
@@ -304,14 +304,22 @@ pub fn assemble(
             &mut work,
         )?;
         if let Some(pool) = &mut pool {
-            pool.texture(Texture::Decoration(decoration), rules.solid_mask(), &cells);
+            let pixels = native_footprint_cells(
+                &grid,
+                rules,
+                &textures,
+                &path,
+                [instance.position[0], instance.position[1]],
+                f64::from(instance.angle) / std::f64::consts::FRAC_PI_2,
+            )?;
+            pool.decoration_pixels(Texture::Decoration(decoration), &pixels);
             decoration += 1;
         }
     }
     let mut layers = Vec::new();
     for (id, instance, state) in objects.destructables_with_handles() {
-        let live = catalog.path(tables, instance.objectid.to_be_bytes(), false)?;
-        let dead = catalog.path(tables, instance.objectid.to_be_bytes(), true)?;
+        let live_path = catalog.path(tables, instance.objectid.to_be_bytes(), false)?;
+        let dead_path = catalog.path(tables, instance.objectid.to_be_bytes(), true)?;
         let key = match instance.origin {
             DestructableOrigin::Placed { creation_number } => {
                 StationaryKey::Placed(creation_number)
@@ -322,7 +330,7 @@ pub fn assemble(
             &grid,
             rules,
             &mut textures,
-            &live,
+            &live_path,
             [instance.x, instance.y],
             f64::from(instance.face) / 90.0,
             &mut work,
@@ -331,11 +339,24 @@ pub fn assemble(
             &grid,
             rules,
             &mut textures,
-            &dead,
+            &dead_path,
             [instance.x, instance.y],
             f64::from(instance.face) / 90.0,
             &mut work,
         )?;
+        if let Some(pool) = &mut pool {
+            let owner = match key {
+                StationaryKey::Placed(creation) => Texture::Placed(creation),
+                StationaryKey::Destructable(id) => Texture::Destructable(id),
+            };
+            let point = [instance.x, instance.y];
+            let turns = f64::from(instance.face) / 90.0;
+            let live_pixels =
+                native_footprint_cells(&grid, rules, &textures, &live_path, point, turns)?;
+            let dead_pixels =
+                native_footprint_cells(&grid, rules, &textures, &dead_path, point, turns)?;
+            pool.stationary_pixels(owner, live_pixels, dead_pixels, !state.dead);
+        }
         layers.push(StationaryStamp {
             key,
             live,
@@ -345,18 +366,6 @@ pub fn assemble(
         });
     }
     if let Some(pool) = &mut pool {
-        for layer in &layers {
-            let owner = match layer.key {
-                StationaryKey::Placed(creation) => Texture::Placed(creation),
-                StationaryKey::Destructable(id) => Texture::Destructable(id),
-            };
-            let cells = if layer.active {
-                &layer.live
-            } else {
-                &layer.dead
-            };
-            pool.texture(owner, layer.mask, cells);
-        }
         for addition in objects.region_registrations().map_err(|e| e.to_string())? {
             let (region, request) = addition.map_err(|e| e.to_string())?;
             pool.region_added(region, request.bounds);
@@ -386,6 +395,72 @@ pub fn assemble(
         placement.attach_spatial(pool);
     }
     Ok(placement)
+}
+
+fn native_footprint_cells(
+    grid: &Grid,
+    rules: &Rules,
+    textures: &Textures,
+    path: &str,
+    point: [f32; 2],
+    turns: f64,
+) -> Result<crate::spatial_pool::TexturePixels, String> {
+    if matches!(path, "" | "_" | "none") {
+        return Ok(Vec::new());
+    }
+    let key = Textures::key(path)?;
+    let texture = textures
+        .native
+        .as_ref()
+        .and_then(|cache| cache.committed.get(&key))
+        .ok_or_else(|| format!("native texture flags missing for {path}"))?;
+    project_native_texture(grid, rules, texture, point, turns)
+}
+
+pub(crate) fn project_native_texture(
+    grid: &Grid,
+    rules: &Rules,
+    texture: &NativeTexture,
+    point: [f32; 2],
+    turns: f64,
+) -> Result<crate::spatial_pool::TexturePixels, String> {
+    let anchor: [i64; 2] = std::array::from_fn(|axis| {
+        ((f64::from(point[axis]) - f64::from(grid.origin[axis])) / f64::from(rules.cell_size()))
+            .round_ties_even() as i64
+    });
+    let quarter = turns.round_ties_even().rem_euclid(4.0) as u8;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(texture.flags.len())
+        .map_err(|_| "native stationary footprint allocation")?;
+    for (i, &flags) in texture.flags.iter().enumerate() {
+        if flags == 0 {
+            continue;
+        }
+        let x = (i / usize::from(texture.width)) as i64 - i64::from(texture.height) / 2;
+        let y = (i % usize::from(texture.width)) as i64 - i64::from(texture.width) / 2;
+        let (x, y) = match quarter {
+            0 => (x, y),
+            1 => (-y - 1, x),
+            2 => (-x - 1, -y - 1),
+            _ => (y, -x - 1),
+        };
+        let (x, y) = (anchor[0] + x, anchor[1] + y);
+        if x >= 0
+            && y >= 0
+            && x < i64::from(grid.pathing.width)
+            && y < i64::from(grid.pathing.height)
+        {
+            let index = (y as u64) * u64::from(grid.pathing.width) + x as u64;
+            result.push((
+                u32::try_from(index).map_err(|_| "native texture cell index overflow")?,
+                flags,
+            ));
+        } else if flags & rules.texture_policy().flags([0, 1, 0, 0]) != 0 {
+            return Err("native texture green channel outside map".into());
+        }
+    }
+    Ok(result)
 }
 
 /// The chain owner for a tracked session, or `None` when region history was not enabled.
@@ -766,7 +841,8 @@ impl FootprintLoader for TextureLoader {
 
     fn native_texture(&self, path: &str) -> Option<&NativeTexture> {
         let key = Textures::key(path).ok()?;
-        self.textures.native.as_ref()?.committed.get(&key)
+        let cache = self.textures.native.as_ref()?;
+        cache.committed.get(&key).or_else(|| cache.staged.get(&key))
     }
 
     fn commit(&mut self, paths: &[String]) {
@@ -1423,6 +1499,83 @@ mod tests {
         assert_eq!(flags.flags, expected);
         let loader = TextureLoader { textures };
         assert_eq!(loader.native_texture("FLAGS.TGA").unwrap().flags, expected);
+    }
+
+    #[test]
+    fn native_stationary_pixels_keep_channel_flags_and_rotate() {
+        let pixels = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 0, 0]];
+        let (mut textures, _) = textures_with_reads(&[("flags.tga", texture(2, 2, &pixels))]);
+        textures.native = Some(Box::new(NativeTextures::default()));
+        textures.remaining_cells = 16;
+        textures.read("flags.tga").unwrap();
+        let rules = crate::unit_placement::tests::rules(2, 0.0);
+        let grid = Grid {
+            source: pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "test".into(),
+            },
+            origin: [0., 0.],
+            pathing: pcx_map::Pathing {
+                version: 0,
+                width: 4,
+                height: 4,
+                cells: vec![0; 16],
+            },
+            domains: vec![0; 16],
+        };
+        let flags: Vec<_> = pixels
+            .iter()
+            .map(|&[r, g, b]| textures.policy.flags([r, g, b, 255]))
+            .collect();
+        assert_eq!(
+            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [8., 8.], 0.).unwrap(),
+            [(5, flags[0]), (9, flags[1]), (6, flags[2])]
+        );
+        assert_eq!(
+            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [8., 8.], 1.).unwrap(),
+            [(6, flags[0]), (5, flags[1]), (10, flags[2])]
+        );
+        assert!(
+            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [0., 0.], 0.).is_err()
+        );
+    }
+
+    #[test]
+    fn script_destructable_registers_staged_native_pixels() {
+        let image = texture(2, 2, &[[0, 255, 0], [0; 3], [0; 3], [0; 3]]);
+        let (mut textures, _) = textures_with_reads(&[("live.tga", image)]);
+        textures.native = Some(Box::new(NativeTextures::default()));
+        textures.remaining_cells = 16;
+        let source = pcx_sim::world::Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "test".into(),
+        };
+        let mut placement = crate::unit_placement::tests::placement(source, 10000)
+            .with_stationary(
+                pcx_map::Pathing {
+                    version: 0,
+                    width: 32,
+                    height: 32,
+                    cells: vec![0; 1024],
+                },
+                vec![],
+            )
+            .unwrap()
+            .with_staged_footprint_loader(TextureLoader { textures })
+            .with_script_paths(|_, dead| Ok(if dead { "_" } else { "live.tga" }.into()));
+        placement.attach_spatial(crate::spatial_pool::tests::pool());
+        let prepared = placement
+            .prepare_script_destructable(1, [32., 32.], 0., false)
+            .unwrap();
+        let id = pcx_script::HandleId::new(std::num::NonZeroU64::new(42).unwrap());
+        placement.publish_script_destructable(id, prepared);
+        let pool = placement.spatial().unwrap();
+        assert!(pool.refusal().is_none(), "{:?}", pool.refusal());
+        assert!(pool.chain([7, 7]).unwrap().next().is_some());
+        assert!(placement.set_destructable_active(id, false));
+        assert!(placement.spatial().unwrap().refusal().is_none());
     }
 
     #[test]

@@ -267,6 +267,17 @@ earlier control. This is not a new paired control measurement; the remaining sta
 delta has not been isolated. Human03 and Human04 route checkpoints and RNG lines match `g1`.
 The budget check passes without raising limits.
 
+The texture-entry split keeps native pixel data only in tracked texture stamps. The locked,
+offline Human03 check again reports 1,597,968 and 3,375,515 allocations and 1,039,365,977 and
+1,756,596,749 requested bytes, matching the immediately preceding measurements above. The
+digests, reallocations and vision work also match. For a separate Human04 map startup at zero
+ticks, using the same installed inputs and a `HEAD` source archive as control, the control
+measured 1,279,285 allocations, 26,969 reallocations and 945,636,912 requested bytes. The
+texture-entry split measured 1,290,430 allocations, 27,126 reallocations and 946,858,968 bytes.
+Both state digests were `47ba6c583ce63641`. The increases of 11,145 allocations, 157
+reallocations and 1,222,056 bytes remain an open regression; no budget was raised. This is a
+map-start workload and does not include the earned-carryover route profile.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

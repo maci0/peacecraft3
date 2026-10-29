@@ -186,6 +186,17 @@ Release run `live-pool-20261030-a` and a second run of the same compiled test wi
 earned profile both stop at 1223 s with the existing construction refusal. Their 98 checkpoint
 and RNG lines are identical.
 
+The subsequent texture-entry split adds the captured `0x08` entry at the farm cell
+(6160, 2800). The 112 recorded reach outcomes and four sampled site selections still match;
+the production path remains refused because the live reach hierarchy, town association and
+effect-source qualification are not connected. Runs `texture-split-y1` and `texture-split-y3`
+both stop at 1223 s on that refusal, with all 98 checkpoint and RNG lines identical. In the
+non-skipped cinematic, `Trig_Cinematic_D_Actions` issues Jaina's `massteleport` target order.
+The script creates unit `Hjai` and selects ability `AHmt`; the selected ability table supplies
+its level data and allowed targets. Supporting that path requires dispatch for that ability,
+qualification of the target and nearby units, channel timing and interruption, and placement
+of the transported group at the destination. It is not implemented by the present change.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

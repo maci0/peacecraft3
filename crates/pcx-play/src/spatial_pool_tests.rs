@@ -54,6 +54,57 @@ fn tracked(map: &str) -> Placement {
     p
 }
 
+#[test]
+fn texture_masks_follow_selected_instructions_and_green_pixels() {
+    let plain = [
+        0xc7, 0x45, 0xe4, 1, 0, 0, 0, 0x50, 0xc7, 0x45, 0xe8, 2, 0, 0, 0, 0xc7, 0x45, 0xec, 4, 0,
+        0, 0,
+    ];
+    let green = [
+        0xc7, 0x45, 0xe0, 1, 0, 0, 0, 0x50, 0xc7, 0x45, 0xe4, 2, 0, 0, 0, 0xc7, 0x45, 0xe8, 4, 0,
+        0, 0, 0xc7, 0x45, 0xec, 8, 0, 0, 0,
+    ];
+    let masks = TextureMasks::from_instructions(&plain, &green).unwrap();
+    assert_eq!(masks.for_pixels(&[1, 4, 0]), &[1, 2, 4]);
+    assert_eq!(masks.for_pixels(&[1, 8, 4]), &[1, 2, 4, 8]);
+    let mut invalid = green;
+    invalid[3] = 2;
+    assert!(TextureMasks::from_instructions(&plain, &invalid).is_err());
+}
+
+#[test]
+fn texture_pixels_create_separate_ordered_entries_and_restore_them() {
+    let mut pool = pool();
+    let pixels = [(100, 1 | 4), (101, 4), (102, 8)];
+    pool.set_texture_pixels(5, &pixels);
+    let entries = pool.texture_entries[&5].clone();
+    assert_eq!(
+        entries.iter().map(|entry| entry.1).collect::<Vec<_>>(),
+        [1, 2, 4, 8]
+    );
+    let links: Vec<_> = pool.chain([3, 4]).unwrap().collect();
+    assert_eq!(
+        links,
+        [link(entries[2].0, OBJECT), link(entries[0].0, OBJECT)]
+    );
+    assert!(pool.live().blocked([3, 4], 0, 4).unwrap());
+    pool.hide(id(5));
+    assert!(!pool.live().blocked([3, 4], 0, 4).unwrap());
+    pool.set_texture_pixels(5, &pixels);
+    assert!(pool.live().blocked([3, 4], 0, 4).unwrap());
+    assert!(pool.refusal().is_none());
+}
+
+#[test]
+fn unknown_stationary_pixels_stop_the_live_pool() {
+    let mut pool = pool();
+    pool.stationary_active(Texture::Placed(12), true);
+    assert_eq!(
+        pool.refusal().unwrap().error,
+        ChainError::MissingTexturePixels(PLACED_TAG | 12)
+    );
+}
+
 fn chain(p: &Placement, cell: [usize; 2]) -> Vec<ChainLink> {
     p.spatial().unwrap().chain(cell).unwrap().collect()
 }
@@ -148,44 +199,17 @@ fn a_shown_unit_registers_a_new_entry_after_it_was_hidden() {
 }
 
 #[test]
-fn a_structure_footprint_is_a_blocking_texture_entry_that_hide_deactivates() {
+fn a_structure_without_retained_texture_pixels_is_refused() {
     let mut p = placement(source("structure"), 10000)
         .with_footprint_loader(footprint_loader(vec![[0, 0], [1, 0], [0, 1]]));
     p.attach_spatial(pool());
     let stamp = p.prepare([32., 32.], None, "farm.tga", 0.).unwrap();
     p.commit(id(5), stamp);
-    // Pathing cells (8, 8), (9, 8), (8, 9) become native cells [8, 8], [8, 9], [9, 8].
-    for cell in [[8, 8], [8, 9], [9, 8]] {
-        assert_eq!(chain(&p, cell), [link(5, OBJECT)]);
-    }
-    assert!(chain(&p, [9, 9]).is_empty());
-    let live = p.spatial().unwrap().live();
     assert_eq!(
-        live.sequence(),
-        2,
-        "two row runs, two ordered registrations"
+        p.spatial().unwrap().refusal().unwrap().error,
+        ChainError::MissingTexturePixels(5)
     );
-    assert_eq!(live.entry_state(5), Some((ACTIVE | GROUND, REGISTERED)));
-    assert!(live.blocked([8, 8], 0, GROUND).unwrap());
-    assert!(!live.blocked([8, 8], 0, AIR).unwrap());
-
-    p.hide(id(5)).unwrap();
-    let live = p.spatial().unwrap().live();
-    assert_eq!(
-        live.entry_state(5),
-        Some((GROUND, REGISTERED)),
-        "hiding clears only the active flag"
-    );
-    assert!(!live.blocked([8, 8], 0, GROUND).unwrap());
-    assert_eq!(chain(&p, [8, 8]), [link(5, REMOVAL), link(5, OBJECT)]);
-
-    let again = p
-        .prepare_show(id(5), [32., 32.], None, "farm.tga", 0.)
-        .unwrap();
-    p.commit(id(5), again);
-    let live = p.spatial().unwrap().live();
-    assert!(live.blocked([8, 8], 0, GROUND).unwrap());
-    assert!(p.spatial().unwrap().refusal().is_none());
+    assert!(chain(&p, [8, 8]).is_empty());
 }
 
 #[test]
@@ -208,9 +232,9 @@ fn stationary_layers_swap_their_cells_when_the_object_dies() {
         )
         .unwrap();
     let mut owner = pool();
-    owner.texture(Texture::Placed(3), 0x10, &[100]);
+    owner.stationary_pixels(Texture::Placed(3), vec![(100, 4)], vec![(200, 4)], true);
+    let placed = owner.texture_entries[&(PLACED_TAG | 3)][2].0;
     p.attach_spatial(owner);
-    let placed = PLACED_TAG | 3;
     // Pathing cell 100 is native cell [3, 4]; cell 200 is [6, 8].
     assert_eq!(chain(&p, [3, 4]), [link(placed, OBJECT)]);
 

@@ -4,7 +4,7 @@ use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
 use crate::scripts::AssetIdentity;
-use crate::spatial_pool::{PoolOwner, Stamp, Texture};
+use crate::spatial_pool::{PoolOwner, Stamp, Texture, TexturePixels};
 use pcx_assets::AssetPath;
 use pcx_map::Pathing;
 use pcx_script::HandleId;
@@ -476,6 +476,13 @@ pub(crate) struct PreparedStationary {
     mask: u8,
     active: bool,
     work: usize,
+    native: Option<Box<StationaryTextures>>,
+}
+
+#[derive(Debug)]
+struct StationaryTextures {
+    live: TexturePixels,
+    dead: TexturePixels,
 }
 
 pub struct Placement {
@@ -570,12 +577,44 @@ struct Candidate {
 pub(crate) struct Prepared {
     pub position: [f32; 2],
     cells: Vec<usize>,
-    footprint: Vec<usize>,
+    footprint: PreparedFootprint,
     /// Facing the footprint was oriented with; a later turn of the unit's model does not
     /// rotate a standing footprint, so a reveal or relocation reuses it.
     face: f32,
     active: bool,
     movement: Movement,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PreparedFootprint {
+    Plain(Vec<usize>),
+    Native(Box<NativeFootprint>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeFootprint {
+    cells: Vec<usize>,
+    pixels: TexturePixels,
+}
+
+impl PreparedFootprint {
+    fn native(&self) -> Option<&[(u32, u8)]> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Native(data) => Some(&data.pixels),
+        }
+    }
+}
+
+impl std::ops::Deref for PreparedFootprint {
+    type Target = [usize];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Plain(cells) => cells,
+            Self::Native(data) => &data.cells,
+        }
+    }
 }
 
 impl Prepared {
@@ -992,12 +1031,7 @@ impl Placement {
             StationaryKey::Placed(creation) => Texture::Placed(creation),
             StationaryKey::Destructable(id) => Texture::Destructable(id),
         };
-        let cells = if layer.active {
-            &layer.live
-        } else {
-            &layer.dead
-        };
-        pool.texture(owner, layer.mask, cells);
+        pool.stationary_active(owner, layer.active);
     }
 
     /// Recompose one layer over its retained cells without allocating.
@@ -1175,6 +1209,37 @@ impl Placement {
         cells.extend_from_slice(&dead);
         cells.sort_unstable();
         cells.dedup();
+        let native = if self.spatial.is_some() {
+            let pixels = |path: &str| -> Result<TexturePixels, Error> {
+                if matches!(path, "" | "_" | "none") {
+                    return Ok(Vec::new());
+                }
+                let key = Self::footprint_key(path)?;
+                let texture = self
+                    .footprint_loader
+                    .as_ref()
+                    .and_then(|loader| loader.native_texture(&key))
+                    .ok_or_else(|| {
+                        fail(format!(
+                            "native stationary texture flags unavailable: {path}"
+                        ))
+                    })?;
+                crate::campaign_placement::project_native_texture(
+                    &self.grid,
+                    &self.rules,
+                    texture,
+                    point,
+                    f64::from(face) / 90.0,
+                )
+                .map_err(fail)
+            };
+            Some(Box::new(StationaryTextures {
+                live: pixels(&live_path)?,
+                dead: pixels(&dead_path)?,
+            }))
+        } else {
+            None
+        };
         Ok(PreparedStationary {
             live,
             dead,
@@ -1182,6 +1247,7 @@ impl Placement {
             mask,
             active: !requested_dead,
             work,
+            native,
         })
     }
 
@@ -1220,7 +1286,16 @@ impl Placement {
             },
         );
         self.recompose(&cells);
-        self.register_stationary(key);
+        if let (Some(pool), Some(native)) = (self.spatial.as_deref_mut(), prepared.native) {
+            pool.stationary_pixels(
+                Texture::Destructable(id),
+                native.live,
+                native.dead,
+                prepared.active,
+            );
+        } else {
+            self.register_stationary(key);
+        }
     }
 
     fn script_footprint_cells(
@@ -1734,6 +1809,7 @@ impl Placement {
             return Err(fail("occupancy count overflow"));
         }
         let mut footprint = Vec::new();
+        let mut native_footprint = None;
         if !matches!(path, "" | "_" | "none") {
             let key = Self::footprint_key(path)?;
             let input = self
@@ -1751,6 +1827,38 @@ impl Placement {
                 return Err(fail("only quarter-turn footprint facing is admitted"));
             }
             let quarter = turns.rem_euclid(4.0) as u8;
+            if self.spatial.is_some()
+                && let Some(texture) = self
+                    .footprint_loader
+                    .as_ref()
+                    .and_then(|loader| loader.native_texture(&key))
+            {
+                let mut pixels = Vec::new();
+                pixels
+                    .try_reserve_exact(texture.flags.len())
+                    .map_err(|_| fail("native footprint allocation"))?;
+                for (i, &flags) in texture.flags.iter().enumerate() {
+                    let x = (i / usize::from(texture.width)) as i64 - i64::from(texture.height) / 2;
+                    let y = (i % usize::from(texture.width)) as i64 - i64::from(texture.width) / 2;
+                    let (x, y) = match quarter {
+                        0 => (x, y),
+                        1 => (-y - 1, x),
+                        2 => (-x - 1, -y - 1),
+                        _ => (y, -x - 1),
+                    };
+                    if flags != 0 {
+                        let index = self
+                            .index(i64::from(cell[0]) + x, i64::from(cell[1]) + y)
+                            .ok_or_else(|| fail("native footprint outside map"))?;
+                        pixels.push((
+                            u32::try_from(index)
+                                .map_err(|_| fail("native footprint index overflow"))?,
+                            flags,
+                        ));
+                    }
+                }
+                native_footprint = Some(pixels);
+            }
             // shortcut: quarter-turn footprint orientation; qualify arbitrary facing before supporting it.
             for &[x, y] in &input.cells {
                 let (x, y) = match quarter {
@@ -1776,7 +1884,13 @@ impl Placement {
         Ok(Some(Prepared {
             position,
             cells,
-            footprint,
+            footprint: match native_footprint {
+                Some(pixels) => PreparedFootprint::Native(Box::new(NativeFootprint {
+                    cells: footprint,
+                    pixels,
+                })),
+                None => PreparedFootprint::Plain(footprint),
+            },
             face,
             active: exclude.is_none_or(|p| p.active),
             movement,
@@ -1800,7 +1914,7 @@ impl Placement {
                         self.water_occupied[i] -= 1;
                     }
                 }
-                for &i in &stamp.footprint {
+                for &i in stamp.footprint.iter() {
                     self.footprint_occupied[i] -= 1;
                 }
             }
@@ -2491,7 +2605,7 @@ impl Placement {
                         self.water_occupied[i] -= 1;
                     }
                 }
-                for &i in &stamp.footprint {
+                for &i in stamp.footprint.iter() {
                     self.footprint_occupied[i] -= 1;
                 }
             }
@@ -2505,7 +2619,7 @@ impl Placement {
                     self.water_occupied[i] += 1;
                 }
             }
-            for &i in &prepared.footprint {
+            for &i in prepared.footprint.iter() {
                 self.footprint_occupied[i] += 1;
             }
         }
@@ -2526,6 +2640,7 @@ impl Placement {
                         mask,
                         cells: &stamp.cells,
                         footprint: &stamp.footprint,
+                        native_footprint: stamp.footprint.native(),
                     },
                 );
             }

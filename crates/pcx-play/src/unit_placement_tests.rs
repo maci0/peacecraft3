@@ -1391,7 +1391,7 @@ fn diagnostic_exclusions_restore_occupancy_after_success_and_error() {
     let overlapping = Prepared {
         position: first.position,
         cells: first.cells.clone(),
-        footprint: vec![],
+        footprint: PreparedFootprint::Plain(Vec::new()),
         face: first.face,
         active: true,
         movement: first.movement,

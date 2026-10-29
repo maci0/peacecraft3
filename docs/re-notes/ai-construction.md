@@ -1380,6 +1380,38 @@ choices above. At farm cell (6160, 2800), the live chain has one texture link wi
 `0x02`; the captured native entry at that cell intersects `0x08`. The matching site result
 does not resolve that mismatch. Production construction remains refused.
 
+### Texture entry split, 2026-10-30
+
+The texture constructor at `0x4deb67` marks the texture when any source pixel has a nonzero
+green channel. The registration selector at `0x6c0943` uses this mark to choose three or four
+entry masks, and `0x804cba` links each pixel to every matching entry in entry order. In the
+reviewed image the three masks are `0xc2`, `0x10` and `0x08`, and a green-bearing texture has
+one additional `0x04` entry. The implementation reads these operands and checks the constructor
+against the selected executable rather than copying the mask values into the live rules.
+
+The tracked pool now retains individual entries for unit-owned textures and the map-loaded
+decoration and destructable textures. Script-created destructables preflight both their live
+and dead texture pixels through the staged source loader. Changing a texture between the
+three-entry and four-entry forms currently refuses because entry replacement history has not
+been established. A texture without retained pixels also refuses, as does a stationary
+texture with green pixels outside the map, where clipping would hide the selector input.
+Map-load ordering and the nearest-quarter-turn stationary raster remain as described above;
+this change does not establish their native behavior.
+
+The local Human05 farm test now observes separate `0xc2`, `0x10` and `0x08` entries. In
+particular the cell at (6160, 2800) contains an entry intersecting `0x08`, matching the native
+capture. Startup registered 38,567 pool operations in this fixture. With supplied origins
+and injected worker positions, the live-pool diagnostic matches all 100 at-start and 12
+near-mine reach outcomes and selects (6208, 2752), (5952, 2432), (6336, 2752) and
+(5248, 2944) at dequeues 1, 280, 355 and 419, respectively. It does not replay the native
+movement and timer history. The start-changed scenario has not been tested through production.
+
+The test-only reach snapshot still constructs the hierarchical inputs from a supplied terrain
+raster and builder rectangle. Production has no equivalent live construction of those inputs
+or connected town and effect-source qualification. The live movement entry still has mask
+`0x02` where the captured acolyte entry intersects `0x08`, and the coarse movement grid is not
+tracked. These remain blockers for admitting the structure search in `SetProduce`.
+
 ## Not established
 
 - The structure fallback's root-ability state, native registration and type-change paths beyond
@@ -1390,8 +1422,8 @@ does not resolve that mismatch. Production construction remains refused.
 - Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
   boundary cases and placement requirements such as blight. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.
-  The current placement cache stores aggregate cell counts rather than the ordered native
-  entry chains. The unit arena now retains a creation clock and accepted creation position
+  The ordinary placement cache stores aggregate cell counts; the tracked spatial owner keeps
+  ordered entry chains with the qualifications above. The unit arena retains a creation clock and accepted creation position
   when those systems were admitted, including after removal. The live separation helper uses
   those records, selected movement limits, collision sizes and the placement event log; it
   refuses when inputs are unavailable, a scripted relocation occurred, or a form change may

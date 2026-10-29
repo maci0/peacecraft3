@@ -170,6 +170,8 @@ pub enum Error {
     Clock,
     #[error("spatial entry {0} is missing")]
     MissingEntry(u64),
+    #[error("spatial texture pixels for owner {0} are unavailable")]
+    MissingTexturePixels(u64),
     #[error("spatial entry {0} is already registered")]
     DuplicateEntry(u64),
     #[error("spatial entry {0} has no movement rectangle")]

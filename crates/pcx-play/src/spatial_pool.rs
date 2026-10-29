@@ -22,6 +22,7 @@ const ENTRY_BUDGET: usize = 1 << 16;
 /// Identity space above every arena handle token for objects the arena does not own.
 const DECORATION_TAG: u64 = 1 << 62;
 const PLACED_TAG: u64 = 1 << 63;
+const TEXTURE_ENTRY_TAG: u64 = 1 << 61;
 
 /// Operands read once from the reviewed image for a tracked session.
 #[derive(Clone, Debug)]
@@ -34,6 +35,56 @@ pub struct SpatialRules {
     movement: MovementStateRule,
     movement_scale: u32,
     cleanup: CleanupOperands,
+    texture_masks: TextureMasks,
+}
+
+/// Per-entry pathing masks selected by the texture registration code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureMasks {
+    plain: [u8; 3],
+    green: [u8; 4],
+}
+
+impl TextureMasks {
+    /// Select the entries in native order. The constructor sets the extra-entry
+    /// flag when any pixel has a nonzero green channel.
+    pub fn for_pixels(&self, pixels: &[u8]) -> &[u8] {
+        if pixels.iter().any(|flags| flags & self.green[3] != 0) {
+            &self.green
+        } else {
+            &self.plain
+        }
+    }
+
+    fn from_instructions(plain: &[u8], green: &[u8]) -> Result<Self, String> {
+        fn immediate(code: &[u8], offset: usize, target: u8) -> Result<u8, String> {
+            let instruction = code
+                .get(offset..offset + 7)
+                .ok_or("truncated texture masks")?;
+            if instruction[..3] != [0xc7, 0x45, target]
+                || instruction[4..] != [0, 0, 0]
+                || instruction[3] == 0
+            {
+                return Err("unrecognized texture mask instruction".into());
+            }
+            Ok(instruction[3])
+        }
+        let plain = [
+            immediate(plain, 0, 0xe4)?,
+            immediate(plain, 8, 0xe8)?,
+            immediate(plain, 15, 0xec)?,
+        ];
+        let green = [
+            immediate(green, 0, 0xe0)?,
+            immediate(green, 8, 0xe4)?,
+            immediate(green, 15, 0xe8)?,
+            immediate(green, 22, 0xec)?,
+        ];
+        if plain != green[..3] || green[3] & (green[0] | green[1] | green[2]) != 0 {
+            return Err("unsupported texture mask relationship".into());
+        }
+        Ok(Self { plain, green })
+    }
 }
 
 impl SpatialRules {
@@ -52,11 +103,17 @@ impl SpatialRules {
             movement: MovementStateRule::reviewed_legacy(image, rules)?,
             movement_scale: movement_scale(image)?,
             cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
+            texture_masks: texture_masks(image)?,
         })
     }
 
     pub(crate) fn cleanup(&self) -> &CleanupOperands {
         &self.cleanup
+    }
+
+    /// Source-derived masks for one texture's entry set.
+    pub fn texture_masks(&self) -> TextureMasks {
+        self.texture_masks
     }
 
     #[cfg(test)]
@@ -70,8 +127,47 @@ impl SpatialRules {
             movement: MovementStateRule::synthetic(4.0, 0x40),
             movement_scale: 1.0_f32.to_bits(),
             cleanup: CleanupOperands::synthetic(),
+            texture_masks: TextureMasks {
+                plain: [1, 2, 4],
+                green: [1, 2, 4, 8],
+            },
         }
     }
+}
+
+fn texture_masks(image: &[u8]) -> Result<TextureMasks, String> {
+    use crate::neutral_player::RuleInputBudget;
+    use crate::neutral_rule_input::Pe;
+
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let read = |address, len| -> Result<&[u8], String> {
+        pe.read_from(address, true)
+            .map_err(|error| error.to_string())?
+            .get(..len)
+            .ok_or_else(|| format!("truncated texture masks at {address:#x}"))
+    };
+    let gate = read(0x6c0943, 4)?;
+    let constructor = read(0x4deb67, 20)?;
+    if gate != [0xf6, 0x46, 0x5c, 0x01]
+        || constructor[..4] != [0x80, 0x79, 0x01, 0x00]
+        || constructor[9..12] != [0x80, 0x0c, 0x03]
+        || constructor[16..20] != [0x83, 0x4f, 0x5c, 0x01]
+    {
+        return Err("unrecognized texture green-channel selector".into());
+    }
+    let masks = TextureMasks::from_instructions(read(0x6c0976, 22)?, read(0x6c0952, 29)?)?;
+    if constructor[12] != masks.green[3] {
+        return Err("texture green flag differs from its entry mask".into());
+    }
+    Ok(masks)
 }
 
 fn movement_scale(image: &[u8]) -> Result<u32, String> {
@@ -149,6 +245,7 @@ pub(crate) struct Stamp<'a> {
     pub mask: u8,
     pub cells: &'a [usize],
     pub footprint: &'a [usize],
+    pub native_footprint: Option<&'a [(u32, u8)]>,
 }
 
 /// A pathing-texture owner other than a unit.
@@ -176,11 +273,22 @@ enum Tracked {
     Region,
 }
 
+pub(crate) type TexturePixels = Vec<(u32, u8)>;
+
+struct StationaryPixels {
+    live: TexturePixels,
+    dead: TexturePixels,
+}
+
 pub struct PoolOwner {
     live: LiveChains,
     rules: SpatialRules,
     geometry: Geometry,
     tracked: BTreeMap<u64, Tracked>,
+    texture_entries: BTreeMap<u64, Vec<(u64, u8)>>,
+    stationary_pixels: BTreeMap<u64, StationaryPixels>,
+    next_texture_entry: u64,
+    scratch_cells: Vec<[usize; 2]>,
     /// Last commanded velocity, limit and whether a non-order contributor was present.
     velocities: BTreeMap<HandleId, ([f32; 2], f32, bool)>,
     refusal: Option<Refusal>,
@@ -212,6 +320,10 @@ impl PoolOwner {
             rules,
             geometry,
             tracked: BTreeMap::new(),
+            texture_entries: BTreeMap::new(),
+            stationary_pixels: BTreeMap::new(),
+            next_texture_entry: 0,
+            scratch_cells: Vec::new(),
             velocities: BTreeMap::new(),
             refusal: None,
         })
@@ -274,12 +386,24 @@ impl PoolOwner {
     }
 
     /// Row runs in chain order: native axis 1 major, axis 0 contiguous.
-    fn runs(&self, cells: &[usize]) -> Vec<CellRect> {
-        let mut native: Vec<[usize; 2]> = cells.iter().map(|&i| self.chain_cell(i)).collect();
-        native.sort_unstable_by_key(|cell| (cell[1], cell[0]));
-        native.dedup();
+    fn runs(&mut self, pixels: &[(u32, u8)], mask: u8) -> Vec<CellRect> {
+        let width = self.geometry.width;
+        self.scratch_cells.clear();
+        self.scratch_cells
+            .extend(
+                pixels
+                    .iter()
+                    .filter(|&&(_, flags)| flags & mask != 0)
+                    .map(|&(cell, _)| {
+                        let cell = cell as usize;
+                        [cell / width, cell % width]
+                    }),
+            );
+        self.scratch_cells
+            .sort_unstable_by_key(|cell| (cell[1], cell[0]));
+        self.scratch_cells.dedup();
         let mut runs: Vec<CellRect> = Vec::new();
-        for [x, y] in native {
+        for &[x, y] in &self.scratch_cells {
             match runs.last_mut() {
                 Some(run) if run.lower[1] == y && run.upper[0] == x => run.upper[0] += 1,
                 _ => runs.push(CellRect {
@@ -302,9 +426,15 @@ impl PoolOwner {
             return;
         }
         let identity = unit.token();
-        if !stamp.footprint.is_empty() {
-            let runs = self.runs(stamp.footprint);
-            self.set_texture(identity, stamp.mask, runs);
+        if let Some(pixels) = stamp.native_footprint {
+            self.set_texture_pixels(identity, pixels);
+        } else if !stamp.footprint.is_empty() {
+            let error = if matches!(self.tracked.get(&identity), Some(Tracked::Mover(_))) {
+                ChainError::DuplicateEntry(identity)
+            } else {
+                ChainError::MissingTexturePixels(identity)
+            };
+            self.note(identity, "register texture", Err(error));
         } else if let Some(rect) = self.bounds(stamp.cells) {
             self.set_mover(identity, stamp.mask, rect);
         } else {
@@ -318,6 +448,15 @@ impl PoolOwner {
             return;
         }
         let identity = unit.token();
+        if let Some(entries) = self.texture_entries.get(&identity) {
+            let mut copy = [(0, 0); 4];
+            let len = entries.len();
+            copy[..len].copy_from_slice(entries);
+            for (entry, mask) in copy[..len].iter().copied() {
+                self.set_texture(entry, mask, Vec::new());
+            }
+            return;
+        }
         match self.tracked.get(&identity) {
             Some(Tracked::Mover(_)) => {
                 let result = self.live.retire_movement(identity).map(drop);
@@ -332,13 +471,39 @@ impl PoolOwner {
         }
     }
 
-    /// A stationary object's pathing cells changed, or it was created.
-    pub(crate) fn texture(&mut self, owner: Texture, mask: u8, cells: &[usize]) {
+    pub(crate) fn decoration_pixels(&mut self, owner: Texture, pixels: &[(u32, u8)]) {
+        if self.refusal.is_none() {
+            self.set_texture_pixels(owner.identity(), pixels);
+        }
+    }
+
+    pub(crate) fn stationary_pixels(
+        &mut self,
+        owner: Texture,
+        live: TexturePixels,
+        dead: TexturePixels,
+        active: bool,
+    ) {
         if self.refusal.is_some() {
             return;
         }
-        let runs = self.runs(cells);
-        self.set_texture(owner.identity(), mask, runs);
+        let identity = owner.identity();
+        self.set_texture_pixels(identity, if active { &live } else { &dead });
+        self.stationary_pixels
+            .insert(identity, StationaryPixels { live, dead });
+    }
+
+    pub(crate) fn stationary_active(&mut self, owner: Texture, active: bool) {
+        let Some(layers) = self.stationary_pixels.get(&owner.identity()) else {
+            self.note(
+                owner.identity(),
+                "stationary texture",
+                Err(ChainError::MissingTexturePixels(owner.identity())),
+            );
+            return;
+        };
+        let pixels = if active { &layers.live } else { &layers.dead }.clone();
+        self.decoration_pixels(owner, &pixels);
     }
 
     fn set_mover(&mut self, identity: u64, mask: u8, rect: CellRect) {
@@ -368,6 +533,64 @@ impl PoolOwner {
                 "register movement",
                 Err(ChainError::DuplicateEntry(identity)),
             ),
+        }
+    }
+
+    fn set_texture_pixels(&mut self, owner: u64, pixels: &[(u32, u8)]) {
+        if matches!(self.tracked.get(&owner), Some(Tracked::Mover(_))) {
+            self.note(
+                owner,
+                "texture replaces movement",
+                Err(ChainError::DuplicateEntry(owner)),
+            );
+            return;
+        }
+        let has_green = pixels
+            .iter()
+            .any(|(_, flags)| flags & self.rules.texture_masks.green[3] != 0);
+        let texture_masks = self.rules.texture_masks;
+        let masks = if has_green {
+            texture_masks.green.as_slice()
+        } else {
+            texture_masks.plain.as_slice()
+        };
+        let mut entries = [(0, 0); 4];
+        if let Some(current) = self.texture_entries.get(&owner) {
+            if current
+                .iter()
+                .map(|(_, mask)| *mask)
+                .ne(masks.iter().copied())
+            {
+                self.note(
+                    owner,
+                    "texture entry masks changed",
+                    Err(ChainError::DuplicateEntry(owner)),
+                );
+                return;
+            }
+            entries[..masks.len()].copy_from_slice(current);
+        } else {
+            for (entry, &mask) in entries.iter_mut().zip(masks) {
+                let Some(next) = self
+                    .next_texture_entry
+                    .checked_add(1)
+                    .filter(|next| *next < TEXTURE_ENTRY_TAG)
+                else {
+                    self.note(owner, "texture entry identity", Err(ChainError::Sequence));
+                    return;
+                };
+                self.next_texture_entry = next;
+                *entry = (TEXTURE_ENTRY_TAG | next, mask);
+            }
+            self.texture_entries
+                .insert(owner, entries[..masks.len()].to_vec());
+        }
+        for (entry, mask) in entries[..masks.len()].iter().copied() {
+            if self.refusal.is_some() {
+                return;
+            }
+            let runs = self.runs(pixels, mask);
+            self.set_texture(entry, mask, runs);
         }
     }
 

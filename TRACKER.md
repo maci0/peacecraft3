@@ -6025,3 +6025,24 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Native and WASM Clippy pass with warnings denied. The Human03 simulation budget check passes;
   requested bytes are 20 below the recorded plumbing measurement but four above its earlier
   control, without a new paired control run. The startup allocation delta is not resolved.
+
+### 2026-10-30: Texture entry masks
+
+- [~] The tracked spatial pool registers separate source-derived texture entries for units,
+  decorations and destructables, including staged script-created destructables. The green-channel
+  selector and entry masks come from the reviewed image. Unsupported entry-count changes and
+  missing pixel data refuse. The local farm fixture now contains the captured `0x08` entry at
+  (6160, 2800). See [AI construction](docs/re-notes/ai-construction.md#texture-entry-split-2026-10-30).
+- With sampled workers and supplied town origins, both reach tables still match all 112 recorded
+  results and the four tested sites remain at dequeues 1, 280, 355 and 419. The production
+  structure search remains refused: its live hierarchy, town and effect-source inputs are not
+  connected, and movement-entry masks and the coarse movement grid remain unqualified.
+- The `pcx-play` library suite, native and WASM Clippy pass. The Human03 allocation gate passes
+  with the same allocations and requested bytes as the immediately preceding measurement.
+- Human05 runs `texture-split-y1` and `texture-split-y3` both stop at the existing 1223 s
+  construction refusal; their 98 checkpoint and RNG lines match.
+- Human03 and Human04 runs `texture-split-y1` reach victory, with their 45 and 72 checkpoint
+  and RNG lines matching `g1`.
+- [!] A paired Human04 map-start measurement against committed `HEAD` shows 11,145 additional
+  allocations, 157 reallocations and 1,222,056 requested bytes, with an identical state digest.
+  This does not meet the no-regression target. See [simulation performance](docs/performance/sim-script.md).
