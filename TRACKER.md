@@ -5874,3 +5874,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - Human03 and Human04 reach victory at 279.02 s and 449.02 s with checkpoint and RNG lines
   matching `g1`. The `pcx-play` library suite passes 2,333 tests with 90 ignored; native and
   WASM Clippy pass with warnings denied.
+
+### 2026-10-29: Command card keys and inventory input
+
+- [~] A card button and its hotkey share one activation path. Hotkeys come from the data (`Hotkey`,
+  `Researchhotkey`, read as the client's field parser does) for the seven standard commands including
+  Attack Ground (`G`) and Rally (`Y`), training, building, spells, Hero Abilities (`O`) and the learn
+  page. Cancel codes `27` and `512` both answer to Escape; Ctrl or Alt held ignores the key. Optional
+  `CustomKeys.txt` when the `customkeys` option is on. Inventory slots: left click only, NumPad keys read
+  from the client image (cross-checked against its tooltip labels), drag onto a slot trades, onto the
+  ground drops, onto an ally gives, using the source `DropItemRange` and `GiveItemRange`, with shown
+  refusals. Evidence and decisions: [command keys](docs/re-notes/input-command-keys.md).
+- [ ] Open: Shop (`CmdPurchase`, no shop interface, lowercase `s`), `Unhotkey` (no toggle button),
+  learning with Ctrl, selling by dropping on a shop, the `NumPad N` tooltip label, where the client
+  folds key case, `CustomKeys.txt` stays inert until the options panel stores `CustomKeysCheckBox`,
+  and nothing here was observed in the original client.

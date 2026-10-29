@@ -16,8 +16,6 @@ const FILE: &str = "CustomKeys.txt";
 /// Path of the user-data copy below the user's home folder, from `CustomKeyInfo.txt` and the
 /// client's `CustomKeyBindings` folder name.
 const USER_FOLDERS: [&str; 3] = ["Documents", "Warcraft III", "CustomKeyBindings"];
-/// Application ceiling on the file, not a client value.
-const MAX_BYTES: u64 = 1 << 20;
 
 /// The option: the saved checkbox when the options panel has one, else the client's fallback
 /// row (`0` or `1`).
@@ -73,6 +71,8 @@ fn load_from(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    /// Application ceiling on the file, not a client value.
+    const MAX_BYTES: u64 = 1 << 20;
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(path)?

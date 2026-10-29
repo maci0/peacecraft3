@@ -83,7 +83,7 @@ Facts every later row relies on.
 | A20 | Click on minimap | Left: camera jump with held-drag follow. Right: move/smart order at the point. Both gated like world input. | DOC; recreation per `campaign-minimap.md` | exe | OK (camera, drag, point order); right click is Move not smart | `campaign_minimap.rs:138`, `campaign_input.rs:753` |
 | A21 | Alt+click world or minimap | Minimap signal ("ping") to allies, same as the signal button. Text states Alt+left-click. Alt-G arms the signal. | SS `MINIMAPSIGNALTOOLTIP_UBER`, MiscUI `MinimapSignal='G'`; net command `CNetCommandAllyPing` RTTI | data | MISS | none |
 | A22 | Click command-card buttons | Press consumes the pointer; the button issues its command. | OK | | OK | `campaign_command_card.rs:373`, `campaign_input.rs:107` |
-| A23 | Click inventory slot | Tooltip says "Left-Click to Use". Drag between slots moves, onto units gives, onto ground drops (DOC). | SS `ITEM_USE_TOOLTIP`; drag DOC | data | DIFF: any pointer button uses the item (the observer never reads the button); no drag | `campaign_inventory.rs:157` |
+| A23 | Click inventory slot | Tooltip says "Left-Click to Use". Drag between slots moves, onto units gives, onto ground drops (DOC). | SS `ITEM_USE_TOOLTIP`; drag DOC | data | OK: left click only (on click); drag onto a slot trades, onto the ground drops, onto an ally gives, with the source ranges and shown refusals. Selling on a shop is MISS ([command keys](input-command-keys.md)) | `campaign_inventory.rs`, `inventory_host.rs` `player_move_item` |
 | A24 | Click upper buttons (quests, menu, allies, chat) | Open dialogs; F9/F10/F11/F12 shortcuts. | SS | data | OK for quests and menu; allies, chat and log MISS | `campaign_upper_buttons.rs:162` |
 | A25 | Hover tooltips | Command buttons, inventory, upper buttons, resource bar, time of day. Hover over a world unit highlights it (`CPreselectUI`) and sets the hover cursor mode. | SS; cursor mode EX `0x5fbdf0`, `0x5fda30`; `CPreselectUI` RTTI | data | DIFF: HUD tooltips exist (`tooltip.rs`); no world hover highlight or unit-name hover | `tooltip.rs:192` |
 
@@ -91,7 +91,7 @@ Facts every later row relies on.
 
 | # | Key | Original behaviour | Evidence | Lives in | Recreation | Handler |
 | --- | --- | --- | --- | --- | --- | --- |
-| B1 | Command-card hotkeys | Per-ability `Hotkey`/`Unhotkey`/`Researchhotkey` letters from the ability data and `CommandStrings.txt` (Move `M`, Attack `A`, Attack Ground `G`, Stop `S`, Hold `H`, Patrol `P`, Rally `Y`, Hero Abilities `O`, Build `B`, Shop `s`). Cancel is `27` in `CommandStrings.txt` and `512` in the CustomKeys sample. Dispatch ignores the key when Ctrl or Alt is held; Shift is read for queueing. | SB; EX `0x5fc700` (Alt/Ctrl gate at `0x5fcd0a`, matching `0x638ed0`/`0x639140`) | data files | DIFF: letters from data for Move/Stop/Hold/Patrol/Attack, training, build menus, Holy Light, Water Elemental. MISS: Attack Ground, Rally, Shop, hero-abilities `O`, learn (`Researchhotkey`) and `Unhotkey` keys. OK: Shift with Stop, Hold and immediate abilities queues them ([smart order](input-smart-order.md)); a key pressed with Ctrl or Alt held is ignored. | `campaign_input.rs:834`, `standard_command.rs:6` |
+| B1 | Command-card hotkeys | Per-ability `Hotkey`/`Unhotkey`/`Researchhotkey` letters from the ability data and `CommandStrings.txt` (Move `M`, Attack `A`, Attack Ground `G`, Stop `S`, Hold `H`, Patrol `P`, Rally `Y`, Hero Abilities `O`, Build `B`, Shop `s`). Cancel is `27` in `CommandStrings.txt` and `512` in the CustomKeys sample. Dispatch ignores the key when Ctrl or Alt is held; Shift is read for queueing. | SB; EX `0x5fc700` (Alt/Ctrl gate at `0x5fcd0a`, matching `0x638ed0`/`0x639140`) | data files | OK: one dispatch for a button click and its key; hotkeys from the data for the seven standard commands (Move, Stop, Hold, Patrol, Attack, Attack Ground `G`, Rally `Y`), training, build menus, spells, hero abilities `O` and learn (`Researchhotkey`); cancel `27` and `512` both answer to Escape; Ctrl or Alt held ignores the key; Shift with Stop, Hold and immediate abilities queues them ([smart order](input-smart-order.md)). Optional `CustomKeys.txt`. MISS: Shop (`s`), `Unhotkey` (no toggle button), learning with Ctrl ([command keys](input-command-keys.md)). | `campaign_input.rs` `command_hotkey`, `activate_button`; `command_hotkey.rs` |
 | B2 | Digits 1-9, 0 | `1`..`9` are groups 0..8, `0` is group 9. | EX `0x5fc700` | exe | OK: the binding is decoded from the image | `campaign_control_groups.rs`, [note](input-control-groups.md) |
 | B3 | Ctrl+digit | Defines the group from the current selection (replaces; helper `0x4f4fb0` also runs on this path, purpose UNK). Empty or foreign selections report `Emptycontrolgroup`/`Invalidcontrolgroup`/`Nonunitincontrolgroup`. | EX `0x5fc700` (`0x6cc8e0` is the define dispatch); error texts SB | exe; `[Errors]` | OK: refusals use the shipped texts | `campaign_control_groups.rs`, [note](input-control-groups.md) |
 | B4 | Shift+digit | Adds the current selection to the group (extends and dedupes). Confirmed live: the group gains the selection and the current selection does not change. Ctrl+Shift+digit behaves as Ctrl+digit (replace). Decompiler output for this branch is noisy. | EX; RO ([live capture](input-live-capture.md)) | exe | OK | `campaign_control_groups.rs::shift_digit` |
@@ -112,7 +112,7 @@ Facts every later row relies on.
 | B19 | Alt+F | Toggles formation movement (also an Alt-hold inversion on orders). | SS `FORMATION_*`, MiscUI `FormationToggle='F'`; EX flag in `0x5fd2f0` | data | MISS | none |
 | B20 | Alt+S/L/H/O/Q, Ctrl+M, Ctrl+S | Quick save, quick load, help, options, quit; music and sound-effect toggles. Letters in `MiscUI.txt [Hotkeys]` (`S`, `L`, `H`, `O`, `Q`, `M`, `S`). The modifiers appear only in that file's comments. | SB (letters, comments) | data | MISS | none |
 | B21 | Alt+T, Alt+A, Alt+R, Alt+G | Minimap terrain, ally colours, creep camps, signal. | SS tooltips, MiscUI | data | MISS | none |
-| B22 | Inventory slots | Slots 1-6 use NumPad 7, 8, 4, 5, 1, 2. | EX `0x649283`-`0x6492a6` (label table); SS `ITEM_NAME_HOTKEY` | exe | MISS | none |
+| B22 | Inventory slots | Slots 1-6 use NumPad 7, 8, 4, 5, 1, 2. | EX `0x649283`-`0x6492a6` (label table), key table `0x10dcbcc`, matcher `0x639140`; SS `ITEM_NAME_HOTKEY` | exe | OK: the keys are read from the image and cross-checked against the labels; the gate is the card's. The `NumPad N` tooltip label is MISS ([command keys](input-command-keys.md)) | `campaign_input.rs` `inventory_hotkey`, `inventory_layout.rs` |
 | B23 | Pause, +, - | Replay panel shows Pause, `+`, `-`. Single-player campaign pause is the Pause entry in the F10 menu. | SS `REPLAY_TOOLTIP_*` | data | MISS | none |
 | B24 | Script dialog buttons | Authored button hotkeys match Enter (13), Esc (27) and character keys case-insensitively. | EX/SB | data | OK | `campaign_script_dialogs.rs:169` |
 | B25 | Window keys (Alt+Tab, PrintScreen, Alt+F4) | F4 with Alt is special-cased in the key translator; how is not read. Others UNK. | EX `0x7bddd0`; rest UNK | exe | n/a | none |
@@ -189,8 +189,8 @@ Ordered by user-visible impact in a campaign playthrough (first is worst).
 | 10 | Camera jumps: Space, Backspace, Ctrl/Alt+C | B15-B17 | Frequent in combat; needs an alert history |
 | 11 | Insert/Delete rotation states | B14, C4 | Visible, less used |
 | 12 | Middle-button drag scroll | A16 | Common for mouse users |
-| 13 | Command-card completeness: Attack Ground `G`, Rally `Y`, Shop, `O`, learn keys, Ctrl/Alt gate, `27` vs `512` cancel | B1 | Several commands cannot be used by key |
-| 14 | Inventory: left-click only, NumPad slots, drag/drop | A23, B22 | Wrong button uses items; no key route |
+| 13 | Command-card completeness: Attack Ground `G`, Rally `Y`, Shop, `O`, learn keys, Ctrl/Alt gate, `27` vs `512` cancel (done except Shop) | B1 | Several commands cannot be used by key |
+| 14 | Inventory: left-click only, NumPad slots, drag/drop (done except selling on a shop) | A23, B22 | Wrong button uses items; no key route |
 | 15 | Minimap Alt-ping, minimap buttons | A21, B21 | Multiplayer-oriented; low in campaign |
 | 16 | Chat and ally keys F11/F12, Enter family | B9, B11 | Needs the chat dialogs first |
 | 17 | Health-bar modifiers Alt, `[` , `]` | B18 | Visible but optional |
@@ -198,7 +198,7 @@ Ordered by user-visible impact in a campaign playthrough (first is worst).
 | 19 | Formation toggle | B19 | Only matters with mixed groups |
 | 20 | Scroll options applied (`mousescroll`, `keyscroll`, disable) | C1, E | Defaults already match |
 | 21 | Error line instead of a log field | D6 | Players cannot see why an order failed |
-| 22 | `CustomKeys.txt` | E | Opt-in |
+| 22 | `CustomKeys.txt` (done; inert until the options panel stores `CustomKeysCheckBox`) | E | Opt-in |
 | 23 | Quick keys Alt-S/L/H/O/Q, Ctrl-M/S | B20 | Needs save/load first |
 | 24 | Pause/replay keys | B23 | Not campaign-critical |
 | 25 | X1/X2 buttons, window keys | A17, B25 | Binding not located |
@@ -244,11 +244,11 @@ copied constants; read keys, rates and tables from the data and the supplied exe
 10. **Camera jump keys. Space, Backspace, F8 and backtick done** (Ctrl/Alt+`UnitCenter` open), see [camera input](input-camera.md). Space (alert history, 1.0 s), Backspace (list cycling,
     1.0 s, own Town Hall), F8 and `` ` `` (idle worker, 1.0 s cycle; the recreation's
     F8 debug overlay must move), Ctrl/Alt+`UnitCenter`.
-11. **Command card keys.** Generic `Hotkey`/`Unhotkey`/`Researchhotkey` dispatch,
-    Attack Ground, Rally, Shop, `O`, Ctrl/Alt gate, cancel `27`/`512`,
-    optional `CustomKeys.txt`.
-12. **Inventory input.** Left-click only, NumPad slot keys, drag between slots,
-    drop and give.
+11. **Command card keys. Done** except Shop, `Unhotkey` and Ctrl learning, see
+    [command keys](input-command-keys.md). Generic `Hotkey`/`Researchhotkey` dispatch,
+    Attack Ground, Rally, `O`, Ctrl/Alt gate, cancel `27`/`512`, optional `CustomKeys.txt`.
+12. **Inventory input. Done** except selling on a shop, see [command keys](input-command-keys.md).
+    Left-click only, NumPad slot keys from the image, drag between slots, drop and give.
 13. **Chat and dialogs.** Enter family, F11 and F12.
 14. **Minimap and overlays.** Alt-click ping, minimap buttons, health-bar
     modifiers, world hover highlight, error line.
