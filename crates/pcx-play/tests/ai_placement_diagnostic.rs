@@ -584,6 +584,19 @@ fn human05_placement_diagnostic() {
     let facing = building_facing(angle);
     let mut startup = start(&install, mode, &map.display().to_string(), &bytes, 1, None).unwrap();
     let objects = startup.session.host().unwrap().objects_mut();
+    let cleanup_interval = objects
+        .diagnostic_spatial_cleanup_interval(&image, &rules)
+        .unwrap();
+    assert!(cleanup_interval.is_finite() && cleanup_interval > 0.0);
+    let mut cleanup_clock =
+        pcx_play::native_path_hierarchy::spatial_chains::CleanupClock::new(0.0, cleanup_interval)
+            .unwrap();
+    let first = cleanup_clock.next();
+    assert_eq!(cleanup_clock.pop_due(first).unwrap(), Some(first));
+    let second =
+        pcx_play::script_random::real::add(first.to_bits(), cleanup_interval.to_bits()).unwrap();
+    assert_eq!(cleanup_clock.next().to_bits(), second);
+    println!("native spatial cleanup interval: {cleanup_interval:?}");
     objects.diagnostic_set_snapshot_time(nominal_time).unwrap();
     println!(
         "snapshot game clock {:?}; nominal order time, timer callbacks and movement were not replayed",

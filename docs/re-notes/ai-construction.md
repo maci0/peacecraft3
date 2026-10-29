@@ -545,6 +545,14 @@ to recreation movement and placement queries is not yet established. The
 chain helper implements this compaction for supplied entries, using reusable caller scratch;
 it does not represent live registration or establish the cleanup schedule.
 
+The selected session's numeric policy evaluates the source-derived interval as
+`0.10000001` seconds. The cleanup clock advances each deadline from the preceding deadline
+using the client's real addition, and refuses a nonfinite or nonadvancing clock. Synthetic
+tests cover multiple due deadlines and recycling links at a deadline through the pool's
+single-event cleanup operation. The local-input test
+checks the interval and deadline arithmetic with the session's numeric policy. Neither test
+connects the clock or the pool to the live event scheduler.
+
 A set-based query also requires proof that no newer non-object link suppresses an older object
 link for a live entry. At `0x8be4c3` through `0x8be50e`, a removal link can consume an
 identity before its older object link, even when the chain has fewer links than the visit
@@ -577,6 +585,15 @@ them and makes the upper bounds exclusive (`0x808f40`, `0x801930`). The position
 `0x7fe810` scales the stored spatial position and adds map-owned origin fields to obtain the
 world position. The mapping of that origin and scale to the live placement stamp, and the
 event ordering, remain unqualified.
+
+The current live cache cannot be replayed into these chains without retaining additional
+information. The ordinary footprint loader keeps walk-cell coordinates rather than each
+texture cell's full flags, and stationary footprints are composed into the pathing raster.
+Region rectangle additions are retained per region, while placement is loaded lazily on the
+first unit creation. The temporary construction diagnostic hides unit stamps and restores
+their aggregate counts; recording those operations as actual removals would change the chain
+history. Live wiring therefore needs texture-entry flags, chronological registration from
+before the lazy placement load, and a separate temporary exclusion operation.
 For a unit, `0x66e920` obtains the radius through its virtual method at offset `0x168`,
 applies the minimum at `0x112d810`, and passes it to `0x800340` for conversion before the
 movement object stores it. The captured acolyte's virtual target `0x66ec60` reads a field at

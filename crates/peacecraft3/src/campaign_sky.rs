@@ -192,7 +192,11 @@ pub(super) fn sync_scene_camera(
                 is_active: camera.is_active,
                 viewport: camera.viewport.clone(),
                 sub_camera_view: camera.sub_camera_view,
-                clear_color: ClearColorConfig::Default,
+                clear_color: sky
+                    .scene_clear
+                    .as_ref()
+                    .filter(|(saved, _)| *saved == entity)
+                    .map_or(camera.clear_color, |(_, previous)| *previous),
                 ..default()
             },
             Camera3d::default(),
@@ -581,7 +585,7 @@ mod tests {
             camera.viewport.as_ref().unwrap().physical_size,
             UVec2::new(640, 480)
         );
-        assert!(matches!(camera.clear_color, ClearColorConfig::Default));
+        assert!(matches!(camera.clear_color, ClearColorConfig::None));
         let scene_entity = scene(&mut app);
         let world = app.world();
         assert!(
@@ -591,6 +595,19 @@ mod tests {
                 .intersects(world.get::<RenderLayers>(scene_entity).unwrap())
         );
         assert!(world.get::<RenderTarget>(sky).is_some());
+    }
+
+    #[test]
+    fn sky_camera_uses_the_scene_clear_colour() {
+        let mut app = app([Step::Dome, Step::Dome], red());
+        app.update();
+        app.update();
+        let sky = app
+            .world_mut()
+            .query_filtered::<Entity, With<SkyCamera>>()
+            .single(app.world())
+            .unwrap();
+        assert_clear(app.world().get::<Camera>(sky).unwrap().clear_color, &red());
     }
 
     #[test]

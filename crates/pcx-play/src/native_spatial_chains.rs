@@ -42,6 +42,55 @@ pub enum Error {
     PoolExhausted { needed: usize, available: usize },
     #[error("spatial chain allocation failed")]
     Allocation,
+    #[error("spatial cleanup clock is invalid or cannot advance")]
+    Clock,
+}
+
+/// A recurring cleanup deadline in the selected client's real arithmetic.
+#[derive(Clone, Copy, Debug)]
+pub struct CleanupClock {
+    interval: u32,
+    next: u32,
+}
+
+impl CleanupClock {
+    pub fn new(start: f32, interval: f32) -> Result<Self, Error> {
+        use crate::script_random::real;
+
+        if !start.is_finite() || start < 0.0 || !interval.is_finite() || interval <= 0.0 {
+            return Err(Error::Clock);
+        }
+        let start = real::from_f32(start).map_err(|_| Error::Clock)?;
+        let interval = real::from_f32(interval).map_err(|_| Error::Clock)?;
+        let next = real::add(start, interval).map_err(|_| Error::Clock)?;
+        if f32::from_bits(next) <= f32::from_bits(start) {
+            return Err(Error::Clock);
+        }
+        Ok(Self { interval, next })
+    }
+
+    pub fn next(&self) -> f32 {
+        f32::from_bits(self.next)
+    }
+
+    /// Pop a due deadline; callers deliver one cleanup before popping another.
+    pub fn pop_due(&mut self, now: f32) -> Result<Option<f32>, Error> {
+        use crate::script_random::real;
+
+        if !now.is_finite() || now < 0.0 {
+            return Err(Error::Clock);
+        }
+        let current = self.next();
+        if now < current {
+            return Ok(None);
+        }
+        let next = real::add(self.next, self.interval).map_err(|_| Error::Clock)?;
+        if f32::from_bits(next) <= current {
+            return Err(Error::Clock);
+        }
+        self.next = next;
+        Ok(Some(current))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -373,6 +422,21 @@ impl Chains {
         }
     }
 
+    /// Deliver one due cleanup; the caller orders it with other game events.
+    pub fn cleanup_due(
+        &mut self,
+        clock: &mut CleanupClock,
+        now: f32,
+        rules: EntryRules,
+        present: impl FnMut(u64) -> bool,
+    ) -> Result<bool, Error> {
+        if clock.pop_due(now)?.is_none() {
+            return Ok(false);
+        }
+        self.cleanup(rules, present);
+        Ok(true)
+    }
+
     fn cleanup_cell(
         &mut self,
         cell: usize,
@@ -456,6 +520,51 @@ mod tests {
         check[3] ^= 1;
         assert!(cleanup_operands(&init, &loaded, &check).is_err());
         assert!(cleanup_operands(&[], &loaded, &check).is_err());
+    }
+
+    #[test]
+    fn cleanup_clock_delivers_each_due_deadline_and_rejects_stalled_time() {
+        let mut clock = CleanupClock::new(2.0, 0.375).unwrap();
+        assert_eq!(clock.pop_due(2.25), Ok(None));
+        assert_eq!(clock.pop_due(3.125), Ok(Some(2.375)));
+        assert_eq!(clock.pop_due(3.125), Ok(Some(2.75)));
+        assert_eq!(clock.pop_due(3.125), Ok(Some(3.125)));
+        assert_eq!(clock.pop_due(3.125), Ok(None));
+        assert_eq!(clock.pop_due(f32::NAN), Err(Error::Clock));
+        assert!(CleanupClock::new(f32::MAX, 0.375).is_err());
+    }
+
+    #[test]
+    fn cleanup_at_deadline_recycles_removal_links() {
+        let rules = rules(7);
+        let mut chains = Chains::new([2, 1], 2, 7, 0).unwrap();
+        let mut clock = CleanupClock::new(0.0, 0.25).unwrap();
+        chains.region(rect(0, 1), 1, rules.object_class).unwrap();
+        chains
+            .moved(rect(0, 1), rect(0, 0), 1, rules.object_class)
+            .unwrap();
+        assert!(
+            !chains
+                .cleanup_due(&mut clock, 0.125, rules, |_| true)
+                .unwrap()
+        );
+        assert!(chains.region(rect(1, 2), 2, rules.object_class).is_err());
+        assert!(
+            chains
+                .cleanup_due(&mut clock, 0.25, rules, |_| true)
+                .unwrap()
+        );
+        assert!(
+            !chains
+                .cleanup_due(&mut clock, 0.25, rules, |_| true)
+                .unwrap()
+        );
+        chains.region(rect(1, 2), 2, rules.object_class).unwrap();
+        assert!(
+            chains
+                .blocked([1, 0], 0, 4, rules, |_| Some((0x104, 0x200)))
+                .unwrap()
+        );
     }
 
     #[test]

@@ -144,6 +144,13 @@ The reach-chain cleanup helper was subsequently checked against the selected exe
 the baseline and farm snapshot sites. Live chains and their cleanup schedule remain unconnected,
 so no later Human05 state was tested in that change.
 
+The session numeric policy now also supplies the cleanup interval to a tested deadline clock.
+The baseline and farm snapshot sites still match with reach enabled, but the clock and chain
+pool are not driven by live registrations or the game scheduler. No new Human05 route run
+has established a state beyond the existing refusal. Release runs `live-clock-a` and
+`live-clock-b` both stop at 1223 s, with 98 checkpoint and RNG lines identical to each other
+and `r14`.
+
 Release runs `bounded-set-20261029-a` and `bounded-set-20261029-b` both reach the same
 1223 s placement refusal. Their 98 Human05 and RNG checkpoint lines match each other and
 `r14`. The bounded set evaluator is not connected to production placement, so these runs

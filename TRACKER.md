@@ -5858,3 +5858,19 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Human04 reached victory at 279.02 s and 449.02 s, with checkpoint and RNG lines matching
   `g1`. Two Human05 runs stopped at the existing 1223 s refusal with matching checkpoint and
   RNG lines. These results do not exercise a live chain pool.
+
+### 2026-10-29: Spatial cleanup deadline arithmetic
+
+- [~] The selected session numeric policy supplies the source-derived cleanup interval to a
+  deadline clock using client real addition. Synthetic tests cover overdue deadlines and
+  link recycling. A selected-input diagnostic checks the interval and the baseline and farm
+  snapshot sites. The pool and clock remain disconnected from live registration and game
+  scheduling; AI structure placement remains refused. See
+  [AI construction](docs/re-notes/ai-construction.md).
+- Both recorded reach tables match the snapshot diagnostic (100 and 12 queries); the
+  baseline and farm sites remain at dequeues 1 and 280. The simulation budget check passes
+  with the pool inactive. Two release Human05 runs stop at 1223 s with 98 checkpoint and RNG
+  lines matching each other and `r14`. These checks do not validate live chain inputs.
+- Human03 and Human04 reach victory at 279.02 s and 449.02 s with checkpoint and RNG lines
+  matching `g1`. The `pcx-play` library suite passes 2,333 tests with 90 ignored; native and
+  WASM Clippy pass with warnings denied.

@@ -173,6 +173,22 @@ impl ObjectHost {
         self.set_timer_game_time(at)
     }
 
+    /// Read the spatial cleanup interval with this session's numeric policy.
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_spatial_cleanup_interval(
+        &self,
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<f32, String> {
+        let numeric = self
+            .numeric
+            .as_ref()
+            .ok_or("script numeric policy is missing")?;
+        crate::native_path_hierarchy::spatial_chains::Chains::reviewed_cleanup_interval(
+            image, rules, numeric,
+        )
+    }
+
     /// Mark the end of diagnostic snapshot setup without altering the event history.
     #[cfg(feature = "test-fixtures")]
     pub fn diagnostic_placement_checkpoint(&self) -> usize {
