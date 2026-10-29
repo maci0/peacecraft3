@@ -603,8 +603,13 @@ fn human05_placement_diagnostic() {
         )
         .unwrap();
     println!("selected region link class: {region_class:#x}");
+    let cleanup_interval = objects
+        .diagnostic_spatial_cleanup_interval(&image, &rules)
+        .unwrap();
     {
-        use pcx_play::native_path_hierarchy::spatial_chains::{Chains, region_cells};
+        use pcx_play::native_path_hierarchy::spatial_chains::{
+            Chains, CleanupClock, LiveChains, region_cells,
+        };
         use pcx_play::native_path_hierarchy::{CellRect, EntryRules, reviewed_operands};
 
         let placement = objects.diagnostic_placement().unwrap();
@@ -634,40 +639,43 @@ fn human05_placement_diagnostic() {
             )
             .unwrap()
             .lower;
-            let mut chains = Chains::new([1, 1], region_additions.len(), limit, removal).unwrap();
+            let chains = Chains::new([1, 1], region_additions.len(), limit, removal).unwrap();
+            let mut live = LiveChains::new(
+                chains,
+                CleanupClock::new(0.0, cleanup_interval).unwrap(),
+                entries,
+                region_additions.len(),
+            )
+            .unwrap();
+            let mut registered = BTreeSet::new();
             let mut count = 0;
             for (region, request) in &region_additions {
                 let rect = region_cells(request.bounds, bounds[0], cell_size, size).unwrap();
                 if (0..2)
                     .all(|axis| rect.lower[axis] <= cell[axis] && cell[axis] < rect.upper[axis])
                 {
-                    chains
-                        .region(
-                            CellRect {
-                                lower: [0, 0],
-                                upper: [1, 1],
-                            },
-                            region.token(),
-                            region_class,
-                        )
-                        .unwrap();
+                    let rectangle = CellRect {
+                        lower: [0, 0],
+                        upper: [1, 1],
+                    };
+                    if registered.insert(region.token()) {
+                        let (flags, state) = entries.region_initial_state();
+                        live.register(region.token(), flags, state, rectangle, region_class, false)
+                            .unwrap();
+                    } else {
+                        live.add_rectangle(region.token(), rectangle, region_class)
+                            .unwrap();
+                    }
                     count += 1;
                 }
             }
             if point == sample_point {
                 assert!(count > 0);
             }
-            assert!(
-                !chains
-                    .blocked([0, 0], 0, u32::from(mask), entries, |_| Some((0, 0)))
-                    .unwrap()
-            );
+            assert!(!live.blocked([0, 0], 0, u32::from(mask)).unwrap());
             println!("region-only chain point={point:?} links={count} blocked=false");
         }
     }
-    let cleanup_interval = objects
-        .diagnostic_spatial_cleanup_interval(&image, &rules)
-        .unwrap();
     assert!(cleanup_interval.is_finite() && cleanup_interval > 0.0);
     let mut cleanup_clock =
         pcx_play::native_path_hierarchy::spatial_chains::CleanupClock::new(0.0, cleanup_interval)

@@ -65,6 +65,18 @@ pub enum Error {
     Allocation,
     #[error("spatial cleanup clock is invalid or cannot advance")]
     Clock,
+    #[error("spatial entry {0} is missing")]
+    MissingEntry(u64),
+    #[error("spatial entry {0} is already registered")]
+    DuplicateEntry(u64),
+    #[error("spatial entry {0} has no movement rectangle")]
+    MissingMovement(u64),
+    #[error("spatial entry {0} exclusion count is unbalanced")]
+    Exclusion(u64),
+    #[error("spatial entry capacity {0} is exhausted")]
+    EntryCapacity(usize),
+    #[error("spatial registration sequence overflow")]
+    Sequence,
 }
 
 /// Convert a world-space region to the native grid's clipped, transposed cells.
@@ -568,6 +580,211 @@ impl Chains {
     }
 }
 
+#[derive(Clone, Copy)]
+struct LiveEntry {
+    identity: u64,
+    flags: u32,
+    state: u32,
+    exclusions: u32,
+    movement: Option<CellRect>,
+}
+
+/// Ordered cell links and the current state shared by all links to an entry.
+pub struct LiveChains {
+    chains: Chains,
+    entries: Vec<LiveEntry>,
+    clock: CleanupClock,
+    rules: EntryRules,
+    sequence: u64,
+    entry_capacity: usize,
+}
+
+impl LiveChains {
+    /// Allocate the pool and entry table before recording any registrations.
+    pub fn new(
+        chains: Chains,
+        clock: CleanupClock,
+        rules: EntryRules,
+        entry_capacity: usize,
+    ) -> Result<Self, Error> {
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(entry_capacity)
+            .map_err(|_| Error::Allocation)?;
+        Ok(Self {
+            chains,
+            entries,
+            clock,
+            rules,
+            sequence: 0,
+            entry_capacity,
+        })
+    }
+
+    fn entry(&self, identity: u64) -> Result<usize, Error> {
+        self.entries
+            .binary_search_by_key(&identity, |entry| entry.identity)
+            .map_err(|_| Error::MissingEntry(identity))
+    }
+
+    fn next_sequence(&self) -> Result<u64, Error> {
+        self.sequence.checked_add(1).ok_or(Error::Sequence)
+    }
+
+    /// Register an entry and its first rectangle in the simulation's call order.
+    pub fn register(
+        &mut self,
+        identity: u64,
+        flags: u32,
+        state: u32,
+        rectangle: CellRect,
+        class: u32,
+        moving: bool,
+    ) -> Result<u64, Error> {
+        let sequence = self.next_sequence()?;
+        let index = self
+            .entries
+            .binary_search_by_key(&identity, |entry| entry.identity)
+            .map_or_else(Ok, |_| Err(Error::DuplicateEntry(identity)))?;
+        if self.entries.len() == self.entry_capacity {
+            return Err(Error::EntryCapacity(self.entry_capacity));
+        }
+        self.chains.region(rectangle, identity, class)?;
+        self.entries.insert(
+            index,
+            LiveEntry {
+                identity,
+                flags,
+                state,
+                exclusions: 0,
+                movement: moving.then_some(rectangle),
+            },
+        );
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Add another rectangle for an existing entry, such as a region addition.
+    pub fn add_rectangle(
+        &mut self,
+        identity: u64,
+        rectangle: CellRect,
+        class: u32,
+    ) -> Result<u64, Error> {
+        self.entry(identity)?;
+        let sequence = self.next_sequence()?;
+        self.chains.region(rectangle, identity, class)?;
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Record the removal link for one rectangle without retiring its entry.
+    pub fn remove_rectangle(&mut self, identity: u64, rectangle: CellRect) -> Result<u64, Error> {
+        self.entry(identity)?;
+        let sequence = self.next_sequence()?;
+        self.chains
+            .region(rectangle, identity, self.chains.removal_class)?;
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Move one registered entry while preserving the links in its overlap.
+    pub fn move_entry(
+        &mut self,
+        identity: u64,
+        rectangle: CellRect,
+        class: u32,
+    ) -> Result<u64, Error> {
+        let index = self.entry(identity)?;
+        let old = self.entries[index]
+            .movement
+            .ok_or(Error::MissingMovement(identity))?;
+        let sequence = self.next_sequence()?;
+        self.chains.moved(old, rectangle, identity, class)?;
+        self.entries[index].movement = Some(rectangle);
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Temporarily increment or restore the entry state without changing links.
+    pub fn exclusion(&mut self, identity: u64, exclude: bool) -> Result<(), Error> {
+        let index = self.entry(identity)?;
+        let entry = &mut self.entries[index];
+        if exclude {
+            entry.exclusions = entry
+                .exclusions
+                .checked_add(1)
+                .ok_or(Error::Exclusion(identity))?;
+            entry.state = entry.state.wrapping_add(1);
+        } else {
+            entry.exclusions = entry
+                .exclusions
+                .checked_sub(1)
+                .ok_or(Error::Exclusion(identity))?;
+            entry.state = entry.state.wrapping_sub(1);
+        }
+        Ok(())
+    }
+
+    /// Update the shared state when the represented object changes.
+    pub fn update_state(&mut self, identity: u64, flags: u32, state: u32) -> Result<(), Error> {
+        let index = self.entry(identity)?;
+        let entry = &mut self.entries[index];
+        if entry.exclusions != 0 {
+            return Err(Error::Exclusion(identity));
+        }
+        entry.flags = flags;
+        entry.state = state;
+        Ok(())
+    }
+
+    /// Retire a movement entry, inserting its removal links before removing its state.
+    pub fn retire_movement(&mut self, identity: u64) -> Result<u64, Error> {
+        let index = self.entry(identity)?;
+        let entry = self.entries[index];
+        if entry.exclusions != 0 {
+            return Err(Error::Exclusion(identity));
+        }
+        let old = entry.movement.ok_or(Error::MissingMovement(identity))?;
+        let sequence = self.next_sequence()?;
+        self.chains
+            .region(old, identity, self.chains.removal_class)?;
+        self.entries.remove(index);
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Read the current entry state through the ordered chain.
+    pub fn blocked(&self, cell: [usize; 2], word: u32, mask: u32) -> Result<bool, Error> {
+        self.chains
+            .blocked(cell, word, mask, self.rules, |identity| {
+                self.entry(identity).ok().map(|index| {
+                    let entry = self.entries[index];
+                    (entry.flags, entry.state)
+                })
+            })
+    }
+
+    /// Earliest cleanup deadline to interleave with the game scheduler.
+    pub fn next_cleanup(&self) -> f32 {
+        self.clock.next()
+    }
+
+    /// Apply one due cleanup so the scheduler can interleave other events.
+    pub fn cleanup_due(&mut self, now: f32) -> Result<bool, Error> {
+        if self.clock.pop_due(now)?.is_none() {
+            return Ok(false);
+        }
+        let entries = &self.entries;
+        self.chains.cleanup(self.rules, |identity| {
+            entries
+                .binary_search_by_key(&identity, |entry| entry.identity)
+                .is_ok()
+        });
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +798,8 @@ mod tests {
             object_class: 0x3000,
             skipped_class: 0x4000,
             pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
             max_entries: limit,
         }
     }
@@ -590,6 +809,68 @@ mod tests {
             lower: [left, 0],
             upper: [right, 1],
         }
+    }
+
+    #[test]
+    fn live_entries_follow_registration_order_and_temporary_exclusions() {
+        let mut rules = rules(7);
+        rules.forbidden = 0xf;
+        let chains = Chains::new([3, 1], 8, 15, 0).unwrap();
+        let clock = CleanupClock::new(0.0, 0.25).unwrap();
+        let mut live = LiveChains::new(chains, clock, rules, 2).unwrap();
+        assert_eq!(
+            live.register(9, 0x104, 0x200, rect(0, 2), rules.object_class, true),
+            Ok(1)
+        );
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        live.exclusion(9, true).unwrap();
+        live.exclusion(9, true).unwrap();
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        assert_eq!(live.retire_movement(9), Err(Error::Exclusion(9)));
+        live.exclusion(9, false).unwrap();
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        live.exclusion(9, false).unwrap();
+        assert!(live.blocked([0, 0], 0, 4).unwrap());
+        assert_eq!(live.exclusion(9, false), Err(Error::Exclusion(9)));
+        assert_eq!(live.move_entry(9, rect(1, 3), rules.object_class), Ok(2));
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        assert!(live.blocked([1, 0], 0, 4).unwrap());
+        assert!(live.blocked([2, 0], 0, 4).unwrap());
+        assert_eq!(live.cleanup_due(0.125), Ok(false));
+        assert_eq!(live.cleanup_due(0.25), Ok(true));
+        assert_eq!(live.cleanup_due(0.25), Ok(false));
+        assert_eq!(live.retire_movement(9), Ok(3));
+        assert!(!live.blocked([2, 0], 0, 4).unwrap());
+        assert_eq!(live.cleanup_due(0.5), Ok(true));
+    }
+
+    #[test]
+    fn live_regions_and_capacity_failures_leave_the_order_intact() {
+        let rules = rules(7);
+        let chains = Chains::new([3, 1], 3, 7, 0).unwrap();
+        let clock = CleanupClock::new(0.0, 0.5).unwrap();
+        let mut live = LiveChains::new(chains, clock, rules, 1).unwrap();
+        assert_eq!(
+            live.register(4, 0x104, 0x200, rect(0, 1), rules.object_class, false),
+            Ok(1)
+        );
+        assert_eq!(live.add_rectangle(4, rect(1, 2), rules.object_class), Ok(2));
+        assert_eq!(
+            live.register(5, 0x104, 0x200, rect(2, 3), rules.object_class, false),
+            Err(Error::EntryCapacity(1))
+        );
+        assert_eq!(live.remove_rectangle(4, rect(0, 1)), Ok(3));
+        assert!(!live.blocked([0, 0], 0, 4).unwrap());
+        assert!(live.blocked([1, 0], 0, 4).unwrap());
+        assert_eq!(
+            live.add_rectangle(4, rect(2, 3), rules.object_class),
+            Err(Error::PoolExhausted {
+                needed: 1,
+                available: 0
+            })
+        );
+        assert_eq!(live.cleanup_due(0.5), Ok(true));
+        assert_eq!(live.add_rectangle(4, rect(2, 3), rules.object_class), Ok(4));
     }
 
     #[test]

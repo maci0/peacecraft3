@@ -576,8 +576,15 @@ sentinel is read from the selected executable at `0x8c24b8`; the visit limit is 
 query rule, not the pool capacity. A preallocated indexed pool now records object and removal
 links, rectangle changes, and dirty-cell cleanup for caller-supplied entry identities. Pool
 exhaustion refuses before changing a rectangle. Entry state is resolved at query time, because
-multiple links reference the same changing object. This component does not yet receive live
-collision or region registration. A reader checks the interval initializer and minimum against
+multiple links reference the same changing object. A bounded owner now keeps entry state and a
+monotonic registration sequence, and increments and restores temporary exclusion counts
+without inserting or removing links. It exposes one due cleanup at a time for scheduler
+interleaving. Its operations and exhaustion cases have synthetic tests. The selected-input
+diagnostic supplies executed region additions to this owner in their recorded order, using
+constructor flags and state read from `0x8c19b1`, `0x8c19c6` and `0x8c19ee`. This is a
+region-only check, not a replay of other live objects or of the full cell history.
+This component does not yet receive collision or region callbacks from the live host. A reader
+checks the interval initializer and minimum against
 the selected executable and uses the selected real-number arithmetic; the cleanup is not yet
 scheduled. The movement updater at `0x8bc810` updates two grids. The coarse update at
 `0x8bc840` scales position minus and plus radius. The fine update at `0x8bc900` instead

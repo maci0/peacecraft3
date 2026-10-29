@@ -15,6 +15,8 @@ pub struct EntryRules {
     object_class: u32,
     skipped_class: u32,
     pathing_mask: u32,
+    region_flags: u32,
+    region_state: u32,
     max_entries: u8,
 }
 
@@ -149,6 +151,11 @@ impl CellCrossings {
 }
 
 impl EntryRules {
+    /// Flags and state of a newly created region entry.
+    pub fn region_initial_state(self) -> (u32, u32) {
+        (self.region_flags, self.region_state)
+    }
+
     /// Decode the tests from the same verified image used by placement.
     pub fn reviewed_legacy(
         image: &[u8],
@@ -187,6 +194,9 @@ impl EntryRules {
         let pathing = read(0x8be504, 6)?;
         let cleanup_skipped = read(0x8c2c79, 6)?;
         let cleanup_object = read(0x8c2c89, 6)?;
+        let region_state = read(0x8c19ee, 7)?;
+        let initial_state = read(0x8c19b1, 7)?;
+        let initial_flags = read(0x8c19c6, 7)?;
         if class[..2] != [0x81, 0xe3]
             || skipped[..2] != [0x81, 0xfb]
             || limit[..2] != [0x83, 0xff]
@@ -201,22 +211,31 @@ impl EntryRules {
             || cleanup_skipped[2..] != skipped[2..]
             || cleanup_object[..2] != [0x81, 0xf9]
             || cleanup_object[2..] != object[2..]
+            || region_state[..3] != [0x81, 0x48, 0x44]
+            || initial_state[..3] != [0xc7, 0x43, 0x44]
+            || initial_flags[..3] != [0xc7, 0x43, 0x34]
         {
             return Err("unrecognized reach entry test instructions".into());
         }
         let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().expect("checked width"));
+        let registration_bit = 1_u32
+            .checked_shl(u32::from(registered[2]))
+            .ok_or("registration bit")?;
+        if word(&region_state[3..]) != registration_bit {
+            return Err("region entry registration bit differs from reach test".into());
+        }
         Ok(Self {
             active: 1_u32
                 .checked_shl(u32::from(active[2]))
                 .ok_or("active bit")?,
-            registered: 1_u32
-                .checked_shl(u32::from(registered[2]))
-                .ok_or("registration bit")?,
+            registered: registration_bit,
             forbidden: word(&forbidden[3..]),
             class_mask: word(&class[2..]),
             object_class: word(&object[2..]),
             skipped_class: word(&skipped[2..]),
             pathing_mask: word(&pathing[2..]),
+            region_flags: word(&initial_flags[3..]),
+            region_state: word(&initial_state[3..]) | registration_bit,
             max_entries: limit[2].checked_sub(1).ok_or("reach chain limit")?,
         })
     }
@@ -1280,6 +1299,8 @@ mod tests {
             object_class: 0x3000,
             skipped_class: 0x4000,
             pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
             max_entries: 3,
         };
         let check =
@@ -1304,6 +1325,8 @@ mod tests {
             object_class: 0x3000,
             skipped_class: 0x4000,
             pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
             max_entries: 3,
         };
         let blocked = ChainEntry {
@@ -1342,6 +1365,8 @@ mod tests {
             object_class: 0x3000,
             skipped_class: 0x4000,
             pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
             max_entries: 3,
         };
         let object = ChainEntry {
@@ -1397,6 +1422,8 @@ mod tests {
             object_class: 0x3000,
             skipped_class: 0x4000,
             pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
             max_entries: 3,
         };
         let entry = ChainEntry {

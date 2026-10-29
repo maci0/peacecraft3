@@ -5949,3 +5949,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   reach results match. These comparisons still use sampled occupancy.
 - The Human03 and Human04 routes reach victory at 279.02 s and 449.02 s; their 45 and 72
   checkpoint and RNG lines respectively match `g1`.
+
+### 2026-10-29: Spatial entry owner
+
+- [~] A bounded owner records ordered link operations, current entry state and temporary
+  exclusion counts, and exposes individual cleanup deadlines. Synthetic tests cover moves,
+  exclusion restoration, region additions, cleanup and capacity failures. The selected-input
+  diagnostic checks the owner with recorded region additions and source-read constructor state.
+  Live host callbacks, texture and movement entry state, the scheduler and production placement
+  remain unconnected. See [AI construction](docs/re-notes/ai-construction.md).
+- The library suite passed 2,363 tests with 91 ignored; native and WASM Clippy and the
+  simulation budget check passed with the owner unconnected. The region-only selected-input
+  check passed, and the existing snapshot comparisons again matched both sites and the 112
+  recorded reach decisions. These are not live-pool results.
