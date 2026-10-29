@@ -57,6 +57,14 @@ pub struct MovementStateRule {
 }
 
 impl MovementStateRule {
+    #[cfg(test)]
+    pub(crate) fn synthetic(threshold: f32, moving_bit: u32) -> Self {
+        Self {
+            threshold,
+            moving_bit,
+        }
+    }
+
     /// Read the movement threshold and state mask from the reviewed image.
     pub fn reviewed_legacy(
         image: &[u8],
@@ -229,6 +237,54 @@ pub fn region_cells(
     Ok(CellRect { lower, upper })
 }
 
+/// The cleanup interval's operands as read from the verified image.
+#[derive(Clone, Debug)]
+pub struct CleanupOperands {
+    image_sha256: crate::neutral_player::Sha256Digest,
+    dividend: i32,
+    divisor: i32,
+    minimum: f32,
+}
+
+impl CleanupOperands {
+    #[cfg(test)]
+    pub(crate) fn synthetic() -> Self {
+        Self {
+            image_sha256: [0; 32],
+            dividend: 1,
+            divisor: 10,
+            minimum: 0.1,
+        }
+    }
+
+    /// Divide with the session's real arithmetic and apply the image's minimum.
+    pub fn interval(
+        &self,
+        numeric: &crate::script_numeric::NumericPolicy,
+    ) -> Result<f32, String> {
+        use crate::script_random::real;
+
+        if numeric.image_sha256() != &self.image_sha256 {
+            return Err("spatial cleanup image identity mismatch".into());
+        }
+        let divisor = real::from_i32(self.divisor).map_err(|e| e.to_string())?;
+        let dividend = real::from_i32(self.dividend).map_err(|e| e.to_string())?;
+        let interval = f32::from_bits(
+            numeric
+                .division(dividend, divisor)
+                .map_err(|e| e.to_string())?,
+        );
+        if !interval.is_finite()
+            || !self.minimum.is_finite()
+            || interval <= 0.0
+            || self.minimum <= 0.0
+        {
+            return Err("invalid spatial cleanup interval".into());
+        }
+        Ok(interval.max(self.minimum))
+    }
+}
+
 /// A recurring cleanup deadline in the selected client's real arithmetic.
 #[derive(Clone, Copy, Debug)]
 pub struct CleanupClock {
@@ -283,6 +339,13 @@ struct Node {
     next: u32,
 }
 
+/// One link in a cell chain: the entry it refers to and the link class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainLink {
+    pub identity: u64,
+    pub class: u32,
+}
+
 /// Pool capacity is supplied by the session's resource budget and may not
 /// exceed the index limit read from the selected executable.
 pub struct Chains {
@@ -331,13 +394,20 @@ impl Chains {
         rules: &crate::ai_placement::Rules,
         numeric: &crate::script_numeric::NumericPolicy,
     ) -> Result<f32, String> {
+        Self::reviewed_cleanup_operands(image, rules)?.interval(numeric)
+    }
+
+    /// Read the interval operands from the verified image; the session's numeric
+    /// policy completes the division later.
+    pub fn reviewed_cleanup_operands(
+        image: &[u8],
+        rules: &crate::ai_placement::Rules,
+    ) -> Result<CleanupOperands, String> {
         use crate::neutral_player::{RuleInputBudget, sha256};
         use crate::neutral_rule_input::Pe;
-        use crate::script_random::real;
 
         if rules.image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
             || sha256(image) != rules.image_sha256
-            || numeric.image_sha256() != &rules.image_sha256
         {
             return Err("spatial cleanup image identity mismatch".into());
         }
@@ -360,19 +430,14 @@ impl Chains {
         let loaded = read(0x8c149c, 13, true)?;
         let minimum_check = read(0x8c14b6, 7, true)?;
         let (dividend, divisor, address) = cleanup_operands(initializer, loaded, minimum_check)?;
-        let divisor = real::from_i32(divisor).map_err(|e| e.to_string())?;
-        let dividend = real::from_i32(dividend).map_err(|e| e.to_string())?;
-        let interval = f32::from_bits(
-            numeric
-                .division(dividend, divisor)
-                .map_err(|e| e.to_string())?,
-        );
         let minimum =
             f32::from_le_bytes(read(address, 4, false)?.try_into().expect("checked width"));
-        if !interval.is_finite() || !minimum.is_finite() || interval <= 0.0 || minimum <= 0.0 {
-            return Err("invalid spatial cleanup interval".into());
-        }
-        Ok(interval.max(minimum))
+        Ok(CleanupOperands {
+            image_sha256: rules.image_sha256,
+            dividend,
+            divisor,
+            minimum,
+        })
     }
 
     /// Read the link-index sentinel from the verified client image.
@@ -586,6 +651,28 @@ impl Chains {
             }
         }
         Ok(())
+    }
+
+    /// The cell's links, newest first, without applying any query rule.
+    pub fn links(
+        &self,
+        cell: [usize; 2],
+    ) -> Result<impl Iterator<Item = ChainLink> + '_, Error> {
+        if cell[0] >= self.size[0] || cell[1] >= self.size[1] {
+            return Err(Error::Rectangle);
+        }
+        let mut next = self.heads[cell[1] * self.size[0] + cell[0]];
+        Ok(std::iter::from_fn(move || {
+            if next == NONE {
+                return None;
+            }
+            let node = self.nodes[next as usize];
+            next = node.next;
+            Some(ChainLink {
+                identity: node.identity,
+                class: node.class,
+            })
+        }))
     }
 
     /// Query the newest-first chain using current object state.
@@ -878,6 +965,23 @@ impl LiveChains {
         self.entries.remove(index);
         self.sequence = sequence;
         Ok(sequence)
+    }
+
+    /// The cell's links, newest first.
+    pub fn chain(&self, cell: [usize; 2]) -> Result<impl Iterator<Item = ChainLink> + '_, Error> {
+        self.chains.links(cell)
+    }
+
+    /// Current flags and state of a registered entry.
+    pub fn entry_state(&self, identity: u64) -> Option<(u32, u32)> {
+        let index = self.entry(identity).ok()?;
+        let entry = self.entries[index];
+        Some((entry.flags, entry.state))
+    }
+
+    /// The registration sequence number of the latest operation.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
     }
 
     /// Read the current entry state through the ordered chain.

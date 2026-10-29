@@ -156,6 +156,41 @@ impl EntryRules {
         (self.region_flags, self.region_state)
     }
 
+    /// Flags and state of a texture-cell entry: the wrapper at `0x8c19e0` sets the
+    /// registration bit and the entry's pathing mask is assigned afterward
+    /// (`0x805343`). The active flag is the reach query's `0x8be4ce` test.
+    pub fn texture_entry(self, mask: u8) -> (u32, u32) {
+        (self.active | u32::from(mask), self.region_state)
+    }
+
+    /// Flags and state of a movement object's active entry: the zero-initializing
+    /// constructor `0x8c1950` leaves the registration bit clear, and `0x8baf10`
+    /// sets the active flag (see the movement entry notes in `ai-construction.md`).
+    pub fn movement_entry(self, mask: u8) -> (u32, u32) {
+        (self.active | u32::from(mask), 0)
+    }
+
+    /// The flags with the reach query's active bit cleared.
+    pub fn without_active(self, flags: u32) -> u32 {
+        flags & !self.active
+    }
+
+    #[cfg(test)]
+    pub(crate) fn synthetic(max_entries: u8) -> Self {
+        Self {
+            active: 0x100,
+            registered: 0x200,
+            forbidden: 0x40,
+            class_mask: 0xf000,
+            object_class: 0x3000,
+            skipped_class: 0x4000,
+            pathing_mask: 0xff,
+            region_flags: 0,
+            region_state: 0x200,
+            max_entries,
+        }
+    }
+
     /// Decode the tests from the same verified image used by placement.
     pub fn reviewed_legacy(
         image: &[u8],
