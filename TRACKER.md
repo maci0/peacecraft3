@@ -5889,3 +5889,13 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   learning with Ctrl, selling by dropping on a shop, the `NumPad N` tooltip label, where the client
   folds key case, `CustomKeys.txt` stays inert until the options panel stores `CustomKeysCheckBox`,
   and nothing here was observed in the original client.
+### 2026-10-29: Error line and Alt press (input slices 13 and 14)
+
+- [x] The error line is drawn above the console with the client's rules: frame `0.38 x 0.05` at offset
+  `(0, 0.18)`, gold `0xFFFED312`, 10 s hold then a 3 s linear fade, `MessageFont` at the
+  `WorldFrameMessage` height, shadow and left justification, all decoded from the reviewed image. The control
+  group refusals post to it. Evidence: [chat and overlays](docs/re-notes/input-chat-overlays.md).
+- [x] A left press with Alt held is consumed by the world and the minimap (no selection, box or camera jump).
+- [ ] Open: order refusals (the client's `[Errors]` keys for them are unread), the error sounds, Enter family and
+  the chat edit bar (submit path unread), the ping marker, Alt+T/A/R/G/F minimap button keys (decoded, not wired),
+  quick keys, world health bars and their modifiers, hover highlight, formation toggle.
