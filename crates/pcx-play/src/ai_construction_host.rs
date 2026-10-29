@@ -41,6 +41,18 @@ impl ObjectHost {
             return Err("AI mine construction requires a resolved town mine target".into());
         }
         let center = self.ai_live_town_center(player, owner)?;
+        #[cfg(feature = "test-fixtures")]
+        if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+            eprintln!("AI placement town: player={player} center={center:?}");
+            for (unit, record) in self.executed_units() {
+                if record.owner == owner && record.shown {
+                    eprintln!(
+                        "AI placement unit: {unit:?} kind={:?} position={:?}",
+                        record.definition.rawcode, record.position
+                    );
+                }
+            }
+        }
         self.ai_placement_effect_evidence(worker)?;
         let path = super::unit_positions::text(definition, SlkId::UnitData, "pathTex")
             .map_err(|error| error.to_string())?

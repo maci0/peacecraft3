@@ -6098,3 +6098,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - The simulation allocation and deterministic-work budget check passes for Human03.
 - The `pcx-play` library suite passes 2,391 tests with 92 ignored. Native and WASM Clippy
   pass with warnings denied.
+
+### 2026-10-30: Blight source investigation
+
+- [~] The selected unit and ability data and client effect paths identify the growth
+  parameters and discrete updates. Native placement uses a separate owner-mask grid and
+  high-bit layer. Dynamic blight, its placement rule, source removal and rendering remain
+  unimplemented; see [terrain blight](docs/re-notes/terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+- A private original-client probe isolated one Necropolis. Its sampled construction site
+  stayed unblighted until completion, then the sampled patch expanded during the following
+  second. Source removal and overlapping-source restoration were not tested.
+- Human05 `blight-investigation-a-20261030` and `blight-investigation-b-20261030` both
+  accept the Necropolis order at 1223.211 seconds and stop on the Ziggurat's blight
+  requirement before construction starts. Their 111 trace and checkpoint lines match.
+- Injecting the four live worker positions into the initial-state selector fixture yields
+  (6208, 2752) at dequeue 1, while the live run yields (6144, 2752) at dequeue 10. The
+  difference remains unexplained because the fixture does not replay the live history.
+- The `pcx-play` library suite passes 2,391 tests with 92 ignored; native and WASM Clippy
+  pass with warnings denied. The live-position fixture passes for its observed site.
+- The Human03 simulation allocation and deterministic-work budget check passes.

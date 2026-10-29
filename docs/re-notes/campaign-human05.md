@@ -227,8 +227,12 @@ checkpoint and RNG lines and the build-order trace match. The release test binar
 `856e9cc9165b3bfa3978fa1de7001a3b613e5806d63e78b69deb3772f70c5463`.
 
 The accepted point is 64 units west of the separate original-client probe's first Necropolis.
-The recreation order is issued with a different live worker and movement history from that
-probe, so this observation does not isolate a placement-rule difference. The five recorded
+In two new traced runs the live town center was (6264, 2776), and the four worker positions
+were (6329.007, 2320.2185), (6276.0654, 2096), (6557.9214, 2192) and (6449.32, 2256).
+The initial-state placement fixture selects (6208, 2752) at dequeue 1 when those positions
+are injected. The live run selects (6144, 2752) at dequeue 10, so the different positions
+alone do not explain the result. The fixture does not reproduce the live movement or
+spatial-registration history. The difference remains unexplained. The five recorded
 site comparisons use the recorded worker positions and are reported in
 [AI construction](ai-construction.md#initial-town-production-path-2026-10-30).
 

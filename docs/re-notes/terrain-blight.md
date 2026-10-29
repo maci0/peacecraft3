@@ -65,6 +65,58 @@ not render initial or changing blight textures.
 The previous phase-enabled native probe is invalid for eligibility: its unit
 was misplaced and its records truncated. See [regeneration](unit-regeneration.md#phase-enabled-blight-probe-one-run-outcome-2026-10-20).
 
+## Growth and placement investigation, 2026-10-30
+
+The selected unit ability table assigns the Necropolis and Haunted Gold Mine a
+blight-growth ability. The selected ability table supplies its `Area`, `Dur`,
+`DataA` and `DataB` fields. The growth-ability initializer at `0xb8c3e0` reads
+those fields and creates a separate effect at `0x6da390`. The effect stores a
+target radius, update interval, radius increment and mode. Its start path at
+`0x6daf10` schedules repeated updates and applies the first increment
+immediately. The update at `0x6da100` multiplies the increment by the current
+count, paints that radius and checks whether to stop. The interval is bounded
+by an executable operand at `0x10dd068`. The effect's native lifecycle and
+behavior when its source is removed still need qualification.
+
+The shared placement validator at `0x6902d0` handles the blight requirement as
+a special `0x20` branch. Depending on the caller it checks either the player's
+mask or the terrain's global mask through `0x690d20` or `0x4e02a0`. The latter
+includes the high bit of the terrain blight entry. On map initialization,
+`0x4c40f0` scans groups of spatial pathing cells and seeds a separate blight
+owner-mask grid; `0x4c5470` updates its high-bit layer. Runtime circle painting
+at `0x6da510` changes that grid and notifies the spatial pathing system. Thus
+the current nearest-corner regeneration layer is insufficient evidence for
+the placement raster or for overlapping player-owned sources.
+
+Human05 also registers a construct-start trigger whose action calls
+`SetBlightRadiusLocBJ` for player 5. The host does not implement that setter.
+The recreation's `CreateBlightedGoldmine` host creates the selected unit type;
+it does not currently create that unit's growth effect or paint terrain.
+No dynamic blight placement, source removal or blight rendering is admitted by
+this investigation.
+
+An isolated original-client run sampled `IsPointBlighted` once per game second
+at the Necropolis center and along four axes. At sample-clock 12 seconds the
+structure was under construction and the center was not blighted; the western
+samples already included the separate scripted patch. The center first tested
+blighted at 56 seconds, while construction was still in progress. At 72 seconds
+the finish event had fired and additional samples tested blighted; by 73
+seconds all four axes at the sampled 1024-unit offset tested blighted. Several
+other structures existed by then, so these observations do not isolate the
+source of the earlier center change or establish a single-source radius. The
+sample clock starts three seconds after map initialization. The probe used a
+private Xvfb display and null sink and was stopped after recording completion.
+
+A second run isolated one Necropolis by disabling the script's blight trigger
+and not starting the orange AI. Its build order was accepted and the first
+sample showing a construction site was at two seconds. Every sampled point
+remained unblighted through 61 seconds. The 62-second sample recorded both
+construction completion and blight at the center, with all four axes blighted
+at a 384-unit offset. At 63 seconds all four axes tested blighted at 1024 units;
+at 1152 units only the positive-x and positive-y samples did. These are sampled
+coverage points, not a fitted circle or a death/removal measurement. The same
+three-second initialization offset and isolation applied.
+
 ## Verification scope
 
 Synthetic tests exercise all flag combinations, source spacing/origin, budgets,

@@ -922,9 +922,13 @@ fn human05_placement_diagnostic() {
         sample_workers.remove(closest);
     }
     let production = std::env::var_os("PCX_PRODUCTION_SITE").is_some();
-    let desired = std::iter::once(order_worker)
-        .chain(sample_workers.into_iter().take(3))
-        .collect::<Vec<_>>();
+    let desired = if let Ok(positions) = std::env::var("PCX_LIVE_WORKER_POSITIONS") {
+        positions.split(';').map(probe_point).collect::<Vec<_>>()
+    } else {
+        std::iter::once(order_worker)
+            .chain(sample_workers.into_iter().take(3))
+            .collect::<Vec<_>>()
+    };
     let initial = if production {
         let (spawn, _, count) =
             probe_spawn(&probe_script, std::str::from_utf8(&map_script).unwrap());
