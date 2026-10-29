@@ -1440,6 +1440,37 @@ registration lifecycle must be supplied before the coarse grid can be validated.
 town and reach inputs, effect-source qualification, and production construction path remain
 unconnected.
 
+### Live reach inputs and town selection, 2026-10-30
+
+The reach hierarchy can now be built from the tracked owner's current fine-grid chains and the
+map's authored pathing raster. It rejects a pool with an earlier refusal and requires explicit
+evidence that auxiliary Warp links are absent. The construction worker's retained fine-grid
+rectangle is cleared before the hierarchy is classified. An ignored local-input comparison
+checks both result and removal count against the prior snapshot implementation for every one of
+the 100 workers-at-start and 12 near-mine recorded queries. The same live hierarchy selects the
+baseline, farm, workers-at-start and near-mine sites at dequeues 1, 280, 355 and 419. These
+comparisons still supply the recorded town coordinates and sampled worker positions; they do
+not run `SetProduce`, replay movement or establish the absence of Warp links in a live session.
+
+The town selector at `0xac7450` searches from a resolved registered mine to the requested
+position, not from that position to the mine. Its initial comparison threshold is 80 in the
+returned path units and its initial work limit is 150 removals. After each search the next limit
+is the smaller of the prior limit and the number of removals plus 50 (`0xac745b` through
+`0xac7525`, `0x8a3bf0`). It temporarily clears the mine's position-bearing and texture
+references, and also those of the second unit when supplied (`0x7fd610`, `0x7fd6b0`). A
+diagnostic that instead scans current resource units using the placement budget and the worker
+rectangle reproduces the three recorded initial town midpoints, but it is a hypothesis: it does
+not model the registered town list, mine rectangles or the town selector's budget. The match
+does not qualify that diagnostic for production.
+
+`0xac7550` is another town association path. It considers registered town records and can
+choose their mine, hall or stored coordinate, with a different work limit and comparison bound
+(`0xac7550` through `0xac779a`). Town coordinates are stored at refresh, so recomputing a
+midpoint from a worker's later live position is not equivalent. The recreation still needs the
+town-record lifecycle, refresh events and both association paths before it can derive those
+coordinates from a running game. The live caller must also qualify Warp links and the unit
+effect-source evidence. Production structure orders remain refused.
+
 ## Not established
 
 - The structure fallback's root-ability state, native registration and type-change paths beyond

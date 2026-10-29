@@ -287,6 +287,9 @@ pub fn assemble(
         remaining_source_attempts: FOOTPRINT_SOURCES,
     };
     let mut pool = spatial_owner(objects, &grid, rules, spatial)?;
+    if let Some(pool) = &mut pool {
+        pool.retain_context(Arc::clone(context));
+    }
     let mut work = STATIONARY_WORK;
     let mut decoration = 0u32;
     for instance in catalog.doodads() {

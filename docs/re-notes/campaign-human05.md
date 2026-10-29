@@ -202,6 +202,14 @@ sampled reach and site comparisons still match, but the coarse movement grid and
 placement inputs remain open. Human05 was not rerun for this change; the latest verified
 two-run state is the 1223 s refusal described above.
 
+The live fine-grid chains now also build the reach hierarchy used by the sampled comparison.
+All 112 recorded reach results and the four tested site and dequeue pairs match the snapshot
+implementation. The town coordinates and worker positions remain supplied by the fixture;
+registered town lifecycle and effect-source qualification are not connected to production.
+Runs `live-reach-a-20261030` and `live-reach-b-20261030` both stop on the same construction
+refusal at 1223 s, with 98 identical checkpoint and RNG lines. No state beyond that refusal is
+established ([AI construction](ai-construction.md#live-reach-inputs-and-town-selection-2026-10-30)).
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

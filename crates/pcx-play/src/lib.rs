@@ -55,6 +55,7 @@
 
 pub mod ability_profile;
 pub mod ai_placement;
+pub mod ai_placement_reach;
 pub mod camera_input;
 pub mod camera_margins;
 pub mod campaign;

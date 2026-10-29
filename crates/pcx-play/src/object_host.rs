@@ -1464,6 +1464,10 @@ mod unit_pause;
 #[path = "placement_events_host.rs"]
 mod placement_events;
 
+#[cfg(feature = "test-fixtures")]
+#[path = "ai_construction_host.rs"]
+mod ai_construction;
+
 #[path = "unit_sleep_host.rs"]
 mod unit_sleep;
 pub use unit_sleep::UnitSleep;

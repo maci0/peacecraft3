@@ -6061,3 +6061,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   requested bytes as the previous measurement. Human04 map startup remains 11,145 allocations
   and 1,222,072 requested bytes above the earlier control, 16 bytes above the preceding tracked
   measurement. The allocation increase remains unresolved.
+
+### 2026-10-30: Live reach hierarchy
+
+- [~] A live fine-grid hierarchy reproduces all 112 recorded reach results, the snapshot's
+  removal counts, and the baseline, farm, workers-at-start and near-mine sites at dequeues 1, 280, 355 and
+  419. The comparisons supply recorded town coordinates and sampled workers; they do not
+  establish the live town association or effect-source state. See [AI construction](docs/re-notes/ai-construction.md#live-reach-inputs-and-town-selection-2026-10-30).
+- The town-association search runs from a registered mine to the target and uses its own
+  adaptive work limit and temporary rectangles. A provisional resource scan matches three
+  initial town origins but does not implement the registered town lifecycle. Production
+  construction remains refused.
+- The `pcx-play` library suite passes 2,390 tests with 92 ignored. Native and WASM Clippy pass
+  with warnings denied. The Human03 simulation allocation gate passes with the same allocation
+  counts and requested bytes as the previous measurement. Human04 startup allocations have
+  not been reduced or remeasured.
+- Human05 runs `live-reach-a-20261030` and `live-reach-b-20261030` stop at the existing
+  1223 s construction refusal, with 98 matching checkpoint and RNG lines.

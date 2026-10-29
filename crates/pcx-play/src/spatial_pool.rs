@@ -24,6 +24,7 @@ const ENTRY_BUDGET: usize = 1 << 16;
 const DECORATION_TAG: u64 = 1 << 62;
 const PLACED_TAG: u64 = 1 << 63;
 const TEXTURE_ENTRY_TAG: u64 = 1 << 61;
+type ReachOperands = (u8, u32, u32, usize, i32, u32);
 
 /// Operands read once from the reviewed image for a tracked session.
 #[derive(Clone, Debug)]
@@ -38,6 +39,8 @@ pub struct SpatialRules {
     movement_masks: [u8; 5],
     cleanup: CleanupOperands,
     texture_masks: TextureMasks,
+    placement: Option<std::sync::Arc<crate::ai_placement::Rules>>,
+    reach: Option<ReachOperands>,
 }
 
 /// Per-entry pathing masks selected by the texture registration code.
@@ -107,6 +110,10 @@ impl SpatialRules {
             movement_masks: movement_masks(image)?,
             cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
             texture_masks: texture_masks(image)?,
+            placement: Some(std::sync::Arc::new(rules.clone())),
+            reach: Some(crate::native_path_hierarchy::reviewed_operands(
+                image, rules,
+            )?),
         })
     }
 
@@ -135,6 +142,8 @@ impl SpatialRules {
                 plain: [1, 2, 4],
                 green: [1, 2, 4, 8],
             },
+            placement: None,
+            reach: None,
         }
     }
 }
@@ -383,6 +392,7 @@ pub struct PoolOwner {
     live: LiveChains,
     rules: SpatialRules,
     geometry: Geometry,
+    context: Option<std::sync::Arc<crate::map_admission::ParsedMapContext>>,
     tracked: BTreeMap<u64, Tracked>,
     texture_entries: BTreeMap<u64, Vec<(u64, u8)>>,
     stationary_pixels: BTreeMap<u64, StationaryPixels>,
@@ -418,6 +428,7 @@ impl PoolOwner {
             live,
             rules,
             geometry,
+            context: None,
             tracked: BTreeMap::new(),
             texture_entries: BTreeMap::new(),
             stationary_pixels: BTreeMap::new(),
@@ -431,6 +442,21 @@ impl PoolOwner {
     /// The first refused operation, or `None` while every operation was applied.
     pub fn refusal(&self) -> Option<&Refusal> {
         self.refusal.as_ref()
+    }
+
+    pub(crate) fn retain_context(
+        &mut self,
+        context: std::sync::Arc<crate::map_admission::ParsedMapContext>,
+    ) {
+        self.context = Some(context);
+    }
+
+    pub(crate) fn placement_rules(&self) -> Option<&crate::ai_placement::Rules> {
+        self.rules.placement.as_deref()
+    }
+
+    pub(crate) fn reach_inputs(&self) -> Option<(&pcx_map::Pathing, ReachOperands)> {
+        Some((&self.context.as_ref()?.world.pathing, self.rules.reach?))
     }
 
     /// Chains, entry states and the registration sequence.

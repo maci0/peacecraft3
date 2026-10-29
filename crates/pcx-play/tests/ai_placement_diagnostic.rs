@@ -761,6 +761,9 @@ fn human05_placement_diagnostic() {
             "town snapshot spawn={spawn:?} candidates={units:?} selected={position:?} center={center:?} (fixture assumes registration in creation order)"
         );
         assert_eq!(center, probe_point(&expected));
+        let live = objects.diagnostic_ai_town_hypothesis(player_handle, units[0].0);
+        println!("town hypothesis expected={center:?} actual={live:?}");
+        assert_eq!(live.unwrap(), center);
         return;
     }
     let start_index = objects
@@ -971,7 +974,19 @@ fn human05_placement_diagnostic() {
             &rules,
             &terrain_pathing,
         );
-        compare_reach_snapshot(&snapshot, center, &trace);
+        let live = if std::env::var_os("PCX_REACH_LIVE_POOL").is_some() {
+            Some(
+                pcx_play::ai_placement_reach::Reach::from_placement(
+                    objects.diagnostic_placement().unwrap(),
+                    worker,
+                    pcx_play::ai_placement_reach::LinkEvidence::Absent,
+                )
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        compare_reach_snapshot(&snapshot, live.as_ref(), center, &trace);
         return;
     }
     let necropolis = catalog.resolve(*b"unpl").unwrap();
@@ -1182,6 +1197,14 @@ fn human05_placement_diagnostic() {
         let bounds = placement.world_bounds();
         let reach = full_reach
             .then(|| reach_snapshot(placement, worker, &mobile, &image, &rules, &terrain_pathing));
+        let live_reach = full_reach.then(|| {
+            pcx_play::ai_placement_reach::Reach::from_placement(
+                placement,
+                worker,
+                pcx_play::ai_placement_reach::LinkEvidence::Absent,
+            )
+            .unwrap()
+        });
         if let Ok(point) = std::env::var("PCX_HUMAN05_TRACE_CELL") {
             let point = probe_point(&point);
             println!(
@@ -1308,9 +1331,18 @@ fn human05_placement_diagnostic() {
                         }
                         Ok((p, grid.diagnostic_indices(p)))
                     },
-                    |p| match &reach {
-                        Some(snapshot) => snapshot.query(center, p).map(|(value, _)| value != -1),
-                        None => Ok(true),
+                    |p| match (&reach, &live_reach) {
+                        (Some(snapshot), Some(live)) => {
+                            let (native, removals) = snapshot.query(center, p)?;
+                            let (actual, actual_removals) = live.query(center, p)?;
+                            assert_eq!(
+                                (actual.map_or(-1, |value| value as i32), actual_removals),
+                                (native, removals)
+                            );
+                            Ok(actual.is_some())
+                        }
+                        (None, None) => Ok(true),
+                        _ => Err("incomplete diagnostic reach input".into()),
                     },
                     |p| {
                         let valid = validate(p)?;
@@ -1690,7 +1722,12 @@ impl ReachSnapshot {
     }
 }
 
-fn compare_reach_snapshot(snapshot: &ReachSnapshot, center: [f32; 2], trace: &str) {
+fn compare_reach_snapshot(
+    snapshot: &ReachSnapshot,
+    live: Option<&pcx_play::ai_placement_reach::Reach>,
+    center: [f32; 2],
+    trace: &str,
+) {
     let mut mismatches = 0;
     let mut queries = 0;
     for line in std::fs::read_to_string(trace).unwrap().lines().skip(1) {
@@ -1706,6 +1743,15 @@ fn compare_reach_snapshot(snapshot: &ReachSnapshot, center: [f32; 2], trace: &st
         ];
         let expected = values[5].parse::<i32>().unwrap();
         let actual = snapshot.query(center, point);
+        if let Some(live) = live {
+            let result = live.query(center, point).unwrap();
+            let expected_live = actual.as_ref().unwrap();
+            assert_eq!(
+                (result.0.map(|value| value as i32).unwrap_or(-1), result.1),
+                *expected_live,
+                "live reach differs at rank {rank}, point {point:?}"
+            );
+        }
         if let Ok(node_rank) = std::env::var("PCX_REACH_NODE_RANK")
             && rank == node_rank.parse::<usize>().unwrap()
         {
