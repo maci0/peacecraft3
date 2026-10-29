@@ -1408,9 +1408,37 @@ movement and timer history. The start-changed scenario has not been tested throu
 
 The test-only reach snapshot still constructs the hierarchical inputs from a supplied terrain
 raster and builder rectangle. Production has no equivalent live construction of those inputs
-or connected town and effect-source qualification. The live movement entry still has mask
-`0x02` where the captured acolyte entry intersects `0x08`, and the coarse movement grid is not
-tracked. These remain blockers for admitting the structure search in `SetProduce`.
+or connected town and effect-source qualification. At this point the live movement entry had
+mask `0x02` where the captured entry intersects `0x08`; the following section corrects that
+mapping. The coarse movement grid is not tracked.
+
+### Movement entry masks, 2026-10-30
+
+The selected unit's type record supplies the fine entry mask. At `0x66e920` the unit's
+virtual method at slot `0x160` reads that value through `0x66e570`, and `0x800850` copies it
+into the low portion of the fine entry's flags. The unit-type loader maps its authored movement
+token through `0x691a80` and the dispatch at `0x67ce7d`. For the selected image, foot, horse,
+hover, float and amphibious have mask `0xca`, while fly and the no-movement tokens have zero.
+The live pool reads the mapping from the verified image, distinguishes no movement from ground
+movement, and updates the existing entry without changing its links when its mask changes. A
+synthetic test covers the distinct no-movement mask and an update of an existing entry.
+
+In the local farm fixture, the acolytes now have mask `0xca`, including the captured `0x08`
+bit, and the farm cell (6160, 2800) still contains the texture entry with that bit. The
+recorded reach tables still agree for all 100 and 12 queries. With sampled workers and supplied
+town origins, the baseline, farm, workers-at-start and near-mine sites are unchanged at dequeue
+counts 1, 280, 355 and 419. These are diagnostic snapshots, not a replay of the native
+registration history or production `SetProduce`.
+
+The movement object creates one entry in each of two managers (`0x8baf10`): the coarse manager
+is updated first at `0x8bc840`, and the fine manager follows at `0x8bc900`. The coarse scale is
+initialized from the operand at `0x411810` and installed at `0x8b5788`; its rectangle uses
+position plus and minus the collision radius. The live owner still records only the fine grid.
+It does not retain the exact radius with its collision stamp or reconstruct the coarse
+manager's dimensions and bounds from the initializer at `0x8b5334`. Those inputs and their
+registration lifecycle must be supplied before the coarse grid can be validated. The live
+town and reach inputs, effect-source qualification, and production construction path remain
+unconnected.
 
 ## Not established
 

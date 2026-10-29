@@ -542,6 +542,7 @@ type ScriptPathsLoader = Box<dyn Fn(i32, bool) -> Result<String, String> + Send 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Movement {
     Ground,
+    NoMovement,
     Air,
     Float,
     Amphibious,
@@ -550,7 +551,8 @@ pub enum Movement {
 impl Movement {
     pub fn from_token(token: &str) -> Result<Self, &'static str> {
         match token {
-            "" | "_" | "none" | "foot" | "horse" | "hover" => Ok(Self::Ground),
+            "" | "_" | "none" => Ok(Self::NoMovement),
+            "foot" | "horse" | "hover" => Ok(Self::Ground),
             "fly" => Ok(Self::Air),
             "float" => Ok(Self::Float),
             "amph" => Ok(Self::Amphibious),
@@ -559,7 +561,7 @@ impl Movement {
     }
 
     fn ground(self) -> bool {
-        matches!(self, Self::Ground | Self::Amphibious)
+        matches!(self, Self::Ground | Self::NoMovement | Self::Amphibious)
     }
 
     fn water(self) -> bool {
@@ -910,15 +912,6 @@ impl Placement {
     /// Attach the owner after it has received the session-start registrations.
     pub(crate) fn attach_spatial(&mut self, owner: PoolOwner) {
         self.spatial = Some(Box::new(owner));
-    }
-
-    fn movement_mask(&self, movement: Movement) -> u8 {
-        match movement {
-            Movement::Ground => self.rules.ground_mask(),
-            Movement::Air => self.rules.fly_mask(),
-            Movement::Float => self.rules.float_mask(),
-            Movement::Amphibious => self.rules.amphibious_mask(),
-        }
     }
 
     /// Compose stationary destructables over an already decoration-stamped base.
@@ -1656,7 +1649,7 @@ impl Placement {
     fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, movement: Movement) -> bool {
         let cell = self.grid.pathing.cells[i];
         let terrain_blocked = match movement {
-            Movement::Ground => cell & self.rules.ground_mask() != 0,
+            Movement::Ground | Movement::NoMovement => cell & self.rules.ground_mask() != 0,
             Movement::Air => cell & self.rules.fly_mask() != 0,
             Movement::Float => cell & self.rules.float_mask() != 0,
             Movement::Amphibious => {
@@ -1739,7 +1732,7 @@ impl Placement {
                 Ok(cells
                     .iter()
                     .all(|&i| !self.blocked_class(i, exclude, movement))
-                    && (movement != Movement::Ground
+                    && (!matches!(movement, Movement::Ground | Movement::NoMovement)
                         || self
                             .index(i64::from(cell[0]), i64::from(cell[1]))
                             .is_some_and(|i| self.grid.domains[i] == wanted)))
@@ -2630,14 +2623,13 @@ impl Placement {
             self.stamps.push((unit, prepared));
         }
         if self.spatial.is_some() {
-            let mask = self.movement_mask(self.stamps[at].1.movement);
             let stamp = &self.stamps[at].1;
             if let Some(pool) = self.spatial.as_deref_mut() {
                 pool.commit(
                     unit,
                     Stamp {
                         active: stamp.active,
-                        mask,
+                        movement: stamp.movement,
                         cells: &stamp.cells,
                         footprint: &stamp.footprint,
                         native_footprint: stamp.footprint.native(),

@@ -278,6 +278,13 @@ Both state digests were `47ba6c583ce63641`. The increases of 11,145 allocations,
 reallocations and 1,222,056 bytes remain an open regression; no budget was raised. This is a
 map-start workload and does not include the earned-carryover route profile.
 
+With the subsequent movement-mask reader, the Human03 check again gives the same allocation
+counts and requested bytes. The Human04 map-start measurement gives 1,290,430 allocations,
+27,126 reallocations and 946,858,984 requested bytes, with the same state digest. Relative to
+the control above, this is 11,145 allocations, 157 reallocations and 1,222,072 bytes more. The
+mask change adds 16 requested bytes to the prior tracked measurement. The pool allocation
+increase remains unresolved.
+
 ### Hand-off to render
 
 All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in

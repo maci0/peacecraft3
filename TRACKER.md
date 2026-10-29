@@ -6046,3 +6046,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - [!] A paired Human04 map-start measurement against committed `HEAD` shows 11,145 additional
   allocations, 157 reallocations and 1,222,056 requested bytes, with an identical state digest.
   This does not meet the no-regression target. See [simulation performance](docs/performance/sim-script.md).
+
+### 2026-10-30: Movement entry mask
+
+- [~] The live fine-grid entry mask now comes from the verified client and the unit's selected
+  movement type. The local Human05 farm fixture gives its acolytes mask `0xca`, including the
+  captured `0x08` bit. See [AI construction](docs/re-notes/ai-construction.md#movement-entry-masks-2026-10-30).
+- The sampled live-pool diagnostic matches the 100 and 12 recorded reach outcomes and the four
+  recorded sites at dequeues 1, 280, 355 and 419. The snapshots still supply worker positions
+  and town origins. The coarse grid, live town and reach inputs, and production construction
+  remain open; no new Human05 or route run is claimed.
+- The `pcx-play` library suite passes 2,389 tests with 92 ignored. Native and WASM Clippy pass
+  with warnings denied. The Human03 simulation budget passes with the same allocation counts and
+  requested bytes as the previous measurement. Human04 map startup remains 11,145 allocations
+  and 1,222,072 requested bytes above the earlier control, 16 bytes above the preceding tracked
+  measurement. The allocation increase remains unresolved.

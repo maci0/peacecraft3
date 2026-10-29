@@ -204,6 +204,12 @@ fn live_pool_dumps_the_farm_layout_chains() {
     );
     for (worker, &at) in workers.iter().zip(&FARM_WORKERS) {
         assert!(
+            pool.live()
+                .entry_state(worker.token())
+                .is_some_and(|(flags, _)| flags & 0x08 != 0),
+            "the acolyte movement entry must include the captured pathing bit"
+        );
+        assert!(
             pool.chain(pool.cell_at(at).unwrap())
                 .unwrap()
                 .any(|link| link.identity == worker.token()),

@@ -181,6 +181,63 @@ fn units_of_different_movement_classes_share_one_ordered_chain() {
 }
 
 #[test]
+fn a_unit_without_movement_uses_its_own_entry_mask() {
+    let mut p = tracked("no movement");
+    let stamp = p
+        .prepare_class([32., 40.], Some(2.), "_", 0., Movement::NoMovement)
+        .unwrap();
+    p.commit(id(1), stamp);
+    assert_eq!(
+        p.spatial().unwrap().live().entry_state(1),
+        Some((ACTIVE, 0))
+    );
+    assert_eq!(Movement::from_token("none"), Ok(Movement::NoMovement));
+    assert_eq!(Movement::from_token("foot"), Ok(Movement::Ground));
+}
+
+#[test]
+fn movement_classes_use_the_selected_entry_masks() {
+    for (movement, expected) in [
+        (Movement::Ground, 8),
+        (Movement::NoMovement, 0),
+        (Movement::Air, 4),
+        (Movement::Float, 2),
+        (Movement::Amphibious, 1),
+    ] {
+        let mut owner = pool();
+        owner.commit(
+            id(1),
+            Stamp {
+                active: true,
+                movement,
+                cells: &[0],
+                footprint: &[],
+                native_footprint: None,
+            },
+        );
+        assert_eq!(owner.live.entry_state(1), Some((ACTIVE | expected, 0)));
+    }
+}
+
+#[test]
+fn movement_mask_changes_preserve_links_and_state() {
+    let mut owner = pool();
+    let rect = CellRect {
+        lower: [2, 3],
+        upper: [4, 5],
+    };
+    owner.set_mover(1, 8, rect);
+    owner.live.update_state(1, ACTIVE | 8, MOVING).unwrap();
+    owner.set_mover(1, 4, rect);
+    assert_eq!(owner.live.entry_state(1), Some((ACTIVE | 4, MOVING)));
+    assert_eq!(
+        owner.chain([2, 3]).unwrap().collect::<Vec<_>>(),
+        [link(1, OBJECT)]
+    );
+    assert_eq!(owner.live.sequence(), 1);
+}
+
+#[test]
 fn a_shown_unit_registers_a_new_entry_after_it_was_hidden() {
     let mut p = tracked("show");
     let stamp = p.prepare([32., 40.], Some(2.), "_", 0.).unwrap();

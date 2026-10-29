@@ -197,6 +197,11 @@ its level data and allowed targets. Supporting that path requires dispatch for t
 qualification of the target and nearby units, channel timing and interruption, and placement
 of the transported group at the destination. It is not implemented by the present change.
 
+The movement-entry mask is now read from the reviewed client and unit movement type. The
+sampled reach and site comparisons still match, but the coarse movement grid and production
+placement inputs remain open. Human05 was not rerun for this change; the latest verified
+two-run state is the 1223 s refusal described above.
+
 Stop at 1223 s (tick 78272): the orange AI (player 5, `h05_orange.ai`, started by
 `Trig_OrangeTown_Actions`, `war3map.j:8681`) asks `SetProduce` for `'unpl'` and refuses with
 `AI construction placement is not admitted: ... by "uaco" at [6329.0, 2320.2]`. The builder is one

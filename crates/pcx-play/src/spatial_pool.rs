@@ -12,6 +12,7 @@ use crate::native_path_hierarchy::spatial_chains::{
     MovementStateRule, region_cells,
 };
 use crate::native_path_hierarchy::{CellRect, EntryRules};
+use crate::unit_placement::Movement;
 use pcx_script::HandleId;
 use std::collections::BTreeMap;
 
@@ -34,6 +35,7 @@ pub struct SpatialRules {
     link_limit: u32,
     movement: MovementStateRule,
     movement_scale: u32,
+    movement_masks: [u8; 5],
     cleanup: CleanupOperands,
     texture_masks: TextureMasks,
 }
@@ -102,6 +104,7 @@ impl SpatialRules {
             link_limit: Chains::reviewed_limit(image, rules)?,
             movement: MovementStateRule::reviewed_legacy(image, rules)?,
             movement_scale: movement_scale(image)?,
+            movement_masks: movement_masks(image)?,
             cleanup: Chains::reviewed_cleanup_operands(image, rules)?,
             texture_masks: texture_masks(image)?,
         })
@@ -126,6 +129,7 @@ impl SpatialRules {
             link_limit: 0xfffff,
             movement: MovementStateRule::synthetic(4.0, 0x40),
             movement_scale: 1.0_f32.to_bits(),
+            movement_masks: [8, 0, 4, 2, 1],
             cleanup: CleanupOperands::synthetic(),
             texture_masks: TextureMasks {
                 plain: [1, 2, 4],
@@ -133,6 +137,101 @@ impl SpatialRules {
             },
         }
     }
+}
+
+fn movement_masks(image: &[u8]) -> Result<[u8; 5], String> {
+    use crate::neutral_player::RuleInputBudget;
+    use crate::neutral_rule_input::Pe;
+
+    let pe = Pe::parse(
+        image,
+        RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let read = |address, code| {
+        pe.read_from(address, code)
+            .map_err(|error| format!("movement mask source at {address:#x}: {error}"))
+    };
+    let dispatch = read(0x67ce7d, true)?;
+    if dispatch.get(..7) != Some(&[0x33, 0xc9, 0x8d, 0x50, 0xff, 0x83, 0xfa])
+        || dispatch.get(8..9) != Some(&[0x77])
+        || dispatch.get(10..13) != Some(&[0x0f, 0xb6, 0x82])
+        || dispatch.get(17..20) != Some(&[0xff, 0x24, 0x85])
+    {
+        return Err("unrecognized unit movement-mask dispatch".into());
+    }
+    let address = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().expect("checked width"));
+    let indices = read(address(&dispatch[13..17]), true)?;
+    let targets = read(
+        address(
+            dispatch
+                .get(20..24)
+                .ok_or("truncated movement mask dispatch")?,
+        ),
+        true,
+    )?;
+    let lookup = read(0x691a9b, true)?;
+    if lookup.first() != Some(&0xb8) || lookup.len() < 5 {
+        return Err("unrecognized movement-type token table".into());
+    }
+    let table = read(address(&lookup[1..5]), false)?;
+    let mut values = [None; 9];
+    let names = [
+        "foot", "horse", "hover", "none", "_", "-", "fly", "float", "amph",
+    ];
+    for record in table.as_chunks::<8>().0.iter().take(32) {
+        let pointer = address(&record[..4]);
+        if pointer == 0 {
+            break;
+        }
+        let text = read(pointer, false)?;
+        let length = text
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or("unterminated movement token")?;
+        let name = std::str::from_utf8(&text[..length]).map_err(|_| "invalid movement token")?;
+        let Some(index) = names.iter().position(|&candidate| candidate == name) else {
+            continue;
+        };
+        let kind = address(&record[4..]);
+        let mask = if kind == 0 || kind - 1 > u32::from(dispatch[7]) {
+            0
+        } else {
+            let arm = *indices
+                .get((kind - 1) as usize)
+                .ok_or("movement mask index missing")? as usize;
+            let target = targets
+                .get(arm * 4..arm * 4 + 4)
+                .ok_or("movement mask target missing")?;
+            let instruction = read(address(target), true)?;
+            match instruction.first() {
+                Some(0xb9) => u8::try_from(address(
+                    instruction.get(1..5).ok_or("movement mask truncated")?,
+                ))
+                .map_err(|_| "movement mask exceeds a byte")?,
+                Some(0x89) if instruction.get(..2) == Some(&[0x89, 0x8b]) => 0,
+                _ => return Err("unrecognized movement mask case".into()),
+            }
+        };
+        if values[index].replace(mask).is_some() {
+            return Err("duplicate movement-type token".into());
+        }
+    }
+    let value = |index: usize| {
+        values[index].ok_or_else(|| format!("missing movement token {}", names[index]))
+    };
+    if value(0)? != value(1)?
+        || value(0)? != value(2)?
+        || value(3)? != value(4)?
+        || value(3)? != value(5)?
+    {
+        return Err("unsupported movement-type mask grouping".into());
+    }
+    Ok([value(0)?, value(3)?, value(6)?, value(7)?, value(8)?])
 }
 
 fn texture_masks(image: &[u8]) -> Result<TextureMasks, String> {
@@ -242,7 +341,7 @@ pub struct Refusal {
 /// Collision stamp fields the owner reads at a commit.
 pub(crate) struct Stamp<'a> {
     pub active: bool,
-    pub mask: u8,
+    pub movement: Movement,
     pub cells: &'a [usize],
     pub footprint: &'a [usize],
     pub native_footprint: Option<&'a [(u32, u8)]>,
@@ -436,7 +535,14 @@ impl PoolOwner {
             };
             self.note(identity, "register texture", Err(error));
         } else if let Some(rect) = self.bounds(stamp.cells) {
-            self.set_mover(identity, stamp.mask, rect);
+            let index = match stamp.movement {
+                Movement::Ground => 0,
+                Movement::NoMovement => 1,
+                Movement::Air => 2,
+                Movement::Float => 3,
+                Movement::Amphibious => 4,
+            };
+            self.set_mover(identity, self.rules.movement_masks[index], rect);
         } else {
             self.hide(unit);
         }
@@ -508,6 +614,18 @@ impl PoolOwner {
 
     fn set_mover(&mut self, identity: u64, mask: u8, rect: CellRect) {
         let object_class = self.rules.object_class;
+        if matches!(self.tracked.get(&identity), Some(Tracked::Mover(_)))
+            && let Some((flags, state)) = self.live.entry_state(identity)
+        {
+            let updated = (flags & !u32::from(u8::MAX)) | u32::from(mask);
+            if flags != updated {
+                let result = self.live.update_state(identity, updated, state);
+                self.note(identity, "update movement mask", result);
+                if self.refusal.is_some() {
+                    return;
+                }
+            }
+        }
         match self.tracked.get(&identity) {
             None => {
                 let (flags, state) = self.rules.entries.movement_entry(mask);
