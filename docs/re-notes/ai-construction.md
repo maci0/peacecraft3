@@ -872,6 +872,18 @@ stored components with an input, applies a magnitude threshold, and sets or clea
 according to a stored positive scalar. Another operation sets `0x40000000` temporarily at
 `0x8ac327` and clears it at `0x8ac378`.
 
+The input to `0x8bca70` is an incremental vector contribution, not an old-to-new position
+delta. At `0x8bc5c0`, a contribution change passes the difference between a new vector and
+that contributor's previously stored vector; at `0x8bb150`, begin and end notifications add
+and subtract a contributor's stored vector. The updater adds the contribution to the shared
+vector at `+0x80` and `+0x84`, clamps its magnitude against the scalar at `+0x88`, and
+sets the entry bit only when the resulting branch and scalar permit it. The reset path at
+`0x8a156c` subtracts the shared vector. These native-code observations do not establish which
+recreation activity events supply all contributions or the scalar. In particular, a unit's
+current order or its latest movement displacement alone is not evidence of the native entry
+state. Live chain registration must retain that distinction before it can supply the reach
+query.
+
 An isolated Wine debugger run placed a hardware watchpoint on the state word of the first
 newly constructed movement entry after `0x8bafd6`. The watchpoint was accepted, but did not
 fire during the bounded observation window. That entry was not identified as the captured

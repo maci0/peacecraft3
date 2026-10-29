@@ -5962,3 +5962,12 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   simulation budget check passed with the owner unconnected. The region-only selected-input
   check passed, and the existing snapshot comparisons again matched both sites and the 112
   recorded reach decisions. These are not live-pool results.
+
+### 2026-10-29: Movement entry input
+
+- [~] The native movement state updater receives changes to a shared vector from individual
+  contributors. Begin and end notifications add and subtract stored contributions; changing
+  a contribution supplies its difference. The correspondence between these contributors,
+  their magnitude limit and live recreation activity remains unqualified. Live chain wiring,
+  the scheduler and production construction remain open. See
+  [AI construction](docs/re-notes/ai-construction.md).
