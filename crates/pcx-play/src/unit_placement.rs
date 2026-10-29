@@ -1603,6 +1603,42 @@ impl Placement {
             } else {
                 self.blocked_class(index, exclude, Movement::Ground)
             };
+            #[cfg(feature = "test-fixtures")]
+            if std::env::var_os("PCX_AI_CANDIDATE_TRACE").is_some() {
+                let coordinates = [anchor[0] + x, anchor[1] + y];
+                let requested = std::env::var("PCX_AI_TRACE_CELL")
+                    .ok()
+                    .is_some_and(|cell| cell == format!("{},{}", coordinates[0], coordinates[1]));
+                if blocked || flags & prevent != 0 || flags & require != require || requested {
+                    let stamps: Vec<_> = self
+                        .stamps
+                        .iter()
+                        .filter_map(|(unit, stamp)| {
+                            (stamp.active && stamp.cells.binary_search(&index).is_ok())
+                                .then_some((*unit, stamp.movement))
+                        })
+                        .collect();
+                    let point = std::array::from_fn(|axis| {
+                        self.grid.origin[axis] + (coordinates[axis] as f32 + 0.5) * size
+                    });
+                    if let Some(pool) = self.spatial() {
+                        let cell = pool
+                            .cell_at(point)
+                            .map_err(|error| fail(error.to_string()))?;
+                        let links = pool
+                            .chain(cell)
+                            .map_err(|error| fail(error.to_string()))?
+                            .map(|link| (link, pool.live().entry_state(link.identity)))
+                            .collect::<Vec<_>>();
+                        eprintln!(
+                            "AI footprint request={request:?} cell={coordinates:?} world={point:?} flags={flags:#04x} base={:?} occupied={} footprint={} blocked={blocked} stamps={stamps:?} chain={links:?}",
+                            self.base_pathing.as_ref().map(|base| base.cells[index]),
+                            self.occupied[index],
+                            self.footprint_occupied[index]
+                        );
+                    }
+                }
+            }
             if flags & prevent != 0 || flags & require != require || blocked {
                 return Ok(None);
             }

@@ -1509,6 +1509,29 @@ farm, workers-at-start, workers-near-mine and changed-start sites at dequeue cou
 capture. The fixture rebases the position-injection events as snapshot setup; it does not
 replay the original units' full movement histories or issue a construction order.
 
+### Human05 live candidate trace, 2026-10-30
+
+The first candidate, (6208, 2752), has score 5 and passes reach. Its footprint
+is rejected at pathing cell (537, 402), world center (6448, 2896), by ground
+unit handle 12367, an `nvil` villager at (6480, 2896). The base and live
+pathing flags there are both `0x40`;
+the occupied count is one and the spatial chain has that unit's link with
+class `0x01000000`, flags `0x010000ca` and state zero. The next distinct sites
+(6208, 2688), (6272, 2752) and (6272, 2688) pass reach and hit the same stamp.
+The other first-ten dequeues repeat already checked snapped cells. The tenth,
+(6144, 2752), passes both checks and is accepted.
+
+In the initial-state fixture with the four live worker positions injected, the
+same cell has the same flags but zero occupancy and an empty chain; the first
+candidate is accepted. Adding a neutral-passive `nvil` at the recorded live
+position reproduces the same four rejections, link state, selected site and
+dequeue count. The original probe starts orange production directly and does
+not execute the full farm-corruption trigger, which creates neutral-passive
+villagers before the live order. The client exclusion predicate described
+above does not generally exclude other players' units. These results explain
+the two selections for the two inputs; they do not establish the villager's
+native movement trajectory in the full campaign.
+
 ## Not established
 
 - The structure fallback's root-ability state, native registration and type-change paths beyond

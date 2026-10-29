@@ -44,11 +44,18 @@ impl ObjectHost {
         #[cfg(feature = "test-fixtures")]
         if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
             eprintln!("AI placement town: player={player} center={center:?}");
+            let traced = std::env::var("PCX_AI_TRACE_UNIT")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok());
             for (unit, record) in self.executed_units() {
-                if record.owner == owner && record.shown {
+                if (record.owner == owner && record.shown) || traced == Some(unit.token()) {
                     eprintln!(
-                        "AI placement unit: {unit:?} kind={:?} position={:?}",
-                        record.definition.rawcode, record.position
+                        "AI placement unit: {unit:?} owner={:?} kind={:?} position={:?} shown={} dead={}",
+                        record.owner,
+                        record.definition.rawcode,
+                        record.position,
+                        record.shown,
+                        record.combat.as_ref().is_some_and(|combat| combat.dead)
                     );
                 }
             }
@@ -206,12 +213,28 @@ impl ObjectHost {
             |point| {
                 rank.set(rank.get() + 1);
                 let point = rules.snap(point, bounds, dimensions, quarter)?;
+                #[cfg(feature = "test-fixtures")]
+                if rank.get() <= 10 && std::env::var_os("PCX_AI_CANDIDATE_TRACE").is_some() {
+                    eprintln!(
+                        "AI candidate {}: point={point:?} score={:?}",
+                        rank.get(),
+                        grid.diagnostic_cell(point)
+                    );
+                }
                 Ok((point, grid.diagnostic_indices(point)))
             },
             |point| {
-                reach
-                    .query(center, point)
-                    .map(|(result, _)| result.is_some())
+                let (result, removals) = reach.query(center, point)?;
+                #[cfg(feature = "test-fixtures")]
+                if rank.get() <= 10 && std::env::var_os("PCX_AI_CANDIDATE_TRACE").is_some() {
+                    eprintln!(
+                        "AI candidate {}: reach={result:?} removals={removals}",
+                        rank.get()
+                    );
+                }
+                #[cfg(not(feature = "test-fixtures"))]
+                let _ = removals;
+                Ok(result.is_some())
             },
             |point| {
                 let rectangle = rules.exclusion_rectangle(point, dimensions, quarter)?;
@@ -247,15 +270,23 @@ impl ObjectHost {
                         excluded.push(unit);
                     }
                 }
-                host.borrow_mut()
+                let result = host
+                    .borrow_mut()
                     .unit_placement
                     .as_mut()
                     .ok_or("AI placement cache missing")?
                     .diagnostic_construction_position_excluding(
                         point, face, &path, prevent, require, &excluded,
                     )
-                    .map(|result| result.is_some())
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?;
+                #[cfg(feature = "test-fixtures")]
+                if rank.get() <= 10 && std::env::var_os("PCX_AI_CANDIDATE_TRACE").is_some() {
+                    eprintln!(
+                        "AI candidate {}: valid={result:?} excluded={excluded:?}",
+                        rank.get()
+                    );
+                }
+                Ok(result.is_some())
             },
         )?;
         Ok((result, rank.get()))

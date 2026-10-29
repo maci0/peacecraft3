@@ -6117,3 +6117,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - The `pcx-play` library suite passes 2,391 tests with 92 ignored; native and WASM Clippy
   pass with warnings denied. The live-position fixture passes for its observed site.
 - The Human03 simulation allocation and deterministic-work budget check passes.
+
+### 2026-10-30: Human05 placement trace and blight timing
+
+- [~] The first live Necropolis candidate is blocked by a neutral villager at
+  (6480, 2896). Adding that unit to the live-position fixture reproduces the live site's
+  (6144, 2752) selection at dequeue 10 and its preceding footprint rejections. The isolated
+  original probe omits the farm-corruption sequence that creates these villagers. Native
+  movement in the full campaign has not been compared; see
+  [AI construction](docs/re-notes/ai-construction.md#human05-live-candidate-trace-2026-10-30).
+- A private isolated-client probe retained 600 nominal 5 ms samples after Necropolis
+  completion. Coverage at sampled 128-unit intervals advanced in discrete steps. Dynamic
+  blight, the owner-mask raster, overlapping source removal and placement remain unimplemented;
+  see [terrain blight](docs/re-notes/terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+- Human05 `candidate-confirm-a-20261030` and `candidate-confirm-b-20261030` both stop on the
+  same Ziggurat blight refusal at 1223.211 seconds, before construction starts. Their 100
+  checkpoint, RNG checkpoint and town-trace lines match.
+- The `pcx-play` library suite passes 2,391 tests with 92 ignored; native and WASM Clippy
+  pass with warnings denied.
+- The Human03 simulation allocation and deterministic-work budgets pass.

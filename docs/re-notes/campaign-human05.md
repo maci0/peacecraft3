@@ -231,13 +231,21 @@ In two new traced runs the live town center was (6264, 2776), and the four worke
 were (6329.007, 2320.2185), (6276.0654, 2096), (6557.9214, 2192) and (6449.32, 2256).
 The initial-state placement fixture selects (6208, 2752) at dequeue 1 when those positions
 are injected. The live run selects (6144, 2752) at dequeue 10, so the different positions
-alone do not explain the result. The fixture does not reproduce the live movement or
-spatial-registration history. The difference remains unexplained. The five recorded
+alone do not explain the result. The live footprint is blocked by an `nvil` villager at
+(6480, 2896), which is absent from the probe fixture. Adding a neutral-passive villager at
+that position reproduces the live result at dequeue 10. The fixture does not reproduce
+the full native movement history. The five recorded
 site comparisons use the recorded worker positions and are reported in
 [AI construction](ai-construction.md#initial-town-production-path-2026-10-30).
 
-An original-client probe of exactly this scenario (the four acolytes, `Trig_ResourcesOrange`,
-`Trig_OrangeTown` run three seconds after start on a patched Human05) shows the original building
+Two further runs, `candidate-confirm-a-20261030` and
+`candidate-confirm-b-20261030`, again stop at the blight refusal. Their 100
+Human05 checkpoint, RNG checkpoint and town-trace lines match; no new
+construction event occurs.
+
+An original-client probe of the isolated orange scenario (the four acolytes,
+`Trig_ResourcesOrange` and `Trig_OrangeTown` run three seconds after start on a patched
+Human05, without the full farm-corruption sequence) shows the original building
 the whole base: Necropolis at (6208, 2752) by 12 s, ziggurats from 15 s, a haunted mine on the gold
 mine at 24 s, altar, graveyard and crypts by 47 s. It is the target an implementation must match;
 details in [AI construction](ai-construction.md).

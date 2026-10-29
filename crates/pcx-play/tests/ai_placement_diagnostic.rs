@@ -1000,6 +1000,33 @@ fn human05_placement_diagnostic() {
             objects.diagnostic_rebase_placement_unit(unit).unwrap();
         }
     }
+    if let Ok(specification) = std::env::var("PCX_LIVE_BLOCKER") {
+        let mut fields = specification.split(',');
+        let kind: [u8; 4] = fields.next().unwrap().as_bytes().try_into().unwrap();
+        let owner = fields.next().unwrap().parse::<i32>().unwrap();
+        let point = [
+            fields.next().unwrap().parse::<f32>().unwrap(),
+            fields.next().unwrap().parse::<f32>().unwrap(),
+        ];
+        assert!(fields.next().is_none());
+        let owner = objects.native("Player", &[Value::Int(owner)]).unwrap();
+        let Value::Handle(unit) = objects
+            .native(
+                "CreateUnit",
+                &[
+                    owner,
+                    Value::Int(i32::from_be_bytes(kind)),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                    Value::Real(facing),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("live blocker creation")
+        };
+        assert_eq!(objects.executed_unit(unit).unwrap().position, Some(point));
+    }
     let worker = workers[0];
     if std::env::var_os("PCX_LIVE_EFFECT_CHECK").is_some() {
         let result = objects.diagnostic_ai_effect_evidence(worker);

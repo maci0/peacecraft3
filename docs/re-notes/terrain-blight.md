@@ -88,6 +88,22 @@ at `0x6da510` changes that grid and notifies the spatial pathing system. Thus
 the current nearest-corner regeneration layer is insufficient evidence for
 the placement raster or for overlapping player-owned sources.
 
+The larger-radius branch at `0x6da510` obtains row spans from `0x4c3e70`.
+That function builds symmetric spans using the integer circle data generated
+at `0x4c4e40`; the two smallest radius classes use separate raster cases.
+On removal, `0x4c5160` clears the owner bits while preserving the high bit;
+`0x6d98d0` also enumerates surviving effects through `0x6da2d0`. The ordering
+and precise conditions for those effects to repaint remain to be integrated
+and checked against overlapping-source observations.
+
+The high-bit update at `0x4c5470` has two branches: one sets the high bit
+from whether any owner bit remains in each cell, while the other updates only
+cells selected by a separate mask layer. The ownership and lifetime of that
+mask layer are not yet established. During a clear, `0x6da2d0` considers an
+effect only if its active field and state bit are set and its expanded radius
+intersects the cleared area; its two modes then use different replay paths.
+The source-death call path and those two replay modes have not been qualified.
+
 Human05 also registers a construct-start trigger whose action calls
 `SetBlightRadiusLocBJ` for player 5. The host does not implement that setter.
 The recreation's `CreateBlightedGoldmine` host creates the selected unit type;
@@ -116,6 +132,16 @@ at a 384-unit offset. At 63 seconds all four axes tested blighted at 1024 units;
 at 1152 units only the positive-x and positive-y samples did. These are sampled
 coverage points, not a fitted circle or a death/removal measurement. The same
 three-second initialization offset and isolation applied.
+
+A follow-up of the isolated run sampled at the native scheduler's nominal
+5 ms substep for three seconds after the finish event. All 600 timestamped
+samples were retained; the earlier attempt lost part of each output record to
+the client's string limit and is not used for timing. At the four axes sampled
+every 128 units, the first observed coverage was at 61.628 seconds on the probe
+clock. The next outward coverage changes appeared at 61.788, 61.948, 62.108,
+62.268, 62.427, 62.587 and 62.747 seconds. This measures coverage at those
+points, not every underlying radius update. The 128-unit sample spacing skips
+intermediate changes smaller than that distance.
 
 ## Verification scope
 
