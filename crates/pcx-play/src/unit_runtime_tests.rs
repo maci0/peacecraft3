@@ -19,6 +19,8 @@ native SetUnitPosition takes unit u, real x, real y returns nothing
 native SetUnitPositionLoc takes unit u, location l returns nothing
 native CreateUnitAtLoc takes player id, integer unitid, location whichLocation, real face returns unit
 native CreateBlightedGoldmine takes player id, real x, real y, real face returns unit
+native SetBlight takes player p, real x, real y, real radius, boolean add returns nothing
+native IsPointBlighted takes real x, real y returns boolean
 constant native IsUnitType takes unit u, unittype t returns boolean
 native ClearSelection takes nothing returns nothing
 native SelectUnit takes unit u, boolean b returns nothing
@@ -77,6 +79,13 @@ endfunction
 "#;
 
 fn open_map(map: &str) -> (Vm, HandleId, HandleId) {
+    open_map_with_blight(map, None)
+}
+
+fn open_map_with_blight(
+    map: &str,
+    blight: Option<crate::terrain_blight::InitialBlight>,
+) -> (Vm, HandleId, HandleId) {
     let extra = format!(
         "{}\n{}{DECLARATIONS}",
         enumeration::TRIGGERS,
@@ -98,6 +107,9 @@ fn open_map(map: &str) -> (Vm, HandleId, HandleId) {
     let (registry, rules) = super::activity::rules();
     let mut h = h.with_order_registry(registry).unwrap();
     h.admit_unit_activity(rules, 65536).unwrap();
+    if let Some(blight) = blight {
+        h.admit_initial_blight(blight).unwrap();
+    }
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
@@ -471,6 +483,47 @@ fn the_blighted_goldmine_native_creates_the_type_the_script_maps_to_it() {
     assert_eq!(made.position, Some([40.0, 48.0]));
     assert_eq!(made.owner, h.executed_unit(a).unwrap().owner);
     assert_eq!(made.face, 90.0);
+}
+
+#[test]
+fn scripted_blight_paints_the_shared_state_and_refuses_removal() {
+    use crate::terrain_blight::{
+        GrowthRules, InitialBlight,
+        tests::{identity, terrain},
+    };
+    let ground = terrain([9, 9], [0.0; 2], &[0; 81]);
+    let state = InitialBlight::read(&ground, 16.0, identity(), 81)
+        .unwrap()
+        .with_growth_rules(GrowthRules {
+            ability_class: *b"Q123",
+            spacing: 16.0,
+            fine_spacing: 4.0,
+            interval_cap: 5.0,
+            tolerance: 0.01,
+        });
+    let (mut vm, unit, _) = open_map_with_blight(MAP, Some(state));
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(unit).unwrap().owner;
+    let args = [
+        Value::Handle(owner),
+        Value::Real(40.0),
+        Value::Real(40.0),
+        Value::Real(20.0),
+        Value::Bool(true),
+    ];
+    assert_eq!(h.native("SetBlight", &args).unwrap(), Value::Null);
+    assert_eq!(
+        h.native("IsPointBlighted", &[Value::Real(40.0), Value::Real(40.0)])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    let mut remove = args;
+    remove[4] = Value::Bool(false);
+    assert!(
+        h.native("SetBlight", &remove)
+            .unwrap_err()
+            .contains("removal")
+    );
 }
 
 #[test]

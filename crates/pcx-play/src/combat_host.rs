@@ -1392,6 +1392,9 @@ impl ObjectHost {
                 selected.map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
         }
+        if let Some(blight) = &mut self.initial_blight {
+            blight.remove_growth(unit);
+        }
         self.forget_construction_unit(unit)?;
         if exploded && !exploded_presented {
             self.note_unrendered_explosion(unit);

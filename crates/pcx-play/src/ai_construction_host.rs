@@ -72,6 +72,7 @@ impl ObjectHost {
                 mask |= match token {
                     "" | "_" | "-" => 0,
                     "unbuildable" => 0x08,
+                    "blighted" => 0x20,
                     _ => {
                         return Err(format!(
                             "AI placement {name} requirement {token:?} is not admitted"
@@ -83,6 +84,23 @@ impl ObjectHost {
         };
         let prevent = masks("preventPlace")?;
         let require = masks("requirePlace")?;
+        let needs_blight = (prevent | require) & 0x20 != 0
+            || self
+                .initial_blight
+                .as_ref()
+                .is_some_and(|state| state.has_growth());
+        if needs_blight {
+            let blight = self
+                .initial_blight
+                .as_ref()
+                .ok_or("AI blight state missing")?;
+            let now = self.timer_game_time().ok_or("AI blight clock missing")?;
+            self.unit_placement
+                .as_mut()
+                .and_then(|placement| placement.spatial_mut())
+                .ok_or("AI blight spatial pool missing")?
+                .refresh_blight(blight, now)?;
+        }
         let face = self
             .construction_facing()
             .map_err(|error| error.to_string())?;
@@ -270,15 +288,29 @@ impl ObjectHost {
                         excluded.push(unit);
                     }
                 }
-                let result = host
-                    .borrow_mut()
+                let mut host = host.borrow_mut();
+                let host = &mut **host;
+                let now = host.timer_game_time();
+                let blight = host.initial_blight.as_ref().zip(now);
+                let placement = host
                     .unit_placement
                     .as_mut()
-                    .ok_or("AI placement cache missing")?
-                    .diagnostic_construction_position_excluding(
+                    .ok_or("AI placement cache missing")?;
+                let result = if (prevent | require) & 0x20 != 0 {
+                    placement.construction_position_excluding_live(
+                        point,
+                        face,
+                        &path,
+                        prevent,
+                        require,
+                        (&excluded, blight),
+                    )
+                } else {
+                    placement.diagnostic_construction_position_excluding(
                         point, face, &path, prevent, require, &excluded,
                     )
-                    .map_err(|error| error.to_string())?;
+                }
+                .map_err(|error| error.to_string())?;
                 #[cfg(feature = "test-fixtures")]
                 if rank.get() <= 10 && std::env::var_os("PCX_AI_CANDIDATE_TRACE").is_some() {
                     eprintln!(

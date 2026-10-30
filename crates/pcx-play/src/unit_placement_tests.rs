@@ -1335,6 +1335,82 @@ fn construction_uses_full_authored_footprint_without_relocating_blocked_cells() 
     );
 }
 
+#[test]
+fn construction_checks_live_blight_for_each_footprint_cell() {
+    use crate::terrain_blight::{
+        Growth, GrowthSpec, InitialBlight,
+        tests::{identity, terrain},
+    };
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "blight".into(),
+        },
+        100,
+    );
+    p.footprints.insert(
+        "build.tga".into(),
+        Footprint {
+            origin: identity(),
+            cells: vec![[-1, -1], [0, -1], [-1, 0], [0, 0]],
+        },
+    );
+    let ground = terrain([8, 8], [0.0; 2], &[0; 64]);
+    let mut blight = InitialBlight::read(&ground, 10.0, identity(), 64).unwrap();
+    let source = Growth::new(
+        [15.0; 2],
+        [0.0; 2],
+        0.0,
+        GrowthSpec {
+            spacing: 10.0,
+            fine_spacing: 2.5,
+            interval: 0.25,
+            increment: 5.0,
+            target: 40.0,
+            tolerance: 0.01,
+        },
+    )
+    .unwrap();
+    blight.add_growth(id(99), id(100), source).unwrap();
+    assert_eq!(
+        p.construction_position_live(
+            (None, Some((&blight, -1.0))),
+            [33., 35.],
+            0.,
+            "build.tga",
+            8,
+            0x20
+        )
+        .unwrap(),
+        None
+    );
+    assert_eq!(
+        p.construction_position_live(
+            (None, Some((&blight, 2.0))),
+            [33., 35.],
+            0.,
+            "build.tga",
+            8,
+            0x20
+        )
+        .unwrap(),
+        Some([32., 32.])
+    );
+    blight.remove_growth(id(99));
+    assert!(
+        p.construction_position_live(
+            (None, Some((&blight, 2.0))),
+            [33., 35.],
+            0.,
+            "build.tga",
+            8,
+            0x20
+        )
+        .is_err()
+    );
+}
+
 #[cfg(feature = "test-fixtures")]
 #[test]
 fn diagnostic_exclusions_restore_occupancy_after_success_and_error() {

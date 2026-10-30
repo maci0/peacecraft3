@@ -6136,3 +6136,26 @@ unwired score input, click handling, and FDF or header restrictions are out of d
 - The `pcx-play` library suite passes 2,391 tests with 92 ignored; native and WASM Clippy
   pass with warnings denied.
 - The Human03 simulation allocation and deterministic-work budgets pass.
+
+### 2026-10-30: Blight growth and placement
+
+- [~] Completed blight-growth abilities, completed blighted mines and scripted
+  circular patches now share the terrain blight state used by regeneration,
+  construction validation and the AI spatial mask. Source removal and overlap
+  refuse where they affect a query. The visibility-dependent owner-mask branch,
+  generic prebuilt sources and rendering remain open; see
+  [terrain blight](docs/re-notes/terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+- The local-input comparison reproduces all 600 samples at 44 points from the
+  isolated original-client probe, relative to its first sample. Native completion
+  to first-sample phase is not established.
+- Human05 `blight-growth-final-c-20261030` and `blight-growth-final-d-20261030`
+  match 113 checkpoint, RNG and trace lines. The Necropolis starts at 1224.34375 s;
+  at 1225.211 s the Ziggurat request refuses the changed initial town record.
+  Completion and a Ziggurat site have not been observed.
+- Human03 matches the `g1` checkpoint and RNG lines and reaches victory. Human04
+  matches through its 313 s checkpoint, then refuses an unqualified blight removal
+  effect on structure 2838 at 313.484375 s; its `g1` run reached victory.
+- The `pcx-play` library suite passes 2,398 tests with 93 ignored; the local
+  original-input blight comparison and native and WASM Clippy pass. The Human03
+  deterministic-work and allocation budgets pass with unchanged allocation
+  counts and 10,876 fewer requested bytes in each measured workload.

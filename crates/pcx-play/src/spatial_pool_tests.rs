@@ -61,6 +61,47 @@ pub(crate) fn pool() -> PoolOwner {
     .unwrap()
 }
 
+#[test]
+fn blight_updates_the_spatial_flag_without_losing_other_pathing_bits() {
+    use crate::terrain_blight::{
+        Growth, GrowthSpec, InitialBlight,
+        tests::{identity, terrain},
+    };
+    let geometry = pool().geometry;
+    let mut original = Pathing {
+        version: 0,
+        width: 32,
+        height: 32,
+        cells: vec![0; 1024],
+    };
+    original.cells[0] = 8;
+    let mut layer = original.clone();
+    let terrain = terrain([9, 9], [0.0; 2], &[0; 81]);
+    let mut blight = InitialBlight::read(&terrain, 10.0, identity(), 81).unwrap();
+    let growth = Growth::new(
+        [15.0; 2],
+        [0.0; 2],
+        0.0,
+        GrowthSpec {
+            spacing: 10.0,
+            fine_spacing: 2.5,
+            interval: 0.25,
+            increment: 5.0,
+            target: 40.0,
+            tolerance: 0.01,
+        },
+    )
+    .unwrap();
+    blight.add_growth(id(2), id(3), growth).unwrap();
+    update_blight_pathing(&original, &mut layer, geometry, &blight, -1.0).unwrap();
+    assert_eq!(layer.cells[8 * 32 + 8] & 0x20, 0);
+    update_blight_pathing(&original, &mut layer, geometry, &blight, 2.0).unwrap();
+    assert_eq!(layer.cells[8 * 32 + 8] & 0x20, 0x20);
+    assert_eq!(layer.cells[0] & 8, 8);
+    blight.remove_growth(id(2));
+    assert!(update_blight_pathing(&original, &mut layer, geometry, &blight, 2.0).is_err());
+}
+
 fn tracked(map: &str) -> Placement {
     let mut p = placement(source(map), 10000);
     p.attach_spatial(pool());

@@ -322,6 +322,7 @@ pub fn prepare_new_game(
             group_orders: Some(group_orders),
             research: Some(research),
             placement_rules: Some(placement_rules),
+            blight_growth: Some(crate::terrain_blight::GrowthRules::reviewed_legacy(image)?),
             unit_range_event: Some("EVENT_UNIT_TARGET_IN_RANGE".into()),
             day_cycle: Some(day_cycle),
             game_camera: Some(game_camera),

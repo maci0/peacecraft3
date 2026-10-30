@@ -54,6 +54,7 @@ fn fresh_roster_keeps_executed_controllers_and_only_occupies_selected_slots() {
             seed: 0,
             research: None,
             placement_rules: None,
+            blight_growth: None,
             unit_range_event: None,
             day_cycle: None,
             game_camera: None,

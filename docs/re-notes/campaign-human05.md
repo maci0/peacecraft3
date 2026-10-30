@@ -243,6 +243,18 @@ Two further runs, `candidate-confirm-a-20261030` and
 Human05 checkpoint, RNG checkpoint and town-trace lines match; no new
 construction event occurs.
 
+With dynamic blight and the script's fixed blight patch admitted, runs
+`blight-growth-final-c-20261030` and `blight-growth-final-d-20261030` agree on
+113 checkpoint, RNG, blight, placement and refusal trace lines. The Necropolis order is accepted
+at 1223.211 s at (6144, 2752), after ten candidate removals. Construction
+starts at 1224.34375 s, and the map applies a player 5 blight patch centered at
+(5184, 2400) with radius 600 at the same time. At 1225.211 s the Ziggurat
+request refuses because structure handle 12442 changes the initial town record.
+The last completed checkpoint is tick 78400, 1225.00 s. These runs stop before
+Necropolis completion, so they do not establish its completion time or a
+Ziggurat site. The growth raster and its local-client sample comparison are
+described in [terrain blight](terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+
 An original-client probe of the isolated orange scenario (the four acolytes,
 `Trig_ResourcesOrange` and `Trig_OrangeTown` run three seconds after start on a patched
 Human05, without the full farm-corruption sequence) shows the original building
@@ -255,10 +267,10 @@ details in [AI construction](ai-construction.md).
 - The initial-town production path and live reach chains are connected to the shared
   construction request. The five site comparisons inject recorded worker positions and do
   not replay their original movement histories. Later town changes, some effect sources,
-  blight placement, mine-targeted construction and other cases still refuse; cost timing,
+  some blight overlap or removal cases, mine-targeted construction and other cases still refuse; cost timing,
   worker choice and script retry timing remain open ([AI construction](ai-construction.md)).
-- The 1800 s survival timer and the ending are not reached. The Ziggurat request at 1223.211 s
-  refuses its blighted placement requirement, before the accepted Necropolis order starts.
+- The 1800 s survival timer and the ending are not reached. The later Ziggurat
+  request refuses the changed town record before placement is searched.
 - Gold return distance (no probe), the choice among several lumber depots, and path versus
   straight-line "nearest" are the recreation's, not measured.
 - The Human04 open item (the AI target scorer refuses a unit that ever carried an effect) did

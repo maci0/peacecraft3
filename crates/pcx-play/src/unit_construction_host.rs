@@ -394,6 +394,7 @@ impl ObjectHost {
                     "" | "_" | "-" => 0,
                     // WPM byte flag identity, not a building's authored requirement.
                     "unbuildable" => 0x08,
+                    "blighted" => 0x20,
                     _ => {
                         return Err(self.construction_error(format!(
                             "unsupported {key} pathing token {token}"
@@ -432,18 +433,30 @@ impl ObjectHost {
         let prevent = mask("preventPlace")?;
         let require = mask("requirePlace")?;
         let face = self.construction_facing()?;
+        let now = self.timer_game_time();
+        let blight = self.initial_blight.as_ref().zip(now);
         let placement = self.unit_placement.as_mut().ok_or_else(|| {
             self.inner.error(
                 "construction",
                 Failure::UnitActivity("construction placement not admitted".into()),
             )
         })?;
-        let position = placement
-            .construction_position(Some(worker), point, face, path, prevent, require)
-            .map_err(|why| {
-                self.inner
-                    .error("construction", Failure::UnitActivity(why.to_string()))
-            })?;
+        let position = if (prevent | require) & 0x20 != 0 {
+            placement.construction_position_live(
+                (Some(worker), blight),
+                point,
+                face,
+                path,
+                prevent,
+                require,
+            )
+        } else {
+            placement.construction_position(Some(worker), point, face, path, prevent, require)
+        }
+        .map_err(|why| {
+            self.inner
+                .error("construction", Failure::UnitActivity(why.to_string()))
+        })?;
         Ok(position.map_or(ConstructionPreview::Blocked, |position| {
             ConstructionPreview::Allowed { position }
         }))
@@ -1146,6 +1159,89 @@ impl ObjectHost {
         Ok(Some(site))
     }
 
+    fn completed_blight_growth(
+        &self,
+        site: HandleId,
+        now: f64,
+    ) -> Result<Option<crate::terrain_blight::Growth>, Error> {
+        use pcx_objects::editor::FieldKind;
+        let Some(blight) = self.initial_blight.as_ref() else {
+            return Ok(None);
+        };
+        let Some(rules) = blight.growth_rules.as_ref() else {
+            return Err(
+                self.construction_error(format!("blight growth rules unavailable for {site:?}"))
+            );
+        };
+        let record = self.executed_unit(site)?;
+        let Some(abilities) = &record.abilities else {
+            return Err(self
+                .construction_error(format!("blight source abilities unavailable for {site:?}")));
+        };
+        let mut result = None;
+        for (alias, _) in abilities.levels() {
+            let code = self
+                .ability_data_text(alias, "code")
+                .map_err(|why| self.construction_error(why))?;
+            if code.as_bytes() != rules.ability_class {
+                continue;
+            }
+            if result.is_some() {
+                return Err(self.construction_error(format!("multiple blight effects on {site:?}")));
+            }
+            let number = |field| -> Result<f32, Error> {
+                self.hero_ability_level_cell(alias, field, 1, FieldKind::Unreal)
+                    .or_else(|_| self.hero_ability_level_cell(alias, field, 1, FieldKind::Int))
+                    .map_err(|why| self.construction_error(why))?
+                    .parse()
+                    .map_err(|why| self.construction_error(format!("blight {field}: {why}")))
+            };
+            if number("DataB")? == 0.0 {
+                return Err(self.construction_error(format!(
+                    "blight removal effect on {site:?} is not admitted"
+                )));
+            }
+            let point = record
+                .position
+                .ok_or_else(|| self.construction_error("blight source position unavailable"))?;
+            let spec = crate::terrain_blight::GrowthSpec {
+                spacing: rules.spacing,
+                fine_spacing: rules.fine_spacing,
+                interval: number("Dur")?.min(rules.interval_cap),
+                increment: number("DataA")?,
+                target: number("Area")?,
+                tolerance: rules.tolerance,
+            };
+            #[cfg(feature = "test-fixtures")]
+            if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                eprintln!(
+                    "blight growth: time={now} source={site:?} position={point:?} spec={spec:?}"
+                );
+            }
+            result = Some(
+                crate::terrain_blight::Growth::new(point, blight.growth_origin(), now, spec)
+                    .map_err(|why| self.construction_error(why))?,
+            );
+        }
+        Ok(result)
+    }
+
+    pub(super) fn start_completed_blight_growth(
+        &mut self,
+        site: HandleId,
+        now: f64,
+    ) -> Result<(), Error> {
+        if let Some(growth) = self.completed_blight_growth(site, now)? {
+            let owner = self.executed_unit(site)?.owner;
+            self.initial_blight
+                .as_mut()
+                .expect("growth state checked")
+                .add_growth(site, owner, growth)
+                .map_err(|why| self.inner.error("construction", Failure::UnitActivity(why)))?;
+        }
+        Ok(())
+    }
+
     /// Source-clock work projection; activity enrollment and interruption call this shared site.
     pub fn advance_unit_construction(&mut self, site: HandleId, now: f64) -> Result<(), Error> {
         let record = self.executed_unit(site)?;
@@ -1220,6 +1316,9 @@ impl ObjectHost {
         } else {
             Vec::new()
         };
+        if complete {
+            self.start_completed_blight_growth(site, now)?;
+        }
         if let Entry::Unit { record } = self.inner.entry_mut(site)? {
             record.vitals.as_mut().expect("checked").life = life;
             record.construction = (!complete).then_some(state);

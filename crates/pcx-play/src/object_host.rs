@@ -1001,6 +1001,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.terrain_pathing_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.blight_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.sound_native(name, args) {
             return result.map_err(|e| e.to_string());
         }

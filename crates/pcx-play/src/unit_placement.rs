@@ -14,6 +14,8 @@ use std::{
     sync::Arc,
 };
 
+type BlightQuery<'a> = (&'a crate::terrain_blight::InitialBlight, f64);
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub origin: AssetIdentity,
@@ -752,6 +754,26 @@ impl Placement {
         require: u8,
         excluded: &[HandleId],
     ) -> Result<Option<[f32; 2]>, Error> {
+        self.construction_position_excluding_live(
+            point,
+            face,
+            path,
+            prevent,
+            require,
+            (excluded, None),
+        )
+    }
+
+    pub(crate) fn construction_position_excluding_live(
+        &mut self,
+        point: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+        context: (&[HandleId], Option<BlightQuery<'_>>),
+    ) -> Result<Option<[f32; 2]>, Error> {
+        let (excluded, blight) = context;
         for unit in excluded {
             self.stamps
                 .iter()
@@ -759,7 +781,7 @@ impl Placement {
                 .ok_or_else(|| fail("excluded unit occupancy is missing"))?;
         }
         self.construction_position_inner(
-            (None, Some(excluded)),
+            (None, Some(excluded), blight),
             point,
             face,
             path,
@@ -1415,6 +1437,14 @@ impl Placement {
         Ok(cell)
     }
 
+    pub(crate) fn pathing_flags(&self, point: [f32; 2]) -> Result<u8, Error> {
+        let [x, y] = self.cell(point)?;
+        let index = self
+            .index(i64::from(x), i64::from(y))
+            .ok_or_else(|| fail("pathing point outside map"))?;
+        Ok(self.grid.pathing.cells[index])
+    }
+
     fn index(&self, x: i64, y: i64) -> Option<usize> {
         (x >= 0
             && y >= 0
@@ -1504,12 +1534,42 @@ impl Placement {
         prevent: u8,
         require: u8,
     ) -> Result<Option<[f32; 2]>, Error> {
-        self.construction_position_inner((worker, None), request, face, path, prevent, require)
+        self.construction_position_inner(
+            (worker, None, None),
+            request,
+            face,
+            path,
+            prevent,
+            require,
+        )
+    }
+
+    pub(crate) fn construction_position_live(
+        &mut self,
+        context: (Option<HandleId>, Option<BlightQuery<'_>>),
+        request: [f32; 2],
+        face: f32,
+        path: &str,
+        prevent: u8,
+        require: u8,
+    ) -> Result<Option<[f32; 2]>, Error> {
+        self.construction_position_inner(
+            (context.0, None, context.1),
+            request,
+            face,
+            path,
+            prevent,
+            require,
+        )
     }
 
     fn construction_position_inner(
         &mut self,
-        exclusions: (Option<HandleId>, Option<&[HandleId]>),
+        exclusions: (
+            Option<HandleId>,
+            Option<&[HandleId]>,
+            Option<BlightQuery<'_>>,
+        ),
         request: [f32; 2],
         face: f32,
         path: &str,
@@ -1582,7 +1642,18 @@ impl Placement {
             let Some(index) = self.index(anchor[0] + x, anchor[1] + y) else {
                 return Ok(None);
             };
-            let flags = self.grid.pathing.cells[index];
+            let mut flags = self.grid.pathing.cells[index];
+            if (prevent | require) & 0x20 != 0 {
+                let (blight, now) = exclusions
+                    .2
+                    .ok_or_else(|| fail("construction blight state or clock missing"))?;
+                let point = std::array::from_fn(|axis| {
+                    self.grid.origin[axis] + ((anchor[axis] + [x, y][axis]) as f32 + 0.5) * size
+                });
+                if blight.is_blighted_at(point, now).map_err(fail)? {
+                    flags |= 0x20;
+                }
+            }
             let blocked = if let Some(excluded) = exclusions.1 {
                 let removed = self
                     .stamps

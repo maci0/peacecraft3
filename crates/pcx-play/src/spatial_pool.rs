@@ -429,6 +429,41 @@ impl Geometry {
     }
 }
 
+fn update_blight_pathing(
+    original: &pcx_map::Pathing,
+    layer: &mut pcx_map::Pathing,
+    geometry: Geometry,
+    blight: &crate::terrain_blight::InitialBlight,
+    now: f64,
+) -> Result<(), String> {
+    if geometry.width == 0
+        || geometry.height == 0
+        || original.width as usize != geometry.width
+        || original.height as usize != geometry.height
+        || geometry.width.checked_mul(geometry.height) != Some(original.cells.len())
+        || original.width != layer.width
+        || original.height != layer.height
+        || original.cells.len() != layer.cells.len()
+    {
+        return Err("spatial blight dimensions differ".into());
+    }
+    for (index, cell) in layer.cells.iter_mut().enumerate() {
+        let x = index % geometry.width;
+        let y = index / geometry.width;
+        let point = [
+            geometry.origin[0] + (x as f32 + 0.5) * geometry.cell_size,
+            geometry.origin[1] + (y as f32 + 0.5) * geometry.cell_size,
+        ];
+        *cell = original.cells[index]
+            | if blight.is_blighted_at(point, now)? {
+                0x20
+            } else {
+                0
+            };
+    }
+    Ok(())
+}
+
 /// The first operation the owner could not apply. Later operations are not applied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refusal {
@@ -483,6 +518,7 @@ pub struct PoolOwner {
     rules: SpatialRules,
     geometry: Geometry,
     context: Option<std::sync::Arc<crate::map_admission::ParsedMapContext>>,
+    blight_pathing: Option<Box<pcx_map::Pathing>>,
     tracked: BTreeMap<u64, Tracked>,
     texture_entries: BTreeMap<u64, Vec<(u64, u8)>>,
     stationary_pixels: BTreeMap<u64, StationaryPixels>,
@@ -519,6 +555,7 @@ impl PoolOwner {
             rules,
             geometry,
             context: None,
+            blight_pathing: None,
             tracked: BTreeMap::new(),
             texture_entries: BTreeMap::new(),
             stationary_pixels: BTreeMap::new(),
@@ -572,7 +609,46 @@ impl PoolOwner {
     }
 
     pub(crate) fn reach_inputs(&self) -> Option<(&pcx_map::Pathing, ReachOperands)> {
-        Some((&self.context.as_ref()?.world.pathing, self.rules.reach?))
+        Some((
+            self.blight_pathing
+                .as_deref()
+                .unwrap_or(&self.context.as_ref()?.world.pathing),
+            self.rules.reach?,
+        ))
+    }
+
+    pub(crate) fn refresh_blight(
+        &mut self,
+        blight: &crate::terrain_blight::InitialBlight,
+        now: f64,
+    ) -> Result<(), String> {
+        let original = &self
+            .context
+            .as_ref()
+            .ok_or("spatial blight source missing")?
+            .world
+            .pathing;
+        if original.width as usize != self.geometry.width
+            || original.height as usize != self.geometry.height
+            || self.geometry.width.checked_mul(self.geometry.height) != Some(original.cells.len())
+        {
+            return Err("spatial blight dimensions differ".into());
+        }
+        if self.blight_pathing.is_none() {
+            let mut cells = Vec::new();
+            cells
+                .try_reserve_exact(original.cells.len())
+                .map_err(|_| "spatial blight allocation")?;
+            cells.extend_from_slice(&original.cells);
+            self.blight_pathing = Some(Box::new(pcx_map::Pathing {
+                version: original.version,
+                width: original.width,
+                height: original.height,
+                cells,
+            }));
+        }
+        let layer = self.blight_pathing.as_mut().expect("just admitted");
+        update_blight_pathing(original, layer, self.geometry, blight, now)
     }
 
     /// Chains, entry states and the registration sequence.

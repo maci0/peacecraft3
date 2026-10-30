@@ -8,10 +8,7 @@
 //! ability, collision and footprint come from the selected tables like any unit, and the
 //! caller's `SetResourceAmount` sets the gold.
 //!
-//! Not established: whether the native itself paints blight under or around the mine. The
-//! shipped melee start code paints a 768-radius patch with a separate `SetBlightLoc`, which
-//! suggests it does not. No blight is painted here, and the `SetBlight*` natives remain
-//! unimplemented (see `docs/re-notes/terrain-blight.md`).
+//! The created mine's selected growth ability supplies its blight effect.
 use super::{Error, Failure, ObjectHost};
 use pcx_script::ast::{BinOp, Expr, Literal, Stmt};
 use pcx_script::{Host, Value};
@@ -103,7 +100,19 @@ impl ObjectHost {
             y.clone(),
             face.clone(),
         ];
-        Host::native(self, "CreateUnit", &forwarded)
-            .map_err(|why| self.inner.error(NAME, Failure::UnitActivity(why)))
+        let result = Host::native(self, "CreateUnit", &forwarded)
+            .map_err(|why| self.inner.error(NAME, Failure::UnitActivity(why)))?;
+        if let Value::Handle(unit) = result
+            && self.initial_blight.is_some()
+        {
+            let now = self.timer_game_time().ok_or_else(|| {
+                self.inner.error(
+                    NAME,
+                    Failure::UnitActivity("blight source needs game clock".into()),
+                )
+            })?;
+            self.start_completed_blight_growth(unit, now)?;
+        }
+        Ok(result)
     }
 }

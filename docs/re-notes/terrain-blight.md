@@ -56,11 +56,10 @@ player record. Circle/location call `0x6d98d0`; point calls `0x6d9ab0`.
 Separate registrations use the known no-op stub family. These static paths do
 not establish which registry is active in a runtime call.
 
-The player ownership mask must survive later setter implementation. Painting,
-overlap/removal, the initial layer's relationship to player layers and the
-regeneration eligibility predicate still need qualification. This increment
-does not admit setters or silently discard their player argument. It also does
-not render initial or changing blight textures.
+The host admits circular `SetBlight` and `SetBlightLoc` additions and records
+their player in the same state as structure growth. Removal requests refuse.
+`SetBlightPoint` and `SetBlightRect`, the exact initial owner layers and
+rendering remain open.
 
 The previous phase-enabled native probe is invalid for eligibility: its unit
 was misplaced and its records truncated. See [regeneration](unit-regeneration.md#phase-enabled-blight-probe-one-run-outcome-2026-10-20).
@@ -105,11 +104,36 @@ intersects the cleared area; its two modes then use different replay paths.
 The source-death call path and those two replay modes have not been qualified.
 
 Human05 also registers a construct-start trigger whose action calls
-`SetBlightRadiusLocBJ` for player 5. The host does not implement that setter.
-The recreation's `CreateBlightedGoldmine` host creates the selected unit type;
-it does not currently create that unit's growth effect or paint terrain.
-No dynamic blight placement, source removal or blight rendering is admitted by
-this investigation.
+`SetBlightRadiusLocBJ` for player 5. The host records that fixed circular patch
+through `SetBlightLoc`. Construction completion and `CreateBlightedGoldmine`
+start growth using the selected ability cells and the reviewed image operands.
+Source death and overlapping dynamic patches refuse when their affected cells
+are queried; they are not removed or merged by an approximation.
+
+`IsPointBlighted` uses the spatial `0x20` flag (`0x499680`, `0x7f69d0`),
+not the owner-mask query. A read-only debugger capture at `0x6da6d2` and
+`0x6da6fd` confirmed that the two-cell-radius owner raster includes an edge
+cell that the spatial rectangle excludes. The spatial rectangles and the
+larger integer-circle spans reproduce all 600 recorded point samples in the
+ignored local-input test, with the first sample used as the time origin. The
+selected table supplies the interval and increment; the selected image supplies
+the coarse grid spacing at `0x40a860`, the fine spatial grid spacing at
+`0x4015b0`, the timer bound, effect class and stopping tolerance. The smallest
+spatial rectangles use the fine grid even when the W3E origin is not aligned
+to the coarse grid. The first-sample time origin does not establish the phase
+between construction completion and that sample.
+
+The shared construction validator checks the current spatial blight state at
+each footprint cell. This uses the observed visible-cell behavior; the native
+validator can instead consult its owner grid depending on the terrain visibility
+test at `0x498f10`. That branch and the high-bit mask are not mapped to the
+recreation's vision state. The pool rebuilds its spatial blight flag lazily when
+an AI placement needs it; source-clock regeneration splits movement at grid and
+growth boundaries. The initial W3E corner convention remains the approximation
+described above. These choices do not establish unseen-cell placement parity.
+Completed structures created directly through generic unit creation and runtime
+changes to a source's growth ability are not yet enrolled by this path; the
+completion and `CreateBlightedGoldmine` paths are the ones exercised here.
 
 An isolated original-client run sampled `IsPointBlighted` once per game second
 at the Necropolis center and along four axes. At sample-clock 12 seconds the

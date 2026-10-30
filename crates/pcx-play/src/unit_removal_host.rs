@@ -110,6 +110,9 @@ impl ObjectHost {
             resource_amount,
             birth,
         };
+        if let Some(blight) = &mut self.initial_blight {
+            blight.remove_growth(unit);
+        }
         self.purge_harvest_cargo(unit);
         Ok(Value::Null)
     }

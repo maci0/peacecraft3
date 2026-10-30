@@ -110,6 +110,112 @@ fn regen_type(definition: &Definition) -> Result<RegenType, String> {
 }
 
 impl ObjectHost {
+    pub(super) fn blight_native(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, Error>> {
+        if !matches!(name, "SetBlight" | "SetBlightLoc" | "IsPointBlighted") {
+            return None;
+        }
+        Some((|| {
+            let fail = |why: String| self.inner.error(name, Failure::UnitActivity(why));
+            if name == "IsPointBlighted" {
+                Self::contract(&self.inner, name, &["real", "real"], "boolean", false, None)?;
+                let [x, y] = args else {
+                    return Err(self.inner.error(name, Failure::Signature));
+                };
+                let point = [
+                    x.as_real()
+                        .ok_or_else(|| fail("blight x coordinate missing".into()))?,
+                    y.as_real()
+                        .ok_or_else(|| fail("blight y coordinate missing".into()))?,
+                ];
+                let now = self
+                    .timer_game_time()
+                    .ok_or_else(|| fail("blight clock missing".into()))?;
+                let state = self
+                    .initial_blight
+                    .as_ref()
+                    .ok_or_else(|| fail("terrain blight state missing".into()))?;
+                let dynamic = state.is_blighted_at(point, now).map_err(fail)?;
+                let placement = self
+                    .unit_placement
+                    .as_ref()
+                    .ok_or_else(|| fail("blight pathing grid missing".into()))?;
+                let flags = placement
+                    .pathing_flags(point)
+                    .map_err(|error| fail(error.to_string()))?;
+                return Ok(Value::Bool(dynamic || flags & 0x20 != 0));
+            }
+            let signature: &[&str] = if name == "SetBlightLoc" {
+                &["player", "location", "real", "boolean"]
+            } else {
+                &["player", "real", "real", "real", "boolean"]
+            };
+            Self::contract(&self.inner, name, signature, "nothing", false, None)?;
+            let (owner, point, radius, add) = match args {
+                [Value::Handle(owner), location, radius, Value::Bool(add)]
+                    if name == "SetBlightLoc" =>
+                {
+                    (
+                        *owner,
+                        self.location_point(location, name)?,
+                        radius.as_real(),
+                        *add,
+                    )
+                }
+                [Value::Handle(owner), x, y, radius, Value::Bool(add)] if name == "SetBlight" => {
+                    let point = [
+                        x.as_real()
+                            .ok_or_else(|| fail("blight x coordinate missing".into()))?,
+                        y.as_real()
+                            .ok_or_else(|| fail("blight y coordinate missing".into()))?,
+                    ];
+                    (*owner, point, radius.as_real(), *add)
+                }
+                _ => return Err(self.inner.error(name, Failure::Signature)),
+            };
+            self.player_settings(owner)?;
+            if !add {
+                return Err(fail("script blight removal is not admitted".into()));
+            }
+            let radius = radius.ok_or_else(|| fail("blight radius missing".into()))?;
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| fail("blight clock missing".into()))?;
+            let blight = self
+                .initial_blight
+                .as_ref()
+                .ok_or_else(|| fail("terrain blight state missing".into()))?;
+            let rules = blight
+                .growth_rules
+                .as_ref()
+                .ok_or_else(|| fail("blight image rules missing".into()))?;
+            let patch = crate::terrain_blight::Growth::fixed(
+                point,
+                blight.growth_origin(),
+                rules.spacing,
+                rules.fine_spacing,
+                now,
+                radius,
+            )
+            .map_err(fail)?;
+            self.initial_blight
+                .as_mut()
+                .expect("checked")
+                .add_script_patch(owner, patch)
+                .map_err(fail)?;
+            #[cfg(feature = "test-fixtures")]
+            if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                eprintln!(
+                    "script blight: time={now} owner={owner:?} point={point:?} radius={radius}"
+                );
+            }
+            Ok(Value::Null)
+        })())
+    }
+
     /// Rebuild cached pools from this map's unit and prepared item definitions before publication.
     pub(super) fn prepare_cached_restored_vitals<'a>(
         &self,
@@ -752,7 +858,7 @@ impl ObjectHost {
                 ));
             }
             return blight
-                .seconds(current, current, now - from, work)
+                .seconds_at(current, current, from, now, work)
                 .map_err(fail);
         };
         let mut position = starts
@@ -778,7 +884,7 @@ impl ObjectHost {
                 return Err(fail("blight motion spans overlap".into()));
             }
             total += blight
-                .seconds(position, position, start - cursor, work)
+                .seconds_at(position, position, cursor, start, work)
                 .map_err(fail)?;
             let fraction = (start - span.start) / (span.end - span.start);
             let clipped = std::array::from_fn(|i| {
@@ -787,7 +893,7 @@ impl ObjectHost {
                     as f32
             });
             total += blight
-                .seconds(clipped, span.to, span.end - start, work)
+                .seconds_at(clipped, span.to, start, span.end, work)
                 .map_err(fail)?;
             cursor = span.end;
             position = span.to;
@@ -798,7 +904,7 @@ impl ObjectHost {
             ));
         }
         total += blight
-            .seconds(position, position, now - cursor, work)
+            .seconds_at(position, position, cursor, now, work)
             .map_err(fail)?;
         Ok(total)
     }

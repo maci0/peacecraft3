@@ -1532,13 +1532,20 @@ above does not generally exclude other players' units. These results explain
 the two selections for the two inputs; they do not establish the villager's
 native movement trajectory in the full campaign.
 
+The shared validator now recognizes the blighted placement token and checks the
+same live spatial state used by scripted blight queries. The tracked pool
+refreshes its spatial flag when placement requires blight or a growth source
+exists. This implements the observed visible-cell behavior; the native
+visibility-dependent owner-mask branch remains unqualified, as described in
+[terrain blight](terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+
 ## Not established
 
 - The structure fallback's root-ability state, native registration and type-change paths beyond
   the tracked cases, and later town refresh triggers. Multiple potentially associated initial
   records and later changes refuse rather than using the initial-town rule.
 - Live occupancy and auxiliary links for the reach query, effect-source evidence, terrain
-  boundary cases and placement requirements such as blight. The shared validator and the
+  boundary cases and visibility-dependent blight placement. The shared validator and the
   recorded reach cases are implemented for the qualified snapshot inputs described above.
   The ordinary placement cache stores aggregate cell counts; the tracked spatial owner keeps
   ordered entry chains with the qualifications above. The unit arena retains a creation clock and accepted creation position

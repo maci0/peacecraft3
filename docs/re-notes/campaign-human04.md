@@ -98,6 +98,13 @@ checkpoint lines and the same RNG checkpoint (`fnv64=4114b672250360a2`):
 - The earned Human05 input cache is `0ff12705...` (`profile-v1` and `profile-v2` agree).
 - The granary and ending scenes were skipped with the local end-cinematic event.
 
+The blight-growth change was checked with `blight-growth-v1-20261030`. Its
+checkpoints and RNG agree with `g1` through 313.00 s, then it refuses at
+313.484375 s when structure handle 2838 completes with a blight-removal
+effect. The effect's removal and overlap behavior is not yet admitted, so this
+run does not reach the earlier victory at 449.02 s. See
+[terrain blight](terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+
 ## Open
 
 - Holy Light and the AI target scorer. An earlier policy that cast Holy Light stopped at 435 s
@@ -113,7 +120,7 @@ checkpoint lines and the same RNG checkpoint (`fnv64=4114b672250360a2`):
   harness avoids spells; revisit if a chapter cannot.
 - The AI waves' arrival and strength are the recreation's, not compared with the original;
   the base held without defenders in this policy, which may differ from the original.
-- Not established, as above: the blighted mine's own blight, the order of several pending AI
+- Not established, as above: the blighted mine's full native behavior, the order of several pending AI
   commands, depot search for explicit gold orders, building footprints after model turns, and
   whether buildings should turn at all when attacking (combat sets `face` for any attacker).
 - The Human05 chapter is not started here.

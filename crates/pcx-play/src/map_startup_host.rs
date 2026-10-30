@@ -219,6 +219,8 @@ pub struct NewGameInput {
     pub research: Option<crate::upgrade_research::Rules>,
     /// Source rules for a deferred placement cache, after stationary creations.
     pub placement_rules: Option<crate::unit_placement::Rules>,
+    /// Selected client operands for construction-completion blight growth.
+    pub blight_growth: Option<crate::terrain_blight::GrowthRules>,
     /// Selected common's unit-range event; absent leaves spatial delivery unset.
     pub unit_range_event: Option<String>,
     /// Selected `[Misc]` day rate; absent leaves time-of-day setters unsupported.
@@ -981,7 +983,7 @@ fn assemble_inner(
         }
         placement_rules = input.placement_rules;
         if let (Some(rules), Some(_)) = (&placement_rules, &input.hero_vitals) {
-            let blight = crate::terrain_blight::InitialBlight::read(
+            let mut blight = crate::terrain_blight::InitialBlight::read(
                 &context.terrain,
                 rules.cell_size() * context.alignment.uniform_scale as f32,
                 context.sources.map.clone(),
@@ -990,6 +992,9 @@ fn assemble_inner(
             .map_err(|e| {
                 MapStartupError::Observation(format!("{}: {e}", context.sources.map.source))
             })?;
+            if let Some(rules) = input.blight_growth {
+                blight = blight.with_growth_rules(rules);
+            }
             object.admit_initial_blight(blight)?;
         }
         if let Some(event) = input.unit_range_event {
