@@ -42,6 +42,34 @@ impl ObjectHost {
             false,
             Some("sound"),
         )?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("CreateSoundFilenameWithLabel")
+            .is_some()
+        {
+            Self::contract(
+                &self.inner,
+                "CreateSoundFilenameWithLabel",
+                &[
+                    "string", "boolean", "boolean", "boolean", "integer", "integer", "string",
+                ],
+                "sound",
+                false,
+                Some("sound"),
+            )?;
+            let natives = self.inner.program.natives();
+            let same_source = natives.get(name).map(|n| &n.source)
+                == natives
+                    .get("CreateSoundFilenameWithLabel")
+                    .map(|n| &n.source);
+            if !same_source {
+                return Err(self
+                    .inner
+                    .error("CreateSoundFilenameWithLabel", Failure::Source));
+            }
+        }
         self.file_sounds = Some(State {
             assets,
             eax_bytes: max_eax_bytes,
@@ -165,35 +193,64 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        let state = self.file_sounds.as_mut()?;
-        if name != "CreateSound" {
+        if self.file_sounds.is_none() {
             return None;
         }
+        let labeled = name == "CreateSoundFilenameWithLabel";
+        if name != "CreateSound" && !labeled {
+            return None;
+        }
+        if labeled && self.inner.program.natives().get(name).is_none() {
+            return None;
+        }
+        let fail = |reason| self.inner.error(name, reason);
+        let [
+            Value::Str(member),
+            Value::Bool(looping),
+            Value::Bool(is_3d),
+            Value::Bool(stop_when_out_of_range),
+            Value::Int(fade_in_rate),
+            Value::Int(fade_out_rate),
+            Value::Str(tail),
+        ] = args
+        else {
+            return Some(Err(fail(Failure::SoundState(if labeled {
+                "expected filename, three booleans, two integer rates and sound label"
+            } else {
+                "expected filename, three booleans, two integer rates and EAX text"
+            }))));
+        };
+        let (member, tail) = (member.clone(), tail.clone());
+        let (looping, is_3d, stop_when_out_of_range, fade_in_rate, fade_out_rate) = (
+            *looping,
+            *is_3d,
+            *stop_when_out_of_range,
+            *fade_in_rate,
+            *fade_out_rate,
+        );
+        let state = self.file_sounds.as_ref().expect("admitted");
+        let eax = if labeled { "" } else { tail.as_str() };
+        if member.len() > state.assets.path_limit() || eax.len() > state.eax_bytes {
+            return Some(Err(fail(Failure::Budget("file sound text"))));
+        }
+        if member.contains('\0') || eax.contains('\0') {
+            return Some(Err(fail(Failure::SoundState(
+                "embedded NUL in filename or EAX text is unsupported",
+            ))));
+        }
+        // The label selects an admitted parameter row. It is not EAX text.
+        let parameters = if labeled {
+            match self.prepare_sound_parameter_label(name, &tail) {
+                Ok(index) => Some(index),
+                Err(error) => return Some(Err(error)),
+            }
+        } else {
+            None
+        };
+        let state = self.file_sounds.as_mut().expect("admitted");
         Some((|| {
             let fail = |reason| self.inner.error(name, reason);
-            let [
-                Value::Str(member),
-                Value::Bool(looping),
-                Value::Bool(is_3d),
-                Value::Bool(stop_when_out_of_range),
-                Value::Int(fade_in_rate),
-                Value::Int(fade_out_rate),
-                Value::Str(eax),
-            ] = args
-            else {
-                return Err(fail(Failure::SoundState(
-                    "expected filename, three booleans, two integer rates and EAX text",
-                )));
-            };
-            if member.len() > state.assets.path_limit() || eax.len() > state.eax_bytes {
-                return Err(fail(Failure::Budget("file sound text")));
-            }
-            if member.contains('\0') || eax.contains('\0') {
-                return Err(fail(Failure::SoundState(
-                    "embedded NUL in filename or EAX text is unsupported",
-                )));
-            }
-            let (resource, mp3) = match state.assets.find(member) {
+            let (resource, mp3) = match state.assets.find(&member) {
                 Some(binding) => binding,
                 None => {
                     let Some((loader, budget)) = &mut state.loader else {
@@ -209,10 +266,10 @@ impl ObjectHost {
                     {
                         return Err(fail(Failure::Budget("file sound bank")));
                     }
-                    let next = loader(member, remaining)
+                    let next = loader(&member, remaining)
                         .map_err(|error| fail(Failure::SoundSource(error)))?;
                     if next.resources().len() + next.mp3_resources().len() != 1
-                        || next.find(member).is_none()
+                        || next.find(&member).is_none()
                     {
                         return Err(fail(Failure::SoundState(
                             "loader must return exactly the requested file",
@@ -224,7 +281,7 @@ impl ObjectHost {
                         .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
                     state
                         .assets
-                        .find(member)
+                        .find(&member)
                         .ok_or_else(|| fail(Failure::MissingSoundFile(member.clone())))?
                 }
             };
@@ -239,13 +296,13 @@ impl ObjectHost {
                         resource,
                         properties: super::SoundProperties::default(),
                         mp3,
-                        parameters: None,
+                        parameters,
                         duration: None,
-                        looping: *looping,
-                        is_3d: *is_3d,
-                        stop_when_out_of_range: *stop_when_out_of_range,
-                        fade_in_rate: *fade_in_rate,
-                        fade_out_rate: *fade_out_rate,
+                        looping,
+                        is_3d,
+                        stop_when_out_of_range,
+                        fade_in_rate,
+                        fade_out_rate,
                         eax_setting,
                     },
                     name,

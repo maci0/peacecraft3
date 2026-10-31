@@ -1286,3 +1286,173 @@ fn incremental_parameter_host_validates_identity_before_source_work() {
     );
     assert_eq!(h.sound_parameters(a).unwrap().unwrap().label, "Voice");
 }
+
+const FILENAME_WITH_LABEL: &str = "native CreateSoundFilenameWithLabel takes string file, boolean repeating, boolean spatial, boolean stop, integer a, integer b, string label returns sound\n";
+
+#[test]
+fn filename_with_label_binds_the_caller_file_and_admitted_parameter_row() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let common = format!("{COMMON}{FILENAME_WITH_LABEL}");
+    let mut h = host(&common, "").with_sound_parameters(bank()).unwrap();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&loads);
+    h.admit_file_sound_loader(
+        file_sounds::Budget {
+            resources: 4,
+            resource_bytes: 4096,
+            total_bytes: 8192,
+            metadata_bytes: 4096,
+        },
+        move |_, _| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            Err("file source is not part of this refusal".into())
+        },
+    )
+    .unwrap();
+    let call = [
+        Value::Str("existing.wav".into()),
+        Value::Bool(false),
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::Int(10),
+        Value::Int(-4),
+        Value::Str("Voice".into()),
+    ];
+    let Value::Handle(id) = h.native("CreateSoundFilenameWithLabel", &call).unwrap() else {
+        panic!("sound");
+    };
+    {
+        let state = h.file_sound_state(id).unwrap();
+        assert_eq!(
+            (
+                state.looping,
+                state.is_3d,
+                state.stop_when_out_of_range,
+                state.fade_in_rate,
+                state.fade_out_rate,
+                state.eax_setting,
+                state.duration,
+                state.resource.bytes(),
+            ),
+            (false, true, false, 10, -4, "", None, pcm().as_slice())
+        );
+        let row = h.sound_parameters(id).unwrap().unwrap();
+        assert_eq!(
+            (row.label, row.eax_flags, row.values.volume),
+            ("Voice", "ProfileA", 83)
+        );
+        let properties = h.sound_properties(id).unwrap();
+        assert_eq!(
+            (
+                properties.volume,
+                properties.pitch,
+                properties.channel,
+                properties.distances
+            ),
+            (None, None, None, None)
+        );
+    }
+    let Value::Handle(again) = h.native("CreateSoundFilenameWithLabel", &call).unwrap() else {
+        panic!("second sound");
+    };
+    assert_ne!(id, again);
+    assert!(std::ptr::eq(
+        h.file_sound_state(id).unwrap().resource.bytes(),
+        h.file_sound_state(again).unwrap().resource.bytes()
+    ));
+    let plain = create(&mut h);
+    assert_eq!(
+        h.file_sound_state(plain).unwrap().eax_setting,
+        "CreationEAX"
+    );
+    assert!(h.sound_parameters(plain).unwrap().is_none());
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    let handles = h.inner().handles();
+    let mut missing_label = call.clone();
+    missing_label[0] = Value::Str("new.wav".into());
+    missing_label[6] = Value::Str("Missing".into());
+    let missing = h
+        .native("CreateSoundFilenameWithLabel", &missing_label)
+        .unwrap_err();
+    assert!(
+        missing.contains("sound label is not admitted: Missing"),
+        "{missing}"
+    );
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    assert_eq!(h.inner().handles(), handles);
+    let mut missing_file = call.clone();
+    missing_file[0] = Value::Str("new.wav".into());
+    let missing = h
+        .native("CreateSoundFilenameWithLabel", &missing_file)
+        .unwrap_err();
+    assert!(
+        missing.contains("file source is not part of this refusal"),
+        "{missing}"
+    );
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.sound_parameters(id).unwrap().unwrap().label, "Voice");
+    for args in [
+        call[..6].to_vec(),
+        {
+            let mut args = call.clone();
+            args[1] = Value::Int(1);
+            args.to_vec()
+        },
+        {
+            let mut args = call.clone();
+            args[6] = Value::Str(String::new());
+            args.to_vec()
+        },
+        {
+            let mut args = call.clone();
+            args[6] = Value::Str("x\0y".into());
+            args.to_vec()
+        },
+    ] {
+        assert!(h.native("CreateSoundFilenameWithLabel", &args).is_err());
+        assert_eq!(h.inner().handles(), handles);
+    }
+    let mut bare = host(&common, "");
+    assert!(
+        bare.native("CreateSoundFilenameWithLabel", &call)
+            .unwrap_err()
+            .contains("parameters not admitted")
+    );
+    assert_eq!(bare.inner().handles(), 0);
+    let bad = common.replace("string label returns sound", "string label returns integer");
+    assert!(
+        ObjectHost::checked(enums(&bad, ""))
+            .unwrap()
+            .with_file_sounds(assets(), 32)
+            .is_err()
+    );
+    let map = "globals\nsound voice=null\nendglobals\nfunction main takes nothing returns nothing\nset voice=CreateSoundFilenameWithLabel(\"existing.wav\",false,true,false,10,-4,\"Voice\")\ncall Next()\nendfunction\n";
+    let mut vm = host(
+        &format!("{common}native Next takes nothing returns nothing\n"),
+        map,
+    )
+    .with_sound_parameters(bank())
+    .unwrap()
+    .into_vm();
+    vm.init_globals().unwrap();
+    assert!(
+        vm.call("main", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("Next")
+    );
+    let Value::Handle(voice) = vm.global("voice") else {
+        panic!("voice");
+    };
+    assert_eq!(vm.host().file_sound_state(voice).unwrap().eax_setting, "");
+    assert_eq!(
+        vm.host()
+            .sound_parameters(voice)
+            .unwrap()
+            .unwrap()
+            .values
+            .channel,
+        17
+    );
+}

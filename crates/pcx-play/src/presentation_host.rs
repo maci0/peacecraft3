@@ -1,4 +1,4 @@
-//! Executed local UI input and explicitly configured cinematic filters.
+//! Executed local UI input, cinematic subtitle visibility, and cinematic filters.
 use super::{Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 
@@ -58,6 +58,8 @@ pub struct PresentationState {
     /// Game time and duration of the latest `ShowInterface` fade.
     pub interface_fade: Option<(f64, f32)>,
     pub world_fog_boundary: Option<bool>,
+    /// Executed `ForceCinematicSubtitles` flag. Absent until a script sets it.
+    pub cinematic_subtitles: Option<bool>,
     pub filter: Option<CineFilter>,
     texture: Option<String>,
     blend: Option<HandleId>,
@@ -75,6 +77,7 @@ const CONTRACTS: &[(&str, &[&str])] = &[
     ("EnableWorldFogBoundary", &["boolean"]),
     ("EnableUserControl", &["boolean"]),
     ("ShowInterface", &["boolean", "real"]),
+    ("ForceCinematicSubtitles", &["boolean"]),
     ("SetCineFilterTexture", &["string"]),
     ("SetCineFilterBlendMode", &["blendmode"]),
     ("SetCineFilterTexMapFlags", &["texmapflags"]),
@@ -239,6 +242,17 @@ impl ObjectHost {
                 .control_enabled = Some(*enabled);
             return Ok(Value::Null);
         }
+        if name == "ForceCinematicSubtitles" {
+            let [Value::Bool(shown)] = args else {
+                return Err(fail("expected subtitle boolean"));
+            };
+            // Visibility only. Voice playback stays on the sound host.
+            self.presentation
+                .as_mut()
+                .expect("admitted")
+                .cinematic_subtitles = Some(*shown);
+            return Ok(Value::Null);
+        }
         if name == "DisplayCineFilter" {
             let [Value::Bool(show)] = args else {
                 return Err(fail("expected display boolean"));
@@ -326,12 +340,7 @@ impl ObjectHost {
             }
             (
                 "SetCineFilterStartUV" | "SetCineFilterEndUV",
-                [
-                    Value::Real(a),
-                    Value::Real(b),
-                    Value::Real(c),
-                    Value::Real(d),
-                ],
+                [Value::Real(a), Value::Real(b), Value::Real(c), Value::Real(d)],
             ) if [a, b, c, d].iter().all(|v| v.is_finite()) => {
                 let uv = [a.min(*c), b.min(*d), a.max(*c), b.max(*d)];
                 if name == "SetCineFilterStartUV" {

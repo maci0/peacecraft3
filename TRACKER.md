@@ -1,5 +1,14 @@
 # PeaceCraft3 — Tracker
 
+- [~] Script slices landed for 0.8.0. `CreateSoundFilenameWithLabel` binds the
+  caller file and an admitted SLK row. Group target orders reuse the per-unit
+  target consumers. A point `smart` order resolves through the existing ground
+  rules. `ForceCinematicSubtitles` stores the executed flag. `ForLoopVar` lowers
+  to the declared integer. Regions, cliffs, RNG, and the expiry-trigger order
+  stay open. See `docs/re-notes/slice-sound-binding.md`,
+  `docs/re-notes/slice-group-enum.md`, `docs/re-notes/slice-orders.md`,
+  `docs/re-notes/slice-dialogue.md`, and `docs/re-notes/slice-wtg-desugar.md`.
+
 - [~] Campaign loading screen. Launching a mission opens the original loading
   screen: `Loading.fdf` frames, the background model and sequence the map header
   selects through `UI\WorldEditData.txt` `[LoadingScreens]`, the `LoadingProgressBar`
@@ -6159,3 +6168,76 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   original-input blight comparison and native and WASM Clippy pass. The Human03
   deterministic-work and allocation budgets pass with unchanged allocation
   counts and 10,876 fewer requested bytes in each measured workload.
+
+### 2026-10-30: Deferred dispel and town registration
+
+- [~] A completed structure's blight-dispel ability now records its affected
+  area instead of refusing at completion. Blight-dependent construction refuses
+  when it queries that area; non-placement reads still use the prior blight state.
+  Human03 and Human04 route runs after this change match `g1` and reach victory.
+- A newly constructed town hall can refresh the uniquely qualified initial
+  mine town after the mine-to-hall reach check. Additional potentially competing
+  mines and a new-town result still refuse. Two final Human05 runs match 125
+  checkpoint, RNG and trace lines. The center becomes (5920, 3104), and the
+  Ziggurat order selects (5600, 2912) after 373 dequeues at 1225.211 s. The
+  following Haunted Gold Mine request
+  refuses its unresolved town-mine target. The full campaign state has not
+  been compared with a matching native-client trace.
+- The `pcx-play` library suite passes 2,399 tests with 93 ignored; the original
+  600-sample comparison and native and WASM Clippy pass. The Human03 allocation
+  counts and requested bytes match the previous measurement, and the simulation
+  budgets pass without changes.
+
+### 2026-10-31: Haunted Mine target investigation
+
+- [~] Initial-town records now retain the selected mine handle. The reviewed
+  executable supplies the unit type requiring a mine-targeted order, and its
+  placement search now runs before the outstanding lifecycle refusal. The
+  original-input fixture still selects the baseline and farm Necropolis sites at
+  dequeues 1 and 280, and resolves the map's primary mine.
+- An isolated client probe observed the target mine hidden when construction
+  began, the new structure inheriting its gold, and the original mine reappearing
+  after the completed structure was killed. The native teardown copies remaining
+  gold back, or sets the original mine's life to zero when depleted. Cancellation
+  and depletion event sequences remain unqualified; see
+  [AI construction](docs/re-notes/ai-construction.md#mine-targeted-construction-investigation-2026-10-31).
+- Human05 `mine-search-a-20261031` and `mine-search-b-20261031` match their
+  checkpoint, RNG and construction trace lines and reach tick 78400 at 1225 s. The next
+  mine-targeted search accepts (5568, 2944) after 370 dequeues, then refuses
+  before issuing an order on the mine at (5696, 3456). The search candidate
+  has no matching native trace yet; construction, worker-state selection and
+  the victory path remain open.
+- The `pcx-play` library suite passes 2,401 tests with 93 ignored. Native and
+  WASM Clippy pass with warnings denied, and the offline simulation budget
+  check passes without changing the budgets.
+- Human03 and Human04 both reach victory; their checkpoint and RNG lines match
+  their respective `g1` runs.
+
+### 2026-10-31: Haunted Mine target order
+
+- [~] A successful haunted-mine search is a gate. The order targets the town
+  mine handle, not the searched point. An idle worker pays through the existing
+  construction debit, hides the original at arrival, copies its gold onto the
+  new resource site, and restores that original when a completed site with
+  remaining gold is killed. Cancellation, in-progress death, depletion, and a
+  later town-mine snapshot that no longer matches the captured list refuse.
+  A worker who already has an admitted build order also refuses: `unit+0x3a0`
+  and the AI-component `0x30000000` bits are not represented, so the request
+  does not reuse that worker or select another. See
+  [AI construction](docs/re-notes/ai-construction.md#mine-targeted-construction-investigation-2026-10-31).
+- Release Human05 `mine-link-a-20261031` and `mine-link-b-20261031` exit 101
+  at the same refusal. Last completed checkpoint is tick 78400, 1225.00 s.
+  Worker 12407, mine 3377 at (5696, 3456), search candidate (5568, 2944),
+  370 dequeues. Their 98 checkpoint and RNG lines match each other and
+  `mine-search-a-20261031`. The victory path is not reached.
+- Human03 `mine-link-20261031` and Human04 `mine-link-20261031` reach victory.
+  Their checkpoint and RNG lines match their `g1` logs. Those runners invoked
+  the debug test profile; the Human05 pair above is `--release`.
+- The `pcx-play` library suite passes 2,404 tests with 93 ignored. Native and
+  WASM Clippy pass with warnings denied. The offline simulation budget check
+  passes without raising any budget.
+- [ ] A further static read does not admit cancellation, depletion, or a
+  town-mine update. `0xb27600` runs from event `0xd01a0`; its reviewed
+  publishers are not identified as construction cancel. Zero gold calls life
+  setter slot `0x124` and skips the restore path. `0xac64b0` clears AI-player
+  handle slots, not the town mine pair. Those three requests still refuse.

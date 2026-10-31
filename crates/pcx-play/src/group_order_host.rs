@@ -3,7 +3,7 @@ use super::{Error, Failure, ObjectHost};
 use crate::group_order_rules::Rules;
 use pcx_script::Value;
 
-const NATIVES: [(&str, &str, &[&str]); 6] = [
+const NATIVES: [(&str, &str, &[&str]); 8] = [
     (
         "GroupImmediateOrder",
         "IssueImmediateOrder",
@@ -33,6 +33,16 @@ const NATIVES: [(&str, &str, &[&str]); 6] = [
         "GroupPointOrderByIdLoc",
         "IssuePointOrderByIdLoc",
         &["group", "integer", "location"],
+    ),
+    (
+        "GroupTargetOrder",
+        "IssueTargetOrder",
+        &["group", "string", "widget"],
+    ),
+    (
+        "GroupTargetOrderById",
+        "IssueTargetOrderById",
+        &["group", "integer", "widget"],
     ),
 ];
 impl ObjectHost {
@@ -127,6 +137,12 @@ impl ObjectHost {
                 && !matches!((&args[2],&args[3]),(Value::Real(x),Value::Real(y)) if x.is_finite()&&y.is_finite())
             {
                 return Err(self.inner.error(name, Failure::GroupArguments));
+            } else if signature.last().is_some_and(|ty| *ty == "widget")
+                && !self.group_order_widget(&args[2], name)?
+            {
+                // The widget resolver runs before the group. Null and unresolved
+                // handles return false; they do not read or reject the group.
+                return Ok(Value::Bool(false));
             }
             if args[0] == Value::Null {
                 return Ok(Value::Bool(false));
@@ -136,7 +152,7 @@ impl ObjectHost {
             let mut command = [Value::Null, args[1].clone(), Value::Null, Value::Null];
             command[2..args.len()].clone_from_slice(&args[2..]);
             let command = &mut command[..args.len()];
-            match self.activity_native(unit_name, command) {
+            match self.member_order(unit_name, command) {
                 Some(Ok(Value::Bool(false))) => {}
                 Some(Err(e)) => return Err(self.inner.error(name, e.failure)),
                 _ => {
@@ -159,7 +175,7 @@ impl ObjectHost {
                 }
                 visited += 1;
                 command[0] = Value::Handle(unit);
-                match self.activity_native(unit_name, command) {
+                match self.member_order(unit_name, command) {
                     Some(Ok(Value::Bool(accepted))) => any |= accepted,
                     Some(Err(e)) => return Err(self.inner.error(name, e.failure)),
                     _ => {
@@ -172,5 +188,40 @@ impl ObjectHost {
             }
             Ok(Value::Bool(any))
         })())
+    }
+
+    /// True when `value` is a widget-family handle. Null and unresolved handles
+    /// are false, matching the native widget resolver's null return.
+    fn group_order_widget(&self, value: &Value, name: &str) -> Result<bool, Error> {
+        match value {
+            Value::Null => Ok(false),
+            Value::Handle(id) => match self.inner.kind(*id) {
+                Ok(kind) if super::below(&self.inner.program, kind, "widget") => Ok(true),
+                _ => Ok(false),
+            },
+            _ => Err(self.inner.error(name, Failure::GroupArguments)),
+        }
+    }
+
+    /// Point and immediate orders stay on the activity consumer. Target orders
+    /// use the same consumers as `ObjectHost::native`, in that order.
+    fn member_order(&mut self, unit_name: &str, command: &[Value]) -> Option<Result<Value, Error>> {
+        if !matches!(unit_name, "IssueTargetOrder" | "IssueTargetOrderById") {
+            return self.activity_native(unit_name, command);
+        }
+        self.order_queue_observe(unit_name, command);
+        if let Some(result) = self.harvest_native(unit_name, command) {
+            return Some(result);
+        }
+        if let Some(result) = self.inventory_native(unit_name, command) {
+            return Some(result);
+        }
+        if let Some(result) = self.follow_target_native(unit_name, command) {
+            return Some(result);
+        }
+        if let Some(result) = self.construction_native(unit_name, command) {
+            return Some(result);
+        }
+        self.combat_native(unit_name, command)
     }
 }

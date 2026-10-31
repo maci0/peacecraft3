@@ -47,6 +47,9 @@ same archive. These are observations from the local 1.29b install, not committed
   writes `return`.
 - `ForLoopA` writes `bj_forLoopAIndex` / `bj_forLoopAIndexEnd` (declared in `Blizzard.j`)
   around `loop` / `exitwhen` / `endloop`.
+- `ForLoopVar` writes the declared integer as the index. The end value stays in
+  the `exitwhen`. The body is the single wrapped action, inlined. A non-integer
+  index is refused. No shipped campaign map contains this action.
 - A `boolcall` argument is a direct wrapper call. A `boolexpr` argument is
   `Condition(function F)`.
 - `TriggerRegisterVariableEvent` takes its variable as a quoted `udg_` name.
@@ -125,7 +128,7 @@ does not cover timers firing, condition evaluation, or the native game.
 
 - Editor-expanded forms with no source in the shipped corpus: `AndMultiple`,
   `OrMultiple`, `IfThenElseMultiple`, `ForLoopAMultiple`, `ForLoopBMultiple`,
-  `ForLoopVarMultiple`, `ForLoopVar`, `ForForceMultiple`, `ForGroupMultiple`.
+  `ForLoopVarMultiple`, `ForForceMultiple`, `ForGroupMultiple`.
   Probe counts over the 44 shipped maps are 0 for each.
 - `CustomScriptCode`: 0 occurrences in the shipped maps; no evidence for its emission.
 - Run-on-initialization triggers: 0 occurrences in the shipped maps.

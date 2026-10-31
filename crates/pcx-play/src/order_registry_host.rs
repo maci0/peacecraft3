@@ -4,8 +4,9 @@ use pcx_script::Value;
 use std::sync::Arc;
 
 impl ObjectHost {
-    /// Admit only the selected common's lookup contracts. This does not admit
-    /// issuing an order or infer a unit's ability to execute it.
+    /// Admit only the selected common's lookup contracts. A point `smart` order is
+    /// the one exception: it is resolved and reissued as the concrete ground order.
+    /// Lookup alone still does not admit any other order.
     pub fn with_order_registry(mut self, registry: Arc<Registry>) -> Result<Self, Error> {
         self.admit_order_registry(registry)?;
         Ok(self)
@@ -44,10 +45,17 @@ impl ObjectHost {
     }
 
     pub(super) fn order_registry_native(
-        &self,
+        &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if let Some(answer) = self.order_id_lookup(name, args) {
+            return Some(answer);
+        }
+        self.smart_point_native(name, args)
+    }
+
+    fn order_id_lookup(&self, name: &str, args: &[Value]) -> Option<Result<Value, Error>> {
         let registry = self.order_registry.as_ref()?;
         Some(match (name, args) {
             ("OrderId", [Value::Str(text)]) => Ok(Value::Int(
@@ -60,5 +68,87 @@ impl ObjectHost {
             ("OrderId" | "OrderId2String", _) => Err(self.inner.error(name, Failure::Signature)),
             _ => return None,
         })
+    }
+
+    /// Point `smart` (`0xd0003` in the selected client) is the order a ground click
+    /// sends. Resolve it with the same rules as that click, then issue the concrete
+    /// order. Target `smart` stays on the inventory pickup path.
+    fn smart_point_native(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, Error>> {
+        let location = matches!(name, "IssuePointOrderLoc" | "IssuePointOrderByIdLoc");
+        if !(location || matches!(name, "IssuePointOrder" | "IssuePointOrderById")) {
+            return None;
+        }
+        let smart = self.order_registry.as_ref()?.id("smart")?;
+        let wanted = if location { 3 } else { 4 };
+        if args.len() != wanted {
+            return None;
+        }
+        let by_id = name.contains("ById");
+        let order = match (&args[1], by_id) {
+            (Value::Str(text), false) => self.order_registry.as_ref()?.id(text)?,
+            (Value::Int(id), true) => *id,
+            _ => return None,
+        };
+        if order != smart {
+            return None;
+        }
+        Some(self.issue_registered_smart_point(name, args, location))
+    }
+
+    fn issue_registered_smart_point(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        location: bool,
+    ) -> Result<Value, Error> {
+        let unit = match args[0] {
+            Value::Null => return Ok(Value::Bool(false)),
+            Value::Handle(id) => id,
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        };
+        if matches!(
+            self.inner
+                .entry(unit)
+                .map_err(|error| self.inner.error(name, error.failure))?,
+            super::Entry::RemovedUnit { .. }
+        ) {
+            return Ok(Value::Bool(false));
+        }
+        let at = if location {
+            self.location_point(&args[2], name)?
+        } else {
+            let (Value::Real(x), Value::Real(y)) = (&args[2], &args[3]) else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            if !x.is_finite() || !y.is_finite() {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitActivity("finite destination required".into()),
+                ));
+            }
+            [*x, *y]
+        };
+        let form = match self.resolve_smart_order(unit, super::SmartTarget::Ground(at)) {
+            Ok(form) => form,
+            Err(super::SmartRefusal::NoOrder(_) | super::SmartRefusal::SelfTarget) => {
+                return Ok(Value::Bool(false));
+            }
+            Err(refusal) => {
+                return Err(self
+                    .inner
+                    .error(name, Failure::UnitActivity(refusal.to_string())));
+            }
+        };
+        // Issuing this id again would re-enter this function.
+        if self
+            .order_registry
+            .as_ref()
+            .is_some_and(|registry| registry.id("smart") == Some(form.order()))
+        {
+            return Ok(Value::Bool(false));
+        }
+        self.issue_order_form(unit, form)
+            .map(Value::Bool)
+            .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))
     }
 }

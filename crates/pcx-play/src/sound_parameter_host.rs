@@ -99,40 +99,19 @@ impl ObjectHost {
         }
         self.sound_parameters.as_ref()?;
         Some((|| {
-            let fail = |reason| self.inner.error(name, reason);
             let [Value::Handle(id), Value::Str(label)] = args else {
-                return Err(fail(Failure::SoundState(
-                    "expected sound identity and label",
-                )));
+                return Err(self.inner.error(
+                    name,
+                    Failure::SoundState("expected sound identity and label"),
+                ));
             };
-            self.sound_admitted(*id).map_err(|e| fail(e.failure))?;
-            if label.trim().is_empty() || label.contains('\0') {
-                return Err(fail(Failure::SoundState(
-                    "empty or NUL-containing sound parameter label",
-                )));
-            }
-            let bank = self
-                .sound_parameters
-                .as_ref()
-                .ok_or_else(|| fail(Failure::SoundState("parameters not admitted")))?;
-            if label.len() > bank.label_limit() {
-                return Err(fail(Failure::Budget("sound parameter label")));
-            }
-            let index = match bank.find(label) {
-                Some(index) => index,
-                None => {
-                    let Some((loader, budget)) = &mut self.sound_parameter_loader else {
-                        return Err(fail(Failure::MissingSoundLabel(label.clone())));
-                    };
-                    let next = loader(label).map_err(|e| fail(Failure::SoundSource(e)))?;
-                    self.sound_parameters
-                        .as_mut()
-                        .ok_or_else(|| fail(Failure::SoundState("parameter banks required")))?
-                        .append_label(next, label, *budget)
-                        .map_err(|e| fail(Failure::SoundSource(e.to_string())))?
-                }
-            };
-            let slot = usize::try_from(id.token() - 1).map_err(|_| fail(Failure::Identity))?;
+            let id = *id;
+            let label = label.clone();
+            self.sound_admitted(id)
+                .map_err(|e| self.inner.error(name, e.failure))?;
+            let index = self.prepare_sound_parameter_label(name, &label)?;
+            let slot = usize::try_from(id.token() - 1)
+                .map_err(|_| self.inner.error(name, Failure::Identity))?;
             let (Entry::Sound { parameters, .. } | Entry::FileSound { parameters, .. }) =
                 &mut self.inner.arena[slot]
             else {
@@ -141,5 +120,39 @@ impl ObjectHost {
             *parameters = Some(index);
             Ok(Value::Null)
         })())
+    }
+
+    /// Resolve one admitted label, appending through the loader when it is absent.
+    /// The returned key is the stored parameter row, not copied mixer state.
+    pub(crate) fn prepare_sound_parameter_label(
+        &mut self,
+        name: &str,
+        label: &str,
+    ) -> Result<crate::sound_parameters::ParameterKey, Error> {
+        let fail = |reason| self.inner.error(name, reason);
+        if label.trim().is_empty() || label.contains('\0') {
+            return Err(fail(Failure::SoundState(
+                "empty or NUL-containing sound parameter label",
+            )));
+        }
+        let bank = self
+            .sound_parameters
+            .as_ref()
+            .ok_or_else(|| fail(Failure::SoundState("parameters not admitted")))?;
+        if label.len() > bank.label_limit() {
+            return Err(fail(Failure::Budget("sound parameter label")));
+        }
+        if let Some(index) = bank.find(label) {
+            return Ok(index);
+        }
+        let Some((loader, budget)) = &mut self.sound_parameter_loader else {
+            return Err(fail(Failure::MissingSoundLabel(label.into())));
+        };
+        let next = loader(label).map_err(|e| fail(Failure::SoundSource(e)))?;
+        self.sound_parameters
+            .as_mut()
+            .ok_or_else(|| fail(Failure::SoundState("parameter banks required")))?
+            .append_label(next, label, *budget)
+            .map_err(|e| fail(Failure::SoundSource(e.to_string())))
     }
 }

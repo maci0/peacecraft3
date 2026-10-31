@@ -38,6 +38,7 @@ _ActionAlias_ScriptName=RealActionFn
 IfThenElse=0,boolexpr,code,code
 ForLoopA=0,integer,integer,code
 ForLoopVar=1,integervar,integer,integer,code
+AndMultiple=1,nothing
 CommentString=0,scriptcode
 SetVariable=0,AnyGlobal,Null
 ReturnAction=0,nothing
@@ -415,25 +416,13 @@ fn events_are_registered_before_actions_whatever_the_file_order() {
 
 #[test]
 fn constructs_the_editor_expands_are_refused_with_their_trigger_name() {
-    let mut custom = Trig::new("Scripted", vec![]);
-    custom.custom = true;
     let mut on_init = Trig::new("Startup", vec![]);
     on_init.run_on_init = true;
-    let for_loop = eca(
-        2,
-        "ForLoopVar",
-        true,
-        vec![
-            variable_ref("Count"),
-            preset("Num1"),
-            preset("Num1"),
-            call(2, "DoNothing", vec![]),
-        ],
-    );
+    let and_multiple = eca(2, "AndMultiple", true, vec![]);
     let cases = [
         (
-            Trig::new("Loop", vec![for_loop]),
-            "editor-expanded ForLoopVar",
+            Trig::new("Loop", vec![and_multiple]),
+            "editor-expanded AndMultiple",
         ),
         (on_init, "run-on-initialization trigger"),
         (
@@ -633,6 +622,56 @@ fn if_then_else_is_written_inline_and_disabled_actions_are_omitted() {
         "{jass}"
     );
     assert_eq!(jass.matches("DoNothing()").count(), 1, "{jass}");
+}
+
+#[test]
+fn for_loop_var_indexes_the_declared_integer() {
+    let jass = lower_bytes(&lone(
+        "Loop",
+        vec![eca(
+            2,
+            "ForLoopVar",
+            true,
+            vec![
+                variable_ref("Count"),
+                param(3, "1", None, None),
+                param(3, "10", None, None),
+                call(2, "DoNothing", vec![]),
+            ],
+        )],
+    ))
+    .unwrap();
+    assert!(
+        jass.contains(
+            "function Trig_Loop_Actions takes nothing returns nothing\n    set udg_Count = 1\n    loop\n        exitwhen udg_Count > 10\n        call DoNothing()\n        set udg_Count = udg_Count + 1\n    endloop\nendfunction\n"
+        ),
+        "{jass}"
+    );
+    assert!(!jass.contains("bj_forLoop"), "{jass}");
+    let flagged = wtg(
+        &[variable("Flag", "boolean", None)],
+        &[Trig::new(
+            "Loop",
+            vec![eca(
+                2,
+                "ForLoopVar",
+                true,
+                vec![
+                    variable_ref("Flag"),
+                    param(3, "1", None, None),
+                    param(3, "10", None, None),
+                    call(2, "DoNothing", vec![]),
+                ],
+            )],
+        )],
+    );
+    assert_eq!(
+        lower_bytes(&flagged).unwrap_err(),
+        LowerError::Unsupported {
+            context: "Loop".into(),
+            construct: "ForLoopVar index that is not an integer variable".into(),
+        }
+    );
 }
 
 #[test]

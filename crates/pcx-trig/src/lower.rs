@@ -14,8 +14,8 @@
 //! links only with them. User variables are `udg_` globals.
 //!
 //! Disabled triggers keep their `gg_trg_` declaration but emit no functions.
-//! Refused, failing the whole map with [`LowerError::Unsupported`]: constructs the
-//! editor expands into multi-action forms not yet lowered, custom-text triggers,
+//! Refused, failing the whole map with [`LowerError::Unsupported`]: editor-expanded
+//! forms `statement` does not lower, initially-off custom text,
 //! run-on-initialization triggers, and trigger names that collide after sanitizing.
 
 use crate::catalog::{Catalog, Definition, Kind};
@@ -33,9 +33,11 @@ const NESTING_LIMIT: usize = 64;
 /// The event the editor realizes by running the trigger from `RunInitializationTriggers`.
 const MAP_INITIALIZATION_EVENT: &str = "MapInitializationEvent";
 
-/// Functions the World Editor expands into control flow or multi-action forms that
-/// are not lowered yet. A map using one is refused. `ForLoopA`, `ForLoopB`,
-/// `IfThenElse` and `ReturnAction` are lowered as statements in `statement`.
+/// Functions the World Editor expands into control flow or multi-action forms.
+/// `emit_call` refuses every name here. `statement` lowers `ForLoopVar` before
+/// that check, so only a call-shaped `ForLoopVar` is still refused. `ForLoopA`,
+/// `ForLoopB`, `IfThenElse` and `ReturnAction` are lowered in `statement` and
+/// are not listed.
 const EDITOR_EXPANDED: [&str; 10] = [
     "AndMultiple",
     "OrMultiple",
@@ -463,6 +465,10 @@ impl<'c> Lowerer<'c> {
         match name {
             "IfThenElse" => self.if_then_else(params),
             "ForLoopA" | "ForLoopB" => self.for_loop(name, params),
+            "ForLoopVar" => {
+                self.definition(name, Kind::Action)?;
+                self.for_loop_var(params)
+            }
             "ReturnAction" => {
                 self.definition(name, Kind::Action)?;
                 Ok("return".into())
@@ -753,6 +759,33 @@ impl<'c> Lowerer<'c> {
         ))
     }
 
+    /// `ForLoopVar`: the index is the GUI integer variable. The end value stays
+    /// in the `exitwhen`, unlike `ForLoopA`, which stores it in `bj_forLoopAIndexEnd`.
+    fn for_loop_var(&mut self, params: &[Param]) -> Result<String, LowerError> {
+        let [index_param, start, end, body] = params else {
+            return Err(malformed(&self.trigger, "ForLoopVar arity".into()));
+        };
+        if index_param.kind != ParamKind::Variable {
+            return Err(unsupported(
+                &self.trigger,
+                "ForLoopVar index that is not a variable",
+            ));
+        }
+        if self.variable_type(index_param)? != "integer" {
+            return Err(unsupported(
+                &self.trigger,
+                "ForLoopVar index that is not an integer variable",
+            ));
+        }
+        let index = self.expression(index_param, "integer")?;
+        let start = self.expression(start, "integer")?;
+        let end = self.expression(end, "integer")?;
+        let body = self.branch(body)?;
+        Ok(format!(
+            "set {index} = {start}\nloop\n{INDENT}exitwhen {index} > {end}\n{INDENT}{body}\n{INDENT}set {index} = {index} + 1\nendloop"
+        ))
+    }
+
     /// A numeric literal: a decimal, or an object code written bare or quoted.
     fn number_literal(&self, literal: &str) -> Result<String, LowerError> {
         number_text(literal)
@@ -791,5 +824,121 @@ impl<'c> Lowerer<'c> {
         }
         self.wrappers.push_str("endfunction\n\n");
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lower;
+    use crate::catalog::Catalog;
+    use crate::{Wct, Wtg};
+
+    const DATA: &str = "\
+[TriggerTypes]
+integer=0,1,1,WESTRING_integer
+boolean=0,1,1,WESTRING_boolean
+[TriggerTypeDefaults]
+integer=0
+[TriggerActions]
+DoNothing=0,nothing
+ForLoopVar=1,integervar,integer,integer,code
+";
+
+    fn u(v: &mut Vec<u8>, n: u32) {
+        v.extend_from_slice(&n.to_le_bytes());
+    }
+
+    fn s(v: &mut Vec<u8>, text: &str) {
+        v.extend_from_slice(text.as_bytes());
+        v.push(0);
+    }
+
+    fn param(kind: u32, value: &str, sub: Option<Vec<u8>>) -> Vec<u8> {
+        let mut v = Vec::new();
+        u(&mut v, kind);
+        s(&mut v, value);
+        u(&mut v, sub.is_some() as u32);
+        if let Some(sub) = sub {
+            v.extend_from_slice(&sub);
+        }
+        u(&mut v, 0);
+        v
+    }
+
+    fn action(name: &str, index: &str) -> Vec<u8> {
+        let mut body = Vec::new();
+        u(&mut body, 2);
+        s(&mut body, "DoNothing");
+        u(&mut body, 1);
+        let call = param(2, "", Some(body));
+        let mut eca = Vec::new();
+        u(&mut eca, 2);
+        s(&mut eca, name);
+        u(&mut eca, 1);
+        eca.extend(param(1, index, None));
+        eca.extend(param(3, "1", None));
+        eca.extend(param(3, "10", None));
+        eca.extend(call);
+        eca
+    }
+
+    fn file(var_type: &str, index: &str) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"WTG!");
+        u(&mut v, 4);
+        u(&mut v, 1);
+        u(&mut v, 1);
+        s(&mut v, "Cat");
+        u(&mut v, 1);
+        u(&mut v, 1);
+        s(&mut v, index);
+        s(&mut v, var_type);
+        u(&mut v, 1);
+        u(&mut v, 0);
+        u(&mut v, 0);
+        s(&mut v, "");
+        u(&mut v, 1);
+        s(&mut v, "Loop");
+        s(&mut v, "");
+        u(&mut v, 1);
+        u(&mut v, 0);
+        u(&mut v, 0);
+        u(&mut v, 0);
+        u(&mut v, 1);
+        let eca = action("ForLoopVar", index);
+        u(&mut v, 1);
+        v.extend_from_slice(&eca);
+        v
+    }
+
+    fn lower_file(bytes: &[u8]) -> Result<String, super::LowerError> {
+        let catalog =
+            Catalog::parse("synthetic-TriggerData.txt", "synthetic", "test", DATA).unwrap();
+        let parsed = Wtg::parse(bytes, &catalog.arity().unwrap()).unwrap();
+        let mut wct_bytes = Vec::new();
+        u(&mut wct_bytes, 0);
+        u(&mut wct_bytes, 1);
+        u(&mut wct_bytes, 0);
+        let wct = Wct::parse(&wct_bytes).unwrap();
+        lower(&parsed, &wct, &catalog)
+    }
+
+    #[test]
+    fn for_loop_var_indexes_the_declared_integer() {
+        let jass = lower_file(&file("integer", "Count")).unwrap();
+        assert!(
+            jass.contains(
+                "function Trig_Loop_Actions takes nothing returns nothing\n    set udg_Count = 1\n    loop\n        exitwhen udg_Count > 10\n        call DoNothing()\n        set udg_Count = udg_Count + 1\n    endloop\nendfunction\n"
+            ),
+            "{jass}"
+        );
+        assert!(!jass.contains("bj_forLoop"), "{jass}");
+        assert_eq!(
+            lower_file(&file("boolean", "Flag")).unwrap_err(),
+            super::LowerError::Unsupported {
+                context: "Loop".into(),
+                construct: "ForLoopVar index that is not an integer variable".into(),
+            }
+        );
     }
 }
