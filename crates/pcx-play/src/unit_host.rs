@@ -185,6 +185,10 @@ pub struct ExecutedUnit {
     /// derived. `Some` is the exact raw integer: negative values are stored,
     /// and `AddResourceAmount` wraps instead of clamping.
     pub resource_amount: Option<i32>,
+    /// Original mine linked by target-order construction. `None` means this unit
+    /// is not a haunted-mine site. The handle is the retained source, not a
+    /// town-reference update.
+    pub linked_mine: Option<HandleId>,
     /// Explicit protection set on this unit. None means its initial ability effects
     /// have not been derived; queries refuse rather than inventing that state.
     pub invulnerable: Option<bool>,
@@ -2490,6 +2494,7 @@ impl ObjectHost {
                 requested_show_eye_candy: None,
                 unit_states: Vec::new(),
                 resource_amount,
+                linked_mine: None,
                 invulnerable: None,
                 admitted_order,
                 abilities: None,

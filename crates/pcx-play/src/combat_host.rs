@@ -1327,6 +1327,14 @@ impl ObjectHost {
         killer: Option<HandleId>,
     ) -> Result<(), Error> {
         let name = "unit death";
+        let eligible = self
+            .executed_unit(unit)
+            .ok()
+            .is_some_and(|record| record.combat.as_ref().is_some_and(|combat| !combat.dead));
+        if !eligible {
+            return Ok(());
+        }
+        self.restore_linked_mine_on_death(unit)?;
         let Some(record) = self
             .executed_unit(unit)
             .ok()

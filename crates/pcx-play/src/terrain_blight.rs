@@ -303,6 +303,13 @@ impl Growth {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceState {
+    Active,
+    Removed,
+    UnqualifiedRemoval,
+}
+
 /// Map-authored corner flags and live growth on their source-derived world grid.
 /// shortcut: initial flags use nearest corners; replace with the native initial mask grid.
 #[derive(Debug)]
@@ -312,7 +319,7 @@ pub struct InitialBlight {
     spacing: f64,
     size: [usize; 2],
     corners: Vec<u8>,
-    sources: Vec<(Option<HandleId>, HandleId, Growth, bool)>,
+    sources: Vec<(Option<HandleId>, HandleId, Growth, SourceState)>,
     pub(crate) growth_rules: Option<GrowthRules>,
 }
 
@@ -374,7 +381,41 @@ impl InitialBlight {
     }
 
     pub(crate) fn has_growth(&self) -> bool {
-        !self.sources.is_empty()
+        self.sources
+            .iter()
+            .any(|(_, _, _, state)| *state != SourceState::UnqualifiedRemoval)
+    }
+
+    /// Retain the area of an unqualified removal without aborting construction.
+    pub(crate) fn add_unqualified_removal(
+        &mut self,
+        unit: HandleId,
+        owner: HandleId,
+        effect: Growth,
+    ) -> Result<(), String> {
+        if effect.grid_origin != self.world_origin || effect.spacing != self.spacing {
+            return Err("blight removal grid differs from terrain".into());
+        }
+        self.sources
+            .try_reserve(1)
+            .map_err(|_| "blight removal allocation")?;
+        self.sources
+            .push((Some(unit), owner, effect, SourceState::UnqualifiedRemoval));
+        Ok(())
+    }
+
+    /// Refuse placement only when its cell intersects a pending removal.
+    pub(crate) fn is_blighted_for_placement(
+        &self,
+        position: [f32; 2],
+        now: f64,
+    ) -> Result<bool, String> {
+        for (unit, _, effect, state) in &self.sources {
+            if *state == SourceState::UnqualifiedRemoval && effect.is_blighted_at(position, now)? {
+                return Err(format!("blight removal effect on {unit:?} is not admitted"));
+            }
+        }
+        self.is_blighted_at(position, now)
     }
 
     fn grid(&self, p: [f32; 2]) -> Result<[f64; 2], String> {
@@ -388,7 +429,7 @@ impl InitialBlight {
 
     /// Outside the corner footprints there is no map-authored blight.
     pub fn is_blighted(&self, position: [f32; 2]) -> Result<bool, String> {
-        if !self.sources.is_empty() {
+        if self.has_growth() {
             return Err("dynamic blight query requires a game clock".into());
         }
         Ok(self.at_grid(self.grid(position)?))
@@ -410,7 +451,8 @@ impl InitialBlight {
         self.sources
             .try_reserve(1)
             .map_err(|_| "blight source allocation")?;
-        self.sources.push((Some(unit), owner, growth, false));
+        self.sources
+            .push((Some(unit), owner, growth, SourceState::Active));
         Ok(())
     }
 
@@ -428,7 +470,7 @@ impl InitialBlight {
             .any(|(unit, player, existing, removed)| {
                 unit.is_none()
                     && *player == owner
-                    && !*removed
+                    && *removed == SourceState::Active
                     && existing.fixed
                     && existing.center == growth.center
                     && existing.increment == growth.increment
@@ -440,7 +482,8 @@ impl InitialBlight {
         self.sources
             .try_reserve(1)
             .map_err(|_| "script blight allocation")?;
-        self.sources.push((None, owner, growth, false));
+        self.sources
+            .push((None, owner, growth, SourceState::Active));
         Ok(())
     }
 
@@ -449,9 +492,9 @@ impl InitialBlight {
         if let Some((_, _, _, removed)) = self
             .sources
             .iter_mut()
-            .find(|(id, _, _, _)| *id == Some(unit))
+            .find(|(id, _, _, state)| *id == Some(unit) && *state == SourceState::Active)
         {
-            *removed = true;
+            *removed = SourceState::Removed;
         }
     }
 
@@ -480,8 +523,12 @@ impl InitialBlight {
         let mut found: Option<Option<HandleId>> = None;
         let mut selected = false;
         for (unit, source_owner, growth, removed) in &self.sources {
+            // shortcut: placement alone checks pending dispels until their raster is decoded.
+            if *removed == SourceState::UnqualifiedRemoval {
+                continue;
+            }
             if growth.mask_at(position, now, owner_grid)? {
-                if *removed {
+                if *removed == SourceState::Removed {
                     return Err(format!("blight source {unit:?} was removed"));
                 }
                 if let Some(other) = found {
@@ -514,7 +561,7 @@ impl InitialBlight {
         if !start.is_finite() || !end.is_finite() || end < start {
             return Err("blight integration needs a monotonic clock".into());
         }
-        if self.sources.is_empty() {
+        if !self.has_growth() {
             return self.seconds(from, to, end - start, work);
         }
         self.grid(from)?;
@@ -550,12 +597,17 @@ impl InitialBlight {
                 };
                 next_grid_edge(self.spacing, 0.0);
                 next_grid_edge(self.spacing, 0.5);
-                for (_, _, growth, _) in &self.sources {
-                    next_grid_edge(growth.fine_spacing, 0.0);
+                for (_, _, growth, state) in &self.sources {
+                    if *state != SourceState::UnqualifiedRemoval {
+                        next_grid_edge(growth.fine_spacing, 0.0);
+                    }
                 }
             }
             let time = start + cursor * duration;
-            for (_, _, growth, _) in &self.sources {
+            for (_, _, growth, state) in &self.sources {
+                if *state == SourceState::UnqualifiedRemoval {
+                    continue;
+                }
                 let boundary = if time < growth.start {
                     Some(growth.start)
                 } else if growth.fixed {
@@ -594,7 +646,7 @@ impl InitialBlight {
         duration: f64,
         work: &mut usize,
     ) -> Result<f64, String> {
-        if !self.sources.is_empty() {
+        if self.has_growth() {
             return Err("dynamic blight regeneration requires source-clock integration".into());
         }
         if !duration.is_finite() || duration < 0.0 {

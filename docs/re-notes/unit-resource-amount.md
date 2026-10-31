@@ -139,3 +139,17 @@ Human02's script creates the authored mine and then calls
 `SetResourceAmount(gg_unit_ngol_0009, 20000)` at line 911. The derived
 `DataA1=12500` seed now reproduces the pre-call value, and the script's
 explicit set still determines the value used by the gate.
+
+An isolated Human05 probe built a Haunted Gold Mine over an existing mine.
+The new structure reported the original mine's 12500 gold during construction
+and after completion, whereas the separately created resource-family unit in
+the earlier probe initially reported zero. The native build callback `0xb70220`
+calls `0xb27980`, which links the two mine objects and copies the resource
+amount. Constructor seeding alone does not cover target-ordered mine
+construction. The construction host now copies the original amount onto the
+new resource site at construction start and copies the site's remaining amount
+back when a completed site with positive gold is killed. The original keeps
+its amount while hidden. The zero-gold branch of `0xb27600` does not copy gold
+or show the original; it calls life setter slot `0x124` with zero. That
+setter's death sequence is not established, so a nonpositive teardown still
+refuses, as does cancellation.

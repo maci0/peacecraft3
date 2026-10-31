@@ -104,6 +104,9 @@ checkpoints and RNG agree with `g1` through 313.00 s, then it refuses at
 effect. The effect's removal and overlap behavior is not yet admitted, so this
 run does not reach the earlier victory at 449.02 s. See
 [terrain blight](terrain-blight.md#growth-and-placement-investigation-2026-10-30).
+After deferring the unqualified removal until an affected placement query,
+`town-final-a-20261030` reaches victory and matches the `g1` checkpoint and
+RNG lines. Blight reads other than placement do not yet reflect that removal.
 
 ## Open
 

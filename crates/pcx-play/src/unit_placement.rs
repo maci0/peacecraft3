@@ -1650,7 +1650,7 @@ impl Placement {
                 let point = std::array::from_fn(|axis| {
                     self.grid.origin[axis] + ((anchor[axis] + [x, y][axis]) as f32 + 0.5) * size
                 });
-                if blight.is_blighted_at(point, now).map_err(fail)? {
+                if blight.is_blighted_for_placement(point, now).map_err(fail)? {
                     flags |= 0x20;
                 }
             }

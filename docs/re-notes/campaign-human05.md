@@ -255,6 +255,42 @@ Necropolis completion, so they do not establish its completion time or a
 Ziggurat site. The growth raster and its local-client sample comparison are
 described in [terrain blight](terrain-blight.md#growth-and-placement-investigation-2026-10-30).
 
+With the single-mine hall registration path, `town-final-a-20261030` and
+`town-final-b-20261030` match 125 checkpoint, RNG and trace lines. The town
+center refreshes to (5920, 3104) at the Necropolis construction
+start. At 1225.211 s it accepts a Ziggurat order at (5600, 2912) after 373
+candidate removals. The next request is a Haunted Gold Mine and refuses because
+the mine-targeted construction path is not yet implemented. The last completed
+checkpoint is tick 78400, 1225.00 s; neither building's completion is reached.
+
+In `mine-search-a-20261031` and `mine-search-b-20261031`, the town record retains
+the selected mine handle and the Haunted Mine request runs the placement search before refusing its
+unimplemented target order. At 1225.211 s that search accepts (5568, 2944)
+after 370 dequeues; the order's resolved mine target is handle 3377 at
+(5696, 3456). The search candidate is not the mine's build position. The
+earlier Necropolis and Ziggurat orders match the preceding runs, and the last
+completed checkpoint remains tick 78400. The search candidate has not been
+compared with a matching native trace. Checkpoint, RNG, build-search, build-order
+and construction-start lines match between the runs. The same worker was selected for both
+the Ziggurat and mine searches in that interval.
+
+The target order is now implemented for a worker with no admitted build order.
+It builds at the mine, not at the search candidate, and the linked lifecycle
+hides the original, copies gold, and restores a completed site that still has
+gold. The 1225.211 s worker already has the Ziggurat order. `unit+0x3a0` and
+the AI-component `0x30000000` bits are not represented, and a pending building
+order is not shown to set either before the issue returns. The request therefore
+refuses that worker instead of replacing the Ziggurat or selecting another
+acolyte. Cancellation, in-progress death, depletion, and the town-mine list
+after the link also refuse.
+
+Release runs `mine-link-a-20261031` and `mine-link-b-20261031` both stop at
+that refusal. The cargo test exit is 101. The last completed checkpoint is
+tick 78400, 1225.00 s. The refusal names worker 12407, mine 3377 at
+(5696, 3456), search candidate (5568, 2944), and 370 dequeues. Their 98
+Human05 checkpoint and RNG lines match each other and `mine-search-a-20261031`.
+No construction of the haunted mine, and no later campaign state, is established.
+
 An original-client probe of the isolated orange scenario (the four acolytes,
 `Trig_ResourcesOrange` and `Trig_OrangeTown` run three seconds after start on a patched
 Human05, without the full farm-corruption sequence) shows the original building
@@ -269,8 +305,9 @@ details in [AI construction](ai-construction.md).
   not replay their original movement histories. Later town changes, some effect sources,
   some blight overlap or removal cases, mine-targeted construction and other cases still refuse; cost timing,
   worker choice and script retry timing remain open ([AI construction](ai-construction.md)).
-- The 1800 s survival timer and the ending are not reached. The later Ziggurat
-  request refuses the changed town record before placement is searched.
+- The 1800 s survival timer and the ending are not reached. The next Haunted
+  Gold Mine request refuses because the selected worker already has an admitted
+  build order and the native worker-state fields are not represented.
 - Gold return distance (no probe), the choice among several lumber depots, and path versus
   straight-line "nearest" are the recreation's, not measured.
 - The Human04 open item (the AI target scorer refuses a unit that ever carried an effect) did

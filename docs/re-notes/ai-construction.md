@@ -1481,8 +1481,15 @@ the association. The lower bound uses the decoded cell conversion and ordinary e
 it is used only after excluding Warp links. The candidate must pass both reach searches with
 the minimum work budget guaranteed by the source's adaptive rule. The mine's texture and
 movement rectangles must be covered by the retained texture rectangle; other shapes refuse.
-The retained town center is not recomputed from the peon's later position. A changed peon,
-mine registration or owned hall refuses rather than silently changing the town record.
+The retained town center is not recomputed from the peon's later position. On construction
+of a town-hall-class unit, native registration calls `0xac8290` from `0xabb42f`;
+the mine-to-hall search at `0xac7450` clears both objects' retained rectangles, and a
+successful association stores the hall through `0xac8010` before `0xac80a0` refreshes
+the town coordinates. The host now performs that update at construction start for the
+unique previously qualified mine, with the source work limit and threshold. A competing
+mine or a result requiring a new town record still refuses; the general adaptive
+multiple-record lifecycle remains open. The observed campaign result is documented
+separately in [Human05](campaign-human05.md).
 
 The tracked pool reads the Warp, Ensnare, root, Purge and cargo effect class identifiers from
 the reviewed image. The live qualification checks current buffs and pause state, the event
@@ -1492,8 +1499,8 @@ that the fine-grid hierarchy does not yet model. A possible counter-raising effe
 when its source cannot be proved out of reach. The supported structure request samples live
 terrain and structure scores, searches the live hierarchy, applies the shared validator with
 qualified unit exclusions, and passes the selected site to the existing construction request.
-Mine-targeted builds, blight requirements, non-square scoring textures and the special buffer
-count branch still refuse when encountered.
+Mine-targeted builds, unqualified blight cases, non-square scoring textures and the special
+buffer count branch still refuse when encountered.
 
 The live spatial owner previously refused whenever a moving unit had any buff. The implemented
 slow host updates the admitted order speed, conversion leaves that motion unchanged, and
@@ -1565,3 +1572,80 @@ visibility-dependent owner-mask branch remains unqualified, as described in
 
 The production path admits the bounded initial-town case described above; it refuses inputs
 outside that case.
+
+### Mine-targeted construction investigation, 2026-10-31
+
+The comparison at `0xac2c3d` selects the mine-targeted order by a unit type
+operand in the reviewed executable, not by the unit's `buffType` field. The
+host reads that operand from the pinned image. The same routine resolves the
+town's primary mine reference, falling back to its secondary reference, and
+calls `0xad4970` before issuing the target order. The retained initial-town
+record now keeps its selected mine handle directly; the implementation currently
+qualifies the primary reference only. A successful search is a gate. The order
+built by `0x69f760` receives the mine handle, not the searched point. The
+recreation therefore travels to and builds at the mine's position.
+
+An isolated orange-player probe ordered the Haunted Gold Mine at 20.211 s,
+targeting the neutral gold mine at (5696, 3456). At the 23 s sample the original
+mine was visible and the worker was travelling; at 24 s the original was hidden
+and the new structure at the same coordinates reported the original 12500 gold.
+The structure finished at the 124 s sample. The probe then killed it, and at the
+125 s sample the original mine was visible again with 12500 gold. These are
+one-second observations, not exact start or finish timestamps; the test did not
+spend gold from the mine or cancel an incomplete structure.
+
+In native code, the Undead build callback `0xb70220` supplies the target to the
+new mine's ability; `0xb27980` links it to the original mine and copies the
+resource amount. Its teardown path `0xb27600` restores the retained original
+when gold remains. With zero gold it instead calls the original unit's current-life
+setter with zero, using the same virtual slot identified in
+[unit state](unit-state-maxima.md). The resulting death and cancellation event
+sequences need separate qualification before those paths are admitted.
+
+The recreation now issues that target order only when the selected worker has
+no admitted build order. `0xac2b00` can still issue to a worker whose current
+order is a building, or skip that worker, depending on `unit+0x3a0` and
+`[0x6933c0 object+0x28] & 0x30000000`. Neither field is represented. A pending
+Ziggurat is the order id at `unit+0x3a8`, which this walk does not read, and
+the reviewed issue path does not show that order setting the tested state or
+both flag bits before it returns. Reusing the busy worker or selecting another
+would invent that result, so the request refuses and leaves the pending order
+in place. The stopped debugger log at `0xac2d18` is not kind or worker evidence:
+its three stops are byte-identical and do not record the requested id.
+
+#### Cancellation, depletion and town reference, static only
+
+`0xb27600` has one direct caller, the ability event handler `0xb25e00`. That
+handler calls it when the event id is `0xd01a0`. At link time `0xb27980` registers
+the new ability on the original unit for that event through `0x6bffb0` with a
+nonzero flag; teardown unregisters with flag zero. `0x6becd0` is the publisher.
+Its reviewed callers (`0x67fe10`, `0x689708`, `0x6a0090`, and three later sites)
+set unit state bit `0x100` and invoke virtual slot `0xa0` before publishing.
+Those callers are not identified as construction cancel, `KillUnit`, or
+`RemoveUnit`, so a cancel is not yet the same operation as the probed site death.
+
+The zero-gold branch does not take the restore path. It calls the original
+unit's virtual slot `0x124` with the static float at `0x112d88c` and returns.
+That slot is the current-life setter used by `SetUnitState` (`0x69dd90`). The
+setter's own death, removal and event behavior is not established by the call,
+so depletion is not implemented as `KillUnit` or as a silent life write.
+
+`0xac6340` handles `0xd01a0` on an AI player by calling `0xac64b0`, which clears
+a matching handle in the twelve slots at AI-player `+0x2c`. That array is not
+the town mine pair at `+0x54` and `+0x60`. Hide is not one of the reviewed
+`0xd01a0` publishers. The town record is therefore not updated from this
+evidence, and a later snapshot that no longer matches the captured mine list
+still refuses rather than treating the hidden original or the new site as the
+primary reference.
+
+An idle worker pays through the existing construction debit. Arrival hides the
+original with the same shown state `IsUnitHidden` reads, copies its current
+gold onto the new resource site, and leaves the original's amount in place.
+The probe shows both amounts at once while the original is hidden. Completion
+uses the existing site clock. Killing a completed site with remaining gold
+copies that amount back and shows the original. Cancellation, death during
+construction, and a nonpositive remaining amount refuse; those event sequences
+were not probed. After the link exists, a later town-mine snapshot that no
+longer matches the captured list refuses. That does not treat the hidden
+original as the continuing primary reference or exclude the new site from
+registration; those transitions are not established.

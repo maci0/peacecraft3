@@ -19,7 +19,18 @@ pub(super) struct TownReference {
     pub unit: HandleId,
     pub position: [f32; 2],
     pub mines: Vec<(HandleId, [f32; 2])>,
-    pub center: Result<[f32; 2], String>,
+    pub center: Result<([f32; 2], HandleId), String>,
+}
+
+impl TownReference {
+    pub(super) fn primary_mine(&self) -> Result<(HandleId, [f32; 2]), String> {
+        let (_, mine) = self.center.as_ref().map_err(Clone::clone)?;
+        self.mines
+            .iter()
+            .find(|(unit, _)| unit == mine)
+            .copied()
+            .ok_or_else(|| format!("AI town primary mine {mine:?} is missing"))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -737,7 +748,28 @@ impl ObjectHost {
 
 #[cfg(test)]
 mod tests {
-    use super::Registry;
+    use super::{Registry, TownReference};
+    use pcx_script::HandleId;
+
+    #[test]
+    fn town_retains_its_selected_mine_even_when_positions_match() {
+        let id = |value| HandleId::new(std::num::NonZeroU64::new(value).unwrap());
+        let mut town = TownReference {
+            unit: id(1),
+            position: [7.0, 9.0],
+            mines: vec![(id(2), [4.0, 6.0]), (id(3), [4.0, 6.0])],
+            center: Ok(([5.5, 7.5], id(3))),
+        };
+        assert_eq!(town.primary_mine().unwrap(), (id(3), [4.0, 6.0]));
+        town.mines.pop();
+        assert!(town.primary_mine().unwrap_err().contains("missing"));
+        town.center = Err("town unavailable".into());
+        assert_eq!(town.primary_mine().unwrap_err(), "town unavailable");
+        assert_eq!(
+            std::mem::size_of::<Result<[f32; 2], String>>(),
+            std::mem::size_of::<Result<([f32; 2], HandleId), String>>()
+        );
+    }
 
     #[test]
     fn players_keep_independent_target_heroes_and_flee_flags() {

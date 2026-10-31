@@ -406,11 +406,16 @@ pub struct Rules {
     snap_odd: f32,
     snap_edge: f32,
     exclusion_margin: f32,
+    target_mine_kind: [u8; 4],
 }
 
 impl Rules {
     pub fn diagnostic_radius(&self) -> f32 {
         self.margin
+    }
+
+    pub fn target_mine_kind(&self) -> [u8; 4] {
+        self.target_mine_kind
     }
 
     pub fn reviewed_legacy(image: &[u8], origin: AssetIdentity) -> Result<Self, String> {
@@ -447,6 +452,7 @@ impl Rules {
         read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         let mut r = Reader(read);
+        let target_mine_kind = Self::decode_target_mine_kind(&mut r)?;
         let width = r.word(0xad3de9, &[0xb9])? as usize;
         let center = r.word(0xad3f95, &[0xc7, 0x83, 0xb0, 0x55, 0, 0])? as usize;
         if r.word(0xad3f9f, &[0xc7, 0x83, 0x18, 0xf5, 0, 0])? as usize != center {
@@ -550,7 +556,14 @@ impl Rules {
             snap_odd,
             snap_edge,
             exclusion_margin,
+            target_mine_kind,
         })
+    }
+
+    fn decode_target_mine_kind(
+        r: &mut Reader<impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>>,
+    ) -> Result<[u8; 4], String> {
+        Ok(r.word(0xac2c3d, &[0x81, 0x7d, 0x08])?.to_be_bytes())
     }
 
     /// The validator's expanded object-enumeration rectangle for a snapped candidate.
@@ -1164,7 +1177,22 @@ mod tests {
             snap_odd: 4.,
             snap_edge: 8.,
             exclusion_margin: 11.,
+            target_mine_kind: *b"Mxyz",
         }
+    }
+
+    #[test]
+    fn target_mine_kind_is_taken_from_the_checked_instruction() {
+        let mut reader = Reader(|va, length, code| {
+            assert_eq!((va, length, code), (0xac2c3d, 7, true));
+            Ok(vec![0x81, 0x7d, 0x08, b'z', b'y', b'x', b'M'])
+        });
+        assert_eq!(
+            Rules::decode_target_mine_kind(&mut reader).unwrap(),
+            *b"Mxyz"
+        );
+        let mut changed = Reader(|_, _, _| Ok(vec![0x80, 0x7d, 0x08, b'z', b'y', b'x', b'M']));
+        assert!(Rules::decode_target_mine_kind(&mut changed).is_err());
     }
 
     fn snap(p: [f32; 2]) -> Result<([f32; 2], [i32; 2]), String> {

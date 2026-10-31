@@ -926,13 +926,37 @@ impl ObjectHost {
                                 )
                             })?;
                         return match site {
-                            Some(site) => {
+                            Some(super::ai_construction::AiBuildTarget::Point(site)) => {
                                 let accepted =
                                     self.request_unit_construction(worker, kind, site)?;
                                 #[cfg(feature = "test-fixtures")]
                                 if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
                                     eprintln!(
                                         "AI build order: time={:?} player={player} kind={requested:?} worker={worker:?} site={site:?} dequeues={_dequeues} accepted={accepted}",
+                                        self.timer_game_time()
+                                    );
+                                }
+                                Ok(accepted)
+                            }
+                            Some(super::ai_construction::AiBuildTarget::Mine {
+                                mine,
+                                position,
+                                candidate,
+                            }) => {
+                                if self.unit_construction_order(worker)?.is_some() {
+                                    return Err(self.inner.error(
+                                        "SetProduce",
+                                        Failure::UnitActivity(format!(
+                                            "AI worker-state filter is not qualified: worker {worker:?} already has an admitted build order; unit state and AI-component flags are not represented, so the haunted-mine issue is refused instead of reusing that worker or selecting another (mine {mine:?} at {position:?}, search candidate {candidate:?}, {_dequeues} dequeues)"
+                                        )),
+                                    ));
+                                }
+                                let accepted =
+                                    self.request_linked_mine_construction(worker, kind, mine)?;
+                                #[cfg(feature = "test-fixtures")]
+                                if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                                    eprintln!(
+                                        "AI mine order: time={:?} player={player} kind={requested:?} worker={worker:?} mine={mine:?} position={position:?} candidate={candidate:?} dequeues={_dequeues} accepted={accepted}",
                                         self.timer_game_time()
                                     );
                                 }

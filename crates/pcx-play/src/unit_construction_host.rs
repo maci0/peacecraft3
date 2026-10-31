@@ -65,6 +65,7 @@ pub struct Request {
     reach: f32,
     site: Option<HandleId>,
     autonomous: bool,
+    linked_mine: Option<HandleId>,
 }
 
 struct PreparedBuild {
@@ -87,6 +88,7 @@ pub struct Site {
     last_life: f32,
     damaged: bool,
     fault: Option<String>,
+    linked_mine: Option<HandleId>,
 }
 impl Site {
     pub(super) fn note_damage(&mut self) {
@@ -615,6 +617,7 @@ impl ObjectHost {
                 reach,
                 site: Some(site),
                 autonomous: false,
+                linked_mine: None,
             });
         }
         self.unit_ordered(worker);
@@ -678,6 +681,7 @@ impl ObjectHost {
                 reach,
                 site: None,
                 autonomous,
+                linked_mine: None,
             },
             revision,
             steer,
@@ -709,6 +713,94 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(worker)? {
             record.construction_revision = revision;
             record.construction_request = Some(request);
+        }
+        self.unit_ordered(worker);
+        self.clear_combat_target(worker);
+        self.cancel_inventory_order(worker);
+        Ok(true)
+    }
+
+    /// Target-order construction on an existing mine. The search candidate is not
+    /// the build position: travel and the site use the mine's position.
+    pub(crate) fn request_linked_mine_construction(
+        &mut self,
+        worker: HandleId,
+        kind: i32,
+        mine: HandleId,
+    ) -> Result<bool, Error> {
+        if self.unit_construction_order(worker)?.is_some() {
+            return Err(self.construction_error(
+                "linked mine construction refuses a worker with an admitted build order",
+            ));
+        }
+        let (position, gold_now) = {
+            let source = self.executed_unit(mine)?;
+            if !source.shown || source.combat.as_ref().is_some_and(|state| state.dead) {
+                return Err(self.construction_error("linked mine is not a shown living source"));
+            }
+            let position = source
+                .position
+                .ok_or_else(|| self.construction_error("linked mine position missing"))?;
+            let gold_now = source
+                .resource_amount
+                .ok_or_else(|| self.construction_error("linked mine has no resource amount"))?;
+            (position, gold_now)
+        };
+        let _ = gold_now;
+        let record = self.executed_unit(worker)?;
+        let owner = record.owner;
+        let revision = record
+            .construction_revision
+            .checked_add(1)
+            .ok_or_else(|| self.construction_error("construction revision overflow"))?;
+        let definition = self
+            .unit_catalog()?
+            .resolve(kind.to_be_bytes())
+            .map_err(|why| self.construction_error(format!("construction catalog: {why:?}")))?;
+        let used = self
+            .unit_food_amount(&definition, "fused")
+            .map_err(|why| self.construction_error(why))?;
+        if used != 0 {
+            return Err(self.construction_error("construction food reservation is not qualified"));
+        }
+        self.unit_food_amount(&definition, "fmade")
+            .map_err(|why| self.construction_error(why))?;
+        let duration = self.ai_unit_amount(owner, kind, "bldtm")?;
+        if duration <= 0 {
+            return Err(self.construction_error("construction duration must be positive"));
+        }
+        let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
+        let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
+        let autonomous = self
+            .construction_worker_style(worker)?
+            .ok_or_else(|| self.construction_error("worker construction style is not admitted"))?
+            .1;
+        let reach = self.construction_reach(worker, &definition)?;
+        let Some(steer) =
+            self.prepare_steer_unit_in_range(worker, Some(position), reach, "construction")?
+        else {
+            return Ok(false);
+        };
+        self.reserve_steer_commits(1, "construction")?;
+        let Some(debit) = self.prepare_training_debit(owner, gold, lumber, 0, 0)? else {
+            return Ok(false);
+        };
+        self.commit_steer_unit(worker, steer, "construction")?;
+        self.commit_training_debit(debit);
+        if let Entry::Unit { record } = self.inner.entry_mut(worker)? {
+            record.construction_revision = revision;
+            record.construction_request = Some(Request {
+                owner,
+                kind,
+                position,
+                gold,
+                lumber,
+                duration,
+                reach,
+                site: None,
+                autonomous,
+                linked_mine: Some(mine),
+            });
         }
         self.unit_ordered(worker);
         self.clear_combat_target(worker);
@@ -893,7 +985,7 @@ impl ObjectHost {
             self.advance_unit_construction(site, now)?;
         }
         for (worker, request) in requests {
-            if request.site.is_none() {
+            if request.site.is_none() && request.linked_mine.is_none() {
                 let placement = self.construction_placement(worker, request.kind, request.position);
                 if !matches!(placement?, ConstructionPreview::Allowed { position } if position == request.position)
                 {
@@ -926,8 +1018,13 @@ impl ObjectHost {
                 }
             } else {
                 // Recheck the same placement after travel; a changed site aborts the reserved request.
-                let preview = self.construction_placement(worker, request.kind, request.position);
-                if !matches!(preview?, ConstructionPreview::Allowed { position } if position == request.position)
+                // A linked mine occupies its own cell until construction start hides it.
+                let preview_ok = request.linked_mine.is_some()
+                    || matches!(
+                        self.construction_placement(worker, request.kind, request.position)?,
+                        ConstructionPreview::Allowed { position } if position == request.position
+                    );
+                if !preview_ok
                     || self
                         .begin_unit_construction(worker, request.kind, request.position)?
                         .is_none()
@@ -1007,6 +1104,59 @@ impl ObjectHost {
         Ok(true)
     }
 
+    fn hide_linked_mine(&mut self, mine: HandleId) -> Result<i32, Error> {
+        let source = self.executed_unit(mine)?;
+        if !source.shown || source.combat.as_ref().is_some_and(|state| state.dead) {
+            return Err(self.construction_error("linked mine is not a shown living source"));
+        }
+        let gold = source
+            .resource_amount
+            .ok_or_else(|| self.construction_error("linked mine has no resource amount"))?;
+        let prepared = self.prepare_unit_visibility(mine, false, "construction")?;
+        self.commit_unit_visibility(mine, prepared, "construction")?;
+        Ok(gold)
+    }
+
+    fn show_linked_mine(&mut self, mine: HandleId) -> Result<(), Error> {
+        let prepared = self.prepare_unit_visibility(mine, true, "construction")?;
+        self.commit_unit_visibility(mine, prepared, "construction")?;
+        Ok(())
+    }
+
+    /// Completed-site death with remaining gold restores the original mine.
+    /// In-progress death and a depleted amount stay refused.
+    pub(super) fn restore_linked_mine_on_death(&mut self, site: HandleId) -> Result<(), Error> {
+        let record = self.executed_unit(site)?;
+        let Some(mine) = record.linked_mine else {
+            return Ok(());
+        };
+        if record.construction.is_some() {
+            return Err(
+                self.construction_error("haunted-mine death during construction is not qualified")
+            );
+        }
+        let remaining = record.resource_amount.ok_or_else(|| {
+            self.construction_error("linked construction site has no resource amount")
+        })?;
+        if remaining <= 0 {
+            return Err(self.construction_error("haunted-mine depletion teardown is not qualified"));
+        }
+        let reveal = self.prepare_unit_visibility(mine, true, "construction")?;
+        if self.executed_unit(mine)?.resource_amount.is_none() {
+            return Err(self.construction_error("linked mine has no resource amount"));
+        }
+        if let Entry::Unit { record } = self.inner.entry_mut(mine)? {
+            *record.resource_amount.as_mut().expect("checked") = remaining;
+        } else {
+            return Err(self.construction_error("linked mine is no longer a unit"));
+        }
+        self.commit_unit_visibility(mine, reveal, "construction")?;
+        if let Entry::Unit { record } = self.inner.entry_mut(site)? {
+            record.linked_mine = None;
+        }
+        Ok(())
+    }
+
     /// Engine arrival operation, not a public JASS order or proof of worker travel.
     pub(crate) fn begin_unit_construction(
         &mut self,
@@ -1082,7 +1232,13 @@ impl ObjectHost {
                 .ok_or_else(|| self.construction_error("construction revision overflow"))?
         };
         let events = self.prepare_construction_events(None, owner, Phase::Start)?;
-        let mut prepared = self.prepare_unit_creation(
+        let linked = request.as_ref().and_then(|request| request.linked_mine);
+        let copied_gold = if let Some(mine) = linked {
+            Some(self.hide_linked_mine(mine)?)
+        } else {
+            None
+        };
+        let prepared = self.prepare_unit_creation(
             &[
                 Value::Handle(owner),
                 Value::Int(kind),
@@ -1092,11 +1248,35 @@ impl ObjectHost {
             ],
             None,
             super::unit_creation::Birth::Construction,
-        )?;
+        );
+        let mut prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(mine) = linked {
+                    self.show_linked_mine(mine)?;
+                }
+                return Err(error);
+            }
+        };
         if request.is_some() && prepared.record.position != Some(position) {
+            if let Some(mine) = linked {
+                self.show_linked_mine(mine)?;
+            }
             return Err(
                 self.construction_error("construction creation differs from prepared placement")
             );
+        }
+        if let Some(gold_now) = copied_gold {
+            if prepared.record.resource_amount.is_none() {
+                if let Some(mine) = linked {
+                    self.show_linked_mine(mine)?;
+                }
+                return Err(
+                    self.construction_error("linked construction site has no resource amount")
+                );
+            }
+            prepared.record.resource_amount = Some(gold_now);
+            prepared.record.linked_mine = linked;
         }
         let vitals = prepared
             .record
@@ -1117,6 +1297,7 @@ impl ObjectHost {
             last_life: vitals.life,
             damaged: false,
             fault: None,
+            linked_mine: request.as_ref().and_then(|request| request.linked_mine),
         });
         self.inner
             .arena
@@ -1130,10 +1311,22 @@ impl ObjectHost {
         let Some(debit) =
             self.prepare_training_debit(owner, debit_gold, debit_lumber, 0, events.len())?
         else {
+            if let Some(mine) = linked {
+                self.show_linked_mine(mine)?;
+            }
             return Ok(None);
         };
-        let site = self.commit_unit_creation(prepared)?;
+        let site = match self.commit_unit_creation(prepared) {
+            Ok(site) => site,
+            Err(error) => {
+                if let Some(mine) = linked {
+                    self.show_linked_mine(mine)?;
+                }
+                return Err(error);
+            }
+        };
         self.commit_training_debit(debit);
+        self.ai_register_constructed_town(site, owner);
         #[cfg(feature = "test-fixtures")]
         if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
             eprintln!(
@@ -1163,7 +1356,7 @@ impl ObjectHost {
         &self,
         site: HandleId,
         now: f64,
-    ) -> Result<Option<crate::terrain_blight::Growth>, Error> {
+    ) -> Result<Option<(crate::terrain_blight::Growth, bool)>, Error> {
         use pcx_objects::editor::FieldKind;
         let Some(blight) = self.initial_blight.as_ref() else {
             return Ok(None);
@@ -1196,11 +1389,7 @@ impl ObjectHost {
                     .parse()
                     .map_err(|why| self.construction_error(format!("blight {field}: {why}")))
             };
-            if number("DataB")? == 0.0 {
-                return Err(self.construction_error(format!(
-                    "blight removal effect on {site:?} is not admitted"
-                )));
-            }
+            let removes_blight = number("DataB")? == 0.0;
             let point = record
                 .position
                 .ok_or_else(|| self.construction_error("blight source position unavailable"))?;
@@ -1218,10 +1407,11 @@ impl ObjectHost {
                     "blight growth: time={now} source={site:?} position={point:?} spec={spec:?}"
                 );
             }
-            result = Some(
+            result = Some((
                 crate::terrain_blight::Growth::new(point, blight.growth_origin(), now, spec)
                     .map_err(|why| self.construction_error(why))?,
-            );
+                removes_blight,
+            ));
         }
         Ok(result)
     }
@@ -1231,13 +1421,15 @@ impl ObjectHost {
         site: HandleId,
         now: f64,
     ) -> Result<(), Error> {
-        if let Some(growth) = self.completed_blight_growth(site, now)? {
+        if let Some((growth, removes_blight)) = self.completed_blight_growth(site, now)? {
             let owner = self.executed_unit(site)?.owner;
-            self.initial_blight
-                .as_mut()
-                .expect("growth state checked")
-                .add_growth(site, owner, growth)
-                .map_err(|why| self.inner.error("construction", Failure::UnitActivity(why)))?;
+            let state = self.initial_blight.as_mut().expect("growth state checked");
+            if removes_blight {
+                state.add_unqualified_removal(site, owner, growth)
+            } else {
+                state.add_growth(site, owner, growth)
+            }
+            .map_err(|why| self.inner.error("construction", Failure::UnitActivity(why)))?;
         }
         Ok(())
     }
@@ -1397,6 +1589,10 @@ impl ObjectHost {
         }
         if state.damaged || vitals.life < state.last_life {
             return Err(self.construction_error("damaged construction refunds are not qualified"));
+        }
+        if state.linked_mine.is_some() || record.linked_mine.is_some() {
+            return Err(self
+                .construction_error("haunted-mine cancellation event sequence is not qualified"));
         }
         let owner = record.owner;
         let rate = self.construction_rules()?.refund_rate;

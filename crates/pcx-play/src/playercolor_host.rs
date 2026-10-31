@@ -936,13 +936,13 @@ pub(crate) use objects::harvest_runtime;
 #[cfg(test)]
 pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
 pub use objects::{
-    AcceptedSpan, AppliedCameraSetup, CameraDestination, CameraFieldRecord, CameraState,
-    CineFilter, ConditionBudget, ConditionCallback, DayNightState, DeathEventRegistration,
-    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableStats, DestructableVisual, Environment, ExecutedItem, ExecutedUnit,
-    ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, FilterSample, ForceBudget,
-    GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress, Illusion,
-    ItemBudget, LabelSoundFlags, LearnBlock, LearnableSkill, MapConfig, MapConfigBudget,
+    AcceptedSpan, AiBuildTarget, AppliedCameraSetup, CameraDestination, CameraFieldRecord,
+    CameraState, CineFilter, ConditionBudget, ConditionCallback, DayNightState,
+    DeathEventRegistration, DestructableBudget, DestructableCatalog, DestructableCreation,
+    DestructableOrigin, DestructableStats, DestructableVisual, Environment, ExecutedItem,
+    ExecutedUnit, ExecutedUnitState, FileSoundState, FilterBudget, FilterCallback, FilterSample,
+    ForceBudget, GameStateEventRegistration, GuardBudget, GuardState, HeroBudget, HeroProgress,
+    Illusion, ItemBudget, LabelSoundFlags, LearnBlock, LearnableSkill, MapConfig, MapConfigBudget,
     MapMusicSelection, MessageBudget, MessageState, MirrorEventContext, MirrorEventPhase,
     MorphEventContext, MorphEventPhase, MorphPhase, ObjectHost, PlayerAdmissionError,
     PlayerAllianceBudget, PlayerBudget, PlayerEventRegistration, PlayerRemoval,

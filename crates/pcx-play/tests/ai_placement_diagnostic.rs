@@ -7,6 +7,7 @@ use pcx_play::ai_placement::{
     MovementEvidence, Rules, beyond_cast_reach, exclude_unit,
 };
 use pcx_play::headless_startup::start;
+use pcx_play::playercolor_host::AiBuildTarget;
 use pcx_script::{Host, Value};
 use pcx_sim::world::{Definition, FieldValue};
 use std::collections::BTreeSet;
@@ -783,7 +784,7 @@ fn human05_placement_diagnostic() {
         .find(|p| p.index == start_index)
         .unwrap();
     let start_point = [start.x, start.y];
-    let (_, mine_record) = objects
+    let (mine_handle, mine_record) = objects
         .executed_units()
         .find(|(_, u)| u.definition.rawcode == *b"ngol" && u.position == Some([5696., 3456.]))
         .unwrap();
@@ -976,6 +977,10 @@ fn human05_placement_diagnostic() {
         objects
             .diagnostic_install_ai_town(5, player_handle)
             .unwrap();
+        assert_eq!(
+            objects.diagnostic_ai_town_mine(5, player_handle).unwrap(),
+            (mine_handle, mine)
+        );
         for &unit in &workers {
             objects
                 .native("SetUnitPathing", &[Value::Handle(unit), Value::Bool(false)])
@@ -1204,7 +1209,32 @@ fn human05_placement_diagnostic() {
             let expected_rank = std::env::var("PCX_REACH_ORACLE_RANK")
                 .map(|value| value.parse().unwrap())
                 .unwrap_or(if blocked { 280 } else { 1 });
-            assert_eq!(result.unwrap(), (Some(oracle), expected_rank));
+            assert_eq!(
+                result.unwrap(),
+                (Some(AiBuildTarget::Point(oracle)), expected_rank)
+            );
+            if !blocked {
+                let (mine, mine_position) = objects
+                    .diagnostic_ai_town_mine(5, player_handle)
+                    .expect("town mine");
+                let result =
+                    objects.diagnostic_ai_structure_site(5, player_handle, worker, *b"ugol");
+                println!("production mine-target search: {result:?}");
+                let (target, dequeues) = result.expect("mine search");
+                match target {
+                    Some(AiBuildTarget::Mine {
+                        mine: found,
+                        position,
+                        candidate,
+                    }) => {
+                        assert_eq!(found, mine);
+                        assert_eq!(position, mine_position);
+                        assert_ne!(candidate, position);
+                        assert!(dequeues > 0);
+                    }
+                    other => panic!("mine target was {other:?}"),
+                }
+            }
             continue;
         }
         let checkpoint = objects.diagnostic_placement_checkpoint();
@@ -1557,8 +1587,7 @@ fn human05_placement_diagnostic() {
             }
         }
     }
-    println!("mine oracle {mine:?}: mine-target order is not a decoded grid search");
-    println!("ziggurats: validator refuses the source blighted requirement");
+    println!("mine oracle {mine:?}: target-order lifecycle is not exercised here");
     assert!(
         refusals.is_empty(),
         "AI placement exclusions unresolved: {}",

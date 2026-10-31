@@ -229,6 +229,37 @@ fn growth_state_integrates_the_clock_and_refuses_overlap_or_removal() {
 }
 
 #[test]
+fn removal_effect_refuses_only_placement_in_its_reached_area() {
+    let map = terrain([9, 9], [0.0; 2], &[0; 81]);
+    let mut state = InitialBlight::read(&map, 10.0, identity(), 81).unwrap();
+    let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+    let effect = Growth::new(
+        [45.0; 2],
+        [0.0; 2],
+        2.0,
+        GrowthSpec {
+            spacing: 10.0,
+            fine_spacing: 2.5,
+            interval: 0.25,
+            increment: 5.0,
+            target: 20.0,
+            tolerance: 0.01,
+        },
+    )
+    .unwrap();
+    state.add_unqualified_removal(unit, unit, effect).unwrap();
+    assert!(!state.is_blighted_for_placement([45.0; 2], 1.0).unwrap());
+    assert!(!state.is_blighted_for_placement([5.0; 2], 3.0).unwrap());
+    assert!(!state.is_blighted_at([45.0; 2], 3.0).unwrap());
+    assert!(
+        state
+            .is_blighted_for_placement([45.0; 2], 3.0)
+            .unwrap_err()
+            .contains("HandleId(7)")
+    );
+}
+
+#[test]
 fn script_patch_is_immediate_and_does_not_grow() {
     let patch = Growth::fixed([15.0; 2], [0.0; 2], 10.0, 2.5, 3.0, 5.0).unwrap();
     assert!(!patch.is_blighted_at([15.0; 2], 2.9).unwrap());

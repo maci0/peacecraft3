@@ -1489,3 +1489,309 @@ fn construction_partial_route_retry_reselects_the_authored_walk_sequence() {
         "a new nonzero route after the partial endpoint must restart authored Walk"
     );
 }
+
+const LINKED_GOLD: i32 = 31337;
+
+struct LinkedMineCatalog(Arc<dyn ObjectCatalog + Send + Sync>);
+
+impl ObjectCatalog for LinkedMineCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+        let mut definition = if code == *b"m001" {
+            let mut built = PublicBuildCatalog(Arc::clone(&self.0)).resolve(*b"b001")?;
+            built.rawcode = *b"m001";
+            built
+        } else {
+            PublicBuildCatalog(Arc::clone(&self.0)).resolve(code)?
+        };
+        let buff = if matches!(&code, b"b001" | b"m001") {
+            "resource"
+        } else {
+            "_"
+        };
+        let (_, field) = column(b"BTYP", SlkId::UnitData, "buffType", FieldKind::Token, buff);
+        definition.fields.insert(*b"BTYP", field);
+        Ok(definition)
+    }
+}
+
+fn linked_resource_tables() -> Arc<pcx_objects::editor::defaults::DefaultTables> {
+    let data = b"ID;PWXL;N;E\r\nC;X1;Y1;K\"alias\"\r\nC;X2;Y1;K\"code\"\r\nC;X3;Y1;K\"levels\"\r\nC;X4;Y1;K\"DataA1\"\r\nC;X5;Y1;K\"DataB1\"\r\nC;X1;Y2;K\"Zfix\"\r\nC;X2;Y2;K\"Zfix\"\r\nC;X3;Y2;K\"1\"\r\nC;X4;Y2;K\"0\"\r\nC;X5;Y2;K\"0\"\r\nE\r\n";
+    Arc::new(
+        pcx_objects::editor::defaults::DefaultTables::from_bytes(
+            pcx_objects::editor::defaults::Identity {
+                install: "synthetic linked mine".into(),
+                edition_version: "fixture".into(),
+            },
+            &[(
+                pcx_objects::editor::SlkId::AbilityData.path(),
+                data.as_slice(),
+            )],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 1,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .expect("synthetic resource tables"),
+    )
+}
+
+fn linked_mine_fixture() -> (Vm, HandleId, HandleId) {
+    let script = format!(
+        "{EVENTS}\nnative SetUnitPosition takes unit u, real x, real y returns nothing\nnative SetResourceAmount takes unit whichUnit, integer amount returns nothing\nnative AddResourceAmount takes unit whichUnit, integer amount returns nothing\nnative GetResourceAmount takes unit whichUnit returns integer\nnative ShowUnit takes unit u, boolean shown returns nothing\nconstant native IsUnitHidden takes unit u returns boolean\n"
+    );
+    let (mut vm, worker, producer) = super::fixture_with_training_configured(
+        &[
+            profile_field(b"C001", "Builds", "unitList", "b001"),
+            column(
+                b"C002",
+                SlkId::UnitData,
+                "race",
+                FieldKind::Token,
+                "fixture",
+            ),
+            column(
+                b"C004",
+                SlkId::UnitBalance,
+                "preventPlace",
+                FieldKind::Token,
+                "unbuildable",
+            ),
+            column(
+                b"C005",
+                SlkId::UnitBalance,
+                "requirePlace",
+                FieldKind::Token,
+                "_",
+            ),
+            column(
+                b"C006",
+                SlkId::UnitData,
+                "requireWaterRadius",
+                FieldKind::Real,
+                "0",
+            ),
+            column(b"F001", SlkId::UnitBalance, "isbldg", FieldKind::Bool, "1"),
+            column(b"T006", SlkId::UnitBalance, "fused", FieldKind::Int, "0"),
+            empty_ability_list(),
+        ],
+        8,
+        0.37,
+        true,
+        super::super::super::super::activity::rules_with_repair(),
+        true,
+        (&script, |mut host| {
+            let catalog = Arc::new(LinkedMineCatalog(host.unit_catalog().unwrap()));
+            host.construction_test_catalog(catalog);
+            host.construction_test_footprint_loader(|path| {
+                assert_eq!(path, "build.tga");
+                Ok(crate::unit_placement::Footprint {
+                    origin: crate::scripts::AssetIdentity {
+                        source: "synthetic build footprint".into(),
+                        edition: "fixture".into(),
+                        version: "nonstock".into(),
+                    },
+                    cells: vec![[-1, -1], [0, -1], [-1, 0], [0, 0]],
+                })
+            });
+            host.with_resource_amounts(linked_resource_tables())
+                .expect("resource amounts")
+        }),
+    );
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(
+        &context,
+        crate::upgrade_research::fixture(&context.sources.catalog),
+    )
+    .unwrap();
+    h.native("RemoveGuardPosition", &[Value::Handle(worker)])
+        .unwrap();
+    let _ = producer;
+    (vm, worker, producer)
+}
+
+fn resource_amount(h: &mut ObjectHost, unit: HandleId) -> i32 {
+    let Value::Int(amount) = h
+        .native("GetResourceAmount", &[Value::Handle(unit)])
+        .unwrap()
+    else {
+        panic!("resource amount")
+    };
+    amount
+}
+
+fn hidden(h: &mut ObjectHost, unit: HandleId) -> bool {
+    let Value::Bool(hidden) = h.native("IsUnitHidden", &[Value::Handle(unit)]).unwrap() else {
+        panic!("hidden")
+    };
+    hidden
+}
+
+fn create_linked_mine(vm: &mut Vm, owner: HandleId, at: [f32; 2]) -> HandleId {
+    let Value::Handle(mine) = vm
+        .host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"m001")),
+                Value::Real(at[0]),
+                Value::Real(at[1]),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("mine")
+    };
+    vm.host()
+        .inner
+        .native(
+            "SetResourceAmount",
+            &[Value::Handle(mine), Value::Int(LINKED_GOLD)],
+        )
+        .unwrap();
+    mine
+}
+
+#[test]
+fn linked_mine_construction_hides_the_source_copies_gold_and_restores_it() {
+    let (mut vm, worker, _) = linked_mine_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let mine = create_linked_mine(&mut vm, owner, [80., 16.]);
+    let kind = i32::from_be_bytes(*b"b001");
+    let before = bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    let position = vm
+        .host()
+        .inner
+        .executed_unit(mine)
+        .unwrap()
+        .position
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .request_linked_mine_construction(worker, kind, mine)
+            .unwrap()
+    );
+    let h = &mut vm.host().inner;
+    assert!(!hidden(h, mine));
+    assert_eq!(resource_amount(h, mine), LINKED_GOLD);
+    assert!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD") < before);
+    let order = h.unit_construction_order(worker).unwrap().unwrap();
+    assert_eq!(order.position, position);
+    assert!(order.site.is_none());
+    let site = h
+        .begin_unit_construction(worker, kind, position)
+        .unwrap()
+        .unwrap();
+    assert!(hidden(h, mine));
+    assert_eq!(resource_amount(h, mine), LINKED_GOLD);
+    assert_eq!(resource_amount(h, site), LINKED_GOLD);
+    assert_eq!(h.executed_unit(site).unwrap().position, Some(position));
+    step(&mut vm, 9.);
+    vm.host().inner.advance_unit_construction(site, 9.).unwrap();
+    assert!(vm.host().inner.unit_construction(site).unwrap().is_none());
+    vm.host()
+        .inner
+        .native("KillUnit", &[Value::Handle(site)])
+        .unwrap();
+    let h = &mut vm.host().inner;
+    assert!(!hidden(h, mine));
+    assert_eq!(resource_amount(h, mine), LINKED_GOLD);
+}
+
+#[test]
+fn a_pending_build_order_refuses_the_linked_mine_instead_of_replacing_it() {
+    let (mut vm, worker, _) = linked_mine_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let kind = i32::from_be_bytes(*b"b001");
+    assert_eq!(
+        vm.host().inner.native(
+            "IssueBuildOrderById",
+            &[
+                Value::Handle(worker),
+                Value::Int(kind),
+                Value::Real(80.),
+                Value::Real(16.),
+            ],
+        ),
+        Ok(Value::Bool(true))
+    );
+    let mine = create_linked_mine(&mut vm, owner, [32., 48.]);
+    let gold = bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    let error = vm
+        .host()
+        .inner
+        .request_linked_mine_construction(worker, kind, mine)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("admitted build order"), "{error}");
+    let h = &mut vm.host().inner;
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+    assert!(!hidden(h, mine));
+    assert_eq!(
+        h.unit_construction_order(worker).unwrap().unwrap().position,
+        [80., 16.]
+    );
+}
+
+#[test]
+fn linked_mine_cancel_and_depletion_refuse_without_inventing_a_teardown() {
+    let (mut vm, worker, _) = linked_mine_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let mine = create_linked_mine(&mut vm, owner, [80., 16.]);
+    let kind = i32::from_be_bytes(*b"b001");
+    let position = vm
+        .host()
+        .inner
+        .executed_unit(mine)
+        .unwrap()
+        .position
+        .unwrap();
+    vm.host()
+        .inner
+        .request_linked_mine_construction(worker, kind, mine)
+        .unwrap();
+    let site = vm
+        .host()
+        .inner
+        .begin_unit_construction(worker, kind, position)
+        .unwrap()
+        .unwrap();
+    let error = vm
+        .host()
+        .inner
+        .cancel_unit_construction(site)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cancellation"), "{error}");
+    assert!(hidden(&mut vm.host().inner, mine));
+    assert!(vm.host().inner.unit_construction(site).unwrap().is_some());
+    step(&mut vm, 9.);
+    vm.host().inner.advance_unit_construction(site, 9.).unwrap();
+    vm.host()
+        .inner
+        .native("SetResourceAmount", &[Value::Handle(site), Value::Int(0)])
+        .unwrap();
+    let error = vm
+        .host()
+        .inner
+        .native("KillUnit", &[Value::Handle(site)])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("depletion"), "{error}");
+    let h = &mut vm.host().inner;
+    assert!(hidden(h, mine));
+    assert_eq!(resource_amount(h, mine), LINKED_GOLD);
+    assert!(
+        h.executed_unit(site)
+            .unwrap()
+            .combat
+            .as_ref()
+            .is_none_or(|combat| !combat.dead)
+    );
+}

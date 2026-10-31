@@ -1469,6 +1469,7 @@ mod placement_events;
 
 #[path = "ai_construction_host.rs"]
 mod ai_construction;
+pub use ai_construction::AiBuildTarget;
 
 #[path = "unit_sleep_host.rs"]
 mod unit_sleep;

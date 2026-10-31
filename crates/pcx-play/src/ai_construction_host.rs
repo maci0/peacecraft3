@@ -4,6 +4,19 @@ use super::ObjectHost;
 use crate::ai_placement_reach::{LinkEvidence, Reach};
 use pcx_script::HandleId;
 
+/// A successful placement search. The mine variant keeps the search candidate
+/// separate from the order target: native `0x69f760` receives the town mine
+/// handle, not the searched point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AiBuildTarget {
+    Point([f32; 2]),
+    Mine {
+        mine: HandleId,
+        position: [f32; 2],
+        candidate: [f32; 2],
+    },
+}
+
 fn placement_text(definition: &pcx_sim::world::Definition, name: &str) -> Result<String, String> {
     let (_, field) = definition
         .column_field(name)
@@ -32,13 +45,26 @@ impl ObjectHost {
         owner: HandleId,
         worker: HandleId,
         definition: &pcx_sim::world::Definition,
-    ) -> Result<(Option<[f32; 2]>, usize), String> {
+    ) -> Result<(Option<AiBuildTarget>, usize), String> {
         use crate::ai_placement::{
             BuffType, ExclusionContext, ExclusionVisibility, Grid, MovementEvidence, exclude_unit,
         };
         use pcx_objects::editor::SlkId;
-        if placement_text(definition, "buffType")?.eq_ignore_ascii_case("resource") {
-            return Err("AI mine construction requires a resolved town mine target".into());
+        let buff_type = placement_text(definition, "buffType")?;
+        let target_mine_kind = self
+            .unit_placement
+            .as_ref()
+            .and_then(|placement| placement.spatial())
+            .and_then(|pool| pool.placement_rules())
+            .ok_or("AI placement rules missing")?
+            .target_mine_kind();
+        let target_mine = if definition.rawcode == target_mine_kind {
+            Some(self.ai_live_town_mine(player, owner)?)
+        } else {
+            None
+        };
+        if target_mine.is_none() && buff_type.eq_ignore_ascii_case("resource") {
+            return Err("AI placement for other resource structures is not admitted".into());
         }
         let center = self.ai_live_town_center(player, owner)?;
         #[cfg(feature = "test-fixtures")]
@@ -321,14 +347,24 @@ impl ObjectHost {
                 Ok(result.is_some())
             },
         )?;
-        Ok((result, rank.get()))
+        let target = match (target_mine, result) {
+            (Some((mine, position)), Some(candidate)) => Some(AiBuildTarget::Mine {
+                mine,
+                position,
+                candidate,
+            }),
+            (Some(_), None) => None,
+            (None, Some(point)) => Some(AiBuildTarget::Point(point)),
+            (None, None) => None,
+        };
+        Ok((target, rank.get()))
     }
 
     pub(super) fn ai_capture_town_center(
         &mut self,
         owner: HandleId,
         reference: &super::campaign_flee::TownReference,
-    ) -> Result<[f32; 2], String> {
+    ) -> Result<([f32; 2], HandleId), String> {
         self.ai_placement_source_evidence(reference.unit, true)?;
         let settings = self
             .player_settings(owner)
@@ -510,6 +546,116 @@ impl ObjectHost {
         pool.placement_rules()
             .ok_or("AI town placement rules missing")?
             .town_center(start, Some(position), Some(reference.position))
+            .map(|center| (center, mine))
+    }
+
+    /// Register a constructed hall against the uniquely qualified initial mine town.
+    pub(super) fn ai_register_constructed_town(&mut self, site: HandleId, owner: HandleId) {
+        let Ok(player) = self.player_settings(owner).map(|settings| settings.number) else {
+            return;
+        };
+        let Some(mut reference) = self.campaign_ai.town_reference(player).cloned() else {
+            return;
+        };
+        let result = (|| -> Result<Option<[[f32; 2]; 2]>, String> {
+            let hall = self
+                .executed_unit(site)
+                .map_err(|error| error.to_string())?;
+            if !super::unit_types::class(&hall.definition, "UNIT_TYPE_TOWNHALL")? {
+                return Ok(None);
+            }
+            if !placement_text(&hall.definition, "buffType")?.eq_ignore_ascii_case("townhall") {
+                return Err(format!(
+                    "AI town structure {site:?} has an unqualified hall class"
+                ));
+            }
+            self.ai_placement_source_evidence(site, true)?;
+            let position = hall.position.ok_or("AI town hall position missing")?;
+            let (old, _) = reference.center.clone()?;
+            let placement = self
+                .unit_placement
+                .as_ref()
+                .ok_or("AI town placement missing")?;
+            let pool = placement.spatial().ok_or("AI town spatial pool missing")?;
+            let rules = pool
+                .placement_rules()
+                .ok_or("AI town placement rules missing")?;
+            let (threshold, limit, _, _) =
+                pool.town_operands().ok_or("AI town operands missing")?;
+            let (mine, mine_position) = reference.primary_mine()?;
+            let (_, (_, _, scale, _, _, _)) =
+                pool.reach_inputs().ok_or("AI town reach inputs missing")?;
+            let bounds = placement.world_bounds();
+            let size = placement.rules().cell_size() * scale as f32;
+            if !size.is_finite() || size <= 0.0 {
+                return Err("AI town reach cell size invalid".into());
+            }
+            let cell = |point: [f32; 2]| -> [i32; 2] {
+                std::array::from_fn(|axis| ((point[axis] - bounds[0][axis]) / size).floor() as i32)
+            };
+            let target = cell(position);
+            for &(other, other_position) in &reference.mines {
+                if other == mine {
+                    continue;
+                }
+                let other_cell = cell(other_position);
+                let lower = u64::from(scale)
+                    * (0..2)
+                        .map(|axis| i64::from(target[axis]).abs_diff(i64::from(other_cell[axis])))
+                        .max()
+                        .unwrap_or(0);
+                if lower < u64::from(threshold) {
+                    return Err(format!(
+                        "AI town hall {site:?} may associate with another mine {other:?}"
+                    ));
+                }
+            }
+            let mine_texture = pool
+                .texture_rectangle(mine)
+                .ok_or("AI town mine texture rectangle missing")?;
+            let hall_texture = pool
+                .texture_rectangle(site)
+                .ok_or("AI town hall texture rectangle missing")?;
+            let radius = hall.collision_radius.map_err(str::to_owned)?;
+            for axis in 0..2 {
+                let native_axis = 1 - axis;
+                let low = bounds[0][axis]
+                    + hall_texture.lower[native_axis] as f32 * placement.rules().cell_size();
+                let high = bounds[0][axis]
+                    + hall_texture.upper[native_axis] as f32 * placement.rules().cell_size();
+                if position[axis] - radius - placement.rules().cell_size() < low
+                    || position[axis] + radius + placement.rules().cell_size() > high
+                {
+                    return Err(format!(
+                        "AI town hall {site:?} movement rectangle exceeds texture rectangle"
+                    ));
+                }
+            }
+            let reach = Reach::from_rectangles(
+                placement,
+                &[mine_texture, hall_texture],
+                LinkEvidence::Absent,
+            )?;
+            let (distance, _) = reach.query_with_limit(mine_position, position, limit)?;
+            if distance.is_none_or(|distance| distance >= threshold) {
+                return Err(format!("AI town hall {site:?} needs a new town record"));
+            }
+            Ok(Some([
+                position,
+                rules.town_center(old, Some(mine_position), Some(position))?,
+            ]))
+        })();
+        match result {
+            Ok(None) => return,
+            Ok(Some([position, center])) => {
+                reference.unit = site;
+                reference.position = position;
+                let (_, mine) = reference.center.expect("validated town center");
+                reference.center = Ok((center, mine));
+            }
+            Err(error) => reference.center = Err(error),
+        }
+        self.campaign_ai.set_town_reference(player, Some(reference));
     }
 
     pub(super) fn ai_live_town_center(
@@ -521,6 +667,7 @@ impl ObjectHost {
             .campaign_ai
             .town_reference(player)
             .ok_or("AI initial peon town reference was not captured")?;
+        let (center, _) = reference.center.clone()?;
         let unit = self.executed_unit(reference.unit).map_err(|error| {
             format!(
                 "AI town reference {:?} no longer exists: {error}",
@@ -553,7 +700,7 @@ impl ObjectHost {
                     }
                     _ => return Err(format!("AI town structure {unit:?} buff type unavailable")),
                 };
-                if value.eq_ignore_ascii_case("townhall") {
+                if unit != reference.unit && value.eq_ignore_ascii_case("townhall") {
                     return Err(format!(
                         "AI town structure {unit:?} changes the initial town record"
                     ));
@@ -571,9 +718,39 @@ impl ObjectHost {
             .collect::<Option<Vec<_>>>()
             .ok_or("AI town mine position unavailable")?;
         if mines != reference.mines {
+            let linked = self
+                .executed_units()
+                .any(|(_, record)| record.linked_mine.is_some());
+            if linked {
+                return Err(
+                    "AI town mine reference after a haunted-mine link is not qualified".into(),
+                );
+            }
             return Err("AI town mine registration changed since captain initialization".into());
         }
-        reference.center.clone()
+        Ok(center)
+    }
+
+    /// Resolve the retained primary mine after validating the live town snapshot.
+    pub(super) fn ai_live_town_mine(
+        &self,
+        player: i32,
+        owner: HandleId,
+    ) -> Result<(HandleId, [f32; 2]), String> {
+        self.ai_live_town_center(player, owner)?;
+        self.campaign_ai
+            .town_reference(player)
+            .ok_or("AI town reference missing")?
+            .primary_mine()
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn diagnostic_ai_town_mine(
+        &self,
+        player: i32,
+        owner: HandleId,
+    ) -> Result<(HandleId, [f32; 2]), String> {
+        self.ai_live_town_mine(player, owner)
     }
 
     #[cfg(feature = "test-fixtures")]
@@ -611,6 +788,7 @@ impl ObjectHost {
                 center: Err("not evaluated".into()),
             },
         )
+        .map(|(center, _)| center)
     }
 
     #[cfg(feature = "test-fixtures")]
@@ -619,7 +797,6 @@ impl ObjectHost {
         player: i32,
         owner: HandleId,
     ) -> Result<(), String> {
-        let center = self.diagnostic_ai_town_capture(owner)?;
         let unit = self
             .ai_town_reference(owner)
             .map_err(|error| error.to_string())?
@@ -639,18 +816,18 @@ impl ObjectHost {
             .map(|(unit, record)| record.position.map(|position| (unit, position)))
             .collect::<Option<Vec<_>>>()
             .ok_or("AI initial town mine position missing")?;
+        let mut reference = super::campaign_flee::TownReference {
+            unit,
+            position,
+            mines,
+            center: Err("not evaluated".into()),
+        };
+        reference.center = self.ai_capture_town_center(owner, &reference);
+        reference.center.clone()?;
         if !self.campaign_ai.is_active(player) {
             self.campaign_ai.activate(player, None, None);
         }
-        self.campaign_ai.set_town_reference(
-            player,
-            Some(super::campaign_flee::TownReference {
-                unit,
-                position,
-                mines,
-                center: Ok(center),
-            }),
-        );
+        self.campaign_ai.set_town_reference(player, Some(reference));
         Ok(())
     }
 
@@ -661,7 +838,7 @@ impl ObjectHost {
         owner: HandleId,
         worker: HandleId,
         kind: [u8; 4],
-    ) -> Result<(Option<[f32; 2]>, usize), String> {
+    ) -> Result<(Option<AiBuildTarget>, usize), String> {
         let definition = self
             .unit_catalog()
             .map_err(|error| error.to_string())?

@@ -1372,7 +1372,7 @@ fn construction_checks_live_blight_for_each_footprint_cell() {
         },
     )
     .unwrap();
-    blight.add_growth(id(99), id(100), source).unwrap();
+    blight.add_growth(id(99), id(100), source.clone()).unwrap();
     assert_eq!(
         p.construction_position_live(
             (None, Some((&blight, -1.0))),
@@ -1401,6 +1401,33 @@ fn construction_checks_live_blight_for_each_footprint_cell() {
     assert!(
         p.construction_position_live(
             (None, Some((&blight, 2.0))),
+            [33., 35.],
+            0.,
+            "build.tga",
+            8,
+            0x20
+        )
+        .is_err()
+    );
+    let mut removal = InitialBlight::read(&ground, 10.0, identity(), 64).unwrap();
+    removal
+        .add_unqualified_removal(id(99), id(100), source)
+        .unwrap();
+    assert_eq!(
+        p.construction_position_live(
+            (None, Some((&removal, 2.0))),
+            [33., 35.],
+            0.,
+            "build.tga",
+            8,
+            0
+        )
+        .unwrap(),
+        Some([32., 32.])
+    );
+    assert!(
+        p.construction_position_live(
+            (None, Some((&removal, 2.0))),
             [33., 35.],
             0.,
             "build.tga",

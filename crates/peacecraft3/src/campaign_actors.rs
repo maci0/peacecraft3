@@ -2276,6 +2276,7 @@ mod tests {
             requested_show_eye_candy: None,
             unit_states: Vec::new(),
             resource_amount: None,
+            linked_mine: None,
             invulnerable: None,
             admitted_order: None,
             abilities: None,

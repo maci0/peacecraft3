@@ -110,6 +110,16 @@ start growth using the selected ability cells and the reviewed image operands.
 Source death and overlapping dynamic patches refuse when their affected cells
 are queried; they are not removed or merged by an approximation.
 
+The selected ability table also has blight-dispel modes. At structure completion
+the host records the source, clock and growing affected area from those ability
+fields instead of refusing immediately. A construction footprint that requires
+or prevents blight refuses when it reaches that area. Other blight reads still
+use the pre-dispel state: the effect's removal and overlap raster is not
+implemented, so those reads and blight regeneration inside that area are not
+qualified. The pool's broad refresh similarly retains the prior flags; the
+footprint validator performs the localized refusal. This avoids an unrelated
+construction-completion failure but does not establish general dispel fidelity.
+
 `IsPointBlighted` uses the spatial `0x20` flag (`0x499680`, `0x7f69d0`),
 not the owner-mask query. A read-only debugger capture at `0x6da6d2` and
 `0x6da6fd` confirmed that the two-cell-radius owner raster includes an edge
