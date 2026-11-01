@@ -36,10 +36,14 @@ impl Generator {
     }
 }
 
-/// A narrow copy of the primary generator state. Restoring it undoes consumed
-/// primary draws without cloning the retained secondary block.
+/// A narrow copy of the primary generator state plus the caller-sequence
+/// length at that point. Restoring undoes consumed primary draws and drops
+/// later caller records, without cloning the retained secondary block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PrimaryCheckpoint(Primary);
+pub(crate) struct PrimaryCheckpoint {
+    primary: Primary,
+    order_len: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateError {
@@ -49,6 +53,8 @@ pub enum StateError {
     Profile,
     #[error("random secondary allocation exceeds the caller budget")]
     Budget,
+    #[error("random caller order exceeds the retained budget")]
+    Order,
     #[error("random secondary channel or die sides are invalid")]
     SecondaryDie,
     #[error(transparent)]
@@ -94,11 +100,18 @@ impl State {
     pub fn secondary_words(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
         self.secondary.iter().map(|state| state.word)
     }
-    pub(crate) fn primary_checkpoint(&self) -> PrimaryCheckpoint {
-        PrimaryCheckpoint(self.primary)
+    pub(crate) fn primary_checkpoint(&self, order_len: usize) -> PrimaryCheckpoint {
+        PrimaryCheckpoint {
+            primary: self.primary,
+            order_len,
+        }
     }
     pub(crate) fn restore_primary(&mut self, checkpoint: PrimaryCheckpoint) {
-        self.primary = checkpoint.0;
+        self.primary = checkpoint.primary;
+    }
+    /// Caller-sequence length when checkpointed; restores truncate later records.
+    pub(crate) fn checkpoint_order_len(checkpoint: &PrimaryCheckpoint) -> usize {
+        checkpoint.order_len
     }
     fn check(&self, policy: &Policy) -> Result<(), StateError> {
         if self.policy_key == policy.key {

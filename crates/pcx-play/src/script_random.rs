@@ -1,5 +1,6 @@
 //! Caller-qualified script random parameters and explicitly seeded state.
 //! The selected image is separate from archive provenance and initial engine state.
+pub mod order;
 pub mod profile;
 pub mod real;
 pub mod state;
