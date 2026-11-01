@@ -1649,6 +1649,7 @@ mod tests {
                 required_catalog_tables: Vec::new(),
                 catalog: BoundCatalog(Arc::new(UnusedCatalog)),
                 required_fields: Vec::new(),
+                trigger_catalog: None,
                 budget: MapAdmissionBudget {
                     scripts: MapScriptBudget {
                         max_script_bytes: 1,

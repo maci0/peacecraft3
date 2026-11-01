@@ -286,6 +286,41 @@ pub fn start(
         units: map_overlay(&map, map_label, "war3map.w3u")?,
         items: map_overlay(&map, map_label, "war3map.w3t")?,
     });
+    // TriggerData for the editor trigger-graph path, same edition/version as
+    // the compiled scripts. Absent data leaves WTG compilation refusing loudly.
+    let trigger_catalog: Option<Arc<pcx_trig::catalog::Catalog>> = match resolver
+        .resolve_bounded("UI\\TriggerData.txt", MAX_ASSET_BYTES as u64)
+    {
+        Ok(asset) => {
+            let text = std::str::from_utf8(&asset.bytes).map_err(|e| {
+                StartupError::Member {
+                    member: "UI\\TriggerData.txt".into(),
+                    message: format!("not UTF-8 at byte {}", e.valid_up_to()),
+                }
+            })?;
+            match pcx_trig::catalog::Catalog::parse(
+                "UI\\TriggerData.txt",
+                &edition,
+                "selected install",
+                text,
+            ) {
+                Ok(catalog) => Some(Arc::new(catalog)),
+                Err(e) => {
+                    return Err(StartupError::Member {
+                        member: "UI\\TriggerData.txt".into(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+        Err(pcx_assets::Error::MissingAsset { .. }) => None,
+        Err(e) => {
+            return Err(StartupError::Member {
+                member: "UI\\TriggerData.txt".into(),
+                message: e.to_string(),
+            });
+        }
+    };
 
     let context = Arc::new(
         prepare_map_context(
@@ -310,6 +345,7 @@ pub fn start(
                 catalog_identity: &catalog_identity,
                 catalog: catalog.as_ref(),
                 required_fields: &[],
+                trigger_catalog: trigger_catalog.clone(),
             },
             ADMISSION_BUDGET,
         )
@@ -334,10 +370,24 @@ pub fn start(
         expansion_of(mode),
     )
     .map_err(StartupError::Inputs)?;
-    let config = campaign_host::entry_id(&context, "config")
-        .map_err(|error| StartupError::Entrypoint(error.to_string()))?;
-    let main = campaign_host::entry_id(&context, "main")
-        .map_err(|error| StartupError::Entrypoint(error.to_string()))?;
+    // Allied shared data is retained for provenance but has no measured
+    // gameplay interpretation; a map that carries it refuses startup loudly
+    // with its own label rather than playing without it.
+    if let Some(wpmp) = &context.wpmp {
+        return Err(StartupError::Map(format!(
+            "{map_label}: war3map.wpmp carries {} shared-data bytes (hash {:016x}); no measured layout, refusing gameplay use",
+            wpmp.len(),
+            wpmp.canonical_hash(),
+        )));
+    }
+    let entrypoints = campaign_host::script_entrypoints(&context);
+    if entrypoints.is_empty() {
+        return Err(StartupError::Entrypoint(format!(
+            "{}: admitted {} declares no runnable entrypoint",
+            map_label,
+            context.script_source,
+        )));
+    }
     let post = inputs.post_config.clone();
     let admitted = Arc::clone(&context);
     let placement_map = Arc::clone(&sources.map_bytes);
@@ -356,7 +406,7 @@ pub fn start(
                     session_cache,
                 )
             },
-            &[config, main],
+            &entrypoints,
             move |vm, completed| campaign_host::apply_after_config(vm, &admitted, completed, &post),
         )
         .map_err(|error| StartupError::Session(error.to_string()))?;
