@@ -66,6 +66,11 @@ impl ObjectHost {
 
     /// Admit the health wrapper and its source-backed limits. Existing player
     /// rows receive the null-player result; no unit pools change at admission.
+    /// Provenance: source-qualified setter/getter/initializers/reset/rounder/
+    /// floor and threshold/minimum/bias operands per
+    /// `docs/re-notes/player-health-handicap.md` (implementation status);
+    /// destructive projections refuse atomically pending death/revive
+    /// semantics (existing support boundary, not native behavior).
     pub fn with_player_health_handicap(
         mut self,
         rules: crate::player_handicap::HealthRules,
