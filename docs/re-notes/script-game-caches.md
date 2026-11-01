@@ -388,6 +388,28 @@ and a foreign layer overriding an otherwise listed map. These checks establish
 recreation qualification and restoration behavior, not native compatibility or
 complete campaign progression.
 
+### Ability order preservation (2026-11-01)
+
+`StoreUnit` sorted the saved ability ranks by alias, so a live hero carrying
+`AHer`, `AHhb`, `AInv` (creation/learn sequence) was stored and restored as
+`AInv`, `AHer`, `AHhb`. The score-screen continuation requires the restored
+unit to carry the stored sequence, so Human01 `continue_campaign` refused. The
+payload now preserves the live order through store, encode, decode and
+restore; validation rejects a duplicated alias in any position instead of
+requiring ascending order. Previously written sorted payloads still decode.
+Native restore order is unqualified; this is a recreation-owned round-trip
+contract, and command-card presentation reads the same order.
+
+Follow-on: stored cooldowns are projected into the same live ability order at
+capture (`unit_cache_host.rs`), and `CachedUnit::validate` rejects duplicated
+`(alias, rank)` pairs instead of requiring sorted cooldown order. Duration
+overrides remain sorted in `ability_cooldown.rs`; only the cached projection
+follows live order. Native cooldown restore order remains unqualified.
+
+This note records the contract only; the isolated transition fixture and its
+`.scratch` receipts remain with the originating checkout and were not re-run
+from this worktree.
+
 The isolated short transition fixture passes with a clone of the legitimate
 Human01 winning profile. It restores a reference through public cache natives,
 removes that diagnostic unit, activates the existing score Continue path, and

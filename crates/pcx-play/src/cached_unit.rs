@@ -47,7 +47,15 @@ impl CachedUnit {
             || self
                 .experience
                 .is_some_and(|state| state.xp < 0 || self.hero.is_none())
-            || self.abilities.windows(2).any(|a| a[0].0 >= a[1].0)
+            || self
+                .abilities
+                .iter()
+                .enumerate()
+                .any(|(index, (alias, _))| {
+                    self.abilities[..index]
+                        .iter()
+                        .any(|(seen, _)| seen == alias)
+                })
             || self.cooldowns.iter().any(|(alias, rank, bits)| {
                 *rank < 1
                     || !self
@@ -59,8 +67,13 @@ impl CachedUnit {
             })
             || self
                 .cooldowns
-                .windows(2)
-                .any(|a| (a[0].0, a[0].1) >= (a[1].0, a[1].1))
+                .iter()
+                .enumerate()
+                .any(|(index, (alias, rank, _))| {
+                    self.cooldowns[..index]
+                        .iter()
+                        .any(|(seen, seen_rank, _)| seen == alias && seen_rank == rank)
+                })
             || self.items.iter().any(|item| item.charges < 0)
             || self.items.windows(2).any(|a| a[0].slot >= a[1].slot)
             || self

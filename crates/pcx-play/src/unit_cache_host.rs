@@ -160,8 +160,24 @@ impl ObjectHost {
             });
         }
         items.sort_unstable_by_key(|item| item.slot);
-        let mut levels: Vec<_> = abilities.levels().collect();
-        levels.sort_unstable_by_key(|(alias, _)| *alias);
+        // Preserve the live ability order (creation/learn sequence). The
+        // chapter-continuation gate requires the restored unit to carry the
+        // same order the previous chapter stored, and presentation reads this
+        // order. Native restore order is unqualified; PC3UNIT is
+        // recreation-owned, so round-trip preservation is the contract.
+        let levels: Vec<_> = abilities.levels().collect();
+        // Order stored cooldowns by the live ability order so the payload
+        // round-trips the same sequence the chapter stored. Duration overrides
+        // are retained sorted in `ability_cooldown.rs`; this projects them into
+        // live order. Native restore order is unqualified; PC3UNIT ordering is
+        // recreation-owned.
+        let mut cooldowns = abilities.cooldowns().to_vec();
+        cooldowns.sort_by_key(|(alias, _, _)| {
+            levels
+                .iter()
+                .position(|(live, _)| live == alias)
+                .unwrap_or(usize::MAX)
+        });
         let saved = CachedUnit {
             rawcode: record.definition.rawcode,
             client_sha256: self
@@ -178,7 +194,7 @@ impl ObjectHost {
                 .map(|hero| [hero.level, hero.skill_points]),
             experience: abilities.hero.as_ref().and_then(|hero| hero.experience),
             abilities: levels,
-            cooldowns: abilities.cooldowns().to_vec(),
+            cooldowns,
             permanent_strength: record.permanent_strength,
             pools: [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana].map(f32::to_bits),
             items,
