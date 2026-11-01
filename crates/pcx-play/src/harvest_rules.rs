@@ -829,6 +829,26 @@ pub(crate) fn definition_upgrade_codes(
     }
 }
 
+/// Authored worker race (`UnitData/race`) for race-specific harvest behavior.
+/// Sentinels and missing/ambiguous fields refuse; no race is invented and no
+/// race-specific rate is assumed here. Callers preserve the admitted race for
+/// depot/worker matching once those native rules are qualified.
+pub(crate) fn worker_race_from_definition(
+    definition: &Definition,
+) -> Result<String, HarvestError> {
+    let raw = fourcc(definition.rawcode)?;
+    let race = definition_text(definition, SlkId::UnitData, "race")?;
+    let trimmed = race.trim();
+    if matches!(trimmed, "" | "-" | "_") {
+        return Err(HarvestError::Missing {
+            rawcode: raw,
+            column: "race".into(),
+            detail: "worker UnitData race is not admitted".into(),
+        });
+    }
+    Ok(trimmed.to_owned())
+}
+
 fn definition_abil_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
     let list = definition_text(definition, SlkId::UnitAbilities, "abilList")?;
     Ok(split_csv(&list).map(str::to_owned).collect())

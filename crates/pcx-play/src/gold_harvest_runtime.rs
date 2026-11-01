@@ -75,6 +75,8 @@ impl ObjectHost {
             .position
             .ok_or_else(|| self.harvest_error("accepted worker position required"))?;
         let owner = record.owner;
+        crate::harvest_rules::worker_race_from_definition(&record.definition)
+            .map_err(|error| self.harvest_read_error("race", error))?;
         let Some(setup) = self.harvest_setup(&record.definition, owner)? else {
             return Ok(None);
         };

@@ -695,6 +695,15 @@ impl Rules {
     pub(crate) fn upkeep_food_state(&self) -> Option<i32> {
         self.upkeep.as_ref().ok().map(|u| u.food_state)
     }
+    pub(crate) fn upkeep_tier(&self, food: i32, version: Option<i32>) -> Result<i32, String> {
+        // Source-derived upkeep rank for gold-income tiering. The income
+        // scale itself is not admitted here: callers must refuse explicitly
+        // until its source rates are measured rather than inventing a tax.
+        self.upkeep
+            .as_ref()
+            .map_err(Clone::clone)?
+            .tier(food, version)
+    }
     pub(crate) fn money(&self, value: i32) -> i32 {
         let raw = value.wrapping_mul(self.money_scale);
         let raw = if raw as u32 > self.money_maximum as u32 {
