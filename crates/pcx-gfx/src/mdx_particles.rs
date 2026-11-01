@@ -346,6 +346,12 @@ pub struct Profile {
     rotation: Option<Channel>,
     visibility: Option<Channel>,
     emission: Option<Channel>,
+    speed: Option<Channel>,
+    variation: Option<Channel>,
+    latitude: Option<Channel>,
+    gravity: Option<Channel>,
+    width: Option<Channel>,
+    length: Option<Channel>,
 }
 enum Geometry<'a> {
     Standalone(&'a Pivots),
@@ -698,6 +704,12 @@ impl Plan {
                 let mut rotation = None;
                 let mut visibility = None;
                 let mut emission = None;
+                let mut speed = None;
+                let mut variation = None;
+                let mut latitude = None;
+                let mut gravity = None;
+                let mut width = None;
+                let mut length = None;
                 for track in &emitter.node_tracks {
                     let (slot, width, is_rotation) = match &track.magic {
                         b"KGTR" => (&mut translation, 3, false),
@@ -719,6 +731,12 @@ impl Plan {
                     let slot = match &track.magic {
                         b"KP2V" if track.interpolation == Interpolation::None => &mut visibility,
                         b"KP2E" => &mut emission,
+                        b"KP2S" => &mut speed,
+                        b"KP2R" => &mut variation,
+                        b"KP2L" => &mut latitude,
+                        b"KP2G" => &mut gravity,
+                        b"KP2N" => &mut width,
+                        b"KP2W" => &mut length,
                         _ => return Err(Failure::Unsupported("particle scalar channel")),
                     };
                     if slot.is_some() {
@@ -741,6 +759,18 @@ impl Plan {
                 {
                     return Err(Failure::Malformed("negative emission key"));
                 }
+                // Static-path-consistent admission: KP2R/KP2L/KP2N/KP2W keys must be
+                // non-negative like their static counterparts above; KP2S/KP2G stay
+                // signed like statics. This task definition is the authority where the
+                // code cannot decide between clamping and refusing.
+                for channel in [&variation, &latitude, &width, &length]
+                    .into_iter()
+                    .flatten()
+                {
+                    if channel.keys.iter().any(|key| key.value[0] < 0.) {
+                        return Err(Failure::Malformed("particle scalars"));
+                    }
+                }
                 if props.squirt == 1 {
                     emission.as_ref().expect("checked burst channel").bursts(
                         Duration::ZERO,
@@ -760,6 +790,12 @@ impl Plan {
                     rotation,
                     visibility,
                     emission,
+                    speed,
+                    variation,
+                    latitude,
+                    gravity,
+                    width,
+                    length,
                 })
             };
             profiles.push(build().map_err(|failure| fail(Some(emitter.object_id), failure))?);
@@ -847,6 +883,12 @@ impl Plan {
                     && global_matches(&a.rotation, &b.rotation)
                     && global_matches(&a.visibility, &b.visibility)
                     && global_matches(&a.emission, &b.emission)
+                    && global_matches(&a.speed, &b.speed)
+                    && global_matches(&a.variation, &b.variation)
+                    && global_matches(&a.latitude, &b.latitude)
+                    && global_matches(&a.gravity, &b.gravity)
+                    && global_matches(&a.width, &b.width)
+                    && global_matches(&a.length, &b.length)
             })
             && match (&self.joints, &next.joints) {
                 (None, None) => true,
@@ -1559,9 +1601,25 @@ impl Simulation {
                     ));
                 }
                 self.next_remainders[index] = emission - count as f64;
+                // Birth overrides are sampled once per emitter per tick: every birth in
+                // this tick shares the same frame(ms) and global clock ms, so one
+                // sample covers the whole batch. Skipped when nothing is born so an
+                // idle tick cannot fail on an unused channel.
+                let birth = (count > 0)
+                    .then(|| {
+                        birth_scalars(profile, plan.frame(ms), ms)
+                            .map_err(|failure| plan.error(index, failure))
+                    })
+                    .transpose()?;
                 for _ in 0..count {
-                    let particle = spawn_particle(index, profile, sample, &mut rng)
-                        .map_err(|failure| plan.error(index, failure))?;
+                    let particle = spawn_particle(
+                        index,
+                        profile,
+                        sample,
+                        birth.as_ref().expect("sampled birth when count > 0"),
+                        &mut rng,
+                    )
+                    .map_err(|failure| plan.error(index, failure))?;
                     if let Some(next) = advance_particle(particle, dt, profile.properties.life_span)
                         .map_err(|failure| plan.error(index, failure))?
                     {
@@ -1615,13 +1673,70 @@ impl Simulation {
         Ok(work)
     }
 }
+/// Per-birth scalar overrides. Only `width`/`length` shape the spawn extent,
+/// only `speed`/`variation`/`latitude` shape the initial velocity, and only
+/// `gravity` flows into the per-particle state integrated later.
+struct BirthScalars {
+    speed: f64,
+    variation: f64,
+    latitude: f64,
+    gravity: f32,
+    width: f64,
+    length: f64,
+}
+
+fn birth_scalars(profile: &Profile, frame: u32, elapsed_ms: u64) -> Result<BirthScalars, Failure> {
+    let props = profile.properties;
+    let get = |channel: &Option<Channel>, fallback: f32| -> Result<f64, Failure> {
+        match channel {
+            None => Ok(f64::from(fallback)),
+            Some(channel) => {
+                Ok(channel.sample(frame, elapsed_ms, [f64::from(fallback), 0., 0., 0.])?[0])
+            }
+        }
+    };
+    let speed = get(&profile.speed, props.speed)?;
+    let variation = get(&profile.variation, props.variation)?;
+    let latitude = get(&profile.latitude, props.latitude)?;
+    let gravity_value = get(&profile.gravity, props.gravity)?;
+    let width = get(&profile.width, props.width)?;
+    let length = get(&profile.length, props.length)?;
+    // Static-path-consistent dynamic check: admission already refused negative
+    // authored keys for variation/latitude/width/length, so a negative sample
+    // here can only come from interpolation overshoot; report it the same way
+    // continuous emission reports a negative interpolated rate (Arithmetic),
+    // as chosen for this task where the code cannot decide alone.
+    if ![speed, variation, latitude, gravity_value, width, length]
+        .into_iter()
+        .all(|value| value.is_finite())
+        || variation < 0.
+        || latitude < 0.
+        || width < 0.
+        || length < 0.
+    {
+        return Err(Failure::Arithmetic);
+    }
+    let gravity = gravity_value as f32;
+    if !gravity.is_finite() {
+        return Err(Failure::Arithmetic);
+    }
+    Ok(BirthScalars {
+        speed,
+        variation,
+        latitude,
+        gravity,
+        width,
+        length,
+    })
+}
+
 fn spawn_particle(
     index: usize,
     profile: &Profile,
     sample: EmitterSample,
+    birth: &BirthScalars,
     rng: &mut Rng,
 ) -> Result<Particle, Failure> {
-    let props = profile.properties;
     let model_space = profile.flags & MODEL_SPACE != 0;
     let sample = if model_space {
         EmitterSample {
@@ -1633,9 +1748,9 @@ fn spawn_particle(
     } else {
         sample
     };
-    let sx = rng.symmetric(f64::from(props.width) * 0.5);
-    let sy = rng.symmetric(f64::from(props.length) * 0.5);
-    let lat = f64::from(props.latitude).to_radians();
+    let sx = rng.symmetric(birth.width * 0.5);
+    let sy = rng.symmetric(birth.length * 0.5);
+    let lat = birth.latitude.to_radians();
     let inclination = rng.symmetric(lat);
     let azimuth = if profile.flags & LINE == 0 {
         rng.symmetric(std::f64::consts::TAU)
@@ -1646,7 +1761,7 @@ fn spawn_particle(
     let (sin_az, cos_az) = azimuth.sin_cos();
     // The source plane basis turns the polar cone a quarter turn around local Z.
     let direction = [-sin_lat * sin_az, sin_lat * cos_az, cos_lat];
-    let speed = f64::from(props.speed) * (1. + rng.symmetric(f64::from(props.variation)));
+    let speed = birth.speed * (1. + rng.symmetric(birth.variation));
     let (position, velocity) = if let Some(basis) = sample.basis {
         (
             transform_point_f64(
@@ -1674,7 +1789,7 @@ fn spawn_particle(
         age: 0.,
         position,
         velocity,
-        gravity: props.gravity,
+        gravity: birth.gravity,
     })
 }
 fn advance_particle(

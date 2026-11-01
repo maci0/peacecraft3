@@ -84,6 +84,8 @@ fn plan(e: &[Particle2], globals: &[u32], interval: [u32; 2], looping: bool) -> 
     )
 }
 type TrackKey<'a> = (i32, &'a [f32], &'a [f32], &'a [f32]);
+type ScalarSetter = fn(&mut Particle2Properties, f32);
+type ScalarCase = ([u8; 4], ScalarSetter, f32);
 fn track(
     tag: [u8; 4],
     interpolation: Interpolation,
@@ -596,7 +598,7 @@ fn malformed_and_unsupported_inputs_fail_with_source_and_emitter_context() {
     cases.push((e, Failure::Malformed("global reference")));
     let mut e = emitter(properties());
     e.tracks.push(track(
-        *b"KP2G",
+        *b"KP2H",
         Interpolation::None,
         NO_ID,
         &[(0, &[1.], &[], &[])],
@@ -1326,6 +1328,279 @@ fn negative_and_duplicate_rate_channels_and_nonstep_bursts_refuse() {
         assert_eq!(error.source_name, "synthetic:bad-rate");
         assert_eq!(error.emitter, Some(0));
     }
+}
+
+#[test]
+fn scalar_channels_refuse_negative_keys_where_statics_do_and_keep_signed_speed_and_gravity() {
+    for tag in [*b"KP2R", *b"KP2L", *b"KP2N", *b"KP2W"] {
+        let mut e = emitter(properties());
+        e.tracks.push(track(
+            tag,
+            Interpolation::None,
+            NO_ID,
+            &[(0, &[-1.], &[], &[])],
+        ));
+        finish(&mut e);
+        let error = Plan::checked(
+            &[e],
+            &texture(),
+            &Pivots(vec![[0.; 3]]),
+            &[],
+            Clip {
+                interval: [0, 1000],
+                looping: true,
+            },
+            "synthetic:scalar-sign",
+            limits(),
+        )
+        .unwrap_err();
+        assert_eq!(error.failure, Failure::Malformed("particle scalars"));
+        assert_eq!(error.emitter, Some(0));
+    }
+    for tag in [*b"KP2S", *b"KP2G"] {
+        let mut e = emitter(properties());
+        e.tracks.push(track(
+            tag,
+            Interpolation::None,
+            NO_ID,
+            &[(0, &[-3.], &[], &[])],
+        ));
+        finish(&mut e);
+        Plan::checked(
+            &[e],
+            &texture(),
+            &Pivots(vec![[0.; 3]]),
+            &[],
+            Clip {
+                interval: [0, 1000],
+                looping: true,
+            },
+            "synthetic:scalar-sign",
+            limits(),
+        )
+        .unwrap();
+    }
+    for tag in [*b"KP2S", *b"KP2R", *b"KP2L", *b"KP2G", *b"KP2N", *b"KP2W"] {
+        let mut e = emitter(properties());
+        e.tracks.push(track(
+            tag,
+            Interpolation::Bezier,
+            NO_ID,
+            &[(0, &[0.], &[0.], &[1.]), (1000, &[2.], &[1.], &[0.])],
+        ));
+        finish(&mut e);
+        Plan::checked(
+            &[e],
+            &texture(),
+            &Pivots(vec![[0.; 3]]),
+            &[],
+            Clip {
+                interval: [0, 1000],
+                looping: true,
+            },
+            "synthetic:scalar-interp",
+            limits(),
+        )
+        .unwrap();
+    }
+    let mut e = emitter(properties());
+    e.tracks.push(track(
+        *b"KP2V",
+        Interpolation::Linear,
+        NO_ID,
+        &[(0, &[1.], &[], &[]), (1000, &[0.], &[], &[])],
+    ));
+    finish(&mut e);
+    let error = Plan::checked(
+        &[e],
+        &texture(),
+        &Pivots(vec![[0.; 3]]),
+        &[],
+        Clip {
+            interval: [0, 1000],
+            looping: true,
+        },
+        "synthetic:scalar-interp",
+        limits(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.failure,
+        Failure::Unsupported("particle scalar channel")
+    );
+}
+
+#[test]
+fn each_scalar_channel_supports_constant_animated_and_global_tracks() {
+    fn speed(p: &mut Particle2Properties, v: f32) {
+        p.speed = v;
+    }
+    fn variation(p: &mut Particle2Properties, v: f32) {
+        p.variation = v;
+    }
+    fn latitude(p: &mut Particle2Properties, v: f32) {
+        p.latitude = v;
+    }
+    fn gravity(p: &mut Particle2Properties, v: f32) {
+        p.gravity = v;
+    }
+    fn width(p: &mut Particle2Properties, v: f32) {
+        p.width = v;
+    }
+    fn length(p: &mut Particle2Properties, v: f32) {
+        p.length = v;
+    }
+    let cases: [ScalarCase; 6] = [
+        (*b"KP2S", speed, 6.),
+        (*b"KP2R", variation, 0.5),
+        (*b"KP2L", latitude, 30.),
+        (*b"KP2G", gravity, 4.),
+        (*b"KP2N", width, 2.),
+        (*b"KP2W", length, 6.),
+    ];
+    for (tag, set, value) in cases {
+        let base = || {
+            let mut p = properties();
+            p.emission_rate = 8.;
+            p.speed = 6.;
+            p
+        };
+        // Constant: one STEP key reproduces the static path bit-for-bit.
+        let mut statik = base();
+        set(&mut statik, value);
+        let mut tracked = base();
+        set(&mut tracked, 0.);
+        let mut e = emitter(tracked);
+        e.tracks.push(track(
+            tag,
+            Interpolation::None,
+            NO_ID,
+            &[(0, &[value], &[], &[])],
+        ));
+        finish(&mut e);
+        let a = plan(&[emitter(statik)], &[], [0, 1000], true);
+        let b = plan(&[e], &[], [0, 1000], true);
+        let mut x = Simulation::new(Arc::clone(&a), 5, limits()).unwrap();
+        let mut y = Simulation::new(Arc::clone(&b), 5, limits()).unwrap();
+        x.advance(Duration::from_millis(500), limits()).unwrap();
+        y.advance(Duration::from_millis(500), limits()).unwrap();
+        assert_eq!(x.work.births, 4, "{tag:?}");
+        assert_eq!((x.work, x.particles()), (y.work, y.particles()), "{tag:?}");
+        // Animated local: a linear 0→8 ramp sampled at the birth frame.
+        let mut statik = base();
+        set(&mut statik, 1.);
+        let mut tracked = base();
+        set(&mut tracked, 0.);
+        let mut e = emitter(tracked);
+        e.tracks.push(track(
+            tag,
+            Interpolation::Linear,
+            NO_ID,
+            &[(0, &[0.], &[], &[]), (1000, &[8.], &[], &[])],
+        ));
+        finish(&mut e);
+        let a = plan(&[emitter(statik)], &[], [0, 1000], false);
+        let b = plan(&[e], &[], [0, 1000], false);
+        let mut x = Simulation::new(Arc::clone(&a), 5, limits()).unwrap();
+        let mut y = Simulation::new(Arc::clone(&b), 5, limits()).unwrap();
+        x.advance(Duration::from_millis(125), limits()).unwrap();
+        y.advance(Duration::from_millis(125), limits()).unwrap();
+        assert_eq!(x.work.births, 1, "{tag:?}");
+        assert_eq!((x.work, x.particles()), (y.work, y.particles()), "{tag:?}");
+        // Global clock: the looping clip is 100 long but the global period is
+        // 1000, so frame 25 and global clock 125 disagree; only the global
+        // clock reads 1.25 here.
+        let mut statik = base();
+        set(&mut statik, 1.25);
+        let mut tracked = base();
+        set(&mut tracked, 0.);
+        let mut e = emitter(tracked);
+        e.tracks.push(track(
+            tag,
+            Interpolation::Linear,
+            0,
+            &[(0, &[0.], &[], &[]), (1000, &[10.], &[], &[])],
+        ));
+        finish(&mut e);
+        let a = plan(&[emitter(statik)], &[1000], [0, 100], true);
+        let b = plan(&[e], &[1000], [0, 100], true);
+        let mut x = Simulation::new(Arc::clone(&a), 5, limits()).unwrap();
+        let mut y = Simulation::new(Arc::clone(&b), 5, limits()).unwrap();
+        x.advance(Duration::from_millis(125), limits()).unwrap();
+        y.advance(Duration::from_millis(125), limits()).unwrap();
+        assert_eq!(x.work.births, 1, "{tag:?}");
+        assert_eq!((x.work, x.particles()), (y.work, y.particles()), "{tag:?}");
+    }
+}
+
+#[test]
+fn animated_bezier_speed_is_sampled_per_birth_not_retroactively() {
+    let mut props = properties();
+    props.emission_rate = 8.;
+    let mut e = emitter(props);
+    // Cubic 8·t³: frame 500 reads 1, frame 125 reads 0.015625.
+    e.tracks.push(track(
+        *b"KP2S",
+        Interpolation::Bezier,
+        NO_ID,
+        &[(0, &[0.], &[0.], &[0.]), (1000, &[8.], &[0.], &[0.])],
+    ));
+    finish(&mut e);
+    let p = plan(&[e], &[], [0, 1000], false);
+    let mut s = Simulation::new(Arc::clone(&p), 5, limits()).unwrap();
+    s.advance(Duration::from_millis(500), limits()).unwrap();
+    assert_eq!(s.particles().len(), 4);
+    approx(s.particles()[3].velocity[2], 1.);
+    approx(s.particles()[3].position[2], 13. + 0.125);
+    // The first birth keeps its own birth frame instead of following the track.
+    approx(s.particles()[0].velocity[2], 0.015625);
+}
+
+#[test]
+fn entrance_and_clip_changes_key_on_global_scalar_channels_only() {
+    let mut local_a = emitter(properties());
+    local_a.tracks.push(track(
+        *b"KP2S",
+        Interpolation::None,
+        NO_ID,
+        &[
+            (10, &[1.], &[], &[]),
+            (260, &[2.], &[], &[]),
+            (1000, &[3.], &[], &[]),
+            (1500, &[4.], &[], &[]),
+        ],
+    ));
+    finish(&mut local_a);
+    let mut local_b = local_a.clone();
+    local_b.tracks[0] = track(
+        *b"KP2S",
+        Interpolation::None,
+        NO_ID,
+        &[
+            (10, &[9.], &[], &[]),
+            (260, &[2.], &[], &[]),
+            (1000, &[3.], &[], &[]),
+            (1500, &[4.], &[], &[]),
+        ],
+    );
+    finish(&mut local_b);
+    let first = Arc::try_unwrap(plan(&[local_a], &[], [10, 260], false)).unwrap();
+    let next = Arc::try_unwrap(plan(&[local_b], &[], [1000, 1500], true)).unwrap();
+    first.then(next).unwrap();
+    let mut global_a = emitter(properties());
+    global_a.tracks.push(track(
+        *b"KP2S",
+        Interpolation::None,
+        0,
+        &[(0, &[1.], &[], &[])],
+    ));
+    finish(&mut global_a);
+    let mut global_b = global_a.clone();
+    global_b.tracks[0] = track(*b"KP2S", Interpolation::None, 0, &[(0, &[2.], &[], &[])]);
+    finish(&mut global_b);
+    let first = Arc::try_unwrap(plan(&[global_a], &[500], [10, 260], false)).unwrap();
+    let next = Arc::try_unwrap(plan(&[global_b], &[500], [1000, 1500], true)).unwrap();
+    assert!(first.then(next).is_err());
 }
 
 #[test]
