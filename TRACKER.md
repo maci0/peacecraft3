@@ -1316,7 +1316,9 @@ evidence for independent AI globals and synchronous initial execution are record
       actual WASM; intermediate arithmetic/layout bounds are checked before
       allocation. A selected-primary differential records 29 matching roundtrips
       and two shared refusals across 31 synthetic vectors; no native parity claim.
-- [ ] `pcx-mpq`: other compression chains and original sparse-member acceptance
+- [~] `pcx-mpq`: other compression chains and original sparse-member acceptance
+  `[work/mpq-chains/methods]` claimed from `29b6f07`: explicit mask taxonomy
+  (`BZIP2`/`LZMA`-exact/sparse-other/unknown refusals) without new decoders.
       The standalone sparse reader is exposed and passes 13 checked public-API
       tests, a 172-case synthetic primary-source differential, strict Clippy
       and a warning-denied WASM check. Other sparse combinations, BZIP2/LZMA and
