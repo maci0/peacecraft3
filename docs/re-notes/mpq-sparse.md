@@ -84,3 +84,16 @@ it is not a hosted-page or original-ISO sparse-member acceptance result.
 Original sparse-member acceptance, other compression combinations and target
 native codec interoperability remain unverified. No original bytes were used by
 these new gates or committed.
+
+## Mask taxonomy (explicit refusals, no new decoders)
+
+`payload::classify_mask` names every sector mask without decoding payload
+bytes: `Stored` (`0x00`), exact `Sparse` (`0x20`) and `SparseZlib` (`0x22`),
+exact `Lzma` (`0x12`), remaining `Bzip2` (`0x10`-carrying), remaining
+`SparseCombo` (any other `0x20`-carrying mask), `Unknown` (bits outside the
+supported set), and `Supported` (non-zero subsets of the PKWARE/ZLIB/Huffman/
+ADPCM set, still subject to codec-table availability). The sector path refuses
+`Lzma`/`Bzip2`/`SparseCombo`/`Unknown` before producing bytes, preserving the
+existing `UnsupportedCompression` contract. This records the unobserved
+combinations explicitly rather than inventing their contents; BZIP2/LZMA
+decoders and original sparse-member acceptance remain open.

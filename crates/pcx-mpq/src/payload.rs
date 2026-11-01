@@ -21,14 +21,82 @@ use crate::flags;
 use crate::hash;
 
 /// Per-sector compression mask bits.
-const COMPRESSION_HUFFMAN: u8 = 0x01;
-const COMPRESSION_ZLIB: u8 = 0x02;
-const COMPRESSION_PKWARE: u8 = 0x08;
-const COMPRESSION_BZIP2: u8 = 0x10;
-const COMPRESSION_SPARSE: u8 = 0x20;
-const COMPRESSION_ADPCM_MONO: u8 = 0x40;
-const COMPRESSION_ADPCM_STEREO: u8 = 0x80;
-const COMPRESSION_LZMA: u8 = 0x12;
+///
+/// Format identifiers, not measured asset values: the mask byte layout comes
+/// from the container format (StormLib `SCompression.cpp` at pinned revision
+/// `116135c2`) and is independently established by the shipped-table sweeps.
+/// `0x12` is an exact LZMA mask, not a bit set: testing it bitwise would also
+/// swallow plain ZLIB (`0x02`).
+pub const COMPRESSION_HUFFMAN: u8 = 0x01;
+pub const COMPRESSION_ZLIB: u8 = 0x02;
+pub const COMPRESSION_PKWARE: u8 = 0x08;
+pub const COMPRESSION_BZIP2: u8 = 0x10;
+pub const COMPRESSION_SPARSE: u8 = 0x20;
+pub const COMPRESSION_ADPCM_MONO: u8 = 0x40;
+pub const COMPRESSION_ADPCM_STEREO: u8 = 0x80;
+pub const COMPRESSION_LZMA: u8 = 0x12;
+
+/// Masks the current sector reader decodes.
+pub const SUPPORTED_MASKS: u8 =
+    COMPRESSION_PKWARE | COMPRESSION_ZLIB | COMPRESSION_HUFFMAN | COMPRESSION_ADPCM_MONO | COMPRESSION_ADPCM_STEREO;
+
+/// Exact sparse-combined mask the reader admits (ZLIB outer, sparse inner).
+pub const COMPRESSION_SPARSE_ZLIB: u8 = COMPRESSION_SPARSE | COMPRESSION_ZLIB;
+
+/// Static taxonomy of a sector mask byte.
+///
+/// `Supported` covers every non-zero subset of [`SUPPORTED_MASKS`]; whether it
+/// decodes on a given call still depends on codec-table availability (see
+/// [`needs_codec_tables`]). All other variants are refused before any bytes
+/// are produced, preserving the existing [`PayloadError::UnsupportedCompression`]
+/// contract. Ordering matters: [`MaskKind::Lzma`] is exact and wins over the
+/// `BZIP2` bit it contains, and any sparse bit outside the two admitted exact
+/// masks is a [`MaskKind::SparseCombo`] regardless of accompanying bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskKind {
+    /// `0x00`: stored verbatim, no mask semantics.
+    Stored,
+    /// Exact standalone sparse (`0x20`).
+    Sparse,
+    /// Exact sparse-plus-ZLIB (`0x22`).
+    SparseZlib,
+    /// Exact LZMA (`0x12`).
+    Lzma,
+    /// Any remaining mask carrying the `BZIP2` (`0x10`) bit.
+    Bzip2,
+    /// Any remaining mask carrying the `SPARSE` (`0x20`) bit.
+    SparseCombo,
+    /// Any remaining mask with bits outside the supported set.
+    Unknown,
+    /// Non-zero subset of [`SUPPORTED_MASKS`].
+    Supported,
+}
+
+/// Classify a sector mask byte without reading any payload bytes.
+pub fn classify_mask(mask: u8) -> MaskKind {
+    if mask == 0 {
+        return MaskKind::Stored;
+    }
+    if mask == COMPRESSION_SPARSE {
+        return MaskKind::Sparse;
+    }
+    if mask == COMPRESSION_SPARSE_ZLIB {
+        return MaskKind::SparseZlib;
+    }
+    if mask == COMPRESSION_LZMA {
+        return MaskKind::Lzma;
+    }
+    if mask & COMPRESSION_SPARSE != 0 {
+        return MaskKind::SparseCombo;
+    }
+    if mask & COMPRESSION_BZIP2 != 0 {
+        return MaskKind::Bzip2;
+    }
+    if mask & !SUPPORTED_MASKS != 0 {
+        return MaskKind::Unknown;
+    }
+    MaskKind::Supported
+}
 
 /// Whether a sector's mask needs weights or ADPCM tables from the codec source.
 pub fn needs_codec_tables(mask: u8) -> bool {
@@ -141,16 +209,14 @@ fn decompress_sector_in(
         )?;
         return Ok(crate::sparse::decompress(&intermediate[..produced], out)?);
     }
-    let allowed = COMPRESSION_PKWARE
-        | COMPRESSION_ZLIB
-        | COMPRESSION_HUFFMAN
-        | COMPRESSION_ADPCM_MONO
-        | COMPRESSION_ADPCM_STEREO;
-    if mask == COMPRESSION_LZMA
-        || mask & (COMPRESSION_BZIP2 | COMPRESSION_SPARSE) != 0
-        || mask & !allowed != 0
-        || needs_codec_tables(mask) && table.is_none()
-    {
+    // Taxonomy preserves the historical refusal set exactly: exact LZMA,
+    // any other sparse- or BZIP2-carrying mask, any mask with bits outside
+    // the supported set, or a supported mask whose codec tables are absent.
+    let unsupported = !matches!(
+        classify_mask(mask),
+        MaskKind::Stored | MaskKind::Supported
+    );
+    if unsupported || needs_codec_tables(mask) && table.is_none() {
         return Err(PayloadError::UnsupportedCompression { mask });
     }
     let body = &sector[1..];
