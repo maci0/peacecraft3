@@ -1,4 +1,16 @@
 //! Selection image placement from the reviewed, locally supplied Legacy client.
+//!
+//! Native pick geometry (`0x601410`, about 1,000 decompiled lines, partially
+//! read) sets up its own projection (base loads at `0x601455` from `0x1161b54`,
+//! per-press origin in manager `+0x54`), tests candidate objects against the
+//! rectangle, sorts by distance in `0x6010e0` (dx/dy from manager `+0x90`/`+0x94`)
+//! and filters on per-object flag bits and virtual calls (for example
+//! `test byte [esi+0x20], 2` at `0x601701`, `test dword [esi+0x48c], 0x400` at
+//! `0x601707`, vtable `+0x13c` and `+0x100`). The flag meanings are not
+//! established. The recreation does not reproduce that path; it projects each
+//! unit's selection circle through the real scene camera and tests the
+//! projected footprint against the rectangle (inference). The helpers below
+//! name that inference exactly so the gap stays measurable.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -7,6 +19,65 @@ use crate::{
 };
 
 const IMAGE_BUDGET: usize = 32 * 1024 * 1024;
+
+/// Points sampled around a selection circle when its world footprint is
+/// projected to the screen. Numerical method only (inference, not an asset
+/// value and not read from the client image). The drag-box caller samples the
+/// circle (`UnitUI` `scale` times `ScaleFactor`, at terrain height) at this
+/// many evenly spaced angles and keeps the screen-space bounds of the samples
+/// that project; a unit is taken when those bounds touch the drag rectangle.
+pub const PROJECTED_CIRCLE_SAMPLES: usize = 16;
+
+/// Selection-circle radius in world units (inference): `UnitUI` `scale` times
+/// `ScaleFactor`, halved from diameter to radius. Returns `None` when either
+/// input is non-finite or non-positive, so callers refuse before projection
+/// instead of sampling a degenerate circle.
+pub fn circle_radius(unit_scale: f32, scale_factor: f32) -> Option<f32> {
+    if !unit_scale.is_finite() || !scale_factor.is_finite() {
+        return None;
+    }
+    let radius = unit_scale * scale_factor * 0.5;
+    if radius.is_finite() && radius > 0.0 {
+        Some(radius)
+    } else {
+        None
+    }
+}
+
+/// Converts the double-click tolerance from UI frame units to pixels
+/// (inference for the axis mapping). The native test compares the press
+/// against the previous press per axis in the UI frame space (0.8 by 0.6;
+/// `0x601410` normalises the cursor by the world frame rectangle), so the
+/// recreation divides by the frame height and multiplies by the viewport
+/// height. `frame_height` is a parameter so the 0.6 frame stays at the call
+/// site with its own provenance; this helper performs no substitution.
+pub fn tolerance_pixels(tolerance_ui: f32, frame_height: f32, view_height: f32) -> Option<f32> {
+    if !tolerance_ui.is_finite()
+        || !frame_height.is_finite()
+        || !view_height.is_finite()
+        || tolerance_ui <= 0.0
+        || frame_height <= 0.0
+        || view_height <= 0.0
+    {
+        return None;
+    }
+    let pixels = tolerance_ui / frame_height * view_height;
+    if pixels.is_finite() && pixels > 0.0 {
+        Some(pixels)
+    } else {
+        None
+    }
+}
+
+/// Viewport boundary for double-click grouping (inference, stated boundary).
+/// The native grouping routine `0x5fff10` is reached only when the point pick
+/// holds exactly one unit; its on-screen test beyond the viewport rect was not
+/// decompiled, so the recreation groups own non-hero units of the clicked type
+/// inside the scene viewport. This helper names that boundary so a future
+/// decompilation can replace it without touching the pick itself.
+pub fn grouping_uses_scene_viewport() -> bool {
+    true
+}
 
 #[derive(Clone, Debug)]
 pub struct Parameters {
