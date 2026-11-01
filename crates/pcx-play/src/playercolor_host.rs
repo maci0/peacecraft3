@@ -978,7 +978,8 @@ pub use objects::{
 };
 pub use objects::{
     BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionContext, ConstructionOrder,
-    ConstructionPhase, ConstructionPreview, ConstructionSite, UnitConstruction,
+    ConstructionPhase, ConstructionPreview, ConstructionSite, TrainOption, TrainUnavailable,
+    TrainingQueueEntry, UnitConstruction,
 };
 pub use objects::{
     CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState,

@@ -63,6 +63,61 @@ struct TrainingEvent {
     player: Option<HandleId>,
 }
 
+/// Why a training button is drawn disabled. Presentation only: the enqueue
+/// path re-checks every gate and refuses there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainUnavailable {
+    /// The producer is paused; the host refuses new paid orders there.
+    Paused,
+    /// The unit is a hero: ordinary training and token transitions are refused.
+    Hero,
+    /// The producer's queue already holds the source bound.
+    QueueFull,
+    /// The unit's `Requires` list is not met by the owner.
+    Requirements,
+    /// The owner's tech max for the unit is reached.
+    Limit,
+    /// The owner's gold or lumber bank is short.
+    Resources,
+    /// The head would reserve food past the cap. Pending entries reserve no
+    /// food, so this only applies when the queue is empty.
+    Food,
+}
+
+/// One trainable unit of a producer with its authored cost and readiness.
+/// Costs resolve the same unit catalog and map overrides the enqueue path
+/// uses; `refund_gold`/`refund_lumber` are the per-entry cancellation refunds
+/// through the source numeric policy, truncated per entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrainOption {
+    pub kind: i32,
+    pub gold: i32,
+    pub lumber: i32,
+    pub food: i32,
+    pub duration: i32,
+    pub refund_gold: i32,
+    pub refund_lumber: i32,
+    pub unavailable: Option<TrainUnavailable>,
+}
+
+/// One queued training entry for presentation. `finish`/`through` are the
+/// live head clocks only when `active` is set; pending entries carry `None`,
+/// matching [`ObjectHost::unit_training_queue`]. Refunds are per-entry
+/// conversions, not a share of a summed cost.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrainingQueueEntry {
+    pub kind: i32,
+    pub active: bool,
+    pub gold: i32,
+    pub lumber: i32,
+    pub refund_gold: i32,
+    pub refund_lumber: i32,
+    pub food: i32,
+    pub duration: i32,
+    pub finish: Option<f64>,
+    pub through: Option<f64>,
+}
+
 fn live(record: &ExecutedUnit) -> bool {
     record.combat.as_ref().is_none_or(|c| !c.dead)
         && record
@@ -649,6 +704,173 @@ impl ObjectHost {
                 .filter(|job| job.producer == producer)
                 .map(|job| (job.kind, job.active.then_some(job.finish))),
         );
+        Ok(entries)
+    }
+
+    /// The source queue bound, for `used/max` presentation. Refuses when the
+    /// bound is not admitted rather than presenting an invented limit.
+    pub fn training_queue_capacity(&self) -> Result<usize, Error> {
+        self.training_queue_slots()
+    }
+
+    /// Authored trainable units of `producer` with resolved costs and
+    /// readiness. Order follows the producer's `Trains` list with repeats
+    /// removed, matching the command card. A removed producer errors so the
+    /// presentation hides instead of showing a stale queue; a dead producer
+    /// yields no options. Explicit owner transfer is not resolved here: the
+    /// caller compares the producer's live owner with its selection.
+    pub fn unit_train_options(&self, producer: HandleId) -> Result<Vec<TrainOption>, Error> {
+        let record = self.executed_unit(producer)?;
+        let owner = record.owner;
+        if !live(record) {
+            return Ok(Vec::new());
+        }
+        let paused = record.paused_since.is_some();
+        let slots = self.training_queue_slots()?;
+        let queued = self
+            .training
+            .jobs
+            .iter()
+            .filter(|job| job.producer == producer)
+            .count();
+        let list = profile(&record.definition, "Trains", "unitList")
+            .map_err(|e| self.training_error(e))?;
+        let mut kinds = Vec::new();
+        for token in list.split(',').filter(|s| !s.trim().is_empty()) {
+            if matches!(token.trim(), "_" | "-") {
+                continue;
+            }
+            let code: [u8; 4] = token
+                .trim()
+                .as_bytes()
+                .try_into()
+                .map_err(|_| self.training_error("malformed Trains rawcode"))?;
+            if !code.iter().all(u8::is_ascii_graphic) {
+                return Err(self.training_error("malformed Trains rawcode"));
+            }
+            let kind = i32::from_be_bytes(code);
+            if kinds.iter().any(|seen: &i32| *seen == kind) {
+                continue;
+            }
+            kinds.push(kind);
+        }
+        let mut options = Vec::new();
+        options
+            .try_reserve_exact(kinds.len())
+            .map_err(|_| self.training_error("training option capacity"))?;
+        for kind in kinds {
+            let hero = self.require_ordinary_training(kind).is_err();
+            let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
+            let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
+            // Hero build times need revival state the host does not admit;
+            // the button stays disabled on the hero gate, so no time is shown.
+            let duration = if hero {
+                0
+            } else {
+                self.ai_unit_amount(owner, kind, "bldtm")?
+            };
+            let definition =
+                self.unit_catalog()?
+                    .resolve(kind.to_be_bytes())
+                    .map_err(|problem| {
+                        self.training_error(format!("training catalog {kind:?}: {problem:?}"))
+                    })?;
+            let food = self
+                .unit_food_amount(&definition, "fused")
+                .map_err(|e| self.training_error(e))?;
+            let prerequisites = self.training_prerequisites_met(&definition, owner)?;
+            let limit = self.training_limit_allows(owner, kind)?;
+            let bank_gold = self
+                .player_resource_value(owner, "PLAYER_STATE_RESOURCE_GOLD")?
+                .ok_or_else(|| self.training_error("training gold not admitted"))?;
+            let bank_lumber = self
+                .player_resource_value(owner, "PLAYER_STATE_RESOURCE_LUMBER")?
+                .ok_or_else(|| self.training_error("training lumber not admitted"))?;
+            // A non-empty queue takes the entry pending with no food
+            // reservation, so the cap only gates the activating head.
+            let food_blocked = if queued == 0 && food > 0 {
+                let used = self
+                    .player_resource_value(owner, "PLAYER_STATE_RESOURCE_FOOD_USED")?
+                    .ok_or_else(|| self.training_error("training food not admitted"))?;
+                let cap = self
+                    .player_resource_value(owner, "PLAYER_STATE_RESOURCE_FOOD_CAP")?
+                    .ok_or_else(|| self.training_error("food capacity not admitted"))?;
+                used.checked_add(food).is_none_or(|after| after > cap)
+            } else {
+                false
+            };
+            let unavailable = if paused {
+                Some(TrainUnavailable::Paused)
+            } else if hero {
+                Some(TrainUnavailable::Hero)
+            } else if queued >= slots {
+                Some(TrainUnavailable::QueueFull)
+            } else if !prerequisites {
+                Some(TrainUnavailable::Requirements)
+            } else if !limit {
+                Some(TrainUnavailable::Limit)
+            } else if gold > bank_gold || lumber > bank_lumber {
+                Some(TrainUnavailable::Resources)
+            } else if food_blocked {
+                Some(TrainUnavailable::Food)
+            } else {
+                None
+            };
+            options.push(TrainOption {
+                kind,
+                gold,
+                lumber,
+                food,
+                duration,
+                refund_gold: self.training_refund(gold)?,
+                refund_lumber: self.training_refund(lumber)?,
+                unavailable,
+            });
+        }
+        Ok(options)
+    }
+
+    /// The producer's queue with per-entry costs and source-derived refunds.
+    /// A removed producer errors so the presentation hides; an owner change
+    /// against the jobs is reported rather than presenting another owner's
+    /// queue as this producer's.
+    pub fn unit_training_details(
+        &self,
+        producer: HandleId,
+    ) -> Result<Vec<TrainingQueueEntry>, Error> {
+        let record = self.executed_unit(producer)?;
+        let count = self
+            .training
+            .jobs
+            .iter()
+            .filter(|job| job.producer == producer)
+            .count();
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(count)
+            .map_err(|_| self.training_error("queue observation capacity"))?;
+        for job in self
+            .training
+            .jobs
+            .iter()
+            .filter(|job| job.producer == producer)
+        {
+            if record.owner != job.owner {
+                return Err(self.training_error("training owner changed"));
+            }
+            entries.push(TrainingQueueEntry {
+                kind: job.kind,
+                active: job.active,
+                gold: job.gold,
+                lumber: job.lumber,
+                refund_gold: self.training_refund(job.gold)?,
+                refund_lumber: self.training_refund(job.lumber)?,
+                food: job.food,
+                duration: job.duration,
+                finish: job.active.then_some(job.finish),
+                through: job.active.then_some(job.through),
+            });
+        }
         Ok(entries)
     }
 

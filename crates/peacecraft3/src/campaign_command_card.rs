@@ -38,6 +38,12 @@ pub(crate) enum Kind {
     TargetUnit,
     Immediate,
     Train(i32),
+    /// Cancels the shared training queue's FIFO `slot` of the button's unit.
+    /// The slot is the position in
+    /// [`pcx_play::playercolor_host::ObjectHost::unit_training_queue`], not a
+    /// script order id: the public `"cancel"` string converts to zero and is
+    /// not a working cancellation order.
+    TrainCancel(usize),
     BuildMenu,
     Build(i32),
     BuildCancel,
@@ -125,6 +131,7 @@ struct Signature {
     header: Header,
     abilities: Vec<([u8; 4], i32, bool)>,
     builds: Vec<pcx_play::playercolor_host::BuildOption>,
+    trains: Vec<pcx_play::playercolor_host::TrainOption>,
 }
 
 fn header(objects: &ObjectHost) -> Result<Option<Header>, String> {
