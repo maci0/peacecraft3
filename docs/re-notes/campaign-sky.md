@@ -34,6 +34,9 @@ actors. Terrain/unit sun selection is not substituted. Missing or unsupported
 own-light records and unavailable clocks remain explicit diagnostics. The model
 and light binding retire with the same sky/session state. Other sky animation
 clock behavior and camera-relative placement still need broader qualification.
+An admitted lighting bundle with no model refuses with the sky script identity
+instead of indexing; the single-model read otherwise keeps the existing
+first-model selection.
 
 Focused source-clock, identity and lifecycle checks pass (12 tests), as does the
 explicit original-model reader gate (1), full app suite (686), strict native/WASM
