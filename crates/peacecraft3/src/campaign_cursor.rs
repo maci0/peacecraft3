@@ -101,6 +101,7 @@ impl Armed {
             Kind::Standard(StandardKind::Stop | StandardKind::Hold)
             | Kind::Immediate
             | Kind::Train(_)
+            | Kind::TrainCancel(_)
             | Kind::BuildMenu
             | Kind::Build(_)
             | Kind::BuildCancel

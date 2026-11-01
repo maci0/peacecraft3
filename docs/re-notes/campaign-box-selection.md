@@ -28,12 +28,19 @@ original. This note records where each rule comes from. Evidence classes:
   outline with no fill, sampled at `(429..430, 300)` and `(500, 249)` of
   `drag-held.png`. It is drawn from the first pixel of movement: a 2 px sweep already
   shows a 2x1 outline. Edge width was 2 px on vertical edges and 1 px on the
-  horizontal edge at this resolution. The recreation draws one logical pixel
-  (`OUTLINE_PX`, a recreation choice). Width at other resolutions is not measured.
+  horizontal edge at this resolution. The recreation draws one device pixel
+  (`OUTLINE_PX`): the draw routine `0x5ff0e0` passes `+0xfc` as the line colour
+  with primitive type 2 and no width operand, and `0x5ff240` draws the same
+  lines in `0xf0ffffff`. A line list has no width state, so one device pixel is
+  resolution-independent; the 2 px / 1 px asymmetry is the rasterization of
+  that 1 px line, not a width parameter. No other width was measured and none
+  is needed: the exe carries no width to read.
 - observation: units inside the rectangle show their selection circle while the
   button is still held, and the command card stays empty until release. The
-  recreation does not draw these live preselect circles (`CPreselectUI` exists in the
-  exe). Selection commits on release.
+  recreation publishes the live pick under the committed tiers as `preselect`
+  (honouring `EnablePreSelect`, `EnableSelect` and `EnableDragSelect`); the
+  dotted band itself is drawn by the existing selection UI. Selection commits
+  on release.
 - No FDF, texture or skin in the archives defines the rectangle.
 
 ## Gesture
@@ -59,14 +66,20 @@ original. This note records where each rule comes from. Evidence classes:
 
 ## Which units a rectangle takes
 
-- exe: the native pick (`0x601410`, about 1,000 decompiled lines, not read in
-  full) sets up its own projection, tests candidate objects against the
-  rectangle, sorts them into several lists and filters on per-object flag bits
-  and virtual calls (for example `object[8] & 2`, `object[0x123] & 0x400`,
-  vtable `+0x13c` and `+0x100`). The recreation does not reproduce that; it projects each live, shown, visible unit's
+- exe: the native pick (`0x601410`, about 1,000 decompiled lines, partially read)
+  sets up its own projection (base loads at `0x601455` from `0x1161b54`, the
+  per-press origin in manager `+0x54`), tests candidate objects against the
+  rectangle, sorts them by distance in `0x6010e0` (dx/dy from manager
+  `+0x90`/`+0x94`, `mulss`/`addss`, ordered through `0x995460` with comparator
+  `0x5f95e0`) and filters on per-object flag bits and virtual calls (for
+  example `test byte [esi+0x20], 2` at `0x601701`, `test dword [esi+0x48c],
+  0x400` at `0x601707`, vtable `+0x13c` and `+0x100`). The flag meanings are not
+  established. The recreation does not reproduce that filter; it projects each
+  live, shown, selectable and visible unit's
   selection circle (UnitUI `scale` times `ScaleFactor`, 16 samples at terrain height)
   through the real scene camera and takes units whose projected circle touches
-  the rectangle (inference).
+  the rectangle (inference). Selectability covers `BlzUnitDisableSelection` and
+  the `Aloc` locust inference; visibility and screen position are the caller's.
 - exe: `CSelectionWar3` refuses to add past 12: `cmp dword [edi+0x10], 0xc` at
   `0x4ef657` and `cmp dword [ebx+0x1f8], 0xc` at `0x4efc8b`. The recreation reads
   both operands from the image at run time and requires them to agree
@@ -79,15 +92,22 @@ original. This note records where each rule comes from. Evidence classes:
   only when exactly one is in the rectangle.
 - observation: Shift plus a rectangle adds to the selection and does not toggle units
   already selected.
-- Not established, so refused or flagged instead of guessed:
-  - several units of other players in one rectangle: refused with a message;
-  - Shift with another player's unit in the current selection or the pick: refused;
-  - which units survive when more than 12 qualify: the recreation keeps the first 12
-    in unit creation order and records that the original's choice is not established;
-  - hero priority and `prio` ordering, items and destructables, the unit
-    selectability flag (the host does not model `BlzIsUnitSelectable` or the `Aloc`
-    effect on selection), and the script natives `EnableSelect` and
-    `EnableDragSelect` (strings exist in the exe, the host does not implement them).
+- recreation choices for the unestablished foreign cases (exe shows no loud refusal
+  on this path: the commit filters through `0x5ffae0`/`0x5fa130`, and the Shift
+  path reads `0x83fea0` before the same `0x4efc40` add): a box holding several
+  units of other players keeps the current selection silently, like an empty
+  sweep; Shift with another player's unit in the current selection or the pick
+  keeps the current selection silently. The pure functions still report
+  `SeveralForeign`/`MixedAdditive` so headless callers see the explicit signal.
+- recreation choice within the cap: hero/`prio`/rawcode order (heroes first,
+  then descending `prio`, then ascending rawcode, ties in unit creation order),
+  reusing the subgroup ordering evidence in `input-selection-rules.md`. The
+  original's choice past 12 is not established and is reported via
+  `Pick::truncated`. Items and destructables never enter a box pick.
+- admitted: hero priority and `prio` ordering, the unit selectability flag
+  (`BlzIsUnitSelectable`/`BlzUnitDisableSelection` plus the `Aloc` locust
+  inference), and the script natives `EnableSelect`, `EnableDragSelect` and
+  `EnablePreSelect` (signatures read from the script's own declarations).
 
 ## Double click
 
@@ -100,9 +120,16 @@ original. This note records where each rule comes from. Evidence classes:
   normalises the cursor by the world frame rectangle), so the recreation converts it to
   pixels with the 0.6 frame height (inference).
 - observation: double click on a peon selected all five peons, the only five on screen.
-  The recreation selects every own unit of the clicked type inside the scene viewport
-  (same 12 cap). Another player's unit stays a single selection. The native
-  routine `0x5fff10` does this; its on-screen test was not decompiled.
+  The recreation selects every own non-hero unit of the clicked type inside the
+  scene viewport (same 12 cap, hero/`prio`/rawcode order). A hero double click
+  stays single (two heroes of one type are two subgroups: `0x4efe80` with
+  `0x696810`, see `input-selection-rules.md`). Another player's unit stays a
+  single selection. The native routine `0x5fff10` does this; it is reached only
+  when the point pick holds exactly one unit (`cmp [ebp-0x38], 1` at `0x5f9ddc`
+  after `0x601410`+`0x6010e0`), after the press-vs-previous tolerance test at
+  `0x5f9d2e..0x5f9d6b` (`andps` with `0xe78370`, `comiss` against `0xe7e968`).
+  Its on-screen test beyond the viewport rect was not decompiled, so the
+  viewport is the recreation's stated boundary (inference).
 
 ## Interactions left alone
 
