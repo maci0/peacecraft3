@@ -250,6 +250,10 @@ pub(crate) fn activate_button(
             immediate_command(host, input, button.unit, kind, false);
             return;
         }
+        crate::campaign_command_card::Kind::TrainCancel(slot) => {
+            cancel_training(host, input, button.unit, slot);
+            return;
+        }
         crate::campaign_command_card::Kind::Standard(kind) => {
             if let Err(error) =
                 activate_standard(host, input, button.unit, kind, button.session.clone())
@@ -291,6 +295,7 @@ pub(crate) fn activate_button(
             }
             crate::campaign_command_card::Kind::Standard(_)
             | crate::campaign_command_card::Kind::Train(_)
+            | crate::campaign_command_card::Kind::TrainCancel(_)
             | crate::campaign_command_card::Kind::SkillMenu
             | crate::campaign_command_card::Kind::SkillCancel
             | crate::campaign_command_card::Kind::Learn(_)
@@ -314,6 +319,31 @@ fn cancel_construction(host: &mut MapStartupHost, input: &mut CampaignInput, sit
     let clock = objects.timer_game_time();
     match objects.cancel_unit_construction(site) {
         Ok(true) => record_command(input, clock, PlayerCommand::CancelConstruction { site }),
+        Ok(false) => {}
+        Err(error) => input.last_error = Some(error.to_string()),
+    }
+}
+
+/// Cancels one shared training-queue entry by FIFO slot. Stale sessions never
+/// reach this path: [`command_button`] only activates buttons whose session
+/// matches the live session. Repeats are silent; a refused refund or a
+/// changed owner is reported instead of retried.
+fn cancel_training(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    producer: HandleId,
+    slot: usize,
+) {
+    input.command = None;
+    input.build = None;
+    let objects = host.objects_mut();
+    let clock = objects.timer_game_time();
+    match objects.cancel_unit_training(producer, slot) {
+        Ok(true) => record_command(
+            input,
+            clock,
+            PlayerCommand::CancelTraining { producer, slot },
+        ),
         Ok(false) => {}
         Err(error) => input.last_error = Some(error.to_string()),
     }

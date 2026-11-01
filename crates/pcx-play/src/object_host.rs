@@ -1342,6 +1342,7 @@ pub use unit_creation::{
     ExecutedUnit, ExecutedUnitState, HeroBudget, HeroProgress, LearnBlock, LearnableSkill,
     ResearchIcon, UnitAbilities, UnitBudget, UnitStateBudget,
 };
+pub use unit_training::{TrainOption, TrainUnavailable, TrainingQueueEntry};
 
 #[path = "unit_position_host.rs"]
 mod unit_positions;

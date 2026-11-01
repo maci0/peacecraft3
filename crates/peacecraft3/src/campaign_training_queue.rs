@@ -56,12 +56,14 @@ const MAX_RETAINED: usize = 32 << 20;
 pub(crate) struct TrainingQueueSet;
 
 /// Runtime geometry: the authored strip height and entry size in frame units,
-// plus the logical viewport they are percentages of.
+// plus the logical viewport they are percentages of. `repeat` is the
+// command-texture sampler addressing the executable selects.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct QueueGeometry {
     strip: f32,
     icon: f32,
     viewport: [f32; 2],
+    repeat: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,7 +131,7 @@ pub(crate) fn install(app: &mut App) {
 struct Inputs<'w, 's> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
-    camera: Res<'w, crate::campaign_camera::CampaignCamera>,
+    camera: Res<'w, peacecraft3::campaign_camera::CampaignCamera>,
     launcher: Option<Res<'w, crate::launch_gui::Launcher>>,
     frames: Query<'w, 's, (Entity, &'static crate::hud_render::HudSourceAttachment)>,
 }
@@ -188,6 +190,7 @@ fn block_number(text: &str, block: &str, key: &str) -> Result<f32, String> {
 fn read_geometry(
     reader: &pcx_assets::Resolver,
     viewport: [f32; 2],
+    repeat: bool,
     receipts: &mut Vec<AssetReceipt>,
 ) -> Result<QueueGeometry, String> {
     use crate::campaign_hud::upper_buttons::read;
@@ -215,6 +218,7 @@ fn read_geometry(
         strip,
         icon,
         viewport,
+        repeat,
     })
 }
 
@@ -222,6 +226,7 @@ fn image(
     reader: &pcx_assets::Resolver,
     state: &mut TrainingQueue,
     path: &str,
+    repeat: bool,
     images: &mut Assets<Image>,
 ) -> Result<Handle<Image>, String> {
     if let Some(image) = state.images.get(path) {
@@ -247,7 +252,9 @@ fn image(
             .filter(|bytes| *bytes <= MAX_RETAINED)
             .ok_or("training queue image aggregate budget")?;
         let mut decoded = pcx_gfx::viewer::rgba_image(&texture);
-        decoded.sampler = bevy::image::ImageSamplerDescriptor::default_nearest();
+        decoded.sampler = bevy::image::ImageSampler::Descriptor(
+            crate::campaign_hud::upper_buttons::image_sampler(repeat),
+        );
         let handle = images.add(decoded);
         state.images.insert(path.into(), handle.clone());
         state.retained = retained;
@@ -339,7 +346,7 @@ fn hide(state: &mut TrainingQueue, nodes: &mut Query<&mut Node>) {
 fn console_parent(
     inputs: &Inputs,
     console: &str,
-    bindings: &peacecraft3::map_requests::MapBinding,
+    bindings: &peacecraft3::map_requests::MapBindings,
 ) -> Result<Entity, String> {
     let mut parents = inputs.frames.iter().filter(|(_, frame)| {
         frame.frame == console
@@ -400,7 +407,7 @@ fn sync(
                 .launcher
                 .as_deref()
                 .and_then(crate::launch_gui::selected_install);
-            let (viewport, console) = crate::menu_lighting::with_client_image(
+            let (viewport, repeat, console) = crate::menu_lighting::with_client_image(
                 install.as_deref(),
                 |label, image| {
                     let identity = pcx_play::campaign_inputs::client_identity(image, label);
@@ -424,10 +431,10 @@ fn sync(
                         &sections,
                         &rules.console_key,
                     )?;
-                    Ok::<_, String>((rules.viewport, console))
+                    Ok::<_, String>((rules.viewport, rules.icon_repeat, console))
                 },
             )?;
-            let geometry = read_geometry(&reader, viewport, &mut state.receipts)?;
+            let geometry = read_geometry(&reader, viewport, repeat, &mut state.receipts)?;
             crate::campaign_hud::upper_buttons::text(&reader, CONSOLE_FDF, &mut state.receipts)?;
             Ok::<_, String>((geometry, console))
         })();
@@ -465,7 +472,7 @@ fn sync(
         let root = commands
             .spawn((
                 root_node(&geometry, 0, false),
-                crate::campaign_presentation::CampaignInterface,
+                peacecraft3::campaign_presentation::CampaignInterface,
                 Pickable::IGNORE,
             ))
             .id();
@@ -628,7 +635,7 @@ fn paint(
         let command = pcx_play::training_command::Command::read(&definition)
             .map_err(|e| format!("training queue unit {kind:?}: {e}"))?;
         pcx_assets::AssetPath::new(&command.art).map_err(|e| e.to_string())?;
-        let image = image(reader, state, &command.art, images)?;
+        let image = image(reader, state, &command.art, geometry.repeat, images)?;
         let (name, mut tip) = match command.tooltip {
             Ok(tip) => (tip.title, tip.description),
             Err(_) => (

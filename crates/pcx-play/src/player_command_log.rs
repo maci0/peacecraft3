@@ -37,6 +37,11 @@ pub enum PlayerCommand {
     },
     /// Local UI cancellation; no native order or W3G action mapping is implied.
     CancelConstruction { site: HandleId },
+    /// Local UI cancellation of one shared training-queue entry by FIFO slot.
+    /// `slot` is the position in
+    /// [`crate::playercolor_host::ObjectHost::unit_training_queue`]; no public
+    /// `"cancel"` script order exists for this operation.
+    CancelTraining { producer: HandleId, slot: usize },
     /// An order aimed at a unit or item handle, such as `attack` or `smart`.
     Target {
         unit: HandleId,
