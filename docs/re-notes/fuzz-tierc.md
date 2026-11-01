@@ -1,0 +1,68 @@
+# Tier C fuzz corpus + runner ownership (fuzz-tierc lane)
+
+Process note, not game behavior. No shipped-byte, native-code or runtime
+evidence applies. Nothing here changes parsers, the sim, rendering or any
+admitted rule. It records what the `fuzz-tierc` lane owns, where the
+`mechanics` lane boundary is, and what remains open.
+
+## Ownership
+
+Lane `fuzz-tierc`, worktree `../peacecraft3-fuzz-tierc`, branch
+`work/fuzz-tierc/corpus`. Claimed paths (see `tools/parallel-claim.sh`):
+
+- `crates/pcx-play/src/fuzz_corpus.rs` — fixed 32-seed corpus, recipe v1.
+- `crates/pcx-play/src/fuzz_scenario.rs` — seeded generation over the
+  existing movement generator (random unit comps, synthetic map tags).
+- `crates/pcx-play/src/fuzz_resume.rs` — mid-run checkpoint/resume with
+  RNG continuity (`run_head` / `resume_to_end` / `run_via_resume`).
+- `crates/pcx-play/src/fuzz_report.rs` — bounded TRACKER-ready divergence
+  filings + artifact names.
+- `crates/pcx-play/src/lib.rs` — four `pub mod fuzz_*;` lines only.
+- `docs/re-notes/fuzz-tierc.md` — this note.
+
+## Mechanics-lane boundary (hands off)
+
+Claimed by `mechanics` and never edited here: `rpl`, `runner`,
+`scenario`, `trace`, `diff` (`crates/pcx-play/src/`), plus
+`camera_setup_host`, `native_coverage_host`, `widget_enumeration_host`,
+`world_snapshot_host`, `tests/minimize.rs`, `docs/re-notes/script-items.md`.
+This lane reads their public types (`Scenario`, `RunConfig`, `Trace`,
+`Divergence`, `run`, `generate`) and mirrors the runner's schedule/RNG
+order in `fuzz_resume.rs`. Grammar, ordering or codec changes there must
+be mirrored here; the mirror is documented at the top of each module.
+
+Seed minimization (`tests/minimize.rs`) stays with `mechanics`: the
+"minimal reproducing seed" filed by `fuzz_report.rs` is the corpus seed +
+recipe version. Shorter-horizon / fewer-unit reduction is their lane.
+
+## Design
+
+- Corpus: 32 fixed seeds (small, large, bit-pattern edges) × 3 cycled
+  shapes (100t/4u/8a, 300t/8u/16a, 600t/12u/24a). Work per entry is at
+  most ~7,824 (`ticks * (units + 1) + actions`).
+- Generation: per-seed `Rng` picks the synthetic map tag; a derived
+  `Rng(seed, index, recipe)` feeds `generator::generate` modulo selection.
+  Names are `fuzz.s<seed>.<index>`; assets are `vanilla`, no fix rows.
+- Resume: `run_head` executes `0..upto` with the same grouping as
+  `runner::run` (BTreeMap schedule, BTreeMap player commands, single `Rng`,
+  sorted unit snapshots, sorted fix rows) and keeps the live `Rng`,
+  `draw_index`, `timer_seq` and prefix records. `resume_to_end` continues
+  without re-seeding, so `run_via_resume == run` for every split point.
+- Report: `format_tracker_entry` emits one append-only TRACKER line with
+  seed, recipe, both trace hashes, the one-line `pcx-diff` report and a
+  bounded RPL prefix (2,048 bytes; filing capped at 4,096). Full RPL is
+  reproducible from the seed + recipe; the artifact name is
+  `diverge-fuzz-s<seed>-<index>-<tick|header>.rpl`.
+
+## Open items
+
+- No test runs were made in this lane (per tasking). Continuity
+  (`run_via_resume == run`), corpus generation ceilings and filing bounds
+  still need execution in the release lane.
+- Real terrain/tileset fuzzing waits on map-container wiring owned
+  elsewhere; the map tag here is a synthetic identity only.
+- Whether the corpus should also cover `hd`/`reforged` asset modes or
+  non-empty fix rows is undecided; currently `vanilla` with no fix rows
+  so mode confusion is impossible.
+- Stale-claim expiry follows the parallel-ownership note (claims persist
+  until released).
