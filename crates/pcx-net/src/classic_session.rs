@@ -18,8 +18,8 @@ use crate::classic_frame::bncs::{
     AccountLogonReply, AuthCheckReply, AuthInfoReply, ChatEvent, ChatEventKind, KeyState,
 };
 use crate::classic_frame::lobby::{
-    DOWNLOAD_VERIFIED, ChatMessage, IncomingJoin, LagEntry, LeaveCode, MapSizeReport, SLOT_OCCUPIED,
-    SlotReadiness,
+    ChatMessage, DOWNLOAD_VERIFIED, IncomingJoin, LagEntry, LeaveCode, MapSizeReport,
+    SLOT_OCCUPIED, SlotReadiness,
 };
 use crate::classic_frame::map_check::Fingerprints;
 
@@ -469,7 +469,10 @@ impl ClassicLobby {
             events.push(LobbyEvent::LagStarted { entries: lagged });
         }
         if !ping_due.is_empty() {
-            events.push(LobbyEvent::PingDue { ticks, pids: ping_due });
+            events.push(LobbyEvent::PingDue {
+                ticks,
+                pids: ping_due,
+            });
         }
         if let LobbyPhase::Countdown { started_ms } = self.phase
             && now_ms.saturating_sub(started_ms) >= self.timing.countdown_ms
@@ -614,12 +617,19 @@ impl RealmSession {
 
     /// Handles the account-logon reply: status 0 with salt and server key
     /// continues to the proof step; anything else fails with its status.
-    pub fn on_account_logon(&mut self, reply: &AccountLogonReply<'_>) -> Result<bool, RealmFailure> {
+    pub fn on_account_logon(
+        &mut self,
+        reply: &AccountLogonReply<'_>,
+    ) -> Result<bool, RealmFailure> {
         if self.phase != RealmPhase::Logon {
-            return Err(RealmFailure::Challenge("account-logon arrived out of phase"));
+            return Err(RealmFailure::Challenge(
+                "account-logon arrived out of phase",
+            ));
         }
         if reply.status != 0 || reply.salt.is_none() || reply.server_key.is_none() {
-            return Err(RealmFailure::Logon { status: reply.status });
+            return Err(RealmFailure::Logon {
+                status: reply.status,
+            });
         }
         Ok(true)
     }
@@ -654,7 +664,9 @@ impl RealmSession {
             return Err(RealmFailure::Challenge("channel join arrived out of phase"));
         }
         if channel.len() > 64 {
-            return Err(RealmFailure::Challenge("channel exceeds the 64-byte ceiling"));
+            return Err(RealmFailure::Challenge(
+                "channel exceeds the 64-byte ceiling",
+            ));
         }
         self.channel = Some(channel.to_vec());
         self.phase = RealmPhase::Channel;

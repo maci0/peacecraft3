@@ -118,15 +118,23 @@ pub fn entrypoints_are_unchanged(entrypoints: &[String]) -> bool {
 /// `None` means the map has not completed through its own triggers; the
 /// driver must not invent victory.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub struct CampaignAdvance {
     pub next_level: Option<String>,
 }
 
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub fn unchanged_map_advance(
     has_exit: bool,
     next_level: Option<String>,
 ) -> Option<CampaignAdvance> {
-    has_exit.then(|| CampaignAdvance { next_level })
+    has_exit.then_some(CampaignAdvance { next_level })
 }
 
 #[cfg(test)]

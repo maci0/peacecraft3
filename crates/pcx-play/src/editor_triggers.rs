@@ -94,6 +94,9 @@ pub fn compile_editor_triggers_with_objects(
 /// Same as above with the map's `war3map.wts` strings wired to the compiled
 /// program, so `TRIGSTR_` in lowered triggers and custom text resolves
 /// through the same retained table as the JASS-first path.
+// Eight script inputs mirror `MapScripts::compile`'s bundle shape; grouping
+// them would churn both call sites for no behavior change.
+#[allow(clippy::too_many_arguments)]
 pub fn compile_editor_triggers_with_objects_and_wts(
     identity: AssetIdentity,
     common: ScriptAsset<'_>,
@@ -128,10 +131,7 @@ pub fn compile_editor_triggers_with_objects_and_wts(
         None => String::new(),
     };
     let jass = editor_object_globals::merge_region_init(&jass, &region_init)?;
-    let wts_asset: Option<ScriptAsset<'_>> = match wts {
-        Some((label, bytes)) => Some(ScriptAsset { label, bytes }),
-        None => None,
-    };
+    let wts_asset: Option<ScriptAsset<'_>> = wts.map(|(label, bytes)| ScriptAsset { label, bytes });
     MapScripts::compile(
         identity,
         common,
@@ -198,9 +198,7 @@ pub fn compile_editor_map_scripts_with_wts(
     };
     let wtg = member("war3map.wtg")?;
     let wct = member("war3map.wct")?;
-    let wts_bytes: Option<Vec<u8>> = map
-        .extract_checked(source_label, "war3map.wts", budget)?
-        .map(|bytes| bytes);
+    let wts_bytes: Option<Vec<u8>> = map.extract_checked(source_label, "war3map.wts", budget)?;
     let regions = map
         .extract_checked(source_label, "war3map.w3r", budget)?
         .map(|bytes| Regions::parse(&bytes))

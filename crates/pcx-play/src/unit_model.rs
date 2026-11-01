@@ -370,7 +370,9 @@ impl Animation {
         }
         Ok(())
     }
-    pub(crate) fn select_index(&mut self, index: usize, now: f64) -> Result<(), String> {
+    /// Select an authored sequence by index for portrait/idle arbitration.
+    /// The render layer owns the speaking clock; this only validates.
+    pub fn select_index(&mut self, index: usize, now: f64) -> Result<(), String> {
         if index >= self.model.sequences.len()
             || !now.is_finite()
             || now < self.started

@@ -244,9 +244,7 @@ fn build_melee_panel(
             MINIMAP_IMAGE_BYTES,
         ) {
             Ok(texture) => {
-                let image = stores
-                    .images
-                    .add(crate::menu_composition::image(&texture));
+                let image = stores.images.add(crate::menu_composition::image(&texture));
                 handles.images.push(image.clone());
                 commands.spawn((
                     Node {
@@ -367,12 +365,8 @@ fn build_melee_panel(
             ChildOf(root),
         ))
         .id();
-    let type_value = global_string(strings, melee.game_type.global_key()).ok_or_else(|| {
-        format!(
-            "{STRINGS_PATH}: missing {}",
-            melee.game_type.global_key()
-        )
-    })?;
+    let type_value = global_string(strings, melee.game_type.global_key())
+        .ok_or_else(|| format!("{STRINGS_PATH}: missing {}", melee.game_type.global_key()))?;
     texts.push(MeleeText {
         holder: value_holder,
         frame: MELEE_TYPE_VALUE,
@@ -420,12 +414,9 @@ fn build_melee_panel(
                 .map(|asset| asset.bytes)
             {
                 Ok(raw) => {
-                    match pcx_gfx::load_mipmapped_image_bounded(&raw, art, MINIMAP_IMAGE_BYTES)
-                    {
+                    match pcx_gfx::load_mipmapped_image_bounded(&raw, art, MINIMAP_IMAGE_BYTES) {
                         Ok(texture) => {
-                            let image = stores
-                                .images
-                                .add(crate::menu_composition::image(&texture));
+                            let image = stores.images.add(crate::menu_composition::image(&texture));
                             handles.images.push(image.clone());
                             commands.spawn((
                                 Node {
@@ -807,8 +798,7 @@ fn build(
                 root,
                 &mut handles,
             )? {
-                if let Err(error) = label(commands, stores, item.holder, item.frame, &item.value)
-                {
+                if let Err(error) = label(commands, stores, item.holder, item.frame, &item.value) {
                     warn!("loading screen {} refused: {error}", item.frame);
                 }
             }
@@ -1075,8 +1065,7 @@ pub(crate) mod harness {
         app.cleanup();
         app.update();
         app.update();
-        let mut image =
-            Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8Unorm, None);
+        let mut image = Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8Unorm, None);
         image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let cameras: Vec<Entity> = {
@@ -1176,8 +1165,7 @@ pub(crate) mod harness {
     ) -> Result<pcx_play::campaign_loading::ImageComparison, String> {
         let bytes = std::fs::read(reference).map_err(|e| format!("{reference:?}: {e}"))?;
         let pixels = parse_p6(&bytes)?;
-        pcx_play::campaign_loading::compare_images(capture, &pixels)
-            .map_err(|e| e.to_owned())
+        pcx_play::campaign_loading::compare_images(capture, &pixels).map_err(|e| e.to_owned())
     }
 
     /// Read a binary PPM (`P6`, 255 max, no comments) into packed `Rgba8`.

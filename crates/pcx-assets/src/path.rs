@@ -6,6 +6,16 @@ use std::{fmt, str::FromStr};
 #[serde(transparent)]
 pub struct AssetPath(String);
 
+impl<'de> serde::Deserialize<'de> for AssetPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::new(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
     #[error("asset path is empty")]

@@ -12,6 +12,10 @@ pub struct ObjectHost {
     selection: Option<Vec<HandleId>>,
     /// A unit of the subgroup the player last chose; see `subgroups` in `selection_subgroup_host.rs`.
     active_subgroup: Option<HandleId>,
+    select_enabled: Option<bool>,
+    drag_select_enabled: Option<bool>,
+    preselect_enabled: Option<bool>,
+    unit_selectable: std::collections::BTreeMap<HandleId, bool>,
     pings: Vec<indicators::MinimapPing>,
     cinematic_scene: Option<Option<cinematic_scene::CinematicScene>>,
     dialogs: Option<dialogs::DialogState>,

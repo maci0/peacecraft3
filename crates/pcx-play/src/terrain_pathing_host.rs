@@ -65,7 +65,14 @@ impl ObjectHost {
         // `docs/re-notes/ai-construction.md` and
         // `docs/re-notes/script-unit-world.md`.
         if self.inner.program.natives().get(CLIFF_QUERY).is_some() {
-            Self::contract(&self.inner, CLIFF_QUERY, &["real", "real"], "integer", false, None)?;
+            Self::contract(
+                &self.inner,
+                CLIFF_QUERY,
+                &["real", "real"],
+                "integer",
+                false,
+                None,
+            )?;
             let cliff = self
                 .inner
                 .program
@@ -76,8 +83,7 @@ impl ObjectHost {
                 return Err(self.inner.error(CLIFF_QUERY, Failure::Source));
             }
         }
-        let overlay = CliffOverlay::of_terrain(&context.terrain)
-            .map_err(|reason| fail(reason))?;
+        let overlay = CliffOverlay::of_terrain(&context.terrain).map_err(fail)?;
         self.terrain_pathing = Some(input);
         self.cliff_overlay = Some(overlay);
         Ok(self)
@@ -204,10 +210,11 @@ impl ObjectHost {
         // native maximum over the spatial-rect layer.
         if fx >= 0.0 && fy >= 0.0 {
             let (fx, fy) = (fx as u32, fy as u32);
-            if fx < width && fy < height {
-                if let Some(tile_level) = overlay.level_at_tile([fx, fy]) {
-                    level = level.max(tile_level);
-                }
+            if fx < width
+                && fy < height
+                && let Some(tile_level) = overlay.level_at_tile([fx, fy])
+            {
+                level = level.max(tile_level);
             }
         }
         Ok(Value::Int(i32::from(level)))

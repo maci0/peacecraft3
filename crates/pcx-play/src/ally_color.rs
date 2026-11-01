@@ -250,7 +250,12 @@ impl PixelComparison {
         }
         let tol = self.tolerance_per_channel;
         let mut differing = 0usize;
-        for (a, e) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+        for (a, e) in actual
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0.iter())
+        {
             if a.iter().zip(e.iter()).any(|(&x, &y)| x.abs_diff(y) > tol) {
                 differing += 1;
             }
@@ -260,7 +265,12 @@ impl PixelComparison {
 
     /// True when the differing fraction is within policy. Buffers and extents
     /// are caller-supplied original/recreation captures.
-    pub fn passes(self, actual: &[u8], expected: &[u8], pixel_count: usize) -> Result<bool, String> {
+    pub fn passes(
+        self,
+        actual: &[u8],
+        expected: &[u8],
+        pixel_count: usize,
+    ) -> Result<bool, String> {
         Ok(self.differing_fraction(actual, expected, pixel_count)? <= self.max_differing_fraction)
     }
 }

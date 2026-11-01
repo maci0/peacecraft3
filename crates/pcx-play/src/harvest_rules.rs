@@ -833,9 +833,7 @@ pub(crate) fn definition_upgrade_codes(
 /// Sentinels and missing/ambiguous fields refuse; no race is invented and no
 /// race-specific rate is assumed here. Callers preserve the admitted race for
 /// depot/worker matching once those native rules are qualified.
-pub(crate) fn worker_race_from_definition(
-    definition: &Definition,
-) -> Result<String, HarvestError> {
+pub(crate) fn worker_race_from_definition(definition: &Definition) -> Result<String, HarvestError> {
     let raw = fourcc(definition.rawcode)?;
     let race = definition_text(definition, SlkId::UnitData, "race")?;
     let trimmed = race.trim();

@@ -120,7 +120,7 @@ pub const ADVEX_CLOSE: u32 = 18;
 pub const TFT_PRODUCT_VERSION: u32 = 14;
 
 /// Why a BNCS body was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BncsError {
     /// Header family is not [`BNCS_FAMILY`].
     WrongFamily(u8),
@@ -164,7 +164,7 @@ fn check(family: u8, id: u8, want: u8, body: &[u8]) -> Result<&[u8], BncsError> 
     Ok(body)
 }
 
-fn cstring(body: &[u8], what: &'static str) -> Result<(&[u8], &[u8]), BncsError> {
+fn cstring<'a>(body: &'a [u8], what: &'static str) -> Result<(&'a [u8], &'a [u8]), BncsError> {
     let end = body
         .iter()
         .position(|&b| b == 0)
@@ -220,7 +220,9 @@ pub fn decode_enterchat(family: u8, id: u8, body: &[u8]) -> Result<&[u8], BncsEr
         return Err(BncsError::Malformed("enterchat name is empty"));
     }
     if !rest.is_empty() {
-        return Err(BncsError::Malformed("enterchat carries bytes past the name"));
+        return Err(BncsError::Malformed(
+            "enterchat carries bytes past the name",
+        ));
     }
     Ok(name)
 }
@@ -233,7 +235,9 @@ pub fn encode_joinchannel(channel: &[u8]) -> Result<Vec<u8>, BncsError> {
         return Err(BncsError::Fields("channel holds a terminator byte"));
     }
     if channel.len() > 64 {
-        return Err(BncsError::Fields("channel exceeds the 64-byte caller ceiling"));
+        return Err(BncsError::Fields(
+            "channel exceeds the 64-byte caller ceiling",
+        ));
     }
     let mut body = Vec::with_capacity(4 + channel.len());
     body.extend_from_slice(
@@ -339,11 +343,7 @@ impl ChatEventKind {
 }
 
 /// Reads a `SID_CHATEVENT` frame, accepting every pinned event id.
-pub fn decode_chatevent(
-    family: u8,
-    id: u8,
-    body: &[u8],
-) -> Result<ChatEvent<'_>, BncsError> {
+pub fn decode_chatevent(family: u8, id: u8, body: &[u8]) -> Result<ChatEvent<'_>, BncsError> {
     let body = check(family, id, SID_CHATEVENT, body)?;
     if body.len() < 25 {
         return Err(BncsError::Malformed(
@@ -360,7 +360,9 @@ pub fn decode_chatevent(
     let (user, rest) = cstring(&body[24..], "unterminated chatevent user")?;
     let (message, tail) = cstring(rest, "unterminated chatevent message")?;
     if !tail.is_empty() {
-        return Err(BncsError::Malformed("chatevent carries bytes past the message"));
+        return Err(BncsError::Malformed(
+            "chatevent carries bytes past the message",
+        ));
     }
     Ok(ChatEvent {
         event,
@@ -449,11 +451,7 @@ pub struct AuthInfoReply<'a> {
 }
 
 /// Reads a `SID_AUTH_INFO` server reply.
-pub fn decode_auth_info(
-    family: u8,
-    id: u8,
-    body: &[u8],
-) -> Result<AuthInfoReply<'_>, BncsError> {
+pub fn decode_auth_info(family: u8, id: u8, body: &[u8]) -> Result<AuthInfoReply<'_>, BncsError> {
     let body = check(family, id, SID_AUTH_INFO, body)?;
     if body.len() < 21 {
         return Err(BncsError::Malformed(
@@ -463,7 +461,9 @@ pub fn decode_auth_info(
     let (ver_file_name, rest) = cstring(&body[20..], "unterminated auth-info filename")?;
     let (formula, tail) = cstring(rest, "unterminated auth-info equation")?;
     if !tail.is_empty() {
-        return Err(BncsError::Malformed("auth-info carries bytes past the equation"));
+        return Err(BncsError::Malformed(
+            "auth-info carries bytes past the equation",
+        ));
     }
     Ok(AuthInfoReply {
         logon_type: body[0..4].try_into().expect("checked length"),
@@ -515,10 +515,14 @@ pub fn encode_auth_check(req: &AuthCheckRequest<'_>) -> Result<Vec<u8>, BncsErro
         return Err(BncsError::Fields("TFT key info is not 36 bytes"));
     }
     if req.exe_info.contains(&0) || req.key_owner_name.contains(&0) {
-        return Err(BncsError::Fields("exe info and owner name must be unterminated"));
+        return Err(BncsError::Fields(
+            "exe info and owner name must be unterminated",
+        ));
     }
     if req.exe_info.len() > 256 || req.key_owner_name.len() > 64 {
-        return Err(BncsError::Fields("exe info or owner name exceeds caller ceilings"));
+        return Err(BncsError::Fields(
+            "exe info or owner name exceeds caller ceilings",
+        ));
     }
     let mut body = Vec::with_capacity(60 + req.exe_info.len() + req.key_owner_name.len());
     body.extend_from_slice(&req.client_token);
@@ -579,19 +583,19 @@ pub struct AuthCheckReply<'a> {
 }
 
 /// Reads a `SID_AUTH_CHECK` reply.
-pub fn decode_auth_check(
-    family: u8,
-    id: u8,
-    body: &[u8],
-) -> Result<AuthCheckReply<'_>, BncsError> {
+pub fn decode_auth_check(family: u8, id: u8, body: &[u8]) -> Result<AuthCheckReply<'_>, BncsError> {
     let body = check(family, id, SID_AUTH_CHECK, body)?;
     if body.len() < 5 {
-        return Err(BncsError::Malformed("auth-check is shorter than state and a description"));
+        return Err(BncsError::Malformed(
+            "auth-check is shorter than state and a description",
+        ));
     }
     let raw = u32::from_le_bytes(body[0..4].try_into().expect("checked length"));
     let (description, tail) = cstring(&body[4..], "unterminated auth-check description")?;
     if !tail.is_empty() {
-        return Err(BncsError::Malformed("auth-check carries bytes past the description"));
+        return Err(BncsError::Malformed(
+            "auth-check carries bytes past the description",
+        ));
     }
     Ok(AuthCheckReply {
         state: KeyState::of(raw),
@@ -607,7 +611,9 @@ pub fn encode_account_logon(client_key: &[u8; 32], account: &[u8]) -> Result<Vec
         return Err(BncsError::Fields("account name is empty or NUL-bearing"));
     }
     if account.len() > 32 {
-        return Err(BncsError::Fields("account name exceeds the 32-byte ceiling"));
+        return Err(BncsError::Fields(
+            "account name exceeds the 32-byte ceiling",
+        ));
     }
     let mut body = Vec::with_capacity(32 + account.len());
     body.extend_from_slice(client_key);
@@ -634,7 +640,9 @@ pub fn decode_account_logon(
 ) -> Result<AccountLogonReply<'_>, BncsError> {
     let body = check(family, id, SID_AUTH_ACCOUNTLOGON, body)?;
     if body.len() < 4 {
-        return Err(BncsError::Malformed("account-logon is shorter than its status"));
+        return Err(BncsError::Malformed(
+            "account-logon is shorter than its status",
+        ));
     }
     let status = u32::from_le_bytes(body[0..4].try_into().expect("checked length"));
     if status != 0 {
@@ -671,7 +679,9 @@ pub fn encode_account_logon_proof(proof: &[u8; 20]) -> Result<Vec<u8>, BncsError
 pub fn decode_account_logon_proof(family: u8, id: u8, body: &[u8]) -> Result<bool, BncsError> {
     let body = check(family, id, SID_AUTH_ACCOUNTLOGONPROOF, body)?;
     if body.len() != 4 {
-        return Err(BncsError::Malformed("account-logon-proof is not the status word"));
+        return Err(BncsError::Malformed(
+            "account-logon-proof is not the status word",
+        ));
     }
     Ok(matches!(
         u32::from_le_bytes(body.try_into().expect("checked length")),
@@ -692,7 +702,9 @@ pub fn encode_logon_response(
         return Err(BncsError::Fields("password hash is empty or overlong"));
     }
     if account.is_empty() || account.contains(&0) || account.len() > 32 {
-        return Err(BncsError::Fields("account name is empty, NUL-bearing or overlong"));
+        return Err(BncsError::Fields(
+            "account name is empty, NUL-bearing or overlong",
+        ));
     }
     let mut body = Vec::with_capacity(8 + password_hash.len() + account.len());
     body.extend_from_slice(&client_token);
@@ -706,7 +718,9 @@ pub fn encode_logon_response(
 pub fn decode_logon_response(family: u8, id: u8, body: &[u8]) -> Result<bool, BncsError> {
     let body = check(family, id, SID_LOGONRESPONSE, body)?;
     if body.len() != 4 {
-        return Err(BncsError::Malformed("logon-response is not the status word"));
+        return Err(BncsError::Malformed(
+            "logon-response is not the status word",
+        ));
     }
     Ok(u32::from_le_bytes(body.try_into().expect("checked length")) == 1)
 }
@@ -761,7 +775,9 @@ pub struct GameAdvertisement<'a> {
 /// reversed ASCII hex digits, following the pinned sender exactly.
 pub fn encode_startadvex(ad: &GameAdvertisement<'_>) -> Result<Vec<u8>, BncsError> {
     if !matches!(ad.state, ADVEX_PUBLIC | ADVEX_PRIVATE | ADVEX_CLOSE) {
-        return Err(BncsError::Fields("advertise state is not public, private or close"));
+        return Err(BncsError::Fields(
+            "advertise state is not public, private or close",
+        ));
     }
     for (field, bytes) in [
         ("game name", ad.game_name),
@@ -814,7 +830,9 @@ pub fn encode_startadvex(ad: &GameAdvertisement<'_>) -> Result<Vec<u8>, BncsErro
 pub fn decode_startadvex(family: u8, id: u8, body: &[u8]) -> Result<bool, BncsError> {
     let body = check(family, id, SID_STARTADVEX3, body)?;
     if body.len() != 4 {
-        return Err(BncsError::Malformed("startadvex reply is not the status word"));
+        return Err(BncsError::Malformed(
+            "startadvex reply is not the status word",
+        ));
     }
     Ok(u32::from_le_bytes(body.try_into().expect("checked length")) == 0)
 }
@@ -843,10 +861,14 @@ pub fn decode_checkad(family: u8, id: u8, body: &[u8]) -> Result<(), BncsError> 
 /// with the pinned sender's map filters and one-game ceiling.
 pub fn encode_getadvlistex(game_name: &[u8]) -> Result<Vec<u8>, BncsError> {
     if game_name.contains(&0) {
-        return Err(BncsError::Fields("game-name filter holds a terminator byte"));
+        return Err(BncsError::Fields(
+            "game-name filter holds a terminator byte",
+        ));
     }
     if game_name.len() > 31 {
-        return Err(BncsError::Fields("game-name filter exceeds the 31-byte ceiling"));
+        return Err(BncsError::Fields(
+            "game-name filter exceeds the 31-byte ceiling",
+        ));
     }
     let mut body = Vec::with_capacity(18 + game_name.len());
     body.extend_from_slice(&[255, 3, 0, 0]);
@@ -882,7 +904,9 @@ pub fn decode_getadvlistex(
 ) -> Result<Vec<AdvertisedHost<'_>>, BncsError> {
     let body = check(family, id, SID_GETADVLISTEX, body)?;
     if body.len() < 4 {
-        return Err(BncsError::Malformed("advlistex is shorter than its game count"));
+        return Err(BncsError::Malformed(
+            "advlistex is shorter than its game count",
+        ));
     }
     let found = u32::from_le_bytes(body[0..4].try_into().expect("checked length")) as usize;
     if found == 0 {
@@ -894,14 +918,18 @@ pub fn decode_getadvlistex(
         return Ok(Vec::new());
     }
     if max_hosts == 0 {
-        return Err(BncsError::Fields("host ceiling must admit one advertised host"));
+        return Err(BncsError::Fields(
+            "host ceiling must admit one advertised host",
+        ));
     }
     let mut hosts = Vec::new();
     let mut at = 4;
     while hosts.len() < found.min(max_hosts) {
         // Ten reserved bytes, port, IP, then the game name.
         if body.len() < at + 10 + 2 + 4 + 1 {
-            return Err(BncsError::Malformed("advlistex host is shorter than its header"));
+            return Err(BncsError::Malformed(
+                "advlistex host is shorter than its header",
+            ));
         }
         at += 10;
         let port = u16::from_le_bytes(body[at..at + 2].try_into().expect("checked host"));
@@ -912,7 +940,9 @@ pub fn decode_getadvlistex(
         }
         // Two reserved bytes, then the hex-swapped host counter.
         if rest.len() < 2 + 4 {
-            return Err(BncsError::Malformed("advlistex host is shorter than its counter"));
+            return Err(BncsError::Malformed(
+                "advlistex host is shorter than its counter",
+            ));
         }
         hosts.push(AdvertisedHost {
             ip,
@@ -923,7 +953,9 @@ pub fn decode_getadvlistex(
         at = body.len() - rest.len() + 2 + 4;
     }
     if hosts.len() != found.min(max_hosts) {
-        return Err(BncsError::Malformed("advlistex host count disagrees with its bodies"));
+        return Err(BncsError::Malformed(
+            "advlistex host count disagrees with its bodies",
+        ));
     }
     Ok(hosts)
 }
@@ -932,10 +964,14 @@ pub fn decode_getadvlistex(
 /// Product id stays zero and product version 14, following the pinned sender.
 pub fn encode_notifyjoin(game_name: &[u8]) -> Result<Vec<u8>, BncsError> {
     if game_name.is_empty() || game_name.contains(&0) {
-        return Err(BncsError::Fields("notifyjoin game name is empty or NUL-bearing"));
+        return Err(BncsError::Fields(
+            "notifyjoin game name is empty or NUL-bearing",
+        ));
     }
     if game_name.len() > 31 {
-        return Err(BncsError::Fields("notifyjoin game name exceeds the 31-byte ceiling"));
+        return Err(BncsError::Fields(
+            "notifyjoin game name exceeds the 31-byte ceiling",
+        ));
     }
     let mut body = Vec::with_capacity(9 + game_name.len());
     body.extend_from_slice(&[0, 0, 0, 0]);

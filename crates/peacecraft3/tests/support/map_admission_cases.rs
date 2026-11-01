@@ -364,14 +364,14 @@ pub fn malformed_archive_or_grid_and_missing_script_cannot_publish() {
     let map = Map::parse(&bytes).unwrap();
     let mut budget = fixture.budget(&map);
     budget.scripts.max_archive_bytes = map.archive().len();
+    // No script member at all: selection finds neither path and the caller
+    // reports the missing member instead of entering script import.
     assert!(matches!(
         app.replace(fixture.inputs(&map, "no compiled script"), budget),
-        Err(MapAdmissionError::Input(
-            MapScriptImportError::MissingScriptMember {
-                member: "war3map.j",
-                ..
-            }
-        ))
+        Err(MapAdmissionError::MissingMember {
+            member: "war3map.j",
+            ..
+        })
     ));
 }
 #[cfg_attr(test, test)]

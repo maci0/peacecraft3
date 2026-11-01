@@ -79,10 +79,18 @@ pub(crate) struct CameraInput {
 
 #[cfg(test)]
 impl CameraInput {
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn with_edges(edges: u8) -> Self {
         Self { edges, ..default() }
     }
 
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn with_rules(rules: CameraInputRules) -> Self {
         Self {
             rules: Some(Ok(rules)),
@@ -453,6 +461,6 @@ fn scroll(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_camera_input_tests.rs"]
 mod tests;

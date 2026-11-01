@@ -456,9 +456,8 @@ pub fn encode_game_info(ad: &GameAdvertisement<'_>) -> Result<Vec<u8>, Discovery
     if ad.stat_extension.len() > 64 {
         return Err(E::Packet("stat extension exceeds its caller ceiling"));
     }
-    let mut stat = Vec::with_capacity(
-        13 + ad.map_path.len() + ad.host_name.len() + ad.stat_extension.len(),
-    );
+    let mut stat =
+        Vec::with_capacity(13 + ad.map_path.len() + ad.host_name.len() + ad.stat_extension.len());
     stat.extend_from_slice(&ad.map_flags);
     stat.push(ad.stat_reserved);
     stat.extend_from_slice(&ad.map_dimensions[0].to_le_bytes());
@@ -486,5 +485,6 @@ pub fn encode_game_info(ad: &GameAdvertisement<'_>) -> Result<Vec<u8>, Discovery
     body.extend_from_slice(&ad.slots_open.to_le_bytes());
     body.extend_from_slice(&ad.uptime.to_le_bytes());
     body.extend_from_slice(&ad.port.to_le_bytes());
-    super::encode(W3GS_FAMILY, GAMEINFO_ID, &body).map_err(|_| E::Packet("advertisement exceeds the frame ceiling"))
+    super::encode(W3GS_FAMILY, GAMEINFO_ID, &body)
+        .map_err(|_| E::Packet("advertisement exceeds the frame ceiling"))
 }

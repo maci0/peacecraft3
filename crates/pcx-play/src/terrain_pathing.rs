@@ -216,7 +216,10 @@ impl CliffOverlay {
                     continue;
                 }
                 let level = *layers.iter().max().expect("four corners");
-                rects.push(CliffRect { tile: [tx, ty], level });
+                rects.push(CliffRect {
+                    tile: [tx, ty],
+                    level,
+                });
             }
         }
         rects.shrink_to_fit();

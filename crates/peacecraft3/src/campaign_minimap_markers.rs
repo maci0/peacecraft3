@@ -162,10 +162,7 @@ impl Markers {
                 | pcx_play::ally_color::SpecialMinimapLayer::Camp => 1,
                 _ => base_class,
             };
-            let enlarged = matches!(
-                layer,
-                pcx_play::ally_color::SpecialMinimapLayer::Hero
-            );
+            let enlarged = matches!(layer, pcx_play::ally_color::SpecialMinimapLayer::Hero);
             if plan.len() >= MARKER_COUNT {
                 return Err("minimap marker count budget".into());
             }
@@ -286,10 +283,7 @@ impl Markers {
                     | pcx_play::ally_color::SpecialMinimapLayer::Camp => 1,
                     _ => base_class,
                 };
-                let enlarged = matches!(
-                    layer,
-                    pcx_play::ally_color::SpecialMinimapLayer::Hero
-                );
+                let enlarged = matches!(layer, pcx_play::ally_color::SpecialMinimapLayer::Hero);
                 (centre, class, enlarged)
             } else if base_class == 1
                 && let Some((centre, _, class)) = self.remembered.get(&id)
@@ -397,9 +391,9 @@ fn paint(
                 let overlap = |pixel: usize, lo: f64, hi: f64| {
                     (f64::min(pixel as f64 + 1.0, hi) - f64::max(pixel as f64, lo)).clamp(0.0, 1.0)
                 };
-                let coverage =
-                    (overlap(x, square[0], square[2]) * overlap(y, square[1], square[3]))
-                        .clamp(0.0, 1.0);
+                let coverage = (overlap(x, square[0], square[2])
+                    * overlap(y, square[1], square[3]))
+                .clamp(0.0, 1.0);
                 let at = (y * width + x) * 4;
                 if coverage >= 1.0 - f64::EPSILON {
                     pixels[at..at + 4].copy_from_slice(&color);

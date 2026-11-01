@@ -178,18 +178,12 @@ pub fn prepare_sequence(
         .resolve_bounded(&source, MODEL_BYTES)
         .map_err(|e| format!("{source}: {e}"))?
         .bytes;
-    prepare_sequence_from_bytes(
-        bytes,
-        &source,
-        background,
-        sequence,
-        &mut |path| {
-            resolver
-                .resolve_bounded(path, TEXTURE_BYTES)
-                .map(|asset| asset.bytes)
-                .map_err(|e| e.to_string())
-        },
-    )
+    prepare_sequence_from_bytes(bytes, &source, background, sequence, &mut |path| {
+        resolver
+            .resolve_bounded(path, TEXTURE_BYTES)
+            .map(|asset| asset.bytes)
+            .map_err(|e| e.to_string())
+    })
 }
 
 /// [`prepare_sequence`] for a model that does not live in any mounted archive:
@@ -220,7 +214,7 @@ pub fn prepare_sequence_from_bytes(
         })?),
     };
     let interval = chosen.map_or([0, 0], |first| [first.interval_start, first.interval_end]);
-    let model = pcx_gfx::load_model(&bytes, &source).map_err(|e| format!("{source}: {e}"))?;
+    let model = pcx_gfx::load_model(&bytes, source).map_err(|e| format!("{source}: {e}"))?;
     let runtime =
         pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).map_err(|e| format!("{source}: {e}"))?;
     let paths =
@@ -231,7 +225,7 @@ pub fn prepare_sequence_from_bytes(
         opacity,
         selection,
         uv,
-    } = interval_plans(&runtime, interval, &source)?;
+    } = interval_plans(&runtime, interval, source)?;
     Ok(BackgroundPlan {
         frame: background.frame.clone(),
         source: source.to_owned(),
@@ -267,8 +261,9 @@ pub fn interval_plans(
         .map_err(|e| format!("{source}: {e}"))?;
     let selection = crate::mainmenu_scene::texture_selection(runtime, interval, source)
         .map_err(|e| e.to_string())?;
-    let uv = pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(runtime, interval, source)
-        .map_err(|e| format!("{source}: {e}"))?;
+    let uv =
+        pcx_gfx::mdx_uv_translation::UvTranslationPlan::from_runtime(runtime, interval, source)
+            .map_err(|e| format!("{source}: {e}"))?;
     Ok(IntervalPlans {
         opacity,
         selection,

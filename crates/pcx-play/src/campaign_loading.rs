@@ -390,9 +390,7 @@ impl MinDisplay {
             base: value(MIN_BASE_VA)?,
             per_char: value(MIN_PER_CHAR_VA)?,
         };
-        let ordered = 0.0 <= rules.per_char
-            && 0.0 < rules.base
-            && rules.base <= rules.cap;
+        let ordered = 0.0 <= rules.per_char && 0.0 < rules.base && rules.base <= rules.cap;
         if ![rules.cap, rules.base, rules.per_char]
             .iter()
             .all(|v| v.is_finite())
@@ -674,7 +672,21 @@ NumScreens=1
                 origin: Origin::Custom
             })
         );
-        let selected = select(&info(u32::MAX, "", "words", "Title"), &table, None).unwrap();
+        let mut header = info(u32::MAX, "", "words", "Title");
+        // The melee panel lists the map's own authored slots: one player
+        // record in the synthetic header stands in for the map's roster.
+        header.players.push(pcx_map::info::Player {
+            controller: 0,
+            race: 1,
+            start_point: 1,
+            colour: 0,
+            name: "Player 1".into(),
+            start_x: 0.0,
+            start_y: 0.0,
+            ally_priorities: 0,
+            ally_mask: 0,
+        });
+        let selected = select(&header, &table, None).unwrap();
         let Selection::Melee(panel) = selected else {
             panic!("a header with no number and no model is the melee panel");
         };

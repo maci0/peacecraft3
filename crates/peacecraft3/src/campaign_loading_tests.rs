@@ -173,7 +173,19 @@ fn a_request_follows_the_header_through_the_selected_table() {
     assert_eq!(text.title, "Title");
     assert_eq!(text.subtitle, "sub");
     // No number and no custom path is the melee panel, with the map's slots.
-    let melee = info(u32::MAX, "", "words", "Title");
+    // One synthetic player record stands in for the map's authored roster.
+    let mut melee = info(u32::MAX, "", "words", "Title");
+    melee.players.push(pcx_map::info::Player {
+        controller: 0,
+        race: 1,
+        start_point: 1,
+        colour: 0,
+        name: "Player 1".into(),
+        start_x: 0.0,
+        start_y: 0.0,
+        ally_priorities: 0,
+        ally_mask: 0,
+    });
     let melee = LoadingRequest::read(
         source.resolver(),
         None,

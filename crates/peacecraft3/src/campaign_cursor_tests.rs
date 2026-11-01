@@ -108,16 +108,28 @@ fn building_placement_falls_back_to_the_normal_cursor_and_says_so() {
 
 #[test]
 fn only_commands_waiting_for_a_target_arm_the_cursor() {
-    assert_eq!(Armed::of(Kind::Standard(StandardKind::Attack)), Armed::Attack);
+    assert_eq!(
+        Armed::of(Kind::Standard(StandardKind::Attack)),
+        Armed::Attack
+    );
     assert_eq!(Armed::of(Kind::Standard(StandardKind::Move)), Armed::Target);
-    assert_eq!(Armed::of(Kind::Standard(StandardKind::Patrol)), Armed::Target);
+    assert_eq!(
+        Armed::of(Kind::Standard(StandardKind::Patrol)),
+        Armed::Target
+    );
     assert_eq!(
         Armed::of(Kind::Standard(StandardKind::AttackGround)),
         Armed::Target
     );
-    assert_eq!(Armed::of(Kind::Standard(StandardKind::Rally)), Armed::Target);
+    assert_eq!(
+        Armed::of(Kind::Standard(StandardKind::Rally)),
+        Armed::Target
+    );
     assert_eq!(Armed::of(Kind::TargetUnit), Armed::Target);
-    assert_eq!(Armed::of(Kind::Standard(StandardKind::Stop)), Armed::Nothing);
+    assert_eq!(
+        Armed::of(Kind::Standard(StandardKind::Stop)),
+        Armed::Nothing
+    );
     assert_eq!(Armed::of(Kind::Immediate), Armed::Nothing);
 }
 
@@ -173,12 +185,7 @@ fn pointer_states_choose_the_sequence_and_tint_the_client_rules_give() {
         look(facts(Armed::Attack, hovered(Relation::Enemy, false))),
         ("TargetSelect".into(), [255, 0, 0])
     );
-    let scroll = |edges| {
-        look(Facts {
-            edges,
-            ..default()
-        })
-    };
+    let scroll = |edges| look(Facts { edges, ..default() });
     assert_eq!(scroll(edge::LEFT).0, "Scroll Left");
     assert_eq!(scroll(edge::UP | edge::RIGHT).0, "Scroll Up Right");
     assert_eq!(scroll(edge::DOWN | edge::LEFT).0, "Scroll Down Left");
@@ -198,9 +205,7 @@ fn present_world(active: bool, position: Option<Vec2>) -> (World, Entity, Entity
     let window = world
         .spawn((Window::default(), PrimaryWindow, CursorOptions::default()))
         .id();
-    let root = world
-        .spawn((Transform::default(), Visibility::Hidden))
-        .id();
+    let root = world.spawn((Transform::default(), Visibility::Hidden)).id();
     world.insert_resource(CampaignCursor {
         rules: Some(CursorRules::fixture()),
         model: Some(Model {
@@ -225,8 +230,14 @@ fn the_system_cursor_hides_while_the_model_is_drawn_and_returns_after() {
     let (mut world, window, root) = present_world(true, Some(at));
     run_present(&mut world);
     assert!(!world.get::<CursorOptions>(window).unwrap().visible);
-    assert_eq!(*world.get::<Visibility>(root).unwrap(), Visibility::Inherited);
-    assert_eq!(world.get::<Transform>(root).unwrap().translation, at.extend(0.0));
+    assert_eq!(
+        *world.get::<Visibility>(root).unwrap(),
+        Visibility::Inherited
+    );
+    assert_eq!(
+        world.get::<Transform>(root).unwrap().translation,
+        at.extend(0.0)
+    );
     // The pointer left the window.
     world.resource_mut::<CampaignCursor>().position = None;
     run_present(&mut world);
@@ -269,10 +280,16 @@ fn the_pointer_position_and_edge_band_reach_the_cursor_state() {
     world.run_system_once(classify).unwrap();
     let cursor = world.resource::<CampaignCursor>();
     assert_eq!(cursor.facts.edges, edge::UP | edge::LEFT);
-    assert_eq!(cursor.position, Some(model_position(Vec2::ZERO, Vec2::new(1280.0, 960.0))));
+    assert_eq!(
+        cursor.position,
+        Some(model_position(Vec2::ZERO, Vec2::new(1280.0, 960.0)))
+    );
     // No scene camera is published here, so the pointer is not over the world.
     assert!(cursor.facts.over_interface);
-    assert_eq!(pointer(cursor.facts).0, Pointer::Scroll(edge::UP | edge::LEFT));
+    assert_eq!(
+        pointer(cursor.facts).0,
+        Pointer::Scroll(edge::UP | edge::LEFT)
+    );
 }
 
 #[test]
@@ -310,7 +327,10 @@ mod original {
         };
         Resolver::new(
             mode,
-            Some(OverrideDirectory::open(std::path::Path::new(&assets), "cursor-test", None).unwrap()),
+            Some(
+                OverrideDirectory::open(std::path::Path::new(&assets), "cursor-test", None)
+                    .unwrap(),
+            ),
             Vec::new(),
         )
         .unwrap()
@@ -356,7 +376,9 @@ mod original {
     fn synthetic_pointer_states_pose_the_sequence_and_tint_of_their_mode() {
         let (reader, rules) = (resolver(), rules());
         let path = model_path(&reader, Some("RACE_PREF_HUMAN".into())).unwrap();
-        let Prepared { plan, sequences, .. } = prepare(&reader, &path, &rules).unwrap();
+        let Prepared {
+            plan, sequences, ..
+        } = prepare(&reader, &path, &rules).unwrap();
         let mut world = World::new();
         let root = world.spawn_empty().id();
         let mut meshes = Assets::<Mesh>::default();

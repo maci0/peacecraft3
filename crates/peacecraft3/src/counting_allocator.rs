@@ -34,6 +34,10 @@ impl std::ops::Sub for Totals {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub(crate) fn totals() -> Totals {
     Totals {
         calls: CALLS.load(Ordering::Relaxed),
@@ -43,6 +47,10 @@ pub(crate) fn totals() -> Totals {
 }
 
 /// The calling thread's own counters, for attributing allocations to a span on that thread.
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub(crate) fn thread_totals() -> Totals {
     THREAD.with(Cell::get)
 }

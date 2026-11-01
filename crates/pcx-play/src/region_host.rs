@@ -215,7 +215,8 @@ impl ObjectHost {
                     return None;
                 }
                 Some(
-                    self.region_rect_requests(region)?
+                    self.region_rect_requests(region)
+                        .ok()?
                         .get(index)
                         .copied()
                         .map(|request| (region, request))

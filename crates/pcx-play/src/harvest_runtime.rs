@@ -416,6 +416,8 @@ impl ObjectHost {
     /// Harvest admission already requires this race before work starts; this
     /// query preserves it for depot/worker matching once those native rules
     /// are qualified. Sentinels and missing fields refuse; no rate is assumed.
+    /// Call sites currently inline the same rule; kept for the depot matcher.
+    #[allow(dead_code)]
     pub(crate) fn harvest_worker_race(&self, unit: HandleId) -> Result<String, Error> {
         let record = self.executed_unit(unit)?;
         crate::harvest_rules::worker_race_from_definition(&record.definition)

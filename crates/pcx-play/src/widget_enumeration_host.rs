@@ -246,4 +246,27 @@ impl ObjectHost {
                 .unwrap_or(Value::Null))
         })
     }
+
+    /// Canonical ground-item and destructable counts for world snapshots.
+    /// Ground items exclude consumed and held units; destructables count
+    /// every admitted entry including dead ones.
+    pub fn widget_snapshot_counts(&self) -> (usize, usize) {
+        let mut items = 0;
+        let mut destructables = 0;
+        for index in 0..self.inner.handles() {
+            let Some(id) = std::num::NonZeroU64::new(index as u64 + 1).map(HandleId::new) else {
+                continue;
+            };
+            match self.inner.entry(id) {
+                Ok(Entry::Item { record }) if !record.consumed && record.held_by.is_none() => {
+                    items += 1;
+                }
+                Ok(Entry::Destructable { .. }) => {
+                    destructables += 1;
+                }
+                _ => {}
+            }
+        }
+        (items, destructables)
+    }
 }

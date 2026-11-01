@@ -193,9 +193,7 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if self.file_sounds.is_none() {
-            return None;
-        }
+        self.file_sounds.as_ref()?;
         let labeled = name == "CreateSoundFilenameWithLabel";
         if name != "CreateSound" && !labeled {
             return None;

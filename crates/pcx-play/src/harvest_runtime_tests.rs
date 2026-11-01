@@ -479,6 +479,10 @@ fn field(fourcc: [u8; 4], slk: SlkId, column: &str, text: &str) -> ([u8; 4], Obj
 
 fn harvest_fields() -> Vec<([u8; 4], ObjectField)> {
     vec![
+        // Human workers/depots in these fixtures carry the authored race.
+        // Depot/worker matching beyond admission is unqualified; the value is
+        // only required to be present and non-sentinel here.
+        field(*b"race", SlkId::UnitData, "race", "human"),
         field(*b"uabi", SlkId::UnitAbilities, "abilList", "Ahar,Argl"),
         field(*b"upgr", SlkId::UnitBalance, "upgradeList", "Rhlh"),
         field(*b"ua1w", SlkId::UnitWeapons, "weapsOn", "2"),

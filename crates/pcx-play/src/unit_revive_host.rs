@@ -111,21 +111,17 @@ impl ObjectHost {
         self.check_activity_boundary(now, name)?;
         // Validate placement before mutating: a blocked footprint is a `false`
         // return, while an unreadable definition is an asset error.
-        let prepared = if self.unit_placement.is_some() {
+        let prepared = if let Some(placement) = self.unit_placement.as_mut() {
             let geometry = super::unit_positions::geometry(&definition_for_geometry)
                 .map_err(|reason| fail(Failure::UnitState(reason)))?;
-            match self
-                .unit_placement
-                .as_mut()
-                .expect("placement")
-                .prepare_show_class(
-                    unit,
-                    point,
-                    geometry.radius,
-                    geometry.path,
-                    face,
-                    geometry.movement,
-                ) {
+            match placement.prepare_show_class(
+                unit,
+                point,
+                geometry.radius,
+                geometry.path,
+                face,
+                geometry.movement,
+            ) {
                 Ok(prepared) => Some(prepared),
                 Err(error) if error.work_exhausted() => {
                     return Err(self
@@ -170,7 +166,7 @@ impl ObjectHost {
             // stand is not invented here.
             animation
                 .select("stand", now, None)
-                .map_err(|detail| fail(Failure::UnitAnimation(detail)))?;
+                .map_err(|detail| self.inner.error(name, Failure::UnitAnimation(detail)))?;
         }
         if let Some(prepared) = prepared {
             self.unit_placement

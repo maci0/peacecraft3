@@ -599,6 +599,7 @@ pub(crate) mod tests {
             .is_err()
         );
     }
+
     #[test]
     fn source_thresholds_drive_tier_without_income_rates() {
         let (image, budget) = fixture();
@@ -606,15 +607,16 @@ pub(crate) mod tests {
         let global = 0x301000 + (0xa94 - 0x200);
         let upkeep =
             Upkeep::discover(&pe, global, &[], budget.profile_bytes, (4, 16, 0x301280)).unwrap();
-        // Synthetic bank 0 thresholds are [7, 19, 0, ...]: the tier counts
-        // crossed nonzero thresholds below the supplied food count.
-        assert_eq!(upkeep.tier(7, Some(0)).unwrap(), 0);
-        assert_eq!(upkeep.tier(8, Some(0)).unwrap(), 1);
-        assert_eq!(upkeep.tier(19, Some(0)).unwrap(), 1);
-        assert_eq!(upkeep.tier(20, Some(0)).unwrap(), 2);
+        // Synthetic bank 0 thresholds are [7, 19, 0, ...] with source
+        // first_rank 1: the tier counts crossed nonzero thresholds below the
+        // supplied food count, then applies the source rank offset.
+        assert_eq!(upkeep.tier(7, Some(0)).unwrap(), 1);
+        assert_eq!(upkeep.tier(8, Some(0)).unwrap(), 2);
+        assert_eq!(upkeep.tier(19, Some(0)).unwrap(), 2);
+        assert_eq!(upkeep.tier(20, Some(0)).unwrap(), 3);
         // Synthetic bank 1 thresholds are [11, 29, 0, ...].
-        assert_eq!(upkeep.tier(8, Some(1)).unwrap(), 0);
-        assert_eq!(upkeep.tier(12, Some(1)).unwrap(), 1);
+        assert_eq!(upkeep.tier(8, Some(1)).unwrap(), 1);
+        assert_eq!(upkeep.tier(12, Some(1)).unwrap(), 2);
         assert!(upkeep.tier(8, None).is_err());
     }
     #[test]

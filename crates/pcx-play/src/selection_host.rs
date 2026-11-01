@@ -48,14 +48,36 @@ impl ObjectHost {
             if self.inner.program.natives().get(name).is_none() {
                 continue;
             }
-            if Self::contract_in(&self.inner, name, &["boolean", "boolean"], "nothing", false, None, false)
-                .is_err()
+            if Self::contract_in(
+                &self.inner,
+                name,
+                &["boolean", "boolean"],
+                "nothing",
+                false,
+                None,
+                false,
+            )
+            .is_err()
             {
-                Self::contract_in(&self.inner, name, &["boolean"], "nothing", false, None, false)?;
+                Self::contract_in(
+                    &self.inner,
+                    name,
+                    &["boolean"],
+                    "nothing",
+                    false,
+                    None,
+                    false,
+                )?;
             }
         }
         for (name, args, result, constant, family) in [
-            ("BlzIsUnitSelectable", &["unit"][..], "boolean", true, Some("unit")),
+            (
+                "BlzIsUnitSelectable",
+                &["unit"][..],
+                "boolean",
+                true,
+                Some("unit"),
+            ),
             (
                 "BlzUnitDisableSelection",
                 &["unit", "boolean"][..],
@@ -95,7 +117,11 @@ impl ObjectHost {
     /// unread). Scripts can still force-select via `SelectUnit`; input picks
     /// (`box_candidate` and the click pick) honour this.
     pub fn is_unit_selectable(&self, id: HandleId) -> bool {
-        if self.unit_selectable.get(&id).is_some_and(|&allowed| !allowed) {
+        if self
+            .unit_selectable
+            .get(&id)
+            .is_some_and(|&allowed| !allowed)
+        {
             return false;
         }
         match self.inner.entry(id) {

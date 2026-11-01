@@ -184,3 +184,49 @@ fn duplicate_or_split_declaration_sources_are_rejected() {
             .is_err()
     );
 }
+
+#[test]
+fn identical_seeds_and_call_order_reproduce_outputs_and_rng_state() {
+    use crate::script_random::order::CallSite;
+    const MAP: &str = "globals\ninteger a = 0\ninteger b = 0\ninteger c = 0\nreal x = 0.0\nreal y = 0.0\nendglobals\nfunction main takes nothing returns nothing\ncall SetRandomSeed(12345)\nset a = GetRandomInt(1, 100)\nset x = GetRandomReal(0.0, 1.0)\nset b = GetRandomInt(1, 100)\ncall SetRandomSeed(12345)\nset c = GetRandomInt(1, 100)\nset y = GetRandomReal(0.0, 1.0)\nendfunction\n";
+    fn run_once() -> (Vec<Value>, u32, Vec<u32>, Vec<CallSite>) {
+        let vm_host = host(RANDOM, MAP)
+            .with_script_random(Arc::new(profile::fixture()), 3)
+            .unwrap();
+        let mut vm = vm_host.into_vm();
+        vm.init_globals().unwrap();
+        vm.call("main", &[]).unwrap();
+        let globals = ["a", "b", "c", "x", "y"]
+            .into_iter()
+            .map(|name| vm.global(name))
+            .collect::<Vec<_>>();
+        let host = vm.host();
+        let state = host.script_random_state().expect("seeded stream");
+        let words = state.secondary_words().collect::<Vec<_>>();
+        let sites = host
+            .script_random_calls()
+            .expect("caller sequence")
+            .iter()
+            .map(|record| record.site.clone())
+            .collect::<Vec<_>>();
+        (globals, state.primary_word(), words, sites)
+    }
+    let first = run_once();
+    let second = run_once();
+    // Same ticks (one `main` call), same input (same seed calls in the same
+    // order): exactly the same outputs and exactly the same RNG words.
+    assert_eq!(first.0, second.0, "script outputs must match");
+    assert_eq!(first.1, second.1, "primary words must match");
+    assert_eq!(first.2, second.2, "secondary words must match");
+    assert_eq!(first.3, second.3, "caller order must match");
+    // Reseeding replays the stream: the post-reseed integer repeats the
+    // pre-reseed one, and the reseed clears the caller log alongside the
+    // generator state, so only the post-reseed pair remains recorded.
+    assert_eq!(first.0[0], first.0[2], "reseed must replay the stream");
+    assert_eq!(
+        first.3,
+        [CallSite::ScriptInteger, CallSite::ScriptReal,],
+        "caller order is part of the reproducible state"
+    );
+    assert!(second.3.len() == 2);
+}

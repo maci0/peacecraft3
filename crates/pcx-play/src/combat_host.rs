@@ -110,7 +110,7 @@ pub struct Combat {
     pub target: Option<HandleId>,
     pub dead: bool,
     pub(super) ready_at: f64,
-    swing: Option<(HandleId, f64)>,
+    pub(crate) swing: Option<(HandleId, f64)>,
     pub(super) chase: Option<[f32; 2]>,
     /// Retained accepted attack-move or patrol endpoint while acquisition interrupts travel.
     pub attack_destination: Option<[f32; 2]>,

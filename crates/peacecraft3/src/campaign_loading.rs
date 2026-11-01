@@ -120,8 +120,8 @@ fn melee_background(resolver: &Resolver, race: Option<u32>) -> Result<String, St
     let asset = resolver
         .resolve_bounded(SKIN_PATH, SKIN_BYTES)
         .map_err(|e| format!("{SKIN_PATH}: {e}"))?;
-    let skin = std::str::from_utf8(&asset.bytes)
-        .map_err(|_| format!("{SKIN_PATH}: not UTF-8 text"))?;
+    let skin =
+        std::str::from_utf8(&asset.bytes).map_err(|_| format!("{SKIN_PATH}: not UTF-8 text"))?;
     // One entry per race section plus a `[Default]` fallback is the shipped
     // shape, so a section-aware lookup is used instead of a unique-file rule.
     // This mirrors the `menu_skin` grammar (`[Section]` headers, `key=value`
@@ -144,10 +144,11 @@ fn melee_background(resolver: &Resolver, race: Option<u32>) -> Result<String, St
             if !current.eq_ignore_ascii_case(section) {
                 continue;
             }
-            if let Some((key, value)) = line.split_once('=') {
-                if key.trim() == MELEE_BACKGROUND_KEY && !value.trim().is_empty() {
-                    return Some(value.trim().to_owned());
-                }
+            if let Some((key, value)) = line.split_once('=')
+                && key.trim() == MELEE_BACKGROUND_KEY
+                && !value.trim().is_empty()
+            {
+                return Some(value.trim().to_owned());
             }
         }
         None
@@ -182,8 +183,8 @@ impl LoadingRequest {
         let selection = select(info, &table, strings).map_err(|e| e.to_string())?;
         match selection {
             Selection::Campaign(screen) => {
-                let text = resolve_text(&info.loading_screen(), strings)
-                    .map_err(|e| e.to_string())?;
+                let text =
+                    resolve_text(&info.loading_screen(), strings).map_err(|e| e.to_string())?;
                 let min_hold = min_display.hold(&text);
                 let custom = match &screen.origin {
                     pcx_play::campaign_loading::Origin::Custom => {
@@ -230,10 +231,7 @@ impl LoadingRequest {
                 } = panel;
                 // The local race selects the skin section; with no human slot
                 // the default background applies.
-                let race = info
-                    .human_players()
-                    .next()
-                    .map(|player| player.race_id());
+                let race = info.human_players().next().map(|player| player.race_id());
                 let background = melee_background(&resolver, race)?;
                 let text = ScreenText {
                     text: String::new(),
@@ -242,18 +240,15 @@ impl LoadingRequest {
                 };
                 let min_hold = min_display.hold(&text);
                 let minimap = match map {
-                    Some((map, _)) => map
-                        .content_files()
-                        .minimap_image
-                        .and_then(|name| {
-                            map.extract(name)
-                                .ok()
-                                .filter(|bytes| bytes.len() <= MAP_MEMBER_BYTES)
-                                .map(|bytes| MinimapImage {
-                                    name: name.to_owned(),
-                                    bytes,
-                                })
-                        }),
+                    Some((map, _)) => map.content_files().minimap_image.and_then(|name| {
+                        map.extract(name)
+                            .ok()
+                            .filter(|bytes| bytes.len() <= MAP_MEMBER_BYTES)
+                            .map(|bytes| MinimapImage {
+                                name: name.to_owned(),
+                                bytes,
+                            })
+                    }),
                     None => None,
                 };
                 Ok(Self {

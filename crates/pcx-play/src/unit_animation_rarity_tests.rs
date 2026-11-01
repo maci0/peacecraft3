@@ -378,5 +378,8 @@ fn portrait_idle_and_talk_use_admitted_delimiters_and_rarity_extremum() {
     );
     assert_eq!(a.choose_portrait(&m, false, 0).unwrap(), 1);
     assert_eq!(a.choose_portrait(&m, true, 7).unwrap(), 3);
-    assert!(a.choose_portrait(&model(&[("stand", 0.5)]), false, 0).is_err());
+    assert!(
+        a.choose_portrait(&model(&[("stand", 0.5)]), false, 0)
+            .is_err()
+    );
 }

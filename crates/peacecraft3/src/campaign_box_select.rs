@@ -24,8 +24,7 @@ use pcx_play::{
     playercolor_host::{ObjectHost, VisionState},
     scripts::AssetIdentity,
     selection_box::{
-        Candidate, Finish, Gesture, Parameters, Pick, Rect, Refusal, add_to_selection,
-        pick_box,
+        Candidate, Finish, Gesture, Parameters, Pick, Rect, Refusal, add_to_selection, pick_box,
     },
 };
 use pcx_script::HandleId;
@@ -101,6 +100,10 @@ impl BoxSelect {
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub fn with_parameters(parameters: Parameters) -> Self {
         Self {
             parameters: Some(Ok(parameters)),

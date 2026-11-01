@@ -100,8 +100,12 @@ mod sky_sight_parity {
         let mut changed = 0usize;
         let mut bounds: Option<[[u32; 2]; 2]> = None;
         let mut first: Option<serde_json::Value> = None;
-        for (index, (pixel_a, pixel_b)) in
-            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).enumerate()
+        for (index, (pixel_a, pixel_b)) in a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .enumerate()
         {
             if pixel_a != pixel_b {
                 changed += 1;
@@ -109,9 +113,7 @@ mod sky_sight_parity {
                 let y = (index as u32) / width;
                 bounds = Some(match bounds {
                     None => [[x, y], [x, y]],
-                    Some([[x0, y0], [x1, y1]]) => {
-                        [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]]
-                    }
+                    Some([[x0, y0], [x1, y1]]) => [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]],
                 });
                 if first.is_none() {
                     first = Some(serde_json::json!({
@@ -184,7 +186,10 @@ mod sky_sight_parity {
             let bounds = objects.vision_world_bounds();
             let viewer = objects.local_player_settings().map(|local| {
                 let settings = objects.startup_settings();
-                (local.identity, settings.map(|s| (s.fog_enabled, s.fog_mask_enabled)))
+                (
+                    local.identity,
+                    settings.map(|s| (s.fog_enabled, s.fog_mask_enabled)),
+                )
             });
             let mut counts = serde_json::json!({
                 "visible": 0, "fogged": 0, "masked": 0, "outside": 0, "refused": 0, "units": 0,
@@ -239,13 +244,17 @@ mod sky_sight_parity {
                 format!("{transform:?} {projection:?} {camera:?}")
             })
             .collect();
-        let minimap = app.world().resource::<crate::campaign_minimap::CampaignMinimap>();
+        let minimap = app
+            .world()
+            .resource::<crate::campaign_minimap::CampaignMinimap>();
         let minimap_state = serde_json::json!({
             "member": minimap.member,
             "shown": minimap.shown,
             "last_error": minimap.last_error,
         });
-        let ground = app.world().resource::<peacecraft3::map_ground::GroundPublication>();
+        let ground = app
+            .world()
+            .resource::<peacecraft3::map_ground::GroundPublication>();
         let ground_state = serde_json::json!({
             "last_error": ground.last_error.as_ref().map(|error| format!("{error:?}")),
             "shadow_error": ground.shadow_error,
@@ -276,7 +285,9 @@ mod sky_sight_parity {
                 }),
                 Err(error) => serde_json::json!({ "refusal": error }),
             },
-            Err(error) => serde_json::json!({ "refusal": format!("control frame unread: {error}") }),
+            Err(error) => {
+                serde_json::json!({ "refusal": format!("control frame unread: {error}") })
+            }
         };
         let receipt = serde_json::json!({
             "install": install, "map": map, "expansion": expansion,
@@ -404,10 +415,7 @@ mod ally_water_menu_parity {
         };
         let pixels = size.width as usize * size.height as usize;
         let fraction = config.comparison.differing_fraction(a, b, pixels)?;
-        let passes = config
-            .comparison
-            .passes(a, b, pixels)
-            .unwrap_or(false);
+        let passes = config.comparison.passes(a, b, pixels).unwrap_or(false);
         Ok(serde_json::json!({
             "label": label,
             "extent": [size.width, size.height],
@@ -453,13 +461,7 @@ mod ally_water_menu_parity {
     /// captures the harness already retains. Never asserts parity: per-label
     /// `passes` values are recorded for the analyst's `reference.py report`
     /// run, and the strict render gate stays red on the known sky/sight gaps.
-    pub(super) fn retain(
-        app: &mut App,
-        output: &Path,
-        install: &str,
-        map: &str,
-        expansion: bool,
-    ) {
+    pub(super) fn retain(app: &mut App, output: &Path, install: &str, map: &str, expansion: bool) {
         let Some(config) = config_from_env() else {
             std::fs::write(
                 output.join("ally-water-menu-parity.json"),
@@ -556,7 +558,8 @@ mod ally_water_menu_parity {
         let bytes = {
             let world = app.world();
             let requests = world.resource::<peacecraft3::map_requests::MapRequests>();
-            let sources = world.resource::<peacecraft3::browser_configuration::SelectedMapSources>();
+            let sources =
+                world.resource::<peacecraft3::browser_configuration::SelectedMapSources>();
             let Some(bindings) = requests.bindings.as_ref() else {
                 return serde_json::json!({"refusal": "no admitted map bindings for bridge decks"});
             };
@@ -612,16 +615,14 @@ mod ally_water_menu_parity {
                 Some(rules) => rules.clone(),
                 None => return serde_json::json!({"refusal": "no admitted terrain encoding"}),
             };
-            let movement = match objects.executed_units().find_map(|(_, unit)| {
-                unit.movement().ok().map(|_| unit.movement())
-            }) {
+            let movement = match objects
+                .executed_units()
+                .find_map(|(_, unit)| unit.movement().ok().map(|_| unit.movement()))
+            {
                 Some(Ok(movement)) => movement,
                 _ => return serde_json::json!({"refusal": "no admitted movement class"}),
             };
-            let reader = match objects
-                .startup_settings()
-                .and_then(|_| session.host())
-            {
+            let reader = match objects.startup_settings().and_then(|_| session.host()) {
                 Some(_) => (),
                 None => return serde_json::json!({"refusal": "no live host reader"}),
             };
@@ -630,7 +631,9 @@ mod ally_water_menu_parity {
                 let [tile, bias, factor] = rules.terrain_encoding();
                 match pcx_tera::world::Mapping::new(tile, bias, factor) {
                     Some(mapping) => mapping,
-                    None => return serde_json::json!({"refusal": "invalid admitted terrain encoding"}),
+                    None => {
+                        return serde_json::json!({"refusal": "invalid admitted terrain encoding"});
+                    }
                 }
             };
             let offset = {
@@ -640,9 +643,10 @@ mod ally_water_menu_parity {
                 let requests = app
                     .world()
                     .resource::<peacecraft3::map_requests::MapRequests>();
-                let (Some(bindings), Some(_)) =
-                    (requests.bindings.as_ref(), requests.admission.shared_context())
-                else {
+                let (Some(bindings), Some(_)) = (
+                    requests.bindings.as_ref(),
+                    requests.admission.shared_context(),
+                ) else {
                     return serde_json::json!({"refusal": "no admitted bindings for water offset"});
                 };
                 let Some(reader) = sources.for_receipts(&bindings.receipts) else {
@@ -678,10 +682,7 @@ mod ally_water_menu_parity {
                 context.sources.map.edition.clone(),
                 context.sources.map.source.clone(),
                 movement,
-                crate::campaign_actors::WaterSurface {
-                    mapping,
-                    offset,
-                },
+                crate::campaign_actors::WaterSurface { mapping, offset },
             )
         };
         let steps = std::env::var("PCX_PARITY_TRAJECTORY_STEPS")
@@ -699,13 +700,18 @@ mod ally_water_menu_parity {
         // coverage; the gap stays observable instead of lifting motion onto an
         // invented height.
         match crate::campaign_actors::trajectory_bridge_crossings(
-            from, to, steps, surface, &terrain, &edition, &source, movement, |_, _| None,
+            from,
+            to,
+            steps,
+            surface,
+            &terrain,
+            &edition,
+            &source,
+            movement,
+            |_, _| None,
         ) {
             Ok(crossings) => {
-                let gaps = crossings
-                    .iter()
-                    .map(|c| c.deck_gap())
-                    .collect::<Vec<_>>();
+                let gaps = crossings.iter().map(|c| c.deck_gap()).collect::<Vec<_>>();
                 let rendered = crossings
                     .iter()
                     .map(|c| c.rendered_height())
@@ -752,7 +758,9 @@ mod ally_water_menu_parity {
                 let ny = c - d;
                 [nx / (2.0 * eps), ny / (2.0 * eps), 1.0]
             }
-            _ => return serde_json::json!({"refusal": "orientation point outside admitted terrain"}),
+            _ => {
+                return serde_json::json!({"refusal": "orientation point outside admitted terrain"});
+            }
         };
         let derived = match crate::campaign_actors::BankPitch::from_ground_normal(normal) {
             Ok(orientation) => orientation,
@@ -1224,8 +1232,12 @@ mod portrait_parity {
         let mut changed = 0usize;
         let mut bounds: Option<[[u32; 2]; 2]> = None;
         let mut first: Option<serde_json::Value> = None;
-        for (index, (pixel_a, pixel_b)) in
-            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0.iter()).enumerate()
+        for (index, (pixel_a, pixel_b)) in a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0.iter())
+            .enumerate()
         {
             if pixel_a != pixel_b {
                 changed += 1;
@@ -1233,9 +1245,7 @@ mod portrait_parity {
                 let y = (index as u32) / width;
                 bounds = Some(match bounds {
                     None => [[x, y], [x, y]],
-                    Some([[x0, y0], [x1, y1]]) => {
-                        [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]]
-                    }
+                    Some([[x0, y0], [x1, y1]]) => [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]],
                 });
                 if first.is_none() {
                     first = Some(serde_json::json!({
@@ -1346,9 +1356,9 @@ mod portrait_parity {
                 .world()
                 .get_resource::<crate::campaign_audio::CampaignAudio>()
                 .and_then(|audio| {
-                    audio.speaking.clone().map(|(unit, row)| {
-                        serde_json::json!({"unit": format!("{unit:?}"), "row": row})
-                    })
+                    audio.speaking.clone().map(
+                        |(unit, row)| serde_json::json!({"unit": format!("{unit:?}"), "row": row}),
+                    )
                 });
             let mut query = app
                 .world_mut()
@@ -1372,7 +1382,9 @@ mod portrait_parity {
                 }),
                 Err(error) => serde_json::json!({ "refusal": error }),
             },
-            Err(error) => serde_json::json!({ "refusal": format!("selected-unit frame unread: {error}") }),
+            Err(error) => {
+                serde_json::json!({ "refusal": format!("selected-unit frame unread: {error}") })
+            }
         };
         // Optional paired original supplied by the analyst; untracked, never
         // committed. When absent the probe retains the recreation side only.
@@ -1398,7 +1410,9 @@ mod portrait_parity {
                     serde_json::json!({"original": path, "refusal": format!("original unread: {error}")})
                 }
             },
-            Err(_) => serde_json::json!({"refusal": "PCX_PORTRAIT_ORIGINAL unset; no original supplied"}),
+            Err(_) => {
+                serde_json::json!({"refusal": "PCX_PORTRAIT_ORIGINAL unset; no original supplied"})
+            }
         };
         let receipt = serde_json::json!({
             "install": install, "map": map, "expansion": expansion,

@@ -119,8 +119,7 @@ impl TrainingQueue {
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<TrainingQueue>().add_systems(
         Update,
-        sync
-            .in_set(TrainingQueueSet)
+        sync.in_set(TrainingQueueSet)
             .after(crate::hud_render::HudRenderSet)
             .after(crate::campaign_command_card::CommandCardSet)
             .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
@@ -197,9 +196,8 @@ fn read_geometry(
     let mut aggregate = String::new();
     for member in [SIMPLE_PANEL_FDF, BUILDING_DETAIL_FDF] {
         let bytes = read(reader, member, MAX_FDF_BYTES, receipts)?;
-        aggregate.push_str(
-            &String::from_utf8(bytes).map_err(|_| format!("{member} is not UTF-8"))?,
-        );
+        aggregate
+            .push_str(&String::from_utf8(bytes).map_err(|_| format!("{member} is not UTF-8"))?);
         aggregate.push('\n');
     }
     let strip = block_number(&aggregate, "SimpleBuildQueueBackdrop", "Height")
@@ -407,9 +405,8 @@ fn sync(
                 .launcher
                 .as_deref()
                 .and_then(crate::launch_gui::selected_install);
-            let (viewport, repeat, console) = crate::menu_lighting::with_client_image(
-                install.as_deref(),
-                |label, image| {
+            let (viewport, repeat, console) =
+                crate::menu_lighting::with_client_image(install.as_deref(), |label, image| {
                     let identity = pcx_play::campaign_inputs::client_identity(image, label);
                     let rules =
                         pcx_play::command_layout::Rules::reviewed_legacy(image, identity.clone())?;
@@ -432,8 +429,7 @@ fn sync(
                         &rules.console_key,
                     )?;
                     Ok::<_, String>((rules.viewport, rules.icon_repeat, console))
-                },
-            )?;
+                })?;
             let geometry = read_geometry(&reader, viewport, repeat, &mut state.receipts)?;
             crate::campaign_hud::upper_buttons::text(&reader, CONSOLE_FDF, &mut state.receipts)?;
             Ok::<_, String>((geometry, console))
@@ -564,7 +560,7 @@ fn sync(
             &geometry,
             &view,
             &details,
-            producer_paused(&record),
+            producer_paused(record),
             now,
         ) {
             state.last_error = Some(error);
@@ -608,6 +604,10 @@ fn producer_paused(record: &ExecutedUnit) -> bool {
     record.paused_since.is_some()
 }
 
+// Twelve paint inputs (commands, state, objects, assets, nodes, geometry,
+// view, entries, pause flag, clock) exceed the default arity lint; grouping
+// them would churn the queue system call for no behavior change.
+#[allow(clippy::too_many_arguments)]
 fn paint(
     commands: &mut Commands,
     state: &mut TrainingQueue,

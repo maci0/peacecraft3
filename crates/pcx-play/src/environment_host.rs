@@ -64,7 +64,9 @@ impl ObjectHost {
 
     /// Current executed sky-model override for the 3D renderer.
     pub fn sky_model_3d(&self) -> Option<Option<String>> {
-        self.scene.as_ref().map(|scene| scene.sky_model.clone())
+        self.scene
+            .as_ref()
+            .and_then(|scene| scene.sky_model.clone())
     }
 
     pub(super) fn environment_native(

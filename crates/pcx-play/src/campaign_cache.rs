@@ -68,6 +68,8 @@ impl SessionStorage {
     /// Profile persistence inventory for menus and harnesses: whether the
     /// stored profile carries cache and progress sections. `None` storage
     /// reports `(false, false)`; malformed profiles refuse.
+    /// Staged for menu/harness consumers; wired separately.
+    #[allow(dead_code)]
     pub fn stored_sections(&self) -> Result<(bool, bool), String> {
         match self.snapshot()? {
             None => Ok((false, false)),
@@ -78,6 +80,8 @@ impl SessionStorage {
     /// Persisted progress section bytes without the cache payload, for menus
     /// and harnesses. `None` storage and legacy cache-only profiles report
     /// `None`; malformed profiles refuse.
+    /// Staged for menu/harness consumers; wired separately.
+    #[allow(dead_code)]
     pub fn stored_progress(&self) -> Result<Option<Vec<u8>>, String> {
         match self.snapshot()? {
             None => Ok(None),

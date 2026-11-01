@@ -454,13 +454,21 @@ pub struct BankPitch {
 }
 
 impl BankPitch {
+    /// Level flight (no pitch or bank); reproduces the yaw-only pose.
+    /// Staged for the oriented-transform consumer; wired separately.
+    #[allow(dead_code)]
     pub fn level() -> Self {
-        Self { pitch: 0.0, bank: 0.0 }
+        Self {
+            pitch: 0.0,
+            bank: 0.0,
+        }
     }
 
     /// Derive pitch/bank from a caller-supplied ground normal in world space.
     /// A missing or nonfinite normal refuses; a near-vertical normal yields
     /// level flight. This is recreation geometry, not a native-orientation claim.
+    /// Staged for the oriented-transform consumer; wired separately.
+    #[allow(dead_code)]
     pub fn from_ground_normal(normal: [f32; 3]) -> Result<Self, String> {
         let [x, y, z] = normal;
         if ![x, y, z].iter().all(|v| v.is_finite()) {
@@ -494,9 +502,7 @@ impl BankPitch {
             return Err("nonfinite bank/pitch orientation".into());
         }
         Ok(Quat::from_rotation_y(face_degrees.to_radians())
-            * Quat::from_rotation_x(
-                -std::f32::consts::FRAC_PI_2 + self.pitch,
-            )
+            * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2 + self.pitch)
             * Quat::from_rotation_z(self.bank))
     }
 }
@@ -540,6 +546,10 @@ pub fn transform_for_oriented(
 /// The movement-trajectory playback consumer is the next slice; this is the
 /// admitted elevation query it will sample.
 #[allow(dead_code)]
+// Eight trajectory inputs (endpoints, steps, surface, terrain, provenance,
+// movement) exceed the default arity lint; grouping them would churn the
+// bridge-crossing caller for no behavior change.
+#[allow(clippy::too_many_arguments)]
 fn trajectory_surface(
     from: [f32; 2],
     to: [f32; 2],
@@ -556,9 +566,12 @@ fn trajectory_surface(
     if ![from, to].iter().flatten().all(|v| v.is_finite()) {
         return Err("nonfinite trajectory endpoint".into());
     }
-    let water_data = pcx_tera::WaterData::new(terrain, edition, source).map_err(|e| e.to_string())?;
+    let water_data =
+        pcx_tera::WaterData::new(terrain, edition, source).map_err(|e| e.to_string())?;
     let mut heights = Vec::new();
-    heights.try_reserve_exact(steps + 1).map_err(|_| "trajectory allocation")?;
+    heights
+        .try_reserve_exact(steps + 1)
+        .map_err(|_| "trajectory allocation")?;
     for step in 0..=steps {
         let t = step as f32 / steps as f32;
         let x = from[0] + (to[0] - from[0]) * t;
@@ -590,6 +603,11 @@ fn trajectory_surface(
 /// sampled point (or `None` when no bridge footprint covers it). Motion keeps
 /// the surface height; the returned crossings preserve the deck gap per step
 /// instead of lifting motion onto an invented deck.
+/// Staged for the oriented playback consumer; wired separately.
+#[allow(dead_code)]
+// Nine trajectory inputs including the deck resolver exceed the default arity
+// lint; grouping them would churn the harness caller for no behavior change.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn trajectory_bridge_crossings(
     from: [f32; 2],
     to: [f32; 2],

@@ -338,7 +338,10 @@ fn consume_pointer(
                     let before = input.commands.entries().len();
                     // Unit icons are the minimap's unit targets: hit-test the drawn
                     // marker blocks at this press and pass the unit through.
-                    let icon = match (state.markers.as_mut(), state.fog.as_ref()) {
+                    // Split borrows keep the marker cache mutable while the
+                    // fog raster is only read.
+                    let CampaignMinimap { markers, fog, .. } = &mut *state;
+                    let icon = match (markers.as_mut(), fog.as_ref()) {
                         (Some(Ok(markers)), Some(fog)) => {
                             let pixel = [
                                 f64::from(fraction.x) * f64::from(fog.width),
@@ -1208,6 +1211,7 @@ endglobals
                 .pointer_consumed
         );
     }
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
     #[test]
     fn a_left_press_with_alt_held_is_the_signal_and_never_reaches_the_camera() {
         for alt_held in [false, true] {

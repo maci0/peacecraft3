@@ -549,6 +549,8 @@ fn bind_retained(
         required_catalog_tables: input.required_catalog_tables.to_vec(),
         catalog: bound,
         required_fields: input.required_fields.to_vec(),
+        // No TriggerData rides this binding yet; see the field docs.
+        trigger_catalog: None,
         budget: limits.admission,
         max_map_file_bytes: limits.max_map_file_bytes,
         limits,

@@ -11,10 +11,7 @@
 use std::sync::{Arc, Weak};
 
 use bevy::{
-    camera::{
-        ScalingMode,
-        visibility::RenderLayers,
-    },
+    camera::{ScalingMode, visibility::RenderLayers},
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
     ecs::system::SystemParam,
     picking::{hover::HoverMap, pointer::PointerId},
@@ -240,10 +237,7 @@ fn same_session(a: Option<&Weak<()>>, b: Option<&Weak<()>>) -> bool {
 }
 
 /// The `Cursor` model path of the race the local player picked.
-fn model_path(
-    reader: &pcx_assets::Resolver,
-    race: Option<String>,
-) -> Result<String, String> {
+fn model_path(reader: &pcx_assets::Resolver, race: Option<String>) -> Result<String, String> {
     let mut receipts = Vec::new();
     let skin = crate::menu_skin::SkinTable::parse(&text(reader, SKIN, &mut receipts)?)
         .map_err(|e| e.to_string())?;
@@ -394,16 +388,18 @@ fn load(
     let built = (|| {
         let rules = match cursor.rules.take() {
             Some(rules) => rules,
-            None => crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
-                CursorRules::read(
-                    image,
-                    AssetIdentity {
-                        source: source.into(),
-                        edition: "selected campaign client".into(),
-                        version: "reviewed Legacy 1.29.2.9231 cursor profile".into(),
-                    },
-                )
-            })?,
+            None => {
+                crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                    CursorRules::read(
+                        image,
+                        AssetIdentity {
+                            source: source.into(),
+                            edition: "selected campaign client".into(),
+                            version: "reviewed Legacy 1.29.2.9231 cursor profile".into(),
+                        },
+                    )
+                })?
+            }
         };
         let path = model_path(&reader, race?)?;
         let prepared = prepare(&reader, &path, &rules).map_err(|e| format!("{path}: {e}"));
@@ -702,7 +698,9 @@ fn present(
         return;
     }
     let normal = rules.look(Pointer::Normal);
-    let Some((_, mut state)) = states.iter_mut().find(|(parent, _)| parent.parent() == root)
+    let Some((_, mut state)) = states
+        .iter_mut()
+        .find(|(parent, _)| parent.parent() == root)
     else {
         return;
     };
@@ -722,7 +720,7 @@ fn present(
     cursor.applied = Some(applied);
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_cursor_tests.rs"]
 mod tests;
 

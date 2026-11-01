@@ -97,7 +97,7 @@ fn project(
     for mut distance in &mut cameras {
         *distance = DistanceFog {
             color,
-            falloff,
+            falloff: falloff.clone(),
             directional_light_color: Color::NONE,
             directional_light_exponent: 0.0,
         };

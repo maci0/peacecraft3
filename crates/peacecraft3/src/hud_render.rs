@@ -2142,6 +2142,8 @@ mod tests {
                         let fields: &[[u8; 4]] = &[];
                         fields
                     },
+                    // Fixture path carries no TriggerData; editor maps refuse loudly here.
+                    trigger_catalog: None,
                 },
                 budget,
             )
@@ -2207,6 +2209,8 @@ mod tests {
                 required_catalog_tables: Vec::new(),
                 catalog: BoundCatalog(Arc::new(IdleCatalog)),
                 required_fields: Vec::new(),
+                // Fixture path carries no TriggerData; editor maps refuse loudly here.
+                trigger_catalog: None,
                 budget,
                 max_map_file_bytes: map_len,
                 limits: BindingLimits {

@@ -56,9 +56,9 @@ impl ObjectHost {
     /// Export the raw UI preference for persistence across sessions. No
     /// interpretation happens here; the next admitted map re-derives roles.
     pub fn export_ally_color_preference(&self) -> Option<PersistedAllyColor> {
-        self.ally_colors
-            .as_ref()
-            .map(|s| PersistedAllyColor { raw_state: s.current })
+        self.ally_colors.as_ref().map(|s| PersistedAllyColor {
+            raw_state: s.current,
+        })
     }
     /// Apply a persisted preference after admission. Arbitrary integers
     /// round-trip; modes are re-derived from the newly admitted rules, so a
@@ -147,9 +147,7 @@ impl ObjectHost {
         unit: &ExecutedUnit,
         local: pcx_script::HandleId,
     ) -> Result<Role, String> {
-        let viewer = self
-            .player_settings(local)
-            .map_err(|e| e.to_string())?;
+        let viewer = self.player_settings(local).map_err(|e| e.to_string())?;
         let other = self
             .player_settings(unit.owner)
             .map_err(|e| e.to_string())?;

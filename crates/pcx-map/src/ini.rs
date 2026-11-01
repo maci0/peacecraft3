@@ -67,7 +67,10 @@ impl Ini {
                 .expect("current section is retained")
                 .insert(key.trim().to_string(), value.trim().to_string());
         }
-        Ok(Self { raw: bytes, sections })
+        Ok(Self {
+            raw: bytes,
+            sections,
+        })
     }
 
     /// The file's own bytes.
@@ -110,15 +113,15 @@ pub fn preferred_script(ini: Option<&Ini>, present: &[&str]) -> Option<&'static 
         for section in ini.sections.values() {
             for (key, value) in section {
                 for candidate in SCRIPT_MEMBERS {
-                    if key.eq_ignore_ascii_case(candidate) || value.eq_ignore_ascii_case(candidate)
+                    if (key.eq_ignore_ascii_case(candidate)
+                        || value.eq_ignore_ascii_case(candidate))
+                        && has(candidate)
                     {
-                        if has(candidate) {
-                            return Some(match candidate {
-                                "war3map.j" => "war3map.j",
-                                "war3map.wtg" => "war3map.wtg",
-                                _ => "war3map.wtg",
-                            });
-                        }
+                        return Some(match candidate {
+                            "war3map.j" => "war3map.j",
+                            "war3map.wtg" => "war3map.wtg",
+                            _ => "war3map.wtg",
+                        });
                     }
                     // Substring match for values like `war3map.j` with a path prefix.
                     let lower = value.to_ascii_lowercase().replace('\\', "/");

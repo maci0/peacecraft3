@@ -686,11 +686,9 @@ fn depth_flags_change_overlapping_opaque_and_blend_visibility() {
     );
 }
 
-#[test]
-#[ignore = "requires a local Vulkan adapter; synthetic HUD texture readback"]
-fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
+fn build_hud_texture_scene() -> (App, Handle<Image>) {
     use crate::hud_assets::{HudBudgets, HudInput, HudMarkup, NamedBytes, RootRole, SourceId};
-    use crate::hud_render::{HudAnchor, HudMount, HudSubmit};
+    use crate::hud_render::{HudAnchor, HudSubmit};
 
     let mut app = vulkan_menu_app("HUD texture ranges");
     crate::hud_render::install(&mut app);
@@ -773,6 +771,45 @@ fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
             binding_revision: 0,
         },
     });
+    (app, target)
+}
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; identical scenes must render byte-identical frames"]
+fn identical_hud_scenes_render_byte_identical_frames() {
+    // Same scene, same ticks, same input: exactly the same output pixels.
+    // Two independently built apps rule out shared GPU/upload state as a
+    // nondeterminism source; synchronous pipeline compilation keeps shader
+    // selection out of the frame path.
+    let (mut first, first_target) = build_hud_texture_scene();
+    let first_readback = drive_readback(&mut first, first_target);
+    let (mut second, second_target) = build_hud_texture_scene();
+    let second_readback = drive_readback(&mut second, second_target);
+    assert_eq!(
+        first_readback.completed, second_readback.completed,
+        "both scenes must complete the same readback count"
+    );
+    assert_eq!(
+        first_readback.stride, second_readback.stride,
+        "both scenes must agree on readback stride"
+    );
+    assert_eq!(
+        first_readback.bytes, second_readback.bytes,
+        "identical scenes must render byte-identical frames"
+    );
+    println!(
+        "deterministic-render bytes={} stride={} completed={}",
+        first_readback.bytes.len(),
+        first_readback.stride,
+        first_readback.completed
+    );
+}
+
+#[test]
+#[ignore = "requires a local Vulkan adapter; synthetic HUD texture readback"]
+fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
+    use crate::hud_render::HudMount;
+    let (mut app, target) = build_hud_texture_scene();
     let readback = drive_readback(&mut app, target);
     assert_eq!(app.world().resource::<HudMount>().generation, 1);
     let colours = [
@@ -1419,7 +1456,7 @@ fn source_menu_vertex_lighting_precedes_texture_modulation() {
     app.world_mut()
         .resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
             let mut materials = world.resource_mut::<Assets<MenuMaterial>>();
-            lighting.bind(&bound, &materials, &[false]);
+            lighting.bind(&bound, &materials);
             lighting
                 .apply(
                     &model,

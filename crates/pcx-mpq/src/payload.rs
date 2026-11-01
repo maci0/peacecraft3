@@ -37,8 +37,11 @@ pub const COMPRESSION_ADPCM_STEREO: u8 = 0x80;
 pub const COMPRESSION_LZMA: u8 = 0x12;
 
 /// Masks the current sector reader decodes.
-pub const SUPPORTED_MASKS: u8 =
-    COMPRESSION_PKWARE | COMPRESSION_ZLIB | COMPRESSION_HUFFMAN | COMPRESSION_ADPCM_MONO | COMPRESSION_ADPCM_STEREO;
+pub const SUPPORTED_MASKS: u8 = COMPRESSION_PKWARE
+    | COMPRESSION_ZLIB
+    | COMPRESSION_HUFFMAN
+    | COMPRESSION_ADPCM_MONO
+    | COMPRESSION_ADPCM_STEREO;
 
 /// Exact sparse-combined mask the reader admits (ZLIB outer, sparse inner).
 pub const COMPRESSION_SPARSE_ZLIB: u8 = COMPRESSION_SPARSE | COMPRESSION_ZLIB;
@@ -212,10 +215,7 @@ fn decompress_sector_in(
     // Taxonomy preserves the historical refusal set exactly: exact LZMA,
     // any other sparse- or BZIP2-carrying mask, any mask with bits outside
     // the supported set, or a supported mask whose codec tables are absent.
-    let unsupported = !matches!(
-        classify_mask(mask),
-        MaskKind::Stored | MaskKind::Supported
-    );
+    let unsupported = !matches!(classify_mask(mask), MaskKind::Stored | MaskKind::Supported);
     if unsupported || needs_codec_tables(mask) && table.is_none() {
         return Err(PayloadError::UnsupportedCompression { mask });
     }

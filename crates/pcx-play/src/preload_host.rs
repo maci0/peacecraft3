@@ -13,6 +13,11 @@ const NATIVES: [(&str, &[&str]); 6] = [
     ("PreloadRefresh", &[]),
     ("PreloadEndEx", &[]),
 ];
+const GEN_NATIVES: [(&str, &[&str]); 3] = [
+    ("PreloadGenClear", &[]),
+    ("PreloadGenStart", &[]),
+    ("PreloadGenEnd", &["string"]),
+];
 impl MapStartupHost {
     pub fn admit_preloader(&mut self, rules: Rules, reader: Arc<Resolver>) -> Result<(), String> {
         if self.preload.is_some()
@@ -28,11 +33,10 @@ impl MapStartupHost {
             .first()
             .ok_or("Preloader: missing common source")?
             .label;
-        for (name, params) in NATIVES {
-            let native = program
-                .natives()
-                .get(name)
-                .ok_or_else(|| format!("{name}: selected common declaration absent"))?;
+        for (name, params) in NATIVES.into_iter().chain(GEN_NATIVES) {
+            let Some(native) = program.natives().get(name) else {
+                continue;
+            };
             if native.source != *common
                 || native.is_constant
                 || native.ret.kind.name() != "nothing"
@@ -53,13 +57,61 @@ impl MapStartupHost {
     pub fn preload_report(&self) -> Option<&Report> {
         self.preload.as_ref().map(|s| &s.report)
     }
+    /// Native async progress for a loading consumer: queued, warmed, still
+    /// pending and visited bytes. No wall clock is read here.
+    pub fn preload_progress(&self) -> Option<(usize, usize, usize, u64)> {
+        self.preload.as_ref().map(|s| s.progress())
+    }
+    /// Drop every still-pending request; the warmed prefix is retained.
+    pub fn preload_cancel_pending(&mut self) -> usize {
+        self.preload.as_mut().map_or(0, |s| s.cancel_pending())
+    }
+    /// Warm up to `limit` pending requests without touching the recorded timeout.
+    pub fn preload_poll(&mut self, limit: usize) -> Result<usize, String> {
+        self.preload
+            .as_mut()
+            .ok_or_else(|| "Preload: not admitted".to_owned())
+            .and_then(|s| s.poll(limit))
+    }
+    /// Release retained archive winners; loose overrides stay live.
+    pub fn preload_release_retained(&self) -> Result<(usize, usize), String> {
+        self.preload
+            .as_ref()
+            .ok_or_else(|| "Preload: not admitted".to_owned())
+            .and_then(|s| s.release_retained())
+    }
+    pub fn preload_generated(&self, path: &str) -> Option<&str> {
+        self.preload
+            .as_ref()?
+            .report
+            .generated
+            .get(path)
+            .map(String::as_str)
+    }
     pub(super) fn preload_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        if self.preload.is_none() || !NATIVES.iter().any(|(n, _)| *n == name) {
+        if self.preload.is_none()
+            || !(NATIVES
+                .iter()
+                .chain(GEN_NATIVES.iter())
+                .any(|(n, _)| *n == name))
+        {
             return None;
+        }
+        // Refuse undeclared optional generator natives without touching state.
+        if GEN_NATIVES.iter().any(|(n, _)| *n == name)
+            && self
+                .context()
+                .scripts
+                .program()
+                .natives()
+                .get(name)
+                .is_none()
+        {
+            return Some(Err(format!("{name}: selected common declaration absent")));
         }
         Some((|| {
             match (name, args) {
@@ -79,7 +131,16 @@ impl MapStartupHost {
                     s.drain(s.refresh_assets(), None)?;
                 }
                 ("PreloadEndEx", []) => {
-                    self.preload.as_mut().unwrap().drain(usize::MAX, Some(0.))?
+                    // EndEx takes no timeout argument: warm everything that is
+                    // still pending without recording a deadline. (A genuine
+                    // zero `PreloadEnd` timeout records the deadline and lets
+                    // the caller poll/cancel instead; see `drain`.)
+                    self.preload.as_mut().unwrap().drain(usize::MAX, None)?
+                }
+                ("PreloadGenClear", []) => self.preload.as_mut().unwrap().gen_clear(),
+                ("PreloadGenStart", []) => self.preload.as_mut().unwrap().gen_start()?,
+                ("PreloadGenEnd", [Value::Str(path)]) => {
+                    self.preload.as_mut().unwrap().gen_end(path)?
                 }
                 _ => {
                     return Err(format!(

@@ -68,6 +68,25 @@ pub fn entry_id(
         .ok_or(EntrypointError::Missing { name })
 }
 
+/// Runnable entry points for the admitted script source: `config` then `main`
+/// for raw JASS, or the trigger-graph initializers for editor maps. Only
+/// declared map-script functions are returned; missing names are skipped.
+pub fn script_entrypoints(context: &ParsedMapContext) -> Vec<FunctionId> {
+    let names: &[&str] = if context.script_source == "war3map.j" {
+        &["config", "main"]
+    } else {
+        &[
+            "InitGlobals",
+            "InitCustomTriggers",
+            "RunInitializationTriggers",
+        ]
+    };
+    names
+        .iter()
+        .filter_map(|name| entry_id(context, name).ok())
+        .collect()
+}
+
 /// Creates the campaign host: the assembled startup host with the cache, placement, sound,
 /// unit-model and day/night loaders attached.
 pub fn create_host(

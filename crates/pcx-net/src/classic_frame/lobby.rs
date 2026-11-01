@@ -175,7 +175,7 @@ impl SlotReadiness {
 }
 
 /// Why a lobby/gameplay body was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LobbyError {
     /// Header family is not [`W3GS_FAMILY`].
     WrongFamily(u8),
@@ -219,7 +219,7 @@ fn check(family: u8, id: u8, want: u8, body: &[u8]) -> Result<&[u8], LobbyError>
     Ok(body)
 }
 
-fn cstring(body: &[u8], what: &'static str) -> Result<(&[u8], &[u8]), LobbyError> {
+fn cstring<'a>(body: &'a [u8], what: &'static str) -> Result<(&'a [u8], &'a [u8]), LobbyError> {
     let end = body
         .iter()
         .position(|&b| b == 0)
@@ -249,7 +249,11 @@ pub fn encode_stat_string(raw: &[u8]) -> Vec<u8> {
 
 /// Builds a `W3GS_PING_FROM_HOST` frame carrying the caller's tick value.
 pub fn encode_ping(ticks: u32) -> Result<Vec<u8>, LobbyError> {
-    Ok(encode(W3GS_FAMILY, PING_FROM_HOST_ID, &ticks.to_le_bytes())?)
+    Ok(encode(
+        W3GS_FAMILY,
+        PING_FROM_HOST_ID,
+        &ticks.to_le_bytes(),
+    )?)
 }
 
 /// Reads a `W3GS_PING_FROM_HOST` tick value.
@@ -457,10 +461,14 @@ pub struct ParsedPlayerInfo<'a> {
 /// Builds a `W3GS_PLAYERINFO` frame from caller fields.
 pub fn encode_playerinfo(info: &PlayerInfo<'_>) -> Result<Vec<u8>, LobbyError> {
     if info.name.is_empty() || info.name.contains(&0) {
-        return Err(LobbyError::Fields("player name must be nonempty and unterminated"));
+        return Err(LobbyError::Fields(
+            "player name must be nonempty and unterminated",
+        ));
     }
     if info.name.len() > 15 {
-        return Err(LobbyError::Fields("player name exceeds the 15-byte sender profile"));
+        return Err(LobbyError::Fields(
+            "player name exceeds the 15-byte sender profile",
+        ));
     }
     let mut body = Vec::with_capacity(32 + info.name.len());
     body.extend_from_slice(&info.join_counter.to_le_bytes());
@@ -483,13 +491,17 @@ pub fn decode_playerinfo(
 ) -> Result<ParsedPlayerInfo<'_>, LobbyError> {
     let body = check(family, id, PLAYERINFO_ID, body)?;
     if body.len() < 4 + 1 + 1 {
-        return Err(LobbyError::Malformed("playerinfo is shorter than counter, pid and name"));
+        return Err(LobbyError::Malformed(
+            "playerinfo is shorter than counter, pid and name",
+        ));
     }
     let join_counter = u32::from_le_bytes(body[0..4].try_into().expect("checked length"));
     let pid = body[4];
     let (name, rest) = cstring(&body[5..], "unterminated playerinfo name")?;
     if name.is_empty() || name.len() > 31 {
-        return Err(LobbyError::Malformed("playerinfo name is empty or overlong"));
+        return Err(LobbyError::Malformed(
+            "playerinfo name is empty or overlong",
+        ));
     }
     // Reserved words in sender order: 01 00 | 02 00 | port 00 00 |
     // external 4 | zeros 8 | 02 00 | port 00 00 | internal 4 | zeros 8.
@@ -547,7 +559,9 @@ fn decode_chat_body(body: &[u8]) -> Result<ChatMessage<'_>, LobbyError> {
         ));
     }
     if body.len() < 1 + total + 2 {
-        return Err(LobbyError::Malformed("chat body is shorter than its receivers"));
+        return Err(LobbyError::Malformed(
+            "chat body is shorter than its receivers",
+        ));
     }
     let to_pids = &body[1..1 + total];
     let from_pid = body[1 + total];
@@ -556,7 +570,9 @@ fn decode_chat_body(body: &[u8]) -> Result<ChatMessage<'_>, LobbyError> {
     match flag {
         CHAT_FLAG_MESSAGE => {
             if rest.is_empty() || rest.contains(&0) {
-                return Err(LobbyError::Malformed("chat message is empty or NUL-bearing"));
+                return Err(LobbyError::Malformed(
+                    "chat message is empty or NUL-bearing",
+                ));
             }
             Ok(ChatMessage {
                 to_pids,
@@ -599,7 +615,11 @@ fn decode_chat_body(body: &[u8]) -> Result<ChatMessage<'_>, LobbyError> {
 }
 
 /// Reads a `W3GS_CHAT_FROM_HOST` body.
-pub fn decode_chat_from_host(family: u8, id: u8, body: &[u8]) -> Result<ChatMessage<'_>, LobbyError> {
+pub fn decode_chat_from_host(
+    family: u8,
+    id: u8,
+    body: &[u8],
+) -> Result<ChatMessage<'_>, LobbyError> {
     check(family, id, CHAT_FROM_HOST_ID, body)?;
     decode_chat_body(body)
 }
@@ -708,7 +728,9 @@ pub fn decode_start_lag(family: u8, id: u8, body: &[u8]) -> Result<Vec<LagEntry>
         ));
     }
     Ok(body[1..]
-        .chunks_exact(5)
+        .as_chunks::<5>()
+        .0
+        .iter()
         .map(|e| LagEntry {
             pid: e[0],
             elapsed_ms: u32::from_le_bytes(e[1..5].try_into().expect("chunked entry")),
@@ -1026,7 +1048,11 @@ pub enum Announce {
 }
 
 /// Builds a `W3GS_CREATEGAME` announce frame.
-pub fn encode_creategame(product: [u8; 4], version: u32, host_counter: u32) -> Result<Vec<u8>, LobbyError> {
+pub fn encode_creategame(
+    product: [u8; 4],
+    version: u32,
+    host_counter: u32,
+) -> Result<Vec<u8>, LobbyError> {
     let mut body = Vec::with_capacity(12);
     body.extend_from_slice(&product);
     body.extend_from_slice(&version.to_le_bytes());
@@ -1049,7 +1075,9 @@ pub fn encode_refreshgame(
 
 /// Builds a `W3GS_DECREATEGAME` announce frame.
 pub fn encode_decreategame(host_counter: u32) -> Result<Vec<u8>, LobbyError> {
-    Ok(encode(W3GS_FAMILY, DECREATEGAME_ID,
+    Ok(encode(
+        W3GS_FAMILY,
+        DECREATEGAME_ID,
         &host_counter.to_le_bytes(),
     )?)
 }
@@ -1159,10 +1187,70 @@ macro_rules! lobby_frame_methods {
             }
         }
     };
+    ($frame:ty) => {
+        impl $frame {
+            /// Reads a `W3GS_PING_FROM_HOST` tick value.
+            pub fn ping(&self) -> Result<u32, LobbyError> {
+                decode_ping(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_PONG_TO_HOST` echo value.
+            pub fn pong(&self) -> Result<u32, LobbyError> {
+                decode_pong(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_LEAVEGAME` reason word.
+            pub fn leave_reason(&self) -> Result<u32, LobbyError> {
+                decode_leave(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_GAMELOADED_SELF` frame.
+            pub fn gameloaded_self(&self) -> Result<(), LobbyError> {
+                decode_gameloaded_self(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_GAMELOADED_OTHERS` player id.
+            pub fn gameloaded_others(&self) -> Result<u8, LobbyError> {
+                decode_gameloaded_others(self.family(), self.id(), self.body())
+            }
+            /// Reads a countdown frame: true for start, false for end.
+            pub fn countdown(&self) -> Result<bool, LobbyError> {
+                decode_countdown(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_PLAYERLEAVE_OTHERS` notice.
+            pub fn player_left(&self) -> Result<PlayerLeft, LobbyError> {
+                decode_playerleave_others(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_PLAYERINFO` body.
+            pub fn player_info(&self) -> Result<ParsedPlayerInfo<'_>, LobbyError> {
+                decode_playerinfo(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_CHAT_FROM_HOST` body.
+            pub fn chat_from_host(&self) -> Result<ChatMessage<'_>, LobbyError> {
+                decode_chat_from_host(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_CHAT_TO_HOST` body.
+            pub fn chat_to_host(&self) -> Result<ChatMessage<'_>, LobbyError> {
+                decode_chat_to_host(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_START_LAG` frame.
+            pub fn start_lag(&self) -> Result<Vec<LagEntry>, LobbyError> {
+                decode_start_lag(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_STOP_LAG` frame.
+            pub fn stop_lag(&self) -> Result<LagEntry, LobbyError> {
+                decode_stop_lag(self.family(), self.id(), self.body())
+            }
+            /// Reads a `W3GS_OUTGOING_KEEPALIVE` frame.
+            pub fn keepalive(&self) -> Result<Keepalive, LobbyError> {
+                decode_keepalive(self.family(), self.id(), self.body())
+            }
+            /// Reads a LAN announce frame.
+            pub fn announce(&self) -> Result<Announce, LobbyError> {
+                decode_announce(self.family(), self.id(), self.body())
+            }
+        }
+    };
 }
 
 lobby_frame_methods!(Frame<'frame>, 'frame);
-lobby_frame_methods!(OwnedFrame, '_);
+lobby_frame_methods!(OwnedFrame);
 
 /// Address bytes the pinned `SEND_W3GS_SLOTINFOJOIN` writes: little-endian
 /// `AF_INET`, as raw bytes.
@@ -1192,9 +1280,7 @@ pub fn encode_slot_blob(
     max_slots: usize,
 ) -> Result<Vec<u8>, LobbyError> {
     if slots.len() > max_slots || slots.len() > 255 {
-        return Err(LobbyError::Fields(
-            "slot count exceeds the caller ceiling",
-        ));
+        return Err(LobbyError::Fields("slot count exceeds the caller ceiling"));
     }
     let mut blob = Vec::with_capacity(1 + 9 * slots.len() + 6);
     blob.push(slots.len() as u8);

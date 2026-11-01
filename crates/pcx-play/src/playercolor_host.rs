@@ -275,6 +275,7 @@ enum Entry {
     /// A region after `RemoveRegion`; its call-time bounds stay retained for
     /// registration history while membership and new additions refuse.
     RemovedRegion {
+        #[allow(dead_code)]
         additions: Vec<objects::RegionRectRequest>,
     },
     RegisteredRegionEvent(objects::RegionEventRegistration),
@@ -995,5 +996,5 @@ pub use objects::{UseCheck, UseCommit, UseGrant};
 
 pub use objects::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};
 
-pub use objects::{NativeCoverage, WorldSnapshot};
 pub use objects::CorpseTiming;
+pub use objects::{NativeCoverage, WorldSnapshot};

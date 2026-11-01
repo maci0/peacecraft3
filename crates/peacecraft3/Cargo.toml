@@ -18,6 +18,7 @@ pcx-mpq.workspace = true
 pcx-sim.workspace = true
 pcx-play.workspace = true
 pcx-script.workspace = true
+pcx-trig.workspace = true
 pcx-map.workspace = true
 pcx-objects.workspace = true
 pcx-assets.workspace = true

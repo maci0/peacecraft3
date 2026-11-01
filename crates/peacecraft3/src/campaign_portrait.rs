@@ -132,8 +132,7 @@ fn is_portrait_idle(name: &str) -> bool {
 }
 fn is_portrait_talk(name: &str) -> bool {
     let tokens = portrait_tokens(name);
-    is_portrait_talk_full(&tokens)
-        || tokens.first().is_some_and(|t| t == "talk")
+    is_portrait_talk_full(&tokens) || tokens.first().is_some_and(|t| t == "talk")
 }
 /// Authored `portrait talk` (first token `portrait`, second `talk`): the
 /// preferred speech variant per the wiring plan, falling back to bare `talk`.
@@ -142,8 +141,7 @@ fn is_portrait_talk(name: &str) -> bool {
 /// several talk clips stays with that table once its anim-index semantics are
 /// qualified, so no label is hard-coded here.
 fn is_portrait_talk_full(tokens: &[String]) -> bool {
-    tokens.first().is_some_and(|t| t == "portrait")
-        && tokens.get(1).is_some_and(|t| t == "talk")
+    tokens.first().is_some_and(|t| t == "portrait") && tokens.get(1).is_some_and(|t| t == "talk")
 }
 fn splitmix64(mut x: u64) -> u64 {
     // Deterministic application draw over authored rarity weights.
@@ -208,6 +206,10 @@ pub(crate) fn install(app: &mut App) {
         )
         .add_systems(PostUpdate, resize.after(bevy::ui::UiSystems::PostLayout));
 }
+// Nine Bevy system params (commands, state, time, models, images, audio,
+// HUD, presentation, target) exceed the default arity lint; grouping them
+// would churn every system call site for no behavior change.
+#[allow(clippy::too_many_arguments)]
 fn project(
     mut commands: Commands,
     mut state: ResMut<CampaignPortrait>,
@@ -393,9 +395,7 @@ fn project(
     let Some(mut scene) = state.scene.take() else {
         return;
     };
-    commands
-        .entity(scene.mask)
-        .insert(Visibility::Inherited);
+    commands.entity(scene.mask).insert(Visibility::Inherited);
     commands
         .entity(scene.image_node)
         .insert(Visibility::Inherited);
@@ -407,13 +407,9 @@ fn project(
     // holds exactly while the `GameSound` row is live, with no invented
     // hold, delay or blend. Original-client speech/idle cadence parity is
     // unqualified and remains open.
-    let speaking = audio
-        .speaking
-        .as_ref()
-        .is_some_and(|(unit, row)| {
-            *unit == scene.key.unit
-                && queries.sounds.iter().any(|sound| &sound.name == row)
-        });
+    let speaking = audio.speaking.as_ref().is_some_and(|(unit, row)| {
+        *unit == scene.key.unit && queries.sounds.iter().any(|sound| &sound.name == row)
+    });
     if let Err(error) = advance(
         &mut scene,
         &mut assets,
@@ -650,11 +646,7 @@ fn spawn(
         ),
     )
     .map_err(|e| e.to_string())?;
-    plan.lighting.bind(
-        &geosets.bound,
-        &assets.materials,
-        &vec![false; geosets.bound.len()],
-    );
+    plan.lighting.bind(&geosets.bound, &assets.materials);
     plan.textures.clear();
     let target = assets.images.add(Image::new_target_texture(
         1,
@@ -708,12 +700,14 @@ fn spawn(
     // fitted screenshot default.
     let mask = commands
         .spawn((
-            frame(rect, viewport),
+            Node {
+                overflow: Overflow::clip(),
+                ..frame(rect, viewport)
+            },
             PortraitMask,
             CampaignInterface,
             Pickable::IGNORE,
             ZIndex(-1),
-            Overflow::clip(),
             ChildOf(parent),
         ))
         .id();
@@ -799,12 +793,14 @@ fn advance(
         // portrait never freezes on a finished clip.
         if let Some(seq) = scene.plan.idle.get(scene.idle_pos).copied() {
             let span = idle_duration_secs(&scene.plan.source, seq)?;
-            let held = scene.elapsed.saturating_sub(scene.idle_started).as_secs_f64();
+            let held = scene
+                .elapsed
+                .saturating_sub(scene.idle_started)
+                .as_secs_f64();
             let done = if span <= 0. { true } else { held >= span };
             if done {
                 let next_cycle = scene.idle_cycle.wrapping_add(1);
-                let next_pos =
-                    weighted_idle(&scene.plan.idle_weights, scene.key.unit, next_cycle)?;
+                let next_pos = weighted_idle(&scene.plan.idle_weights, scene.key.unit, next_cycle)?;
                 let now = scene.elapsed.as_secs_f64();
                 if let Some(next_seq) = scene.plan.idle.get(next_pos).copied() {
                     scene.plan.animation.select_index(next_seq, now)?;
@@ -1046,6 +1042,10 @@ impl CampaignPortrait {
 /// from the admitted scene plan, sequences or render target.
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub(crate) struct PortraitParityClip {
     pub name: String,
     pub rarity: f32,
@@ -1056,6 +1056,10 @@ pub(crate) struct PortraitParityClip {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[allow(
+    dead_code,
+    reason = "test-only helper; consumed by feature-gated tests"
+)]
 pub(crate) struct PortraitParityScene {
     pub unit: pcx_script::HandleId,
     pub model: String,
@@ -1086,6 +1090,10 @@ pub(crate) struct PortraitParityScene {
 
 #[cfg(test)]
 impl CampaignPortrait {
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn parity_scene(&self) -> Option<PortraitParityScene> {
         let scene = self.scene.as_ref()?;
         fn clip(sequence: &pcx_mdl::Sequence) -> PortraitParityClip {

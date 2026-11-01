@@ -288,39 +288,36 @@ pub fn start(
     });
     // TriggerData for the editor trigger-graph path, same edition/version as
     // the compiled scripts. Absent data leaves WTG compilation refusing loudly.
-    let trigger_catalog: Option<Arc<pcx_trig::catalog::Catalog>> = match resolver
-        .resolve_bounded("UI\\TriggerData.txt", MAX_ASSET_BYTES as u64)
-    {
-        Ok(asset) => {
-            let text = std::str::from_utf8(&asset.bytes).map_err(|e| {
-                StartupError::Member {
+    let trigger_catalog: Option<Arc<pcx_trig::catalog::Catalog>> =
+        match resolver.resolve_bounded("UI\\TriggerData.txt", MAX_ASSET_BYTES as u64) {
+            Ok(asset) => {
+                let text = std::str::from_utf8(&asset.bytes).map_err(|e| StartupError::Member {
                     member: "UI\\TriggerData.txt".into(),
                     message: format!("not UTF-8 at byte {}", e.valid_up_to()),
-                }
-            })?;
-            match pcx_trig::catalog::Catalog::parse(
-                "UI\\TriggerData.txt",
-                &edition,
-                "selected install",
-                text,
-            ) {
-                Ok(catalog) => Some(Arc::new(catalog)),
-                Err(e) => {
-                    return Err(StartupError::Member {
-                        member: "UI\\TriggerData.txt".into(),
-                        message: e.to_string(),
-                    });
+                })?;
+                match pcx_trig::catalog::Catalog::parse(
+                    "UI\\TriggerData.txt",
+                    &edition,
+                    "selected install",
+                    text,
+                ) {
+                    Ok(catalog) => Some(Arc::new(catalog)),
+                    Err(e) => {
+                        return Err(StartupError::Member {
+                            member: "UI\\TriggerData.txt".into(),
+                            message: e.to_string(),
+                        });
+                    }
                 }
             }
-        }
-        Err(pcx_assets::Error::MissingAsset { .. }) => None,
-        Err(e) => {
-            return Err(StartupError::Member {
-                member: "UI\\TriggerData.txt".into(),
-                message: e.to_string(),
-            });
-        }
-    };
+            Err(pcx_assets::Error::MissingAsset { .. }) => None,
+            Err(e) => {
+                return Err(StartupError::Member {
+                    member: "UI\\TriggerData.txt".into(),
+                    message: e.to_string(),
+                });
+            }
+        };
 
     let context = Arc::new(
         prepare_map_context(
@@ -384,8 +381,7 @@ pub fn start(
     if entrypoints.is_empty() {
         return Err(StartupError::Entrypoint(format!(
             "{}: admitted {} declares no runnable entrypoint",
-            map_label,
-            context.script_source,
+            map_label, context.script_source,
         )));
     }
     let post = inputs.post_config.clone();

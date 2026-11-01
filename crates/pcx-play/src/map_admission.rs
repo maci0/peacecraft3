@@ -54,8 +54,8 @@ pub enum MapAdmissionError {
     },
     #[error(transparent)]
     Input(#[from] MapScriptImportError),
-    #[error("editor triggers in {map}: {source}")]
-    Editor { map: String, source: String },
+    #[error("editor triggers in {map}: {detail}")]
+    Editor { map: String, detail: String },
     #[error("{map}: required member {member} is absent")]
     MissingMember { map: String, member: &'static str },
     #[error("{member}: {source}")]
@@ -230,14 +230,14 @@ pub fn prepare_map_context<C: ObjectCatalog>(
     }
     // Optional map-compat members: init selection, shared data, strings and
     // both script paths. Presence is preflighted; absence is not an error.
-    let ini_size = archive
+    let _ini_size = archive
         .preflight_member("war3map.ini", budget.scripts.max_wts_bytes)
         .map_err(|source| MapAdmissionError::Read {
             member: "war3map.ini",
             source,
         })?
         .unwrap_or(0);
-    let wpmp_size = archive
+    let _wpmp_size = archive
         .preflight_member("war3map.wpmp", budget.scripts.max_wts_bytes)
         .map_err(|source| MapAdmissionError::Read {
             member: "war3map.wpmp",
@@ -301,7 +301,14 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         .unwrap_or(0);
     map_scripts_import::aggregate(
         label,
-        &[raw.len(), prelude_bytes, j_size, wts_bytes, wtg_size, wct_size],
+        &[
+            raw.len(),
+            prelude_bytes,
+            j_size,
+            wts_bytes,
+            wtg_size,
+            wct_size,
+        ],
         budget.scripts.max_aggregate_input_bytes,
     )?;
     map_scripts_import::aggregate(
@@ -417,13 +424,10 @@ pub fn prepare_map_context<C: ObjectCatalog>(
             MapAdmissionError::Parse {
                 map: label.into(),
                 member,
-                source: pcx_map::Error::Extraction(error.into()),
+                source: pcx_map::Error::BadObjects(error.to_string()),
             }
         })?;
-        object_overlays.insert(
-            member.to_string(),
-            pcx_objects::editor::Overlay::of(&file),
-        );
+        object_overlays.insert(member.to_string(), pcx_objects::editor::Overlay::of(&file));
     }
     let selection = pcx_map::preferred_script(ini.as_ref(), &present).ok_or_else(|| {
         MapAdmissionError::MissingMember {
@@ -433,43 +437,44 @@ pub fn prepare_map_context<C: ObjectCatalog>(
     })?;
     let script_source = selection.to_string();
     drop(archive);
-    let scripts = match selection {
-        "war3map.j" => map_scripts_import::import_map_scripts(
-            input.map,
-            label,
-            input.map_identity.clone(),
-            input.common.asset,
-            input.blizzard.asset,
-            budget.scripts,
-        )
-        .map_err(MapAdmissionError::Input)?,
-        _ => {
-            let catalog = input.trigger_catalog.as_ref().ok_or_else(|| {
-                MapAdmissionError::MissingMember {
-                    map: label.into(),
-                    member: "war3map.wtg",
-                }
-            })?;
-            crate::editor_triggers::compile_editor_map_scripts_with_wts(
+    let scripts =
+        match selection {
+            "war3map.j" => map_scripts_import::import_map_scripts(
                 input.map,
                 label,
                 input.map_identity.clone(),
                 input.common.asset,
                 input.blizzard.asset,
-                catalog,
-                pcx_mpq::checked::ReadBudget {
-                    max_archive_bytes: budget.scripts.max_archive_bytes,
-                    max_archive_table_bytes: budget.scripts.max_archive_table_bytes,
-                    max_raw_packed_bytes: budget.scripts.max_raw_packed_bytes,
-                    max_decoded_bytes: budget.scripts.max_decoded_bytes,
-                },
+                budget.scripts,
             )
-            .map_err(|error| MapAdmissionError::Editor {
-                map: label.into(),
-                source: error.to_string(),
-            })?
-        }
-    };
+            .map_err(MapAdmissionError::Input)?,
+            _ => {
+                let catalog = input.trigger_catalog.as_ref().ok_or_else(|| {
+                    MapAdmissionError::MissingMember {
+                        map: label.into(),
+                        member: "war3map.wtg",
+                    }
+                })?;
+                crate::editor_triggers::compile_editor_map_scripts_with_wts(
+                    input.map,
+                    label,
+                    input.map_identity.clone(),
+                    input.common.asset,
+                    input.blizzard.asset,
+                    catalog,
+                    pcx_mpq::checked::ReadBudget {
+                        max_archive_bytes: budget.scripts.max_archive_bytes,
+                        max_archive_table_bytes: budget.scripts.max_archive_table_bytes,
+                        max_raw_packed_bytes: budget.scripts.max_raw_packed_bytes,
+                        max_decoded_bytes: budget.scripts.max_decoded_bytes,
+                    },
+                )
+                .map_err(|error| MapAdmissionError::Editor {
+                    map: label.into(),
+                    detail: error.to_string(),
+                })?
+            }
+        };
     let mut required_fields = Vec::new();
     required_fields
         .try_reserve_exact(input.required_fields.len())

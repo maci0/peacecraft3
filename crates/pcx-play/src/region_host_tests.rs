@@ -281,23 +281,63 @@ fn owned_vm_retains_call_time_bounds_and_both_subscription_kinds_without_evaluat
         (1, 2, 3)
     );
     let before = h.inner().handles();
-    for (name, args) in [
-        ("RemoveRegion", vec![Value::Handle(g)]),
-        ("RegionClearRect", vec![Value::Handle(g), Value::Handle(r)]),
-        (
-            "IsPointInRegion",
-            vec![Value::Handle(g), Value::Int(0), Value::Int(0)],
-        ),
-    ] {
-        assert!(
-            vm.host()
-                .native(name, &args)
-                .unwrap_err()
-                .contains("unsupported")
-        );
-    }
+    // Point queries read live call-time bounds: (-4, 2) sits inside the first
+    // rect while (0, 0) falls outside both rects.
+    assert_eq!(
+        vm.host()
+            .native(
+                "IsPointInRegion",
+                &[Value::Handle(g), Value::Real(-4.0), Value::Real(2.0)]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        vm.host()
+            .native(
+                "IsPointInRegion",
+                &[Value::Handle(g), Value::Int(0), Value::Int(0)]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    // RemoveRegion retires the region but retains its call-time bounds for
+    // the registration history; live queries refuse afterward, like a second
+    // RemoveRect. Clearing or point-testing the retired region refuses too.
+    vm.host()
+        .native("RemoveRegion", &[Value::Handle(g)])
+        .unwrap();
+    assert!(vm.host().region_rect_requests(g).is_err());
+    assert!(
+        vm.host()
+            .native("RegionClearRect", &[Value::Handle(g), Value::Handle(r)])
+            .is_err()
+    );
+    assert!(
+        vm.host()
+            .native(
+                "IsPointInRegion",
+                &[Value::Handle(g), Value::Int(0), Value::Int(0)]
+            )
+            .is_err()
+    );
+    assert!(
+        vm.host()
+            .native("RemoveRegion", &[Value::Handle(g)])
+            .is_err()
+    );
+    // Rect removal after retirement changes nothing observable: the retired
+    // region keeps refusing live queries and the registration history
+    // counts stay retained.
     vm.host().native("RemoveRect", &[Value::Handle(r)]).unwrap();
-    assert_eq!(vm.host().region_rect_requests(g).unwrap().len(), 2);
+    assert!(vm.host().region_rect_requests(g).is_err());
+    assert!(
+        (
+            vm.host().retained_regions().unwrap(),
+            vm.host().retained_region_rect_requests().unwrap(),
+            vm.host().retained_region_events().unwrap()
+        ) == (1, 2, 3)
+    );
     assert!(
         vm.host()
             .native(ADD, &[Value::Handle(g), Value::Handle(r)])

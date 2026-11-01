@@ -39,6 +39,10 @@ pub struct MapBindings {
     pub required_catalog_tables: Vec<pcx_objects::editor::path::SlkId>,
     pub catalog: BoundCatalog,
     pub required_fields: Vec<[u8; 4]>,
+    /// TriggerData of the map's edition/version for the editor trigger path.
+    /// `None` leaves `war3map.wtg` compilation refusing loudly; binding the
+    /// selected install's TriggerData here is follow-up work.
+    pub trigger_catalog: Option<std::sync::Arc<pcx_trig::catalog::Catalog>>,
     pub budget: MapAdmissionBudget,
     pub max_map_file_bytes: usize,
     /// The exact limits that admitted this binding, retained for an authored transition.
@@ -300,6 +304,9 @@ impl MapRequests {
                     catalog_identity: &bindings.catalog_identity,
                     catalog: &bindings.catalog,
                     required_fields: &bindings.required_fields,
+                    // No TriggerData rides this request path; editor maps
+                    // refuse loudly at compilation per the input docs.
+                    trigger_catalog: None,
                 },
                 bindings.budget,
             )

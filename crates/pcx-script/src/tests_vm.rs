@@ -1576,7 +1576,7 @@ fn returning_calls_share_one_function_body() {
         let program = program_of(&source);
         let mut vm = Vm::new(&program, NullHost);
         vm.call("main", &[]).unwrap();
-        assert_eq!(vm.global("total"), Value::Int(calls as i32));
+        assert_eq!(vm.global("total"), Value::Int(calls));
         let body = program
             .function("child")
             .and_then(|f| f.body.as_ref())

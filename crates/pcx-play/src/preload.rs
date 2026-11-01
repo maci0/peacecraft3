@@ -161,6 +161,12 @@ pub struct Report {
     pub missing: Vec<String>,
     pub timeout: Option<f32>,
     pub scripts: Vec<String>,
+    /// Requests still waiting for an incremental poll.
+    pub pending: usize,
+    /// Requests dropped by an explicit cancellation.
+    pub cancelled: usize,
+    /// Finished generated-preload files by requested name.
+    pub generated: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) struct State {
@@ -169,6 +175,8 @@ pub(crate) struct State {
     pub(crate) report: Report,
     pub(crate) depth: usize,
     pending: VecDeque<String>,
+    generating: bool,
+    gen_lines: Vec<String>,
 }
 impl State {
     pub(crate) fn new(rules: Rules, reader: Arc<Resolver>) -> Self {
@@ -178,6 +186,8 @@ impl State {
             report: Report::default(),
             depth: 0,
             pending: VecDeque::new(),
+            generating: false,
+            gen_lines: Vec::new(),
         }
     }
     pub(crate) fn queue(&mut self, path: &str) -> Result<(), String> {
@@ -193,14 +203,22 @@ impl State {
             .map_err(|_| "Preload: allocation")?;
         self.pending.push_back(path.into());
         self.report.queued += 1;
+        self.report.pending = self.pending.len();
+        if self.generating {
+            if self.gen_lines.len() >= 4096 {
+                return Err("PreloadGen: line budget".into());
+            }
+            self.gen_lines
+                .try_reserve(1)
+                .map_err(|_| "PreloadGen: allocation")?;
+            self.gen_lines
+                .push(format!("call Preload(\"{}\")", escape(path)));
+        }
         Ok(())
     }
-    pub(crate) fn drain(&mut self, limit: usize, timeout: Option<f32>) -> Result<(), String> {
-        if timeout.is_some_and(|n| !n.is_finite() || n < 0.) {
-            return Err("PreloadEnd: invalid timeout".into());
-        }
-        self.report.timeout = timeout;
-        // shortcut: bounded synchronous warming; add incremental decoding when loading UI supports native asynchronous progress.
+    /// Warm up to `limit` queued requests; missing entries never spend the
+    /// successful-work count used by the selected refresh bound.
+    pub(crate) fn poll(&mut self, limit: usize) -> Result<usize, String> {
         let completed = self.report.loaded;
         while self.report.loaded - completed < limit {
             let Some(path) = self.pending.front() else {
@@ -221,6 +239,83 @@ impl State {
             }
             self.pending.pop_front();
         }
+        self.report.pending = self.pending.len();
+        Ok(self.report.loaded - completed)
+    }
+    pub(crate) fn cancel_pending(&mut self) -> usize {
+        let dropped = self.pending.len();
+        self.report.cancelled += dropped;
+        self.pending.clear();
+        self.report.pending = 0;
+        dropped
+    }
+    pub(crate) fn release_retained(&self) -> Result<(usize, usize), String> {
+        self.reader
+            .release_preloaded()
+            .map_err(|e| format!("Preload release: {e}"))
+    }
+    pub(crate) fn progress(&self) -> (usize, usize, usize, u64) {
+        (
+            self.report.queued,
+            self.report.loaded,
+            self.pending.len(),
+            self.report.loaded_bytes,
+        )
+    }
+    pub(crate) fn gen_clear(&mut self) {
+        self.gen_lines.clear();
+        self.generating = false;
+    }
+    pub(crate) fn gen_start(&mut self) -> Result<(), String> {
+        if self.generating {
+            return Err("PreloadGenStart: generation already active".into());
+        }
+        self.generating = true;
+        Ok(())
+    }
+    pub(crate) fn gen_end(&mut self, path: &str) -> Result<(), String> {
+        if !self.generating {
+            return Err("PreloadGenEnd: generation was not started".into());
+        }
+        if path.is_empty() {
+            return Err("PreloadGenEnd: filename required".into());
+        }
+        if path.len() > self.rules.path_bytes {
+            return Err("PreloadGenEnd: path ceiling".into());
+        }
+        if !self.rules.extensions.iter().any(|ext| path.ends_with(ext)) {
+            return Err("PreloadGenEnd: unsupported extension".into());
+        }
+        AssetPath::new(path).map_err(|e| format!("PreloadGenEnd: {e}"))?;
+        if self.report.generated.len() >= 128 {
+            return Err("PreloadGenEnd: file budget".into());
+        }
+        let mut text = String::from("function PreloadFiles takes nothing returns nothing\n");
+        for line in &self.gen_lines {
+            text.push_str("    ");
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push_str("endfunction\n");
+        if text.len() > 2 << 20 {
+            return Err("PreloadGenEnd: byte budget".into());
+        }
+        self.report.generated.insert(path.into(), text);
+        self.generating = false;
+        Ok(())
+    }
+    pub(crate) fn drain(&mut self, limit: usize, timeout: Option<f32>) -> Result<(), String> {
+        if timeout.is_some_and(|n| !n.is_finite() || n < 0.) {
+            return Err("PreloadEnd: invalid timeout".into());
+        }
+        self.report.timeout = timeout;
+        // A zero timeout records the deadline without spending work, so the
+        // caller can poll progress and cancel the remainder explicitly.
+        if timeout == Some(0.0) {
+            self.report.pending = self.pending.len();
+            return Ok(());
+        }
+        self.poll(limit)?;
         Ok(())
     }
     pub(crate) fn filename(&self, path: &str) -> Result<bool, String> {
@@ -248,6 +343,19 @@ impl State {
     pub(crate) fn start_timeout(&self) -> f32 {
         self.rules.start_timeout
     }
+}
+
+fn escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push('?'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

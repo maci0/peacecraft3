@@ -270,6 +270,6 @@ fn show(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 #[path = "campaign_error_view_tests.rs"]
 mod tests;

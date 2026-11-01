@@ -362,6 +362,7 @@ impl Rules {
     /// Literal portrait words over the admitted model delimiters. Tag ids are
     /// not used here: portrait/talk arbitration (acknowledgement audio drives
     /// the speaking clock) stays with the render layer, which owns that clock.
+    #[allow(dead_code)]
     fn portrait_words(&self, name: &str) -> Vec<String> {
         name.split(|c: char| self.model_delimiters.contains(c))
             .filter(|s| !s.is_empty())
@@ -386,8 +387,7 @@ impl Rules {
                 let first = words.first().map(String::as_str);
                 let second = words.get(1).map(String::as_str);
                 if talk {
-                    (first == Some("portrait") && second == Some("talk"))
-                        || first == Some("talk")
+                    (first == Some("portrait") && second == Some("talk")) || first == Some("talk")
                 } else {
                     first == Some("portrait") && second != Some("talk")
                 }
@@ -418,6 +418,8 @@ impl Rules {
     /// Portrait idle sequences at the admitted rarity extremum, in source order.
     /// An empty result reports that the model carries no portrait idle; the
     /// render layer decides the fallback, not this decoder.
+    /// Staged for the render layer; wired separately.
+    #[allow(dead_code)]
     pub(crate) fn portrait_idle_candidates(
         &self,
         model: &crate::unit_model::Model,
@@ -426,6 +428,8 @@ impl Rules {
         self.portrait_candidates(model, false, rarity)
     }
     /// Portrait speech sequences at the admitted rarity extremum, in source order.
+    /// Staged for the render layer; wired separately.
+    #[allow(dead_code)]
     pub(crate) fn portrait_talk_candidates(
         &self,
         model: &crate::unit_model::Model,
@@ -613,6 +617,7 @@ impl State {
     /// Empty means the model carries no such sequences; the render layer owns
     /// that fallback. Draws share the independent model stream, never the
     /// script primary or secondary stream.
+    #[allow(dead_code)]
     pub fn choose_portrait(
         &mut self,
         model: &crate::unit_model::Model,

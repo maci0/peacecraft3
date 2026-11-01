@@ -695,6 +695,8 @@ impl Rules {
     pub(crate) fn upkeep_food_state(&self) -> Option<i32> {
         self.upkeep.as_ref().ok().map(|u| u.food_state)
     }
+    /// Staged for the income-tier consumer; wired separately.
+    #[allow(dead_code)]
     pub(crate) fn upkeep_tier(&self, food: i32, version: Option<i32>) -> Result<i32, String> {
         // Source-derived upkeep rank for gold-income tiering. The income
         // scale itself is not admitted here: callers must refuse explicitly

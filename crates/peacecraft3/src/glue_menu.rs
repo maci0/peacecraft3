@@ -1552,6 +1552,21 @@ fn show_states(
 /// Activation is already filtered (`button_actions`, `shortcut_keys`, and the
 /// campaign selection/launch gates check the authored `DefaultOpen`), but a
 /// closed campaign row would otherwise remain tab-focusable and hoverable.
+/// Closed rows are ignored by every input path: stripping `TabIndex` keeps
+/// keyboard focus off closed rows, and `Pickable::IGNORE` keeps them
+/// unhoverable and unclickable.
+type UnpickableRows<'w, 's> =
+    Query<'w, 's, Entity, (With<UiButton>, With<InteractionDisabled>, Without<Pickable>)>;
+type UnfocusableRows<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    (
+        With<UiButton>,
+        With<InteractionDisabled>,
+        With<bevy::input_focus::tab_navigation::TabIndex>,
+    ),
+>;
 /// Re-anchor and state rendering already skip disabled buttons, so this only
 /// removes what they ignore: stripping `TabIndex` keeps keyboard focus off
 /// closed rows, and `Pickable::IGNORE` keeps them unhoverable and unclickable.
@@ -1561,15 +1576,8 @@ fn show_states(
 /// closed campaign has no path to selection, focus, hover or launch.
 fn enforce_disabled_unselectable(
     mut commands: Commands,
-    unpickable: Query<Entity, (With<UiButton>, With<InteractionDisabled>, Without<Pickable>)>,
-    unfocusable: Query<
-        Entity,
-        (
-            With<UiButton>,
-            With<InteractionDisabled>,
-            With<bevy::input_focus::tab_navigation::TabIndex>,
-        ),
-    >,
+    unpickable: UnpickableRows,
+    unfocusable: UnfocusableRows,
 ) {
     for entity in &unpickable {
         commands.entity(entity).insert(Pickable::IGNORE);

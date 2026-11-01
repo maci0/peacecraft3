@@ -148,10 +148,10 @@ pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};
 
 pub use doodads::{Doodad, Doodads, ItemDropData, TerrainDoodad};
 pub use info::{Force, MapInfo, Player};
-pub use ini::{Ini, INI_NAME, SCRIPT_MEMBERS, preferred_script};
-pub use wpmp::{Wpmp, WPMP_NAME};
+pub use ini::{INI_NAME, Ini, SCRIPT_MEMBERS, preferred_script};
 pub use minimap::{Marker, MinimapImage, MinimapImageKind, MinimapMarkers};
 pub use shadows::Shadows;
+pub use wpmp::{WPMP_NAME, Wpmp};
 
 /// Retains the requested member even when archive preflight fails.
 #[derive(Debug, thiserror::Error)]
@@ -308,6 +308,8 @@ pub enum Error {
     BadIni(String),
     #[error("map shared data: {0}")]
     BadWpmp(String),
+    #[error("object edits: {0}")]
+    BadObjects(String),
     #[error("no shipped byte proves a layout for {0}; refusing to invent one")]
     UnprovenContent(&'static str),
     #[error("blp: {0}")]
@@ -673,9 +675,7 @@ impl<'a> Map<'a> {
     pub fn wpmp(&self) -> Result<Option<Wpmp>, Error> {
         match self.extract(WPMP_NAME) {
             Err(_) => Ok(None),
-            Ok(bytes) => Wpmp::from_bytes(bytes)
-                .map(Some)
-                .map_err(Error::BadWpmp),
+            Ok(bytes) => Wpmp::from_bytes(bytes).map(Some).map_err(Error::BadWpmp),
         }
     }
 

@@ -79,9 +79,7 @@ impl DrawLog {
     /// Reserve one record slot before drawing, so a refused draw leaves no
     /// phantom entry and a budget refusal leaves prior state untouched.
     pub(crate) fn reserve(&mut self) -> Result<(), StateError> {
-        self.records
-            .try_reserve(1)
-            .map_err(|_| StateError::Order)?;
+        self.records.try_reserve(1).map_err(|_| StateError::Order)?;
         Ok(())
     }
 

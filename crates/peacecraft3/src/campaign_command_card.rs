@@ -424,11 +424,19 @@ impl CommandCard {
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn build_page_open(&self) -> bool {
         self.page == SkillPage::Builds
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn skill_page_open(&self) -> bool {
         self.page == SkillPage::Skills
     }
@@ -449,6 +457,10 @@ impl CommandCard {
 
     /// Shows `buttons` for `unit` without a mounted console, for input tests.
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only helper; consumed by feature-gated tests"
+    )]
     pub(crate) fn show_buttons(&mut self, unit: HandleId, buttons: &[(Kind, Option<Hotkey>)]) {
         self.view = Some(View {
             unit,
@@ -1117,7 +1129,9 @@ fn command_art(source: &Source, icon: &Icon) -> Result<String, String> {
 
 /// The authored unavailability reason, for tooltips. Names the gate, not a
 /// workaround: the enqueue path re-checks the same gate and refuses there.
-fn train_unavailable_reason(unavailable: pcx_play::playercolor_host::TrainUnavailable) -> &'static str {
+fn train_unavailable_reason(
+    unavailable: pcx_play::playercolor_host::TrainUnavailable,
+) -> &'static str {
     use pcx_play::playercolor_host::TrainUnavailable as Unavailable;
     match unavailable {
         Unavailable::Paused => "the producer is paused",

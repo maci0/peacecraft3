@@ -1114,7 +1114,11 @@ pub mod classic {
 
         /// Milliseconds since the host bound, for lobby bookkeeping.
         pub fn now_ms(&self) -> u64 {
-            self.started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+            self.started
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX)
         }
 
         fn advertisement(&self) -> Result<Vec<u8>, ClassicLanError> {
@@ -1136,7 +1140,12 @@ pub mod classic {
                 game_type: config.game_type,
                 tail_word: [1, 0, 0, 0],
                 slots_open: config.slots_open,
-                uptime: self.started.elapsed().as_secs().try_into().unwrap_or(u32::MAX),
+                uptime: self
+                    .started
+                    .elapsed()
+                    .as_secs()
+                    .try_into()
+                    .unwrap_or(u32::MAX),
                 port: config.game_port,
             })
             .map_err(|e| ClassicLanError::Protocol(e.to_string()))
@@ -1145,7 +1154,10 @@ pub mod classic {
         /// Answers every pending `W3GS_SEARCHGAME` matching the configured
         /// profile, returning the sources answered. Anything else on the
         /// socket is ignored, never stored.
-        pub fn serve_discovery(&mut self, limits: ClassicLanLimits) -> Result<Vec<SocketAddr>, ClassicLanError> {
+        pub fn serve_discovery(
+            &mut self,
+            limits: ClassicLanLimits,
+        ) -> Result<Vec<SocketAddr>, ClassicLanError> {
             let reply = self.advertisement()?;
             self.socket.set_nonblocking(true)?;
             let mut answered = Vec::new();
@@ -1212,9 +1224,13 @@ pub mod classic {
             let frame = connection
                 .receive()
                 .map_err(|e| ClassicLanError::Protocol(e.to_string()))?
-                .ok_or(ClassicLanError::Protocol("join stream ended before its frame"))?;
+                .ok_or(ClassicLanError::Protocol(
+                    "join stream ended before its frame".to_string(),
+                ))?;
             if frame.body().len() > policy.max_read_bytes {
-                return Err(ClassicLanError::Budget("join frame exceeds its read ceiling"));
+                return Err(ClassicLanError::Budget(
+                    "join frame exceeds its read ceiling",
+                ));
             }
             // The borrowed request must not outlive this function on the
             // stack, so re-derive it from the retained frame: validate
@@ -1226,7 +1242,7 @@ pub mod classic {
                 || join.entry_key != self.config.entry_key
             {
                 return Err(ClassicLanError::Protocol(
-                    "join echoes a foreign host counter or entry key",
+                    "join echoes a foreign host counter or entry key".to_string(),
                 ));
             }
             let owned: OwnedFrame = frame;
@@ -1280,10 +1296,7 @@ pub mod classic {
 
     /// Graceful leave: sends one `W3GS_LEAVEGAME` with the caller's reason
     /// and returns the connection for shutdown. No retry, no response read.
-    pub fn graceful_leave(
-        pending: &mut PendingJoin,
-        reason: u32,
-    ) -> Result<(), ClassicLanError> {
+    pub fn graceful_leave(pending: &mut PendingJoin, reason: u32) -> Result<(), ClassicLanError> {
         let frame =
             lobby::encode_leave(reason).map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
         let _ = pending.connection.send(&frame);

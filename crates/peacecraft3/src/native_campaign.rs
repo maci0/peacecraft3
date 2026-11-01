@@ -30,8 +30,8 @@ use peacecraft3::browser_configuration::{
 use peacecraft3::campaign_loading::{
     CampaignLoading, CampaignLoadingSet, LastRules, LoadingRequest,
 };
-use peacecraft3::map_requests::MapBindings;
 use peacecraft3::map_binding::{BindingLimits, OverlayLimits};
+use peacecraft3::map_requests::MapBindings;
 use peacecraft3::map_requests::{MapRequest, MapRequestSet, MapRequests};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -576,8 +576,8 @@ fn loading_request(
         .transpose()?;
     let rules = pcx_play::campaign_loading::ProgressRules::read(recipe.image())
         .map_err(|e| e.to_string())?;
-    let min_display = pcx_play::campaign_loading::MinDisplay::read(recipe.image())
-        .map_err(|e| e.to_string())?;
+    let min_display =
+        pcx_play::campaign_loading::MinDisplay::read(recipe.image()).map_err(|e| e.to_string())?;
     // Every session this build admits is a local single-player one; the
     // provider tag branch is kept asset-derived rather than literal.
     let networked =
@@ -644,43 +644,42 @@ fn fresh_binding<'w>(
         .clone()
         .or_else(|| sources.for_receipts(&bindings.receipts))
         .ok_or_else(|| "admitted map has no matching source reader".to_string())?;
-    let (rules, min_display, provenance) =
-        match sources.campaign_for_receipts(&bindings.receipts) {
-            Some(recipe) => (
-                pcx_play::campaign_loading::ProgressRules::read(recipe.image())
-                    .map_err(|e| e.to_string())?,
-                pcx_play::campaign_loading::MinDisplay::read(recipe.image())
-                    .map_err(|e| e.to_string())?,
-                format!("selected recipe {}", recipe.dir().display()),
-            ),
-            None => {
-                let install =
-                    std::path::PathBuf::from(&bindings.receipts.common.provenance.source.origin);
-                match crate::menu_lighting::with_client_image(Some(&install), |_, image| {
-                    Ok::<_, String>((
-                        pcx_play::campaign_loading::ProgressRules::read(image)
-                            .map_err(|e| e.to_string())?,
-                        pcx_play::campaign_loading::MinDisplay::read(image)
-                            .map_err(|e| e.to_string())?,
-                    ))
-                }) {
-                    Ok((rules, min_display)) => (
-                        rules,
-                        min_display,
-                        format!("selected client image under {}", install.display()),
-                    ),
-                    Err(error) => match &last.rules {
-                        Some((rules, min_display)) => {
-                            info!(
-                                "loading screen reuses retained bar rules                                  (selected image unavailable: {error})"
-                            );
-                            (*rules, *min_display, "retained rules".to_string())
-                        }
-                        None => return Err(error),
-                    },
-                }
+    let (rules, min_display, provenance) = match sources.campaign_for_receipts(&bindings.receipts) {
+        Some(recipe) => (
+            pcx_play::campaign_loading::ProgressRules::read(recipe.image())
+                .map_err(|e| e.to_string())?,
+            pcx_play::campaign_loading::MinDisplay::read(recipe.image())
+                .map_err(|e| e.to_string())?,
+            format!("selected recipe {}", recipe.dir().display()),
+        ),
+        None => {
+            let install =
+                std::path::PathBuf::from(&bindings.receipts.common.provenance.source.origin);
+            match crate::menu_lighting::with_client_image(Some(&install), |_, image| {
+                Ok::<_, String>((
+                    pcx_play::campaign_loading::ProgressRules::read(image)
+                        .map_err(|e| e.to_string())?,
+                    pcx_play::campaign_loading::MinDisplay::read(image)
+                        .map_err(|e| e.to_string())?,
+                ))
+            }) {
+                Ok((rules, min_display)) => (
+                    rules,
+                    min_display,
+                    format!("selected client image under {}", install.display()),
+                ),
+                Err(error) => match &last.rules {
+                    Some((rules, min_display)) => {
+                        info!(
+                            "loading screen reuses retained bar rules                                  (selected image unavailable: {error})"
+                        );
+                        (*rules, *min_display, "retained rules".to_string())
+                    }
+                    None => return Err(error),
+                },
             }
-        };
+        }
+    };
     info!(
         "loading screen rules from {provenance} for {}",
         bindings.map_label
@@ -699,7 +698,7 @@ fn fresh_binding<'w>(
 /// Start a screen for a fresh binding that has none: an authored continuation
 /// or a browser launch, which never pass through the chapter launch. A native
 /// chapter launch carries its prebuilt screen instead, so this leaves a shown
-    /// screen and an already-seen revision alone.
+/// screen and an already-seen revision alone.
 fn ensure_loading(
     mut loading: ResMut<CampaignLoading>,
     requests: Res<MapRequests>,
@@ -747,9 +746,11 @@ fn ensure_loading(
         Err(error) => {
             // No admitted binding yet, or the selected sources are gone: the
             // mission still loads, and a later update retries.
-            if requests.last_outcome.as_ref().is_some_and(|o| {
-                o.result.is_ok() && o.binding_revision == Some(bindings.revision)
-            }) {
+            if requests
+                .last_outcome
+                .as_ref()
+                .is_some_and(|o| o.result.is_ok() && o.binding_revision == Some(bindings.revision))
+            {
                 warn!("campaign loading screen refused: {error}");
                 loading.mark_unbuildable(bindings.revision);
             }

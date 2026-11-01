@@ -47,8 +47,7 @@ fn draw_every_pointer_state_offscreen() {
     let reader = Resolver::new(
         mode,
         Some(
-            OverrideDirectory::open(std::path::Path::new(&assets), "cursor-capture", None)
-                .unwrap(),
+            OverrideDirectory::open(std::path::Path::new(&assets), "cursor-capture", None).unwrap(),
         ),
         Vec::new(),
     )
@@ -121,7 +120,9 @@ fn draw_every_pointer_state_offscreen() {
     let spacing = FRAME_H * 0.12;
     let first = -spacing * (states.len() as f32 - 1.0) / 2.0;
     for (i, state) in states.iter().enumerate() {
-        let Prepared { plan, sequences, .. } = prepare(&reader, &path, &rules).unwrap();
+        let Prepared {
+            plan, sequences, ..
+        } = prepare(&reader, &path, &rules).unwrap();
         let root = app
             .world_mut()
             .spawn((
@@ -214,13 +215,17 @@ fn draw_every_pointer_state_offscreen() {
     };
     let background = pixel(0, 0);
     let mean = |i: usize| -> ([f32; 3], usize) {
-        let centre = (WIDTH as f32 / 2.0 + (first + spacing * i as f32) / FRAME_H * HEIGHT as f32)
-            as usize;
+        let centre =
+            (WIDTH as f32 / 2.0 + (first + spacing * i as f32) / FRAME_H * HEIGHT as f32) as usize;
         let (mut sum, mut count) = ([0.0f32; 3], 0usize);
         for y in HEIGHT as usize / 2 - 60..HEIGHT as usize / 2 + 60 {
             for x in centre - 45..centre + 45 {
                 let colour = pixel(x, y);
-                if colour.iter().zip(background).any(|(c, b)| (c - b).abs() > 40.0) {
+                if colour
+                    .iter()
+                    .zip(background)
+                    .any(|(c, b)| (c - b).abs() > 40.0)
+                {
                     count += 1;
                     for channel in 0..3 {
                         sum[channel] += colour[channel];
@@ -233,14 +238,36 @@ fn draw_every_pointer_state_offscreen() {
     for i in 0..states.len() {
         assert!(mean(i).1 > 150, "cursor {i} drew {} pixels", mean(i).1);
     }
-    let [normal, friend, neutral, enemy, plain, attack_friend, attack_enemy] =
-        [0, 1, 2, 3, 4, 5, 6].map(|i| mean(i).0);
-    assert!(friend[1] > friend[0] + 60.0 && friend[1] > friend[2] + 60.0, "{friend:?}");
-    assert!(neutral[0] > neutral[2] + 60.0 && neutral[1] > neutral[2] + 60.0, "{neutral:?}");
-    assert!(enemy[0] > enemy[1] + 60.0 && enemy[0] > enemy[2] + 60.0, "{enemy:?}");
-    assert!(normal[2] >= normal[0] && normal[1] > normal[0], "grey-blue {normal:?}");
+    let [
+        normal,
+        friend,
+        neutral,
+        enemy,
+        plain,
+        attack_friend,
+        attack_enemy,
+    ] = [0, 1, 2, 3, 4, 5, 6].map(|i| mean(i).0);
+    assert!(
+        friend[1] > friend[0] + 60.0 && friend[1] > friend[2] + 60.0,
+        "{friend:?}"
+    );
+    assert!(
+        neutral[0] > neutral[2] + 60.0 && neutral[1] > neutral[2] + 60.0,
+        "{neutral:?}"
+    );
+    assert!(
+        enemy[0] > enemy[1] + 60.0 && enemy[0] > enemy[2] + 60.0,
+        "{enemy:?}"
+    );
+    assert!(
+        normal[2] >= normal[0] && normal[1] > normal[0],
+        "grey-blue {normal:?}"
+    );
     assert!(plain[2] > plain[0] + 40.0, "cyan target {plain:?}");
-    assert!(attack_friend[1] > attack_friend[0] + 60.0, "{attack_friend:?}");
+    assert!(
+        attack_friend[1] > attack_friend[0] + 60.0,
+        "{attack_friend:?}"
+    );
     assert!(attack_enemy[0] > attack_enemy[1] + 60.0, "{attack_enemy:?}");
     let mut ppm = format!("P6\n{WIDTH} {HEIGHT}\n255\n").into_bytes();
     for row in data.chunks(stride).take(height) {

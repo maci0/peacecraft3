@@ -8,7 +8,7 @@ use std::{
 
 use crate::{AssetPath, Error};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LayerKind {
     Override,
@@ -29,7 +29,7 @@ impl FromStr for LayerKind {
 }
 
 /// Adapter-supplied identity, not a version inferred from a directory or mode.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceInfo {
     pub id: String,
     pub kind: LayerKind,

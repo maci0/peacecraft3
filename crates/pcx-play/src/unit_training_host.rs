@@ -546,6 +546,14 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Whether `producer` holds any queued training job (active or pending).
+    pub(crate) fn producer_has_training(&self, producer: HandleId) -> bool {
+        self.training
+            .jobs
+            .iter()
+            .any(|job| job.producer == producer)
+    }
+
     /// Cancel one queue entry; public script order strings are not cancellation commands.
     pub fn cancel_unit_training(&mut self, producer: HandleId, slot: usize) -> Result<bool, Error> {
         let record = self.executed_unit(producer)?;
@@ -749,7 +757,7 @@ impl ObjectHost {
                 return Err(self.training_error("malformed Trains rawcode"));
             }
             let kind = i32::from_be_bytes(code);
-            if kinds.iter().any(|seen: &i32| *seen == kind) {
+            if kinds.contains(&kind) {
                 continue;
             }
             kinds.push(kind);

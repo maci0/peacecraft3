@@ -103,6 +103,10 @@ pub fn install(app: &mut App) {
         .insert_resource(NoOcclusionPass);
     register_publisher(app);
     crate::campaign_boundary::install(app);
+    // Session-state publications that render alongside ground admission.
+    crate::campaign_fog::install(app);
+    crate::campaign_preload::install(app);
+    crate::campaign_weather::install(app);
 }
 
 /// Install ground publication with application budgets that follow map delivery.
@@ -187,8 +191,7 @@ impl BridgeDeckTable {
         height_column: &str,
         max_entries: usize,
     ) -> Result<Self, String> {
-        let table =
-            pcx_slq::Table::parse(bytes).map_err(|e| format!("{path}: deck table: {e}"))?;
+        let table = pcx_slq::Table::parse(bytes).map_err(|e| format!("{path}: deck table: {e}"))?;
         if table.column_of(path_column).is_none() {
             return Err(format!("{path}: deck table has no {path_column} column"));
         }
@@ -215,7 +218,10 @@ impl BridgeDeckTable {
                 .parse()
                 .map_err(|_| format!("{path}: row {}: invalid {height_column}", row.index()))?;
             if !height.is_finite() {
-                return Err(format!("{path}: row {}: nonfinite {height_column}", row.index()));
+                return Err(format!(
+                    "{path}: row {}: nonfinite {height_column}",
+                    row.index()
+                ));
             }
             if entries.len() >= max_entries {
                 return Err(format!("{path}: deck table exceeds {max_entries} entries"));
@@ -406,6 +412,10 @@ pub(crate) fn publish_admitted_ground(
     }
 }
 
+// Nine Bevy system params (commands, requests, sources, supply, publication,
+// device limits, mesh/image/material assets) exceed the default arity lint;
+// grouping them would churn every system call site for no behavior change.
+#[allow(clippy::too_many_arguments)]
 fn publish_admitted_water(
     mut commands: Commands,
     requests: Res<MapRequests>,
@@ -518,6 +528,11 @@ fn publish_admitted_water(
 /// `Water.slk` row's `texFile`; its alpha channel is the blend, matching the
 /// ground-sheet convention of authored alpha rather than numeric weights.
 #[allow(clippy::too_many_arguments)]
+/// Prepared water mesh, material and per-asset receipts for publication.
+/// Factored out so the fallible preparation reads separately from the
+/// infallible ECS publication below.
+type PreparedWater = Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec<AssetReceipt>)>;
+
 fn prepare_water(
     terrain: &Terrain,
     reader: &pcx_assets::Resolver,
@@ -526,14 +541,7 @@ fn prepare_water(
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
-) -> Result<
-    Option<(
-        Handle<Mesh>,
-        Handle<StandardMaterial>,
-        Vec<AssetReceipt>,
-    )>,
-    MapGroundError,
-> {
+) -> Result<PreparedWater, MapGroundError> {
     use bevy::{
         asset::RenderAssetUsages,
         mesh::{Indices, PrimitiveTopology},
@@ -575,12 +583,18 @@ fn prepare_water(
     if mesh.wet_tiles == 0 {
         return Ok(None);
     }
-    let tex_file = profile
-        .field("texFile")
-        .ok_or_else(|| read_error("TerrainArt\\Water.slk", "selected row has no texFile".into()))?;
+    let tex_file = profile.field("texFile").ok_or_else(|| {
+        read_error(
+            "TerrainArt\\Water.slk",
+            "selected row has no texFile".into(),
+        )
+    })?;
     let tex_file = tex_file.trim().trim_matches('"');
     if tex_file.is_empty() {
-        return Err(read_error("TerrainArt\\Water.slk", "selected row texFile is empty".into()));
+        return Err(read_error(
+            "TerrainArt\\Water.slk",
+            "selected row texFile is empty".into(),
+        ));
     }
     let texture_asset = reader
         .resolve_bounded(tex_file, read_limit)
@@ -594,7 +608,10 @@ fn prepare_water(
         && (loaded.width > limits.max_texture_dimension_2d
             || loaded.height > limits.max_texture_dimension_2d)
     {
-        return Err(read_error(tex_file, "water texture exceeds device limits".into()));
+        return Err(read_error(
+            tex_file,
+            "water texture exceeds device limits".into(),
+        ));
     }
     let mut water_image = Image::new(
         Extent3d {
@@ -617,7 +634,10 @@ fn prepare_water(
         cull_mode: None,
         ..default()
     });
-    let mut render_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    let mut render_mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
     // Terrain `(x east, y north, z up)` becomes Bevy `(x, z, -y)`, matching the
     // ground mesh convention so floating/amphibious actors sample the same
     // surface the renderer draws. Bridge decks use the admitted

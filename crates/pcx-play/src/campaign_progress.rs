@@ -23,12 +23,7 @@ impl Progress {
     /// An explicit `SetMissionAvailable` value wins; unknown missions fall back
     /// to the campaign index's authored default. Fresh-profile unlocks remain
     /// unknown and are not invented here.
-    pub fn availability(
-        &self,
-        campaign: i32,
-        mission: i32,
-        default_open: bool,
-    ) -> bool {
+    pub fn availability(&self, campaign: i32, mission: i32, default_open: bool) -> bool {
         self.mission_available(campaign, mission)
             .unwrap_or(default_open)
     }
@@ -55,8 +50,7 @@ impl Progress {
         if campaign < 0 || mission < 0 {
             return Err("negative campaign/mission indices are not admitted".into());
         }
-        if !self.completed.contains_key(&(campaign, mission))
-            && self.completed.len() >= MAX_ENTRIES
+        if !self.completed.contains_key(&(campaign, mission)) && self.completed.len() >= MAX_ENTRIES
         {
             return Err("campaign completion entry policy exceeded".into());
         }
@@ -66,7 +60,10 @@ impl Progress {
 
     /// True only after an executed `mark_complete` for the same key.
     pub fn is_complete(&self, campaign: i32, mission: i32) -> bool {
-        self.completed.get(&(campaign, mission)).copied().unwrap_or(false)
+        self.completed
+            .get(&(campaign, mission))
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn completed_missions(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
@@ -120,7 +117,7 @@ impl Progress {
             bytes.extend_from_slice(&mission.to_le_bytes());
             bytes.push(u8::from(available));
         }
-        for (&(campaign, mission), _) in &self.completed {
+        for (campaign, mission) in self.completed.keys() {
             bytes.extend_from_slice(&campaign.to_le_bytes());
             bytes.extend_from_slice(&mission.to_le_bytes());
             bytes.push(1);
@@ -164,7 +161,9 @@ impl Progress {
             let body = &bytes[MAGIC_COMPLETION.len() + 8..];
             if avail > MAX_ENTRIES
                 || done > MAX_ENTRIES
-                || avail.checked_add(done).is_none_or(|n| n.checked_mul(9) != Some(body.len()))
+                || avail
+                    .checked_add(done)
+                    .is_none_or(|n| n.checked_mul(9) != Some(body.len()))
             {
                 return Err("campaign progress count/length policy".into());
             }
