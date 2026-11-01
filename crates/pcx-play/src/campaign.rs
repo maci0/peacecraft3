@@ -10,6 +10,12 @@ pub trait CampaignHost: Host {
     fn advance_tick(&mut self, tick: u64) -> Result<Vec<FunctionId>, String>;
 }
 
+/// WC3 script format entrypoints for unchanged-map execution. These are
+/// format identifiers, not map content: every shipped map script declares
+/// `config` and `main`, and the headless harness starts from them rather
+/// than an injected victory stimulus.
+pub const UNCHANGED_MAP_ENTRYPOINTS: [&str; 2] = ["config", "main"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Gate {
     Dialogue,
@@ -58,7 +64,10 @@ impl ChapterPlan {
         let plan = Self {
             name,
             ticks,
-            entrypoints: vec!["config".into(), "main".into()],
+            entrypoints: UNCHANGED_MAP_ENTRYPOINTS
+                .iter()
+                .map(|entry| entry.to_string())
+                .collect(),
             calls,
             outcomes,
         };
@@ -78,9 +87,23 @@ impl ChapterPlan {
             missing.remove(&check.gate);
         }
         if !missing.is_empty() {
-            return Err(format!("chapter is missing explicit outcome gates {missing:?}"));
+            return Err(format!(
+                "chapter is missing explicit outcome gates {missing:?}"
+            ));
         }
         Ok(plan)
+    }
+
+    /// Whether this plan runs a map unchanged: exactly the WC3 script format
+    /// entrypoints, in declaration order. The campaign driver uses this to
+    /// refuse injected victory stimuli before execution.
+    pub fn is_unchanged_map(&self) -> bool {
+        self.entrypoints.len() == UNCHANGED_MAP_ENTRYPOINTS.len()
+            && self
+                .entrypoints
+                .iter()
+                .zip(UNCHANGED_MAP_ENTRYPOINTS.iter())
+                .all(|(entry, expected)| entry == expected)
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -519,6 +542,45 @@ mod tests {
             })
             .collect(),
         }
+    }
+    fn gates() -> Vec<OutcomeCheck> {
+        [
+            (0, Gate::Dialogue, "Dialogue"),
+            (1, Gate::Quest, "Quest"),
+            (2, Gate::Victory, "Victory"),
+            (3, Gate::EndGame, "EndGame"),
+        ]
+        .into_iter()
+        .map(|(tick, gate, predicate)| OutcomeCheck {
+            tick,
+            gate,
+            predicate: predicate.into(),
+        })
+        .collect()
+    }
+    #[test]
+    fn unchanged_map_constructor_pins_format_entrypoints_and_all_gates() {
+        let plan =
+            ChapterPlan::unchanged_map("synthetic-chapter".into(), 4, Vec::new(), gates()).unwrap();
+        assert!(plan.is_unchanged_map());
+        assert_eq!(
+            plan.entrypoints,
+            vec!["config".to_string(), "main".to_string()]
+        );
+        assert!(ChapterPlan::unchanged_map(String::new(), 4, Vec::new(), gates()).is_err());
+        assert!(
+            ChapterPlan::unchanged_map("synthetic-chapter".into(), 0, Vec::new(), gates()).is_err()
+        );
+        let mut partial = gates();
+        partial.pop();
+        assert!(
+            ChapterPlan::unchanged_map("synthetic-chapter".into(), 4, Vec::new(), partial)
+                .unwrap_err()
+                .contains("EndGame")
+        );
+        let mut swapped = plan.clone();
+        swapped.entrypoints = vec!["main".into(), "config".into()];
+        assert!(!swapped.is_unchanged_map());
     }
     #[test]
     fn every_gate_is_observed_and_a_missing_callback_cannot_pass() {

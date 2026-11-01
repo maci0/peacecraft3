@@ -412,6 +412,16 @@ impl ObjectHost {
             .is_some_and(|state| state.workers.iter().any(|worker| worker.unit == unit))
     }
 
+    /// Admitted worker race (`UnitData/race`) for `unit`'s live definition.
+    /// Harvest admission already requires this race before work starts; this
+    /// query preserves it for depot/worker matching once those native rules
+    /// are qualified. Sentinels and missing fields refuse; no rate is assumed.
+    pub(crate) fn harvest_worker_race(&self, unit: HandleId) -> Result<String, Error> {
+        let record = self.executed_unit(unit)?;
+        crate::harvest_rules::worker_race_from_definition(&record.definition)
+            .map_err(|error| self.harvest_read_error("race", error))
+    }
+
     #[cfg(test)]
     pub(crate) fn harvest_cargo(&self, unit: HandleId) -> Option<f32> {
         self.harvest

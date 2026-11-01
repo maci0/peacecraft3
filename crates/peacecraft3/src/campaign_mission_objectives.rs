@@ -88,6 +88,30 @@ const CHAIN_SKILL: [u8; 4] = *b"AOcl";
 /// than an injected victory stimulus.
 pub const UNCHANGED_MAP_ENTRYPOINTS: [&str; 2] = ["config", "main"];
 
+/// Script-harness entrypoints for unchanged-map execution, checked against
+/// the `pcx-play` campaign driver's format identifiers. The two crates must
+/// agree: a drift refuses so a stale entrypoint list cannot stand in for the
+/// authored `config`/`main` start.
+pub fn unchanged_map_entrypoints() -> Result<[String; 2], String> {
+    let upstream = pcx_play::campaign::UNCHANGED_MAP_ENTRYPOINTS;
+    if UNCHANGED_MAP_ENTRYPOINTS != upstream {
+        return Err(format!(
+            "unchanged-map entrypoints {UNCHANGED_MAP_ENTRYPOINTS:?} disagree with the script harness {upstream:?}"
+        ));
+    }
+    Ok(UNCHANGED_MAP_ENTRYPOINTS.map(|entry| entry.to_string()))
+}
+
+/// Whether `entrypoints` run a map unchanged: exactly the WC3 script format
+/// entrypoints, in declaration order.
+pub fn entrypoints_are_unchanged(entrypoints: &[String]) -> bool {
+    entrypoints.len() == UNCHANGED_MAP_ENTRYPOINTS.len()
+        && entrypoints
+            .iter()
+            .zip(UNCHANGED_MAP_ENTRYPOINTS.iter())
+            .all(|(entry, expected)| entry == expected)
+}
+
 /// Unchanged-map chapter advancement: only a queued `EndGame`/`ChangeLevel`
 /// request moves to the next level. `has_exit` reports the queued request and
 /// `next_level` carries the verbatim `ChangeLevel`/`SetNextLevel` target.
@@ -108,6 +132,23 @@ pub fn unchanged_map_advance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_entrypoints_match_the_script_harness_format() {
+        assert_eq!(
+            unchanged_map_entrypoints().unwrap(),
+            ["config".to_string(), "main".to_string()]
+        );
+        assert!(entrypoints_are_unchanged(&[
+            "config".to_string(),
+            "main".to_string()
+        ]));
+        assert!(!entrypoints_are_unchanged(&[
+            "main".to_string(),
+            "config".to_string()
+        ]));
+        assert!(!entrypoints_are_unchanged(&["config".to_string()]));
+    }
 
     #[test]
     #[ignore = "requires unchanged RoC Prologue01 via PCX_NATIVE_CHAPTER_* and a fresh mode-0700 XDG_DATA_HOME under .scratch"]

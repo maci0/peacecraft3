@@ -94,6 +94,32 @@ fn failed_saves_and_malformed_sections_preserve_both_sections() {
 }
 
 #[test]
+fn section_inventory_reports_cache_and_progress_presence() {
+    let c = cache(None);
+    let p = progress();
+    assert_eq!(sections_present(&c), Ok((true, false)));
+    assert_eq!(progress_bytes(&c).unwrap(), None);
+    let bytes = Envelope {
+        cache: Some(&c),
+        progress: Some(&p),
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(sections_present(&bytes), Ok((true, true)));
+    assert_eq!(progress_bytes(&bytes).unwrap(), Some(p));
+    let cache_only = Envelope {
+        cache: Some(&c),
+        progress: None,
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(sections_present(&cache_only), Ok((true, false)));
+    assert_eq!(progress_bytes(&cache_only).unwrap(), None);
+    assert!(sections_present(b"invalid original or recreation profile").is_err());
+    assert!(progress_bytes(b"invalid original or recreation profile").is_err());
+}
+
+#[test]
 fn envelope_lengths_and_truncation_are_checked_before_indexing() {
     let c = cache(None);
     let p = progress();

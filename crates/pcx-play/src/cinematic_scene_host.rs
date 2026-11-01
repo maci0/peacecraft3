@@ -36,6 +36,11 @@ impl CinematicScene {
         Ok(now < self.ends_at()?)
     }
 
+    /// Whether the authored playback window has elapsed at `now`.
+    pub fn completed_at(&self, now: f64) -> Result<bool, String> {
+        self.active_at(now).map(|active| !active)
+    }
+
     /// Bounded playback progress in `[0, 1]` for the renderer. A zero-length
     /// scene reports completion once started; time before start clamps to zero.
     pub fn progress_at(&self, now: f64) -> Result<f32, String> {
