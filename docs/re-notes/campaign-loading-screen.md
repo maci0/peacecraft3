@@ -154,8 +154,15 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   that committed no client image — the previously admitted values, logged as
   retained. A chapter launch begins its screen before admission, so the first
   stage waits for new bindings; a continuation or browser launch begins after,
-  so its bindings already count. A screen that cannot be built is reported once
-  per revision and the mission loads without it.
+  so its bindings already count. A screen re-begun after its session was
+  already admitted (observed on the mounted Human01 path: `ensure_loading`
+  re-began with the live witness, stalling `published` at
+  `{admitted:true, prepared:true, published:false}` and freezing the clock at
+  0.0) counts the admitted live session for its own bindings as published, by
+  pointer-matching the session context against the admission's shared context;
+  a stale screen still waits for the renewal its revision implies. A screen
+  that cannot be built is reported once per revision and the mission loads
+  without it.
 - **Recreation choice.** Sessions are local single-player ones, so the network
   branch never arms in this build (`networked(PROVIDER_LOOPBACK)` is false);
   the press-after-hold, `WAITING FOR OTHER PLAYERS` state and minimum-display
