@@ -229,3 +229,10 @@ pub mod campaign_assault_policy;
 pub mod autocast_rules;
 pub mod mirror_image_rules;
 pub mod unit_morph_rules;
+
+// Tier C fuzz corpus + runner (fuzz-tierc lane; mechanics lane owns
+// rpl/runner/scenario/trace/diff — see docs/re-notes/fuzz-tierc.md).
+pub mod fuzz_corpus;
+pub mod fuzz_report;
+pub mod fuzz_resume;
+pub mod fuzz_scenario;
