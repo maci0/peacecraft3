@@ -1104,16 +1104,33 @@ fn color_snapshot(
 
 fn item_visibility_roundtrip(app: &mut App, output: &Path) {
     use pcx_script::{Host, Value};
-    let id = app
+    let items = app
         .world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>()
         .host()
         .unwrap()
         .objects()
         .executed_items()
-        .find(|(_, item)| item.visible() == Some(true))
-        .map(|(id, _)| id)
-        .expect("diagnostic chapter needs a visible ground item");
+        .map(|(id, item)| (id, item.visible()))
+        .collect::<Vec<_>>();
+    let Some(id) = items
+        .iter()
+        .find(|(_, visible)| *visible == Some(true))
+        .map(|(id, _)| *id)
+    else {
+        // Human01 has no ground items at this stage: its six scripted
+        // `CreateItemLoc` calls all wait on crate-death and story triggers,
+        // and `war3mapUnits.doo` carries unit placements with drop sets
+        // rather than item instances. The original shows no ground items
+        // here either, so there is nothing to pick; record that instead of
+        // inventing an item or forcing gameplay in a render diagnostic.
+        std::fs::write(output.join("item-visibility.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "refusal": "no visible ground item at this chapter stage",
+            "executed_items": items.len(),
+            "scope": "source ground item actor root and actual ray picking; captures retained, no original pixel-parity claim"
+        })).unwrap()).unwrap();
+        return;
+    };
     let (root, ray, far) = app
         .world()
         .resource::<crate::campaign_actors::UnitActors>()
