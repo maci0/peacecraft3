@@ -28,6 +28,831 @@ use std::{path::Path, time::Duration};
 
 mod bench;
 
+/// Controlled original-capture comparison harness for sky illumination,
+/// terrain/tree sight occlusion and doodad-particle ownership.
+///
+/// Correction context (`docs/re-notes/campaign-sky.md#correction-and-own-light-connection-2026-10-25`,
+/// TRACKER sky/sight entries): the selected sky model carries its own `LITE`
+/// directional light sampled at the canonical day fraction; the earlier
+/// no-light inventory was wrong. A headless/muted original-client control
+/// pair keeps the same map, sky texture, camera and frozen diagnostic noon
+/// while forcing the material unlit bit, plus a null-sky control. This module
+/// retains the recreation side of those controls with asset-derived identities
+/// only: no brightness, colour, geometry or timing constants are invented.
+/// Sight occlusion (`SharedVision::occlusion_applied == Some(false)`,
+/// minimap circular-sight rendering) and doodad-particle ownership refusals
+/// remain open gaps; the harness records them instead of asserting parity.
+/// Captures and receipts stay local under the caller-supplied output
+/// directory. Original captures remain untracked. This harness does not turn
+/// the strict render gate green.
+mod sky_sight_parity {
+    use super::*;
+
+    /// Exact RGBA comparison of two PNG file buffers. Refuses differing
+    /// extents instead of rescaling. No tolerance, no normalization, no
+    /// cropping: any channel difference in a pixel counts as changed. Mirrors
+    /// the `tools/original-game-reference/reference.py report` rule for the
+    /// sky/sight patch comparison the analyst runs against the original
+    /// capture.
+    pub(super) struct Comparison {
+        pub(super) changed: usize,
+        pub(super) total: usize,
+        pub(super) bounds: Option<[[u32; 2]; 2]>,
+        pub(super) first: Option<serde_json::Value>,
+    }
+
+    pub(super) fn compare_png_bytes(
+        recreation: &[u8],
+        original: &[u8],
+        label: &str,
+    ) -> Result<Comparison, String> {
+        fn decode(bytes: &[u8], label: &str) -> Result<Image, String> {
+            Image::from_buffer(
+                bytes,
+                bevy::image::ImageType::Extension("png"),
+                bevy::image::CompressedImageFormats::NONE,
+                true,
+                bevy::image::ImageSampler::linear(),
+                bevy::asset::RenderAssetUsages::default(),
+            )
+            .map_err(|error| format!("{label}: png decode refused: {error:?}"))
+        }
+        let recreation = decode(recreation, &format!("{label}: recreation"))?;
+        let original = decode(original, &format!("{label}: original"))?;
+        let size = recreation.texture_descriptor.size;
+        let other = original.texture_descriptor.size;
+        if size.width != other.width || size.height != other.height {
+            return Err(format!(
+                "{label}: extent differs, no rescaling: recreation {}x{} vs original {}x{}",
+                size.width, size.height, other.width, other.height,
+            ));
+        }
+        let Some(a) = recreation.data.as_deref() else {
+            return Err(format!("{label}: recreation pixels unavailable"));
+        };
+        let Some(b) = original.data.as_deref() else {
+            return Err(format!("{label}: original pixels unavailable"));
+        };
+        if a.len() != b.len() {
+            return Err(format!("{label}: pixel buffer length differs"));
+        }
+        let width = size.width;
+        let mut changed = 0usize;
+        let mut bounds: Option<[[u32; 2]; 2]> = None;
+        let mut first: Option<serde_json::Value> = None;
+        for (index, (pixel_a, pixel_b)) in
+            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).enumerate()
+        {
+            if pixel_a != pixel_b {
+                changed += 1;
+                let x = (index as u32) % width;
+                let y = (index as u32) / width;
+                bounds = Some(match bounds {
+                    None => [[x, y], [x, y]],
+                    Some([[x0, y0], [x1, y1]]) => {
+                        [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]]
+                    }
+                });
+                if first.is_none() {
+                    first = Some(serde_json::json!({
+                        "x": x, "y": y, "recreation": pixel_a, "original": pixel_b,
+                    }));
+                }
+            }
+        }
+        Ok(Comparison {
+            changed,
+            total: a.len() / 4,
+            bounds,
+            first,
+        })
+    }
+
+    /// Retains the recreation side of the controlled sky/sight comparison at
+    /// the unchanged campaign-control checkpoint, before the harness mutates
+    /// fog for its separate minimap diagnostic. All values are read from the
+    /// admitted session, scene camera and renderer; nothing is invented.
+    /// The three arms are: source-lit (the current dome with its own `LITE`
+    /// sun at the canonical day fraction), forced-unlit (the same model bytes
+    /// with the material unlit bit set, applied in the original-client
+    /// control only) and null-sky (`SetSkyModel(null)`). The original runner
+    /// repeats the same map, sky texture, camera and frozen noon, then the
+    /// analyst compares with `reference.py report` under exact RGB equality.
+    pub(super) fn retain_control(
+        app: &mut App,
+        output: &Path,
+        install: &str,
+        map: &str,
+        expansion: bool,
+    ) {
+        let (sky_script, day_fraction, game_time, vision) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let Some(host) = session.host() else {
+                let receipt = serde_json::json!({
+                    "install": install, "map": map, "expansion": expansion,
+                    "refusal": "no live campaign host at the control checkpoint",
+                    "scope": "sky/sight parity harness; unchanged checkpoint; no pixel-parity claim",
+                });
+                std::fs::write(
+                    output.join("sky-sight-parity.json"),
+                    serde_json::to_vec_pretty(&receipt).unwrap(),
+                )
+                .unwrap();
+                return;
+            };
+            let objects = host.objects();
+            let sky_script = match objects.environment().map(|state| state.sky_model.clone()) {
+                None => "unset".to_owned(),
+                Some(None) => "never-executed".to_owned(),
+                Some(Some(None)) => "null".to_owned(),
+                Some(Some(Some(path))) => format!("executed:{path}"),
+            };
+            let day_fraction = objects.day_fraction();
+            let game_time = objects.timer_game_time();
+            let readiness = objects.vision_readiness().err();
+            let revision = objects.vision_revision();
+            let occlusion_applied = objects.vision_occlusion_applied();
+            let stats = objects.vision_sample_stats().map(|stats| {
+                serde_json::json!({
+                    "cell_visits": stats.cell_visits,
+                    "emitted_sources": stats.emitted_sources,
+                    "candidates_scanned": stats.candidates_scanned,
+                })
+            });
+            let bounds = objects.vision_world_bounds();
+            let viewer = objects.local_player_settings().map(|local| {
+                let settings = objects.startup_settings();
+                (local.identity, settings.map(|s| (s.fog_enabled, s.fog_mask_enabled)))
+            });
+            let mut counts = serde_json::json!({
+                "visible": 0, "fogged": 0, "masked": 0, "outside": 0, "refused": 0, "units": 0,
+            });
+            if let Some((viewer, switches)) = viewer
+                && let Some((fog, mask)) = switches
+            {
+                for (_, unit) in objects.executed_units() {
+                    counts["units"] = (counts["units"].as_u64().unwrap_or(0) + 1).into();
+                    let Some(position) = unit.position else {
+                        continue;
+                    };
+                    match objects.vision_presented(viewer, position, fog, mask) {
+                        Ok(Some(state)) => {
+                            let key = format!("{state:?}").to_lowercase();
+                            if counts.get(&key).is_some() {
+                                counts[&key] = (counts[&key].as_u64().unwrap_or(0) + 1).into();
+                            }
+                        }
+                        Ok(None) => {
+                            counts["outside"] =
+                                (counts["outside"].as_u64().unwrap_or(0) + 1).into();
+                        }
+                        Err(_) => {
+                            counts["refused"] =
+                                (counts["refused"].as_u64().unwrap_or(0) + 1).into();
+                        }
+                    }
+                }
+            }
+            let destructables = objects.destructables_with_handles().count();
+            let vision = serde_json::json!({
+                "readiness": readiness,
+                "revision": revision,
+                "occlusion_applied": occlusion_applied,
+                "sample_stats": stats,
+                "world_bounds": bounds,
+                "presented_counts": counts,
+                "destructable_handles": destructables,
+                "note": "terrain/tree occlusion is not applied by the shared-vision sampler; minimap renders circular sight",
+            });
+            (sky_script, day_fraction, game_time, vision)
+        };
+        let cameras: Vec<String> = app
+            .world_mut()
+            .query_filtered::<
+                (&Transform, &Projection, &Camera),
+                With<peacecraft3::campaign_camera::CampaignSceneCamera>,
+            >()
+            .iter(app.world())
+            .map(|(transform, projection, camera)| {
+                format!("{transform:?} {projection:?} {camera:?}")
+            })
+            .collect();
+        let minimap = app.world().resource::<crate::campaign_minimap::CampaignMinimap>();
+        let minimap_state = serde_json::json!({
+            "member": minimap.member,
+            "shown": minimap.shown,
+            "last_error": minimap.last_error,
+        });
+        let ground = app.world().resource::<peacecraft3::map_ground::GroundPublication>();
+        let ground_state = serde_json::json!({
+            "last_error": ground.last_error.as_ref().map(|error| format!("{error:?}")),
+            "shadow_error": ground.shadow_error,
+        });
+        let actors = app.world().resource::<crate::campaign_actors::UnitActors>();
+        let actor_error = actors.last_error.clone();
+        let rendered_destructables = actors.rendered_destructables();
+        let sky_cameras = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::campaign_actors::sky::SkyCamera>>()
+            .iter(app.world())
+            .count();
+        let particle_meshes = app
+            .world_mut()
+            .query_filtered::<
+                Entity,
+                With<bevy::prelude::MeshMaterial3d<crate::mainmenu_scene::ParticleMaterial>>,
+            >()
+            .iter(app.world())
+            .count();
+        // Self-comparison exercises the exact-compare path on real
+        // asset-derived bytes: identical inputs must report zero changes.
+        let self_check = match std::fs::read(output.join("campaign-control.png")) {
+            Ok(bytes) => match compare_png_bytes(&bytes, &bytes, "campaign-control self") {
+                Ok(comparison) => serde_json::json!({
+                    "changed": comparison.changed, "total": comparison.total,
+                    "bounds": comparison.bounds, "first": comparison.first,
+                }),
+                Err(error) => serde_json::json!({ "refusal": error }),
+            },
+            Err(error) => serde_json::json!({ "refusal": format!("control frame unread: {error}") }),
+        };
+        let receipt = serde_json::json!({
+            "install": install, "map": map, "expansion": expansion,
+            "sky_script": sky_script,
+            "day_fraction": day_fraction,
+            "game_time": game_time,
+            "scene_cameras": cameras,
+            "vision": vision,
+            "minimap": minimap_state,
+            "ground": ground_state,
+            "actors": {
+                "last_error": actor_error,
+                "rendered_destructables": rendered_destructables,
+                "particle_mesh_entities": particle_meshes,
+                "sky_cameras": sky_cameras,
+                "note": "doodad-particle ownership refusals surface in last_error as doodad {id} diagnostics; deferred publication boundary sits between actor projection and doodad advance_particles",
+            },
+            "frames_self_check": self_check,
+            "arms": {
+                "source_lit": "current dome with its own LITE directional sun sampled at the canonical day fraction",
+                "forced_unlit": "original-client control only: same model bytes with the material unlit bit set",
+                "null_sky": "SetSkyModel(null): no dome; sky patches black while the sampled terrain patch is unchanged",
+            },
+            "original_runner": {
+                "paired_skip_at": "PCX_PAIRED_SKIP_AT",
+                "paired_capture_at": "PCX_PAIRED_CAPTURE_AT",
+                "report": "tools/original-game-reference/reference.py report",
+                "rule": "exact RGB equality, no tolerance, no rescaling, no exclusions",
+            },
+            "scope": "Controlled sky illumination plus terrain/tree and doodad-particle render harness at the unchanged campaign-control checkpoint; records recreation probes for comparison against the original capture. No pixel-parity claim; the strict render gate still refuses the known sky/sight gaps.",
+        });
+        std::fs::write(
+            output.join("sky-sight-parity.json"),
+            serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+/// Original-client pixel comparison harness for ally, water and menu frames.
+///
+/// Scope is ally filter/minimap colors, water/bridge trajectory elevation and
+/// menu frames only; sky illumination, terrain/tree sight occlusion and
+/// doodad-particle ownership stay with `sky_sight_parity`. All expected pixels
+/// come from caller-supplied original captures under `PCX_ORIGINAL_CAPTURE_DIR`
+/// (a local, untracked directory of `<label>.png` files produced by
+/// `tools/original-game-reference/reference.py capture`); no reference pixels
+/// are hard-coded here. Tolerances come from `PCX_PARITY_TOLERANCE` (u8 per
+/// channel, default exact) and `PCX_PARITY_MAX_FRACTION` (f32, default exact).
+/// `PCX_BRIDGE_SLK`, `PCX_BRIDGE_PATH_COLUMN` and `PCX_BRIDGE_HEIGHT_COLUMN`
+/// name the caller-supplied doodad-deck table; without them deck admission is
+/// refused, not invented. Receipts stay under the caller-supplied output
+/// directory. A missing original capture is a refusal for that label, not a
+/// parity pass or failure.
+mod ally_water_menu_parity {
+    use super::*;
+
+    pub(super) struct ParityConfig {
+        pub(super) original_dir: std::path::PathBuf,
+        pub(super) comparison: pcx_play::ally_color::PixelComparison,
+    }
+
+    pub(super) fn config_from_env() -> Option<ParityConfig> {
+        let dir = std::env::var_os("PCX_ORIGINAL_CAPTURE_DIR")?;
+        if dir.is_empty() {
+            return None;
+        }
+        let tolerance = std::env::var("PCX_PARITY_TOLERANCE")
+            .ok()
+            .map(|v| {
+                v.parse::<u8>()
+                    .unwrap_or_else(|_| panic!("PCX_PARITY_TOLERANCE must be 0..=255, got {v:?}"))
+            })
+            .unwrap_or(0);
+        let max_fraction = std::env::var("PCX_PARITY_MAX_FRACTION")
+            .ok()
+            .map(|v| {
+                v.parse::<f32>().unwrap_or_else(|_| {
+                    panic!("PCX_PARITY_MAX_FRACTION must be 0.0..=1.0, got {v:?}")
+                })
+            })
+            .unwrap_or(0.0);
+        Some(ParityConfig {
+            original_dir: std::path::PathBuf::from(dir),
+            comparison: pcx_play::ally_color::PixelComparison {
+                tolerance_per_channel: tolerance,
+                max_differing_fraction: max_fraction,
+            },
+        })
+    }
+
+    fn decode_png(bytes: &[u8], label: &str) -> Result<Image, String> {
+        Image::from_buffer(
+            bytes,
+            bevy::image::ImageType::Extension("png"),
+            bevy::image::CompressedImageFormats::NONE,
+            true,
+            bevy::image::ImageSampler::linear(),
+            bevy::asset::RenderAssetUsages::default(),
+        )
+        .map_err(|error| format!("{label}: png decode refused: {error:?}"))
+    }
+
+    fn compare_buffers(
+        recreation: &[u8],
+        original: &[u8],
+        config: &ParityConfig,
+        label: &str,
+    ) -> Result<serde_json::Value, String> {
+        let recreation = decode_png(recreation, &format!("{label}: recreation"))?;
+        let original = decode_png(original, &format!("{label}: original"))?;
+        let size = recreation.texture_descriptor.size;
+        let other = original.texture_descriptor.size;
+        if size.width != other.width || size.height != other.height {
+            return Err(format!(
+                "{label}: extent differs, no rescaling: recreation {}x{} vs original {}x{}",
+                size.width, size.height, other.width, other.height,
+            ));
+        }
+        let Some(a) = recreation.data.as_deref() else {
+            return Err(format!("{label}: recreation pixels unavailable"));
+        };
+        let Some(b) = original.data.as_deref() else {
+            return Err(format!("{label}: original pixels unavailable"));
+        };
+        let pixels = size.width as usize * size.height as usize;
+        let fraction = config.comparison.differing_fraction(a, b, pixels)?;
+        let passes = config
+            .comparison
+            .passes(a, b, pixels)
+            .unwrap_or(false);
+        Ok(serde_json::json!({
+            "label": label,
+            "extent": [size.width, size.height],
+            "differing_fraction": fraction,
+            "tolerance_per_channel": config.comparison.tolerance_per_channel,
+            "max_differing_fraction": config.comparison.max_differing_fraction,
+            "passes": passes,
+        }))
+    }
+
+    /// Compare one recreation capture against its original peer. Missing files
+    /// are recorded as refusals; extents must match exactly.
+    pub(super) fn compare_capture(
+        output: &Path,
+        config: &ParityConfig,
+        label: &str,
+    ) -> serde_json::Value {
+        let recreation_path = output.join(label);
+        let original_path = config.original_dir.join(label);
+        let recreation = std::fs::read(&recreation_path);
+        let original = std::fs::read(&original_path);
+        match (recreation, original) {
+            (Ok(a), Ok(b)) => match compare_buffers(&a, &b, config, label) {
+                Ok(entry) => entry,
+                Err(error) => serde_json::json!({"label": label, "refusal": error}),
+            },
+            (Err(error), _) => serde_json::json!({
+                "label": label,
+                "refusal": format!("recreation capture unread: {error}"),
+            }),
+            (_, Err(error)) => serde_json::json!({
+                "label": label,
+                "refusal": format!("no original capture; run the original client first: {error}"),
+                "original_expected_at": original_path.display().to_string(),
+            }),
+        }
+    }
+
+    /// Retain the recreation side of the ally/water/menu comparison at the
+    /// post-restart checkpoint. Wires `PixelComparison`, `BridgeDeckTable`,
+    /// `trajectory_bridge_crossings`, `BankPitch` and
+    /// `Progress::{mark_complete, next_incomplete}` into the same offscreen
+    /// captures the harness already retains. Never asserts parity: per-label
+    /// `passes` values are recorded for the analyst's `reference.py report`
+    /// run, and the strict render gate stays red on the known sky/sight gaps.
+    pub(super) fn retain(
+        app: &mut App,
+        output: &Path,
+        install: &str,
+        map: &str,
+        expansion: bool,
+    ) {
+        let Some(config) = config_from_env() else {
+            std::fs::write(
+                output.join("ally-water-menu-parity.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "install": install, "map": map, "expansion": expansion,
+                    "refusal": "PCX_ORIGINAL_CAPTURE_DIR is unset; no original captures to compare",
+                    "scope": "ally/water/menu pixel comparison harness; caller must supply local original captures",
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            return;
+        };
+        // Ally and menu frames: every label is a file the harness already
+        // captured offscreen; each original peer is caller-supplied.
+        let mut frames = Vec::new();
+        for label in [
+            "main-menu.png",
+            "chapter-selection.png",
+            "campaign-entry.png",
+            "campaign-control.png",
+            "selected-unit.png",
+            "minimap-no-fog-diagnostic.png",
+            "ally-colors-individual.png",
+            "ally-colors-filtered.png",
+            "ally-colors-restored.png",
+            "escape-main.png",
+            "escape-end.png",
+            "escape-confirm-exit.png",
+            "campaign-exit.png",
+            "campaign-restarted.png",
+        ] {
+            frames.push(compare_capture(output, &config, label));
+        }
+        // Water and bridge decks: admit the caller-supplied doodad table when
+        // the runner names it; otherwise record the refusal and keep the prior
+        // surface-only behavior (`WaterPublication::decks == None`).
+        let bridge = admit_bridge_decks(app);
+        // Trajectory samples between two accepted live positions. The deck
+        // lookup stays `None` until a bridge-footprint index is admitted, so
+        // motion keeps the sampled surface and gaps stay observable.
+        let trajectory = sample_bridge_trajectory(app);
+        // Orientation: `BankPitch::level()` must reproduce the existing
+        // yaw-only pose exactly; a caller-derived ground normal supplies the
+        // only tilt. Normals come from admitted terrain, never constants.
+        let orientation = sample_bank_pitch(app);
+        // Completion: authored order from the selected index; `mark_complete`
+        // runs only for an executed victory observed through the score
+        // handoff, never invented. Otherwise `next_incomplete` stays at the
+        // first authored mission.
+        let completion = sample_completion(app);
+        std::fs::write(
+            output.join("ally-water-menu-parity.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "install": install, "map": map, "expansion": expansion,
+                "tolerance_per_channel": config.comparison.tolerance_per_channel,
+                "max_differing_fraction": config.comparison.max_differing_fraction,
+                "frames": frames,
+                "bridge": bridge,
+                "trajectory": trajectory,
+                "orientation": orientation,
+                "completion": completion,
+                "original_dir": config.original_dir.display().to_string(),
+                "scope": "ally/water/menu pixel comparison harness; sky/sight gaps stay with sky_sight_parity",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn admit_bridge_decks(app: &mut App) -> serde_json::Value {
+        let (member, path_column, height_column) = match (
+            std::env::var("PCX_BRIDGE_SLK").ok(),
+            std::env::var("PCX_BRIDGE_PATH_COLUMN").ok(),
+            std::env::var("PCX_BRIDGE_HEIGHT_COLUMN").ok(),
+        ) {
+            (Some(a), Some(b), Some(c)) if !a.is_empty() && !b.is_empty() && !c.is_empty() => {
+                (a, b, c)
+            }
+            _ => {
+                return serde_json::json!({
+                    "refusal": "no caller-supplied bridge SLK; set PCX_BRIDGE_SLK, PCX_BRIDGE_PATH_COLUMN and PCX_BRIDGE_HEIGHT_COLUMN",
+                    "decks": None::<()>,
+                });
+            }
+        };
+        let max_entries = std::env::var("PCX_BRIDGE_MAX_ENTRIES")
+            .ok()
+            .map(|v| {
+                v.parse::<usize>()
+                    .unwrap_or_else(|_| panic!("PCX_BRIDGE_MAX_ENTRIES must be a count, got {v:?}"))
+            })
+            .unwrap_or(4096);
+        let bytes = {
+            let world = app.world();
+            let requests = world.resource::<peacecraft3::map_requests::MapRequests>();
+            let sources = world.resource::<peacecraft3::browser_configuration::SelectedMapSources>();
+            let Some(bindings) = requests.bindings.as_ref() else {
+                return serde_json::json!({"refusal": "no admitted map bindings for bridge decks"});
+            };
+            let Some(reader) = sources.for_receipts(&bindings.receipts) else {
+                return serde_json::json!({"refusal": "no source reader for bridge decks"});
+            };
+            match reader.resolve_bounded(&member, 8 << 20) {
+                Ok(asset) => asset.bytes,
+                Err(error) => {
+                    return serde_json::json!({"refusal": format!("bridge SLK unread: {error}")});
+                }
+            }
+        };
+        match peacecraft3::map_ground::BridgeDeckTable::read(
+            &bytes,
+            &member,
+            &path_column,
+            &height_column,
+            max_entries,
+        ) {
+            Ok(table) => {
+                let len = table.len();
+                app.world_mut()
+                    .resource_mut::<peacecraft3::map_ground::WaterPublication>()
+                    .decks = Some(table);
+                serde_json::json!({"member": member, "entries": len, "admitted": true})
+            }
+            Err(error) => serde_json::json!({"member": member, "refusal": error}),
+        }
+    }
+
+    fn sample_bridge_trajectory(app: &mut App) -> serde_json::Value {
+        let (from, to, terrain, edition, source, movement, surface) = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let Some(host) = session.host() else {
+                return serde_json::json!({"refusal": "no live campaign host for trajectory"});
+            };
+            let objects = host.objects();
+            let mut positions = objects
+                .executed_units()
+                .filter_map(|(_, unit)| unit.position)
+                .take(2);
+            let (Some(from), Some(to)) = (positions.next(), positions.next()) else {
+                return serde_json::json!({"refusal": "fewer than two accepted unit positions"});
+            };
+            let context = match session.context() {
+                Some(context) => context.clone(),
+                None => return serde_json::json!({"refusal": "no admitted map context"}),
+            };
+            let rules = match objects.unit_placement_rules() {
+                Some(rules) => rules.clone(),
+                None => return serde_json::json!({"refusal": "no admitted terrain encoding"}),
+            };
+            let movement = match objects.executed_units().find_map(|(_, unit)| {
+                unit.movement().ok().map(|_| unit.movement())
+            }) {
+                Some(Ok(movement)) => movement,
+                _ => return serde_json::json!({"refusal": "no admitted movement class"}),
+            };
+            let reader = match objects
+                .startup_settings()
+                .and_then(|_| session.host())
+            {
+                Some(_) => (),
+                None => return serde_json::json!({"refusal": "no live host reader"}),
+            };
+            let _ = reader;
+            let mapping = {
+                let [tile, bias, factor] = rules.terrain_encoding();
+                match pcx_tera::world::Mapping::new(tile, bias, factor) {
+                    Some(mapping) => mapping,
+                    None => return serde_json::json!({"refusal": "invalid admitted terrain encoding"}),
+                }
+            };
+            let offset = {
+                let sources = app
+                    .world()
+                    .resource::<peacecraft3::browser_configuration::SelectedMapSources>();
+                let requests = app
+                    .world()
+                    .resource::<peacecraft3::map_requests::MapRequests>();
+                let (Some(bindings), Some(_)) =
+                    (requests.bindings.as_ref(), requests.admission.shared_context())
+                else {
+                    return serde_json::json!({"refusal": "no admitted bindings for water offset"});
+                };
+                let Some(reader) = sources.for_receipts(&bindings.receipts) else {
+                    return serde_json::json!({"refusal": "no source reader for water offset"});
+                };
+                match reader.resolve_bounded("TerrainArt/Water.slk", 4 << 20) {
+                    Ok(asset) => match pcx_slq::Table::parse(&asset.bytes) {
+                        Ok(table) => match pcx_tera::WaterProfile::open_scaled(
+                            &table,
+                            "TerrainArt/Water.slk",
+                            pcx_tera::WaterSelection::Tileset,
+                            &context.terrain,
+                            tile,
+                        ) {
+                            Ok(profile) => profile.height_offset(),
+                            Err(error) => {
+                                return serde_json::json!({"refusal": format!("water profile: {error}")});
+                            }
+                        },
+                        Err(error) => {
+                            return serde_json::json!({"refusal": format!("water table: {error}")});
+                        }
+                    },
+                    Err(error) => {
+                        return serde_json::json!({"refusal": format!("water SLK unread: {error}")});
+                    }
+                }
+            };
+            (
+                from,
+                to,
+                context.terrain.clone(),
+                context.sources.map.edition.clone(),
+                context.sources.map.source.clone(),
+                movement,
+                crate::campaign_actors::WaterSurface {
+                    mapping,
+                    offset,
+                },
+            )
+        };
+        let steps = std::env::var("PCX_PARITY_TRAJECTORY_STEPS")
+            .ok()
+            .map(|v| {
+                v.parse::<usize>().unwrap_or_else(|_| {
+                    panic!("PCX_PARITY_TRAJECTORY_STEPS must be 1..=64, got {v:?}")
+                })
+            })
+            .unwrap_or(8);
+        if steps == 0 || steps > 64 {
+            return serde_json::json!({"refusal": "trajectory steps out of bounds"});
+        }
+        // No bridge-footprint index is admitted yet, so no point claims deck
+        // coverage; the gap stays observable instead of lifting motion onto an
+        // invented height.
+        match crate::campaign_actors::trajectory_bridge_crossings(
+            from, to, steps, surface, &terrain, &edition, &source, movement, |_, _| None,
+        ) {
+            Ok(crossings) => {
+                let gaps = crossings
+                    .iter()
+                    .map(|c| c.deck_gap())
+                    .collect::<Vec<_>>();
+                let rendered = crossings
+                    .iter()
+                    .map(|c| c.rendered_height())
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "from": from, "to": to, "steps": steps,
+                    "movement": format!("{movement:?}"),
+                    "deck_cover": gaps.iter().filter(|g| g.is_some()).count(),
+                    "gaps": gaps, "rendered": rendered,
+                })
+            }
+            Err(error) => serde_json::json!({"refusal": error}),
+        }
+    }
+
+    fn sample_bank_pitch(app: &mut App) -> serde_json::Value {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let Some(host) = session.host() else {
+            return serde_json::json!({"refusal": "no live campaign host for orientation"});
+        };
+        let context = match session.context() {
+            Some(context) => context.clone(),
+            None => return serde_json::json!({"refusal": "no admitted map context"}),
+        };
+        let Some((_, unit)) = host
+            .objects()
+            .executed_units()
+            .find(|(_, unit)| unit.position.is_some())
+        else {
+            return serde_json::json!({"refusal": "no accepted unit position for orientation"});
+        };
+        let unit = unit.clone();
+        let [x, y] = unit.position.unwrap();
+        // Central differences on admitted terrain; the epsilon is a harness
+        // sampling policy, not a native orientation constant.
+        let eps = 1.0_f32;
+        let h = |x: f32, y: f32| pcx_tera::world::sample_world_z(&context.terrain, x, y);
+        let (hx0, hx1, hy0, hy1) = (h(x - eps, y), h(x + eps, y), h(x, y - eps), h(x, y + eps));
+        let normal = match (hx0, hx1, hy0, hy1) {
+            (Some(a), Some(b), Some(c), Some(d)) => {
+                let nx = a - b;
+                let ny = c - d;
+                [nx / (2.0 * eps), ny / (2.0 * eps), 1.0]
+            }
+            _ => return serde_json::json!({"refusal": "orientation point outside admitted terrain"}),
+        };
+        let derived = match crate::campaign_actors::BankPitch::from_ground_normal(normal) {
+            Ok(orientation) => orientation,
+            Err(error) => return serde_json::json!({"refusal": error}),
+        };
+        let level = crate::campaign_actors::BankPitch::level();
+        let face = unit.face;
+        let (level_rotation, derived_rotation) =
+            match (level.rotation(face), derived.rotation(face)) {
+                (Ok(a), Ok(b)) => (a, b),
+                (Err(error), _) | (_, Err(error)) => {
+                    return serde_json::json!({"refusal": error});
+                }
+            };
+        // `level()` must reproduce the yaw-only pose exactly; only a derived
+        // normal may tilt the actor.
+        let oriented = match crate::campaign_actors::transform_for_oriented(
+            &unit,
+            &context.terrain,
+            1.0,
+            0.0,
+            None,
+            level,
+        ) {
+            Ok(transform) => transform,
+            Err(error) => return serde_json::json!({"refusal": error}),
+        };
+        let tilted = match crate::campaign_actors::transform_for_oriented(
+            &unit,
+            &context.terrain,
+            1.0,
+            0.0,
+            None,
+            derived,
+        ) {
+            Ok(transform) => transform,
+            Err(error) => return serde_json::json!({"refusal": error}),
+        };
+        serde_json::json!({
+            "face_degrees": face,
+            "ground_normal": normal,
+            "level": {"pitch": level.pitch, "bank": level.bank},
+            "derived": {"pitch": derived.pitch, "bank": derived.bank},
+            "level_rotation": level_rotation.to_array(),
+            "derived_rotation": derived_rotation.to_array(),
+            "positions_equal": oriented.translation == tilted.translation,
+            "rotations_equal": level_rotation.to_array() == derived_rotation.to_array(),
+        })
+    }
+
+    fn sample_completion(app: &mut App) -> serde_json::Value {
+        let order = app
+            .world()
+            .resource::<crate::native_campaign::Chapters>()
+            .mission_order();
+        let mut progress = pcx_play::campaign_progress::Progress::default();
+        let before = progress.next_incomplete(&order);
+        let complete_before = progress.order_complete(&order);
+        // Only an executed victory observed through the score handoff marks a
+        // mission; anything else leaves completion empty.
+        let mut marked: Option<(i32, i32)> = None;
+        let won = app
+            .world()
+            .resource::<Option<peacecraft3::campaign_runtime::CampaignExitResult>>()
+            .as_ref()
+            .and_then(|exit| exit.victory_map().map(str::to_owned));
+        // Resource is `Res<...>` when installed; fall back to no victory when
+        // the harness checkpoint has none.
+        let won = won.or_else(|| {
+            app.world()
+                .get_resource::<peacecraft3::campaign_runtime::CampaignExitResult>()
+                .and_then(|exit| exit.victory_map().map(str::to_owned))
+        });
+        if let Some(won) = won {
+            let chapters = app.world().resource::<crate::native_campaign::Chapters>();
+            for campaign in &chapters.campaigns {
+                if let Some(row) = campaign.missions.iter().position(|m| m.map == won) {
+                    let key = (
+                        i32::try_from(campaign.source_index).unwrap_or(i32::MAX),
+                        i32::try_from(row).unwrap_or(i32::MAX),
+                    );
+                    if progress.mark_complete(key.0, key.1).is_ok() {
+                        marked = Some(key);
+                    }
+                    break;
+                }
+            }
+        }
+        let after = progress.next_incomplete(&order);
+        serde_json::json!({
+            "authored_missions": order.len(),
+            "next_before": before,
+            "order_complete_before": complete_before,
+            "marked_complete": marked,
+            "next_after": after,
+            "order_complete_after": progress.order_complete(&order),
+        })
+    }
+}
+
 /// Virtual time per fixture update.
 const STEP_SECONDS: f64 = 1.0 / 64.0;
 
@@ -1196,6 +2021,8 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         "subsystem_errors": errors,
         "scope": "Production app offscreen Vulkan; mounted widget activation and synthetic keyboard messages; no physical input, audio playback or original paired-frame parity claim"
     })).unwrap()).unwrap();
+    // Controlled sky/sight parity harness at the unchanged checkpoint.
+    sky_sight_parity::retain_control(app, &output, &install, &map, expansion);
     // Retain the unchanged campaign above; the following mutation is a separate rendering diagnostic.
     let before = {
         use pcx_script::{Host, Value};
@@ -1435,6 +2262,9 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         "restart_widget_replaced_session": true,
         "scope": "Source menu key and HUD Menu, Return, End Game, exit cancellation, Restart Mission and Quit Mission; subsequent chapter launch. Native quit/score timing parity remains unqualified."
     })).unwrap()).unwrap();
+    // Ally/water/menu original-client comparison: recreation captures above
+    // against caller-supplied originals; records parity without asserting it.
+    ally_water_menu_parity::retain(&mut app, &output, &install, &map, expansion);
     assert!(
         errors.iter().all(|(_, error)| error.is_none()),
         "campaign rendering: {errors:?}"
