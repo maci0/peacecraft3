@@ -96,6 +96,11 @@ impl ObjectHost {
         Ok(self)
     }
 
+    /// Admitted full-map extent for world snapshots; `None` is unadmitted.
+    pub fn world_bounds_snapshot(&self) -> Option<[f32; 4]> {
+        self.world_bounds
+    }
+
     /// Bounds in executed min-x, min-y, max-x, max-y order.
     pub fn rectangle_bounds(&self, id: HandleId) -> Result<[f32; 4], Error> {
         match self.inner.entry(id)? {
