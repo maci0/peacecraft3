@@ -123,6 +123,14 @@ impl ObjectHost {
             if policy.unclassified_rawcodes.contains(&rawcode) {
                 return Err("candidate is an unclassified special object");
             }
+            // Score-dependent highest band: the admitted ability probe and its
+            // counter (`highest_counter_offset`/`highest_counter_limit`) select
+            // a priority above the hero band. The counter lifecycle is not
+            // modeled, so a candidate carrying that rawcode refuses instead of
+            // taking a silently under-scored hero/nearest result.
+            if rawcode == policy.highest_ability_rawcode {
+                return Err("candidate needs the unmodelled highest ability/counter band");
+            }
             let owner = self
                 .player_settings(record.owner)
                 .map_err(|_| "candidate owner is not admitted")?

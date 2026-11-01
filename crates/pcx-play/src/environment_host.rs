@@ -56,6 +56,17 @@ impl ObjectHost {
         self.scene.as_ref()
     }
 
+    /// Current executed terrain-fog parameters for the 3D renderer.
+    /// `None` means no script override: the authored map settings apply.
+    pub fn terrain_fog_3d(&self) -> Option<TerrainFog> {
+        self.scene.as_ref()?.terrain_fog
+    }
+
+    /// Current executed sky-model override for the 3D renderer.
+    pub fn sky_model_3d(&self) -> Option<Option<String>> {
+        self.scene.as_ref().map(|scene| scene.sky_model.clone())
+    }
+
     pub(super) fn environment_native(
         &mut self,
         name: &str,

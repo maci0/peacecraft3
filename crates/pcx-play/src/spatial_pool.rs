@@ -503,7 +503,8 @@ enum Tracked {
     Mover(CellRect),
     /// Row runs covering the entry's cells; empty while the object has no pathing texture.
     Texture(Vec<CellRect>),
-    Region,
+    /// Region rectangles in registration order, as converted grid cells.
+    Region(Vec<CellRect>),
 }
 
 pub(crate) type TexturePixels = Vec<(u32, u8)>;
@@ -1001,18 +1002,88 @@ impl PoolOwner {
             self.geometry.size(),
         );
         let class = self.rules.region_class;
-        let result = rect.and_then(|rect| {
-            if self.tracked.contains_key(&identity) {
-                self.live.add_rectangle(identity, rect, class).map(drop)
-            } else {
+        let result = rect.and_then(|rect| match self.tracked.get(&identity) {
+            Some(Tracked::Region(_)) => self
+                .live
+                .add_rectangle(identity, rect, class)
+                .map(drop)
+                .map(|()| rect),
+            Some(_) => Err(ChainError::DuplicateEntry(identity)),
+            None => {
                 let (flags, state) = self.rules.entries.region_initial_state();
-                self.tracked.insert(identity, Tracked::Region);
                 self.live
                     .register(identity, flags, state, rect, class, false)
                     .map(drop)
+                    .map(|()| rect)
             }
         });
-        self.note(identity, "add region rectangle", result);
+        match result {
+            Ok(rect) => match self.tracked.get_mut(&identity) {
+                Some(Tracked::Region(rects)) => rects.push(rect),
+                _ => {
+                    self.tracked.insert(identity, Tracked::Region(vec![rect]));
+                }
+            },
+            Err(error) => self.note(identity, "add region rectangle", Err(error)),
+        }
+    }
+
+    /// A region was removed. Removal links cover every retained rectangle,
+    /// then the entry state is dropped; later cleanups compact the chains.
+    /// A region the pool never retained (added before tracking began, or a
+    /// failed addition) leaves no links behind.
+    pub(crate) fn region_removed(&mut self, region: HandleId) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let identity = region.token();
+        let Some(Tracked::Region(rects)) = self.tracked.remove(&identity) else {
+            return;
+        };
+        let mut result = Ok(());
+        for rect in &rects {
+            result = result.and_then(|()| self.live.remove_rectangle(identity, *rect).map(drop));
+        }
+        result = result.and_then(|()| self.live.drop_entry(identity).map(drop));
+        self.note(identity, "remove region", result);
+    }
+
+    /// Rectangles cleared from a region keep their stored bounds: removal
+    /// links cover the cleared cells and the retained list drops them. A
+    /// rectangle the pool does not retain inserts no links.
+    pub(crate) fn region_rect_cleared(&mut self, region: HandleId, bounds: [f32; 4]) {
+        if self.refusal.is_some() {
+            return;
+        }
+        let identity = region.token();
+        let rect = region_cells(
+            bounds,
+            self.geometry.origin,
+            self.geometry.cell_size,
+            self.geometry.size(),
+        );
+        let rect = match rect {
+            Ok(rect) => rect,
+            Err(error) => {
+                self.note(identity, "clear region rectangle", Err(error));
+                return;
+            }
+        };
+        let retained = matches!(
+            self.tracked.get(&identity),
+            Some(Tracked::Region(rects)) if rects.contains(&rect)
+        );
+        if !retained {
+            return;
+        }
+        let result = self.live.remove_rectangle(identity, rect).map(drop);
+        if result.is_ok()
+            && let Some(Tracked::Region(rects)) = self.tracked.get_mut(&identity)
+            && let Some(position) = rects.iter().position(|&held| held == rect)
+        {
+            rects.remove(position);
+        }
+        self.note(identity, "clear region rectangle", result);
     }
 
     /// Apply the commanded movement contribution of a moving unit. Only a change in
