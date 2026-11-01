@@ -309,7 +309,7 @@ fn the_signals_wait_for_this_loads_revision_and_session() {
         ready: true,
         failed: false,
     };
-    let none = signals(&loading, &requests, &supply, &startup, None, ready);
+    let none = signals(&loading, &requests, &supply, &startup, None, ready, false);
     assert_eq!(none, Signals::default());
     // A session that was already running at the launch is not this load's.
     let old = Arc::new(());
@@ -321,8 +321,165 @@ fn the_signals_wait_for_this_loads_revision_and_session() {
         &startup,
         Some(Arc::downgrade(&old)),
         ready,
+        false,
     );
     assert!(!same.published && !same.ready);
+}
+
+#[test]
+fn an_admitted_live_session_counts_as_published_for_its_bindings() {
+    use crate::map_binding::{AssetReceipt, BindingLimits, BindingReceipts, OverlayLimits};
+    use crate::map_requests::{BoundCatalog, BoundScript, MapBindings};
+    use pcx_assets::{AssetPath, LayerKind, Provenance, SourceInfo};
+    use pcx_play::map_admission::MapAdmissionBudget;
+    use pcx_play::map_scripts_import::MapScriptBudget;
+    use pcx_play::scripts::AssetIdentity;
+
+    struct UnusedCatalog;
+    impl pcx_sim::world::ObjectCatalog for UnusedCatalog {
+        fn resolve(
+            &self,
+            _: pcx_objects::Fourcc,
+        ) -> Result<pcx_sim::world::Definition, pcx_sim::world::ResolutionProblem> {
+            Err(pcx_sim::world::ResolutionProblem::InvalidRawcode)
+        }
+    }
+
+    // A re-begun screen that snapshots its already-admitted session (the
+    // continuation path) can never observe a post-begin replacement: the
+    // session it waits for is already running for these bindings.
+    const REVISION: u64 = 7;
+    let identity = AssetIdentity {
+        edition: "roc".into(),
+        version: "1.29.2".into(),
+        source: "fixture-archive".into(),
+    };
+    let receipt = |member: &str, hash: u64| AssetReceipt {
+        path: AssetPath::new(member).unwrap(),
+        provenance: Provenance {
+            source: SourceInfo {
+                id: "fixture-archive".into(),
+                kind: LayerKind::Mpq,
+                origin: "fixture-archive".into(),
+                version: Some("1.29.2".into()),
+            },
+            archive_priority: Some(0),
+            locator: member.into(),
+            byte_length: 1,
+        },
+        hash,
+    };
+    let budget = MapAdmissionBudget {
+        scripts: MapScriptBudget {
+            max_script_bytes: 1,
+            max_wts_bytes: 1,
+            max_archive_bytes: 1,
+            max_archive_table_bytes: 1,
+            max_raw_packed_bytes: 1,
+            max_decoded_bytes: 1,
+            max_prelude_bytes: 1,
+            max_aggregate_input_bytes: 1,
+        },
+        terrain_bytes: 1,
+        info_bytes: 1,
+        pathing_bytes: 1,
+        units_bytes: 1,
+        aggregate_input_bytes: 1,
+        required_fields: 1,
+    };
+    let requests = MapRequests {
+        bindings: Some(MapBindings {
+            map_identity: identity.clone(),
+            map_label: "fixture".into(),
+            receipts: Arc::new(BindingReceipts {
+                map: receipt("maps/fixture.w3m", 1),
+                common: receipt("scripts/common.j", 2),
+                blizzard: receipt("scripts/blizzard.j", 3),
+                catalog: Vec::new(),
+                missing_catalog: Vec::new(),
+                units: None,
+                items: None,
+            }),
+            resolver: None,
+            catalog_map_bytes: Arc::<[u8]>::from([]),
+            revision: REVISION,
+            common: BoundScript {
+                identity: identity.clone(),
+                label: "common".into(),
+                bytes: Vec::new(),
+            },
+            blizzard: BoundScript {
+                identity: identity.clone(),
+                label: "blizzard".into(),
+                bytes: Vec::new(),
+            },
+            catalog_identity: identity.clone(),
+            catalog_label: "fixture".into(),
+            catalog_sources: Vec::new(),
+            required_catalog_tables: Vec::new(),
+            catalog: BoundCatalog(Arc::new(UnusedCatalog)),
+            required_fields: Vec::new(),
+            trigger_catalog: None,
+            budget,
+            max_map_file_bytes: 1,
+            limits: BindingLimits {
+                reader: pcx_objects::editor::EditorReadLimits {
+                    max_listed_paths: 1,
+                    max_asset_bytes: 1,
+                    max_aggregate_input_bytes: 1,
+                },
+                overlay: OverlayLimits {
+                    unit_bytes: 1,
+                    item_bytes: 1,
+                    aggregate_bytes: 1,
+                },
+                admission: budget,
+                max_map_file_bytes: 1,
+                max_resolver_input_bytes: 1,
+            },
+        }),
+        last_outcome: Some(MapOutcome {
+            label: "fixture".into(),
+            identity: None,
+            binding_revision: Some(REVISION),
+            result: Ok(()),
+        }),
+        ..Default::default()
+    };
+    let supply = CampaignHostSupply {
+        revision: REVISION,
+        inputs: None,
+    };
+    let startup = CampaignStartup::default();
+    let ready = ViewState {
+        ready: true,
+        failed: false,
+    };
+    let live = Arc::new(());
+    let mut loading = CampaignLoading::default();
+    loading.begin(request(), &requests, Some(Arc::downgrade(&live)), true);
+    // Renewal alone still waits: the captured live witness is not a restart.
+    let stalled = signals(
+        &loading,
+        &requests,
+        &supply,
+        &startup,
+        Some(Arc::downgrade(&live)),
+        ready,
+        false,
+    );
+    assert!(!stalled.published && !stalled.ready);
+    // The admitted live session for these bindings is already running.
+    let current = signals(
+        &loading,
+        &requests,
+        &supply,
+        &startup,
+        Some(Arc::downgrade(&live)),
+        ready,
+        true,
+    );
+    assert_eq!(current, LOADED);
 }
 
 fn app() -> App {

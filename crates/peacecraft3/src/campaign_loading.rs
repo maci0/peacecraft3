@@ -539,6 +539,7 @@ fn signals(
     startup: &CampaignStartup,
     witness: Option<Weak<()>>,
     view: ViewState,
+    session_current: bool,
 ) -> Signals {
     let revision = requests.bindings.as_ref().map(|b| b.revision);
     let admitted = revision.is_some_and(|r| Some(r) != loading.revision || loading.begun_admitted)
@@ -547,13 +548,19 @@ fn signals(
             .as_ref()
             .is_some_and(|o| o.result.is_ok() && o.binding_revision == revision);
     let prepared = admitted && revision == Some(supply.revision);
+    // A screen begun after its session was already admitted (the continuation
+    // and re-begin path) can never observe a post-begin replacement: the
+    // session it waits for is already running. The admitted live session for
+    // these bindings counts as published; a stale screen still waits for the
+    // renewal its revision implies.
     let published = prepared
-        && witness.as_ref().is_some_and(|w| {
-            loading
-                .session
-                .as_ref()
-                .is_none_or(|old| !Weak::ptr_eq(old, w))
-        });
+        && (session_current
+            || witness.as_ref().is_some_and(|w| {
+                loading
+                    .session
+                    .as_ref()
+                    .is_none_or(|old| !Weak::ptr_eq(old, w))
+            }));
     let startup_failed = admitted
         && match &startup.last_error {
             Some(StartupError::Preparation { binding, .. }) => Some(*binding) == revision,
@@ -607,6 +614,19 @@ fn advance_loading(mut loading: ResMut<CampaignLoading>, state: LoadState, press
         ground.as_ref().and_then(|g| g.context.as_ref()),
         session.context(),
     );
+    // A screen begun after its session was already admitted (the continuation
+    // and re-begin path) can never observe a post-begin replacement: the
+    // session it waits for is already running. The admitted live session for
+    // the screen's own bindings counts as published; a stale screen still
+    // waits for the renewal its revision implies.
+    let session_current = requests
+        .bindings
+        .as_ref()
+        .is_some_and(|bindings| Some(bindings.revision) == loading.revision())
+        && session
+            .context()
+            .zip(requests.admission.shared_context())
+            .is_some_and(|(live, admitted)| Arc::ptr_eq(live, &admitted));
     let observed = signals(
         &loading,
         &requests,
@@ -614,6 +634,7 @@ fn advance_loading(mut loading: ResMut<CampaignLoading>, state: LoadState, press
         &startup,
         session.session_witness(),
         view,
+        session_current,
     );
     // Only a press made while the loaded screen was already waiting counts.
     let waiting = loading.phase() == Phase::AwaitKey;
