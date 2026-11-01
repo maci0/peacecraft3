@@ -1419,7 +1419,7 @@ fn source_menu_vertex_lighting_precedes_texture_modulation() {
     app.world_mut()
         .resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
             let mut materials = world.resource_mut::<Assets<MenuMaterial>>();
-            lighting.bind(&bound, &materials);
+            lighting.bind(&bound, &materials, &[false]);
             lighting
                 .apply(
                     &model,
