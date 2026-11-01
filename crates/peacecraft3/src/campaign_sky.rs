@@ -125,7 +125,11 @@ fn own_lighting(
 
 fn sun(sky: &SkyState, fraction: Option<f32>) -> Result<pcx_play::day_night::Sun, String> {
     let lighting = sky.lighting.as_ref().map_err(Clone::clone)?;
-    lighting.models()[0].sun(fraction.ok_or("sky day fraction is unavailable")?)
+    let model = lighting
+        .models()
+        .first()
+        .ok_or_else(|| format!("sky {}: no admitted sky light model", sky.script))?;
+    model.sun(fraction.ok_or("sky day fraction is unavailable")?)
 }
 
 /// Despawns the dome and its camera. The scene clear colour is restored by the next sync.
