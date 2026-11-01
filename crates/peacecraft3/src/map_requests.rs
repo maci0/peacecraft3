@@ -300,7 +300,6 @@ impl MapRequests {
                     catalog_identity: &bindings.catalog_identity,
                     catalog: &bindings.catalog,
                     required_fields: &bindings.required_fields,
-                trigger_catalog: None,
                 },
                 bindings.budget,
             )

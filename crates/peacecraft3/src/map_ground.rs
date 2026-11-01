@@ -103,9 +103,6 @@ pub fn install(app: &mut App) {
         .insert_resource(NoOcclusionPass);
     register_publisher(app);
     crate::campaign_boundary::install(app);
-    crate::campaign_weather::install(app);
-    crate::campaign_fog::install(app);
-    crate::campaign_preload::install(app);
 }
 
 /// Install ground publication with application budgets that follow map delivery.
