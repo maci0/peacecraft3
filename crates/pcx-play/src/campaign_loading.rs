@@ -173,16 +173,114 @@ pub enum Selection {
     /// A campaign-style screen with title, subtitle and text.
     Campaign(Screen),
     /// The header names neither a number nor a model: the original shows its
-    /// melee panel, which this recreation does not draw.
+    /// melee panel (minimap, map name, game type, player slots).
+    Melee(MeleePanel),
+}
+
+/// One player row of the melee panel, from the header's authored slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeleeSlot {
+    /// Player name, resolved through the map's string table like the campaign
+    /// text, or the literal when it is not a `TRIGSTR_n` key.
+    pub name: String,
+    /// Authored race word, retained raw; the view maps it to its global key.
+    pub race: u32,
+    /// Authored controller word, retained raw.
+    pub controller: u32,
+}
+
+/// Which game-type value the melee panel shows. The original reads the type
+/// from undecoded lobby/setup state, so this mapping is a recreation choice:
+/// a single force over every slot is the shipped melee shape (adrenaline,
+/// IceCrown), while several forces are the shipped scenario shape (Human01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeleeGameType {
     Melee,
+    Scenario,
+}
+
+impl MeleeGameType {
+    /// Global-string key of the value, in `UI\FrameDef\GlobalStrings.fdf`.
+    pub fn global_key(self) -> &'static str {
+        match self {
+            Self::Melee => "MELEE",
+            Self::Scenario => "NON_MELEE",
+        }
+    }
+}
+
+/// What the melee panel shows when the header names neither a number nor a
+/// model: the map name, the game type and one row per authored player slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeleePanel {
+    pub map_name: String,
+    pub game_type: MeleeGameType,
+    pub slots: Vec<MeleeSlot>,
+}
+
+fn resolve_one(
+    field: &'static str,
+    value: &str,
+    strings: Option<&Wts>,
+) -> Result<String, LoadingError> {
+    let Some(id) = value
+        .get(..TRIGSTR_PREFIX.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(TRIGSTR_PREFIX))
+        .and_then(|_| value[TRIGSTR_PREFIX.len()..].parse::<u32>().ok())
+    else {
+        return Ok(value.to_owned());
+    };
+    let key = value.to_owned();
+    let strings = strings.ok_or_else(|| LoadingError::MissingString {
+        field,
+        key: key.clone(),
+    })?;
+    if !strings.contains(id) {
+        return Err(LoadingError::MissingString { field, key });
+    }
+    strings
+        .decode_utf8(id)
+        .map(str::to_owned)
+        .map_err(|_| LoadingError::BadString { field, key })
+}
+
+/// Build the melee panel from the map's own header: its name and every
+/// authored player slot. Names resolve through the map's string table exactly
+/// like the campaign text does.
+pub fn melee_panel(
+    info: &pcx_map::info::MapInfo,
+    strings: Option<&Wts>,
+) -> Result<MeleePanel, LoadingError> {
+    let map_name = resolve_one("map name", &info.name, strings)?;
+    let mut slots = Vec::with_capacity(info.players().len());
+    for player in info.players() {
+        slots.push(MeleeSlot {
+            name: resolve_one("player name", &player.name, strings)?,
+            race: player.race_id(),
+            controller: player.control(),
+        });
+    }
+    let game_type = if info.forces().len() <= 1 {
+        MeleeGameType::Melee
+    } else {
+        MeleeGameType::Scenario
+    };
+    Ok(MeleePanel {
+        map_name,
+        game_type,
+        slots,
+    })
 }
 
 /// A non-negative background number selects a table record; otherwise a custom
 /// model path selects that model at sequence 0 (`0x558f8f` to `0x558fb8`).
+/// With neither, the melee panel is built from the map's own header.
 pub fn select(
-    fields: &LoadingScreenFields<'_>,
+    info: &pcx_map::info::MapInfo,
     table: &ScreenTable,
+    strings: Option<&Wts>,
 ) -> Result<Selection, LoadingError> {
+    let fields = info.loading_screen();
     if let Some(index) = fields.background {
         let record = table.get(index).ok_or(LoadingError::UnknownScreen {
             index,
@@ -203,7 +301,7 @@ pub fn select(
             sequence: 0,
             origin: Origin::Custom,
         }),
-        None => Selection::Melee,
+        None => Selection::Melee(melee_panel(info, strings)?),
     })
 }
 
@@ -221,31 +319,136 @@ pub fn resolve_text(
     fields: &LoadingScreenFields<'_>,
     strings: Option<&Wts>,
 ) -> Result<ScreenText, LoadingError> {
-    let resolve = |field: &'static str, value: &str| -> Result<String, LoadingError> {
-        let Some(id) = value
-            .get(..TRIGSTR_PREFIX.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(TRIGSTR_PREFIX))
-            .and_then(|_| value[TRIGSTR_PREFIX.len()..].parse::<u32>().ok())
-        else {
-            return Ok(value.to_owned());
-        };
-        let key = value.to_owned();
-        let strings = strings.ok_or_else(|| LoadingError::MissingString {
-            field,
-            key: key.clone(),
-        })?;
-        if !strings.contains(id) {
-            return Err(LoadingError::MissingString { field, key });
-        }
-        strings
-            .decode_utf8(id)
-            .map(str::to_owned)
-            .map_err(|_| LoadingError::BadString { field, key })
-    };
     Ok(ScreenText {
-        text: resolve("loading text", fields.text)?,
-        title: resolve("loading title", fields.title.unwrap_or_default())?,
-        subtitle: resolve("loading subtitle", fields.subtitle.unwrap_or_default())?,
+        text: resolve_one("loading text", fields.text, strings)?,
+        title: resolve_one("loading title", fields.title.unwrap_or_default(), strings)?,
+        subtitle: resolve_one(
+            "loading subtitle",
+            fields.subtitle.unwrap_or_default(),
+            strings,
+        )?,
+    })
+}
+
+/// Virtual addresses in the reviewed image of the minimum-display-time
+/// constants the constructor at `0x558c70` computes (`this+0x220`):
+/// `min(300.0, 3.0 + 0.1 * (len(text) + len(title) + len(subtitle)))`.
+const MIN_CAP_VA: u32 = 0xe7_8344;
+const MIN_BASE_VA: u32 = 0xe7_8340;
+const MIN_PER_CHAR_VA: u32 = 0xe8_dfe4;
+
+/// Session-provider tags `Warcraft III.exe` compares at `0x005ad700`: the
+/// fourth bar button is Chat unless the tag is `LOOP` or `NONE`, and the same
+/// test decides the loading screen's network branch. Read as the local
+/// single-player session tag; that reading is not traced further.
+pub const PROVIDER_LOOPBACK: u32 = u32::from_be_bytes(*b"LOOP");
+pub const PROVIDER_NONE: u32 = u32::from_be_bytes(*b"NONE");
+
+/// Whether the loading screen takes its network branch for this provider tag.
+pub fn networked(provider: u32) -> bool {
+    !matches!(provider, PROVIDER_LOOPBACK | PROVIDER_NONE)
+}
+
+/// Minimum display time read from the reviewed image. The original applies it
+/// only to the network branch; a local screen shows the press-a-key state with
+/// no timer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MinDisplay {
+    /// Upper bound of the hold, seconds.
+    pub cap: f32,
+    /// Fixed part of the hold, seconds.
+    pub base: f32,
+    /// Added hold per displayed character, seconds.
+    pub per_char: f32,
+}
+
+impl MinDisplay {
+    /// Read the constants from the reviewed Legacy image; any other image refuses.
+    pub fn read(image: &[u8]) -> Result<Self, LoadingError> {
+        if image.len() > MAX_IMAGE_BYTES || sha256(image) != REVIEWED_IMAGE {
+            return Err(LoadingError::Image("unsupported client image"));
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: MAX_IMAGE_BYTES,
+                profile_bytes: 128,
+                sections: MAX_IMAGE_SECTIONS,
+            },
+        )
+        .map_err(|_| LoadingError::Image("invalid PE image"))?;
+        Self::decode(|va| {
+            let bytes = pe.read_from(va, false).ok()?.get(..4)?.try_into().ok()?;
+            Some(f32::from_le_bytes(bytes))
+        })
+    }
+
+    fn decode(read: impl Fn(u32) -> Option<f32>) -> Result<Self, LoadingError> {
+        let value = |va| read(va).ok_or(LoadingError::Image("missing display constant"));
+        let rules = Self {
+            cap: value(MIN_CAP_VA)?,
+            base: value(MIN_BASE_VA)?,
+            per_char: value(MIN_PER_CHAR_VA)?,
+        };
+        let ordered = 0.0 <= rules.per_char
+            && 0.0 < rules.base
+            && rules.base <= rules.cap;
+        if ![rules.cap, rules.base, rules.per_char]
+            .iter()
+            .all(|v| v.is_finite())
+            || !ordered
+        {
+            return Err(LoadingError::Image(
+                "display constants are not an ordered hold",
+            ));
+        }
+        Ok(rules)
+    }
+
+    /// The hold for these displayed strings: the fixed part plus one step per
+    /// character, capped. Lengths count Unicode scalar values; the original's
+    /// own length unit for this sum is not decoded, so this is the documented
+    /// side of the comparison.
+    pub fn hold(&self, text: &ScreenText) -> std::time::Duration {
+        let chars = (text.text.chars().count()
+            + text.title.chars().count()
+            + text.subtitle.chars().count()) as f32;
+        let seconds = (self.base + self.per_char * chars).min(self.cap).max(0.0);
+        std::time::Duration::from_secs_f32(seconds)
+    }
+}
+
+/// Channel-wise comparison of two `Rgba8` frames of the same dimensions, for
+/// qualifying a recreated capture against an original capture. Empty or
+/// mismatched buffers refuse rather than report a zero difference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageComparison {
+    /// Mean absolute channel difference over all bytes, `0.0..=255.0`.
+    pub mean_abs: f64,
+    /// Largest absolute channel difference, `0..=255`.
+    pub max_abs: u8,
+    /// Share of bytes that differ at all, `0.0..=1.0`.
+    pub differing: f64,
+}
+
+pub fn compare_images(a: &[u8], b: &[u8]) -> Result<ImageComparison, &'static str> {
+    if a.is_empty() || a.len() != b.len() {
+        return Err("captures have different lengths or are empty");
+    }
+    let mut total: u64 = 0;
+    let mut max: u8 = 0;
+    let mut different: u64 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let delta = x.abs_diff(*y);
+        total += u64::from(delta);
+        max = max.max(delta);
+        different += u64::from(delta != 0);
+    }
+    let count = a.len() as f64;
+    Ok(ImageComparison {
+        mean_abs: total as f64 / count,
+        max_abs: max,
+        differing: different as f64 / count,
     })
 }
 
@@ -367,18 +570,48 @@ NumScreens=1
 00=0,WESTRING_UNKNOWN,0,UI\\Loading\\P.mdl
 ";
 
-    fn fields<'a>(
-        background: Option<u32>,
-        custom_model: Option<&'a str>,
-        text: &'a str,
-    ) -> LoadingScreenFields<'a> {
-        LoadingScreenFields {
-            background,
-            custom_model,
-            text,
-            title: Some("T"),
-            subtitle: None,
+    fn info(background: u32, custom: &str, text: &str, title: &str) -> pcx_map::info::MapInfo {
+        let mut data = Vec::new();
+        for word in [25u32, 11, 12] {
+            data.extend(word.to_le_bytes());
         }
+        for string in ["map", "author", "description", "recommended"] {
+            data.extend(string.as_bytes());
+            data.push(0);
+        }
+        for value in 0..8 {
+            data.extend((value as f32).to_le_bytes());
+        }
+        for word in [1u32, 2, 3, 4, 32, 64, 7] {
+            data.extend(word.to_le_bytes());
+        }
+        data.push(b'L');
+        data.extend(background.to_le_bytes());
+        for string in [custom, text, title, "sub"] {
+            data.extend(string.as_bytes());
+            data.push(0);
+        }
+        data.extend(0u32.to_le_bytes());
+        data.extend([0u8; 4]);
+        data.extend(2u32.to_le_bytes());
+        for value in [1f32, 2., 3.] {
+            data.extend(value.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        data.extend(0u32.to_le_bytes());
+        data.extend(b"sound\0");
+        data.push(b'A');
+        data.extend(0u32.to_le_bytes());
+        for _ in 0..5 {
+            data.extend(0u32.to_le_bytes());
+        }
+        data.extend(1u32.to_le_bytes());
+        data.extend(42u32.to_le_bytes());
+        data.extend(b"items\0");
+        for word in [2u32, 1, 33, 0x4142_4344, 0] {
+            data.extend(word.to_le_bytes());
+        }
+        pcx_map::info::MapInfo::from_bytes(data).unwrap()
     }
 
     #[test]
@@ -416,7 +649,7 @@ NumScreens=1
     #[test]
     fn a_number_selects_its_record_and_wins_over_a_custom_model() {
         let table = ScreenTable::parse(TABLE).unwrap();
-        let selected = select(&fields(Some(2), Some("Own.mdl"), ""), &table).unwrap();
+        let selected = select(&info(2, "Own.mdl", "", "T"), &table, None).unwrap();
         assert_eq!(
             selected,
             Selection::Campaign(Screen {
@@ -434,28 +667,29 @@ NumScreens=1
     fn a_custom_model_plays_its_first_sequence_and_no_header_is_melee() {
         let table = ScreenTable::parse(TABLE).unwrap();
         assert_eq!(
-            select(&fields(None, Some("Own.mdl"), ""), &table).unwrap(),
+            select(&info(u32::MAX, "Own.mdl", "", "T"), &table, None).unwrap(),
             Selection::Campaign(Screen {
                 model: "Own.mdl".into(),
                 sequence: 0,
                 origin: Origin::Custom
             })
         );
-        assert_eq!(
-            select(&fields(None, None, ""), &table).unwrap(),
-            Selection::Melee
-        );
+        let selected = select(&info(u32::MAX, "", "words", "Title"), &table, None).unwrap();
+        let Selection::Melee(panel) = selected else {
+            panic!("a header with no number and no model is the melee panel");
+        };
+        assert_eq!(panel.map_name, "map");
+        assert_eq!(panel.slots.len(), 1);
     }
 
     #[test]
     fn an_unknown_number_refuses_instead_of_falling_back() {
         let table = ScreenTable::parse(TABLE).unwrap();
         assert_eq!(
-            select(&fields(Some(3), Some("Own.mdl"), ""), &table),
+            select(&info(3, "Own.mdl", "", "T"), &table, None),
             Err(LoadingError::UnknownScreen { index: 3, count: 3 })
         );
     }
-
     fn strings() -> Wts {
         Wts::parse(b"STRING 7\r\n{\r\nThe Defense\r\n}\r\n\r\nSTRING 8\r\n{\r\n\xff\r\n}\r\n")
             .unwrap()
@@ -464,7 +698,13 @@ NumScreens=1
     #[test]
     fn keys_resolve_through_the_map_strings_and_literals_pass_through() {
         let wts = strings();
-        let mut f = fields(None, None, "plain text");
+        let mut f = LoadingScreenFields {
+            background: None,
+            custom_model: None,
+            text: "plain text",
+            title: None,
+            subtitle: None,
+        };
         f.title = Some("trigstr_7");
         let text = resolve_text(&f, Some(&wts)).unwrap();
         assert_eq!(text.text, "plain text");
@@ -475,7 +715,13 @@ NumScreens=1
     #[test]
     fn an_unresolvable_key_refuses() {
         let wts = strings();
-        let mut f = fields(None, None, "TRIGSTR_9");
+        let mut f = LoadingScreenFields {
+            background: None,
+            custom_model: None,
+            text: "TRIGSTR_9",
+            title: None,
+            subtitle: None,
+        };
         assert!(matches!(
             resolve_text(&f, Some(&wts)),
             Err(LoadingError::MissingString {

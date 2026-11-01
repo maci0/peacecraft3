@@ -24,7 +24,13 @@ use pcx_play::campaign_data_set::{CampaignRecipe, ImageRules};
 use pcx_play::install_source::{MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS};
 use pcx_play::map_admission::MapAdmissionBudget;
 use pcx_play::scripts::AssetIdentity;
-use peacecraft3::browser_configuration::{Configuration, ConfigurationInbox, Member, Poll};
+use peacecraft3::browser_configuration::{
+    Configuration, ConfigurationInbox, Member, Poll, SelectedMapSources,
+};
+use peacecraft3::campaign_loading::{
+    CampaignLoading, CampaignLoadingSet, LastRules, LoadingRequest,
+};
+use peacecraft3::map_requests::MapBindings;
 use peacecraft3::map_binding::{BindingLimits, OverlayLimits};
 use peacecraft3::map_requests::{MapRequest, MapRequestSet, MapRequests};
 use std::path::{Path, PathBuf};
@@ -164,6 +170,14 @@ pub(crate) fn install(app: &mut App) {
                 .run_if(crate::launch_gui::campaign_is_hidden)
                 .before(MapRequestSet::Deliver)
                 .before(crate::button_actions::clear),
+        )
+        .add_systems(
+            Update,
+            ensure_loading
+                .after(MapRequestSet::Deliver)
+                .after(peacecraft3::campaign_startup::CampaignStartupSet)
+                .after(peacecraft3::campaign_runtime::CampaignTransitionSet)
+                .before(CampaignLoadingSet),
         );
 }
 
@@ -562,7 +576,185 @@ fn loading_request(
         .transpose()?;
     let rules = pcx_play::campaign_loading::ProgressRules::read(recipe.image())
         .map_err(|e| e.to_string())?;
-    peacecraft3::campaign_loading::LoadingRequest::read(base, &info, strings.as_ref(), rules)
+    let min_display = pcx_play::campaign_loading::MinDisplay::read(recipe.image())
+        .map_err(|e| e.to_string())?;
+    // Every session this build admits is a local single-player one; the
+    // provider tag branch is kept asset-derived rather than literal.
+    let networked =
+        pcx_play::campaign_loading::networked(pcx_play::campaign_loading::PROVIDER_LOOPBACK);
+    peacecraft3::campaign_loading::LoadingRequest::read(
+        base,
+        Some((&map, chapter.map.as_str())),
+        &info,
+        strings.as_ref(),
+        rules,
+        &min_display,
+        networked,
+    )
+    .map(Some)
+}
+
+/// What a fresh binding carries for a screen built after admission: the
+/// selected resolver, the map's parsed members and the rule sources.
+struct FreshBinding<'w> {
+    map: pcx_map::Map<'w>,
+    label: String,
+    resolver: std::sync::Arc<pcx_assets::Resolver>,
+    info: pcx_map::info::MapInfo,
+    strings: Option<pcx_play::campaign_loading::StringTable>,
+    rules: pcx_play::campaign_loading::ProgressRules,
+    min_display: pcx_play::campaign_loading::MinDisplay,
+}
+
+fn fresh_binding<'w>(
+    bindings: &'w MapBindings,
+    requests: &MapRequests,
+    sources: &SelectedMapSources,
+    last: &LastRules,
+) -> Result<FreshBinding<'w>, String> {
+    let outcome_ok = requests
+        .last_outcome
+        .as_ref()
+        .is_some_and(|o| o.result.is_ok() && o.binding_revision == Some(bindings.revision));
+    if !outcome_ok {
+        return Err("no admitted binding for a loading screen".into());
+    }
+    let map = pcx_map::Map::parse(&bindings.catalog_map_bytes)
+        .map_err(|e| format!("{}: {e}", bindings.map_label))?;
+    let budget = pcx_mpq::checked::ReadBudget {
+        max_archive_bytes: bindings.max_map_file_bytes,
+        max_archive_table_bytes: bindings.max_map_file_bytes,
+        max_raw_packed_bytes: bindings.max_map_file_bytes,
+        max_decoded_bytes: bindings.max_map_file_bytes,
+    };
+    let info_bytes = map
+        .extract_checked(&bindings.map_label, "war3map.w3i", budget)
+        .map_err(|e| format!("{}: war3map.w3i: {e}", bindings.map_label))?
+        .ok_or_else(|| format!("{}: no war3map.w3i", bindings.map_label))?;
+    let info = pcx_map::info::MapInfo::from_bytes(info_bytes).map_err(|e| e.to_string())?;
+    let strings = map
+        .extract_checked(&bindings.map_label, "war3map.wts", budget)
+        .map_err(|e| format!("{}: war3map.wts: {e}", bindings.map_label))?
+        .map(|bytes| {
+            pcx_play::campaign_loading::StringTable::parse(&bytes).map_err(|e| e.to_string())
+        })
+        .transpose()?;
+    let resolver = bindings
+        .resolver
+        .clone()
+        .or_else(|| sources.for_receipts(&bindings.receipts))
+        .ok_or_else(|| "admitted map has no matching source reader".to_string())?;
+    let (rules, min_display, provenance) =
+        match sources.campaign_for_receipts(&bindings.receipts) {
+            Some(recipe) => (
+                pcx_play::campaign_loading::ProgressRules::read(recipe.image())
+                    .map_err(|e| e.to_string())?,
+                pcx_play::campaign_loading::MinDisplay::read(recipe.image())
+                    .map_err(|e| e.to_string())?,
+                format!("selected recipe {}", recipe.dir().display()),
+            ),
+            None => {
+                let install =
+                    std::path::PathBuf::from(&bindings.receipts.common.provenance.source.origin);
+                match crate::menu_lighting::with_client_image(Some(&install), |_, image| {
+                    Ok::<_, String>((
+                        pcx_play::campaign_loading::ProgressRules::read(image)
+                            .map_err(|e| e.to_string())?,
+                        pcx_play::campaign_loading::MinDisplay::read(image)
+                            .map_err(|e| e.to_string())?,
+                    ))
+                }) {
+                    Ok((rules, min_display)) => (
+                        rules,
+                        min_display,
+                        format!("selected client image under {}", install.display()),
+                    ),
+                    Err(error) => match &last.rules {
+                        Some((rules, min_display)) => {
+                            info!(
+                                "loading screen reuses retained bar rules                                  (selected image unavailable: {error})"
+                            );
+                            (*rules, *min_display, "retained rules".to_string())
+                        }
+                        None => return Err(error),
+                    },
+                }
+            }
+        };
+    info!(
+        "loading screen rules from {provenance} for {}",
+        bindings.map_label
+    );
+    Ok(FreshBinding {
+        map,
+        label: bindings.map_label.clone(),
+        resolver,
+        info,
+        strings,
+        rules,
+        min_display,
+    })
+}
+
+/// Start a screen for a fresh binding that has none: an authored continuation
+/// or a browser launch, which never pass through the chapter launch. A native
+/// chapter launch carries its prebuilt screen instead, so this leaves a shown
+    /// screen and an already-seen revision alone.
+fn ensure_loading(
+    mut loading: ResMut<CampaignLoading>,
+    requests: Res<MapRequests>,
+    sources: Res<SelectedMapSources>,
+    session: Res<
+        peacecraft3::map_script_session::MapScriptSession<
+            pcx_play::map_startup_host::MapStartupHost,
+        >,
+    >,
+    mut last: ResMut<LastRules>,
+) {
+    if loading.shown() {
+        return;
+    }
+    let Some(bindings) = requests.bindings.as_ref() else {
+        return;
+    };
+    if loading.revision() == Some(bindings.revision)
+        || loading.unbuildable() == Some(bindings.revision)
+    {
+        return;
+    }
+    match fresh_binding(bindings, &requests, &sources, &last) {
+        Ok(fresh) => {
+            last.rules = Some((fresh.rules, fresh.min_display));
+            let request = LoadingRequest::read(
+                fresh.resolver,
+                Some((&fresh.map, fresh.label.as_str())),
+                &fresh.info,
+                fresh.strings.as_ref(),
+                fresh.rules,
+                &fresh.min_display,
+                pcx_play::campaign_loading::networked(
+                    pcx_play::campaign_loading::PROVIDER_LOOPBACK,
+                ),
+            );
+            match request {
+                Ok(request) => loading.begin(request, &requests, session.session_witness(), true),
+                Err(error) => {
+                    warn!("campaign loading screen refused: {error}");
+                    loading.mark_unbuildable(bindings.revision);
+                }
+            }
+        }
+        Err(error) => {
+            // No admitted binding yet, or the selected sources are gone: the
+            // mission still loads, and a later update retries.
+            if requests.last_outcome.as_ref().is_some_and(|o| {
+                o.result.is_ok() && o.binding_revision == Some(bindings.revision)
+            }) {
+                warn!("campaign loading screen refused: {error}");
+                loading.mark_unbuildable(bindings.revision);
+            }
+        }
+    }
 }
 
 /// Open the loading screen once the mission's launch is under way.
@@ -577,7 +769,7 @@ fn begin_loading(
     >,
 ) {
     if let Some(request) = chapters.loading.take() {
-        loading.begin(request, &requests, session.session_witness());
+        loading.begin(request, &requests, session.session_witness(), false);
     }
 }
 

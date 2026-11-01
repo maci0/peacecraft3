@@ -132,9 +132,34 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   original reads the header in the constructor, before the load stages).
 - Selection, text, frames, fonts and the bar model come from the selected files.
   The three bar constants (`0.01`, `0.001`, `1.0`) are read from the reviewed image
-  at runtime by `ProgressRules::read` and checked to be an ordered ramp. The
-  minimum display time is not read or applied: the original uses it only for a
-  network game.
+  at runtime by `ProgressRules::read` and checked to be an ordered ramp, and the
+  minimum display time (`min(300.0, 3.0 + 0.1 * lens)`) by `MinDisplay::read` the
+  same way. The hold applies only to the network branch, as in the original.
+- The melee panel is drawn for headers with neither a number nor a model: the
+  minimap image comes from the map archive (`war3mapMap.blp`, else `.tga`) when
+  it ships one, the map name and each player slot resolve through `war3map.wts`
+  like the campaign text, and the background is the skin's race-section
+  `LoadingMeleeBackground` for the local race with the `[Default]` fallback.
+  **Recreation choices.** The game-type value is `MELEE` for a single-force map
+  and `NON_MELEE` otherwise, because the original's type source is not decoded.
+  An unknown race word takes `RANDOM`. Slot rows stack downward one authored row
+  height each, because the container names no per-row anchor. The level value
+  and the ready highlight are not drawn, because neither source is decoded.
+- A map-supplied custom loading model is extracted from the map archive itself
+  and posed at its first sequence; its textures still resolve through the game
+  archives, and a texture that only the map supplies refuses loudly by name.
+- Continuation and browser launches open the same screen: any fresh admitted
+  binding with no screen already up builds one from the selected resolver, with
+  rules from the recipe image, the selected client image, or — for a session
+  that committed no client image — the previously admitted values, logged as
+  retained. A chapter launch begins its screen before admission, so the first
+  stage waits for new bindings; a continuation or browser launch begins after,
+  so its bindings already count. A screen that cannot be built is reported once
+  per revision and the mission loads without it.
+- **Recreation choice.** Sessions are local single-player ones, so the network
+  branch never arms in this build (`networked(PROVIDER_LOOPBACK)` is false);
+  the press-after-hold, `WAITING FOR OTHER PLAYERS` state and minimum-display
+  hold exist because the original draws them.
 - **Recreation choice.** Progress reports come from the recreation's own load
   stages, each worth an equal share (`STAGES` in `campaign_loading.rs`): map bindings
   published, host inputs prepared, script session running, terrain published.
@@ -150,12 +175,7 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   these sequences once is not established.
 - The post-load bar sequence in state 1 (`[ebp-0x88] = 4`, `0x966c10`) does not map to
   `LoadBar.mdx` (two sequences). The bar holds its end frame; unresolved.
-- Not implemented: the melee panel (headers with neither a number nor a model),
-  the network wait and timer, the text-fitting routine (`0x53fba0`), map-supplied
-  custom loading models (the pre-admission source does not mount the map archive;
-  the screen refuses loudly and the mission loads without it), and a loading screen
-  for next-level continuation or the browser path, which do not go through the
-  chapter launch.
+- Not implemented: the text-fitting routine (`0x53fba0`).
 
 ## Load end without a camera, and audio
 
@@ -201,8 +221,15 @@ members listed. Nothing here is a runtime observation of the original.
   Human01 renders the Lordaeron map background, the title ("Chapter One"), the
   subtitle, the paragraph, the bar border and glass, `L O A D I N G`, and a fill that
   follows the bar's progress (empty at no stages, about half at two). The capture
-  target is plain `Rgba8UnormSrgb`, not the menu's colour working space, so colour is
-  not qualified. The frames are local files under `.scratch/` and are not committed.
+  target holds the menu working channels (`Rgba8Unorm`, numeric source bytes, no
+  filmic transform), the same colour space the menu captures are qualified in.
+  The frames are local files under `.scratch/` and are not committed.
+- Compared against an original capture through `harness::compare_against`
+  (channel-wise mean/max/differing over working-space `Rgba8`, with a minimal
+  `P6` reference loader). Setting `PCX_LOADING_REFERENCE_PPM` during a capture
+  logs the difference. The reference must already live in the menu working
+  channels; no verdict threshold is set here, because none is established. The
+  reference file stays local and is never committed.
 - **Resolved: black rectangles.** An earlier capture, taken before `pcx-blp` honoured
   the fourth JPEG component regardless of `alpha_bits`, drew the emblem and location
   icons on opaque black rectangles. Both textures are JPEG-content BLP1 files with
@@ -214,7 +241,6 @@ members listed. Nothing here is a runtime observation of the original.
   `pcx-blp` `an_alpha_less_header_still_decodes_its_fourth_component_as_alpha`
   (`PEACECRAFT3_LEGACY_DIR`). The layers' static alpha tracks and the sequence
   clock were not compared with the original.
-- Not compared against a capture of the original loading screen.
 
 ```mermaid
 stateDiagram-v2
@@ -222,6 +248,8 @@ stateDiagram-v2
     Idle --> Loading: mission launched
     Loading --> AwaitKey: terrain published
     Loading --> Idle: stage refused
-    AwaitKey --> Idle: key or pointer press
+    AwaitKey --> Idle: key or pointer press (local)
+    AwaitKey --> WaitingForPeers: key or pointer press (network, hold elapsed)
+    note right of WaitingForPeers: no peer signal exists in this build;\nthe state holds until the session is replaced
     Idle --> [*]
 ```
