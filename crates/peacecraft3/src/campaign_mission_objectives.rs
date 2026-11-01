@@ -82,6 +82,29 @@ const SPEND_DONE: &str = "gg_trg_H3_SpendPoint_Done";
 const SPEND_PROMPT: &str = "gg_trg_H3_SpendPoint_Q";
 const CHAIN_SKILL: [u8; 4] = *b"AOcl";
 
+/// WC3 script format entrypoints for unchanged-map execution. These are
+/// format identifiers, not map content: every shipped map script declares
+/// `config` and `main`, and the headless harness must start from them rather
+/// than an injected victory stimulus.
+pub const UNCHANGED_MAP_ENTRYPOINTS: [&str; 2] = ["config", "main"];
+
+/// Unchanged-map chapter advancement: only a queued `EndGame`/`ChangeLevel`
+/// request moves to the next level. `has_exit` reports the queued request and
+/// `next_level` carries the verbatim `ChangeLevel`/`SetNextLevel` target.
+/// `None` means the map has not completed through its own triggers; the
+/// driver must not invent victory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CampaignAdvance {
+    pub next_level: Option<String>,
+}
+
+pub fn unchanged_map_advance(
+    has_exit: bool,
+    next_level: Option<String>,
+) -> Option<CampaignAdvance> {
+    has_exit.then(|| CampaignAdvance { next_level })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

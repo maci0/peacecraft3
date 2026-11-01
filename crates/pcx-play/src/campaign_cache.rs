@@ -64,6 +64,16 @@ impl SessionStorage {
     pub fn snapshot(&self) -> Result<Option<Vec<u8>>, String> {
         self.load(BUDGET.storage_bytes)
     }
+
+    /// Profile persistence inventory for menus and harnesses: whether the
+    /// stored profile carries cache and progress sections. `None` storage
+    /// reports `(false, false)`; malformed profiles refuse.
+    pub fn stored_sections(&self) -> Result<(bool, bool), String> {
+        match self.snapshot()? {
+            None => Ok((false, false)),
+            Some(bytes) => profile::sections_present(&bytes),
+        }
+    }
 }
 
 impl Storage for SessionStorage {

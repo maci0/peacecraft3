@@ -937,6 +937,18 @@ impl FdfCatalog {
         self.frames.get(id.0)
     }
 
+    /// Rendered transmission-panel lookup for cinematic playback. Returns the
+    /// authored `CinematicPanel` frame plus its speaker/dialogue text frames
+    /// when all three are present; absent panels stay `None` so the renderer
+    /// reports the missing art instead of inventing geometry.
+    pub fn cinematic_panel(&self) -> Option<(FrameId, FrameId, FrameId)> {
+        Some((
+            self.frame_id("CinematicPanel")?,
+            self.frame_id("CinematicSpeakerText")?,
+            self.frame_id("CinematicDialogueText")?,
+        ))
+    }
+
     /// Bind every local authored anchor. Inherited records/children remain graph edges.
     /// The caller supplies parent/active context; this never creates a screen rectangle.
     pub fn relationships(

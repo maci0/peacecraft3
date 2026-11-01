@@ -103,6 +103,27 @@ impl ObjectHost {
             .map(|(progress, _)| progress)
     }
 
+    /// Persisted profile bytes for menus and harnesses: the encoded mission
+    /// availability exactly as stored. `None` when progress storage was never
+    /// admitted; malformed state refuses instead of inventing unlocks.
+    pub fn campaign_progress_bytes(&self) -> Option<Result<Vec<u8>, String>> {
+        self.game_exit.as_ref()?.progress.as_ref().map(|(progress, _)| {
+            progress.encode().map_err(|detail| {
+                self.inner
+                    .error(MISSION, Failure::CampaignProgress(detail))
+                    .to_string()
+            })
+        })
+    }
+
+    /// Whether an `EndGame`/`ChangeLevel` request is still queued for the
+    /// campaign driver to consume for unchanged-map advancement.
+    pub fn has_pending_game_exit(&self) -> bool {
+        self.game_exit
+            .as_ref()
+            .is_some_and(|state| !state.requests.is_empty())
+    }
+
     /// Verbatim source next-map request. This does not itself end or replace a session.
     pub fn next_level(&self) -> Option<&str> {
         self.game_exit.as_ref()?.next_level.as_deref()

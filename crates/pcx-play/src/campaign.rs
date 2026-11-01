@@ -39,6 +39,50 @@ pub struct ChapterPlan {
     pub calls: Vec<ScriptCall>,
     pub outcomes: Vec<OutcomeCheck>,
 }
+
+impl ChapterPlan {
+    /// Unchanged-map playthrough plan from authored entrypoints and explicit
+    /// outcome gates. `config`/`main` are the WC3 script format entrypoints;
+    /// any other entrypoint refuses so an injected victory stimulus cannot
+    /// stand in for authored objectives. All four gates must be present;
+    /// `run_chapter` re-checks them at execution time.
+    pub fn unchanged_map(
+        name: String,
+        ticks: u64,
+        calls: Vec<ScriptCall>,
+        outcomes: Vec<OutcomeCheck>,
+    ) -> Result<Self, String> {
+        if name.is_empty() || ticks == 0 {
+            return Err("chapter name and nonzero tick count are required".into());
+        }
+        let plan = Self {
+            name,
+            ticks,
+            entrypoints: vec!["config".into(), "main".into()],
+            calls,
+            outcomes,
+        };
+        let mut missing = [Gate::Dialogue, Gate::Quest, Gate::Victory, Gate::EndGame]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        for check in &plan.outcomes {
+            if check.tick >= plan.ticks {
+                return Err(format!(
+                    "outcome {:?} tick {} outside chapter",
+                    check.gate, check.tick
+                ));
+            }
+            if check.predicate.is_empty() {
+                return Err("outcome predicate must name a declared function".into());
+            }
+            missing.remove(&check.gate);
+        }
+        if !missing.is_empty() {
+            return Err(format!("chapter is missing explicit outcome gates {missing:?}"));
+        }
+        Ok(plan)
+    }
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallRecord {
     pub sequence: u64,

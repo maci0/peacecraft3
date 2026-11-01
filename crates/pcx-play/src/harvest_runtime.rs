@@ -501,6 +501,12 @@ impl ObjectHost {
         };
         let definition = record.definition.clone();
         let owner = record.owner;
+        // Race-specific worker admission: the authored UnitData race must be
+        // present before harvest work starts. Rates remain generic until the
+        // native race rules are qualified; this preserves the race without
+        // inventing behavior.
+        crate::harvest_rules::worker_race_from_definition(&definition)
+            .map_err(|error| self.harvest_read_error("race", error))?;
         if self.harvest.as_ref().is_some_and(|state| {
             state.workers.iter().any(|worker| {
                 worker.unit == unit && worker.gold.as_ref().is_some_and(|gold| gold.carrying > 0)

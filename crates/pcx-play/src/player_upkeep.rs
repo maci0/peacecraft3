@@ -298,7 +298,11 @@ impl Upkeep {
             capacity,
         })
     }
-    pub(super) fn label(&self, food: i32, version: Option<i32>) -> Result<UpkeepLabel, String> {
+    pub(super) fn tier(&self, food: i32, version: Option<i32>) -> Result<i32, String> {
+        // Upkeep rank drives the resource-bar label and the gold-income tier.
+        // Thresholds and the first rank are source-derived; income scaling
+        // itself remains an explicit refusal until its source rates are
+        // admitted, so this reports the tier without inventing a tax.
         let thresholds = if let Some(values) = &self.thresholds {
             values
         } else {
@@ -313,10 +317,13 @@ impl Upkeep {
             .iter()
             .take_while(|threshold| **threshold != 0 && **threshold < food)
             .count();
-        let rank = i32::try_from(crossed)
+        i32::try_from(crossed)
             .ok()
             .and_then(|v| v.checked_add(self.first_rank))
-            .ok_or("upkeep rank overflow")?;
+            .ok_or("upkeep rank overflow".into())
+    }
+    pub(super) fn label(&self, food: i32, version: Option<i32>) -> Result<UpkeepLabel, String> {
+        let rank = self.tier(food, version)?;
         if let Some(key) = usize::try_from(rank).ok().and_then(|i| self.keys.get(i)) {
             return Ok(UpkeepLabel {
                 primary_key: key.clone(),

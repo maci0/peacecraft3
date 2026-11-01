@@ -104,6 +104,21 @@ pub(super) fn validate(bytes: &[u8]) -> Result<(), String> {
     Envelope::parse(bytes)?.validate()
 }
 
+/// Profile persistence inventory for menus and headless harnesses: which
+/// sections are present in `bytes` without decoding their payloads. Legacy
+/// cache-only bytes report `(true, false)`; the enveloped profile reports
+/// each section by its stored length. Malformed envelopes refuse.
+pub(super) fn sections_present(bytes: &[u8]) -> Result<(bool, bool), String> {
+    if !bytes.starts_with(MAGIC) {
+        // Cache-only legacy profile; validated by the game-cache decoder.
+        crate::game_cache::Profile::decode(bytes, BUDGET)?;
+        return Ok((true, false));
+    }
+    let envelope = Envelope::parse(bytes)?;
+    envelope.validate()?;
+    Ok((envelope.cache.is_some(), envelope.progress.is_some()))
+}
+
 struct Shared {
     storage: Arc<dyn Storage>,
     lock: Mutex<()>,
