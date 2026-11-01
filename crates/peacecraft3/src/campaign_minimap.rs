@@ -634,7 +634,18 @@ fn project(
         });
     let mode_error = marker_error.or_else(|| match fog_result {
         Some(Err(error)) => Some(error),
-        Some(Ok(())) if matches!(visibility, Some(Err(_))) => Some(OCCLUSION_ERROR.into()),
+        Some(Ok(())) if matches!(visibility, Some(Err(_))) => {
+            // Circular sight projects; the arm clears only when the ledger
+            // also ran the terrain/tree occlusion pass.
+            let occluded = session
+                .host()
+                .is_some_and(|host| host.objects().vision_occlusion_applied() == Some(true));
+            if occluded {
+                None
+            } else {
+                Some(OCCLUSION_ERROR.into())
+            }
+        }
         _ => visibility.and_then(Result::err),
     });
     if let Some(error) = &mode_error {

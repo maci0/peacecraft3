@@ -4,10 +4,12 @@
 //!
 //! Pitch and extent come from the admitted placement grid, including a final
 //! partial cell so the source extent is not truncated. This is a recreation
-//! sample, not a traced native fog lattice. Terrain and tree occlusion are not
-//! applied. Script queries, world actor fog, picking, and combat acquisition
-//! are not wired here; they should call [`ObjectHost::vision_cell`] instead of
-//! rebuilding sight circles.
+//! sample, not a traced native fog lattice. Terrain and tree occlusion are
+//! applied by the [`OcclusionInput`] pass below (height-lerp ray-march over the
+//! admitted heightfield plus analytic tree discs); every unqualified choice in
+//! that pass is labelled a recreation choice. Script queries, world actor fog,
+//! picking, and combat acquisition are not wired here; they should call
+//! [`ObjectHost::vision_cell`] instead of rebuilding sight circles.
 use super::{Error, Failure, ObjectHost, VisionShape, VisionSource, VisionState};
 use pcx_script::HandleId;
 use std::{
@@ -270,6 +272,16 @@ struct ViewerGrid {
     sources: Vec<VisionSource>,
 }
 
+/// Occlusion inputs for one stamp: the pass plus the per-source sight
+/// origins, in source order.
+#[derive(Clone, Copy, Debug)]
+struct StampOcclusion<'a> {
+    input: &'a OcclusionInput<'a>,
+    eyes: &'a [Option<[f64; 3]>],
+    /// Per-plan relevant tree indices; the same subset the pre-check charged.
+    trees: &'a [usize],
+}
+
 impl ViewerGrid {
     fn blank(cells: usize) -> Result<Self, String> {
         let mut explored = Vec::new();
@@ -304,50 +316,89 @@ impl ViewerGrid {
     }
 
     /// Stamps `sources` in order. Each row of a source writes its contiguous covered run.
+    /// Occluded cells of `Visible` circles stamp `Fogged` without recording
+    /// exploration; explored retention is unchanged.
     fn stamp(
         &mut self,
         sources: &[VisionSource],
         footprints: &[Arc<Footprint>],
         vision: &SharedVision,
+        occlusion: Option<StampOcclusion<'_>>,
         visits: &mut usize,
     ) {
         let width = vision.shape.width;
-        for (source, footprint) in sources.iter().zip(footprints) {
+        for (index, (source, footprint)) in sources.iter().zip(footprints).enumerate() {
             let rect = footprint.rect;
             let explored = source.state != VisionState::Masked;
+            let eye = occlusion.and_then(|stamp| stamp.eyes.get(index).copied().flatten());
             for y in rect.y0..rect.y1 {
                 *visits += rect.x1.saturating_sub(rect.x0);
                 let (x0, x1) = footprint.run(y);
                 let row = y * width;
-                self.current[row + x0..row + x1].fill(source.state);
-                self.explored[row + x0..row + x1].fill(explored);
+                match (occlusion, eye) {
+                    (Some(stamp), Some(eye)) => {
+                        for x in x0..x1 {
+                            *visits += OcclusionInput::charge_for(stamp.trees.len());
+                            let point = [vision.columns[x], vision.rows[y]];
+                            if stamp
+                                .input
+                                .blocked(eye, point, vision.shape.pitch, stamp.trees)
+                            {
+                                self.current[row + x] = VisionState::Fogged;
+                            } else {
+                                self.current[row + x] = source.state;
+                                self.explored[row + x] = explored;
+                            }
+                        }
+                    }
+                    _ => {
+                        self.current[row + x0..row + x1].fill(source.state);
+                        self.explored[row + x0..row + x1].fill(explored);
+                    }
+                }
             }
         }
     }
 
     /// Sets one cell to what stamping `sources` in order would leave there: the last source that
-    /// covers it, else the previous exploration without current sight.
+    /// covers it, else the previous exploration without current sight. Occlusion
+    /// applies exactly as in [`Self::stamp`].
     fn recompute(
         &mut self,
         sources: &[VisionSource],
         footprints: &[Arc<Footprint>],
         vision: &SharedVision,
-        x: usize,
-        y: usize,
+        occlusion: Option<StampOcclusion<'_>>,
+        cell: [usize; 2],
     ) {
+        let [x, y] = cell;
         let at = y * vision.shape.width + x;
         let point = [vision.columns[x], vision.rows[y]];
-        let covering = sources
-            .iter()
-            .zip(footprints)
-            .rev()
-            .find(|(source, footprint)| {
-                footprint.rect.contains(x, y) && source.shape.contains(point)
-            });
+        let covering =
+            sources
+                .iter()
+                .zip(footprints)
+                .enumerate()
+                .rev()
+                .find(|(_, (source, footprint))| {
+                    footprint.rect.contains(x, y) && source.shape.contains(point)
+                });
         match covering {
-            Some((source, _)) => {
-                self.current[at] = source.state;
-                self.explored[at] = source.state != VisionState::Masked;
+            Some((index, (source, _))) => {
+                let eye = occlusion.and_then(|stamp| stamp.eyes.get(index).copied().flatten());
+                match (occlusion, eye) {
+                    (Some(stamp), Some(eye))
+                        if stamp
+                            .input
+                            .blocked(eye, point, vision.shape.pitch, stamp.trees) =>
+                    {
+                        self.current[at] = VisionState::Fogged;
+                    }
+                    _ => {
+                        self.current[at] = source.state;
+                        self.explored[at] = source.state != VisionState::Masked;
+                    }
+                }
             }
             None => {
                 self.current[at] = if self.explored[at] {
@@ -383,7 +434,368 @@ struct Planned {
     id: HandleId,
     sources: Vec<VisionSource>,
     footprints: Vec<Arc<Footprint>>,
+    /// Sight origin per source, in the same order; empty when no occlusion
+    /// input was supplied or the plan needs no stamping.
+    eyes: Vec<Option<[f64; 3]>>,
+    /// Admitted tree indices that can shadow this plan's cells. Only these
+    /// are tested and charged; anything farther cannot intersect an
+    /// eye-to-cell segment drawn for these sources (see
+    /// `OcclusionInput::relevant`).
+    trees: Vec<usize>,
     update: Update,
+}
+
+// Sight occlusion against the admitted heightfield and live tree discs.
+//
+// Native evidence constrains but does not specify the sampling: the fog
+// updater `658ac0` calls `657340`, which samples two visibility grids through
+// a shared mask, and the per-unit mask-word gate at `65bf63..65bf20` varies
+// with the size class (`docs/re-notes/campaign-minimap.md:122-144,322-329`).
+// Mask bit meanings, grid resolutions and the exact blocker test are unread,
+// so every choice in this section is a labelled recreation choice, never an
+// inferred native behavior.
+//
+// What is admitted and therefore not a choice: the corner heightfield
+// (`height_index`, `layer_height`) from the admitted map context, the
+// `[tile, bias, factor]` terrain encoding from the admitted placement rules,
+// live tree positions and aliveness from the destructable ledger with `tree`
+// from the admitted `targType` record, and the per-viewer 2D origin and
+// radius from the existing source list.
+
+/// Eye height above the viewer's own ground when
+/// [`VisionSource::source_height`] is `None`. Live records never supply one,
+/// so no qualified native value exists; this is a recreation choice.
+const VIEWER_EYE_ABOVE_GROUND: f32 = 128.0;
+/// Tree-disc radius per unit of admitted destructable `scale`. The catalog
+/// carries `targType=tree` and `scale` but no occluder radius, so the radius
+/// is derived transparently as `scale * TREE_RADIUS_PER_SCALE` (see
+/// [`tree_occluder`]); the per-scale unit is the recreation choice.
+const TREE_RADIUS_PER_SCALE: f64 = 48.0;
+/// Canopy top above the tree base per unit of admitted destructable `scale`.
+/// Same provenance caveat as the radius.
+const TREE_CANOPY_PER_SCALE: f64 = 192.0;
+/// W3E elevation-layer encoding bias: a corner's world height adds
+/// `(layer - 2) * tile`. Format invariant, cf. `pcx-tera/src/world.rs`
+/// (`ZERO_LAYER`); not a per-map authored value.
+const W3E_LAYER_BIAS: f64 = 2.0;
+/// Ray-march samples per occludable cell, charged to the stamp budget as an
+/// upper bound and clamped from the ray length. Fixed-count sampling is the
+/// recreation choice; the exact native pattern is undecoded (see above).
+const OCCLUSION_STEPS_MAX: usize = 32;
+/// Short rays still test at least this many interior points.
+const OCCLUSION_STEPS_MIN: usize = 4;
+/// A blocker shadows only when it clears the sight ray by more than this, in
+/// world units. Numerical tolerance only; gameplay heights are orders above it.
+const OCCLUSION_TOLERANCE: f64 = 0.001;
+
+/// One live tree as a sight occluder: admitted position, admitted-scale radius
+/// and canopy, base sampled from the admitted heightfield.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TreeOccluder {
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    pub base: f64,
+    pub top: f64,
+}
+
+/// Admitted inputs to the occlusion pass: the map heightfield, its placement
+/// encoding, and the live tree discs. `None` (no input) leaves
+/// `occlusion_applied` false.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OcclusionInput<'a> {
+    pub terrain: &'a pcx_map::Terrain,
+    pub encoding: [f32; 3],
+    pub trees: &'a [TreeOccluder],
+}
+
+/// Bilinear terrain height under a world point from the admitted corner grid.
+/// Mirrors the mesh surface the renderer draws (`pcx-tera` `sample_world_z`
+/// over `Mapping::sample_ground`): `height_index / factor - bias` plus the
+/// elevation-layer offset, with the admitted `terrain_encoding`
+/// `[tile, bias, factor]` from the placement rules. `None` on unadmitted
+/// encoding or outside the corner grid.
+fn ground_z(terrain: &pcx_map::Terrain, encoding: [f32; 3], x: f64, y: f64) -> Option<f64> {
+    let [tile, bias, factor] = encoding;
+    if !(tile.is_finite() && tile > 0.0 && factor.is_finite() && factor > 0.0 && bias.is_finite()) {
+        return None;
+    }
+    let (origin_x, origin_y) = terrain.origin();
+    if !(origin_x.is_finite() && origin_y.is_finite()) {
+        return None;
+    }
+    let tile = f64::from(tile);
+    let point_x = (x - f64::from(origin_x)) / tile;
+    let point_y = (y - f64::from(origin_y)) / tile;
+    if !(point_x >= 0.0 && point_y >= 0.0) {
+        return None;
+    }
+    let (width, height) = (terrain.width(), terrain.height());
+    if point_x > f64::from(width) || point_y > f64::from(height) {
+        return None;
+    }
+    let (cell_x, cell_y) = (point_x.floor() as u32, point_y.floor() as u32);
+    if cell_x >= width || cell_y >= height {
+        return None;
+    }
+    let corner_height = |corner: &pcx_map::Corner| {
+        f64::from(corner.height_index) / f64::from(factor) - f64::from(bias)
+            + (f64::from(corner.layer_height()) - W3E_LAYER_BIAS) * tile
+    };
+    let (dx, dy) = (point_x - f64::from(cell_x), point_y - f64::from(cell_y));
+    let (south_west, south_east, north_west, north_east) = (
+        terrain.corner(cell_x, cell_y)?,
+        terrain.corner(cell_x + 1, cell_y)?,
+        terrain.corner(cell_x, cell_y + 1)?,
+        terrain.corner(cell_x + 1, cell_y + 1)?,
+    );
+    let south = corner_height(south_west) * (1.0 - dx) + corner_height(south_east) * dx;
+    let north = corner_height(north_west) * (1.0 - dx) + corner_height(north_east) * dx;
+    Some(south * (1.0 - dy) + north * dy)
+}
+
+/// Live tree disc from admitted creation data: position and `scale` from the
+/// executed destructable record, `tree` from the admitted `targType` record
+/// (`destructable_host.rs` `stats_if_destructable`), base from the admitted
+/// heightfield. Radius and canopy are the labelled recreation choices above.
+/// `None` (fail-open: the tree casts no shadow) when any input is unusable.
+pub(crate) fn tree_occluder(
+    terrain: &pcx_map::Terrain,
+    encoding: [f32; 3],
+    creation: &super::super::DestructableCreation,
+) -> Option<TreeOccluder> {
+    if !creation.scale.is_finite() || creation.scale <= 0.0 {
+        return None;
+    }
+    if ![creation.x, creation.y]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let (x, y) = (f64::from(creation.x), f64::from(creation.y));
+    let base = ground_z(terrain, encoding, x, y)?;
+    let scale = f64::from(creation.scale);
+    let radius = scale * TREE_RADIUS_PER_SCALE;
+    let top = base + scale * TREE_CANOPY_PER_SCALE;
+    if !(radius.is_finite() && radius > 0.0 && top.is_finite() && top > base) {
+        return None;
+    }
+    Some(TreeOccluder {
+        x,
+        y,
+        radius,
+        base,
+        top,
+    })
+}
+
+impl OcclusionInput<'_> {
+    /// Per-cell budget charge for a plan: the ray-march bound plus one test
+    /// per tree in that plan's relevant subset. The pre-check and the stamp
+    /// below add exactly this per occludable cell, so `cell_visits` stays
+    /// exact and the budget refusal still protects.
+    fn charge_for(tree_count: usize) -> usize {
+        OCCLUSION_STEPS_MAX.saturating_add(tree_count)
+    }
+
+    /// Indices of admitted trees that can shadow cells stamped for these
+    /// sources. A tree farther than its canopy plus one cell from every
+    /// eye-bearing source centre (sight radius included) cannot intersect any
+    /// eye-to-cell segment drawn for this plan: the segment stays within the
+    /// sight radius of its eye, so the closest approach exceeds the canopy
+    /// radius. Excluding farther trees changes neither the ledger (they can
+    /// never block) nor the budget accounting (pre-check and stamp use this
+    /// same subset). Sources without eyes stamp unoccluded and contribute
+    /// no occludable cells, so only eye-bearing sources qualify trees.
+    fn relevant(
+        &self,
+        sources: &[VisionSource],
+        eyes: &[Option<[f64; 3]>],
+        pitch: f64,
+    ) -> Vec<usize> {
+        debug_assert_eq!(sources.len(), eyes.len());
+        let mut out = Vec::new();
+        'trees: for (index, tree) in self.trees.iter().enumerate() {
+            if !tree.x.is_finite()
+                || !tree.y.is_finite()
+                || !tree.radius.is_finite()
+                || tree.radius <= 0.0
+            {
+                // `blocked` skips these too, so they can never shadow.
+                continue;
+            }
+            for (source, eye) in sources.iter().zip(eyes) {
+                if eye.is_none() {
+                    continue;
+                }
+                let (center, radius) = match source.shape {
+                    VisionShape::Circle { center, radius } => {
+                        (center.map(f64::from), f64::from(radius))
+                    }
+                    // Modifiers stamp unoccluded and carry no eye, but a
+                    // rectangular source still bounds possibly-shadowed cells;
+                    // its half-diagonal is a safe over-approximation.
+                    VisionShape::Rectangle { bounds } => {
+                        let [left, bottom, right, top] = bounds.map(f64::from);
+                        (
+                            [(left + right) / 2.0, (bottom + top) / 2.0],
+                            ((right - left).hypot(top - bottom)) / 2.0,
+                        )
+                    }
+                };
+                if !radius.is_finite() || radius < 0.0 {
+                    continue;
+                }
+                let dx = tree.x - center[0];
+                let dy = tree.y - center[1];
+                // Eye and cell both lie within sight radius plus sampling
+                // slop of the source centre; anything farther than that plus
+                // the canopy cannot touch the segment.
+                if dx.hypot(dy) <= radius + tree.radius + pitch {
+                    out.push(index);
+                    continue 'trees;
+                }
+            }
+        }
+        out
+    }
+
+    /// Change detector over the tree list plus the terrain identity. Terrain
+    /// content is immutable per admitted context, so dimensions, origin and
+    /// the placement encoding identify the heightfield; a tree add/remove/move
+    /// is what forces a restamp of otherwise unchanged sources. FNV-1a over
+    /// the admitted bits; a local change detector, not a format hash.
+    fn sig(&self) -> u64 {
+        let mut sig = 0xcbf2_9ce4_8422_3255u64;
+        let mut mix = |word: u32| {
+            sig ^= u64::from(word);
+            sig = sig.wrapping_mul(0x100_0000_01b3);
+        };
+        let (origin_x, origin_y) = self.terrain.origin();
+        mix(self.terrain.width());
+        mix(self.terrain.height());
+        mix(origin_x.to_bits());
+        mix(origin_y.to_bits());
+        for value in self.encoding {
+            mix(value.to_bits());
+        }
+        for tree in self.trees {
+            for word in [
+                tree.x.to_bits(),
+                tree.y.to_bits(),
+                tree.radius.to_bits(),
+                tree.base.to_bits(),
+                tree.top.to_bits(),
+            ] {
+                sig ^= word;
+                sig = sig.wrapping_mul(0x100_0000_01b3);
+            }
+        }
+        sig
+    }
+
+    /// The sight origin for a source, or `None` when it is not occludable:
+    /// only `Visible` circles participate (rectangular modifiers stamp
+    /// unoccluded; native rectangle-vs-occluder sampling is undecoded), and an
+    /// unsamplable eye fails open.
+    fn eye(&self, source: &VisionSource) -> Option<[f64; 3]> {
+        if source.state != VisionState::Visible {
+            return None;
+        }
+        let VisionShape::Circle { center, .. } = source.shape else {
+            return None;
+        };
+        if !center.iter().all(|value| value.is_finite()) {
+            return None;
+        }
+        let (x, y) = (f64::from(center[0]), f64::from(center[1]));
+        let ground = ground_z(self.terrain, self.encoding, x, y)?;
+        let lift = f64::from(source.source_height.unwrap_or(VIEWER_EYE_ABOVE_GROUND));
+        if !lift.is_finite() || lift < 0.0 {
+            return None;
+        }
+        Some([x, y, ground + lift])
+    }
+
+    /// Whether the sight ray from `eye` to a cell centre is shadowed.
+    /// Analytic 2D segment-vs-disc per tree (blocked when the ray is under the
+    /// canopy at segment entry or exit), then a height-lerp ray-march over the
+    /// admitted heightfield. Symmetric in height (high sees low as low sees
+    /// high); native height-asymmetric rules are undecoded. Any unsamplable
+    /// point fails open to visible. Only the plan's relevant trees are tested;
+    /// farther trees cannot intersect the segment (see `relevant`).
+    fn blocked(&self, eye: [f64; 3], cell: [f64; 2], pitch: f64, trees: &[usize]) -> bool {
+        let Some(target) = ground_z(self.terrain, self.encoding, cell[0], cell[1]) else {
+            return false;
+        };
+        let [eye_x, eye_y, eye_z] = eye;
+        if !eye_z.is_finite() || !target.is_finite() {
+            return false;
+        }
+        let (dx, dy) = (cell[0] - eye_x, cell[1] - eye_y);
+        let along2 = dx * dx + dy * dy;
+        if !along2.is_finite() || along2 <= 0.0 {
+            return false;
+        }
+        for &index in trees {
+            // Indices come from `relevant` over this same list; anything else
+            // fails open rather than panicking.
+            let Some(tree) = self.trees.get(index) else {
+                continue;
+            };
+            if ![tree.x, tree.y, tree.radius, tree.top]
+                .iter()
+                .all(|value| value.is_finite())
+                || tree.radius <= 0.0
+            {
+                continue;
+            }
+            // Segment from the eye to the cell against the tree disc.
+            let (fx, fy) = (eye_x - tree.x, eye_y - tree.y);
+            if fx * fx + fy * fy < tree.radius * tree.radius {
+                // The eye stands inside the canopy: no self-shadow.
+                continue;
+            }
+            let along = fx * dx + fy * dy;
+            let discriminant =
+                along * along - along2 * (fx * fx + fy * fy - tree.radius * tree.radius);
+            if discriminant < 0.0 || !discriminant.is_finite() {
+                continue;
+            }
+            let root = discriminant.sqrt();
+            let (enter, exit) = (
+                ((-along - root) / along2).max(0.0),
+                ((-along + root) / along2).min(1.0),
+            );
+            if enter > exit {
+                continue;
+            }
+            // Recreation choice: under the canopy at either overlap end
+            // shadows; a ray that stays above the top throughout stays visible.
+            let height_at = |t: f64| eye_z + (target - eye_z) * t;
+            if height_at(enter) < tree.top || height_at(exit) < tree.top {
+                return true;
+            }
+        }
+        if !pitch.is_finite() || pitch <= 0.0 {
+            return false;
+        }
+        let dist = along2.sqrt();
+        let steps =
+            ((dist / pitch).ceil() as usize).clamp(OCCLUSION_STEPS_MIN, OCCLUSION_STEPS_MAX);
+        for step in 1..=steps {
+            let t = step as f64 / steps as f64;
+            let ray = eye_z + (target - eye_z) * t;
+            let (px, py) = (eye_x + dx * t, eye_y + dy * t);
+            if ground_z(self.terrain, self.encoding, px, py)
+                .is_some_and(|ground| ground > ray + OCCLUSION_TOLERANCE)
+            {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub(crate) struct SharedVision {
@@ -400,8 +812,14 @@ pub(crate) struct SharedVision {
     /// Counts samples that changed any viewer's cells or the set of viewers.
     revision: u64,
     ready: bool,
-    /// Terrain and tree occlusion are not part of this sampler.
+    /// Whether the last successful sample ran the occlusion pass. Stays false
+    /// without occlusion input; a refused budget changes nothing.
     occlusion_applied: bool,
+    /// Tree-list signature the current cells were stamped with (`None` when
+    /// the last successful sample carried no occlusion input). A changed
+    /// signature forces a full restamp of otherwise unchanged sources so a
+    /// chopped or grown tree cannot leave a stale shadow.
+    occlusion_sig: Option<u64>,
     last: VisionSampleStats,
 }
 
@@ -417,6 +835,7 @@ impl SharedVision {
             ready: false,
             revision: 0,
             occlusion_applied: false,
+            occlusion_sig: None,
             last: VisionSampleStats {
                 cell_visits: 0,
                 emitted_sources: 0,
@@ -570,7 +989,9 @@ impl SharedVision {
         plans: Vec<(HandleId, Vec<VisionSource>)>,
         work_limit: usize,
         candidates_scanned: usize,
+        occlusion: Option<&OcclusionInput>,
     ) -> Result<VisionSampleStats, String> {
+        let occlusion_sig = occlusion.map(|input| input.sig());
         let mut planned: Vec<Planned> = Vec::new();
         planned
             .try_reserve_exact(plans.len())
@@ -583,7 +1004,10 @@ impl SharedVision {
                 .checked_add(sources.len())
                 .ok_or("shared vision work overflow")?;
             let previous = self.viewers.get(&id);
-            if let Some(viewer) = previous.filter(|viewer| viewer.sources == sources) {
+            if previous.is_some_and(|viewer| viewer.sources == sources)
+                && self.occlusion_sig == occlusion_sig
+            {
+                let viewer = previous.expect("checked sources");
                 for (source, footprint) in viewer.sources.iter().zip(&viewer.footprints) {
                     current_footprints
                         .entry(shape_key(source.shape))
@@ -593,6 +1017,9 @@ impl SharedVision {
                     id,
                     sources,
                     footprints: Vec::new(),
+                    eyes: Vec::new(),
+                    // Unchanged plans stamp nothing, so no tree subset is needed.
+                    trees: Vec::new(),
                     update: Update::Unchanged,
                 });
                 continue;
@@ -604,14 +1031,30 @@ impl SharedVision {
             for source in &sources {
                 footprints.push(self.footprint(&mut current_footprints, source.shape)?);
             }
-            let update = Self::plan_update(previous, &sources, &footprints);
+            let eyes: Vec<Option<[f64; 3]>> = match occlusion {
+                Some(input) => sources.iter().map(|source| input.eye(source)).collect(),
+                None => Vec::new(),
+            };
+            // Trees that can shadow this plan's cells; pre-check and stamp
+            // charge exactly this subset (see `relevant`).
+            let trees = match occlusion {
+                Some(input) => input.relevant(&sources, &eyes, self.shape.pitch),
+                None => Vec::new(),
+            };
+            let mut update = Self::plan_update(previous, &sources, &footprints);
+            if self.occlusion_sig != occlusion_sig {
+                // The occlusion input changed (added, removed, or different
+                // trees): every cell is re-evaluated, so a chopped tree cannot
+                // leave a stale shadow and a removed input cannot keep shadows.
+                update = Update::Full;
+            }
             let area_sum = |footprints: &[Arc<Footprint>]| {
                 footprints.iter().try_fold(0usize, |sum, footprint| {
                     sum.checked_add(footprint.rect.area())
                         .ok_or("shared vision work overflow")
                 })
             };
-            let work = match &update {
+            let mut work = match &update {
                 Update::Unchanged => 0,
                 Update::Full => {
                     let reset = previous.map_or(Ok(0), |viewer| area_sum(&viewer.footprints))?;
@@ -624,6 +1067,50 @@ impl SharedVision {
                         .ok_or("shared vision work overflow")
                 })?,
             };
+            // Per-plan occlusion charge for the same subset the stamp below
+            // tests (see `relevant`); zero without occlusion input.
+            let charge = match &occlusion {
+                Some(_) => OcclusionInput::charge_for(trees.len()),
+                None => 0,
+            };
+            if charge > 0 {
+                // Upper bound of the occlusion ray-march, in the same cells the
+                // stamp below charges exactly, so the budget refusal still
+                // protects and `cell_visits` stays exact. Only relevant trees
+                // are charged (see `relevant`).
+                let occludable = match &update {
+                    Update::Unchanged => 0,
+                    Update::Full => {
+                        eyes.iter()
+                            .zip(&footprints)
+                            .try_fold(0usize, |sum, (eye, footprint)| {
+                                if eye.is_none() {
+                                    return Ok(sum);
+                                }
+                                let covered =
+                                    footprint.runs.iter().try_fold(0usize, |sum, &(x0, x1)| {
+                                        sum.checked_add(x1 - x0)
+                                            .ok_or("shared vision work overflow")
+                                    })?;
+                                sum.checked_add(covered)
+                                    .ok_or("shared vision work overflow")
+                            })?
+                    }
+                    // Over-charges cells no source shadows, exactly as the
+                    // stamp below charges every recomputed cell.
+                    Update::Cells(runs) => runs.iter().try_fold(0usize, |sum, run| {
+                        sum.checked_add(run.x1 - run.x0)
+                            .ok_or("shared vision work overflow")
+                    })?,
+                };
+                work = work
+                    .checked_add(
+                        occludable
+                            .checked_mul(charge)
+                            .ok_or("shared vision work overflow")?,
+                    )
+                    .ok_or("shared vision work overflow")?;
+            }
             cell_visits = cell_visits
                 .checked_add(work)
                 .ok_or("shared vision work overflow")?;
@@ -631,6 +1118,8 @@ impl SharedVision {
                 id,
                 sources,
                 footprints,
+                eyes,
+                trees,
                 update,
             });
         }
@@ -670,13 +1159,41 @@ impl SharedVision {
                     for footprint in std::mem::take(&mut viewer.footprints) {
                         viewer.reset_rect(footprint.rect, width, &mut visits);
                     }
-                    viewer.stamp(&plan.sources, &plan.footprints, self, &mut visits);
+                    let occlusion = occlusion.map(|input| StampOcclusion {
+                        input,
+                        eyes: &plan.eyes,
+                        trees: &plan.trees,
+                    });
+                    viewer.stamp(
+                        &plan.sources,
+                        &plan.footprints,
+                        self,
+                        occlusion,
+                        &mut visits,
+                    );
                 }
                 Update::Cells(runs) => {
+                    let occlusion = occlusion.map(|input| StampOcclusion {
+                        input,
+                        eyes: &plan.eyes,
+                        trees: &plan.trees,
+                    });
+                    // No occlusion input means no occlusion charge, matching
+                    // the pre-check gate above; relevant trees are per plan.
+                    let charge = match &occlusion {
+                        Some(stamp) => OcclusionInput::charge_for(stamp.trees.len()),
+                        None => 0,
+                    };
                     for run in runs {
-                        visits += run.x1 - run.x0;
+                        visits += (run.x1 - run.x0) * (1 + charge);
                         for x in run.x0..run.x1 {
-                            viewer.recompute(&plan.sources, &plan.footprints, self, x, run.y);
+                            viewer.recompute(
+                                &plan.sources,
+                                &plan.footprints,
+                                self,
+                                occlusion,
+                                [x, run.y],
+                            );
                         }
                     }
                 }
@@ -698,6 +1215,8 @@ impl SharedVision {
         changed |= self.viewers.len() != viewer_count;
         self.revision += u64::from(changed);
         self.ready = true;
+        self.occlusion_sig = occlusion_sig;
+        self.occlusion_applied = occlusion.is_some();
         self.last = VisionSampleStats {
             cell_visits,
             emitted_sources,
@@ -711,6 +1230,14 @@ pub(crate) enum VisionSlot {
     Blocked(VisionBlock),
     Live(Box<SharedVision>),
 }
+
+/// Admitted heightfield, placement encoding and live tree discs backing one
+/// occlusion pass.
+type OcclusionStore = (
+    Arc<crate::map_admission::ParsedMapContext>,
+    [f32; 3],
+    Vec<TreeOccluder>,
+);
 
 impl ObjectHost {
     /// Admit the placement grid when day/night classification is available.
@@ -892,14 +1419,68 @@ impl ObjectHost {
             );
             plans.push((viewer, listed.sources));
         }
+        let occlusion_store = self.occlusion_store()?;
         let VisionSlot::Live(vision) = self.shared_vision.as_mut().expect("admitted") else {
             return Err(fail("shared vision is not admitted".into()));
         };
+        let occlusion = occlusion_store
+            .as_ref()
+            .map(|(context, encoding, trees)| OcclusionInput {
+                terrain: &context.terrain,
+                encoding: *encoding,
+                trees,
+            });
         let stats = vision
-            .apply(plans, work_limit, candidates_scanned)
+            .apply(plans, work_limit, candidates_scanned, occlusion.as_ref())
             .map_err(fail)?;
         *vision.radii = radii.retained();
         Ok(stats)
+    }
+
+    /// Admitted heightfield plus live tree discs for the occlusion pass, or
+    /// `None` when the map context or the placement encoding is unavailable
+    /// (occlusion then stays unapplied). A missing destructable catalog leaves
+    /// terrain-only occlusion rather than refusing the sample; unusable trees
+    /// fail open (cast no shadow) via [`tree_occluder`]. Tree liveness mirrors
+    /// the harvest `tree_usable` checks (dead, hidden, invulnerable, lifeless)
+    /// and `tree` comes from the admitted `targType` record.
+    fn occlusion_store(&self) -> Result<Option<OcclusionStore>, Error> {
+        let fail = |detail: String| self.inner.error("vision", Failure::UnitActivity(detail));
+        let Some(context) = self.player_context().cloned() else {
+            return Ok(None);
+        };
+        let Some(placement) = self.unit_placement.as_ref() else {
+            return Ok(None);
+        };
+        let encoding = placement.rules().terrain_encoding();
+        let mut trees = Vec::new();
+        if let Some(catalog) = self.destructable_catalog.as_ref() {
+            for (_, creation, state) in self.destructables_with_handles() {
+                if state.dead
+                    || state.hidden
+                    || state.invulnerable
+                    || !state.life.is_some_and(|life| life > 0.0)
+                {
+                    continue;
+                }
+                let tree = catalog
+                    .stats_if_destructable(creation.objectid)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|stats| stats.tree);
+                if !tree {
+                    continue;
+                }
+                let Some(disc) = tree_occluder(&context.terrain, encoding, &creation) else {
+                    continue;
+                };
+                trees
+                    .try_reserve(1)
+                    .map_err(|_| fail("shared vision allocation".into()))?;
+                trees.push(disc);
+            }
+        }
+        Ok(Some((context, encoding, trees)))
     }
 
     /// Raw cell at a world point. `Ok(None)` is outside the admitted extent.
@@ -991,6 +1572,7 @@ mod tests {
                 vec![(viewer, vec![circle([0.5, 3.5], 0.6, VisionState::Visible)])],
                 64,
                 0,
+                None,
             )
             .unwrap();
         assert!(stats.cell_visits > 0);
@@ -1022,6 +1604,7 @@ mod tests {
                 vec![(viewer, vec![circle([3.5, 0.5], 0.6, VisionState::Visible)])],
                 64,
                 0,
+                None,
             )
             .unwrap();
         assert!(moved.cell_visits >= 2);
@@ -1051,13 +1634,13 @@ mod tests {
         }];
         let wide = std::iter::repeat_n(sources[0], 20).collect::<Vec<_>>();
         let first = vision
-            .apply(vec![(viewer, wide.clone())], 262_144, 0)
+            .apply(vec![(viewer, wide.clone())], 262_144, 0, None)
             .unwrap();
         assert_eq!(first.cell_visits, 20 * 64 * 64);
         assert_eq!(first.emitted_sources, 20);
         assert_eq!(first.candidates_scanned, 0);
         assert!(first.cell_visits > 65_536);
-        let again = vision.apply(vec![(viewer, wide)], 0, 40).unwrap();
+        let again = vision.apply(vec![(viewer, wide)], 0, 40, None).unwrap();
         assert_eq!(again.cell_visits, 0);
         assert_eq!(again.emitted_sources, 20);
         assert_eq!(again.candidates_scanned, 40);
@@ -1067,6 +1650,7 @@ mod tests {
                 vec![(viewer, vec![circle([1.5, 1.5], 0.4, VisionState::Visible)])],
                 0,
                 99,
+                None,
             )
             .unwrap_err();
         assert!(err.contains("budget"));
@@ -1096,6 +1680,7 @@ mod tests {
                 )],
                 32,
                 0,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -1267,7 +1852,7 @@ mod tests {
         for step in 0..steps {
             mutate(&mut random, &mut sources, extent, rect_odds);
             let stats = vision
-                .apply(vec![(viewer, sources.clone())], usize::MAX, 0)
+                .apply(vec![(viewer, sources.clone())], usize::MAX, 0, None)
                 .unwrap();
             full += oracle.apply(&shape, &sources);
             incremental += stats.cell_visits;
@@ -1301,14 +1886,14 @@ mod tests {
             .map(|n| circle([20. + 5. * n as f32, 100.], 30., VisionState::Visible))
             .collect();
         vision
-            .apply(vec![(viewer, sources.clone())], usize::MAX, 0)
+            .apply(vec![(viewer, sources.clone())], usize::MAX, 0, None)
             .unwrap();
         sources[4].shape = VisionShape::Circle {
             center: [40.5, 100.],
             radius: 30.,
         };
         let moved = vision
-            .apply(vec![(viewer, sources)], usize::MAX, 0)
+            .apply(vec![(viewer, sources)], usize::MAX, 0, None)
             .unwrap();
         assert!(
             (1..200).contains(&moved.cell_visits),
@@ -1365,6 +1950,358 @@ mod tests {
                 assert_eq!(covered, (x0..x1).collect::<Vec<_>>(), "{shape:?} row {y}");
             }
         }
+    }
+
+    /// Synthetic corner grid: `corners` holds `(height_index, layer)`
+    /// row-major over `(width + 1) * (height + 1)` corners at origin `(0, 0)`.
+    /// Layout mirrors `terrain_blight_tests::terrain`; the per-corner height
+    /// index is what the occlusion pass reads.
+    fn terrain_grid(width: u32, height: u32, corners: &[(u16, u8)]) -> pcx_map::Terrain {
+        assert_eq!(corners.len(), (width + 1) as usize * (height + 1) as usize);
+        let mut bytes = b"W3E!".to_vec();
+        bytes.extend(11u32.to_le_bytes());
+        bytes.push(b'L');
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(b"T001");
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend((width + 1).to_le_bytes());
+        bytes.extend((height + 1).to_le_bytes());
+        bytes.extend(0f32.to_le_bytes());
+        bytes.extend(0f32.to_le_bytes());
+        for (height_index, layer) in corners {
+            bytes.extend(height_index.to_le_bytes());
+            bytes.extend(0u16.to_le_bytes());
+            bytes.push(0);
+            bytes.push(0);
+            bytes.push(*layer);
+        }
+        pcx_map::Terrain::from_bytes(bytes).unwrap()
+    }
+
+    /// Synthetic placement encoding: one world unit per tile, zero bias, four
+    /// raw indices per world unit (so `world z = height_index / 4`).
+    const OCCLUSION_ENCODING: [f32; 3] = [1.0, 0.0, 4.0];
+
+    fn occlusion<'a>(
+        terrain: &'a pcx_map::Terrain,
+        trees: &'a [TreeOccluder],
+    ) -> OcclusionInput<'a> {
+        OcclusionInput {
+            terrain,
+            encoding: OCCLUSION_ENCODING,
+            trees,
+        }
+    }
+
+    fn flat_terrain() -> pcx_map::Terrain {
+        terrain_grid(8, 8, &[(0, 2); 81])
+    }
+
+    /// A north-south ridge one corner wide at world `x == 4`, `height` world
+    /// units tall, ramping over the neighbouring tiles.
+    fn ridge_terrain(height: f32) -> pcx_map::Terrain {
+        let index = (height * OCCLUSION_ENCODING[2]) as u16;
+        let corners = (0..81)
+            .map(|n| if n % 9 == 4 { (index, 2) } else { (0, 2) })
+            .collect::<Vec<_>>();
+        terrain_grid(8, 8, &corners)
+    }
+
+    #[test]
+    fn flat_terrain_leaves_circular_sight_unchanged() {
+        let terrain = flat_terrain();
+        let input = occlusion(&terrain, &[]);
+        let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+        let viewer = id(20);
+        let sources = vec![
+            circle([1.5, 3.5], 3.0, VisionState::Visible),
+            VisionSource {
+                shape: VisionShape::Rectangle {
+                    bounds: [5., 5., 7., 7.],
+                },
+                state: VisionState::Visible,
+                after_units: false,
+                origin: VisionOrigin::Modifier { modifier: id(21) },
+                source_height: None,
+            },
+        ];
+        vision
+            .apply(vec![(viewer, sources.clone())], usize::MAX, 0, Some(&input))
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        // The occluded stamp matches an unoccluded stamp cell for cell,
+        // including rectangular modifiers (which never participate).
+        let mut plain = grid([[0., 0.], [8., 8.]], 1.);
+        plain
+            .apply(vec![(viewer, sources)], usize::MAX, 0, None)
+            .unwrap();
+        assert!(!plain.occlusion_applied);
+        let (stamped, expected) = (
+            vision.viewers.get(&viewer).unwrap(),
+            plain.viewers.get(&viewer).unwrap(),
+        );
+        assert_eq!(stamped.current, expected.current);
+        assert_eq!(stamped.explored, expected.explored);
+        assert_eq!(
+            cell(&vision, viewer, [1.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        assert_eq!(
+            cell(&vision, viewer, [6.5, 5.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        assert_eq!(
+            cell(&vision, viewer, [7.5, 7.5]),
+            VisionCell {
+                raw: VisionState::Masked,
+                explored: false
+            }
+        );
+    }
+
+    #[test]
+    fn ridge_shadows_cells_behind_it_and_keeps_explored_history() {
+        let terrain = ridge_terrain(256.0);
+        let input = occlusion(&terrain, &[]);
+        let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+        let viewer = id(22);
+        // Explore the far cell first without occlusion, so the shadowed sample
+        // below must retain its explored history while fogging the raw state.
+        vision
+            .apply(
+                vec![(viewer, vec![circle([1.5, 3.5], 5.0, VisionState::Visible)])],
+                usize::MAX,
+                0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            cell(&vision, viewer, [6.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        vision
+            .apply(
+                vec![(viewer, vec![circle([1.5, 3.5], 5.0, VisionState::Visible)])],
+                usize::MAX,
+                0,
+                Some(&input),
+            )
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        assert_eq!(
+            cell(&vision, viewer, [2.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        assert_eq!(
+            cell(&vision, viewer, [6.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Fogged,
+                explored: true
+            }
+        );
+    }
+
+    #[test]
+    fn eye_over_a_low_wall_still_sees_beyond_it() {
+        let terrain = ridge_terrain(32.0);
+        let input = occlusion(&terrain, &[]);
+        let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+        let viewer = id(23);
+        vision
+            .apply(
+                vec![(viewer, vec![circle([1.5, 3.5], 5.0, VisionState::Visible)])],
+                usize::MAX,
+                0,
+                Some(&input),
+            )
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        // The 128-unit recreation eye clears the 32-unit ridge.
+        assert_eq!(
+            cell(&vision, viewer, [6.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+    }
+
+    #[test]
+    fn single_tree_disc_shadows_and_its_removal_restores_sight() {
+        let terrain = flat_terrain();
+        let tree = [TreeOccluder {
+            x: 3.0,
+            y: 3.5,
+            radius: 1.0,
+            base: 0.0,
+            top: 200.0,
+        }];
+        let viewer = id(24);
+        let sources = || vec![circle([0.5, 3.5], 6.0, VisionState::Visible)];
+        // Explore the far cell first without occlusion, as above.
+        let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+        vision
+            .apply(vec![(viewer, sources())], usize::MAX, 0, None)
+            .unwrap();
+        assert_eq!(cell(&vision, viewer, [5.5, 3.5]).raw, VisionState::Visible);
+        // The same sources with one tree between source and cell: the far cell
+        // fogs but keeps its explored history; the off-axis cell stays visible.
+        let input = occlusion(&terrain, &tree);
+        vision
+            .apply(vec![(viewer, sources())], usize::MAX, 0, Some(&input))
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        assert_eq!(
+            cell(&vision, viewer, [5.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Fogged,
+                explored: true
+            }
+        );
+        assert_eq!(
+            cell(&vision, viewer, [5.5, 6.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        // Removing the tree restamps the unchanged sources: the shadow lifts.
+        // The signature change forces a full restamp, not an unchanged skip.
+        let cleared = occlusion(&terrain, &[]);
+        vision
+            .apply(vec![(viewer, sources())], usize::MAX, 0, Some(&cleared))
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        assert_eq!(
+            cell(&vision, viewer, [5.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+    }
+
+    #[test]
+    fn tree_discs_derive_radius_and_canopy_from_admitted_scale() {
+        use crate::playercolor_host::{DestructableCreation, DestructableOrigin};
+        let terrain = flat_terrain();
+        let creation = DestructableCreation {
+            origin: DestructableOrigin::Script,
+            objectid: 0,
+            x: 1.5,
+            y: 1.5,
+            z: None,
+            face: 0.0,
+            scale: 2.0,
+            variation: 0,
+            dead: false,
+        };
+        assert_eq!(
+            tree_occluder(&terrain, OCCLUSION_ENCODING, &creation),
+            Some(TreeOccluder {
+                x: 1.5,
+                y: 1.5,
+                radius: 2.0 * TREE_RADIUS_PER_SCALE,
+                base: 0.0,
+                top: 2.0 * TREE_CANOPY_PER_SCALE,
+            })
+        );
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                tree_occluder(
+                    &terrain,
+                    OCCLUSION_ENCODING,
+                    &DestructableCreation { scale, ..creation }
+                ),
+                None,
+                "unusable scale casts no shadow: {scale}"
+            );
+        }
+        assert_eq!(
+            tree_occluder(
+                &terrain,
+                OCCLUSION_ENCODING,
+                &DestructableCreation {
+                    x: 500.0,
+                    y: 500.0,
+                    ..creation
+                }
+            ),
+            None,
+            "a tree outside the admitted heightfield casts no shadow"
+        );
+    }
+
+    #[test]
+    fn flag_tracks_the_pass_and_a_refused_budget_keeps_history() {
+        let terrain = flat_terrain();
+        let input = occlusion(&terrain, &[]);
+        let viewer = id(25);
+        let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+        vision
+            .apply(
+                vec![(viewer, vec![circle([0.5, 3.5], 1.0, VisionState::Visible)])],
+                usize::MAX,
+                0,
+                None,
+            )
+            .unwrap();
+        assert!(!vision.occlusion_applied);
+        vision
+            .apply(
+                vec![(viewer, vec![circle([0.5, 3.5], 1.0, VisionState::Visible)])],
+                usize::MAX,
+                7,
+                Some(&input),
+            )
+            .unwrap();
+        assert!(vision.occlusion_applied);
+        let kept = vision.last;
+        // A moved source charges work; a zero limit refuses before any write.
+        let err = vision
+            .apply(
+                vec![(viewer, vec![circle([6.5, 6.5], 1.0, VisionState::Visible)])],
+                0,
+                99,
+                Some(&input),
+            )
+            .unwrap_err();
+        assert!(err.contains("budget"));
+        assert_eq!(
+            cell(&vision, viewer, [0.5, 3.5]),
+            VisionCell {
+                raw: VisionState::Visible,
+                explored: true
+            }
+        );
+        assert_eq!(cell(&vision, viewer, [6.5, 6.5]).raw, VisionState::Masked);
+        assert_eq!(vision.last, kept);
+        assert!(vision.occlusion_applied);
+        // Without any prior success a refusal leaves the flag false.
+        let mut fresh = grid([[0., 0.], [8., 8.]], 1.);
+        let err = fresh
+            .apply(
+                vec![(viewer, vec![circle([0.5, 3.5], 1.0, VisionState::Visible)])],
+                0,
+                0,
+                Some(&input),
+            )
+            .unwrap_err();
+        assert!(err.contains("budget"));
+        assert!(!fresh.occlusion_applied);
     }
 
     fn cell(vision: &SharedVision, viewer: HandleId, point: [f32; 2]) -> VisionCell {
