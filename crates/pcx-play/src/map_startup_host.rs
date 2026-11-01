@@ -748,6 +748,7 @@ fn assemble_inner(
         .with_label_sound_creation(label_sound_creation)?
         .with_sound_starts(budgets.sound_starts)?
         .with_map_music_selection(budgets.map_music_bytes)?
+        .with_play_music(budgets.map_music_bytes)?
         .with_file_sounds(file_sounds, budgets.file_sound_eax_bytes)?
         .with_sound_parameter_banks(sound_parameters)?
         .with_sound_duration()?

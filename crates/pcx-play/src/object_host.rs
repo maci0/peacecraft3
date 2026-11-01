@@ -89,6 +89,7 @@ pub struct ObjectHost {
     destructable_restore: Option<destructables::RestoreLifePolicy>,
     placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
     map_music: Option<music::State>,
+    play_music: Option<play_music::State>,
     sound_environments: Option<environments::State>,
     quests: Option<crate::quest_session::QuestSession>,
     game_caches: Option<game_caches::State>,
@@ -277,6 +278,7 @@ impl ObjectHost {
             destructable_restore: None,
             placed_sources: std::collections::BTreeMap::new(),
             map_music: None,
+            play_music: None,
             sound_environments: None,
             quests: None,
             game_caches: None,
@@ -1005,6 +1007,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.file_sound_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.play_music_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.map_music_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1297,6 +1302,10 @@ mod terrain_pathing;
 #[path = "map_music_host.rs"]
 mod music;
 pub use music::MapMusicSelection;
+
+#[path = "play_music_host.rs"]
+mod play_music;
+pub use play_music::{PlayMusicRequest, ThematicMusicExRequest};
 
 #[path = "sound_environment_host.rs"]
 mod environments;
