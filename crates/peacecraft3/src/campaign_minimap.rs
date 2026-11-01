@@ -80,6 +80,7 @@ pub(crate) struct CampaignMinimap {
     witness: Option<Weak<()>>,
     attempted: bool,
     root: Option<Entity>,
+    surface: Option<Entity>,
     image_node: Option<Entity>,
     image: Option<Handle<Image>>,
     fog: Option<FogImage>,
@@ -92,12 +93,18 @@ pub(crate) struct CampaignMinimap {
     pub member: Option<String>,
     pub shown: bool,
     pub last_error: Option<String>,
+    /// Best-effort world position of the last Alt+left signal (`MINIMAPSIGNALTOOLTIP_UBER`).
+    pub last_signal: Option<[f32; 2]>,
     terrain_hidden: bool,
 }
 impl CampaignMinimap {
     /// The terrain button's state; hidden terrain leaves the fog mask and markers over black.
     pub(crate) fn set_terrain_hidden(&mut self, hidden: bool) {
         self.terrain_hidden = hidden;
+    }
+    /// Parent for overlay widgets (signal pings) that track the minimap surface.
+    pub(crate) fn overlay_parent(&self) -> Option<Entity> {
+        self.surface.or(self.root)
     }
 }
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
@@ -232,7 +239,7 @@ fn consume_pointer(
         return;
     }
     // Alt + left click signals allies instead of moving the camera
-    // (`MINIMAPSIGNALTOOLTIP_UBER`); the signal itself is not drawn yet.
+    // (`MINIMAPSIGNALTOOLTIP_UBER`); the ping overlay reads `last_signal` via `overlay_parent`.
     let signal = controls
         .game_input
         .as_ref()
@@ -241,7 +248,20 @@ fn consume_pointer(
         if pressed {
             state.drag = None;
         }
-        if pressed && signal && request.button == PointerButton::Primary {
+        if signal && request.button == PointerButton::Primary {
+            // Best-effort world position: record when the fraction, bounds and
+            // raster are all available, otherwise keep the previous signal and
+            // never refuse the press.
+            if let Some(fraction) = request.fraction
+                && let Some(host) = session.host()
+                && let Some(bounds) = host.objects().vision_world_bounds()
+                && let Some(fog) = state.fog.as_ref()
+                && let Ok(target) = fog.raster.world_at(bounds, fraction.to_array())
+            {
+                state.last_signal = Some(target);
+                let parent = state.overlay_parent();
+                debug!(?target, ?parent, signal = ?state.last_signal, "campaign minimap signal");
+            }
             continue;
         }
         let result = (|| -> Result<(), String> {
@@ -316,12 +336,25 @@ fn consume_pointer(
                 MinimapAction::PointOrder(kind) => {
                     state.drag = None;
                     let before = input.commands.entries().len();
+                    // Unit icons are the minimap's unit targets: hit-test the drawn
+                    // marker blocks at this press and pass the unit through.
+                    let icon = match (state.markers.as_mut(), state.fog.as_ref()) {
+                        (Some(Ok(markers)), Some(fog)) => {
+                            let pixel = [
+                                f64::from(fraction.x) * f64::from(fog.width),
+                                f64::from(fraction.y) * f64::from(fog.height),
+                            ];
+                            markers.icon_at(objects, fog, pixel)?
+                        }
+                        _ => None,
+                    };
                     crate::campaign_input::standard_target(
-                        objects, &mut input, kind, target, None,
+                        objects, &mut input, kind, target, icon,
                     )?;
                     debug!(
                         ?target,
                         ?kind,
+                        ?icon,
                         recorded = input.commands.entries().len() - before,
                         "campaign minimap point order"
                     );
@@ -384,8 +417,13 @@ fn load_image(
         }
         let decoded =
             pcx_gfx::load_image_bounded(&bytes, member, PIXEL_BYTES).map_err(|e| e.to_string())?;
-        // shortcut: house clamp/linear sampling; qualify native sampling with the paired render.
-        let image = pcx_gfx::viewer::rgba_image(&decoded);
+        // House clamp/linear sampling (recreation choice); qualify native sampling with a paired render.
+        let mut image = pcx_gfx::viewer::rgba_image(&decoded);
+        let mut sampler = bevy::image::ImageSamplerDescriptor::linear();
+        sampler.address_mode_u = bevy::image::ImageAddressMode::ClampToEdge;
+        sampler.address_mode_v = bevy::image::ImageAddressMode::ClampToEdge;
+        sampler.address_mode_w = bevy::image::ImageAddressMode::ClampToEdge;
+        image.sampler = bevy::image::ImageSampler::Descriptor(sampler);
         return Ok((member.into(), image));
     }
     Err("admitted map has no minimap image in the selected client's lookup order".into())
@@ -700,6 +738,7 @@ fn project(
         .id();
     commands.entity(root).add_child(surface);
     state.root = Some(root);
+    state.surface = Some(surface);
     let result: Result<(String, Image), String> = (|| {
         let map = pcx_map::Map::parse(&bindings.catalog_map_bytes).map_err(|e| e.to_string())?;
         let budget = pcx_mpq::checked::ReadBudget {

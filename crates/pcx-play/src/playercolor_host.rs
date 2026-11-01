@@ -272,6 +272,11 @@ enum Entry {
     Region {
         additions: Vec<objects::RegionRectRequest>,
     },
+    /// A region after `RemoveRegion`; its call-time bounds stay retained for
+    /// registration history while membership and new additions refuse.
+    RemovedRegion {
+        additions: Vec<objects::RegionRectRequest>,
+    },
     RegisteredRegionEvent(objects::RegionEventRegistration),
     CameraSetup {
         fields: Vec<objects::CameraFieldRecord>,
@@ -806,6 +811,9 @@ impl EnumHost {
             }
             Entry::Rect { bounds: Some(_) } => "rect",
             Entry::Region { .. } => "region",
+            Entry::RemovedRegion { .. } => {
+                return Err(self.error("arena", Failure::Identity));
+            }
             Entry::Rect { bounds: None } => {
                 return Err(self.error("arena", Failure::Identity));
             }
@@ -985,3 +993,6 @@ pub use objects::{OrderForm, QueueBudget, QueueOutcome, QueueRefusal, SmartRefus
 pub use objects::{UseCheck, UseCommit, UseGrant};
 
 pub use objects::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};
+
+pub use objects::{NativeCoverage, WorldSnapshot};
+pub use objects::CorpseTiming;

@@ -3,6 +3,24 @@ use crate::{neutral_player::sha256, pe_image::PeSections};
 
 pub use pcx_objects::editor::ally_color::{Palette, Role};
 
+/// Minimap layer for a unit marker. The role color is unchanged; the layer
+/// only selects geometry/retention: heroes draw larger, resources/camps draw
+/// with the building class, ordinary units keep the existing class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialMinimapLayer {
+    Ordinary,
+    Hero,
+    Resource,
+    Camp,
+}
+
+/// Persisted UI preference across map/application replacement. The raw integer
+/// round-trips unchanged; interpretation always uses the newly admitted rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersistedAllyColor {
+    pub raw_state: i32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Rules {
     pub image_sha256: [u8; 32],
@@ -184,6 +202,67 @@ impl Rules {
 pub struct Input {
     pub rules: Rules,
     pub palette: Palette,
+}
+
+/// Caller-supplied original-client pixel reference for ally/minimap/water
+/// comparisons. The expected bytes come from a locally retained original
+/// capture; nothing here hard-codes a color. Both buffers must share extents;
+/// the comparison reports per-channel absolute differences so a harness can
+/// gate pixel parity without inventing tolerance constants in production.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PixelComparison {
+    /// Maximum accepted absolute difference per channel (0 = exact).
+    pub tolerance_per_channel: u8,
+    /// Maximum accepted fraction of differing pixels (0.0 = exact).
+    pub max_differing_fraction: f32,
+}
+
+impl PixelComparison {
+    pub fn exact() -> Self {
+        Self {
+            tolerance_per_channel: 0,
+            max_differing_fraction: 0.0,
+        }
+    }
+
+    /// Compare two RGBA buffers of `pixel_count` pixels. Returns the differing
+    /// fraction, or an error when extents disagree or the policy itself is
+    /// nonfinite/out of range. Callers supply both buffers; no reference
+    /// pixels live in this module.
+    pub fn differing_fraction(
+        self,
+        actual: &[u8],
+        expected: &[u8],
+        pixel_count: usize,
+    ) -> Result<f32, String> {
+        if !self.max_differing_fraction.is_finite()
+            || self.max_differing_fraction < 0.0
+            || self.max_differing_fraction > 1.0
+        {
+            return Err("pixel comparison policy out of range".into());
+        }
+        if pixel_count == 0 {
+            return Err("pixel comparison needs a nonzero extent".into());
+        }
+        let want = pixel_count.checked_mul(4).ok_or("pixel extent overflow")?;
+        if actual.len() != want || expected.len() != want {
+            return Err("pixel buffer extent differs from the compared extent".into());
+        }
+        let tol = self.tolerance_per_channel;
+        let mut differing = 0usize;
+        for (a, e) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+            if a.iter().zip(e.iter()).any(|(&x, &y)| x.abs_diff(y) > tol) {
+                differing += 1;
+            }
+        }
+        Ok(differing as f32 / pixel_count as f32)
+    }
+
+    /// True when the differing fraction is within policy. Buffers and extents
+    /// are caller-supplied original/recreation captures.
+    pub fn passes(self, actual: &[u8], expected: &[u8], pixel_count: usize) -> Result<bool, String> {
+        Ok(self.differing_fraction(actual, expected, pixel_count)? <= self.max_differing_fraction)
+    }
 }
 
 #[cfg(test)]
