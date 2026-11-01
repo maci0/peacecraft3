@@ -104,7 +104,7 @@ pub enum Error {
 }
 
 /// The winning layer and exact locator supplied by it, not a guessed edition.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Provenance {
     pub source: SourceInfo,
     /// None for the overriding filesystem layer; otherwise caller-supplied.
@@ -121,7 +121,7 @@ pub struct ResolvedAsset {
 }
 
 /// Project-owned metadata format. This contains provenance, never asset bytes.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AssetIndex {
     pub schema_version: u32,
     pub mode: String,
@@ -134,6 +134,20 @@ impl AssetIndex {
         let mut json = serde_json::to_string_pretty(self)?;
         json.push('\n');
         Ok(json)
+    }
+
+    /// Reads back a generated `override/index.json`. The schema version
+    /// must be the one this build writes; anything else is refused rather
+    /// than reinterpreted.
+    pub fn from_json(text: &str) -> Result<Self, Error> {
+        let index: AssetIndex = serde_json::from_str(text)?;
+        if index.schema_version != 1 {
+            return Err(Error::InvalidIdentity {
+                layer: "override/index.json".into(),
+                field: "schema_version",
+            });
+        }
+        Ok(index)
     }
 }
 
