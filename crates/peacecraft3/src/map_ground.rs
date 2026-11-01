@@ -103,6 +103,9 @@ pub fn install(app: &mut App) {
         .insert_resource(NoOcclusionPass);
     register_publisher(app);
     crate::campaign_boundary::install(app);
+    crate::campaign_weather::install(app);
+    crate::campaign_fog::install(app);
+    crate::campaign_preload::install(app);
 }
 
 /// Install ground publication with application budgets that follow map delivery.
@@ -133,12 +136,135 @@ pub fn install_with_budget(app: &mut App, read_limit: u64, memory: GroundMemory)
 
 fn register_publisher(app: &mut App) {
     app.init_resource::<GroundPublication>()
+        .init_resource::<WaterPublication>()
         .init_resource::<GroundSupply>()
+        .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<SelectedMapSources>()
         .add_systems(
             Update,
-            publish_admitted_ground.after(MapRequestSet::Deliver),
+            (publish_admitted_ground, publish_admitted_water).after(MapRequestSet::Deliver),
         );
+}
+
+/// Last admitted water surface draw. Water quads come from the map's own
+/// wet-tile flags and stored levels plus the tileset-selected `Water.slk`
+/// row; the texture comes from that row's `texFile`. Dry maps publish no
+/// entity rather than a stand-in plane. Shorelines are the wet-tile boundary.
+/// Doodad bridge decks use the separately admitted [`BridgeDeckTable`]:
+/// trajectories that cross a bridge keep the sampled ground/water surface and
+/// report the deck gap through [`BridgeCrossing`] instead of clipping through
+/// invented deck heights.
+#[derive(Resource, Default)]
+pub struct WaterPublication {
+    attempted: Option<AttemptKey>,
+    pub entity: Option<Entity>,
+    pub context: Option<Arc<ParsedMapContext>>,
+    pub receipts: Vec<AssetReceipt>,
+    pub last_error: Option<MapGroundError>,
+    /// Admitted doodad bridge-deck heights, keyed by doodad path. `None`
+    /// keeps the prior surface-only behavior: trajectories sample ground/water
+    /// and report the bridge gap separately rather than inventing a deck.
+    pub decks: Option<BridgeDeckTable>,
+}
+
+/// Admitted bridge-deck height table. Entries come from a caller-supplied SLK
+/// (for example the tileset-selected doodad table) through caller-supplied
+/// column names; no doodad path or height is hard-coded here. Heights are
+/// world units above the terrain origin, matching the ground-mesh convention.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[allow(dead_code)]
+pub struct BridgeDeckTable {
+    entries: Vec<(String, f32)>,
+}
+
+impl BridgeDeckTable {
+    /// Read deck heights from SLK `bytes` admitted at `path`. `path_column`
+    /// names the doodad-path column and `height_column` names the deck-height
+    /// column; both are resolved through the table's own row-1 headers. Rows
+    /// with an empty path or a nonfinite height refuse with source context.
+    /// `max_entries` bounds allocation before any insert.
+    pub fn read(
+        bytes: &[u8],
+        path: &str,
+        path_column: &str,
+        height_column: &str,
+        max_entries: usize,
+    ) -> Result<Self, String> {
+        let table =
+            pcx_slq::Table::parse(bytes).map_err(|e| format!("{path}: deck table: {e}"))?;
+        if table.column_of(path_column).is_none() {
+            return Err(format!("{path}: deck table has no {path_column} column"));
+        }
+        if table.column_of(height_column).is_none() {
+            return Err(format!("{path}: deck table has no {height_column} column"));
+        }
+        let mut entries = Vec::new();
+        for row in table.rows().skip(1) {
+            let Some(raw_path) = row.by_name(path_column) else {
+                continue;
+            };
+            let raw_path = raw_path.trim().trim_matches('"');
+            if raw_path.is_empty() {
+                continue;
+            }
+            let Some(raw_height) = row.by_name(height_column) else {
+                continue;
+            };
+            let raw_height = raw_height.trim().trim_matches('"');
+            if raw_height.is_empty() {
+                continue;
+            }
+            let height: f32 = raw_height
+                .parse()
+                .map_err(|_| format!("{path}: row {}: invalid {height_column}", row.index()))?;
+            if !height.is_finite() {
+                return Err(format!("{path}: row {}: nonfinite {height_column}", row.index()));
+            }
+            if entries.len() >= max_entries {
+                return Err(format!("{path}: deck table exceeds {max_entries} entries"));
+            }
+            entries.push((raw_path.to_owned(), height));
+        }
+        Ok(Self { entries })
+    }
+
+    pub fn deck_height(&self, doodad_path: &str) -> Option<f32> {
+        self.entries
+            .iter()
+            .find(|(path, _)| path.eq_ignore_ascii_case(doodad_path))
+            .map(|(_, height)| *height)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// One movement-segment sample where a bridge deck may cover the surface.
+/// `deck` is the admitted deck height when a bridge footprint covers the
+/// point; `surface` is the sampled ground/water height. Callers keep the
+/// surface for motion and record the gap separately.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)]
+pub struct BridgeCrossing {
+    pub deck: Option<f32>,
+    pub surface: f32,
+}
+
+impl BridgeCrossing {
+    /// Admitted deck height wins for rendering; the gap stays observable so a
+    /// trajectory never silently clips through an invented height.
+    pub fn rendered_height(self) -> f32 {
+        self.deck.unwrap_or(self.surface)
+    }
+
+    pub fn deck_gap(self) -> Option<f32> {
+        self.deck.map(|deck| deck - self.surface)
+    }
 }
 
 fn require_reader(
@@ -281,6 +407,240 @@ pub(crate) fn publish_admitted_ground(
             publication.last_error = Some(error);
         }
     }
+}
+
+fn publish_admitted_water(
+    mut commands: Commands,
+    requests: Res<MapRequests>,
+    sources: Res<SelectedMapSources>,
+    supply: Res<GroundSupply>,
+    mut publication: ResMut<WaterPublication>,
+    device: Option<Res<RenderDevice>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(outcome) = requests.last_outcome.as_ref() else {
+        return;
+    };
+    if outcome.result.is_err() {
+        return;
+    }
+    let Some(bindings) = requests.bindings.as_ref() else {
+        return;
+    };
+    let Some(context) = requests.admission.shared_context() else {
+        return;
+    };
+    if outcome.binding_revision != Some(bindings.revision)
+        || outcome.identity.as_ref() != Some(&context.sources.map)
+        || context.sources.map.edition != bindings.map_identity.edition
+        || context.sources.map.version != bindings.map_identity.version
+        || !requests
+            .published_receipts
+            .as_ref()
+            .is_some_and(|receipts| Arc::ptr_eq(receipts, &bindings.receipts))
+    {
+        return;
+    }
+    let key = AttemptKey {
+        context: Arc::downgrade(&context),
+        revision: bindings.revision,
+        read_limit: supply.read_limit,
+        memory: supply.memory,
+    };
+    if publication.attempted.as_ref().is_some_and(|previous| {
+        previous.revision == key.revision
+            && Weak::ptr_eq(&previous.context, &key.context)
+            && previous.read_limit == key.read_limit
+            && previous.memory == key.memory
+    }) {
+        return;
+    }
+    let (read_limit, _) = match require_budget(&supply, bindings.revision) {
+        Ok(budget) => budget,
+        Err(error) => {
+            publication.attempted = None;
+            publication.last_error = Some(error);
+            return;
+        }
+    };
+    let reader = match require_reader(&sources, &bindings.receipts) {
+        Ok(reader) => reader,
+        Err(error) => {
+            publication.last_error = Some(error);
+            return;
+        }
+    };
+    let texture_limits = device.as_ref().map(|device| device.limits());
+    publication.attempted = Some(key);
+    let draw = prepare_water(
+        &context.terrain,
+        reader.as_ref(),
+        read_limit,
+        texture_limits.as_ref(),
+        &mut meshes,
+        &mut images,
+        &mut materials,
+    );
+    match draw {
+        Ok(None) => {
+            if let Some(previous) = publication.entity.take() {
+                commands.entity(previous).despawn();
+            }
+            publication.context = Some(context);
+            publication.receipts.clear();
+            publication.last_error = None;
+        }
+        Ok(Some((mesh, material, receipts))) => {
+            if let Some(previous) = publication.entity.take() {
+                commands.entity(previous).despawn();
+            }
+            let entity = commands
+                .spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                    bevy::camera::visibility::RenderLayers::layer(
+                        crate::campaign_camera::RENDER_LAYER,
+                    ),
+                ))
+                .id();
+            publication.entity = Some(entity);
+            publication.context = Some(context);
+            publication.receipts = receipts;
+            publication.last_error = None;
+        }
+        Err(error) => {
+            publication.last_error = Some(error);
+        }
+    }
+}
+
+/// Build the admitted water surface, if the map has any wet tile. Returns
+/// `Ok(None)` for a dry map. The texture path comes from the selected
+/// `Water.slk` row's `texFile`; its alpha channel is the blend, matching the
+/// ground-sheet convention of authored alpha rather than numeric weights.
+#[allow(clippy::too_many_arguments)]
+fn prepare_water(
+    terrain: &Terrain,
+    reader: &pcx_assets::Resolver,
+    read_limit: u64,
+    device: Option<&WgpuLimits>,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Result<
+    Option<(
+        Handle<Mesh>,
+        Handle<StandardMaterial>,
+        Vec<AssetReceipt>,
+    )>,
+    MapGroundError,
+> {
+    use bevy::{
+        asset::RenderAssetUsages,
+        mesh::{Indices, PrimitiveTopology},
+        render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    };
+    use pcx_tera::{WaterBudget, WaterData, WaterProfile, WaterSelection};
+    let read_error = |path: &str, detail: String| MapGroundError::Read {
+        path: path.into(),
+        detail,
+    };
+    let table_asset = reader
+        .resolve_bounded("TerrainArt\\Water.slk", read_limit)
+        .map_err(|e| read_error("TerrainArt\\Water.slk", e.to_string()))?;
+    let table = pcx_slq::Table::parse(&table_asset.bytes)
+        .map_err(|e| read_error("TerrainArt\\Water.slk", e.to_string()))?;
+    let tile = pcx_tera::world::TILE_XY;
+    let profile = WaterProfile::open_scaled(
+        &table,
+        "TerrainArt\\Water.slk",
+        WaterSelection::Tileset,
+        terrain,
+        tile,
+    )
+    .map_err(|e| read_error("TerrainArt\\Water.slk", e.to_string()))?;
+    let corners = terrain.corner_count();
+    let tiles = usize::try_from(terrain.width())
+        .ok()
+        .and_then(|w| usize::try_from(terrain.height()).ok()?.checked_mul(w))
+        .ok_or(MapGroundError::Allocation)?;
+    let budget = WaterBudget {
+        max_vertices: u64::try_from(corners).map_err(|_| MapGroundError::Allocation)? * 4,
+        max_indices: u64::try_from(tiles).map_err(|_| MapGroundError::Allocation)? * 6,
+    };
+    let data = WaterData::new(terrain, "selected map", "war3map.w3e")
+        .map_err(|e| read_error("war3map.w3e", e.to_string()))?;
+    let mesh = data
+        .mesh(&profile, &budget)
+        .map_err(|e| read_error("war3map.w3e", e.to_string()))?;
+    if mesh.wet_tiles == 0 {
+        return Ok(None);
+    }
+    let tex_file = profile
+        .field("texFile")
+        .ok_or_else(|| read_error("TerrainArt\\Water.slk", "selected row has no texFile".into()))?;
+    let tex_file = tex_file.trim().trim_matches('"');
+    if tex_file.is_empty() {
+        return Err(read_error("TerrainArt\\Water.slk", "selected row texFile is empty".into()));
+    }
+    let texture_asset = reader
+        .resolve_bounded(tex_file, read_limit)
+        .map_err(|e| read_error(tex_file, e.to_string()))?;
+    let loaded = pcx_gfx::load_image_bounded(&texture_asset.bytes, tex_file, 8 << 20)
+        .map_err(|e| read_error(tex_file, e.to_string()))?;
+    if loaded.width == 0 || loaded.height == 0 {
+        return Err(read_error(tex_file, "water texture is empty".into()));
+    }
+    if let Some(limits) = device
+        && (loaded.width > limits.max_texture_dimension_2d
+            || loaded.height > limits.max_texture_dimension_2d)
+    {
+        return Err(read_error(tex_file, "water texture exceeds device limits".into()));
+    }
+    let mut water_image = Image::new(
+        Extent3d {
+            width: loaded.width,
+            height: loaded.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        loaded.rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    water_image.sampler = bevy::image::ImageSampler::linear();
+    let texture = images.add(water_image);
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(texture),
+        base_color: Color::WHITE,
+        alpha_mode: AlphaMode::Blend,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
+    let mut render_mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    // Terrain `(x east, y north, z up)` becomes Bevy `(x, z, -y)`, matching the
+    // ground mesh convention so floating/amphibious actors sample the same
+    // surface the renderer draws. Bridge decks use the admitted
+    // `BridgeDeckTable`; see `WaterPublication`.
+    let positions: Vec<[f32; 3]> = mesh
+        .positions
+        .iter()
+        .map(|[x, y, z]| [*x, *z, -*y])
+        .collect();
+    render_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    render_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, mesh.uvs.clone());
+    render_mesh.insert_indices(Indices::U32(mesh.indices.clone()));
+    let handle = meshes.add(render_mesh);
+    let mut receipts = Vec::new();
+    receipts
+        .try_reserve_exact(2)
+        .map_err(|_| MapGroundError::Allocation)?;
+    receipts.push(receipt(&table_asset));
+    receipts.push(receipt(&texture_asset));
+    Ok(Some((handle, material, receipts)))
 }
 
 fn prepare_shadow(
