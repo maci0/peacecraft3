@@ -1,6 +1,12 @@
 //! The local player's unit selection, shared by scripts and player input.
 //! Only the local player has a selection; other players read as empty.
 //! `SyncSelections` completes at once in this single-machine session.
+//!
+//! Selection UI gates (`EnableSelect`, `EnableDragSelect`, `EnablePreSelect`) and
+//! per-unit selectability (`BlzIsUnitSelectable`, `BlzUnitDisableSelection`, the
+//! `Aloc` locust effect) are admitted here. The exe strings exist
+//! (`campaign-box-selection.md`); signatures are read from the script's own
+//! native declarations, so a map without them keeps the enabled defaults.
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, ScriptCall, Value};
 
@@ -17,11 +23,49 @@ const NATIVES: [(&str, &[&str], &str, bool); 5] = [
     ),
 ];
 
+/// Locust ability: units carrying it at a positive level are not input-pickable.
+/// The rawcode is a shipped ability identifier, not a measured selection value.
+const LOCUST: [u8; 4] = *b"Aloc";
+
+fn has_locust(record: &super::ExecutedUnit) -> bool {
+    record
+        .abilities
+        .as_ref()
+        .is_some_and(|abilities| abilities.level(LOCUST) > 0)
+}
+
 impl ObjectHost {
     pub fn with_selection(mut self) -> Result<Self, Error> {
         for (name, args, result, constant) in NATIVES {
             if self.inner.program.natives().get(name).is_some() {
                 Self::contract_in(&self.inner, name, args, result, constant, None, false)?;
+            }
+        }
+        // `EnableSelect`/`EnableDragSelect`/`EnablePreSelect` ship as
+        // `(boolean flag, boolean fade)`; some maps declare the single-flag form.
+        // Admit either boolean-only shape instead of substituting a signature.
+        for name in ["EnableSelect", "EnableDragSelect", "EnablePreSelect"] {
+            if self.inner.program.natives().get(name).is_none() {
+                continue;
+            }
+            if Self::contract_in(&self.inner, name, &["boolean", "boolean"], "nothing", false, None, false)
+                .is_err()
+            {
+                Self::contract_in(&self.inner, name, &["boolean"], "nothing", false, None, false)?;
+            }
+        }
+        for (name, args, result, constant, family) in [
+            ("BlzIsUnitSelectable", &["unit"][..], "boolean", true, Some("unit")),
+            (
+                "BlzUnitDisableSelection",
+                &["unit", "boolean"][..],
+                "nothing",
+                false,
+                Some("unit"),
+            ),
+        ] {
+            if self.inner.program.natives().get(name).is_some() {
+                Self::contract_in(&self.inner, name, args, result, constant, family, true)?;
             }
         }
         self.selection = Some(Vec::new());
@@ -33,14 +77,46 @@ impl ObjectHost {
         self.selection.as_deref().unwrap_or(&[])
     }
 
-    /// The local player's drag-box view of `id`: `None` for a unit that is not live and
-    /// shown. Visibility to the local player and screen position are the caller's.
+    /// Script gates; `None` (never executed) is the client's default: enabled.
+    pub fn select_allowed(&self) -> bool {
+        self.select_enabled.unwrap_or(true)
+    }
+
+    pub fn drag_select_allowed(&self) -> bool {
+        self.drag_select_enabled.unwrap_or(true)
+    }
+
+    pub fn preselect_allowed(&self) -> bool {
+        self.preselect_enabled.unwrap_or(true)
+    }
+
+    /// Per-unit input selectability: an explicit `BlzUnitDisableSelection`
+    /// refusal wins, then the `Aloc` locust effect (inference, exe flag bits
+    /// unread). Scripts can still force-select via `SelectUnit`; input picks
+    /// (`box_candidate` and the click pick) honour this.
+    pub fn is_unit_selectable(&self, id: HandleId) -> bool {
+        if self.unit_selectable.get(&id).is_some_and(|&allowed| !allowed) {
+            return false;
+        }
+        match self.inner.entry(id) {
+            Ok(Entry::Unit { record }) => !has_locust(record),
+            _ => false,
+        }
+    }
+
+    /// The local player's drag-box view of `id`: `None` for a unit that is not live,
+    /// shown and selectable. Visibility to the local player and screen position
+    /// are the caller's. Unselectable units never enter a box pick, the same way
+    /// the down handler tests its per-unit flag before selecting (`0x5fd820`).
     pub fn box_candidate(
         &self,
         id: HandleId,
     ) -> Result<Option<crate::selection_box::Candidate>, String> {
         let record = self.executed_unit(id).map_err(|e| e.to_string())?;
         if !record.shown || record.combat.as_ref().is_some_and(|c| c.dead) {
+            return Ok(None);
+        }
+        if !self.is_unit_selectable(id) {
             return Ok(None);
         }
         let local = self
@@ -53,6 +129,9 @@ impl ObjectHost {
             id,
             own: owner.identity == local.identity,
             structure: super::unit_types::structure(&record.definition)?,
+            hero: record.abilities.as_ref().is_some_and(|a| a.hero.is_some()),
+            priority: super::subgroup_host::priority(&record.definition).unwrap_or(0),
+            kind: record.definition.rawcode,
         }))
     }
 
@@ -125,7 +204,15 @@ impl ObjectHost {
         self.selection.as_ref()?;
         if !matches!(
             name,
-            "ClearSelection" | "SelectUnit" | "SyncSelections" | "IsUnitSelected"
+            "ClearSelection"
+                | "SelectUnit"
+                | "SyncSelections"
+                | "IsUnitSelected"
+                | "EnableSelect"
+                | "EnableDragSelect"
+                | "EnablePreSelect"
+                | "BlzIsUnitSelectable"
+                | "BlzUnitDisableSelection"
         ) {
             return None;
         }
@@ -153,6 +240,30 @@ impl ObjectHost {
                 self.local_player_handle(player)
                     && matches!(unit, Value::Handle(u) if self.selection().contains(u)),
             )),
+            ("EnableSelect", [Value::Bool(flag)])
+            | ("EnableSelect", [Value::Bool(flag), Value::Bool(_)]) => {
+                self.select_enabled = Some(*flag);
+                Ok(Value::Null)
+            }
+            ("EnableDragSelect", [Value::Bool(flag)])
+            | ("EnableDragSelect", [Value::Bool(flag), Value::Bool(_)]) => {
+                self.drag_select_enabled = Some(*flag);
+                Ok(Value::Null)
+            }
+            ("EnablePreSelect", [Value::Bool(flag)])
+            | ("EnablePreSelect", [Value::Bool(flag), Value::Bool(_)]) => {
+                self.preselect_enabled = Some(*flag);
+                Ok(Value::Null)
+            }
+            ("BlzIsUnitSelectable", [Value::Null]) => Ok(Value::Bool(false)),
+            ("BlzIsUnitSelectable", [Value::Handle(unit)]) => {
+                Ok(Value::Bool(self.is_unit_selectable(*unit)))
+            }
+            ("BlzUnitDisableSelection", [Value::Null, Value::Bool(_)]) => Ok(Value::Null),
+            ("BlzUnitDisableSelection", [Value::Handle(unit), Value::Bool(disable)]) => {
+                self.unit_selectable.insert(*unit, !disable);
+                Ok(Value::Null)
+            }
             _ => Err(self.inner.error(name, Failure::Signature)),
         })
     }
