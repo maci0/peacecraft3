@@ -178,6 +178,31 @@ pub fn prepare_sequence(
         .resolve_bounded(&source, MODEL_BYTES)
         .map_err(|e| format!("{source}: {e}"))?
         .bytes;
+    prepare_sequence_from_bytes(
+        bytes,
+        &source,
+        background,
+        sequence,
+        &mut |path| {
+            resolver
+                .resolve_bounded(path, TEXTURE_BYTES)
+                .map(|asset| asset.bytes)
+                .map_err(|e| e.to_string())
+        },
+    )
+}
+
+/// [`prepare_sequence`] for a model that does not live in any mounted archive:
+/// a map-supplied loading model extracted from the map itself. Textures still
+/// resolve through the game archives; a texture that only the map supplies
+/// refuses and names the path, so a partially textured model is never spawned.
+pub fn prepare_sequence_from_bytes(
+    bytes: Vec<u8>,
+    source: &str,
+    background: &AuthoredBackground,
+    sequence: Option<usize>,
+    read_texture: &mut impl FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<BackgroundPlan, String> {
     let mdl = pcx_mdl::Mdlx::parse(&bytes).map_err(|e| format!("{source}: {e}"))?;
     let sequences = mdl
         .sequences(&bytes)
@@ -200,13 +225,8 @@ pub fn prepare_sequence(
         pcx_gfx::mdx_runtime::RuntimePlan::parse(&bytes).map_err(|e| format!("{source}: {e}"))?;
     let paths =
         crate::mainmenu_scene::texture_paths(&bytes).map_err(|e| format!("{source}: {e}"))?;
-    let textures = crate::mainmenu_scene::load_textures_from_paths(&paths, |path| {
-        resolver
-            .resolve_bounded(path, TEXTURE_BYTES)
-            .map(|asset| asset.bytes)
-            .map_err(|e| e.to_string())
-    })
-    .map_err(|e| format!("{source}: {e}"))?;
+    let textures = crate::mainmenu_scene::load_textures_from_paths(&paths, read_texture)
+        .map_err(|e| format!("{source}: {e}"))?;
     let IntervalPlans {
         opacity,
         selection,
@@ -214,7 +234,7 @@ pub fn prepare_sequence(
     } = interval_plans(&runtime, interval, &source)?;
     Ok(BackgroundPlan {
         frame: background.frame.clone(),
-        source,
+        source: source.to_owned(),
         bytes,
         mdl,
         model,

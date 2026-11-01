@@ -1,7 +1,8 @@
 //! The campaign loading screen drawn from the selected `UI\FrameDef\Glue\Loading.fdf`:
-//! the background sprite model at the sequence the map selects, the progress bar
-//! sprite posed by the bar's progress, and the title, subtitle and text frames.
-//! See `docs/re-notes/campaign-loading-screen.md`.
+//! the background sprite model at the sequence the map selects (or the
+//! map-supplied model, or the race-selected melee background), the progress bar
+//! sprite posed by the bar's progress, and the title, subtitle and text frames
+//! or the melee panel. See `docs/re-notes/campaign-loading-screen.md`.
 use crate::campaign_score_model::{
     self, AuthoredBackground, ScoreBackgroundState, ScoreSceneHandles,
 };
@@ -10,7 +11,9 @@ use crate::mainmenu::{FRAME_H, FRAME_W};
 use crate::menu_material::MenuMaterial;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use peacecraft3::campaign_loading::{CampaignLoading, LoadingRequest, Phase};
+use peacecraft3::campaign_loading::{
+    CampaignLoading, LoadingKind, LoadingRequest, Phase, melee_race_key,
+};
 use peacecraft3::campaign_score_layout::includes;
 use peacecraft3::global_strings::global_string;
 use std::sync::Arc;
@@ -23,6 +26,11 @@ const FONT_BYTES: u64 = 32 << 20;
 const BAR_MODEL_KEY: &str = "LoadingProgressBar";
 /// Sequence of the bar model the progress poses: the first.
 const BAR_SEQUENCE: usize = 0;
+/// Upper bound on one texture read for a map-supplied loading model, matching
+/// the background model's own ceiling in `campaign_score_model`.
+const CUSTOM_TEXTURE_BYTES: u64 = 16 << 20;
+/// Upper bound on the melee minimap image admitted from the map.
+const MINIMAP_IMAGE_BYTES: usize = 8 << 20;
 
 const ROOT: &str = "Loading";
 const BACKGROUND: &str = "LoadingBackground";
@@ -31,6 +39,18 @@ const BAR_TEXT: &str = "LoadingBarText";
 const TEXT_STACK: [&str; 3] = ["LoadingTitleText", "LoadingSubtitleText", "LoadingText"];
 const KEY_LOADING: &str = "LOADING_LOADING";
 const KEY_PRESS: &str = "LOADING_PRESS_A_KEY";
+const KEY_WAITING: &str = "LOADING_WAITING_FOR_PLAYERS";
+const MELEE_PANEL: &str = "LoadingMeleePanel";
+const MELEE_MINIMAP: &str = "MinimapImage";
+const MELEE_MAP_NAME: &str = "LoadingMeleeMapName";
+const MELEE_TYPE_LABEL: &str = "LoadingMeleeGameTypeLabel";
+const MELEE_TYPE_VALUE: &str = "LoadingMeleeGameTypeValue";
+const MELEE_SLOT_CONTAINER: &str = "LoadingMeleePlayerContainer";
+const MELEE_SLOT: &str = "LoadingPlayerSlot";
+const MELEE_SLOT_LEVEL: &str = "LoadingPlayerSlotLevel";
+const MELEE_SLOT_NAME: &str = "LoadingPlayerSlotName";
+const MELEE_SLOT_RACE: &str = "LoadingPlayerSlotRace";
+const MELEE_SLOT_BACKDROP: &str = "LoadingPlayerSlotBackdrop";
 
 /// Composition order of this screen's cameras: above the menu, the campaign view
 /// and the cinematic filter. Not a source asset value.
@@ -175,6 +195,303 @@ fn bar_text_offset(fdf: &Fdf) -> Result<(f32, f32), String> {
     Ok((a.x, a.y))
 }
 
+/// One melee text run: the holder the caller fills with the authored style and
+/// font, reporting failures per frame like the campaign column does.
+struct MeleeText {
+    holder: Entity,
+    frame: &'static str,
+    value: String,
+}
+
+/// The melee panel: the map's minimap image at its authored frame, the map name
+/// above it, the game-type line below it, and one row per authored player slot.
+/// Every position and size below comes from the selected `Loading.fdf`; only the
+/// stacking of slot rows inside their container is a recreation choice (the
+/// container names no per-row anchor). The `LoadingPlayerSlotLevel` frame takes
+/// no value and the ready highlight no visibility, because neither source is
+/// decoded; their frames are still validated against the selected FDF. Text is
+/// returned unfilled so the caller's shared label helper owns font loading.
+#[allow(clippy::too_many_arguments)]
+fn build_melee_panel(
+    commands: &mut Commands,
+    fdf: &Fdf,
+    strings: &str,
+    melee: &peacecraft3::campaign_loading::MeleeScreen,
+    resolver: &pcx_assets::Resolver,
+    stores: &mut Stores,
+    root: Entity,
+    handles: &mut ScoreSceneHandles,
+) -> Result<Vec<MeleeText>, String> {
+    if !fdf.frames().iter().any(|frame| frame.name == MELEE_PANEL) {
+        return Err(format!("{MELEE_PANEL}: no such frame"));
+    }
+    // The level frame is validated but takes no value: its source is not decoded.
+    fdf.width(MELEE_SLOT_LEVEL)
+        .map_err(|e| format!("{MELEE_SLOT_LEVEL}: {e}"))?;
+    let mut texts = Vec::new();
+    let viewport = (FRAME_W, FRAME_H);
+    let root_rect = fdf
+        .rect(ROOT, viewport)
+        .map_err(|e| format!("{ROOT}: {e}"))?;
+    // Minimap texture at its authored frame, when the map ships one.
+    let minimap_rect = fdf
+        .rect(MELEE_MINIMAP, viewport)
+        .map_err(|e| format!("{MELEE_MINIMAP}: {e}"))?;
+    if let Some(minimap) = &melee.minimap {
+        match pcx_gfx::load_mipmapped_image_bounded(
+            &minimap.bytes,
+            &minimap.name,
+            MINIMAP_IMAGE_BYTES,
+        ) {
+            Ok(texture) => {
+                let image = stores
+                    .images
+                    .add(crate::menu_composition::image(&texture));
+                handles.images.push(image.clone());
+                commands.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: pct(minimap_rect.left, FRAME_W),
+                        bottom: pct(minimap_rect.bottom, FRAME_H),
+                        width: pct(minimap_rect.width, FRAME_W),
+                        height: pct(minimap_rect.height, FRAME_H),
+                        ..default()
+                    },
+                    ImageNode::new(image),
+                    ChildOf(root),
+                ));
+            }
+            Err(error) => warn!("loading screen {MELEE_MINIMAP} refused: {error}"),
+        }
+    }
+    let anchor = |frame: &str| {
+        fdf.set_point(frame)
+            .ok_or_else(|| format!("{frame}: no SetPoint"))
+    };
+    // Map name above the minimap, at its authored offset.
+    let name_at = anchor(MELEE_MAP_NAME)?;
+    if (
+        name_at.point,
+        name_at.relative.as_str(),
+        name_at.relative_point,
+    ) != (Point::Bottom, MELEE_MINIMAP, Point::Top)
+    {
+        return Err(format!(
+            "{MELEE_MAP_NAME}: expected a BOTTOM anchor on the top of {MELEE_MINIMAP}"
+        ));
+    }
+    let name_holder = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: pct(minimap_rect.left + name_at.x, FRAME_W),
+                bottom: pct(
+                    minimap_rect.bottom + minimap_rect.height + name_at.y,
+                    FRAME_H,
+                ),
+                width: pct(minimap_rect.width, FRAME_W),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    texts.push(MeleeText {
+        holder: name_holder,
+        frame: MELEE_MAP_NAME,
+        value: melee.map_name.clone(),
+    });
+    // Game-type line below the minimap, at its authored offsets. The value is
+    // the shipped `MELEE` or `NON_MELEE` string the request selected.
+    let type_at = anchor(MELEE_TYPE_LABEL)?;
+    if (
+        type_at.point,
+        type_at.relative.as_str(),
+        type_at.relative_point,
+    ) != (Point::Top, MELEE_MINIMAP, Point::Bottom)
+    {
+        return Err(format!(
+            "{MELEE_TYPE_LABEL}: expected a TOP anchor on the bottom of {MELEE_MINIMAP}"
+        ));
+    }
+    let type_width = fdf
+        .width(MELEE_TYPE_LABEL)
+        .map_err(|e| format!("{MELEE_TYPE_LABEL}: {e}"))?;
+    let type_top = minimap_rect.bottom + type_at.y;
+    let type_holder = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: pct(minimap_rect.left + type_at.x, FRAME_W),
+                top: pct(FRAME_H - type_top, FRAME_H),
+                width: pct(type_width, FRAME_W),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    let type_label = global_string(strings, "COLON_GAME_TYPE")
+        .ok_or_else(|| format!("{STRINGS_PATH}: missing COLON_GAME_TYPE"))?;
+    // The value hangs below the label by the label's authored font height, the
+    // same metric the shared label helper will draw with.
+    let type_height = crate::menu_text::render_style(fdf, MELEE_TYPE_LABEL)
+        .map_err(|e| format!("{MELEE_TYPE_LABEL}: {e}"))?
+        .height;
+    texts.push(MeleeText {
+        holder: type_holder,
+        frame: MELEE_TYPE_LABEL,
+        value: type_label,
+    });
+    let value_at = anchor(MELEE_TYPE_VALUE)?;
+    if (
+        value_at.point,
+        value_at.relative.as_str(),
+        value_at.relative_point,
+    ) != (Point::Top, MELEE_TYPE_LABEL, Point::Bottom)
+    {
+        return Err(format!(
+            "{MELEE_TYPE_VALUE}: expected a TOP anchor on the bottom of {MELEE_TYPE_LABEL}"
+        ));
+    }
+    let value_width = fdf
+        .width(MELEE_TYPE_VALUE)
+        .map_err(|e| format!("{MELEE_TYPE_VALUE}: {e}"))?;
+    let value_holder = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: pct(minimap_rect.left + type_at.x + value_at.x, FRAME_W),
+                top: pct(FRAME_H - (type_top - type_height + value_at.y), FRAME_H),
+                width: pct(value_width, FRAME_W),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    let type_value = global_string(strings, melee.game_type.global_key()).ok_or_else(|| {
+        format!(
+            "{STRINGS_PATH}: missing {}",
+            melee.game_type.global_key()
+        )
+    })?;
+    texts.push(MeleeText {
+        holder: value_holder,
+        frame: MELEE_TYPE_VALUE,
+        value: type_value,
+    });
+    // Player slots stacked downward from the container anchor, one authored
+    // row height each. Rows show the backdrop with the name and race.
+    let slot_at = anchor(MELEE_SLOT_CONTAINER)?;
+    if (
+        slot_at.point,
+        slot_at.relative.as_str(),
+        slot_at.relative_point,
+    ) != (Point::Left, ROOT, Point::Left)
+    {
+        return Err(format!(
+            "{MELEE_SLOT_CONTAINER}: expected a LEFT anchor on {ROOT}"
+        ));
+    }
+    let (_, container_y) = root_rect.point(Point::Left);
+    let slot_width = fdf
+        .width(MELEE_SLOT)
+        .map_err(|e| format!("{MELEE_SLOT}: {e}"))?;
+    let slot_height = fdf
+        .height(MELEE_SLOT)
+        .map_err(|e| format!("{MELEE_SLOT}: {e}"))?;
+    let slot_backdrop = fdf.string(MELEE_SLOT_BACKDROP, "BackdropBackground");
+    for (index, slot) in melee.slots.iter().enumerate() {
+        let row_top = container_y + slot_at.y - index as f32 * slot_height;
+        let row = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: pct(slot_at.x, FRAME_W),
+                    top: pct(FRAME_H - row_top, FRAME_H),
+                    width: pct(slot_width, FRAME_W),
+                    height: pct(slot_height, FRAME_H),
+                    ..default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+        if let Some(art) = slot_backdrop.as_deref().filter(|art| !art.is_empty()) {
+            match resolver
+                .resolve_bounded(art, MINIMAP_IMAGE_BYTES as u64)
+                .map(|asset| asset.bytes)
+            {
+                Ok(raw) => {
+                    match pcx_gfx::load_mipmapped_image_bounded(&raw, art, MINIMAP_IMAGE_BYTES)
+                    {
+                        Ok(texture) => {
+                            let image = stores
+                                .images
+                                .add(crate::menu_composition::image(&texture));
+                            handles.images.push(image.clone());
+                            commands.spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: percent(0),
+                                    top: percent(0),
+                                    width: percent(100),
+                                    height: percent(100),
+                                    ..default()
+                                },
+                                ImageNode::new(image),
+                                ChildOf(row),
+                            ));
+                        }
+                        Err(error) => {
+                            warn!("loading screen slot backdrop refused: {error}")
+                        }
+                    }
+                }
+                Err(error) => warn!("loading screen slot backdrop refused: {error}"),
+            }
+        }
+        let name_holder = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: pct(0.024, slot_width),
+                    top: percent(0),
+                    width: percent(62),
+                    height: percent(100),
+                    ..default()
+                },
+                ChildOf(row),
+            ))
+            .id();
+        texts.push(MeleeText {
+            holder: name_holder,
+            frame: MELEE_SLOT_NAME,
+            value: slot.name.clone(),
+        });
+        let race_key = melee_race_key(slot.race);
+        let race_holder = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: pct(0.024, slot_width),
+                    top: percent(0),
+                    width: percent(34),
+                    height: percent(100),
+                    ..default()
+                },
+                ChildOf(row),
+            ))
+            .id();
+        match global_string(strings, race_key) {
+            Some(race) => texts.push(MeleeText {
+                holder: race_holder,
+                frame: MELEE_SLOT_RACE,
+                value: race,
+            }),
+            None => warn!("loading screen {MELEE_SLOT_RACE} refused: missing {race_key}"),
+        }
+    }
+    Ok(texts)
+}
+
 /// Model frame of the bar at `fraction` of its sequence.
 fn bar_frame(interval: [u32; 2], fraction: f32) -> u32 {
     let length = interval[1].saturating_sub(interval[0]);
@@ -252,23 +569,58 @@ fn build(
         .map_err(|e| format!("{BAR_MODEL_KEY}: {e}"))?
         .file;
 
-    // Models.
+    // Models. The background is the sequence the map selects, the
+    // map-supplied model at its first sequence, or the race-selected melee
+    // background at its first sequence (that sequence is not decoded).
     let background_rect = fdf
         .rect(BACKGROUND, viewport)
         .map_err(|e| format!("{BACKGROUND}: {e}"))?;
     let (bar_x, bar_y) = bar_origin(&fdf, root_rect)?;
-    let sequence = usize::try_from(request.screen.sequence)
-        .map_err(|_| format!("sequence {} is out of range", request.screen.sequence))?;
-    let mut background = campaign_score_model::prepare_sequence(
-        &request.resolver,
-        &AuthoredBackground {
-            frame: BACKGROUND.into(),
-            model: request.screen.model.clone(),
-            rect: background_rect,
-            unlit: SPRITES_UNLIT,
-        },
-        Some(sequence),
-    )?;
+    let mut background = match &request.kind {
+        LoadingKind::Campaign { screen, .. } => {
+            let sequence = usize::try_from(screen.sequence)
+                .map_err(|_| format!("sequence {} is out of range", screen.sequence))?;
+            let plan = AuthoredBackground {
+                frame: BACKGROUND.into(),
+                model: screen.model.clone(),
+                rect: background_rect,
+                unlit: SPRITES_UNLIT,
+            };
+            match &request.custom {
+                Some(custom) if custom.path == screen.model => {
+                    let mut read = |path: &str| {
+                        request
+                            .resolver
+                            .resolve_bounded(path, CUSTOM_TEXTURE_BYTES)
+                            .map(|asset| asset.bytes)
+                            .map_err(|e| e.to_string())
+                    };
+                    campaign_score_model::prepare_sequence_from_bytes(
+                        custom.bytes.clone(),
+                        &custom.path,
+                        &plan,
+                        Some(sequence),
+                        &mut read,
+                    )?
+                }
+                _ => campaign_score_model::prepare_sequence(
+                    &request.resolver,
+                    &plan,
+                    Some(sequence),
+                )?,
+            }
+        }
+        LoadingKind::Melee(melee) => campaign_score_model::prepare_sequence(
+            &request.resolver,
+            &AuthoredBackground {
+                frame: BACKGROUND.into(),
+                model: melee.background.clone(),
+                rect: background_rect,
+                unlit: SPRITES_UNLIT,
+            },
+            Some(0),
+        )?,
+    };
     background.driven = false;
     let mut bar = campaign_score_model::prepare_sequence(
         &request.resolver,
@@ -303,7 +655,7 @@ fn build(
             Name::new("Loading models"),
         ))
         .id();
-    let handles = campaign_score_model::spawn_backgrounds_on(
+    let mut handles = campaign_score_model::spawn_backgrounds_on(
         commands,
         crate::mainmenu_scene::GeosetAssets {
             meshes: &mut *stores.meshes,
@@ -315,7 +667,11 @@ fn build(
         MODEL_LAYER,
     )?;
 
-    // Cameras: black bars, the 4:3 model view, the 4:3 interface.
+    // Cameras: black bars, the 4:3 model view, the 4:3 interface. All three
+    // carry the menu working channels, so this screen is qualified in the same
+    // colour space as the menu captures: numeric source channels through
+    // blending, no filmic transform. `MenuColourCamera` also requires the sRGB
+    // compositing space.
     let bars = commands
         .spawn((
             Camera2d,
@@ -325,6 +681,7 @@ fn build(
                 ..default()
             },
             RenderLayers::none(),
+            crate::menu_composition::MenuColourCamera,
             LoadingCamera,
         ))
         .id();
@@ -350,6 +707,7 @@ fn build(
             bevy::core_pipeline::tonemapping::Tonemapping::None,
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             RenderLayers::layer(MODEL_LAYER),
+            crate::menu_composition::MenuColourCamera,
             LoadingCamera,
         ))
         .id();
@@ -363,6 +721,7 @@ fn build(
                 ..default()
             },
             RenderLayers::none(),
+            crate::menu_composition::MenuColourCamera,
             LoadingCamera,
         ))
         .id();
@@ -398,41 +757,61 @@ fn build(
         let line = crate::campaign_script_dialogs::label(commands, parent, value, &style, &font)?;
         Ok((line, style, font))
     };
-    let stack = text_stack(&fdf, &TEXT_STACK)?;
-    let column = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: pct(stack.right, FRAME_W),
-                top: pct(stack.top, FRAME_H),
-                width: pct(stack.width, FRAME_W),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            ChildOf(root),
-        ))
-        .id();
-    let text = &request.text;
-    for ((frame, value), gap) in TEXT_STACK
-        .iter()
-        .zip([&text.title, &text.subtitle, &text.text])
-        .zip(&stack.gaps)
-    {
-        let holder = commands
-            .spawn((
-                Node {
-                    width: percent(100),
-                    margin: UiRect::top(pct(*gap, FRAME_H)),
-                    ..default()
-                },
-                ChildOf(column),
-            ))
-            .id();
-        if value.is_empty() {
-            continue;
+    match &request.kind {
+        LoadingKind::Campaign { text, .. } => {
+            let stack = text_stack(&fdf, &TEXT_STACK)?;
+            let column = commands
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: pct(stack.right, FRAME_W),
+                        top: pct(stack.top, FRAME_H),
+                        width: pct(stack.width, FRAME_W),
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                    ChildOf(root),
+                ))
+                .id();
+            for ((frame, value), gap) in TEXT_STACK
+                .iter()
+                .zip([&text.title, &text.subtitle, &text.text])
+                .zip(&stack.gaps)
+            {
+                let holder = commands
+                    .spawn((
+                        Node {
+                            width: percent(100),
+                            margin: UiRect::top(pct(*gap, FRAME_H)),
+                            ..default()
+                        },
+                        ChildOf(column),
+                    ))
+                    .id();
+                if value.is_empty() {
+                    continue;
+                }
+                if let Err(error) = label(commands, stores, holder, frame, value) {
+                    warn!("loading screen {frame} refused: {error}");
+                }
+            }
         }
-        if let Err(error) = label(commands, stores, holder, frame, value) {
-            warn!("loading screen {frame} refused: {error}");
+        LoadingKind::Melee(melee) => {
+            for item in build_melee_panel(
+                commands,
+                &fdf,
+                &strings,
+                melee,
+                &request.resolver,
+                stores,
+                root,
+                &mut handles,
+            )? {
+                if let Err(error) = label(commands, stores, item.holder, item.frame, &item.value)
+                {
+                    warn!("loading screen {} refused: {error}", item.frame);
+                }
+            }
         }
     }
     let (dx, dy) = bar_text_offset(&fdf)?;
@@ -454,6 +833,8 @@ fn build(
         global_string(&strings, key).ok_or_else(|| format!("{STRINGS_PATH}: missing {key}"))?;
     global_string(&strings, KEY_PRESS)
         .ok_or_else(|| format!("{STRINGS_PATH}: missing {KEY_PRESS}"))?;
+    global_string(&strings, KEY_WAITING)
+        .ok_or_else(|| format!("{STRINGS_PATH}: missing {KEY_WAITING}"))?;
     let (line, bar_style, bar_font) = label(commands, stores, bar_text, BAR_TEXT, &value)?;
     let fonts = loaded.into_iter().map(|(_, handle)| handle).collect();
     Ok(Built {
@@ -529,6 +910,7 @@ fn sync_view(
     {
         let key = match loading.phase() {
             Phase::AwaitKey => KEY_PRESS,
+            Phase::WaitingForPeers => KEY_WAITING,
             _ => KEY_LOADING,
         };
         if let Some(value) = global_string(&built.strings, key) {
@@ -611,7 +993,12 @@ pub(crate) mod harness {
 
     /// Render the screen for `request` at `stages` reached stages to a 1280x960 offscreen
     /// target on a Vulkan adapter, and write it as a binary PPM to `out`. No window is
-    /// opened. The target is not colour-qualified against the menu's working space.
+    /// opened. The target holds the menu working channels (`Rgba8Unorm`, numeric
+    /// source bytes, no filmic transform), the same colour space the menu captures
+    /// are qualified in. When `PCX_LOADING_REFERENCE_PPM` names a reference PPM of
+    /// the same dimensions, the capture is also compared against it and the
+    /// channel-wise difference is logged; the reference stays a local file and
+    /// is never committed.
     pub(crate) fn capture(
         request: LoadingRequest,
         stages: usize,
@@ -681,6 +1068,7 @@ pub(crate) mod harness {
             request,
             &peacecraft3::map_requests::MapRequests::default(),
             None,
+            false,
         );
         app.insert_resource(loading);
         app.finish();
@@ -688,7 +1076,7 @@ pub(crate) mod harness {
         app.update();
         app.update();
         let mut image =
-            Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8UnormSrgb, None);
+            Image::new_target_texture(WIDTH, HEIGHT, TextureFormat::Rgba8Unorm, None);
         image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let cameras: Vec<Entity> = {
@@ -758,7 +1146,72 @@ pub(crate) mod harness {
                 ppm.extend_from_slice(&pixel[..3]);
             }
         }
-        std::fs::write(out, ppm).map_err(|e| e.to_string())
+        std::fs::write(out, ppm).map_err(|e| e.to_string())?;
+        if let Some(reference) = std::env::var_os("PCX_LOADING_REFERENCE_PPM") {
+            let mut raw = Vec::with_capacity(width * height * 4);
+            for row in data.chunks(stride).take(height) {
+                raw.extend_from_slice(&row[..width * 4]);
+            }
+            match compare_against(&raw, std::path::Path::new(&reference)) {
+                Ok(compared) => warn!(
+                    "loading capture compared against {}: mean_abs={:.3} max_abs={} differing={:.4}",
+                    std::path::Path::new(&reference).display(),
+                    compared.mean_abs,
+                    compared.max_abs,
+                    compared.differing,
+                ),
+                Err(error) => warn!("loading capture comparison refused: {error}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare a working-space `Rgba8` capture against a binary-PPM reference of
+    /// the same dimensions. The reference must already live in the menu working
+    /// channels; converting an original-client screenshot into those channels is
+    /// the caller's documented step, not something this helper invents.
+    pub(crate) fn compare_against(
+        capture: &[u8],
+        reference: &std::path::Path,
+    ) -> Result<pcx_play::campaign_loading::ImageComparison, String> {
+        let bytes = std::fs::read(reference).map_err(|e| format!("{reference:?}: {e}"))?;
+        let pixels = parse_p6(&bytes)?;
+        pcx_play::campaign_loading::compare_images(capture, &pixels)
+            .map_err(|e| e.to_owned())
+    }
+
+    /// Read a binary PPM (`P6`, 255 max, no comments) into packed `Rgba8`.
+    fn parse_p6(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let mut fields = Vec::with_capacity(3);
+        let mut start = 0;
+        for _ in 0..3 {
+            let end = bytes[start..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .ok_or("reference: truncated header")?;
+            fields.push(&bytes[start..start + end]);
+            start += end + 1;
+        }
+        let [magic, dims, max] = fields[..] else {
+            return Err("reference: truncated header".into());
+        };
+        if magic != b"P6" || max != b"255" {
+            return Err("reference: not a binary PPM with max 255".into());
+        }
+        let dims = std::str::from_utf8(dims).map_err(|_| "reference: bad dimensions")?;
+        let (width, height) = dims
+            .split_once(' ')
+            .and_then(|(w, h)| Some((w.parse::<usize>().ok()?, h.parse::<usize>().ok()?)))
+            .ok_or("reference: bad dimensions")?;
+        let pixels = &bytes[start..];
+        if pixels.len() != width * height * 3 {
+            return Err("reference: pixel length does not match its dimensions".into());
+        }
+        let mut out = Vec::with_capacity(width * height * 4);
+        for rgb in pixels.chunks(3) {
+            out.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        }
+        Ok(out)
     }
 
     /// Build, label and pose the screen for `request` without a GPU or window.

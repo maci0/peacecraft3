@@ -15,6 +15,12 @@ const RULES: ProgressRules = ProgressRules {
     full: 2.0,
 };
 
+const MIN_DISPLAY: MinDisplay = MinDisplay {
+    cap: 300.0,
+    base: 3.0,
+    per_char: 0.1,
+};
+
 const LOADED: Signals = Signals {
     admitted: true,
     prepared: true,
@@ -120,56 +126,99 @@ fn request() -> LoadingRequest {
     let source = Source::new("request", &[(TABLE_PATH, TABLE)]);
     LoadingRequest::read(
         source.resolver(),
+        None,
         &info(1, "", "words", "Title"),
         None,
         RULES,
+        &MIN_DISPLAY,
+        false,
     )
-    .unwrap()
     .unwrap()
 }
 
 fn begun() -> CampaignLoading {
     let mut loading = CampaignLoading::default();
-    loading.begin(request(), &MapRequests::default(), None);
+    loading.begin(request(), &MapRequests::default(), None, false);
     loading
 }
 
 #[test]
 fn a_request_follows_the_header_through_the_selected_table() {
-    let source = Source::new("selects", &[(TABLE_PATH, TABLE)]);
+    let source = Source::new(
+        "selects",
+        &[
+            (TABLE_PATH, TABLE),
+            (
+                SKIN_PATH,
+                "[Default]\nLoadingMeleeBackground=UI\\Loading\\M.mdl\n",
+            ),
+        ],
+    );
     let request = LoadingRequest::read(
         source.resolver(),
+        None,
         &info(1, "", "words", "Title"),
         None,
         RULES,
+        &MIN_DISPLAY,
+        false,
     )
-    .unwrap()
     .unwrap();
-    assert_eq!(request.screen.model, "UI\\Loading\\B.mdl");
-    assert_eq!(request.screen.sequence, 3);
-    assert_eq!(request.text.text, "words");
-    assert_eq!(request.text.title, "Title");
-    assert_eq!(request.text.subtitle, "sub");
-    // No number and no custom path is the melee panel, which has no request.
+    let LoadingKind::Campaign { screen, text } = &request.kind else {
+        panic!("a numbered header selects the campaign screen");
+    };
+    assert_eq!(screen.model, "UI\\Loading\\B.mdl");
+    assert_eq!(screen.sequence, 3);
+    assert_eq!(text.text, "words");
+    assert_eq!(text.title, "Title");
+    assert_eq!(text.subtitle, "sub");
+    // No number and no custom path is the melee panel, with the map's slots.
     let melee = info(u32::MAX, "", "words", "Title");
-    assert!(
-        LoadingRequest::read(source.resolver(), &melee, None, RULES)
-            .unwrap()
-            .is_none()
-    );
+    let melee = LoadingRequest::read(
+        source.resolver(),
+        None,
+        &melee,
+        None,
+        RULES,
+        &MIN_DISPLAY,
+        false,
+    )
+    .unwrap();
+    let LoadingKind::Melee(panel) = &melee.kind else {
+        panic!("a header with no number and no model is the melee panel");
+    };
+    assert_eq!(panel.map_name, "map");
+    assert_eq!(panel.slots.len(), 1);
+    assert!(melee.custom.is_none());
 }
 
 #[test]
 fn a_missing_table_or_screen_refuses_with_its_name() {
     let empty = Source::new("empty", &[]);
-    let error = LoadingRequest::read(empty.resolver(), &info(0, "", "", ""), None, RULES)
-        .err()
-        .unwrap();
+    let error = LoadingRequest::read(
+        empty.resolver(),
+        None,
+        &info(0, "", "", ""),
+        None,
+        RULES,
+        &MIN_DISPLAY,
+        false,
+    )
+    .err()
+    .unwrap();
     assert!(error.contains(TABLE_PATH), "{error}");
     let source = Source::new("range", &[(TABLE_PATH, TABLE)]);
-    let error = LoadingRequest::read(source.resolver(), &info(2, "", "", ""), None, RULES)
-        .err()
-        .unwrap();
+    let error = LoadingRequest::read(
+        source.resolver(),
+        None,
+        &info(2, "", "", ""),
+        None,
+        RULES,
+        &MIN_DISPLAY,
+        false,
+    )
+    .err()
+    .unwrap();
     assert!(error.contains("loading screen 2"), "{error}");
 }
 
@@ -232,7 +281,7 @@ fn a_failure_already_on_display_at_the_launch_is_not_this_load() {
         ..MapRequests::default()
     };
     let mut loading = CampaignLoading::default();
-    loading.begin(request(), &requests, None);
+    loading.begin(request(), &requests, None, false);
     assert!(!loading.fresh_outcome_failed(&requests));
     requests.last_outcome = Some(failure("new"));
     assert!(loading.fresh_outcome_failed(&requests));

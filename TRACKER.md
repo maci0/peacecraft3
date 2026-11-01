@@ -1,5 +1,21 @@
 # PeaceCraft3 — Tracker
 
+- [~] Campaign loading screen parity. Colour is qualified: the screen's cameras
+  carry the menu working channels and the offscreen capture targets `Rgba8Unorm`,
+  the same space as the menu captures. An original capture can be compared with
+  `harness::compare_against` (channel-wise mean/max/differing over working-space
+  bytes; `PCX_LOADING_REFERENCE_PPM` logs the difference during a capture; the
+  reference stays local). The melee panel draws for headers with neither a number
+  nor a model (map minimap, `wts`-resolved name and slots, race-section skin
+  background, `MELEE`/`NON_MELEE` game type as a documented choice). The network
+  branch exists with the image-read minimum hold and the waiting-for-players
+  state, disarmed for local sessions. Map-supplied loading models load from the
+  map archive at their first sequence, and continuation plus browser launches
+  open the same screen through fresh admitted bindings. See
+  [campaign loading screen](docs/re-notes/campaign-loading-screen.md). Open: the
+  original's text-fitting routine, the post-load bar sequence mapping, exact
+  game-type/race/level sources, and repeated original-capture numbers.
+
 - [~] Script slices landed for 0.8.0. `CreateSoundFilenameWithLabel` binds the
   caller file and an admitted SLK row. Group target orders reuse the per-unit
   target consumers. A point `smart` order resolves through the existing ground
