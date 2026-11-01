@@ -78,12 +78,18 @@ pub(crate) struct ButtonPress {
     pub order: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CardUnavailable {
+    Build(pcx_play::playercolor_host::BuildUnavailable),
+    Train(pcx_play::playercolor_host::TrainUnavailable),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Icon {
     active: bool,
     rank: Option<i32>,
     blocked_learning: bool,
-    unavailable: Option<pcx_play::playercolor_host::BuildUnavailable>,
+    unavailable: Option<CardUnavailable>,
     kind: Kind,
     data: IconData,
     tooltip: Result<ability_profile::Tooltip, String>,
@@ -190,7 +196,9 @@ fn unchanged(objects: &ObjectHost, previous: Option<&Signature>) -> Result<bool,
             return Ok(false);
         }
     }
-    Ok(old.next().is_none() && build_options(objects, current.unit)? == previous.builds)
+    Ok(old.next().is_none()
+        && build_options(objects, current.unit)? == previous.builds
+        && train_options(objects, current.unit)? == previous.trains)
 }
 
 fn build_options(
@@ -205,6 +213,13 @@ fn build_options(
         return Ok(Vec::new());
     }
     objects.unit_build_options(unit).map_err(|e| e.to_string())
+}
+
+fn train_options(
+    objects: &ObjectHost,
+    unit: HandleId,
+) -> Result<Vec<pcx_play::playercolor_host::TrainOption>, String> {
+    objects.unit_train_options(unit).map_err(|e| e.to_string())
 }
 
 fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
@@ -226,10 +241,12 @@ fn snapshot(objects: &ObjectHost) -> Result<Option<Signature>, String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let builds = build_options(objects, header.unit)?;
+    let trains = train_options(objects, header.unit)?;
     Ok(Some(Signature {
         header,
         abilities,
         builds,
+        trains,
     }))
 }
 
@@ -666,7 +683,8 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             });
         }
     }
-    for kind in pcx_play::training_command::types(&record.definition)? {
+    for option in train_options(objects, unit)? {
+        let kind = option.kind.to_be_bytes();
         let definition = objects
             .unit_catalog()
             .map_err(|e| e.to_string())?
@@ -683,7 +701,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
             active: false,
             rank: None,
             blocked_learning: false,
-            unavailable: None,
+            unavailable: option.unavailable.map(CardUnavailable::Train),
             kind: Kind::Train(command.kind),
             data: IconData {
                 art: command.art,
@@ -695,7 +713,7 @@ fn wanted(objects: &ObjectHost, source: &Source, page: SkillPage) -> Result<Opti
                     command.hotkey,
                 ),
             },
-            tooltip: command.tooltip,
+            tooltip: train_tooltip(command.tooltip, &option),
             order: None,
         });
     }
@@ -832,7 +850,7 @@ fn building_page(
             active: false,
             rank: None,
             blocked_learning: false,
-            unavailable: choice.unavailable,
+            unavailable: choice.unavailable.map(CardUnavailable::Build),
             kind: Kind::Build(command.kind),
             data: IconData {
                 art: command.art,
@@ -1088,6 +1106,47 @@ fn command_art(source: &Source, icon: &Icon) -> Result<String, String> {
     } else {
         Ok(icon.data.art.clone())
     }
+}
+
+/// The authored unavailability reason, for tooltips. Names the gate, not a
+/// workaround: the enqueue path re-checks the same gate and refuses there.
+fn train_unavailable_reason(unavailable: pcx_play::playercolor_host::TrainUnavailable) -> &'static str {
+    use pcx_play::playercolor_host::TrainUnavailable as Unavailable;
+    match unavailable {
+        Unavailable::Paused => "the producer is paused",
+        Unavailable::Hero => "hero training is not admitted",
+        Unavailable::QueueFull => "the training queue is full",
+        Unavailable::Requirements => "requirements are not met",
+        Unavailable::Limit => "the tech limit is reached",
+        Unavailable::Resources => "more gold or lumber is needed",
+        Unavailable::Food => "more food capacity is needed",
+    }
+}
+
+/// The button's authored tip with its resolved cost, per-entry cancellation
+/// refund and readiness appended. Costs and refunds resolve the same unit
+/// catalog and map overrides the enqueue path uses.
+fn train_tooltip(
+    tooltip: Result<ability_profile::Tooltip, String>,
+    option: &pcx_play::playercolor_host::TrainOption,
+) -> Result<ability_profile::Tooltip, String> {
+    let mut tip = tooltip?;
+    tip.description.push_str(&format!(
+        "|n|nCost: {} gold, {} lumber, {} food, {} sec.|nRefund on cancel: {} gold, {} lumber.",
+        option.gold,
+        option.lumber,
+        option.food,
+        option.duration,
+        option.refund_gold,
+        option.refund_lumber
+    ));
+    if let Some(unavailable) = option.unavailable {
+        tip.description.push_str(&format!(
+            "|nUnavailable: {}.",
+            train_unavailable_reason(unavailable)
+        ));
+    }
+    Ok(tip)
 }
 
 fn paint(
@@ -2869,7 +2928,9 @@ mod tests {
         };
         {
             let icons = &mut card.view.as_mut().unwrap().icons;
-            icons[1].unavailable = Some(pcx_play::playercolor_host::BuildUnavailable::Resources);
+            icons[1].unavailable = Some(CardUnavailable::Build(
+                pcx_play::playercolor_host::BuildUnavailable::Resources,
+            ));
             icons[2].blocked_learning = true;
         }
         assert_eq!(card.button_for_keys(unit, &[KEY_Q, KEY_W]), None);

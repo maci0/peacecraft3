@@ -430,6 +430,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_minimap::install(&mut app);
     crate::campaign_minimap_buttons::install(&mut app);
     crate::campaign_command_card::install(&mut app);
+    crate::campaign_training_queue::install(&mut app);
     crate::campaign_selection::install(&mut app);
     crate::campaign_uber_splats::install(&mut app);
     crate::campaign_unit_shadows::install(&mut app);
