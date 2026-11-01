@@ -1,4 +1,16 @@
 //! Clip the selection square to the same tile triangles as `pcx_gfx::ground`.
+//!
+//! Rendered mesh versus box-pick footprint (inference boundary): the native
+//! pick (`0x601410`) sets up its own projection and per-object flag/virtual
+//! filter, while the recreation's box pick projects each unit's selection
+//! circle (`UnitUI` `scale` times `ScaleFactor`, [`pcx_play::selection_circle`]
+//! `PROJECTED_CIRCLE_SAMPLES` samples at terrain height) through the real
+//! scene camera. This mesh is the drawn circle for that same radius
+//! (`scale`, `z_offset` from `selection_circle::Parameters`); it is clipped to
+//! the rendered ground triangles here, whereas the pick footprint keeps the
+//! screen-space bounds of the projected samples. The two share the radius and
+//! offset but not the geometry test, which is why the pick stays an inference
+//! even when the drawn circle matches the ground.
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
 use pcx_map::Terrain;
 use pcx_tera::world::{TILE_XY, corner_world};

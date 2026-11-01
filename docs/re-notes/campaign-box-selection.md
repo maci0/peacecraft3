@@ -109,6 +109,31 @@ original. This note records where each rule comes from. Evidence classes:
   inference), and the script natives `EnableSelect`, `EnableDragSelect` and
   `EnablePreSelect` (signatures read from the script's own declarations).
 
+## Native geometry vs projected circle (exactness)
+
+- exe vs inference: the addresses above are the native pick's own projection
+  and filter. The recreation's pick is `pcx_play::selection_circle` plus the
+  scene camera: radius `UnitUI` `scale` times `ScaleFactor` halved
+  (`circle_radius`), `PROJECTED_CIRCLE_SAMPLES = 16` evenly spaced points at
+  terrain height (`sample_world_z`), projected with `world_to_viewport`, kept
+  as the screen-space bounds of the samples that project. Touch is rectangle
+  intersection. The count, the radius formula and the camera are the
+  recreation's inference, not image operands; the module names them exactly so
+  a future `0x601410` read can replace them without touching the tier filter.
+- 16-sample exactness: off-terrain or behind-camera samples shrink the
+  footprint; with no projecting sample there is no shape and the unit is not
+  taken. The count is a numerical-method choice: fewer samples miss small
+  overlaps at glancing angles, more samples cost projection work without
+  changing the tier outcome. No asset or image value supplies it.
+- tolerance/viewport exactness: `tolerance_pixels(tolerance_ui, frame_height,
+  view_height)` is `tolerance_ui / frame_height * view_height` with refusal on
+  non-finite or non-positive inputs. Callers pass the image tolerance (`0.01`
+  on the reviewed image) and the `0.6` frame height; the division axis (height,
+  not width) is the inference. The double-click grouping boundary is the scene
+  viewport (`grouping_uses_scene_viewport`): the native `0x5fff10` on-screen
+  test beyond that rect was not decompiled, so the viewport stays a stated
+  inference boundary rather than a proven native rule.
+
 ## Double click
 
 - exe: the manager constructor stores a 500 ms window (`mov [esi+0x10], 0x1f4`
