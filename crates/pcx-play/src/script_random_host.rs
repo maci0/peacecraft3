@@ -1,5 +1,6 @@
 use super::{Error, Failure, ObjectHost};
 use crate::script_random::{
+    order::{CallSite, DrawLog, DrawRecord},
     profile::Policy,
     state::{self, PrimaryCheckpoint, State},
 };
@@ -10,6 +11,9 @@ pub(super) struct Random {
     policy: Arc<Policy>,
     max_secondary: usize,
     state: Option<State>,
+    /// Caller sequence in execution order. Reseeds clear it with the state;
+    /// refused calls record nothing.
+    order: DrawLog,
 }
 
 impl ObjectHost {
@@ -52,11 +56,13 @@ impl ObjectHost {
             policy,
             max_secondary,
             state: None,
+            order: DrawLog::new(),
         });
         Ok(self)
     }
 
     /// One draw from the shared script RNG, as `GetRandomInt` makes.
+    /// Admitted calls are appended to the caller sequence in execution order.
     pub(super) fn draw_random_integer(
         &mut self,
         low: i32,
@@ -67,13 +73,22 @@ impl ObjectHost {
             self.inner
                 .error(caller, Failure::RandomSetup("not admitted"))
         })?;
-        state::integer(&random.policy, &mut random.state, low, high)
-            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))
+        random
+            .order
+            .reserve()
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let site = CallSite::gameplay(caller)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let value = state::integer(&random.policy, &mut random.state, low, high)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let primary_word = random.state.as_ref().map(|state| state.primary_word());
+        random.order.push(DrawRecord { site, primary_word });
+        Ok(value)
     }
 
     /// One source-qualified gameplay die from an already retained secondary stream.
     /// The ability policy supplies the channel and sides; this does not seed or
-    /// borrow the primary script stream.
+    /// borrow the primary script stream. Admitted calls join the caller sequence.
     pub fn draw_random_secondary_die(
         &mut self,
         channel: usize,
@@ -84,30 +99,50 @@ impl ObjectHost {
             self.inner
                 .error(caller, Failure::RandomSetup("not admitted"))
         })?;
-        state::secondary_die(&random.policy, &mut random.state, channel, sides)
-            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))
+        random
+            .order
+            .reserve()
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let value = state::secondary_die(&random.policy, &mut random.state, channel, sides)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let primary_word = random.state.as_ref().map(|state| state.primary_word());
+        random.order.push(DrawRecord {
+            site: CallSite::SecondaryDie { channel },
+            primary_word,
+        });
+        Ok(value)
     }
 
     pub fn script_random_state(&self) -> Option<&State> {
         self.random.as_ref()?.state.as_ref()
     }
 
-    /// Save only the primary word and lanes, so a refused combat hit can restore
-    /// the draw that its damage roll consumed without copying secondary history.
+    /// Caller sequence in execution order, oldest first. Reseeds clear it with
+    /// the generator state; refused calls record nothing.
+    pub fn script_random_calls(&self) -> Option<&[DrawRecord]> {
+        Some(self.random.as_ref()?.order.records())
+    }
+
+    /// Save the primary word and lanes plus the caller-sequence length, so a
+    /// refused combat hit can restore the draw that its damage roll consumed
+    /// without copying secondary history. Restoring also drops later caller
+    /// records, keeping the sequence aligned with the generator.
     pub(super) fn script_random_primary_checkpoint(&self) -> Option<PrimaryCheckpoint> {
-        Some(self.script_random_state()?.primary_checkpoint())
+        let random = self.random.as_ref()?;
+        let state = random.state.as_ref()?;
+        Some(state.primary_checkpoint(random.order.records().len()))
     }
 
     pub(super) fn restore_script_random_primary(&mut self, checkpoint: Option<PrimaryCheckpoint>) {
         let Some(checkpoint) = checkpoint else {
             return;
         };
-        if let Some(state) = self
-            .random
-            .as_mut()
-            .and_then(|random| random.state.as_mut())
-        {
-            state.restore_primary(checkpoint);
+        let order_len = State::checkpoint_order_len(&checkpoint);
+        if let Some(random) = self.random.as_mut() {
+            if let Some(state) = random.state.as_mut() {
+                state.restore_primary(checkpoint);
+            }
+            random.order.truncate(order_len);
         }
     }
 
@@ -124,15 +159,34 @@ impl ObjectHost {
             ("SetRandomSeed", [Value::Int(seed)]) => {
                 state::seeded(&random.policy, *seed, random.max_secondary).map(|next| {
                     random.state = Some(next);
+                    random.order.clear();
                     Value::Null
                 })
             }
-            ("GetRandomInt", [Value::Int(low), Value::Int(high)]) => {
-                state::integer(&random.policy, &mut random.state, *low, *high).map(Value::Int)
-            }
-            ("GetRandomReal", [Value::Real(low), Value::Real(high)]) => {
-                state::real(&random.policy, &mut random.state, *low, *high).map(Value::Real)
-            }
+            ("GetRandomInt", [Value::Int(low), Value::Int(high)]) => random
+                .order
+                .reserve()
+                .and_then(|()| state::integer(&random.policy, &mut random.state, *low, *high))
+                .map(|value| {
+                    let primary_word = random.state.as_ref().map(|state| state.primary_word());
+                    random.order.push(DrawRecord {
+                        site: CallSite::ScriptInteger,
+                        primary_word,
+                    });
+                    Value::Int(value)
+                }),
+            ("GetRandomReal", [Value::Real(low), Value::Real(high)]) => random
+                .order
+                .reserve()
+                .and_then(|()| state::real(&random.policy, &mut random.state, *low, *high))
+                .map(|value| {
+                    let primary_word = random.state.as_ref().map(|state| state.primary_word());
+                    random.order.push(DrawRecord {
+                        site: CallSite::ScriptReal,
+                        primary_word,
+                    });
+                    Value::Real(value)
+                }),
             _ => {
                 return Some(Err(self.inner.error(
                     name,

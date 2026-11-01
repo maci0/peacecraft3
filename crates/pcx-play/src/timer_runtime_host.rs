@@ -31,6 +31,13 @@ struct Expired {
 }
 
 /// One prepared expiry. Finish it even when its callback fails.
+///
+/// `triggers` holds every live subscription snapshot in arena (registration)
+/// order. The session delivers each trigger's conditions and actions before
+/// the direct `callback`: expiry-trigger actions observe the expired timer
+/// first, and the direct handler runs with cleared trigger/event context.
+/// Snapshots are prepared before the deadline is consumed, so callback-list
+/// edits apply on the next firing.
 #[derive(Debug)]
 pub struct TimerExpiry {
     source: HandleId,
@@ -40,6 +47,7 @@ pub struct TimerExpiry {
 }
 
 impl TimerExpiry {
+    /// Trigger snapshots in delivery order: arena (registration) order.
     pub fn triggers(&self) -> &[super::TriggerDelivery] {
         &self.triggers
     }
@@ -434,7 +442,7 @@ impl ObjectHost {
                     .filter(|at| *at <= until)
                     .map(|at| (index, run, at, timed))
             })
-            .min_by(|a, b| a.2.total_cmp(&b.2).then(a.1.sequence.cmp(&b.1.sequence)));
+            .min_by(|a, b| expiry_order((a.2, a.1.sequence), (b.2, b.1.sequence)));
         let Some((index, mut run, at, timed)) = next else {
             self.timers.as_mut().expect("admitted above").now = until;
             return Ok(None);
@@ -508,4 +516,13 @@ impl ObjectHost {
 fn deadline(now: f64, timeout: f64) -> Option<f64> {
     let at = now + timeout;
     (timeout.is_finite() && timeout > 0.0 && at.is_finite() && at > now).then_some(at)
+}
+
+/// Delivery order across armed expiries: earliest deadline first; exact ties
+/// break by creation/restart sequence, so a restarted timer loses its old
+/// slot. This is an explicit recreation tie policy: native equal-deadline
+/// order remains open (see `docs/re-notes/legacy-timer-start.md`). Timer and
+/// timed-event runs share this one queue; kinds never reorder around it.
+fn expiry_order(left: (f64, u64), right: (f64, u64)) -> std::cmp::Ordering {
+    left.0.total_cmp(&right.0).then(left.1.cmp(&right.1))
 }
