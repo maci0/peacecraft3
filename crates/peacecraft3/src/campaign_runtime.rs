@@ -373,6 +373,10 @@ pub struct CampaignExitSnapshot {
 pub struct CampaignExitResult(Option<CampaignExitSnapshot>);
 
 impl CampaignExitResult {
+    pub fn next_level(&self) -> Option<&str> {
+        self.0.as_ref()?.next_level.as_deref()
+    }
+
     pub fn take_campaign_menu_index(&mut self) -> Option<i32> {
         self.0.as_mut()?.campaign_menu_index.take()
     }

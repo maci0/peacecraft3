@@ -592,7 +592,14 @@ mod ally_water_menu_parity {
     }
 
     fn sample_bridge_trajectory(app: &mut App) -> serde_json::Value {
-        let (from, to, terrain, edition, source, movement, surface) = {
+        let context = {
+            let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+            match session.context() {
+                Some(context) => context.clone(),
+                None => return serde_json::json!({"refusal": "no admitted map context"}),
+            }
+        };
+        let (from, to, rules, movement, has_settings) = {
             let mut session = app
                 .world_mut()
                 .resource_mut::<MapScriptSession<MapStartupHost>>();
@@ -607,10 +614,6 @@ mod ally_water_menu_parity {
             let (Some(from), Some(to)) = (positions.next(), positions.next()) else {
                 return serde_json::json!({"refusal": "fewer than two accepted unit positions"});
             };
-            let context = match session.context() {
-                Some(context) => context.clone(),
-                None => return serde_json::json!({"refusal": "no admitted map context"}),
-            };
             let rules = match objects.unit_placement_rules() {
                 Some(rules) => rules.clone(),
                 None => return serde_json::json!({"refusal": "no admitted terrain encoding"}),
@@ -622,13 +625,15 @@ mod ally_water_menu_parity {
                 Some(Ok(movement)) => movement,
                 _ => return serde_json::json!({"refusal": "no admitted movement class"}),
             };
-            let reader = match objects.startup_settings().and_then(|_| session.host()) {
-                Some(_) => (),
-                None => return serde_json::json!({"refusal": "no live host reader"}),
-            };
-            let _ = reader;
+            let has_settings = objects.startup_settings().is_some();
+            (from, to, rules, movement, has_settings)
+        };
+        if !has_settings {
+            return serde_json::json!({"refusal": "no live host reader"});
+        }
+        let (terrain, edition, source, mapping, offset) = {
+            let [tile, bias, factor] = rules.terrain_encoding();
             let mapping = {
-                let [tile, bias, factor] = rules.terrain_encoding();
                 match pcx_tera::world::Mapping::new(tile, bias, factor) {
                     Some(mapping) => mapping,
                     None => {
@@ -676,15 +681,14 @@ mod ally_water_menu_parity {
                 }
             };
             (
-                from,
-                to,
                 context.terrain.clone(),
                 context.sources.map.edition.clone(),
                 context.sources.map.source.clone(),
-                movement,
-                crate::campaign_actors::WaterSurface { mapping, offset },
+                mapping,
+                offset,
             )
         };
+        let surface = crate::campaign_actors::WaterSurface { mapping, offset };
         let steps = std::env::var("PCX_PARITY_TRAJECTORY_STEPS")
             .ok()
             .map(|v| {
@@ -728,24 +732,29 @@ mod ally_water_menu_parity {
     }
 
     fn sample_bank_pitch(app: &mut App) -> serde_json::Value {
-        let mut session = app
-            .world_mut()
-            .resource_mut::<MapScriptSession<MapStartupHost>>();
-        let Some(host) = session.host() else {
-            return serde_json::json!({"refusal": "no live campaign host for orientation"});
+        let context = {
+            let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+            match session.context() {
+                Some(context) => context.clone(),
+                None => return serde_json::json!({"refusal": "no admitted map context"}),
+            }
         };
-        let context = match session.context() {
-            Some(context) => context.clone(),
-            None => return serde_json::json!({"refusal": "no admitted map context"}),
+        let unit = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let Some(host) = session.host() else {
+                return serde_json::json!({"refusal": "no live campaign host for orientation"});
+            };
+            let Some((_, unit)) = host
+                .objects()
+                .executed_units()
+                .find(|(_, unit)| unit.position.is_some())
+            else {
+                return serde_json::json!({"refusal": "no accepted unit position for orientation"});
+            };
+            unit.clone()
         };
-        let Some((_, unit)) = host
-            .objects()
-            .executed_units()
-            .find(|(_, unit)| unit.position.is_some())
-        else {
-            return serde_json::json!({"refusal": "no accepted unit position for orientation"});
-        };
-        let unit = unit.clone();
         let [x, y] = unit.position.unwrap();
         // Central differences on admitted terrain; the epsilon is a harness
         // sampling policy, not a native orientation constant.
@@ -812,28 +821,28 @@ mod ally_water_menu_parity {
     }
 
     fn sample_completion(app: &mut App) -> serde_json::Value {
-        let order = app
-            .world()
-            .resource::<crate::native_campaign::Chapters>()
-            .mission_order();
+        let chapters = app.world().resource::<crate::native_campaign::Chapters>();
+        let mut order = Vec::new();
+        for campaign in &chapters.campaigns {
+            for (row, _) in campaign.missions.iter().enumerate() {
+                order.push((
+                    i32::try_from(campaign.source_index).unwrap_or(i32::MAX),
+                    i32::try_from(row).unwrap_or(i32::MAX),
+                ));
+            }
+        }
         let mut progress = pcx_play::campaign_progress::Progress::default();
         let before = progress.next_incomplete(&order);
         let complete_before = progress.order_complete(&order);
         // Only an executed victory observed through the score handoff marks a
-        // mission; anything else leaves completion empty.
+        // mission; anything else leaves completion empty. The exit snapshot
+        // carries the verbatim `ChangeLevel` destination; match it against the
+        // authored mission maps.
         let mut marked: Option<(i32, i32)> = None;
         let won = app
             .world()
-            .resource::<Option<peacecraft3::campaign_runtime::CampaignExitResult>>()
-            .as_ref()
-            .and_then(|exit| exit.victory_map().map(str::to_owned));
-        // Resource is `Res<...>` when installed; fall back to no victory when
-        // the harness checkpoint has none.
-        let won = won.or_else(|| {
-            app.world()
-                .get_resource::<peacecraft3::campaign_runtime::CampaignExitResult>()
-                .and_then(|exit| exit.victory_map().map(str::to_owned))
-        });
+            .get_resource::<peacecraft3::campaign_runtime::CampaignExitResult>()
+            .and_then(|exit| exit.next_level().map(str::to_owned));
         if let Some(won) = won {
             let chapters = app.world().resource::<crate::native_campaign::Chapters>();
             for campaign in &chapters.campaigns {
@@ -1303,7 +1312,7 @@ mod portrait_parity {
                 panel.portrait_binding().map(|(rules, viewport, parent)| {
                     (
                         rules.portrait.rect(viewport[0] / viewport[1]).ok(),
-                        rules.portrait.light.clone(),
+                        rules.portrait.light,
                         viewport,
                         parent,
                     )
@@ -1337,8 +1346,8 @@ mod portrait_parity {
                 .get::<ComputedNode>(scene.mask)
                 .map(|node| [node.size().x, node.size().y]);
             let mask_clip = world
-                .get::<Overflow>(scene.mask)
-                .is_some_and(|overflow| *overflow == Overflow::clip());
+                .get::<Node>(scene.mask)
+                .is_some_and(|node| node.overflow == Overflow::clip());
             let (camera_active, camera_clear) = world
                 .get::<Camera>(scene.camera_entity)
                 .map(|camera| (camera.is_active, format!("{:?}", camera.clear_color)))
@@ -2355,7 +2364,7 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         "scope": "Production app offscreen Vulkan; mounted widget activation and synthetic keyboard messages; no physical input, audio playback or original paired-frame parity claim"
     })).unwrap()).unwrap();
     // Controlled sky/sight parity harness at the unchanged checkpoint.
-    sky_sight_parity::retain_control(app, &output, &install, &map, expansion);
+    sky_sight_parity::retain_control(&mut app, &output, &install, &map, expansion);
     // Retain the unchanged campaign above; the following mutation is a separate rendering diagnostic.
     let before = {
         use pcx_script::{Host, Value};

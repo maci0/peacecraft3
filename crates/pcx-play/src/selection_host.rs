@@ -75,7 +75,7 @@ impl ObjectHost {
                 "BlzIsUnitSelectable",
                 &["unit"][..],
                 "boolean",
-                true,
+                false,
                 Some("unit"),
             ),
             (

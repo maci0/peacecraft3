@@ -234,7 +234,9 @@ pub fn install(app: &mut App) {
         )
         .add_systems(
             Update,
-            log_audibility_probe.in_set(ScriptAudioPlayback).after(apply_category_gains),
+            log_audibility_probe
+                .in_set(ScriptAudioPlayback)
+                .after(apply_category_gains),
         );
 }
 
