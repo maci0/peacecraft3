@@ -522,9 +522,14 @@ reports current progress.
   portrait/readout lifecycle tests, 1,684 core, 58 MDX, 66 graphics, 55 app-library
   and 638 app-binary tests pass, with strict native/WASM Clippy. A calibrated
   menu-to-Human01 desktop replay shows lit Arthas/Footman portraits, idle motion
-  and selection switching. Speech animation,
-  idle rarity, portrait-mask composition and original-client pixel parity remain
-  open; see [animated portrait](docs/re-notes/held-inventory-presentation.md#animated-selected-unit-portrait).
+  and selection switching. Speech animation now holds the authored
+  `portrait talk`/`talk` variant while the unit's ack row stays live (unit id
+  retained at voice start, not a name-prefix guess); idle rarity re-draws over
+  the shipped SEQS weights on each completed idle loop through a deterministic
+  splitmix draw (recreation choice, not native RNG parity); mask composition is
+  a clipped transparent target over the authored console backing (a circular
+  mask model/texture is not sourced, so no new mask art is invented).
+  Original-client pixel parity remains open; see [animated portrait](docs/re-notes/held-inventory-presentation.md#animated-selected-unit-portrait).
 
 - [~] A single selected unit now shows its source-derived name and live health/
   mana readouts in the campaign console. The selected detail FDF supplies title

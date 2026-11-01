@@ -297,6 +297,9 @@ pub(crate) struct CampaignAudio {
     failed: Option<Request>,
     /// Accepted player commands already voiced.
     pub(crate) commands_seen: usize,
+    /// The unit whose acknowledgement voice was last started and its row name.
+    /// The portrait treats it as speaking while a live `GameSound` keeps that row.
+    pub(crate) speaking: Option<(pcx_script::HandleId, String)>,
     /// Problems already logged, so a repeating one is reported once.
     reported: BTreeSet<String>,
     /// Row flags already reported as not applied.
