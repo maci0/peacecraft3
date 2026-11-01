@@ -866,3 +866,427 @@ mod discovery_loopback {
         assert_eq!(client.address(source), Some(host_addr));
     }
 }
+
+/// Classic W3GS LAN host direction and broadcast discovery, on top of the
+/// integrated codec. An original unmodified client discovers this host with
+/// its LAN UI and joins over TCP; a PeaceCraft client collects original
+/// broadcasts the same way. All bounds are caller configuration.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod classic {
+    use std::collections::BTreeMap;
+    use std::net::{SocketAddr, TcpListener, UdpSocket};
+    use std::time::{Duration, Instant};
+
+    use crate::classic_frame::game_info::{DiscoveryProfile, GameAdvertisement, encode_game_info};
+    use crate::classic_frame::lobby::{self, IncomingJoin};
+    use crate::classic_frame::tcp::{CallPolicy, Connection};
+    use crate::classic_frame::{Decoder, FrameLimits, OwnedFrame};
+
+    /// Why classic discovery or host service failed.
+    #[derive(Debug)]
+    pub enum ClassicLanError {
+        /// Socket I/O.
+        Io(std::io::Error),
+        /// A datagram or stream failed framing or body checks.
+        Protocol(String),
+        /// The absolute deadline elapsed.
+        Deadline,
+        /// The caller ceiling refuses the result.
+        Budget(&'static str),
+    }
+
+    impl std::fmt::Display for ClassicLanError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Io(e) => write!(f, "classic LAN io: {e}"),
+                Self::Protocol(e) => write!(f, "classic LAN protocol: {e}"),
+                Self::Deadline => write!(f, "classic LAN deadline elapsed"),
+                Self::Budget(e) => write!(f, "classic LAN budget: {e}"),
+            }
+        }
+    }
+
+    impl std::error::Error for ClassicLanError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Io(e) => Some(e),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for ClassicLanError {
+        fn from(e: std::io::Error) -> Self {
+            Self::Io(e)
+        }
+    }
+
+    /// Caller ceilings for classic LAN discovery and join service.
+    #[derive(Debug, Clone, Copy)]
+    pub struct ClassicLanLimits {
+        /// Largest accepted discovery datagram, including one spare byte
+        /// that detects truncation.
+        pub max_datagram_bytes: usize,
+        /// Decoder ceiling per datagram.
+        pub max_frame_bytes: usize,
+        /// Most hosts retained from one broadcast collection.
+        pub max_hosts: usize,
+        /// Most discovery datagrams read per collection, bounding work.
+        pub max_datagrams: usize,
+    }
+
+    impl Default for ClassicLanLimits {
+        fn default() -> Self {
+            Self {
+                max_datagram_bytes: 2049,
+                max_frame_bytes: 2048,
+                max_hosts: 16,
+                max_datagrams: 64,
+            }
+        }
+    }
+
+    /// One collected advertisement: who sent it and its validated frame.
+    #[derive(Debug)]
+    pub struct CollectedHost {
+        /// UDP source of the advertisement.
+        pub from: SocketAddr,
+        /// Validated `W3GS_GAMEINFO` frame.
+        pub frame: OwnedFrame,
+    }
+
+    /// Collects `W3GS_GAMEINFO` broadcasts matching `profile` until
+    /// `deadline`, or until `max_hosts` distinct sources answer. Sends one
+    /// `W3GS_SEARCHGAME` broadcast first. Foreign-family datagrams and
+    /// mismatched profiles are counted and skipped, never stored.
+    pub fn collect_broadcast(
+        socket: &UdpSocket,
+        profile: DiscoveryProfile,
+        deadline: Instant,
+        limits: ClassicLanLimits,
+    ) -> Result<Vec<CollectedHost>, ClassicLanError> {
+        if limits.max_hosts == 0 {
+            return Err(ClassicLanError::Budget("host ceiling must admit one host"));
+        }
+        let request = profile.search_request();
+        socket.send_to(&request, ("255.255.255.255", super::LAN_PORT))?;
+        let mut buf = vec![0u8; limits.max_datagram_bytes];
+        let mut hosts: BTreeMap<SocketAddr, OwnedFrame> = BTreeMap::new();
+        let mut datagrams = 0usize;
+        loop {
+            if hosts.len() >= limits.max_hosts || datagrams >= limits.max_datagrams {
+                break;
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            socket.set_read_timeout(Some(left))?;
+            match socket.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    datagrams += 1;
+                    if n == buf.len() {
+                        continue;
+                    }
+                    let mut decoder = Decoder::new(FrameLimits {
+                        max_frame_bytes: limits.max_frame_bytes,
+                        max_frames: 1,
+                    })
+                    .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+                    let frames = decoder.push(&buf[..n]);
+                    let _ = decoder.finish();
+                    let Ok(frames) = frames else { continue };
+                    let Some(frame) = frames.into_iter().next() else {
+                        continue;
+                    };
+                    if frame.game_info(profile, 4096).is_err() {
+                        continue;
+                    }
+                    hosts.entry(from).or_insert(frame);
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    break;
+                }
+                Err(e) => return Err(ClassicLanError::Io(e)),
+            }
+        }
+        Ok(hosts
+            .into_iter()
+            .map(|(from, frame)| CollectedHost { from, frame })
+            .collect())
+    }
+
+    /// Configuration for one classic LAN host: advertisement fields plus
+    /// the lobby keys a join must echo.
+    #[derive(Debug, Clone)]
+    pub struct ClassicLanConfig {
+        /// Selected product and full version word.
+        pub profile: DiscoveryProfile,
+        /// Raw host counter in advertisements and joins.
+        pub host_counter: u32,
+        /// Raw entry key in advertisements and joins.
+        pub entry_key: u32,
+        /// Game-name bytes for advertisements.
+        pub game_name: Vec<u8>,
+        /// Map flags, dimensions, checksum, path and host name.
+        pub map_flags: [u8; 4],
+        /// Stored width and height words.
+        pub map_dimensions: [u16; 2],
+        /// Four map-checksum bytes.
+        pub map_crc: [u8; 4],
+        /// Protocol path bytes.
+        pub map_path: Vec<u8>,
+        /// Host-name bytes.
+        pub host_name: Vec<u8>,
+        /// Advertised totals and game port.
+        pub slots_total: u32,
+        /// Game-type bytes, wire order.
+        pub game_type: [u8; 4],
+        /// Advertised open slots.
+        pub slots_open: u32,
+        /// Game port clients connect to.
+        pub game_port: u16,
+    }
+
+    /// One accepted join: the validated request and its live connection.
+    /// Admission (slots, map, readiness) is the caller's `ClassicLobby`
+    /// duty; this only proves the peer echoed the advertisement.
+    pub struct PendingJoin {
+        /// Host counter the peer echoed from the advertisement.
+        pub host_counter: u32,
+        /// Entry key the peer echoed from the advertisement.
+        pub entry_key: u32,
+        /// Unspecified byte before the listen port, preserved as supplied.
+        pub unknown: u8,
+        /// Client's listen port, little-endian.
+        pub listen_port: u16,
+        /// Caller-supplied peer key, not a project player id.
+        pub peer_key: u32,
+        /// Name bytes without the terminator.
+        pub player_name: Vec<u8>,
+        /// Bytes after the name terminator, kept opaquely.
+        pub address_tail: Vec<u8>,
+        /// Peer TCP source address.
+        pub peer: SocketAddr,
+        /// Live framed connection for the lobby exchange.
+        pub connection: Connection,
+    }
+
+    impl PendingJoin {
+        /// Re-borrows the owned request as the lobby's join type.
+        pub fn as_join(&self) -> IncomingJoin<'_> {
+            IncomingJoin {
+                host_counter: self.host_counter,
+                entry_key: self.entry_key,
+                unknown: self.unknown,
+                listen_port: self.listen_port,
+                peer_key: self.peer_key,
+                player_name: &self.player_name,
+                address_tail: &self.address_tail,
+            }
+        }
+    }
+
+    /// A classic LAN host: answers original `W3GS_SEARCHGAME` broadcasts
+    /// and accepts `W3GS_REQJOIN` over TCP.
+    #[derive(Debug)]
+    pub struct ClassicLanHost {
+        socket: UdpSocket,
+        config: ClassicLanConfig,
+        started: Instant,
+    }
+
+    impl ClassicLanHost {
+        /// Binds the discovery socket. Broadcasts are enabled so original
+        /// clients browsing the LAN reach this host.
+        pub fn bind(addr: &str, config: ClassicLanConfig) -> Result<Self, ClassicLanError> {
+            let socket = UdpSocket::bind(addr)?;
+            socket.set_broadcast(true)?;
+            socket.set_nonblocking(false)?;
+            Ok(Self {
+                socket,
+                config,
+                started: Instant::now(),
+            })
+        }
+
+        /// Milliseconds since the host bound, for lobby bookkeeping.
+        pub fn now_ms(&self) -> u64 {
+            self.started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+        }
+
+        fn advertisement(&self) -> Result<Vec<u8>, ClassicLanError> {
+            let config = &self.config;
+            encode_game_info(&GameAdvertisement {
+                profile: config.profile,
+                host_counter: config.host_counter,
+                entry_key: config.entry_key,
+                game_name: &config.game_name,
+                name_suffix: 0,
+                map_flags: config.map_flags,
+                stat_reserved: 0,
+                map_dimensions: config.map_dimensions,
+                map_crc: config.map_crc,
+                map_path: &config.map_path,
+                host_name: &config.host_name,
+                stat_extension: &[],
+                slots_total: config.slots_total,
+                game_type: config.game_type,
+                tail_word: [1, 0, 0, 0],
+                slots_open: config.slots_open,
+                uptime: self.started.elapsed().as_secs().try_into().unwrap_or(u32::MAX),
+                port: config.game_port,
+            })
+            .map_err(|e| ClassicLanError::Protocol(e.to_string()))
+        }
+
+        /// Answers every pending `W3GS_SEARCHGAME` matching the configured
+        /// profile, returning the sources answered. Anything else on the
+        /// socket is ignored, never stored.
+        pub fn serve_discovery(&mut self, limits: ClassicLanLimits) -> Result<Vec<SocketAddr>, ClassicLanError> {
+            let reply = self.advertisement()?;
+            self.socket.set_nonblocking(true)?;
+            let mut answered = Vec::new();
+            let mut buf = vec![0u8; limits.max_datagram_bytes];
+            loop {
+                match self.socket.recv_from(&mut buf) {
+                    Ok((n, from)) => {
+                        if n == buf.len() {
+                            continue;
+                        }
+                        let mut decoder = Decoder::new(FrameLimits {
+                            max_frame_bytes: limits.max_frame_bytes,
+                            max_frames: 1,
+                        })
+                        .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+                        let frames = decoder.push(&buf[..n]);
+                        let _ = decoder.finish();
+                        let Ok(frames) = frames else { continue };
+                        let Some(frame) = frames.into_iter().next() else {
+                            continue;
+                        };
+                        if frame.check_search_game(self.config.profile).is_err() {
+                            continue;
+                        }
+                        if answered.len() >= limits.max_hosts {
+                            continue;
+                        }
+                        self.socket.send_to(&reply, from)?;
+                        answered.push(from);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(ClassicLanError::Io(e)),
+                }
+            }
+            Ok(answered)
+        }
+
+        /// Accepts one TCP join before `deadline`: takes the pending
+        /// connection, reads exactly one frame, and validates it as a
+        /// `W3GS_REQJOIN` echoing this host's counter and entry key.
+        /// Anything else is a protocol refusal, not a player.
+        pub fn accept_join(
+            &self,
+            listener: &TcpListener,
+            deadline: Instant,
+            policy: CallPolicy,
+        ) -> Result<PendingJoin, ClassicLanError> {
+            listener.set_nonblocking(true)?;
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(ClassicLanError::Deadline);
+                        }
+                        std::thread::yield_now();
+                    }
+                    Err(e) => return Err(ClassicLanError::Io(e)),
+                }
+            };
+            let peer = stream.peer_addr()?;
+            let mut connection = Connection::from_accepted(stream, policy)
+                .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+            let frame = connection
+                .receive()
+                .map_err(|e| ClassicLanError::Protocol(e.to_string()))?
+                .ok_or(ClassicLanError::Protocol("join stream ended before its frame"))?;
+            if frame.body().len() > policy.max_read_bytes {
+                return Err(ClassicLanError::Budget("join frame exceeds its read ceiling"));
+            }
+            // The borrowed request must not outlive this function on the
+            // stack, so re-derive it from the retained frame: validate
+            // twice, once for admission and once for the owned copy.
+            let join = frame
+                .incoming_join()
+                .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+            if join.host_counter != self.config.host_counter
+                || join.entry_key != self.config.entry_key
+            {
+                return Err(ClassicLanError::Protocol(
+                    "join echoes a foreign host counter or entry key",
+                ));
+            }
+            let owned: OwnedFrame = frame;
+            let request = owned
+                .incoming_join()
+                .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+            Ok(PendingJoin {
+                host_counter: request.host_counter,
+                entry_key: request.entry_key,
+                unknown: request.unknown,
+                listen_port: request.listen_port,
+                peer_key: request.peer_key,
+                player_name: request.player_name.to_vec(),
+                address_tail: request.address_tail.to_vec(),
+                peer,
+                connection,
+            })
+        }
+    }
+
+    /// Builds a host-bound `CallPolicy` for one join exchange under an
+    /// absolute deadline.
+    pub fn join_policy(deadline: Instant, max_bytes: usize, max_frames: usize) -> CallPolicy {
+        CallPolicy {
+            deadline,
+            connect_timeout: Duration::from_secs(0),
+            max_write_bytes: max_bytes,
+            max_read_bytes: max_bytes,
+            frames: FrameLimits {
+                max_frame_bytes: max_bytes,
+                max_frames,
+            },
+        }
+    }
+
+    /// Sends a lobby frame and reads the peer's next frame on an accepted
+    /// join connection, both under the connection's own policy.
+    pub fn exchange_join(
+        pending: &mut PendingJoin,
+        send: &[u8],
+    ) -> Result<Option<OwnedFrame>, ClassicLanError> {
+        pending
+            .connection
+            .send(send)
+            .map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+        pending
+            .connection
+            .receive()
+            .map_err(|e| ClassicLanError::Protocol(e.to_string()))
+    }
+
+    /// Graceful leave: sends one `W3GS_LEAVEGAME` with the caller's reason
+    /// and returns the connection for shutdown. No retry, no response read.
+    pub fn graceful_leave(
+        pending: &mut PendingJoin,
+        reason: u32,
+    ) -> Result<(), ClassicLanError> {
+        let frame =
+            lobby::encode_leave(reason).map_err(|e| ClassicLanError::Protocol(e.to_string()))?;
+        let _ = pending.connection.send(&frame);
+        Ok(())
+    }
+}
