@@ -527,6 +527,318 @@ fn decay_refusals_and_work_exhaustion_preserve_unit_state_and_removal_retires_it
 }
 
 #[test]
+fn bone_deadline_drives_removal_on_the_authored_boundary() {
+    use crate::unit_decay::Phase::*;
+    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let corpse = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
+    let decay_of = |h: &ObjectHost| h.executed_unit(id(&corpse)).unwrap().decay.clone();
+    assert_eq!(phase(h, &corpse), Dying);
+    assert_eq!(decay_of(h).as_ref().unwrap().deadline(), Some(0.5));
+    decay_step(h, 0.5);
+    assert_eq!(phase(h, &corpse), Flesh);
+    assert_eq!(decay_of(h).as_ref().unwrap().deadline(), Some(1.25));
+    decay_step(h, 1.25);
+    assert_eq!(phase(h, &corpse), Bone);
+    assert_eq!(decay_of(h).as_ref().unwrap().deadline(), Some(2.5));
+    decay_step(h, 2.499);
+    assert_eq!(phase(h, &corpse), Bone);
+    decay_step(h, 2.5);
+    assert!(h.executed_unit(id(&corpse)).is_err());
+}
+
+#[test]
+fn suspend_freezes_the_remaining_lifetime_and_resume_shifts_the_deadline() {
+    use crate::unit_decay::Phase::*;
+    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let corpse = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
+    let decay_of = |h: &ObjectHost| h.executed_unit(id(&corpse)).unwrap().decay.clone();
+    decay_step(h, 0.75);
+    assert_eq!(phase(h, &corpse), Flesh);
+    assert_eq!(decay_of(h).as_ref().unwrap().remaining(), 0.75);
+    h.native("UnitSuspendDecay", &[corpse.clone(), Value::Bool(true)])
+        .unwrap();
+    let frozen = decay_of(h).unwrap();
+    assert!(frozen.suspended());
+    assert_eq!(frozen.deadline(), None);
+    assert_eq!(frozen.remaining(), 0.5);
+    decay_step(h, 4.);
+    let held = decay_of(h).unwrap();
+    assert_eq!(phase(h, &corpse), Flesh);
+    assert_eq!(held.deadline(), None);
+    assert_eq!(held.remaining(), 0.5);
+    assert!(held.suspended());
+    h.native("UnitSuspendDecay", &[corpse.clone(), Value::Bool(false)])
+        .unwrap();
+    let resumed = decay_of(h).unwrap();
+    assert!(!resumed.suspended());
+    assert_eq!(resumed.deadline(), Some(4.5));
+    assert_eq!(resumed.remaining(), 0.5);
+    decay_step(h, 4.5);
+    assert_eq!(phase(h, &corpse), Bone);
+    assert_eq!(decay_of(h).as_ref().unwrap().deadline(), Some(5.75));
+    decay_step(h, 5.75);
+    assert!(h.executed_unit(id(&corpse)).is_err());
+}
+
+#[test]
+fn suspended_bone_corpses_are_retained_as_permanent_corpses() {
+    use crate::unit_decay::Phase::*;
+    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let permanent = h
+        .native("CreateCorpse", &args(owner.clone(), b"u001"))
+        .unwrap();
+    let other = h.native("CreateCorpse", &args(owner, b"u002")).unwrap();
+    decay_step(h, 0.75);
+    h.native("UnitSuspendDecay", &[other.clone(), Value::Bool(true)])
+        .unwrap();
+    decay_step(h, 1.25);
+    assert_eq!(phase(h, &permanent), Bone);
+    h.native("UnitSuspendDecay", &[permanent.clone(), Value::Bool(true)])
+        .unwrap();
+    decay_step(h, 100.);
+    for unit in [&permanent, &other] {
+        assert!(h.executed_unit(id(unit)).is_ok());
+    }
+    assert_eq!(phase(h, &permanent), Bone);
+    assert_eq!(phase(h, &other), Flesh);
+    let timings = h.corpse_timings();
+    assert_eq!(timings.len(), 2);
+    let timing_of = |rawcode: &[u8; 4]| timings.iter().find(|t| &t.rawcode == rawcode).unwrap();
+    assert!(ObjectHost::is_permanent_corpse_timing(timing_of(b"u001")));
+    assert!(!ObjectHost::is_permanent_corpse_timing(timing_of(b"u002")));
+    let kept = h.executed_unit(id(&permanent)).unwrap();
+    let decay = kept.decay.as_ref().unwrap();
+    assert!(decay.suspended());
+    assert_eq!(decay.deadline(), None);
+    assert_eq!(decay.remaining(), 1.25);
+}
+
+fn revive_fixture() -> pcx_script::OwnedVm<ObjectHost> {
+    let mut fields = combat::hero_fields("STR");
+    for (id, field) in &mut fields {
+        if id == b"H006" {
+            field.value = Ok(FieldValue::Cell("3.5".into()));
+        }
+        if id == b"H008" {
+            field.value = Ok(FieldValue::Cell("always".into()));
+        }
+    }
+    fields.extend([
+        combat::column(b"F001", SlkId::UnitBalance, "fused", FieldKind::Int, "7"),
+        combat::column(b"F002", SlkId::UnitBalance, "fmade", FieldKind::Int, "13"),
+    ]);
+    fields.extend([
+        combat::column(b"D001", SlkId::UnitData, "death", FieldKind::Unreal, "0.5"),
+        combat::column(
+            b"D002",
+            SlkId::UnitData,
+            "deathType",
+            FieldKind::Token,
+            "12",
+        ),
+        combat::column(b"D003", SlkId::UnitBalance, "isbldg", FieldKind::Bool, "0"),
+    ]);
+    for (_, field) in fields
+        .iter_mut()
+        .filter(|(id, _)| matches!(id, b"F001" | b"F002"))
+    {
+        field.metadata.as_mut().unwrap().declared = "int".into();
+    }
+    let declarations = format!(
+        "{}{}{}{}\nnative RemoveUnit takes unit u returns nothing\nnative SetUnitAnimation takes unit u, string s returns nothing\nnative UnitSuspendDecay takes unit u, boolean suspend returns nothing\nnative ReviveHero takes unit whichHero, real x, real y, boolean doEyecandy returns boolean\n",
+        super::enumeration::TRIGGERS,
+        super::activity::ORDERS,
+        combat::DECLARATIONS,
+        DECLARATION
+    );
+    let h = position_host_admitting(
+        10000,
+        16,
+        "// synthetic corpse map",
+        &declarations,
+        &fields,
+        |h| h,
+    );
+    let (registry, activity) = super::activity::rules();
+    let mut h = h
+        .with_order_registry(registry)
+        .unwrap()
+        .with_player_unit_events(8)
+        .unwrap()
+        .with_unit_states(UnitStateBudget { max_records: 16 })
+        .unwrap()
+        .with_player_alliances(crate::playercolor_host::PlayerAllianceBudget { max_records: 8 })
+        .unwrap()
+        .with_player_state_requests(crate::playercolor_host::PlayerStateRequestBudget {
+            max_records: 16,
+        })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_script_random(Arc::new(crate::script_random::profile::fixture()), 64)
+        .unwrap();
+    let origin = crate::scripts::AssetIdentity {
+        source: source().install,
+        edition: "fixture".into(),
+        version: "fixture".into(),
+    };
+    let tables = pcx_objects::editor::defaults::DefaultTables::from_bytes(
+        pcx_objects::editor::defaults::Identity {
+            install: origin.source.clone(),
+            edition_version: origin.version.clone(),
+        },
+        &[],
+        &[],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 0,
+            max_asset_bytes: 1024,
+            max_aggregate_input_bytes: 1024,
+        },
+    )
+    .unwrap();
+    h = h
+        .with_hero_skills(
+            tables,
+            origin,
+            Default::default(),
+            crate::hero_skills::tests::rules(),
+            crate::playercolor_host::HeroBudget {
+                abilities_per_unit: 8,
+                overlay_objects: 0,
+                modifications_per_ability: 0,
+            },
+        )
+        .unwrap();
+    h.admit_unit_activity(activity, 10000).unwrap();
+    h.admit_unit_vitals(HeroVitals {
+        life_per_strength: 25.,
+        mana_per_intelligence: 15.,
+        life_regen_per_strength: 0.,
+        mana_regen_per_intelligence: 0.,
+    })
+    .unwrap();
+    h.admit_combat(combat::rules(), "alpha").unwrap();
+    h.set_neutral_passive(15);
+    let mut rules = crate::unit_decay::Rules::fixture();
+    rules.image_sha256 = h.player_client_sha256().unwrap();
+    h.admit_unit_decay(rules).unwrap();
+    let mut model = crate::unit_model::tests::model();
+    let mut bytes = model.bytes.to_vec();
+    let parsed = pcx_mdl::Mdlx::parse(&bytes).unwrap();
+    let chunk = parsed.chunk(pcx_mdl::tag::SEQS).unwrap();
+    let size = chunk.size;
+    let offset = chunk.offset;
+    assert_eq!(chunk.payload_offset + chunk.size, bytes.len());
+    for (name, start, end) in [
+        ("Decay Flesh", 5000u32, 5700u32),
+        ("Decay Bone", 7000, 7750),
+        ("Dissipate", 9000, 9750),
+    ] {
+        let mut sequence = vec![0; pcx_mdl::SEQUENCE_SIZE];
+        sequence[..name.len()].copy_from_slice(name.as_bytes());
+        sequence[80..84].copy_from_slice(&start.to_le_bytes());
+        sequence[84..88].copy_from_slice(&end.to_le_bytes());
+        sequence[92..96].copy_from_slice(&1u32.to_le_bytes());
+        bytes.extend(sequence);
+    }
+    bytes[offset + 4..offset + 8]
+        .copy_from_slice(&((size + 3 * pcx_mdl::SEQUENCE_SIZE) as u32).to_le_bytes());
+    model = Arc::new(
+        crate::unit_model::Model::read(
+            model.origin.clone(),
+            model.member.clone(),
+            bytes.into(),
+            4096,
+        )
+        .unwrap(),
+    );
+    h.admit_unit_models(move |d| {
+        if d.rawcode == *b"FAIL" {
+            return Err("synthetic unreadable corpse model".into());
+        }
+        Ok(Some(Arc::clone(&model)))
+    })
+    .unwrap();
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    vm
+}
+
+#[test]
+fn resurrection_resets_decay_and_restores_the_canonical_hero() {
+    use crate::unit_decay::Phase::*;
+    let mut vm = revive_fixture();
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let hero = h
+        .native("CreateCorpse", &args(owner.clone(), b"H001"))
+        .unwrap();
+    let other = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
+    decay_step(h, 0.5);
+    assert_eq!(phase(h, &hero), Dissipating);
+    assert_eq!(phase(h, &other), Flesh);
+    assert_eq!(
+        h.native(
+            "ReviveHero",
+            &[
+                other.clone(),
+                Value::Real(16.),
+                Value::Real(16.),
+                Value::Bool(false)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(phase(h, &other), Flesh);
+    decay_step(h, 1.125);
+    assert_eq!(phase(h, &hero), Hidden);
+    assert!(!h.executed_unit(id(&hero)).unwrap().shown);
+    assert!(!ObjectHost::is_permanent_corpse_timing(
+        h.corpse_timings()
+            .iter()
+            .find(|t| t.phase == Hidden)
+            .unwrap()
+    ));
+    assert_eq!(
+        h.native(
+            "ReviveHero",
+            &[
+                hero.clone(),
+                Value::Real(16.),
+                Value::Real(16.),
+                Value::Bool(false)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let record = h.executed_unit(id(&hero)).unwrap().clone();
+    assert!(!record.combat.as_ref().unwrap().dead);
+    let vitals = record.vitals.as_ref().unwrap();
+    assert_eq!(vitals.life, vitals.max_life);
+    assert!(record.shown);
+    assert_eq!(record.position, Some([16., 16.]));
+    let decay = record.decay.as_ref().unwrap();
+    assert_eq!(decay.phase(), Alive);
+    assert_eq!(decay.deadline(), None);
+    assert_eq!(decay.remaining(), 0.);
+    assert!(!decay.suspended());
+    let timings = h.corpse_timings();
+    assert_eq!(timings.len(), 1);
+    assert_eq!(timings[0].rawcode, *b"u001");
+    decay_step(h, 10.);
+    assert_eq!(phase(h, &hero), Alive);
+    assert!(h.executed_unit(id(&hero)).is_ok());
+}
+
+#[test]
 fn suspend_decay_admission_rejects_malformed_abi_and_foreign_client_before_state() {
     for declaration in [
         "native UnitSuspendDecay takes unit u, integer flag returns nothing",

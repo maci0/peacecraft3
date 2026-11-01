@@ -388,3 +388,139 @@ fn set_item_position_moves_world_items_and_ignores_null_and_removed_ones() {
     assert!(moved(&mut host, Value::Handle(item), f32::NAN, 2.0).is_err());
     assert_eq!(host.executed_item(item).unwrap().x, 10.5);
 }
+
+fn visible_host() -> ObjectHost {
+    let common = format!(
+        "{COMMON}native SetItemVisible takes item i, boolean show returns nothing\nnative IsItemVisible takes item i returns boolean\nnative SetItemPosition takes item i, real x, real y returns nothing\n"
+    );
+    host(&common, 16)
+        .with_item_catalog(
+            Arc::new(Catalog(Arc::new(AtomicUsize::new(0)))),
+            source(),
+            ItemBudget {
+                max_records: 8,
+                ..budget()
+            },
+        )
+        .unwrap()
+        .with_item_visibility(crate::item_visibility::Rules::fixture())
+        .unwrap()
+}
+
+#[test]
+fn carried_ground_and_consumed_visibility_truth_table() {
+    let mut h = visible_host();
+    let owner = handle(h.native("CreateTimer", &[]).unwrap());
+    let stranger = handle(h.native("CreateTimer", &[]).unwrap());
+    let ground = handle(h.native(CREATE, &args(b"ITEM")).unwrap());
+    let base = h.executed_item(ground).unwrap().clone();
+    assert_eq!(base.visible(), Some(true));
+    let probe = |shown: Option<bool>, held_by: Option<(HandleId, usize)>, consumed: bool| {
+        let mut record = base.clone();
+        record.shown = shown;
+        record.held_by = held_by;
+        record.consumed = consumed;
+        record.visible()
+    };
+    assert_eq!(probe(Some(true), None, false), Some(true));
+    assert_eq!(probe(Some(false), None, false), Some(false));
+    assert_eq!(probe(Some(true), Some((owner, 0)), false), Some(false));
+    assert_eq!(probe(Some(true), Some((stranger, 3)), false), Some(false));
+    assert_eq!(probe(Some(false), Some((owner, 0)), false), Some(false));
+    assert_eq!(probe(Some(true), None, true), Some(false));
+    assert_eq!(probe(Some(true), Some((owner, 0)), true), Some(false));
+    let mut bare = host(COMMON, 8)
+        .with_item_catalog(
+            Arc::new(Catalog(Arc::new(AtomicUsize::new(0)))),
+            source(),
+            budget(),
+        )
+        .unwrap();
+    let pending = handle(bare.native(CREATE, &args(b"ITEM")).unwrap());
+    assert_eq!(bare.executed_item(pending).unwrap().visible(), None);
+}
+
+#[test]
+fn carried_items_ignore_show_hide_and_refuse_reposition() {
+    let mut h = visible_host();
+    let holder = handle(h.native("CreateTimer", &[]).unwrap());
+    let carried = h
+        .create_item_record(i32::from_be_bytes(*b"ITEM"), 1.0, 2.0, Some((holder, 0)))
+        .unwrap();
+    let ground = handle(h.native(CREATE, &args(b"ITEM")).unwrap());
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(carried)])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(ground)]).unwrap(),
+        Value::Bool(true)
+    );
+    h.native(
+        "SetItemVisible",
+        &[Value::Handle(carried), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(h.executed_item(carried).unwrap().shown, Some(true));
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(carried)])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    h.native(
+        "SetItemVisible",
+        &[Value::Handle(ground), Value::Bool(false)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(ground)]).unwrap(),
+        Value::Bool(false)
+    );
+    h.native(
+        "SetItemVisible",
+        &[Value::Handle(ground), Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(ground)]).unwrap(),
+        Value::Bool(true)
+    );
+    assert!(
+        h.native(
+            "SetItemPosition",
+            &[Value::Handle(carried), Value::Real(5.0), Value::Real(6.0)]
+        )
+        .is_err()
+    );
+    let record = h.executed_item(carried).unwrap();
+    assert_eq!((record.x, record.y), (1.0, 2.0));
+}
+
+#[test]
+fn consumed_items_read_as_absent_while_retaining_their_record() {
+    let mut h = visible_host();
+    let item = handle(h.native(CREATE, &args(b"ITEM")).unwrap());
+    let Entry::Item { record } = h.inner.entry_mut(item).unwrap() else {
+        panic!("item entry")
+    };
+    record.consumed = true;
+    assert!(h.executed_items().next().is_none());
+    assert!(h.executed_item(item).unwrap().consumed);
+    assert_eq!(
+        h.native("IsItemVisible", &[Value::Handle(item)]).unwrap(),
+        Value::Bool(false)
+    );
+    h.native("SetItemVisible", &[Value::Handle(item), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(h.executed_item(item).unwrap().shown, Some(true));
+    assert_eq!(
+        h.native(
+            "SetItemPosition",
+            &[Value::Handle(item), Value::Real(9.0), Value::Real(9.0)]
+        )
+        .unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.executed_item(item).unwrap().x, -4.0);
+}
