@@ -332,6 +332,18 @@ impl Connection {
         })
     }
 
+    /// Wraps an already-accepted TCP stream with the same decoder, bounds
+    /// and deadline policy as [`Connection::connect`], without dialing.
+    /// This is the host side of a join: the peer already connected.
+    pub fn from_accepted(stream: TcpStream, policy: CallPolicy) -> Result<Self, CallError> {
+        let decoder = Decoder::new(policy.frames)?;
+        remaining(policy.deadline)?;
+        Ok(Self {
+            io: FramedIo::new(stream, policy, decoder),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
     /// Create a controller for this established connection, without exposing I/O.
     /// The clone refers only to this socket, including after a replacement connects.
     pub fn cancellation_handle(&self) -> io::Result<CancellationHandle> {

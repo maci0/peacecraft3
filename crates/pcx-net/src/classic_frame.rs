@@ -545,7 +545,9 @@ pub mod tcp;
 
 pub mod action;
 pub mod auth_info;
+pub mod bncs;
 pub mod game_info;
+pub mod lobby;
 pub mod map_check;
 pub mod slot_seed;
 

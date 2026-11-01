@@ -30,6 +30,7 @@ pub mod w3g;
 
 pub mod bnet;
 pub mod classic_frame;
+pub mod classic_session;
 #[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
 pub mod host;
 #[cfg(all(feature = "session-server", not(target_arch = "wasm32")))]
