@@ -325,6 +325,322 @@ fn item_visibility_roundtrip(app: &mut App, output: &Path) {
     })).unwrap()).unwrap();
 }
 
+/// Controlled original-capture comparison probe for the selected-unit
+/// portrait: composition, mask and speech timing from asset-derived captures.
+///
+/// Context (`docs/re-notes/held-inventory-presentation.md#animated-selected-unit-portrait`,
+/// TRACKER portrait entry): idle keeps every authored `portrait` sequence
+/// without a `talk` token with SEQS rarity re-drawn over each completed loop
+/// through a deterministic splitmix draw (recreation choice, not native RNG
+/// parity); speech holds the authored `portrait talk`/`talk` variant while the
+/// unit's ack row stays live as a `GameSound` linked by retained unit id;
+/// composition is a clipped transparent target over the authored console
+/// backing; the portrait camera is explicitly despawned on selection switches
+/// and same-handle hero revivals. A circular mask model/texture is not
+/// sourced, so no new mask art is invented: checked sources (the `0x6416b0`
+/// rectangle, the `0x620ee0` shared light, the admitted ConsoleUI and
+/// SimpleInfoPanel FDF) expose no circular mask operand, and this probe
+/// records the rectangular `Overflow::clip` composition instead of asserting
+/// a fitted circle. All values below are read from the admitted session,
+/// layout rules, sequences and renderer; captures and receipts stay local
+/// under the caller-supplied output directory. Original captures remain
+/// untracked. This harness does not turn any render gate green.
+mod portrait_parity {
+    use super::*;
+
+    /// Exact RGBA comparison of two PNG file buffers. Refuses differing
+    /// extents instead of rescaling. No tolerance, no normalization, no
+    /// cropping: any channel difference in a pixel counts as changed. Mirrors
+    /// the `tools/original-game-reference/reference.py report` rule the
+    /// analyst runs against the original capture.
+    pub(super) struct Comparison {
+        pub(super) changed: usize,
+        pub(super) total: usize,
+        pub(super) bounds: Option<[[u32; 2]; 2]>,
+        pub(super) first: Option<serde_json::Value>,
+    }
+
+    pub(super) fn compare_png_bytes(
+        recreation: &[u8],
+        original: &[u8],
+        label: &str,
+    ) -> Result<Comparison, String> {
+        fn decode(bytes: &[u8], label: &str) -> Result<Image, String> {
+            Image::from_buffer(
+                bytes,
+                bevy::image::ImageType::Extension("png"),
+                bevy::image::CompressedImageFormats::NONE,
+                true,
+                bevy::image::ImageSampler::linear(),
+                bevy::asset::RenderAssetUsages::default(),
+            )
+            .map_err(|error| format!("{label}: png decode refused: {error:?}"))
+        }
+        let recreation = decode(recreation, &format!("{label}: recreation"))?;
+        let original = decode(original, &format!("{label}: original"))?;
+        let size = recreation.texture_descriptor.size;
+        let other = original.texture_descriptor.size;
+        if size.width != other.width || size.height != other.height {
+            return Err(format!(
+                "{label}: extent differs, no rescaling: recreation {}x{} vs original {}x{}",
+                size.width, size.height, other.width, other.height,
+            ));
+        }
+        let Some(a) = recreation.data.as_deref() else {
+            return Err(format!("{label}: recreation pixels unavailable"));
+        };
+        let Some(b) = original.data.as_deref() else {
+            return Err(format!("{label}: original pixels unavailable"));
+        };
+        if a.len() != b.len() {
+            return Err(format!("{label}: pixel buffer length differs"));
+        }
+        let width = size.width;
+        let mut changed = 0usize;
+        let mut bounds: Option<[[u32; 2]; 2]> = None;
+        let mut first: Option<serde_json::Value> = None;
+        for (index, (pixel_a, pixel_b)) in
+            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0.iter()).enumerate()
+        {
+            if pixel_a != pixel_b {
+                changed += 1;
+                let x = (index as u32) % width;
+                let y = (index as u32) / width;
+                bounds = Some(match bounds {
+                    None => [[x, y], [x, y]],
+                    Some([[x0, y0], [x1, y1]]) => {
+                        [[x0.min(x), y0.min(y)], [x1.max(x), y1.max(y)]]
+                    }
+                });
+                if first.is_none() {
+                    first = Some(serde_json::json!({
+                        "x": x, "y": y, "recreation": pixel_a, "original": pixel_b,
+                    }));
+                }
+            }
+        }
+        Ok(Comparison {
+            changed,
+            total: a.len() / 4,
+            bounds,
+            first,
+        })
+    }
+
+    /// Retains the recreation side of the controlled portrait comparison at
+    /// the unchanged campaign-control checkpoint with a live local selection.
+    /// Composition (authored rectangle, viewport, computed mask/parent sizes,
+    /// transparent clear, rectangular clip), mask (explicit rectangular clip;
+    /// no circular operand admitted) and speech timing (authored idle/talk
+    /// clips with SEQS rarity/duration/looping, current idle position/cycle,
+    /// ack row and live `GameSound` rows) are all read from the admitted
+    /// scene, layout rules and renderer. The original runner repeats the same
+    /// map, selection, camera and ack timing, then the analyst compares with
+    /// `reference.py report` under exact RGB equality.
+    pub(super) fn retain_control(
+        app: &mut App,
+        output: &Path,
+        install: &str,
+        map: &str,
+        expansion: bool,
+    ) {
+        let scene = app
+            .world()
+            .get_resource::<crate::campaign_portrait::CampaignPortrait>()
+            .and_then(|portrait| portrait.parity_scene());
+        let Some(scene) = scene else {
+            let receipt = serde_json::json!({
+                "install": install, "map": map, "expansion": expansion,
+                "refusal": "no live portrait scene at the control checkpoint (no single live selection)",
+                "scope": "portrait parity probe; unchanged checkpoint; no pixel-parity claim",
+            });
+            std::fs::write(
+                output.join("portrait-parity.json"),
+                serde_json::to_vec_pretty(&receipt).unwrap(),
+            )
+            .unwrap();
+            return;
+        };
+        let binding = app
+            .world()
+            .get_resource::<crate::campaign_unit_panel::UnitPanel>()
+            .and_then(|panel| {
+                panel.portrait_binding().map(|(rules, viewport, parent)| {
+                    (
+                        rules.portrait.rect(viewport[0] / viewport[1]).ok(),
+                        rules.portrait.light.clone(),
+                        viewport,
+                        parent,
+                    )
+                })
+            });
+        let (authored_rect, light, viewport, parent) = match binding {
+            Some((rect, light, viewport, parent)) => (rect, Some(light), viewport, Some(parent)),
+            None => (None, None, [0., 0.], None),
+        };
+        let authored_rect_json = authored_rect.map(|rect| {
+            serde_json::json!({
+                "x": rect.x, "y": rect.y,
+                "width": rect.width, "height": rect.height,
+            })
+        });
+        let light_json = light.map(|sun| {
+            serde_json::json!({
+                "direction": sun.direction,
+                "colour": sun.colour,
+                "intensity": sun.intensity,
+                "ambient_colour": sun.ambient_colour,
+                "ambient_intensity": sun.ambient_intensity,
+            })
+        });
+        let (parent_size, mask_size, mask_clip, camera_active, camera_clear) = {
+            let world = app.world();
+            let parent_size = parent
+                .and_then(|parent| world.get::<ComputedNode>(parent))
+                .map(|node| [node.size().x, node.size().y]);
+            let mask_size = world
+                .get::<ComputedNode>(scene.mask)
+                .map(|node| [node.size().x, node.size().y]);
+            let mask_clip = world
+                .get::<Overflow>(scene.mask)
+                .is_some_and(|overflow| *overflow == Overflow::clip());
+            let (camera_active, camera_clear) = world
+                .get::<Camera>(scene.camera_entity)
+                .map(|camera| (camera.is_active, format!("{:?}", camera.clear_color)))
+                .unwrap_or((false, "missing".to_owned()));
+            (
+                parent_size,
+                mask_size,
+                mask_clip,
+                camera_active,
+                camera_clear,
+            )
+        };
+        let (ack, live_rows) = {
+            let ack = app
+                .world()
+                .get_resource::<crate::campaign_audio::CampaignAudio>()
+                .and_then(|audio| {
+                    audio.speaking.clone().map(|(unit, row)| {
+                        serde_json::json!({"unit": format!("{unit:?}"), "row": row})
+                    })
+                });
+            let mut query = app
+                .world_mut()
+                .query_filtered::<&crate::campaign_audio::GameSound, ()>();
+            let world = app.world();
+            let mut rows = Vec::new();
+            for sound in query.iter(world) {
+                rows.push(sound.name.clone());
+            }
+            rows.sort();
+            rows.dedup();
+            (ack, rows)
+        };
+        // Self-comparison exercises the exact-compare path on real
+        // asset-derived bytes: identical inputs must report zero changes.
+        let self_check = match std::fs::read(output.join("selected-unit.png")) {
+            Ok(bytes) => match compare_png_bytes(&bytes, &bytes, "portrait self") {
+                Ok(comparison) => serde_json::json!({
+                    "changed": comparison.changed, "total": comparison.total,
+                    "bounds": comparison.bounds, "first": comparison.first,
+                }),
+                Err(error) => serde_json::json!({ "refusal": error }),
+            },
+            Err(error) => serde_json::json!({ "refusal": format!("selected-unit frame unread: {error}") }),
+        };
+        // Optional paired original supplied by the analyst; untracked, never
+        // committed. When absent the probe retains the recreation side only.
+        let paired = match std::env::var("PCX_PORTRAIT_ORIGINAL") {
+            Ok(path) => match (
+                std::fs::read(output.join("selected-unit.png")),
+                std::fs::read(&path),
+            ) {
+                (Ok(recreation), Ok(original)) => {
+                    match compare_png_bytes(&recreation, &original, "portrait paired") {
+                        Ok(comparison) => serde_json::json!({
+                            "original": path,
+                            "changed": comparison.changed, "total": comparison.total,
+                            "bounds": comparison.bounds, "first": comparison.first,
+                        }),
+                        Err(error) => serde_json::json!({"original": path, "refusal": error}),
+                    }
+                }
+                (Err(error), _) => {
+                    serde_json::json!({"original": path, "refusal": format!("recreation unread: {error}")})
+                }
+                (_, Err(error)) => {
+                    serde_json::json!({"original": path, "refusal": format!("original unread: {error}")})
+                }
+            },
+            Err(_) => serde_json::json!({"refusal": "PCX_PORTRAIT_ORIGINAL unset; no original supplied"}),
+        };
+        let receipt = serde_json::json!({
+            "install": install, "map": map, "expansion": expansion,
+            "unit": format!("{:?}", scene.unit),
+            "model": scene.model,
+            "source_member": scene.source_member,
+            "color": scene.color,
+            "viewport": viewport,
+            "authored_rect": authored_rect_json,
+            "parent_size": parent_size,
+            "mask_size": mask_size,
+            "mask_clip_rectangular": mask_clip,
+            "mask_note": "rectangular Overflow::clip over the authored console backing; no circular mask model/texture operand is admitted, so none is asserted",
+            "camera": {
+                "name": scene.camera_name,
+                "eye": scene.camera_eye, "target": scene.camera_target,
+                "fov": scene.camera_fov, "near": scene.camera_near, "far": scene.camera_far,
+                "is_active": camera_active, "clear": camera_clear,
+                "retirement": "explicit camera despawn on selection switch and same-handle hero revival; a stale camera must not survive",
+            },
+            "composition": {
+                "target_size": scene.target_size,
+                "tint": scene.tint,
+                "light": light_json,
+                "receipts": scene.receipt_members,
+            },
+            "idle": scene.idle.iter().map(|clip| serde_json::json!({
+                "name": clip.name, "rarity": clip.rarity,
+                "duration_ms": clip.duration_ms, "non_looping": clip.non_looping,
+                "interval": clip.interval,
+            })).collect::<Vec<_>>(),
+            "talk": scene.talk.as_ref().map(|clip| serde_json::json!({
+                "name": clip.name, "rarity": clip.rarity,
+                "duration_ms": clip.duration_ms, "non_looping": clip.non_looping,
+                "interval": clip.interval,
+            })),
+            "timing": {
+                "idle_pos": scene.idle_pos, "idle_cycle": scene.idle_cycle,
+                "speaking": scene.speaking, "ack": ack, "live_rows": live_rows,
+                "elapsed_secs": scene.elapsed_secs, "idle_started_secs": scene.idle_started_secs,
+                "rule": "Talk holds exactly while the retained unit's ack GameSound stays live; silence returns to the current rarity-weighted idle; completed idle loops re-draw over authored SEQS weights via the deterministic splitmix recreation choice; non-looping Talk loops while the voice plays and non-looping idle advances at its clamp bound",
+            },
+            "last_error": scene.last_error,
+            "frames_self_check": self_check,
+            "paired": paired,
+            "arms": {
+                "composition": "authored portrait rectangle over the console backing with a transparent target",
+                "mask": "rectangular clip only; circular mask is not sourced and is not asserted",
+                "speech": "authored Talk variant while the ack row is live; rarity-weighted authored idle otherwise",
+            },
+            "original_runner": {
+                "paired_skip_at": "PCX_PAIRED_SKIP_AT",
+                "paired_capture_at": "PCX_PAIRED_CAPTURE_AT",
+                "portrait_original": "PCX_PORTRAIT_ORIGINAL",
+                "report": "tools/original-game-reference/reference.py report",
+                "rule": "exact RGB equality, no tolerance, no rescaling, no exclusions",
+            },
+            "scope": "Controlled portrait composition/mask/speech-timing harness at the unchanged campaign-control checkpoint; records asset-derived recreation probes for comparison against the original capture. No pixel-parity claim.",
+        });
+        std::fs::write(
+            output.join("portrait-parity.json"),
+            serde_json::to_vec_pretty(&receipt).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires explicit original install/edition/map, Vulkan and a new PCX_CAMPAIGN_CAPTURE_DIR"]
 fn mounted_menu_enters_the_rendered_campaign() {
@@ -584,6 +900,9 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         unit
     };
     let selected_image = capture(&mut app, &output.join("selected-unit.png"));
+    // Controlled portrait parity probe at the unchanged checkpoint: the
+    // selection above is the live canonical unit the probe snapshots.
+    portrait_parity::retain_control(&mut app, &output, &install, &map, expansion);
     if let Some(mut workload) = workload {
         workload.campaign(&mut app, &output, selected);
         workload.finish(&mut app, &output);
