@@ -1705,6 +1705,45 @@ fn linked_mine_construction_hides_the_source_copies_gold_and_restores_it() {
 }
 
 #[test]
+fn begin_linked_mine_construction_answers_none_when_the_source_is_already_hidden() {
+    let (mut vm, worker, _) = linked_mine_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let mine = create_linked_mine(&mut vm, owner, [80., 16.]);
+    let kind = i32::from_be_bytes(*b"b001");
+    let position = vm
+        .host()
+        .inner
+        .executed_unit(mine)
+        .unwrap()
+        .position
+        .unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .request_linked_mine_construction(worker, kind, mine)
+            .unwrap()
+    );
+    vm.host()
+        .inner
+        .native("ShowUnit", &[Value::Handle(mine), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .begin_unit_construction(worker, kind, position)
+            .unwrap(),
+        None
+    );
+    assert!(
+        vm.host()
+            .inner
+            .unit_construction_order(worker)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn a_pending_build_order_refuses_the_linked_mine_instead_of_replacing_it() {
     let (mut vm, worker, _) = linked_mine_fixture();
     let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
@@ -1736,6 +1775,90 @@ fn a_pending_build_order_refuses_the_linked_mine_instead_of_replacing_it() {
     assert_eq!(
         h.unit_construction_order(worker).unwrap().unwrap().position,
         [80., 16.]
+    );
+}
+
+#[test]
+fn set_produce_skips_a_busy_builder_and_answers_false_when_every_builder_is_busy() {
+    let (mut vm, worker, producer) = linked_mine_fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(worker).unwrap().owner;
+    let kind = i32::from_be_bytes(*b"b001");
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    assert_eq!(
+        h.native(
+            "IssueBuildOrderById",
+            &[
+                Value::Handle(worker),
+                Value::Int(kind),
+                Value::Real(80.),
+                Value::Real(16.),
+            ],
+        ),
+        Ok(Value::Bool(true))
+    );
+    let gold = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    let order = h.unit_construction_order(worker).unwrap();
+    assert!(!h.set_ai_produce(4, 1, kind, -1).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+    assert_eq!(h.unit_construction_order(worker).unwrap(), order);
+
+    let rawcode = h.executed_unit(worker).unwrap().definition.rawcode;
+    let Value::Handle(other) = h
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(rawcode)),
+                Value::Real(48.),
+                Value::Real(16.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("second builder")
+    };
+    h.native("RemoveGuardPosition", &[Value::Handle(other)])
+        .unwrap();
+    let error = h.set_ai_produce(4, 1, kind, -1).unwrap_err().to_string();
+    assert!(
+        error.contains(&format!("by {other:?}")) && error.contains("AI placement rules missing"),
+        "{error}"
+    );
+    assert_eq!(h.unit_construction_order(worker).unwrap(), order);
+    assert!(h.unit_construction_order(other).unwrap().is_none());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+}
+
+#[test]
+fn a_linked_mine_keeps_the_captured_town_center() {
+    let (mut vm, worker, producer) = linked_mine_fixture();
+    let h = &mut vm.host().inner;
+    h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+    let owner = h.executed_unit(worker).unwrap().owner;
+    let mine_at = [80., 16.];
+    let mine = create_linked_mine(&mut vm, owner, mine_at);
+    let center = [64., 32.];
+    let h = &mut vm.host().inner;
+    h.remember_town_mine(4, worker, center, mine, mine_at);
+    assert_eq!(h.ai_live_town_center(4, owner).unwrap(), center);
+    let kind = i32::from_be_bytes(*b"b001");
+    assert!(
+        h.request_linked_mine_construction(worker, kind, mine)
+            .unwrap()
+    );
+    assert!(
+        h.begin_unit_construction(worker, kind, mine_at)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(h.ai_live_town_center(4, owner).unwrap(), center);
+    let _extra = create_linked_mine(&mut vm, owner, [16., 80.]);
+    let error = vm.host().inner.ai_live_town_center(4, owner).unwrap_err();
+    assert!(
+        error.contains("haunted-mine link is not qualified"),
+        "{error}"
     );
 }
 

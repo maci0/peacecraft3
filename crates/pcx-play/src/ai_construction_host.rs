@@ -188,6 +188,12 @@ impl ObjectHost {
                 units.push((unit, record.owner, point));
             }
         }
+        let buffer_count = if definition.rawcode == *b"hwtw" || definition.rawcode == *b"uzig" {
+            self.ai_unit_count(player, i32::from_be_bytes(definition.rawcode), false)
+                .map_err(|error| error.to_string())?
+        } else {
+            0
+        };
         let placement = self
             .unit_placement
             .as_mut()
@@ -217,11 +223,11 @@ impl ObjectHost {
             if (point[0] - center[0]).hypot(point[1] - center[1]) > rules.diagnostic_radius() {
                 continue;
             }
-            if matches!(kind, BuffType::Buffer) {
-                return Err(format!(
-                    "AI placement structure {unit:?} requires the buffer-count scoring branch"
-                ));
-            }
+            let radius = if matches!(kind, BuffType::Buffer) {
+                crate::ai_placement::buffer_score_radius(definition.rawcode, buffer_count, radius)?
+            } else {
+                radius
+            };
             if matches!(path.as_str(), "" | "_" | "-" | "none") {
                 return Err(format!(
                     "AI placement structure {unit:?} has no texture rectangle"
@@ -658,7 +664,7 @@ impl ObjectHost {
         self.campaign_ai.set_town_reference(player, Some(reference));
     }
 
-    pub(super) fn ai_live_town_center(
+    pub(crate) fn ai_live_town_center(
         &self,
         player: i32,
         owner: HandleId,
@@ -717,7 +723,9 @@ impl ObjectHost {
             .map(|(unit, record)| record.position.map(|position| (unit, position)))
             .collect::<Option<Vec<_>>>()
             .ok_or("AI town mine position unavailable")?;
-        if mines != reference.mines {
+        if mines != reference.mines
+            && !self.linked_mine_keeps_town_snapshot(&reference.mines, &mines)
+        {
             let linked = self
                 .executed_units()
                 .any(|(_, record)| record.linked_mine.is_some());
@@ -729,6 +737,79 @@ impl ObjectHost {
             return Err("AI town mine registration changed since captain initialization".into());
         }
         Ok(center)
+    }
+
+    /// The reviewed town-mine pair is not cleared when the original mine is hidden.
+    /// A link explains the snapshot when that mine is hidden in place and the new
+    /// site is the only added shown resource, at the same coordinates.
+    fn linked_mine_keeps_town_snapshot(
+        &self,
+        captured: &[(HandleId, [f32; 2])],
+        live: &[(HandleId, [f32; 2])],
+    ) -> bool {
+        let mut links = Vec::new();
+        for (site, record) in self.executed_units() {
+            let Some(source) = record.linked_mine else {
+                continue;
+            };
+            let Some(position) = record.position else {
+                return false;
+            };
+            if !record.shown || record.combat.as_ref().is_some_and(|state| state.dead) {
+                return false;
+            }
+            let Ok(original) = self.executed_unit(source) else {
+                return false;
+            };
+            if original.shown
+                || original.position != Some(position)
+                || !captured
+                    .iter()
+                    .any(|(unit, captured_at)| *unit == source && *captured_at == position)
+            {
+                return false;
+            }
+            links.push((site, source));
+        }
+        if links.is_empty() {
+            return false;
+        }
+        let expected: Vec<_> = captured
+            .iter()
+            .copied()
+            .filter(|(unit, _)| !links.iter().any(|(_, source)| source == unit))
+            .collect();
+        let actual: Vec<_> = live
+            .iter()
+            .copied()
+            .filter(|(unit, _)| !links.iter().any(|(site, _)| site == unit))
+            .collect();
+        expected == actual
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remember_town_mine(
+        &mut self,
+        player: i32,
+        hall: HandleId,
+        center: [f32; 2],
+        mine: HandleId,
+        mine_at: [f32; 2],
+    ) {
+        let position = self
+            .executed_unit(hall)
+            .ok()
+            .and_then(|record| record.position)
+            .unwrap_or(center);
+        self.campaign_ai.set_town_reference(
+            player,
+            Some(super::campaign_flee::TownReference {
+                unit: hall,
+                position,
+                mines: vec![(mine, mine_at)],
+                center: Ok((center, mine)),
+            }),
+        );
     }
 
     /// Resolve the retained primary mine after validating the live town snapshot.
@@ -1015,10 +1096,17 @@ impl ObjectHost {
                     "AI placement source {source:?} ability {alias:?} reach overflow"
                 ));
             }
-            if !self
+            // A max-speed disk from birth covers the map after a long match, so it
+            // stops proving separation. Live positions still prove the caster cannot
+            // land the effect now. A landed effect is refused from the target's buffs.
+            // This is the recreation's cast state, not a retail ensnare replay.
+            let lifetime = self
                 .ai_live_birth_reach_bound(source, target, range)
-                .map_err(|error| error.to_string())?
-            {
+                .map_err(|error| error.to_string())?;
+            let currently = self
+                .ai_birth_reach_bound(source, target, [0., 0.], range)
+                .map_err(|error| error.to_string())?;
+            if !crate::ai_placement::placement_effect_separated(lifetime, currently) {
                 return Err(format!(
                     "AI placement unit {target:?}: movement effect {alias:?} from unit {source:?} may have reached it"
                 ));

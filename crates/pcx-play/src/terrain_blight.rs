@@ -498,7 +498,7 @@ impl InitialBlight {
         }
     }
 
-    /// Query the current spatial flag, refusing overlapping or removed sources.
+    /// Query the current spatial flag. Live sources combine; a removed source refuses.
     pub fn is_blighted_at(&self, position: [f32; 2], now: f64) -> Result<bool, String> {
         self.mask_at(position, now, false, None)
     }
@@ -520,7 +520,6 @@ impl InitialBlight {
         owner_grid: bool,
         owner: Option<HandleId>,
     ) -> Result<bool, String> {
-        let mut found: Option<Option<HandleId>> = None;
         let mut selected = false;
         for (unit, source_owner, growth, removed) in &self.sources {
             // shortcut: placement alone checks pending dispels until their raster is decoded.
@@ -531,11 +530,9 @@ impl InitialBlight {
                 if *removed == SourceState::Removed {
                     return Err(format!("blight source {unit:?} was removed"));
                 }
-                if let Some(other) = found {
-                    return Err(format!("blight sources {other:?} and {unit:?} overlap"));
-                }
-                found = Some(*unit);
-                selected = owner.is_none_or(|owner| owner == *source_owner);
+                // 0x4c5470 sets the high bit when any owner bit remains. Two live
+                // painters both set bits, so the boolean does not choose a source.
+                selected |= owner.is_none_or(|owner| owner == *source_owner);
             }
         }
         Ok(selected || self.at_grid(self.grid(position)?))

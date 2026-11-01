@@ -2835,4 +2835,10 @@ mod human04;
 mod human05;
 
 #[cfg(feature = "test-fixtures")]
+mod human05_interlude;
+
+#[cfg(feature = "test-fixtures")]
+mod human06;
+
+#[cfg(feature = "test-fixtures")]
 mod sim_bench;

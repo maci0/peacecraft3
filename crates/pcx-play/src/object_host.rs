@@ -925,8 +925,12 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_timed_life_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
-        if name == "IsUnitEnemy" && self.combat.is_some() {
-            return self.is_unit_enemy_native(args).map_err(|e| e.to_string());
+        if self.combat.is_some() && matches!(name, "IsUnitEnemy" | "IsUnitAlly") {
+            return match name {
+                "IsUnitEnemy" => self.is_unit_enemy_native(args),
+                _ => self.is_unit_ally_native(args),
+            }
+            .map_err(|e| e.to_string());
         }
         if name == "GetUnitDefaultAcquireRange" && self.units.is_some() {
             return self.default_acquire_range(args).map_err(|e| e.to_string());
@@ -958,6 +962,11 @@ impl Host for ObjectHost {
         }
         if let Some(result) = self.trigger_runtime_native(name, args) {
             return result.map_err(|e| e.to_string());
+        }
+        if name == "TriggerRegisterVariableEvent" {
+            return self
+                .register_variable_event(args)
+                .map_err(|e| e.to_string());
         }
         if let Some(result) = self.event_response_native(name, args) {
             return result.map_err(|e| e.to_string());

@@ -380,8 +380,12 @@ impl ObjectHost {
         Some((|| {
             let fail = |detail| self.inner.error(name, Failure::UnitState(detail));
             if matches!(name, "GetUnitX" | "GetUnitY") {
-                let [Value::Handle(id)] = args else {
-                    return Err(fail("one executed unit required"));
+                let id = match args {
+                    [Value::Handle(id)] => *id,
+                    // Exe 0x497d70 / 0x497db0 read the untouched static float when the
+                    // handle is not a unit, including a null unit.
+                    [Value::Null] => return Ok(Value::Real(0.0)),
+                    _ => return Err(fail("one executed unit required")),
                 };
                 // A removed unit answers its removal-time point during the removal tick, as
                 // `GetUnitLoc` does (client probes: docs/re-notes/post-escape-getunitloc.md).
@@ -390,7 +394,7 @@ impl ObjectHost {
                 // no unit object. That a removed handle resolves to none after the removal tick
                 // is an inference. The shipped Human05 conversion conditions ask for the
                 // coordinates of a unit an earlier trigger of the same event already replaced.
-                if let Ok(Entry::RemovedUnit { location, .. }) = self.inner.entry(*id) {
+                if let Ok(Entry::RemovedUnit { location, .. }) = self.inner.entry(id) {
                     let now = self.timer_game_time();
                     return Ok(Value::Real(match location {
                         Some((at, point)) if now == Some(*at) => {
@@ -400,7 +404,7 @@ impl ObjectHost {
                     }));
                 }
                 let position = self
-                    .executed_unit(*id)
+                    .executed_unit(id)
                     .map_err(|e| self.inner.error(name, e.failure))?
                     .position
                     .ok_or_else(|| fail("accepted unit position missing"))?;

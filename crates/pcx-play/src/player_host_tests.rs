@@ -1205,3 +1205,136 @@ fn slow_chopping_players_and_lifecycles_are_independent() {
 
 #[path = "leaderboard_host_tests.rs"]
 mod leaderboards;
+
+#[test]
+fn unset_camera_target_reads_the_local_players_assigned_start_location() {
+    use pcx_objects::editor::camera::GameCamera;
+    let common = format!(
+        "{COMMON}\
+type location extends agent
+type camerafield extends handle
+type camerasetup extends handle
+constant native ConvertCameraField takes integer i returns camerafield
+constant native GetLocalPlayer takes nothing returns player
+native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
+native TimerGetElapsed takes timer t returns real
+native TimerGetRemaining takes timer t returns real
+native TimerGetTimeout takes timer t returns real
+native GetExpiredTimer takes nothing returns timer
+native CreateCameraSetup takes nothing returns camerasetup
+native CameraSetupSetField takes camerasetup s, camerafield f, real v, real d returns nothing
+native CameraSetupSetDestPosition takes camerasetup s, real x, real y, real d returns nothing
+native PanCameraToTimed takes real x, real y, real d returns nothing
+constant native GetCameraTargetPositionX takes nothing returns real
+constant native GetCameraTargetPositionY takes nothing returns real
+globals
+constant camerafield CAMERA_FIELD_TARGET_DISTANCE = ConvertCameraField(0)
+constant camerafield CAMERA_FIELD_FARZ = ConvertCameraField(1)
+constant camerafield CAMERA_FIELD_ANGLE_OF_ATTACK = ConvertCameraField(2)
+constant camerafield CAMERA_FIELD_FIELD_OF_VIEW = ConvertCameraField(3)
+constant camerafield CAMERA_FIELD_ROTATION = ConvertCameraField(5)
+constant camerafield CAMERA_FIELD_ZOFFSET = ConvertCameraField(6)
+endglobals
+"
+    );
+    let ctx = context(300, &common, "// map", "camera-start");
+    let mut h = ObjectHost::checked(
+        EnumHost::checked_selected(
+            ctx.scripts.shared_program(),
+            &ctx.map_digest.label,
+            &[
+                "ConvertPlacement",
+                "ConvertPlayerColor",
+                "ConvertRacePref",
+                "ConvertMapControl",
+                "ConvertCameraField",
+            ],
+            Limits {
+                max_handles: 64,
+                admission_steps: 1000,
+                expression_depth: 16,
+                expression_work: 1000,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .with_map_config(MapConfigBudget {
+        text_bytes: 128,
+        start_locations: 4,
+    })
+    .unwrap()
+    .with_timer_runtime(100.0)
+    .unwrap()
+    .with_camera_setups(8)
+    .unwrap()
+    .with_players(ctx.clone(), slots_rule(301, -3, 9), budget())
+    .unwrap();
+    h.admit_camera_view(&GameCamera {
+        angle_of_attack: 304.0,
+        field_of_view: 70.0,
+        rotation: 90.0,
+        distance: 1650.0,
+        far_z: 5000.0,
+        height: 0.0,
+        forward_rate: 3000.0,
+        strafe_rate: 3000.0,
+    })
+    .unwrap();
+    let point = |h: &mut ObjectHost| {
+        (
+            h.native("GetCameraTargetPositionX", &[]),
+            h.native("GetCameraTargetPositionY", &[]),
+        )
+    };
+    assert!(point(&mut h).0.is_err(), "no start location still refuses");
+    let define = |h: &mut ObjectHost, index: i32, x: f32, y: f32| {
+        h.native(
+            "DefineStartLocation",
+            &[Value::Int(index), Value::Real(x), Value::Real(y)],
+        )
+        .unwrap();
+    };
+    define(&mut h, 0, 10.0, 20.0);
+    define(&mut h, 4, 50.0, 60.0);
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(10.0)), Ok(Value::Real(20.0)))
+    );
+    h.admit_local_player(&ctx, 1).unwrap();
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(10.0)), Ok(Value::Real(20.0))),
+        "an undefined player index keeps the lowest start location"
+    );
+    define(&mut h, 1, 30.0, 40.0);
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(30.0)), Ok(Value::Real(40.0)))
+    );
+    let owner = player(&mut h, 1);
+    h.native("SetPlayerStartLocation", &[owner, Value::Int(4)])
+        .unwrap();
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(50.0)), Ok(Value::Real(60.0)))
+    );
+    assert_eq!(h.camera_target(), Some([50.0, 60.0]));
+    h.native(
+        "PanCameraToTimed",
+        &[Value::Real(150.0), Value::Real(60.0), Value::Real(2.0)],
+    )
+    .unwrap();
+    assert_eq!(h.camera_target(), Some([50.0, 60.0]));
+    assert!(h.next_timer_expiry(101.0, &mut 8).unwrap().is_none());
+    assert_eq!(h.camera_target(), Some([100.0, 60.0]));
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(100.0)), Ok(Value::Real(60.0)))
+    );
+    assert!(h.next_timer_expiry(102.0, &mut 8).unwrap().is_none());
+    assert_eq!(
+        point(&mut h),
+        (Ok(Value::Real(150.0)), Ok(Value::Real(60.0)))
+    );
+}

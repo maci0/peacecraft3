@@ -284,9 +284,17 @@ impl ObjectHost {
         };
         let reach = self.unit_collision_radius(mine, HARVEST_ORDER)? + worker.rules.range;
         let destination = (distance(position, target) > reach).then_some(target);
-        let route = self
-            .prepare_steer_unit_in_range(worker.unit, destination, reach, HARVEST_ORDER)?
-            .ok_or_else(|| self.harvest_error("mine is unreachable"))?;
+        let Some(route) =
+            self.prepare_steer_unit_in_range(worker.unit, destination, reach, HARVEST_ORDER)?
+        else {
+            // An initial harvest order returns false when the route is missing.
+            // A later re-seek stops the same way so one blocked approach does not
+            // abort the caller. The worker keeps the task only while carrying.
+            self.stop_unit(worker.unit)?;
+            worker.tree = None;
+            worker.phase = Phase::Seek;
+            return Ok(());
+        };
         self.reserve_steer_commits(1, HARVEST_ORDER)?;
         self.commit_steer_unit(worker.unit, route, HARVEST_ORDER)?;
         let gold = worker.gold.as_mut().expect("gold task");

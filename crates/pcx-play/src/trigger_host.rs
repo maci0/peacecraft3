@@ -112,6 +112,8 @@ pub(super) struct Admission {
     player_state_ops: Option<[i32; 6]>,
     player_state_event: Option<HandleId>,
     player_state_registrations: Vec<HandleId>,
+    variable_ops: Option<[i32; 6]>,
+    variable_registrations: Vec<HandleId>,
 }
 
 impl ObjectHost {
@@ -255,6 +257,8 @@ impl ObjectHost {
             player_state_ops: None,
             player_state_event: None,
             player_state_registrations: Vec::new(),
+            variable_ops: None,
+            variable_registrations: Vec::new(),
         });
         Ok(self)
     }
@@ -573,6 +577,209 @@ pub(super) fn loaded_type(
         return Err(inner.error(native, Failure::Signature));
     }
     Ok(())
+}
+
+const VARIABLE_EVENT: &str = "TriggerRegisterVariableEvent";
+const VARIABLE_OPS: [&str; 6] = [
+    "LESS_THAN",
+    "LESS_THAN_OR_EQUAL",
+    "EQUAL",
+    "GREATER_THAN_OR_EQUAL",
+    "GREATER_THAN",
+    "NOT_EQUAL",
+];
+
+fn variable_holds(index: usize, value: f64, limit: f64) -> bool {
+    match index {
+        0 => value < limit,
+        1 => value <= limit,
+        2 => value == limit,
+        3 => value >= limit,
+        4 => value > limit,
+        5 => value != limit,
+        _ => false,
+    }
+}
+
+impl ObjectHost {
+    /// `TriggerRegisterVariableEvent`. The first later sample of a changed
+    /// value fires when the comparison holds. The sample that records the
+    /// current value does not.
+    pub(super) fn register_variable_event(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |reason| self.inner.error(VARIABLE_EVENT, reason);
+        self.admitted_triggers()?;
+        let [
+            Value::Handle(trigger),
+            Value::Str(name),
+            Value::Handle(limitop),
+            limit,
+        ] = args
+        else {
+            return Err(fail(Failure::TriggerState(
+                "expected trigger, variable name, limitop and real threshold",
+            )));
+        };
+        if name.is_empty() || name.as_bytes().contains(&0) {
+            return Err(fail(Failure::TriggerState("variable event name is empty")));
+        }
+        let global =
+            self.inner.program.global(name).ok_or_else(|| {
+                fail(Failure::TriggerState("variable event name is not a global"))
+            })?;
+        if global.array
+            || !matches!(
+                global.ty.kind,
+                pcx_script::ast::TypeKind::Real | pcx_script::ast::TypeKind::Integer
+            )
+        {
+            return Err(fail(Failure::TriggerState(
+                "variable event watches a real or integer",
+            )));
+        }
+        if !matches!(
+            self.inner.entry(*trigger).map_err(|e| fail(e.failure))?,
+            Entry::Trigger { .. }
+        ) {
+            return Err(fail(Failure::WrongFamily));
+        }
+        let limit = limit
+            .as_real()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| fail(Failure::TriggerState("finite real threshold required")))?;
+        let limitop_value = self
+            .inner
+            .symbolic_value(*limitop, "limitop")
+            .map_err(|e| fail(e.failure))?;
+        let ops = self.variable_limit_ops()?;
+        if !ops.contains(&limitop_value) {
+            return Err(self
+                .inner
+                .error(VARIABLE_EVENT, Failure::OutsideDomain(limitop_value)));
+        }
+        let id = self.inner.allocate(
+            Entry::RegisteredVariableEvent {
+                trigger: *trigger,
+                name: name.clone(),
+                limitop_value,
+                limit: f64::from(limit),
+                last: None,
+            },
+            VARIABLE_EVENT,
+        )?;
+        self.triggers
+            .as_mut()
+            .expect("admitted")
+            .variable_registrations
+            .push(id);
+        Ok(Value::Handle(id))
+    }
+
+    fn variable_limit_ops(&mut self) -> Result<[i32; 6], Error> {
+        if let Some(ops) = self.triggers.as_ref().and_then(|state| state.variable_ops) {
+            return Ok(ops);
+        }
+        let mut ops = [0; VARIABLE_OPS.len()];
+        for (value, name) in ops.iter_mut().zip(VARIABLE_OPS) {
+            *value = self.source_constant_enumerand(name, "limitop")?;
+        }
+        if ops
+            .iter()
+            .enumerate()
+            .any(|(index, value)| ops[..index].contains(value))
+        {
+            return Err(self.inner.error(
+                VARIABLE_EVENT,
+                Failure::TriggerState("variable event limit operations are not distinct"),
+            ));
+        }
+        self.triggers.as_mut().expect("admitted").variable_ops = Some(ops);
+        Ok(ops)
+    }
+
+    pub(crate) fn variable_event_watches(&self) -> Vec<(HandleId, String)> {
+        let Some(state) = &self.triggers else {
+            return Vec::new();
+        };
+        state
+            .variable_registrations
+            .iter()
+            .filter_map(|id| match self.inner.entry(*id).ok() {
+                Some(Entry::RegisteredVariableEvent { name, .. }) => Some((*id, name.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn poll_variable_events(
+        &mut self,
+        samples: &[(HandleId, Value)],
+        work: &mut usize,
+    ) -> Result<(), Error> {
+        let ops = self.triggers.as_ref().and_then(|state| state.variable_ops);
+        let Some(ops) = ops else {
+            return Ok(());
+        };
+        for &(id, ref value) in samples {
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner
+                    .error(VARIABLE_EVENT, Failure::Budget("variable event scan"))
+            })?;
+            let Entry::RegisteredVariableEvent {
+                trigger,
+                limitop_value,
+                limit,
+                last,
+                ..
+            } = self
+                .inner
+                .entry(id)
+                .map_err(|e| self.inner.error(VARIABLE_EVENT, e.failure))?
+            else {
+                return Err(self.inner.error(VARIABLE_EVENT, Failure::WrongFamily));
+            };
+            let (trigger, limitop_value, limit, last) = (*trigger, *limitop_value, *limit, *last);
+            let current = match value {
+                Value::Real(value) if value.is_finite() => f64::from(*value),
+                Value::Int(value) => *value as f64,
+                _ => {
+                    return Err(self.inner.error(
+                        VARIABLE_EVENT,
+                        Failure::TriggerState("variable event value is not a real or integer"),
+                    ));
+                }
+            };
+            let Some(index) = ops.iter().position(|op| *op == limitop_value) else {
+                return Err(self
+                    .inner
+                    .error(VARIABLE_EVENT, Failure::OutsideDomain(limitop_value)));
+            };
+            let fire = match last {
+                None => false,
+                Some(previous) if previous == current => false,
+                Some(_) => {
+                    self.trigger_enabled(trigger)?.unwrap_or(false)
+                        && variable_holds(index, current, limit)
+                }
+            };
+            if fire {
+                self.queue_event(trigger, None, super::super::EventSubject::default(), None)?;
+            }
+            if last != Some(current) {
+                let step = match self.inner.entry_mut(id) {
+                    Ok(Entry::RegisteredVariableEvent { last, .. }) => {
+                        *last = Some(current);
+                        None
+                    }
+                    Ok(_) => Some(Failure::WrongFamily),
+                    Err(error) => Some(error.failure),
+                };
+                if let Some(failure) = step {
+                    return Err(self.inner.error(VARIABLE_EVENT, failure));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Same index lookup the chapter runner uses before a later `call`.

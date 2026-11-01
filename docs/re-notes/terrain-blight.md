@@ -107,16 +107,18 @@ Human05 also registers a construct-start trigger whose action calls
 `SetBlightRadiusLocBJ` for player 5. The host records that fixed circular patch
 through `SetBlightLoc`. Construction completion and `CreateBlightedGoldmine`
 start growth using the selected ability cells and the reviewed image operands.
-Source death and overlapping dynamic patches refuse when their affected cells
-are queried; they are not removed or merged by an approximation.
+A live query treats a cell as blighted when any active source covers it. That
+matches the high bit at `0x4c5470`, which is set from whether any owner bit
+remains, so two painters do not need a winner. A removed source still refuses
+on cells its last radius covers: `0x4c5160` clears owner bits and `0x6d98d0`
+may repaint survivors, and that order is not qualified.
 
 The selected ability table also has blight-dispel modes. At structure completion
 the host records the source, clock and growing affected area from those ability
 fields instead of refusing immediately. A construction footprint that requires
 or prevents blight refuses when it reaches that area. Other blight reads still
-use the pre-dispel state: the effect's removal and overlap raster is not
-implemented, so those reads and blight regeneration inside that area are not
-qualified. The pool's broad refresh similarly retains the prior flags; the
+use the pre-dispel state: the dispel's removal raster is not implemented, so
+those reads and blight regeneration inside that area are not qualified. The pool's broad refresh similarly retains the prior flags; the
 footprint validator performs the localized refusal. This avoids an unrelated
 construction-completion failure but does not establish general dispel fidelity.
 

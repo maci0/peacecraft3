@@ -117,6 +117,23 @@ const NATIVES: &[(&str, &[&str], &str)] = &[
         &["leaderboard", "integer", "string"],
         "nothing",
     ),
+    (
+        "LeaderboardSetItemValue",
+        &["leaderboard", "integer", "integer"],
+        "nothing",
+    ),
+    (
+        "LeaderboardSetItemValueColor",
+        &[
+            "leaderboard",
+            "integer",
+            "integer",
+            "integer",
+            "integer",
+            "integer",
+        ],
+        "nothing",
+    ),
 ];
 impl ObjectHost {
     pub fn with_leaderboards(mut self, budget: LeaderboardBudget) -> Result<Self, Error> {
@@ -472,6 +489,14 @@ impl ObjectHost {
                 state.boards[index].label = Some(label);
                 state.text_bytes = total;
             }
+            ("LeaderboardSetItemValue", [_, Value::Int(row), Value::Int(value)]) => {
+                let row = usize::try_from(*row)
+                    .ok()
+                    .filter(|&at| at < board.items.len())
+                    .ok_or_else(|| fail(Failure::LeaderboardState("row index out of range")))?;
+                self.leaderboards.as_mut().expect("admitted").boards[index].items[row].value =
+                    *value;
+            }
             ("LeaderboardSetItemLabel", [_, Value::Int(row), Value::Str(label)]) => {
                 let row = usize::try_from(*row)
                     .ok()
@@ -482,6 +507,30 @@ impl ObjectHost {
                 let state = self.leaderboards.as_mut().expect("admitted");
                 state.boards[index].items[row].label = label;
                 state.text_bytes = total;
+            }
+            (
+                "LeaderboardSetItemValueColor",
+                [
+                    _,
+                    Value::Int(row),
+                    Value::Int(r),
+                    Value::Int(g),
+                    Value::Int(b),
+                    Value::Int(a),
+                ],
+            ) => {
+                let row = usize::try_from(*row)
+                    .ok()
+                    .filter(|&at| at < board.items.len())
+                    .ok_or_else(|| fail(Failure::LeaderboardState("row index out of range")))?;
+                let color = [*r, *g, *b, *a].map(u8::try_from);
+                let [Ok(r), Ok(g), Ok(b), Ok(a)] = color else {
+                    return Err(fail(Failure::LeaderboardState(
+                        "RGBA channels must fit bytes",
+                    )));
+                };
+                self.leaderboards.as_mut().expect("admitted").boards[index].items[row]
+                    .value_color = Some([r, g, b, a]);
             }
             ("LeaderboardSetSizeByItemCount", [_, Value::Int(count)]) => {
                 if *count < 0 {

@@ -131,6 +131,12 @@ pub struct KinematicWindow {
     pub elapsed: f64,
 }
 
+/// A lifetime max-speed disk and the units' current positions. Either proof is
+/// enough to say the caster is not on the target now.
+pub fn placement_effect_separated(lifetime_excluded: bool, currently_separated: bool) -> bool {
+    lifetime_excluded || currently_separated
+}
+
 /// Prove that a targeted effect cannot reach the other unit during the interval.
 /// Both origins must describe the same instant and both windows must cover the
 /// entire interval, including scripted displacement and speed changes.
@@ -692,6 +698,25 @@ pub enum BuffType {
     Other,
 }
 
+/// Radius written by `0xad4c53` for a `buffer` object.
+///
+/// `0xad3f23` selects this override only for requested `hwtw` and `uzig`.
+/// `0xad49ea` compares the `GetUnitCount` sum with 2: at least 2 stores 15 at
+/// search `+0x14`, otherwise 5 at `+0x18`. Any other request keeps `authored`.
+pub fn buffer_score_radius(
+    requested: [u8; 4],
+    existing: i32,
+    authored: i32,
+) -> Result<i32, String> {
+    if requested != *b"hwtw" && requested != *b"uzig" {
+        return Ok(authored);
+    }
+    if existing < 0 {
+        return Err("AI placement buffer count is negative".into());
+    }
+    Ok(if existing >= 2 { 15 } else { 5 })
+}
+
 /// The sampled score raster. Points passed to callbacks are world coordinates.
 pub struct Grid<'a> {
     rules: &'a Rules,
@@ -782,7 +807,6 @@ impl<'a> Grid<'a> {
     }
 
     /// Apply a single object's complete pathing-texture rectangle, expressed in grid indices.
-    /// For the special buffer override, the caller must first establish the native count branch.
     pub fn score_rectangle(
         &mut self,
         cells: impl IntoIterator<Item = [i32; 2]>,
@@ -1282,6 +1306,15 @@ mod tests {
             grid.score_rectangle([[0, 0]], BuffType::Buffer, -1)
                 .is_err()
         );
+        let wide = buffer_score_radius(*b"uzig", 2, 9).unwrap();
+        let narrow = buffer_score_radius(*b"uzig", 1, 9).unwrap();
+        assert_eq!((wide, narrow), (15, 5));
+        assert_eq!(buffer_score_radius(*b"unec", 4, 9).unwrap(), 9);
+        assert!(buffer_score_radius(*b"hwtw", -1, 9).is_err());
+        grid.score_rectangle([[2, 2]], BuffType::Buffer, narrow)
+            .unwrap();
+        assert_eq!(grid.scores[2 * 5 + 2], -50);
+        assert_eq!(grid.scores[2 * 5 + 2 + 5], 3);
     }
 
     #[test]

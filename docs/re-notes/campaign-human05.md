@@ -305,9 +305,16 @@ details in [AI construction](ai-construction.md).
   not replay their original movement histories. Later town changes, some effect sources,
   some blight overlap or removal cases, mine-targeted construction and other cases still refuse; cost timing,
   worker choice and script retry timing remain open ([AI construction](ai-construction.md)).
-- The 1800 s survival timer and the ending are not reached. The next Haunted
-  Gold Mine request refuses because the selected worker already has an admitted
-  build order and the native worker-state fields are not represented.
+- Release `selected_human05_route_reaches_authored_victory` from the Human04
+  cache reaches authored victory at tick 115969 / 1812.02 s and names
+  `Maps\Campaign\Human05Interlude.w3m`. `SetProduce` skips
+  a builder who already has an admitted construction order. Release run
+  `builder-walk-a` passed the 1225.211 s refusal and stopped at 1231.00 s
+  because the haunted-mine link changed the shown mine list. That link now
+  keeps the captured town center when the hidden original and its shown site
+  are the only difference. `unit+0x3a0` and the `0x30000000` bits are still
+  unmapped. The follow-up release run did not start: the earned Human04 profile
+  under `.scratch` was removed before launch.
 - Gold return distance (no probe), the choice among several lumber depots, and path versus
   straight-line "nearest" are the recreation's, not measured.
 - The Human04 open item (the AI target scorer refuses a unit that ever carried an effect) did

@@ -73,7 +73,11 @@ established.
    `Blizzard.j` scales exactly those four by `bj_RADTODEG`, so they are returned in
    radians; stored values stay in degrees. Roll has no `[Camera]` key; its value
    comes from the script's own `bj_CAMERA_DEFAULT_ROLL`. An unset camera target
-   refuses, as `GetCameraTargetPositionLoc` already does. Not established: the
+   with no start location still refuses. When a start location exists and no
+   pan has run, the getter reads the local player's assigned start location,
+   else the location indexed by that player, else the lowest index. That
+   stand-in is a recreation of the initial game camera, not a decoded native
+   default. Not established: the
    native's value for a field the script never set beyond these defaults.
    Test: `state_host_tests.rs::camera_getters_report_live_target_and_fields_with_angles_in_radians`.
 

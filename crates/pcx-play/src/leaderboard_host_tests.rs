@@ -24,6 +24,8 @@ native LeaderboardSetLabelColor takes leaderboard b, integer r, integer g, integ
 native LeaderboardSetValueColor takes leaderboard b, integer r, integer g, integer blue, integer a returns nothing
 native LeaderboardSetStyle takes leaderboard b, boolean title, boolean names, boolean values, boolean icons returns nothing
 native LeaderboardSetItemLabel takes leaderboard b, integer i, string label returns nothing
+native LeaderboardSetItemValue takes leaderboard b, integer i, integer v returns nothing
+native LeaderboardSetItemValueColor takes leaderboard b, integer i, integer r, integer g, integer blue, integer a returns nothing
 "#;
 fn budget() -> LeaderboardBudget {
     LeaderboardBudget {
@@ -516,6 +518,71 @@ fn leaderboard_rows_preserve_color_and_style_history() {
     assert_eq!(board.items[0].value_color, Some([7, 19, 37, 89]));
     assert_eq!(board.items[1].label_color, None);
     assert_eq!(board.items[1].value_color, None);
+    h.native(
+        "LeaderboardSetItemValueColor",
+        &[
+            b.clone(),
+            Value::Int(1),
+            Value::Int(255),
+            Value::Int(255),
+            Value::Int(255),
+            Value::Int(255),
+        ],
+    )
+    .unwrap();
+    let board = &h.leaderboard_state().unwrap().boards()[0];
+    assert_eq!(board.items[0].value_color, Some([7, 19, 37, 89]));
+    assert_eq!(board.value_color, Some([7, 19, 37, 89]));
+    assert_eq!(board.items[1].value_color, Some([255, 255, 255, 255]));
+    h.native(
+        "LeaderboardSetItemValue",
+        &[b.clone(), Value::Int(0), Value::Int(11)],
+    )
+    .unwrap();
+    let board = &h.leaderboard_state().unwrap().boards()[0];
+    assert_eq!(board.items[0].value, 11);
+    assert_eq!(board.items[1].value, 4);
+    assert!(
+        h.native(
+            "LeaderboardSetItemValue",
+            &[b.clone(), Value::Int(2), Value::Int(9)],
+        )
+        .is_err()
+    );
+    assert_eq!(
+        h.leaderboard_state().unwrap().boards()[0].items[0].value,
+        11
+    );
+    let kept = snapshot(&h);
+    for args in [
+        vec![
+            b.clone(),
+            Value::Int(2),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+        ],
+        vec![
+            b.clone(),
+            Value::Int(-1),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+        ],
+        vec![
+            b.clone(),
+            Value::Int(1),
+            Value::Int(256),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(0),
+        ],
+    ] {
+        assert!(h.native("LeaderboardSetItemValueColor", &args).is_err());
+        assert_eq!(snapshot(&h), kept);
+    }
     h.native(
         "LeaderboardSetStyle",
         &[

@@ -1234,6 +1234,12 @@ impl ObjectHost {
         let events = self.prepare_construction_events(None, owner, Phase::Start)?;
         let linked = request.as_ref().and_then(|request| request.linked_mine);
         let copied_gold = if let Some(mine) = linked {
+            let source = self.executed_unit(mine)?;
+            if !source.shown || source.combat.as_ref().is_some_and(|state| state.dead) {
+                // The source was hidden or killed after the order. Arrival cancels
+                // instead of aborting the script.
+                return Ok(None);
+            }
             Some(self.hide_linked_mine(mine)?)
         } else {
             None

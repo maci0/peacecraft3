@@ -2249,16 +2249,41 @@ fn ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_place
         "{error}"
     );
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 90);
-    // A unit that upgrades into the kind also routes the request (the executable's fallback).
+    // No builder: an idle unit whose Upgrade list names the kind pays the target
+    // and becomes that kind when `bldtm` elapses (exe `0xac3070`).
     let (mut vm, actor, _) =
         ai_production_fixture_with(&[profile_field(b"T009", "Upgrade", "unitList", "b001")]);
-    let h = &mut vm.host().inner;
-    let _ = actor;
-    let error = h.set_ai_produce(4, 1, structure, -1).unwrap_err();
-    assert!(
-        error.to_string().contains("upgrade is not admitted"),
-        "{error}"
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    assert!(vm.host().inner.set_ai_produce(4, 1, structure, -1).unwrap());
+    assert_eq!(
+        bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+        49
     );
+    assert_eq!(
+        bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+        74
+    );
+    let ids: Vec<_> = vm.host().inner.executed_units().map(|(id, _)| id).collect();
+    let queued: Vec<_> = ids
+        .into_iter()
+        .filter(|id| !vm.host().inner.unit_training_queue(*id).unwrap().is_empty())
+        .collect();
+    assert_eq!(queued.len(), 1);
+    let upgraded = queued[0];
+    let revision = vm
+        .host()
+        .inner
+        .executed_unit(upgraded)
+        .unwrap()
+        .definition_revision;
+    step(&mut vm, 9.);
+    let h = &mut vm.host().inner;
+    assert!(h.unit_training_queue(upgraded).unwrap().is_empty());
+    assert_eq!(
+        h.executed_unit(upgraded).unwrap().definition.rawcode,
+        *b"b001"
+    );
+    assert!(h.executed_unit(upgraded).unwrap().definition_revision > revision);
     let (mut vm, actor, _) =
         ai_production_fixture_with(&[profile_field(b"T012", "Builds", "unitList", "b001")]);
     let h = &mut vm.host().inner;

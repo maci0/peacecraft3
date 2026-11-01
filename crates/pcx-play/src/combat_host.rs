@@ -1105,6 +1105,22 @@ impl ObjectHost {
         !self.effective_alliance(a, b, rules.passive)
     }
 
+    /// `player` treats `owner` as a passive ally, including its own units.
+    /// Neutral Passive is not an ally. Same alliance reading as [`Self::hostile_owners`].
+    pub(super) fn allied_owners(&self, player: HandleId, owner: HandleId) -> bool {
+        let rules = self.combat.as_ref().expect("combat");
+        let (Ok(a), Ok(b)) = (self.player_settings(player), self.player_settings(owner)) else {
+            return false;
+        };
+        if a.identity == b.identity {
+            return true;
+        }
+        if Some(b.number) == rules.neutral_passive {
+            return false;
+        }
+        self.effective_alliance(a, b, rules.passive)
+    }
+
     /// How the local player regards `unit`'s owner, for selection circle colours:
     /// its own units and passive allies are friends, Neutral Passive is neutral,
     /// everyone else an enemy (the same alliance rule as [`Self::is_enemy`]).
@@ -1197,6 +1213,29 @@ impl ObjectHost {
         };
         let owner = self.executed_unit(*unit)?.owner;
         Ok(Value::Bool(self.hostile_owners(*player, owner)))
+    }
+
+    /// `IsUnitAlly(unit, player)`: `player` treats the unit's owner as a passive ally,
+    /// including that player's own units. Neutral Passive is not an ally.
+    pub(super) fn is_unit_ally_native(&self, args: &[Value]) -> Result<Value, Error> {
+        const NAME: &str = "IsUnitAlly";
+        Self::contract(
+            &self.inner,
+            NAME,
+            &["unit", "player"],
+            "boolean",
+            true,
+            Some("unit"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(NAME).map(|n| &n.source) != natives.get("CreateUnit").map(|n| &n.source) {
+            return Err(self.inner.error(NAME, Failure::Source));
+        }
+        let [Value::Handle(unit), Value::Handle(player)] = args else {
+            return Err(self.inner.error(NAME, Failure::Signature));
+        };
+        let owner = self.executed_unit(*unit)?.owner;
+        Ok(Value::Bool(self.allied_owners(*player, owner)))
     }
 
     /// Whether `attacker`'s owner treats `target` as hostile under the combat rules.

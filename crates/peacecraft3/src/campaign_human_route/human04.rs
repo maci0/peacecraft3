@@ -292,7 +292,7 @@ pub(super) fn train(app: &mut App, footman: [u8; 4]) -> Training {
         let owner = objects.local_player_settings().unwrap().identity;
         objects
             .executed_units()
-            .filter(|(_, u)| u.owner == owner && u.shown)
+            .filter(|(_, u)| u.owner == owner && u.shown && u.vitals.is_some_and(|v| v.life > 0.))
             .find_map(|(id, unit)| {
                 pcx_play::training_command::types(&unit.definition)
                     .ok()?

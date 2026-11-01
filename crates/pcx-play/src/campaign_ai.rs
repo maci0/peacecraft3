@@ -126,6 +126,11 @@ pub(crate) trait AiWorld: Host {
         target: pcx_script::HandleId,
         check_full: bool,
     ) -> Result<bool, String>;
+    fn ai_suicide_unit(&mut self, player: i32, count: i32, kind: i32) -> Result<(), String>;
+    fn ai_teleport_captain(&mut self, player: i32, point: [f32; 2]) -> Result<(), String>;
+    fn ai_clear_captain_targets(&mut self, player: i32) -> Result<(), String>;
+    fn ai_captain_attack(&mut self, player: i32, point: [f32; 2]) -> Result<(), String>;
+    fn ai_captain_vs(&mut self, player: i32, target: pcx_script::HandleId) -> Result<(), String>;
     fn ai_set_produce(
         &mut self,
         player: i32,
@@ -235,6 +240,56 @@ impl AiWorld for NeutralStack {
             .inner_mut()
             .inner_mut()
             .suicide_ai_player(player, target, check_full)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_suicide_unit(&mut self, player: i32, count: i32, kind: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .suicide_unit(player, count, kind)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_teleport_captain(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .teleport_captain(player, point)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_clear_captain_targets(&mut self, player: i32) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .clear_captain_targets(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_attack(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .captain_attack(player, point)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_vs(&mut self, player: i32, target: pcx_script::HandleId) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .captain_vs(player, target)
             .map_err(|e| e.to_string())
     }
     fn ai_set_produce(
@@ -1584,6 +1639,52 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .ai_suicide_player(player, *target, *check_full)
                     .map(Value::Bool)
             }
+            "SuicideUnit" => {
+                let [Value::Int(count), Value::Int(kind)] = args else {
+                    return Err("SuicideUnit: expected count and unit type".into());
+                };
+                let player = self.player;
+                self.world_mut()?.ai_suicide_unit(player, *count, *kind)?;
+                Ok(Value::Null)
+            }
+            "TeleportCaptain" => {
+                let [Value::Real(x), Value::Real(y)] = args else {
+                    return Err("TeleportCaptain: expected two reals".into());
+                };
+                if !x.is_finite() || !y.is_finite() {
+                    return Err("TeleportCaptain: finite coordinates required".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_teleport_captain(player, [*x, *y])?;
+                Ok(Value::Null)
+            }
+            "ClearCaptainTargets" => {
+                if !args.is_empty() {
+                    return Err("ClearCaptainTargets: expected no arguments".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_clear_captain_targets(player)?;
+                Ok(Value::Null)
+            }
+            "CaptainAttack" => {
+                let [Value::Real(x), Value::Real(y)] = args else {
+                    return Err("CaptainAttack: expected two reals".into());
+                };
+                if !x.is_finite() || !y.is_finite() {
+                    return Err("CaptainAttack: finite coordinates required".into());
+                }
+                let player = self.player;
+                self.world_mut()?.ai_captain_attack(player, [*x, *y])?;
+                Ok(Value::Null)
+            }
+            "CaptainVsUnits" | "CaptainVsPlayer" => {
+                let [Value::Handle(target)] = args else {
+                    return Err(format!("{name}: expected one player"));
+                };
+                let player = self.player;
+                self.world_mut()?.ai_captain_vs(player, *target)?;
+                Ok(Value::Null)
+            }
             "SetProduce" => {
                 let [Value::Int(quantity), Value::Int(kind), Value::Int(town)] = args else {
                     return Err("SetProduce: expected quantity, unit type and town integers".into());
@@ -1646,6 +1747,11 @@ mod tests {
         upgrade_costs: Vec<(i32, i32, bool)>,
         upgrade_orders: Vec<(i32, i32)>,
         assault_calls: Vec<(i32, &'static str)>,
+        suicide_units: Vec<(i32, i32, i32)>,
+        teleport_captains: Vec<(i32, f32, f32)>,
+        cleared_captain_targets: Vec<i32>,
+        captain_attacks: Vec<(i32, f32, f32)>,
+        captain_vs: Vec<(i32, HandleId)>,
     }
 
     #[test]
@@ -1673,6 +1779,71 @@ mod tests {
                 .contains("expected quantity")
         );
         assert_eq!(shared.lock().unwrap().production_requests.len(), 2);
+    }
+
+    #[test]
+    fn suicide_unit_reaches_the_world() {
+        let shared = Arc::new(Mutex::new(State::default()));
+        let mut host = AiHost::new(3, World(Arc::clone(&shared)));
+        let kind = i32::from_be_bytes(*b"ugho");
+        assert_eq!(
+            host.native("SuicideUnit", &[Value::Int(4), Value::Int(kind)])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(shared.lock().unwrap().suicide_units, vec![(3, 4, kind)]);
+        assert!(
+            host.native("SuicideUnit", &[Value::Int(1)])
+                .unwrap_err()
+                .contains("expected count")
+        );
+        assert_eq!(
+            host.native("TeleportCaptain", &[Value::Real(20.0), Value::Real(1000.0)])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            shared.lock().unwrap().teleport_captains,
+            vec![(3, 20.0, 1000.0)]
+        );
+        assert!(
+            host.native(
+                "TeleportCaptain",
+                &[Value::Real(f32::NAN), Value::Real(1.0)],
+            )
+            .unwrap_err()
+            .contains("finite")
+        );
+        assert_eq!(
+            host.native("ClearCaptainTargets", &[]).unwrap(),
+            Value::Null
+        );
+        assert_eq!(shared.lock().unwrap().cleared_captain_targets, vec![3]);
+        assert_eq!(
+            host.native("CaptainAttack", &[Value::Real(12.0), Value::Real(-4.0)])
+                .unwrap(),
+            Value::Null
+        );
+        let foe = Value::Handle(HandleId::new(NonZeroU64::new(9).unwrap()));
+        assert_eq!(
+            host.native("CaptainVsUnits", std::slice::from_ref(&foe))
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            host.native("CaptainVsPlayer", std::slice::from_ref(&foe))
+                .unwrap(),
+            Value::Null
+        );
+        let state = shared.lock().unwrap();
+        assert_eq!(state.captain_attacks, vec![(3, 12.0, -4.0)]);
+        assert_eq!(
+            state.captain_vs,
+            vec![
+                (3, HandleId::new(NonZeroU64::new(9).unwrap())),
+                (3, HandleId::new(NonZeroU64::new(9).unwrap()))
+            ]
+        );
     }
 
     #[test]
@@ -1788,6 +1959,42 @@ mod tests {
                 .assault_calls
                 .push((player, "launch"));
             Ok(true)
+        }
+        fn ai_suicide_unit(&mut self, player: i32, count: i32, kind: i32) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .suicide_units
+                .push((player, count, kind));
+            Ok(())
+        }
+        fn ai_teleport_captain(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .teleport_captains
+                .push((player, point[0], point[1]));
+            Ok(())
+        }
+        fn ai_clear_captain_targets(&mut self, player: i32) -> Result<(), String> {
+            self.0.lock().unwrap().cleared_captain_targets.push(player);
+            Ok(())
+        }
+        fn ai_captain_attack(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .captain_attacks
+                .push((player, point[0], point[1]));
+            Ok(())
+        }
+        fn ai_captain_vs(
+            &mut self,
+            player: i32,
+            target: pcx_script::HandleId,
+        ) -> Result<(), String> {
+            self.0.lock().unwrap().captain_vs.push((player, target));
+            Ok(())
         }
         fn ai_set_produce(
             &mut self,

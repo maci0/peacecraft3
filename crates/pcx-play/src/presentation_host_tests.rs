@@ -90,10 +90,11 @@ fn actual_vm_publishes_explicit_filter_fields_without_constructor_defaults() {
     vm.host()
         .native("SetCineFilterBlendMode", &[other])
         .unwrap();
-    assert!(vm
-        .host()
-        .native("DisplayCineFilter", &[Value::Bool(true)])
-        .is_err());
+    assert!(
+        vm.host()
+            .native("DisplayCineFilter", &[Value::Bool(true)])
+            .is_err()
+    );
     assert_eq!(
         vm.host().presentation().unwrap().filter.as_ref(),
         Some(&old)
@@ -122,14 +123,16 @@ fn timed_filter_refuses_without_clock_and_invalid_setters_preserve_the_previous_
     ] {
         assert!(vm.host().native("SetCineFilterDuration", &args).is_err());
     }
-    assert!(vm
-        .host()
-        .native("SetCineFilterTexture", &[Value::Str("x".repeat(65))])
-        .is_err());
-    assert!(vm
-        .host()
-        .native("SetCineFilterTexture", &[Value::Str("bad\0path".into())])
-        .is_err());
+    assert!(
+        vm.host()
+            .native("SetCineFilterTexture", &[Value::Str("x".repeat(65))])
+            .is_err()
+    );
+    assert!(
+        vm.host()
+            .native("SetCineFilterTexture", &[Value::Str("bad\0path".into())])
+            .is_err()
+    );
     vm.host()
         .native("DisplayCineFilter", &[Value::Bool(true)])
         .unwrap();
@@ -146,10 +149,11 @@ fn timed_filter_refuses_without_clock_and_invalid_setters_preserve_the_previous_
     vm.host()
         .native("SetCineFilterDuration", &[Value::Real(2.)])
         .unwrap();
-    assert!(vm
-        .host()
-        .native("DisplayCineFilter", &[Value::Bool(true)])
-        .is_err());
+    assert!(
+        vm.host()
+            .native("DisplayCineFilter", &[Value::Bool(true)])
+            .is_err()
+    );
     assert_eq!(
         vm.host()
             .presentation()
@@ -269,9 +273,10 @@ fn invalid_interface_fades_and_bad_arguments_preserve_the_visible_state() {
     h.native("ShowInterface", &[Value::Bool(false), Value::Real(0.)])
         .unwrap();
     for duration in [f32::INFINITY, f32::NAN] {
-        assert!(h
-            .native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
-            .is_err());
+        assert!(
+            h.native("ShowInterface", &[Value::Bool(true), Value::Real(duration)])
+                .is_err()
+        );
         assert_eq!(h.presentation().unwrap().interface_visible, Some(false));
         assert_eq!(h.presentation().unwrap().control_enabled, Some(false));
     }
@@ -322,9 +327,10 @@ fn non_positive_interface_duration_clears_the_pending_fade_on_every_transition()
     // A refused call changes nothing, including a fade already pending.
     h.native("ShowInterface", &[Value::Bool(false), Value::Real(4.)])
         .unwrap();
-    assert!(h
-        .native("ShowInterface", &[Value::Bool(true), Value::Real(f32::NAN)])
-        .is_err());
+    assert!(
+        h.native("ShowInterface", &[Value::Bool(true), Value::Real(f32::NAN)])
+            .is_err()
+    );
     assert_eq!(fade(&h), Some((20., 4.)));
     assert_eq!(visible(&h), Some(false));
 }
@@ -433,9 +439,10 @@ fn world_fog_boundary_switch_requires_its_declaration_and_preserves_other_state(
     assert_eq!(h.inner().handles(), handles);
     let mut h = host(COMMON, "// map");
     h.admit_presentation(64).unwrap();
-    assert!(h
-        .native("EnableWorldFogBoundary", &[Value::Bool(false)])
-        .is_err());
+    assert!(
+        h.native("EnableWorldFogBoundary", &[Value::Bool(false)])
+            .is_err()
+    );
     for (c, map) in [
         (COMMON.to_owned(), native.to_owned()),
         (common.clone(), native.to_owned()),
@@ -482,9 +489,10 @@ fn cinematic_subtitles_retain_the_executed_flag_without_a_default() {
     assert_eq!(h.inner().handles(), handles);
     let mut h = host(COMMON, "// map");
     h.admit_presentation(64).unwrap();
-    assert!(h
-        .native("ForceCinematicSubtitles", &[Value::Bool(true)])
-        .is_err());
+    assert!(
+        h.native("ForceCinematicSubtitles", &[Value::Bool(true)])
+            .is_err()
+    );
     for (c, map) in [
         (COMMON.to_owned(), native.to_owned()),
         (common.clone(), native.to_owned()),

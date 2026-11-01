@@ -3175,6 +3175,12 @@ fn finite_state_value(value: &Value) -> Result<f32, Failure> {
 }
 
 impl ObjectHost {
+    pub(super) fn has_unit_model_loader(&self) -> bool {
+        self.units
+            .as_ref()
+            .is_some_and(|units| units.models.is_some())
+    }
+
     pub(super) fn prepare_morph_form(
         &mut self,
         unit: HandleId,

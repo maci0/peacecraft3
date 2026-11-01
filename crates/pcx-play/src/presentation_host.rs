@@ -340,7 +340,12 @@ impl ObjectHost {
             }
             (
                 "SetCineFilterStartUV" | "SetCineFilterEndUV",
-                [Value::Real(a), Value::Real(b), Value::Real(c), Value::Real(d)],
+                [
+                    Value::Real(a),
+                    Value::Real(b),
+                    Value::Real(c),
+                    Value::Real(d),
+                ],
             ) if [a, b, c, d].iter().all(|v| v.is_finite()) => {
                 let uv = [a.min(*c), b.min(*d), a.max(*c), b.max(*d)];
                 if name == "SetCineFilterStartUV" {

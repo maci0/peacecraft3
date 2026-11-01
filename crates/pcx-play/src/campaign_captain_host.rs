@@ -2,7 +2,7 @@
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::campaign_captain_policy::CaptainPolicy;
 use crate::map_admission::ParsedMapContext;
-use pcx_script::HandleId;
+use pcx_script::{HandleId, Value};
 use std::sync::Arc;
 
 const CREATE: &str = "CreateCaptains";
@@ -650,6 +650,262 @@ impl ObjectHost {
         // Native acceptance is independent of target discovery or path success.
         Ok(true)
     }
+
+    /// `SuicideUnit(count, unitid)`. The native body is not decoded. This sends
+    /// up to `count` living units of that type toward the nearest hostile unit.
+    /// A missing route skips that unit. No matching unit or no hostile leaves
+    /// the world unchanged.
+    pub(crate) fn suicide_unit(&mut self, player: i32, count: i32, kind: i32) -> Result<(), Error> {
+        let fail = |why: String| self.inner.error("SuicideUnit", Failure::UnitActivity(why));
+        if count < 0 {
+            return Err(fail("negative suicide count".into()));
+        }
+        if count == 0 {
+            return Ok(());
+        }
+        let owner = self
+            .player_identity(player)
+            .ok_or_else(|| fail(format!("AI player {player} is not admitted")))?;
+        let requested = kind.to_be_bytes();
+        let mut members = Vec::new();
+        for (unit, record) in self.executed_units() {
+            if record.owner != owner || record.definition.rawcode != requested {
+                continue;
+            }
+            let Some(record) = self.live(unit) else {
+                continue;
+            };
+            if record.paused_since.is_some() || record.construction.is_some() || !record.shown {
+                continue;
+            }
+            members
+                .try_reserve(1)
+                .map_err(|_| self.inner.error("SuicideUnit", Failure::Capacity))?;
+            members.push(unit);
+            if members.len() == count as usize {
+                break;
+            }
+        }
+        let Some(origin) = members.iter().find_map(|&unit| self.live(unit)?.position) else {
+            return Ok(());
+        };
+        let mut goal = None;
+        let mut best = f32::MAX;
+        for (unit, record) in self.executed_units() {
+            if !self.hostile_owners(owner, record.owner) {
+                continue;
+            }
+            let Some(record) = self.live(unit) else {
+                continue;
+            };
+            let Some(point) = record.position else {
+                continue;
+            };
+            let distance = (point[0] - origin[0]).hypot(point[1] - origin[1]);
+            if distance < best {
+                best = distance;
+                goal = Some(point);
+            }
+        }
+        let Some(goal) = goal else {
+            return Ok(());
+        };
+        for unit in members {
+            let Some(record) = self.live(unit) else {
+                continue;
+            };
+            if record.combat.as_ref().is_some_and(|combat| {
+                combat.target.is_some() || combat.attack_destination == Some(goal)
+            }) {
+                continue;
+            }
+            let Some(route) =
+                self.prepare_steer_unit_in_range(unit, Some(goal), 0., "SuicideUnit")?
+            else {
+                continue;
+            };
+            self.clear_combat_target(unit);
+            self.commit_steer_unit(unit, route, "SuicideUnit")?;
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                && let Some(combat) = &mut record.combat
+            {
+                combat.attack_destination = Some(goal);
+            }
+        }
+        Ok(())
+    }
+
+    /// `TeleportCaptain(x, y)`. The native body is not decoded. Each current
+    /// captain member is relocated with the shipped `SetUnitPosition` path.
+    /// An empty captain stays where it is and the call still returns.
+    pub(crate) fn teleport_captain(&mut self, player: i32, point: [f32; 2]) -> Result<(), Error> {
+        let fail = |why: String| {
+            self.inner
+                .error("TeleportCaptain", Failure::UnitActivity(why))
+        };
+        if point.iter().any(|value| !value.is_finite()) {
+            return Err(fail("non-finite captain point".into()));
+        }
+        if self.player_identity(player).is_none() {
+            return Err(fail(format!("AI player {player} is not admitted")));
+        }
+        let mut members = Vec::new();
+        for attack in [true, false] {
+            let Some(group) = self.campaign_ai.captain_members_for(player, attack) else {
+                continue;
+            };
+            members
+                .try_reserve(group.len())
+                .map_err(|_| self.inner.error("TeleportCaptain", Failure::Capacity))?;
+            members.extend_from_slice(group);
+        }
+        for unit in members {
+            pcx_script::Host::native(
+                self,
+                "SetUnitPosition",
+                &[
+                    Value::Handle(unit),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                ],
+            )
+            .map_err(|why| {
+                self.inner
+                    .error("TeleportCaptain", Failure::UnitActivity(why))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// `ClearCaptainTargets`. The native body is not decoded. Current captain
+    /// members drop their combat target and attack point.
+    pub(crate) fn clear_captain_targets(&mut self, player: i32) -> Result<(), Error> {
+        let fail = |why: String| {
+            self.inner
+                .error("ClearCaptainTargets", Failure::UnitActivity(why))
+        };
+        if self.player_identity(player).is_none() {
+            return Err(fail(format!("AI player {player} is not admitted")));
+        }
+        let mut members = Vec::new();
+        for attack in [true, false] {
+            let Some(group) = self.campaign_ai.captain_members_for(player, attack) else {
+                continue;
+            };
+            members
+                .try_reserve(group.len())
+                .map_err(|_| self.inner.error("ClearCaptainTargets", Failure::Capacity))?;
+            members.extend_from_slice(group);
+        }
+        for unit in members {
+            self.clear_combat_target(unit);
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                && let Some(combat) = &mut record.combat
+            {
+                combat.attack_destination = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn captain_member_ids(&self, player: i32) -> Result<Vec<HandleId>, Error> {
+        let mut members = Vec::new();
+        for attack in [true, false] {
+            let Some(group) = self.campaign_ai.captain_members_for(player, attack) else {
+                continue;
+            };
+            members
+                .try_reserve(group.len())
+                .map_err(|_| self.inner.error("TeleportCaptain", Failure::Capacity))?;
+            members.extend_from_slice(group);
+        }
+        Ok(members)
+    }
+
+    /// Attack-move current captain members toward `point`. A missing route skips
+    /// that member. The order is the recreation's stand-in for the captain
+    /// attack natives; their bodies are not decoded.
+    fn order_captain_to(&mut self, player: i32, point: [f32; 2], name: &str) -> Result<(), Error> {
+        let fail = |why: String| self.inner.error(name, Failure::UnitActivity(why));
+        if point.iter().any(|value| !value.is_finite()) {
+            return Err(fail("non-finite captain point".into()));
+        }
+        if self.player_identity(player).is_none() {
+            return Err(fail(format!("AI player {player} is not admitted")));
+        }
+        let members = self.captain_member_ids(player)?;
+        for unit in members {
+            let Some(record) = self.live(unit) else {
+                continue;
+            };
+            if record.combat.as_ref().is_some_and(|combat| {
+                combat.target.is_some() || combat.attack_destination == Some(point)
+            }) {
+                continue;
+            }
+            let Some(route) = self.prepare_steer_unit_in_range(unit, Some(point), 0., name)? else {
+                continue;
+            };
+            self.clear_combat_target(unit);
+            self.commit_steer_unit(unit, route, name)?;
+            if let Entry::Unit { record } = self.inner.entry_mut(unit)?
+                && let Some(combat) = &mut record.combat
+            {
+                combat.attack_destination = Some(point);
+            }
+        }
+        Ok(())
+    }
+
+    /// `CaptainAttack(x, y)`.
+    pub(crate) fn captain_attack(&mut self, player: i32, point: [f32; 2]) -> Result<(), Error> {
+        self.order_captain_to(player, point, "CaptainAttack")
+    }
+
+    /// `CaptainVsUnits` and `CaptainVsPlayer`. The nearest living shown unit of
+    /// the target player is the attack point. No such unit leaves the captain
+    /// where it is.
+    pub(crate) fn captain_vs(&mut self, player: i32, target: HandleId) -> Result<(), Error> {
+        let name = "CaptainVsUnits";
+        let fail = |why: String| self.inner.error(name, Failure::UnitActivity(why));
+        let owner = self
+            .player_settings(target)
+            .map_err(|error| fail(error.to_string()))?
+            .identity;
+        let origin = self
+            .captain_member_ids(player)?
+            .into_iter()
+            .find_map(|unit| self.live(unit)?.position);
+        let Some(origin) = origin else {
+            return Ok(());
+        };
+        let mut goal = None;
+        let mut best = f32::MAX;
+        for (unit, record) in self.executed_units() {
+            if record.owner != owner {
+                continue;
+            }
+            let Some(record) = self.live(unit) else {
+                continue;
+            };
+            if !record.shown {
+                continue;
+            }
+            let Some(point) = record.position else {
+                continue;
+            };
+            let distance = (point[0] - origin[0]).hypot(point[1] - origin[1]);
+            if distance < best {
+                best = distance;
+                goal = Some(point);
+            }
+        }
+        let Some(goal) = goal else {
+            return Ok(());
+        };
+        self.order_captain_to(player, goal, name)
+    }
+
     pub(crate) fn captain_assault_owned(&self, unit: HandleId) -> bool {
         self.campaign_ai
             .captain_member_role(unit)

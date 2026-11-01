@@ -54,8 +54,9 @@ The party never casts Holy Light: see the open refusal below.
    Tests: `unit_acquire_range_tests.rs`.
 3. `CommandAI` and the AI-side `CommandsWaiting`, `GetLastCommand`, `GetLastData`,
    `PopLastCommand` (`h04_green.ai` waits for the map's signal in `WaitForSignal`). New
-   `campaign_ai_commands_host.rs`: a per-player queue. Which pair "last" names when several are
-   pending is not established, so a read with more than one pending pair refuses; a backlog over
+   `campaign_ai_commands_host.rs`: a per-player stack. `GetLastCommand` /
+   `GetLastData` read the newest pair and `PopLastCommand` removes that pair.
+   That reading of `PopLast` is a recreation, not a decoded native. A backlog over
    64 refuses. Test: `state_host_tests.rs`.
 4. A `harvest` target order on a tree (`IssueTargetDestructableOrder`, `OpeningCancelled`).
    `harvest_runtime.rs` starts lumber work on that tree, not limited by the search radius; a tree

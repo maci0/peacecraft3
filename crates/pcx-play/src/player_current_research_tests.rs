@@ -98,6 +98,31 @@ impl AiWorld for AiResearchWorld {
             .suicide_ai_player(player, target, check_full)
             .map_err(|e| e.to_string())
     }
+    fn ai_suicide_unit(&mut self, player: i32, count: i32, kind: i32) -> Result<(), String> {
+        self.object
+            .suicide_unit(player, count, kind)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_teleport_captain(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+        self.object
+            .teleport_captain(player, point)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_clear_captain_targets(&mut self, player: i32) -> Result<(), String> {
+        self.object
+            .clear_captain_targets(player)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_attack(&mut self, player: i32, point: [f32; 2]) -> Result<(), String> {
+        self.object
+            .captain_attack(player, point)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_captain_vs(&mut self, player: i32, target: pcx_script::HandleId) -> Result<(), String> {
+        self.object
+            .captain_vs(player, target)
+            .map_err(|e| e.to_string())
+    }
     fn ai_set_produce(
         &mut self,
         player: i32,

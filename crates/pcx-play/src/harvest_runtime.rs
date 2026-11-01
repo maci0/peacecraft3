@@ -744,8 +744,25 @@ impl ObjectHost {
                 return Err(self.harvest_error("worker cannot move to the selected tree"));
             }
             if self.activity_waypoints_empty(worker.unit)? {
-                return Err(self.harvest_error("selected tree is not reachable"));
+                // A steer with no waypoints is the same blocked approach as a
+                // missing gold route: stop, and drop the task unless carrying.
+                return self.abandon_unreachable_tree(worker, position);
             }
+        }
+        Ok(())
+    }
+
+    fn abandon_unreachable_tree(
+        &mut self,
+        worker: &mut Worker,
+        position: [f32; 2],
+    ) -> Result<(), Error> {
+        self.stop_unit(worker.unit)?;
+        worker.tree = None;
+        if worker.carrying >= 1.0 {
+            self.route_depot(worker, position)?;
+        } else {
+            worker.phase = Phase::Seek;
         }
         Ok(())
     }
@@ -782,7 +799,7 @@ impl ObjectHost {
             return Ok(());
         }
         if !self.activity_moving(worker.unit)? && self.activity_waypoints_empty(worker.unit)? {
-            return Err(self.harvest_error("selected tree is not reachable"));
+            return self.abandon_unreachable_tree(worker, position);
         }
         Ok(())
     }
@@ -1104,12 +1121,11 @@ impl ObjectHost {
         unit: HandleId,
         owner: HandleId,
         from: [f32; 2],
-        rules: &HarvestRules,
+        _rules: &HarvestRules,
         gold: bool,
     ) -> Result<Option<HandleId>, Error> {
         let budget = self.harvest.as_ref().expect("admitted").budget.scan_work;
         let mut work = budget;
-        let radius = rules.search_radius;
         let mut candidates = Vec::new();
         candidates
             .try_reserve(budget.min(64))
@@ -1151,11 +1167,8 @@ impl ObjectHost {
             // Original-client probes (`.scratch/depot-probe`, Legacy 1.29.2.9231, `-classic`): a
             // lumber worker explicitly ordered to a tree 2400 and 4400 from the only town hall
             // chopped it, walked the whole way to that hall with a full load, deposited, and
-            // returned to the tree. Lumber depot choice is therefore not bounded by `Ahar.Area`.
-            // Gold keeps the bound: no gold probe was run.
-            if gold && squared > radius * radius {
-                continue;
-            }
+            // returned to the tree. Return choice is therefore not bounded by `Ahar.Area`.
+            // Gold uses the same rule: a loaded worker still has to reach the hall.
             let Some(depot) = self.depot_return(rawcode)? else {
                 continue;
             };

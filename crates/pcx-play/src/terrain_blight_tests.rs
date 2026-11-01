@@ -182,7 +182,7 @@ fn growth_uses_discrete_steps_and_spatial_rectangles() {
 }
 
 #[test]
-fn growth_state_integrates_the_clock_and_refuses_overlap_or_removal() {
+fn growth_state_ors_live_overlap_and_refuses_removal() {
     use std::num::NonZeroU64;
     let base_terrain = terrain([5, 5], [0.0; 2], &[0; 25]);
     let mut state = InitialBlight::read(&base_terrain, 10.0, identity(), 25).unwrap();
@@ -213,12 +213,10 @@ fn growth_state_integrates_the_clock_and_refuses_overlap_or_removal() {
         1.0
     );
     state.add_growth(unit(2), unit(12), growth).unwrap();
-    assert!(
-        state
-            .is_blighted_at([15.0; 2], 0.0)
-            .unwrap_err()
-            .contains("overlap")
-    );
+    assert!(state.is_blighted_at([15.0; 2], 0.0).unwrap());
+    assert!(state.owner_mask_at([15.0; 2], 0.0, Some(unit(11))).unwrap());
+    assert!(state.owner_mask_at([15.0; 2], 0.0, Some(unit(12))).unwrap());
+    assert!(!state.is_blighted_at([45.0, 15.0], 0.5).unwrap());
     state.remove_growth(unit(1));
     assert!(
         state

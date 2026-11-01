@@ -30,6 +30,8 @@ struct Training {
     kind: i32,
     /// The level a research job brings its owner to; `None` trains `kind`.
     research: Option<i32>,
+    /// `kind` replaces this building. Not a trained unit and not a research level.
+    structure_upgrade: bool,
     food: i32,
     finish: f64,
     through: f64,
@@ -825,13 +827,14 @@ impl ObjectHost {
         Ok(selected)
     }
 
-    /// The first live unit of `owner` that lists `kind` in its `key` profile list.
-    fn ai_unit_lists(
+    /// Live units of `owner` that list `kind` in the `key` profile list, in arena order.
+    fn ai_units_listing(
         &self,
         owner: HandleId,
         kind: [u8; 4],
         key: &str,
-    ) -> Result<Option<ListingUnit>, Error> {
+    ) -> Result<Vec<ListingUnit>, Error> {
+        let mut listed = Vec::new();
         for (unit, record) in self.executed_units() {
             if record.owner != owner || !live(record) {
                 continue;
@@ -858,10 +861,16 @@ impl ObjectHost {
                 found |= token.as_bytes() == kind;
             }
             if found {
-                return Ok(Some((unit, record.definition.rawcode, record.position)));
+                if listed.len() >= self.inner.max_handles {
+                    return Err(self.training_error("builder list exhausted"));
+                }
+                listed
+                    .try_reserve(1)
+                    .map_err(|_| self.training_error("builder list capacity"))?;
+                listed.push((unit, record.definition.rawcode, record.position));
             }
         }
-        Ok(None)
+        Ok(listed)
     }
 
     pub(crate) fn set_ai_produce(
@@ -899,79 +908,155 @@ impl ObjectHost {
             return Err(fail("AI production catalog identity differs".into()));
         }
         if super::unit_types::structure(&definition).map_err(fail)? {
-            // The executable (0xac3070) first looks for a builder (0xac2b00: a unit of the player
-            // whose build ability lists the kind) and, failing that, for an idle unit that
-            // upgrades into the kind. With neither the request answers false and orders nothing.
-            for (key, route) in [("Builds", "construction placement"), ("Upgrade", "upgrade")] {
-                if let Some((worker, rawcode, position)) =
-                    self.ai_unit_lists(owner, requested, key)?
-                {
-                    if key == "Builds" {
-                        #[cfg(feature = "test-fixtures")]
-                        if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
-                            eprintln!(
-                                "AI build search: time={:?} player={player} kind={requested:?} worker={worker:?} position={position:?}",
-                                self.timer_game_time()
-                            );
-                        }
-                        let (site, _dequeues) = self
-                            .ai_structure_site(player, owner, worker, &definition)
-                            .map_err(|why| {
-                                self.inner.error(
-                                    "SetProduce",
-                                    Failure::UnitActivity(format!(
-                                        "AI structure {} by {worker:?}: {why}",
-                                        String::from_utf8_lossy(&requested)
-                                    )),
-                                )
-                            })?;
-                        return match site {
-                            Some(super::ai_construction::AiBuildTarget::Point(site)) => {
-                                let accepted =
-                                    self.request_unit_construction(worker, kind, site)?;
-                                #[cfg(feature = "test-fixtures")]
-                                if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
-                                    eprintln!(
-                                        "AI build order: time={:?} player={player} kind={requested:?} worker={worker:?} site={site:?} dequeues={_dequeues} accepted={accepted}",
-                                        self.timer_game_time()
-                                    );
-                                }
-                                Ok(accepted)
-                            }
-                            Some(super::ai_construction::AiBuildTarget::Mine {
-                                mine,
-                                position,
-                                candidate,
-                            }) => {
-                                if self.unit_construction_order(worker)?.is_some() {
-                                    return Err(self.inner.error(
-                                        "SetProduce",
-                                        Failure::UnitActivity(format!(
-                                            "AI worker-state filter is not qualified: worker {worker:?} already has an admitted build order; unit state and AI-component flags are not represented, so the haunted-mine issue is refused instead of reusing that worker or selecting another (mine {mine:?} at {position:?}, search candidate {candidate:?}, {_dequeues} dequeues)"
-                                        )),
-                                    ));
-                                }
-                                let accepted =
-                                    self.request_linked_mine_construction(worker, kind, mine)?;
-                                #[cfg(feature = "test-fixtures")]
-                                if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
-                                    eprintln!(
-                                        "AI mine order: time={:?} player={player} kind={requested:?} worker={worker:?} mine={mine:?} position={position:?} candidate={candidate:?} dequeues={_dequeues} accepted={accepted}",
-                                        self.timer_game_time()
-                                    );
-                                }
-                                Ok(accepted)
-                            }
-                            None => Ok(false),
-                        };
+            // `0xac2b00` walks the player's units and keeps going when one fails the
+            // candidate checks. An admitted construction order stands in for that
+            // rejection: the orange probe keeps the first acolyte on the necropolis
+            // and gives the next structures to other acolytes. `unit+0x3a0` and the
+            // component bits `0x30000000` are still unmapped. With no free builder
+            // and no site, the request answers false and orders nothing. The upgrade
+            // fallback still runs only when no live unit lists the kind in `Builds`.
+            let builders = self.ai_units_listing(owner, requested, "Builds")?;
+            if !builders.is_empty() {
+                for (worker, _rawcode, position) in builders {
+                    if self.unit_construction_order(worker)?.is_some() {
+                        continue;
                     }
-                    return Err(fail(format!(
-                        "AI {route} is not admitted: player={player} kind={requested:?} by {:?} at {position:?}",
-                        String::from_utf8_lossy(&rawcode)
-                    )));
+                    #[cfg(feature = "test-fixtures")]
+                    if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                        eprintln!(
+                            "AI build search: time={:?} player={player} kind={requested:?} worker={worker:?} position={position:?}",
+                            self.timer_game_time()
+                        );
+                    }
+                    let _ = position;
+                    let (site, _dequeues) = self
+                        .ai_structure_site(player, owner, worker, &definition)
+                        .map_err(|why| {
+                            self.inner.error(
+                                "SetProduce",
+                                Failure::UnitActivity(format!(
+                                    "AI structure {} by {worker:?}: {why}",
+                                    String::from_utf8_lossy(&requested)
+                                )),
+                            )
+                        })?;
+                    match site {
+                        Some(super::ai_construction::AiBuildTarget::Point(site)) => {
+                            let accepted = self.request_unit_construction(worker, kind, site)?;
+                            #[cfg(feature = "test-fixtures")]
+                            if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                                eprintln!(
+                                    "AI build order: time={:?} player={player} kind={requested:?} worker={worker:?} site={site:?} dequeues={_dequeues} accepted={accepted}",
+                                    self.timer_game_time()
+                                );
+                            }
+                            return Ok(accepted);
+                        }
+                        Some(super::ai_construction::AiBuildTarget::Mine {
+                            mine,
+                            position,
+                            candidate,
+                        }) => {
+                            let accepted =
+                                self.request_linked_mine_construction(worker, kind, mine)?;
+                            #[cfg(feature = "test-fixtures")]
+                            if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
+                                eprintln!(
+                                    "AI mine order: time={:?} player={player} kind={requested:?} worker={worker:?} mine={mine:?} position={position:?} candidate={candidate:?} dequeues={_dequeues} accepted={accepted}",
+                                    self.timer_game_time()
+                                );
+                            }
+                            let _ = (position, candidate);
+                            return Ok(accepted);
+                        }
+                        None => continue,
+                    }
                 }
+                return Ok(false);
             }
-            return Ok(false);
+            // `0xac3070` issues the upgrade when no builder was found and the
+            // request is not `ugol`. Idle is an empty queue and no construction
+            // site (the counters at `+0x3c` and `+0x40` are not decoded). The
+            // target's `Requires` stands in for check slot `0x328`. Cost and
+            // `bldtm` are the target unit's. Death refunds the training share.
+            // Completion sets the new type's base pools; researched bonuses are
+            // not rebased onto that base.
+            if requested == *b"ugol" || !self.training_prerequisites_met(&definition, owner)? {
+                return Ok(false);
+            }
+            let gold = self.ai_unit_amount(owner, kind, "goldcost")?;
+            let lumber = self.ai_unit_amount(owner, kind, "lumbercost")?;
+            let duration = self.ai_unit_amount(owner, kind, "bldtm")?;
+            if duration <= 0 {
+                return Err(fail("structure upgrade duration must be positive".into()));
+            }
+            for _ in 0..quantity {
+                let candidates = self.ai_units_listing(owner, requested, "Upgrade")?;
+                let mut chosen = None;
+                for (worker, _, _) in candidates {
+                    let record = self.executed_unit(worker)?;
+                    if record.construction.is_some()
+                        || record.construction_request.is_some()
+                        || !record.shown
+                        || record.paused_since.is_some()
+                        || self.training.jobs.iter().any(|job| job.producer == worker)
+                    {
+                        continue;
+                    }
+                    chosen = Some(worker);
+                    break;
+                }
+                let Some(producer) = chosen else {
+                    return Ok(false);
+                };
+                if self.training.jobs.len() >= self.inner.max_handles {
+                    return Err(self.inner.error(
+                        "SetProduce",
+                        Failure::UnitActivity("structure upgrade job budget exhausted".into()),
+                    ));
+                }
+                if self.training.jobs.try_reserve(1).is_err() {
+                    return Err(self.inner.error(
+                        "SetProduce",
+                        Failure::UnitActivity("structure upgrade job capacity".into()),
+                    ));
+                }
+                let now = self.timer_game_time().filter(|n| n.is_finite() && *n >= 0.);
+                let Some(now) = now else {
+                    return Err(self.inner.error(
+                        "SetProduce",
+                        Failure::UnitActivity("structure upgrade clock is not admitted".into()),
+                    ));
+                };
+                let finish = now + f64::from(duration);
+                if !finish.is_finite() || finish <= now {
+                    return Err(self.inner.error(
+                        "SetProduce",
+                        Failure::UnitActivity("structure upgrade deadline cannot advance".into()),
+                    ));
+                }
+                let Some(debit) = self.prepare_training_debit(owner, gold, lumber, 0, 0)? else {
+                    return Ok(false);
+                };
+                self.training.jobs.push(Training {
+                    producer,
+                    owner,
+                    guard: None,
+                    active: true,
+                    duration,
+                    gold,
+                    lumber,
+                    kind,
+                    research: None,
+                    structure_upgrade: true,
+                    food: 0,
+                    finish,
+                    through: now,
+                    pause: None,
+                });
+                self.commit_training_debit(debit);
+            }
+            return Ok(true);
         }
         for _ in 0..quantity {
             let Some(producer) = self.select_training_producer(owner, requested, false)? else {
@@ -1059,6 +1144,7 @@ impl ObjectHost {
             lumber,
             kind,
             research: None,
+            structure_upgrade: false,
             food,
             finish: completion,
             through: now,
@@ -1240,6 +1326,7 @@ impl ObjectHost {
             lumber,
             kind: upgrade,
             research: Some(level),
+            structure_upgrade: false,
             food: 0,
             finish: now + f64::from(seconds),
             through: now,
@@ -1335,8 +1422,9 @@ impl ObjectHost {
                 index += 1;
                 continue;
             }
-            if job.research.is_some() {
-                // The level change runs after this tick's regeneration (`complete_research`).
+            if job.research.is_some() || job.structure_upgrade {
+                // Research levels and structure replacements run after this tick's
+                // regeneration (`complete_research`, `complete_structure_upgrade`).
                 self.training.jobs[index] = job;
                 index += 1;
                 continue;
@@ -1410,6 +1498,76 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Replaces a building that finished its structure upgrade by `now`.
+    pub(super) fn complete_structure_upgrade(&mut self, now: f64) -> Result<(), Error> {
+        let mut index = 0;
+        while index < self.training.jobs.len() {
+            let job = self.training.jobs[index];
+            if !job.structure_upgrade {
+                index += 1;
+                continue;
+            }
+            let record = self
+                .executed_unit(job.producer)
+                .map_err(|e| self.inner.error(NATIVE, e.failure))?;
+            if !job.active || record.paused_since.is_some() || job.finish > now {
+                index += 1;
+                continue;
+            }
+            let handicap = record.health_handicap;
+            let kind = job.kind.to_be_bytes();
+            let definition = self.resolve_form_definition(kind)?;
+            let vitals = self.prepare_unit_vitals(&definition, handicap)?;
+            let has_loader = self.has_unit_model_loader();
+            if has_loader {
+                let form = self.prepare_form(
+                    job.producer,
+                    definition,
+                    super::unit_creation::FormChange::Replacement,
+                )?;
+                let abilities = self.prepare_unit_abilities(&form.definition)?;
+                self.commit_morph_form(job.producer, &form, false)?;
+                let Entry::Unit { record } = self.inner.entry_mut(job.producer)? else {
+                    unreachable!("checked unit")
+                };
+                record.animation = form.animation;
+                record.abilities = abilities;
+                if let Some(vitals) = vitals {
+                    record.vitals = Some(vitals);
+                }
+            } else {
+                let abilities = self.prepare_unit_abilities(&definition)?;
+                let activity = self.prepare_unit_activity(&definition)?;
+                let combat = self.prepare_unit_combat(&definition)?;
+                self.commit_morph_placement(job.producer, &definition)?;
+                let next = self
+                    .executed_unit(job.producer)?
+                    .definition_revision
+                    .checked_add(1)
+                    .ok_or_else(|| self.training_error("definition revision exhausted"))?;
+                let radius = Self::catalog_collision_radius(&definition);
+                let Entry::Unit { record } = self.inner.entry_mut(job.producer)? else {
+                    unreachable!("checked unit")
+                };
+                record.definition = definition;
+                record.definition_revision = next;
+                record.collision_radius = radius;
+                record.abilities = abilities;
+                if let (Some(current), Some(profile)) = (&mut record.activity, &activity) {
+                    current.replace_form_profile(profile);
+                }
+                if let (Some(current), Some(profile)) = (&mut record.combat, &combat) {
+                    current.replace_form_profile(profile);
+                }
+                if let Some(vitals) = vitals {
+                    record.vitals = Some(vitals);
+                }
+            }
+            self.training.jobs.remove(index);
+        }
+        Ok(())
+    }
+
     pub(crate) fn next_training_completion(&self, until: f64) -> Option<f64> {
         self.training
             .jobs
@@ -1433,7 +1591,7 @@ impl ObjectHost {
         producer: HandleId,
         phase: &str,
     ) -> Result<Vec<TrainingEvent>, Error> {
-        if job.research.is_some() {
+        if job.research.is_some() || job.structure_upgrade {
             return Ok(Vec::new());
         }
         self.prepare_training_events(producer, phase)

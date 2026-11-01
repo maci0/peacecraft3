@@ -209,6 +209,29 @@ fn live_birth_bound_uses_the_overlap_of_the_two_lifetimes() {
 }
 
 #[test]
+fn a_long_lifetime_disk_does_not_put_distant_units_inside_the_live_cast_range() {
+    let (mut vm, source, target) = open();
+    tick(&mut vm, 100.);
+    let h = &mut vm.host().inner;
+    let lifetime = h.ai_birth_reach_bound(source, target, [400., 400.], 0.);
+    assert_eq!(
+        lifetime,
+        Ok(false),
+        "max speed since birth can close this gap"
+    );
+    let currently = h.ai_birth_reach_bound(source, target, [0., 0.], 0.);
+    assert_eq!(
+        currently,
+        Ok(true),
+        "the units are standing farther apart than a zero cast range"
+    );
+    assert!(crate::ai_placement::placement_effect_separated(
+        lifetime.unwrap(),
+        currently.unwrap()
+    ));
+}
+
+#[test]
 fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
     let (mut vm, a, b) = open();
     let (Value::Handle(enter), Value::Handle(leave)) = (vm.global("In"), vm.global("Out")) else {
@@ -306,6 +329,7 @@ fn removed_unit_coordinates_survive_the_removal_tick_then_read_zero() {
             h.native(name, &[Value::Handle(a)]).unwrap(),
             Value::Real(0.0)
         );
+        assert_eq!(h.native(name, &[Value::Null]).unwrap(), Value::Real(0.0));
     }
 }
 

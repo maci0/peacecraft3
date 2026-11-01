@@ -7,7 +7,7 @@ use pcx_objects::editor::camera::GameCamera;
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
-const NATIVES: [(&str, &[&str], &str, bool); 8] = [
+const NATIVES: [(&str, &[&str], &str, bool); 10] = [
     (
         "PanCameraToTimed",
         &["real", "real", "real"],
@@ -26,6 +26,8 @@ const NATIVES: [(&str, &[&str], &str, bool); 8] = [
     ("GetCameraTargetPositionX", &[], "real", true),
     ("GetCameraTargetPositionY", &[], "real", true),
     ("GetCameraField", &["camerafield"], "real", true),
+    ("CameraSetSourceNoise", &["real", "real"], "nothing", false),
+    ("CameraSetTargetNoise", &["real", "real"], "nothing", false),
 ];
 
 /// Fields whose `GetCameraField` result is in radians. The selected `Blizzard.j`
@@ -75,6 +77,16 @@ impl<const N: usize> Ramp<N> {
     }
 }
 
+/// A timed move from the initial stand-in. With no stand-in the ramp is already there.
+fn seed_target(fallback: Option<[f32; 2]>, to: [f32; 2], now: f64, duration: f32) -> Ramp<2> {
+    let Some(from) = fallback else {
+        return Ramp::fixed(to, now);
+    };
+    let mut ramp = Ramp::fixed(from, now);
+    ramp.retarget(to, now, duration);
+    ramp
+}
+
 pub(super) struct CameraView {
     target: Option<Ramp<2>>,
     fields: BTreeMap<i32, Ramp<1>>,
@@ -82,6 +94,10 @@ pub(super) struct CameraView {
     smoothing: Option<f32>,
     quick: Option<[f32; 2]>,
     scroll_rates: [f32; 2],
+    /// Last `CameraSetSourceNoise` magnitude and velocity. No shake samples.
+    source_noise: Option<[f32; 2]>,
+    /// Last `CameraSetTargetNoise` magnitude and velocity. No shake samples.
+    target_noise: Option<[f32; 2]>,
 }
 
 /// Script camera fields named by the selected common, paired with the game camera.
@@ -132,6 +148,8 @@ impl ObjectHost {
             smoothing: None,
             quick: None,
             scroll_rates: [camera.forward_rate, camera.strafe_rate],
+            source_noise: None,
+            target_noise: None,
         });
         Ok(())
     }
@@ -162,10 +180,35 @@ impl ObjectHost {
         self.source_constant_enumerand(global, "camerafield")
     }
 
-    /// Current target, if any script call set one.
+    /// Current target. A script pan wins. With no pan, the local player's
+    /// assigned start location stands in for the initial game camera, then the
+    /// start location whose index is that player, then the lowest index. That
+    /// stand-in is a recreation, not a decoded native default. None when
+    /// neither a ramp nor a start location exists.
     pub fn camera_target(&self) -> Option<[f32; 2]> {
         let now = self.timer_game_time()?;
-        Some(self.camera_view.as_ref()?.target?.at(now))
+        let view = self.camera_view.as_ref()?;
+        match view.target {
+            Some(ramp) => Some(ramp.at(now)),
+            None => self.initial_camera_target(),
+        }
+    }
+
+    /// Start location used when no script pan has set the camera target.
+    fn initial_camera_target(&self) -> Option<[f32; 2]> {
+        let locations = self.map_config()?.start_locations.as_slice();
+        if locations.is_empty() {
+            return None;
+        }
+        let preferred = self.local_player_number().map(|number| {
+            self.local_player_settings()
+                .and_then(|row| row.start_location)
+                .unwrap_or(number)
+        });
+        let chosen = preferred
+            .and_then(|index| locations.iter().find(|row| row.index == index))
+            .or_else(|| locations.iter().min_by_key(|row| row.index));
+        chosen.map(|row| [row.x, row.y])
     }
 
     /// Current value of a loaded `camerafield` handle.
@@ -186,6 +229,16 @@ impl ObjectHost {
     /// Selected `[CameraRates]` forward and strafe scroll rates.
     pub fn camera_scroll_rates(&self) -> Option<[f32; 2]> {
         Some(self.camera_view.as_ref()?.scroll_rates)
+    }
+
+    /// Last executed source-noise magnitude and velocity, if any call stored one.
+    pub fn camera_source_noise(&self) -> Option<[f32; 2]> {
+        self.camera_view.as_ref()?.source_noise
+    }
+
+    /// Last executed target-noise magnitude and velocity, if any call stored one.
+    pub fn camera_target_noise(&self) -> Option<[f32; 2]> {
+        self.camera_view.as_ref()?.target_noise
     }
 
     /// Player scrolling: an immediate target change, cancelling a running pan.
@@ -248,6 +301,7 @@ impl ObjectHost {
         target: Option<[f32; 2]>,
         duration: f32,
     ) {
+        let fallback = self.initial_camera_target();
         let (Some(now), Some(view)) = (self.timer_game_time(), self.camera_view.as_mut()) else {
             return;
         };
@@ -260,7 +314,7 @@ impl ObjectHost {
         if let Some(to) = target {
             match &mut view.target {
                 Some(ramp) => ramp.retarget(to, now, duration),
-                None => view.target = Some(Ramp::fixed(to, now)),
+                None => view.target = Some(seed_target(fallback, to, now, duration)),
             }
         }
     }
@@ -301,11 +355,14 @@ impl ObjectHost {
                 .map(|v| v.as_real().filter(|r| r.is_finite()))
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| fail("finite reals required"))?;
+            let fallback = self.initial_camera_target();
             let view = self.camera_view.as_mut().expect("admitted");
             match (name, reals.as_slice()) {
                 ("PanCameraToTimed", &[x, y, duration]) => match &mut view.target {
                     Some(ramp) => ramp.retarget([x, y], now, duration),
-                    None => view.target = Some(Ramp::fixed([x, y], now)),
+                    None => {
+                        view.target = Some(seed_target(fallback, [x, y], now, duration));
+                    }
                 },
                 ("ResetToGameCamera", &[duration]) => {
                     for &(field, value) in &view.game {
@@ -317,10 +374,17 @@ impl ObjectHost {
                 }
                 ("CameraSetSmoothingFactor", &[factor]) => view.smoothing = Some(factor),
                 ("SetCameraQuickPosition", &[x, y]) => view.quick = Some([x, y]),
+                ("CameraSetSourceNoise", &[magnitude, velocity]) => {
+                    view.source_noise = Some([magnitude, velocity]);
+                }
+                ("CameraSetTargetNoise", &[magnitude, velocity]) => {
+                    view.target_noise = Some([magnitude, velocity]);
+                }
                 ("GetCameraTargetPositionX" | "GetCameraTargetPositionY", []) => {
                     let point = view
                         .target
                         .map(|ramp| ramp.at(now))
+                        .or(fallback)
                         .ok_or_else(|| fail("camera target is unset"))?;
                     return Ok(Value::Real(point[usize::from(name.ends_with('Y'))]));
                 }
@@ -328,6 +392,7 @@ impl ObjectHost {
                     let point = view
                         .target
                         .map(|ramp| ramp.at(now))
+                        .or(fallback)
                         .ok_or_else(|| fail("camera target is unset"))?;
                     return self
                         .inner

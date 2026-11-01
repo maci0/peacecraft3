@@ -64,6 +64,8 @@ constant native GetCameraTargetPositionLoc takes nothing returns location
 constant native GetCameraTargetPositionX takes nothing returns real
 constant native GetCameraTargetPositionY takes nothing returns real
 constant native GetCameraField takes camerafield f returns real
+native CameraSetSourceNoise takes real mag, real velocity returns nothing
+native CameraSetTargetNoise takes real mag, real velocity returns nothing
 globals
 constant fgamestate CLOCK = ConvertFGameState(2)
 constant fgamestate OTHER = ConvertFGameState(1)
@@ -437,10 +439,39 @@ fn camera_getters_report_live_target_and_fields_with_angles_in_radians() {
     assert_eq!(field(&mut h, 4).unwrap(), Value::Real(0.0));
     assert_eq!(field(&mut h, 5).unwrap(), Value::Real(90f32.to_radians()));
     assert_eq!(field(&mut h, 1).unwrap(), Value::Real(5000.0));
+    assert_eq!(h.camera_source_noise(), None);
+    assert_eq!(h.camera_target_noise(), None);
+    h.native(
+        "CameraSetSourceNoise",
+        &[Value::Real(20.0), Value::Real(1000.0)],
+    )
+    .unwrap();
+    assert_eq!(h.camera_source_noise(), Some([20.0, 1000.0]));
+    assert_eq!(h.camera_target_noise(), None);
+    h.native(
+        "CameraSetSourceNoise",
+        &[Value::Real(0.0), Value::Real(0.0)],
+    )
+    .unwrap();
+    h.native(
+        "CameraSetTargetNoise",
+        &[Value::Real(0.0), Value::Real(0.0)],
+    )
+    .unwrap();
+    assert_eq!(h.camera_source_noise(), Some([0.0, 0.0]));
+    assert_eq!(h.camera_target_noise(), Some([0.0, 0.0]));
+    assert!(
+        h.native(
+            "CameraSetSourceNoise",
+            &[Value::Real(f32::NAN), Value::Real(1.0)],
+        )
+        .is_err()
+    );
+    assert_eq!(h.camera_source_noise(), Some([0.0, 0.0]));
 }
 
 #[test]
-fn ai_commands_queue_per_player_and_refuse_an_unordered_read() {
+fn ai_commands_are_a_stack_and_an_empty_read_refuses() {
     let mut h = host();
     assert_eq!(h.ai_commands_waiting(4), 0);
     assert!(h.ai_last_command(4, "GetLastCommand").is_err());
@@ -452,17 +483,19 @@ fn ai_commands_queue_per_player_and_refuse_an_unordered_read() {
     assert_eq!(h.ai_commands_waiting(4), 0);
     h.push_ai_command(4, 1, 2).unwrap();
     h.push_ai_command(4, 3, 4).unwrap();
-    let error = h.ai_last_command(4, "GetLastData").unwrap_err().to_string();
-    assert!(
-        error.contains("which one is last is not established"),
-        "{error}"
-    );
+    assert_eq!(h.ai_last_command(4, "GetLastCommand").unwrap(), (3, 4));
+    assert_eq!(h.ai_last_command(4, "GetLastData").unwrap(), (3, 4));
+    h.pop_ai_command(4).unwrap();
+    assert_eq!(h.ai_commands_waiting(4), 1);
+    assert_eq!(h.ai_last_command(4, "GetLastCommand").unwrap(), (1, 2));
+    h.pop_ai_command(4).unwrap();
+    assert_eq!(h.ai_commands_waiting(4), 0);
     assert!(h.pop_ai_command(4).is_err());
-    assert_eq!(h.ai_commands_waiting(4), 2, "a refused pop removes nothing");
-    for _ in 2..64 {
+    for _ in 0..64 {
         h.push_ai_command(4, 0, 0).unwrap();
     }
     assert!(h.push_ai_command(4, 0, 0).is_err());
+    assert_eq!(h.ai_commands_waiting(4), 64);
 }
 
 #[test]

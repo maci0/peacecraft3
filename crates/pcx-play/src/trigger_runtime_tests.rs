@@ -316,3 +316,75 @@ fn sleeping_actions_park_their_own_thread_and_resume_with_their_trigger() {
             .is_err()
     );
 }
+
+#[test]
+fn variable_event_queues_when_the_real_changes_across_the_limit() {
+    let common = format!(
+        "{COMMON}\ntype limitop extends handle\nconstant native ConvertLimitOp takes integer i returns limitop\nglobals\nconstant limitop LESS_THAN=ConvertLimitOp(0)\nconstant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)\nconstant limitop EQUAL=ConvertLimitOp(2)\nconstant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)\nconstant limitop GREATER_THAN=ConvertLimitOp(4)\nconstant limitop NOT_EQUAL=ConvertLimitOp(5)\nendglobals\n"
+    );
+    let map = "globals\nreal udg_ArthasDenials=0\nendglobals\n";
+    let common = pcx_script::parse_script(&common).unwrap();
+    let map = pcx_script::parse_script(map).unwrap();
+    let program =
+        pcx_script::resolve_with(&map, &[Prelude::new("synthetic:trigger-common", &common)])
+            .unwrap();
+    let mut h = ObjectHost::checked(
+        EnumHost::checked_selected(
+            Arc::new(program),
+            "synthetic variable event",
+            &["ConvertUnitEvent", "ConvertGameEvent", "ConvertLimitOp"],
+            Limits {
+                max_handles: 32,
+                admission_steps: 1000,
+                expression_depth: 64,
+                expression_work: 4096,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .with_trigger_admission(TriggerBudget {
+        max_triggers: 8,
+        max_unit_events: 0,
+        max_actions: 4,
+    })
+    .unwrap()
+    .with_timer_events(8)
+    .unwrap()
+    .with_timer_runtime(20.0)
+    .unwrap()
+    .with_trigger_runtime(input(2))
+    .unwrap();
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let op = h.native("ConvertLimitOp", &[Value::Int(3)]).unwrap();
+    let event = h
+        .native(
+            "TriggerRegisterVariableEvent",
+            &[
+                trigger.clone(),
+                Value::Str("udg_ArthasDenials".into()),
+                op,
+                Value::Real(21.0),
+            ],
+        )
+        .unwrap();
+    let Value::Handle(event_id) = event else {
+        panic!("event")
+    };
+    let Value::Handle(trigger_id) = trigger else {
+        panic!("trigger")
+    };
+    let mut work = 8;
+    h.poll_variable_events(&[(event_id, Value::Real(0.0))], &mut work)
+        .unwrap();
+    assert!(h.take_fired_event().is_none());
+    h.poll_variable_events(&[(event_id, Value::Real(21.0))], &mut work)
+        .unwrap();
+    assert_eq!(h.take_fired_event().unwrap().trigger, trigger_id);
+    h.poll_variable_events(&[(event_id, Value::Real(22.0))], &mut work)
+        .unwrap();
+    assert_eq!(h.take_fired_event().unwrap().trigger, trigger_id);
+    h.poll_variable_events(&[(event_id, Value::Real(22.0))], &mut work)
+        .unwrap();
+    assert!(h.take_fired_event().is_none());
+}

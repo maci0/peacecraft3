@@ -227,14 +227,15 @@ map object overrides, establish the native dimension mapping, or run the placeme
 
 - a live unit of the player lists the kind in `Builds`: refuse (`AI construction placement is
   not admitted`, naming the builder type and position);
-- a live unit lists the kind in `Upgrade`: refuse (`AI upgrade is not admitted`);
+- no builder, and the request is not `ugol`: the first idle unit that lists the kind in `Upgrade` pays the target's `goldcost` and `lumbercost` and, after the target's `bldtm` seconds, becomes that unit. Idle means shown, unpaused, not under construction, and holding no queue job. Those stand in for the undecoded counters at `+0x3c` and `+0x40`. The target's `Requires` stands in for check slot `0x328`. A building that cannot be paid for, or a request with no idle upgrader, returns false and orders nothing. Death while the job runs refunds the training share. Completion writes the new type's base life and mana; researched bonuses are not rebased onto that base. A session with a model loader refreshes the model through the replacement form;
 - otherwise return false, charge nothing, order nothing.
 
 "A unit builds the kind" is the `Builds` profile list standing for the ability check at slot
 `0x270`, and "upgrades into" is the `Upgrade` list standing for the class check at `0xb883e0`;
-neither mapping is decoded. The other early false answers (state-2 worker, float at `+0x188`, tech
-and count checks) are not modelled; a request that reaches the refusal may have been false in the
-original.
+neither mapping is decoded. The upgrade order uses that list, the target's costs and build time,
+and the replacement of the same unit. The other early false answers (state-2 worker, float at
+`+0x188`, tech and count checks) are not modelled; a request that reaches a builder may have been
+false in the original.
 
 ## Original-client probe (orange AI)
 
@@ -1499,8 +1500,10 @@ that the fine-grid hierarchy does not yet model. A possible counter-raising effe
 when its source cannot be proved out of reach. The supported structure request samples live
 terrain and structure scores, searches the live hierarchy, applies the shared validator with
 qualified unit exclusions, and passes the selected site to the existing construction request.
-Mine-targeted builds, unqualified blight cases, non-square scoring textures and the special
-buffer count branch still refuse when encountered.
+Mine-targeted builds, unqualified blight cases and non-square scoring textures still
+refuse when encountered. A `buffer` object beside an `hwtw` or `uzig` request uses
+radius 15 when `GetUnitCount` of that request is at least 2, and radius 5 otherwise.
+Any other request keeps the object's `buffRadius`.
 
 The live spatial owner previously refused whenever a moving unit had any buff. The implemented
 slow host updates the admitted order speed, conversion leaves that motion unchanged, and
@@ -1602,16 +1605,17 @@ setter with zero, using the same virtual slot identified in
 [unit state](unit-state-maxima.md). The resulting death and cancellation event
 sequences need separate qualification before those paths are admitted.
 
-The recreation now issues that target order only when the selected worker has
-no admitted build order. `0xac2b00` can still issue to a worker whose current
-order is a building, or skip that worker, depending on `unit+0x3a0` and
-`[0x6933c0 object+0x28] & 0x30000000`. Neither field is represented. A pending
-Ziggurat is the order id at `unit+0x3a8`, which this walk does not read, and
-the reviewed issue path does not show that order setting the tested state or
-both flag bits before it returns. Reusing the busy worker or selecting another
-would invent that result, so the request refuses and leaves the pending order
-in place. The stopped debugger log at `0xac2d18` is not kind or worker evidence:
-its three stops are byte-identical and do not record the requested id.
+`0xac2b00` keeps walking when a unit fails the candidate checks. The numeric
+state at `unit+0x3a0` and the bits `[0x6933c0 object+0x28] & 0x30000000` are
+still unmapped, and a pending building is the order id at `unit+0x3a8`, which
+that walk does not read. The isolated orange probe builds the necropolis with
+one acolyte and the next structures with other acolytes, so an admitted
+construction order now excludes that worker from this `SetProduce` and the
+walk continues. A request whose builders are all already constructing, or whose
+free builders find no site, returns false and leaves the pending orders in
+place. The upgrade fallback still runs only when no live unit lists the kind
+in `Builds`. The stopped debugger log at `0xac2d18` is not kind or worker
+evidence: its three stops are byte-identical and do not record the requested id.
 
 #### Cancellation, depletion and town reference, static only
 
@@ -1635,8 +1639,10 @@ a matching handle in the twelve slots at AI-player `+0x2c`. That array is not
 the town mine pair at `+0x54` and `+0x60`. Hide is not one of the reviewed
 `0xd01a0` publishers. The town record is therefore not updated from this
 evidence, and a later snapshot that no longer matches the captured mine list
-still refuses rather than treating the hidden original or the new site as the
-primary reference.
+still refuses when the mine list changes for any other reason. A hidden
+original with one shown linked site at the same coordinates keeps the captured
+center and primary mine, because the reviewed hide path does not update the
+town-mine pair.
 
 An idle worker pays through the existing construction debit. Arrival hides the
 original with the same shown state `IsUnitHidden` reads, copies its current
@@ -1645,7 +1651,7 @@ The probe shows both amounts at once while the original is hidden. Completion
 uses the existing site clock. Killing a completed site with remaining gold
 copies that amount back and shows the original. Cancellation, death during
 construction, and a nonpositive remaining amount refuse; those event sequences
-were not probed. After the link exists, a later town-mine snapshot that no
-longer matches the captured list refuses. That does not treat the hidden
-original as the continuing primary reference or exclude the new site from
-registration; those transitions are not established.
+were not probed. After the link, the captured primary mine and center stay in
+use when the only snapshot change is that hidden original and its shown site.
+Any other mine-list change still refuses. The new site is not registered as a
+replacement primary mine.

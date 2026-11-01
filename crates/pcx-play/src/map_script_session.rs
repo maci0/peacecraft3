@@ -556,6 +556,17 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .inner
             .objects_mut()
             .poll_player_state_events(&mut work)?;
+        let watches = active.vm.host().inner.objects().variable_event_watches();
+        let samples: Vec<_> = watches
+            .iter()
+            .map(|(id, name)| (*id, active.vm.global(name)))
+            .collect();
+        active
+            .vm
+            .host()
+            .inner
+            .objects_mut()
+            .poll_variable_events(&samples, &mut work)?;
         self.advance_queued_events(work)
             .map(|events| delivered + events)
     }

@@ -6241,3 +6241,172 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   publishers are not identified as construction cancel. Zero gold calls life
   setter slot `0x124` and skips the restore path. `0xac64b0` clears AI-player
   handle slots, not the town mine pair. Those three requests still refuse.
+
+### 2026-11-01: Haunted Mine builder walk
+
+- [~] `SetProduce` for a structure now walks every live unit that lists the kind
+  in `Builds`. A unit that already has an admitted construction order is left
+  on that order, and the next unit is tried. When every such unit is busy, or
+  a free unit's search finds no site, the request returns false and orders
+  nothing. The upgrade fallback still runs only when no live unit lists the
+  kind. `unit+0x3a0` and the component bits `0x30000000` remain unmapped; the
+  admitted order is the stand-in that matches the orange probe's use of other
+  acolytes. See [AI construction](docs/re-notes/ai-construction.md#mine-targeted-construction-investigation-2026-10-31).
+- `cargo test -p pcx-play --lib set_produce_skips_a_busy_builder` passes, as do
+  `ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_placement_data`,
+  `ai_production_rejects_invalid_quantity_and_unsupported_requests_without_spending`,
+  and `a_pending_build_order_refuses_the_linked_mine_instead_of_replacing_it`.
+- Human05 `builder-walk-a` (release) passes the 1225.211 s busy-worker refusal.
+  It stops at tick 78784, 1231.00 s, on `uzig` for worker 12410: the town mine
+  snapshot no longer matches after the haunted-mine link.
+- [~] A hidden original mine with one shown linked site at the same coordinates
+  keeps the captured town center and primary mine. Any other mine-list change
+  still refuses. `a_linked_mine_keeps_the_captured_town_center` passes. The
+  native town-mine pair is not updated by the reviewed hide path. The follow-up
+  release run did not start: `.scratch/human04` and `.scratch/human05` were
+  removed. Human01 was replayed to victory at 281.02 s and wrote
+  `.scratch/human01/profile/peacecraft3/campaign-cache.bin`
+  (`10febfdfbf5234db3495d0cb8e788cc4b8336553380731aeb809138038f7fb7d`, 275 bytes).
+  The score-screen continue then refused because restored ability levels came
+  back as `AHer`, `AHhb`, `AInv` instead of the saved `AInv`, `AHer`, `AHhb`.
+  Human02 from that cache builds the barracks, then peasant 2351 holds a farm
+  order at `[-4256, -5184]` without moving, and the base quest ends at tick
+  57728.
+- [~] A ground unit's own collision cells no longer count as a ground-mask or
+  footprint block for that unit. Fly, float, and amphibious masks still apply
+  on those cells. `a_unit_crosses_a_blocked_cell_it_already_occupies` fails
+  before the change (fraction 0) and passes after it. This is a reconstruction
+  so a worker can leave a finished structure. It is not a measured Warcraft III
+  pathing rule and is not tick-identical playback.
+- Release `selected_human02_route_reaches_authored_victory` from the Human01
+  cache then passes. The base quest completes at tick 19072 / 298 s (2 farms,
+  6 footmen). The blademaster is dead by 825 s. Player victory is recorded at
+  tick 53057 / 829.015625 s. The test finishes in 10.19 s once the release
+  binary exists. The profile cache is now 488 bytes,
+  `ccaaa88461094a05e02a6f816b541f5a1f3e04e20aab42c324b3c9fbd82d5876`, and names
+  both `human02` from `Human01.w3m` and `human03` from `Human02.w3m`. The same
+  `.w3g` in retail Warcraft III and here, with tick-identical results, is still
+  open: the structural reader does not play a retail replay through this
+  session.
+- Release `selected_human03_route_reaches_authored_victory` from that cache
+  passes. Authored exit at tick 17857 / 279.02 s, next map
+  `Maps\Campaign\Human04.w3m`, warehouse dead, investigate and granary quests
+  done. The test finishes in 8.48 s. The cache is 886 bytes,
+  `2d4f66e281a5588092c4c7bde9a116ce93bea8e22b422ffc6697c2e0f42bf98b`, and adds
+  `human04` Arthas and Jaina from `Human03.w3m`.
+- Release `selected_human04_route_reaches_authored_victory` from that cache
+  passes. Authored exit at tick 28673 / 448.02 s, Kel'Thuzad dead, next map
+  `Maps\Campaign\Human05.w3m`. The test finishes in 6.04 s. The cache is 1284
+  bytes, `9c8885c2a5b3c10f1167d8a18b00eebddd5828f7d1feda5ddb65a913b4283aca`,
+  and adds `human05` from `Human04.w3m`.
+- Release Human05 from that cache passes the old haunted-mine snapshot refusal
+  and stops at tick 78912 / 1233.00 s. The first stop was `ACen` from unit
+  3444: a max-speed disk since birth could reach the ziggurat worker.
+  `placement_effect_separated` keeps that disk and also accepts current
+  positions. `a_long_lifetime_disk_does_not_put_distant_units_inside_the_live_cast_range`
+  passes. This is the recreation's cast state, not a retail ensnare replay.
+  The following run stops at the same clock with `linked mine is not a shown
+  living source`. Arrival now returns no site when that mine is already hidden,
+  and the order stays so the caller can cancel it.
+  `begin_linked_mine_construction_answers_none_when_the_source_is_already_hidden`
+  passes. A `buffer` object beside `hwtw` or `uzig` now uses radius 15 when
+  `GetUnitCount` of that request is at least 2, and radius 5 otherwise
+  (`0xad3f23`, `0xad49ea`, `0xad4c53`).
+  `grid_samples_cliffs_and_pathing_and_clips_object_buffers` passes. That
+  release run stopped at tick 79872 / 1248.00 s on `GetUnitX` in
+  `Blizzard.j:870`. A null unit now reads 0.0, matching the untouched static
+  float at `0x497d70` / `0x497db0`.
+  `removed_unit_coordinates_survive_the_removal_tick_then_read_zero` passes.
+  The following release run reaches tick 82240 / 1285.00 s and refuses `uzig`
+  for worker 12407 because blight sources 12585 and 12626 overlap.
+  A live query now treats a cell as blighted when any active source covers it,
+  matching the high bit at `0x4c5470`. A removed source still refuses.
+  `growth_state_ors_live_overlap_and_refuses_removal` passes. The next release
+  run passes that tick and stops at the same clock on `SetProduce` of `unp1`
+  by necropolis 12442. With no builder, and the request not `ugol`, an idle
+  unit that lists the kind in `Upgrade` now pays the target's cost and becomes
+  that unit after `bldtm` seconds (`0xac3070`).
+  `ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_placement_data`
+  passes. The following run reaches tick 83072 / 1298.00 s, then the footman
+  trainer select asserts on a shown building whose life is already gone. The
+  trainer filter now requires life above zero. The following release run
+  reaches tick 89664 / 1401.00 s and stops because a gold re-seek had no route
+  (`mine is unreachable`) during `autoharvestlumber`. That re-seek now stops
+  the worker instead of aborting the caller. The following release run
+  reaches tick 111552 / 1743.00 s and stops because player 3 calls
+  `SuicideUnit`, which had no world behavior. It now sends up to the requested
+  count of that unit type toward the nearest hostile. The native body is not
+  decoded. `suicide_unit_reaches_the_world` passes. Release
+  `selected_human05_route_reaches_authored_victory` then passes. Authored
+  victory is tick 115969 / 1812.02 s, next map
+  `Maps\Campaign\Human05Interlude.w3m`, game over, party 35, footmen 24, gold
+  2710. The test finishes in 2130.64 s. The cache is 2114 bytes,
+  `375e6541cba8e2d2149813cfc9afb1be1dc00b63f1668f6ca3c545173e2ea468`, and adds
+  `human05interlude` and `human06` from `Human05.w3m`.
+  Release `selected_human05interlude_route_reaches_authored_victory` from that
+  cache passes. Ending the cinematic runs the authored victory at tick 64 /
+  1.00 s: `ChangeLevel` to `Maps\Campaign\Human06.w3m` with the score flag
+  clear. The cache is unchanged.
+  Human06 startup then refused `TriggerRegisterVariableEvent`. A watch on a
+  real or integer global now queues when the value changes and the comparison
+  holds, sampled at the end of the range boundary. That timing is a recreation,
+  not a synchronous JASS assignment.
+  `variable_event_queues_when_the_real_changes_across_the_limit` passes.
+  The next startup refusal was `GetCameraTargetPositionX` from
+  `GetCurrentCameraSetup` before any pan. With no ramp, the getter reads the
+  local player's assigned start location, else the location indexed by that
+  player, else the lowest index. No start location still refuses.
+  `unset_camera_target_reads_the_local_players_assigned_start_location` passes.
+  That stand-in is a recreation of the initial game camera, not a decoded
+  native default. The following run passes the camera read and stops in
+  `LeaderboardSetPlayerItemValueColorBJ` because
+  `LeaderboardSetItemValueColor` had no host. One row's value color is now
+  stored without rewriting the board color or the other rows.
+  `leaderboard_rows_preserve_color_and_style_history` passes.
+  That run reached tick 11264 / 176 s with control on, then refused
+  `LeaderboardSetItemValue` while updating the denial count. One row's integer
+  is now replaced in place. The same test covers the write and an out-of-range
+  row. The following run reaches the same clock and refuses
+  `CameraSetSourceNoise` when a building pop shakes the camera.
+  `CameraClearNoiseForPlayer` then writes both source and target noise back to
+  zero. Those two natives store the last magnitude and velocity. They do not
+  sample a shake. `camera_getters_report_live_target_and_fields_with_angles_in_radians`
+  covers the store, the clear, and a non-finite refusal.
+  The following run reaches the same clock and player 6's campaign AI calls
+  `GetLastCommand` with more than one pending pair. The newest pair is now
+  the one `GetLast` reads and `PopLast` removes. That stack is a recreation
+  of the names, not a decoded native.
+  `ai_commands_are_a_stack_and_an_empty_read_refuses` passes.
+  The following run reaches the same clock and player 6 calls
+  `TeleportCaptain`. Each current captain member is then relocated through
+  `SetUnitPosition`. The native body is not decoded. An empty captain still
+  returns. `suicide_unit_reaches_the_world` covers the dispatch.
+  The following run passes that call and refuses `ClearCaptainTargets`.
+  Current captain members now drop their combat target and attack point.
+  The same dispatch test covers the call. The native body is not decoded.
+  The following run reaches tick 12352 / 193 s and refuses `CaptainAttack`.
+  `CaptainAttack` attack-moves the current captain to the point.
+  `CaptainVsUnits` and `CaptainVsPlayer` attack-move it toward the nearest
+  living shown unit of that player. A missing route or no target skips the
+  order. Those bodies are not decoded. The same dispatch test covers the calls.
+  The route then attack-moves only at living `nzom` zombies, the units that
+  raise `udg_ArthasDenials`. That run stops at tick 192 / 3.00 s because a
+  lumber re-seek had an empty waypoint list. The worker now stops, and drops
+  the task unless it is carrying, matching the gold re-seek. The initial
+  unreachable harvest order still refuses.
+  `an_unreachable_tree_refusal_keeps_an_existing_move_route` passes.
+  Zombies then appear, and killing one refuses `IsUnitAlly`. The player
+  treats its own units and passive allies as allies. Neutral Passive is not
+  an ally. `is_unit_enemy_reads_the_players_view_and_never_counts_neutral_passive`
+  covers both readings.
+  A later run, with the army held to zombies within 3000 of the building
+  centroid, reaches tick 119936 / 1874 s and then `udg_GameOver` with the army
+  gone, denials still 0, and four zombies still about 9100 away. Anchoring on
+  the local player's start location leaves that distance about 9278, so the
+  3000 cutoff still never marches. That run stops at tick 69184 / 1081 s on
+  `no gold-accepting depot at mine exit` for worker 2233 (exit
+  `[12014.03, 5872.0]`, previous depot 2117). Gold return is no longer limited
+  by `Ahar.Area`, matching the lumber return probe. A missing depot still
+  refuses. `gold_mine_exit_without_a_usable_depot_preserves_hidden_worker_and_mine`
+  passes. Human06 has no authored victory yet.
+  Tick-identical `.w3g` playback in both clients is still open.

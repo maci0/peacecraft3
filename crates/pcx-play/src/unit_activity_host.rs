@@ -1250,6 +1250,7 @@ impl ObjectHost {
             let spans = sink.as_ref().map(|s| &s.spans[s.base..]).unwrap_or(&[]);
             self.advance_unit_regen_motion(now, Some((spans, &starts)), work)?;
             self.complete_research(now)?;
+            self.complete_structure_upgrade(now)?;
             self.advance_combat()?;
             self.advance_inventory(work)?;
             self.advance_sound_environments();

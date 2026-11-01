@@ -1661,6 +1661,43 @@ fn bounded_route_outcome_preserves_paths_and_distinguishes_search_exhaustion() {
 }
 
 #[test]
+fn a_unit_crosses_a_blocked_cell_it_already_occupies() {
+    let mut p = placement(
+        Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "occupied block".into(),
+        },
+        10000,
+    );
+    // Radius 2 normalises to 0.5 and covers this cell plus the west and south
+    // neighbours. The unit stands on the west side of its cell.
+    let start = [16.5, 18.];
+    let stamp = p.prepare(start, Some(2.), "_", 0.).unwrap();
+    p.commit(id(1), stamp);
+    let west = 4 * 32 + 3;
+    p.grid.pathing.cells[west] |= p.rules.ground_mask();
+    let east_centre = [22., 18.];
+    let mut leaving = 1000;
+    assert_eq!(
+        p.clear_fraction(id(1), start, east_centre, 2., &mut leaving)
+            .unwrap(),
+        1.0,
+        "the building beside a finished structure must not pin the worker in its own cells"
+    );
+    let beyond = 4 * 32 + 6;
+    p.grid.pathing.cells[beyond] |= p.rules.ground_mask();
+    let mut stopped = 1000;
+    let fraction = p
+        .clear_fraction(id(1), start, [26., 18.], 2., &mut stopped)
+        .unwrap();
+    assert!(
+        fraction > 0.0 && fraction < 1.0,
+        "a blocked cell outside the standing footprint still stops the step, fraction={fraction}"
+    );
+}
+
+#[test]
 fn optional_streaming_probe_charges_near_obstruction_without_complete_segment_budget() {
     let mut p = placement(
         Source {
@@ -1670,11 +1707,13 @@ fn optional_streaming_probe_charges_near_obstruction_without_complete_segment_bu
         },
         10000,
     );
-    let start = [16., 16.];
+    // The first half-cell sample leaves this cell. The obstruction is that next
+    // cell, which the standing unit does not occupy.
+    let start = [19., 16.];
     let target = [112., 16.];
     let stamp = p.prepare(start, Some(0.), "_", 0.).unwrap();
     p.commit(id(1), stamp);
-    p.grid.pathing.cells[4 * 32 + 4] |= p.rules.mask;
+    p.grid.pathing.cells[4 * 32 + 5] |= p.rules.mask;
     let mut mandatory = 1;
     assert!(
         p.segment_clear(id(1), start, target, 0., &mut mandatory)
@@ -1696,7 +1735,7 @@ fn optional_streaming_probe_charges_near_obstruction_without_complete_segment_bu
     );
     for blocked in [true, false] {
         if !blocked {
-            p.grid.pathing.cells[4 * 32 + 4] &= !p.rules.mask;
+            p.grid.pathing.cells[4 * 32 + 5] &= !p.rules.mask;
         }
         let mut complete = 1000;
         let mut streaming = 1000;

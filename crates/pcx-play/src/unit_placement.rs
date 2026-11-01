@@ -1753,8 +1753,14 @@ impl Placement {
 
     fn blocked_class(&self, i: usize, exclude: Option<&Prepared>, movement: Movement) -> bool {
         let cell = self.grid.pathing.cells[i];
+        // The mover already covers this cell. A finished structure paints the ground
+        // mask there; treating that as a new block pins the worker. Fly, float and
+        // amphibious masks still apply on those cells.
+        let standing = exclude.is_some_and(|stamp| stamp.cells.binary_search(&i).is_ok());
         let terrain_blocked = match movement {
-            Movement::Ground | Movement::NoMovement => cell & self.rules.ground_mask() != 0,
+            Movement::Ground | Movement::NoMovement => {
+                cell & self.rules.ground_mask() != 0 && !standing
+            }
             Movement::Air => cell & self.rules.fly_mask() != 0,
             Movement::Float => cell & self.rules.float_mask() != 0,
             Movement::Amphibious => {
@@ -1778,7 +1784,8 @@ impl Placement {
                     || (movement.water() && self.water_occupied[i] > u32::from(occupies(true)))
                     || self.footprint_occupied[i]
                         > u32::from(
-                            exclude.is_some_and(|p| p.footprint.binary_search(&i).is_ok()),
+                            standing
+                                || exclude.is_some_and(|p| p.footprint.binary_search(&i).is_ok()),
                         )))
     }
 

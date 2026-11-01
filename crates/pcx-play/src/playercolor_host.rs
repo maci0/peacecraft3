@@ -360,6 +360,15 @@ enum Entry {
         limitop: HandleId,
         limit: f32,
     },
+    /// A real or integer global watched by `TriggerRegisterVariableEvent`.
+    /// `last` is absent until the first sample, which does not fire.
+    RegisteredVariableEvent {
+        trigger: HandleId,
+        name: String,
+        limitop_value: i32,
+        limit: f64,
+        last: Option<f64>,
+    },
     /// One loaded `Filter` callback; its body is not entered during wrapping.
     Filter {
         function: FunctionId,
@@ -830,7 +839,8 @@ impl EnumHost {
             | Entry::RegisteredTimedEvent { .. }
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredPlayerStateEvent(_)
-            | Entry::RegisteredGameStateEvent { .. } => "event",
+            | Entry::RegisteredGameStateEvent { .. }
+            | Entry::RegisteredVariableEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",
             Entry::TriggerCondition(_) => "triggercondition",
             Entry::Force { .. } => self

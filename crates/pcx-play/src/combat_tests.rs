@@ -146,6 +146,7 @@ native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
 native GetUnitDefaultAcquireRange takes unit u returns real
 constant native IsUnitEnemy takes unit u, player p returns boolean
+constant native IsUnitAlly takes unit u, player p returns boolean
 native KillUnit takes unit u returns nothing
 native UnitApplyTimedLife takes unit u, integer buffid, real duration returns nothing
 native SetUnitExploded takes unit whichUnit, boolean exploded returns nothing
@@ -5819,6 +5820,13 @@ fn is_unit_enemy_reads_the_players_view_and_never_counts_neutral_passive() {
     assert_eq!(ask(h, b, own).unwrap(), Value::Bool(true));
     assert_eq!(ask(h, a, other).unwrap(), Value::Bool(true));
     assert_eq!(ask(h, a, own).unwrap(), Value::Bool(false));
+    let ally = |h: &mut ObjectHost, unit, player| {
+        h.native("IsUnitAlly", &[Value::Handle(unit), Value::Handle(player)])
+    };
+    assert_eq!(ally(h, a, own).unwrap(), Value::Bool(true));
+    assert_eq!(ally(h, b, own).unwrap(), Value::Bool(false));
     h.set_neutral_passive(5);
     assert_eq!(ask(h, b, own).unwrap(), Value::Bool(false));
+    assert_eq!(ally(h, b, own).unwrap(), Value::Bool(false));
+    assert_eq!(ally(h, a, own).unwrap(), Value::Bool(true));
 }
