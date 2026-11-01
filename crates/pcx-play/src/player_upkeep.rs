@@ -600,6 +600,24 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn source_thresholds_drive_tier_without_income_rates() {
+        let (image, budget) = fixture();
+        let pe = Pe::parse(&image, budget).unwrap();
+        let global = 0x301000 + (0xa94 - 0x200);
+        let upkeep =
+            Upkeep::discover(&pe, global, &[], budget.profile_bytes, (4, 16, 0x301280)).unwrap();
+        // Synthetic bank 0 thresholds are [7, 19, 0, ...]: the tier counts
+        // crossed nonzero thresholds below the supplied food count.
+        assert_eq!(upkeep.tier(7, Some(0)).unwrap(), 0);
+        assert_eq!(upkeep.tier(8, Some(0)).unwrap(), 1);
+        assert_eq!(upkeep.tier(19, Some(0)).unwrap(), 1);
+        assert_eq!(upkeep.tier(20, Some(0)).unwrap(), 2);
+        // Synthetic bank 1 thresholds are [11, 29, 0, ...].
+        assert_eq!(upkeep.tier(8, Some(1)).unwrap(), 0);
+        assert_eq!(upkeep.tier(12, Some(1)).unwrap(), 1);
+        assert!(upkeep.tier(8, None).is_err());
+    }
+    #[test]
     #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE selecting a locally supplied client executable"]
     fn supplied_image_binds_upkeep_to_food_version_and_localization_operands() {
         let path = std::env::var("PCX_PLAYER_RESOURCE_IMAGE").expect("explicit local image");

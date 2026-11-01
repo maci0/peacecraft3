@@ -74,6 +74,16 @@ impl SessionStorage {
             Some(bytes) => profile::sections_present(&bytes),
         }
     }
+
+    /// Persisted progress section bytes without the cache payload, for menus
+    /// and harnesses. `None` storage and legacy cache-only profiles report
+    /// `None`; malformed profiles refuse.
+    pub fn stored_progress(&self) -> Result<Option<Vec<u8>>, String> {
+        match self.snapshot()? {
+            None => Ok(None),
+            Some(bytes) => profile::progress_bytes(&bytes),
+        }
+    }
 }
 
 impl Storage for SessionStorage {
@@ -220,6 +230,31 @@ impl Storage for LocalStorage {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    #[test]
+    fn session_storage_reports_sections_and_progress_bytes() {
+        let empty = SessionStorage::new(None).unwrap();
+        assert_eq!(empty.stored_sections().unwrap(), (false, false));
+        assert_eq!(empty.stored_progress().unwrap(), None);
+        let cache = crate::game_cache::Profile::default()
+            .encode(BUDGET)
+            .unwrap();
+        let legacy = SessionStorage::new(Some(&cache)).unwrap();
+        assert_eq!(legacy.stored_sections().unwrap(), (true, false));
+        assert_eq!(legacy.stored_progress().unwrap(), None);
+        let mut progress = crate::campaign_progress::Progress::default();
+        progress.set(3, 7, false).unwrap();
+        let progress_bytes = progress.encode().unwrap();
+        // Envelope framing from `campaign_profile`: magic, cache length,
+        // progress length, then both sections verbatim.
+        let mut enveloped = b"PCXPROFILE1\n".to_vec();
+        enveloped.extend_from_slice(&u32::try_from(cache.len()).unwrap().to_le_bytes());
+        enveloped.extend_from_slice(&u32::try_from(progress_bytes.len()).unwrap().to_le_bytes());
+        enveloped.extend_from_slice(&cache);
+        enveloped.extend_from_slice(&progress_bytes);
+        let stored = SessionStorage::new(Some(&enveloped)).unwrap();
+        assert_eq!(stored.stored_sections().unwrap(), (true, true));
+        assert_eq!(stored.stored_progress().unwrap(), Some(progress_bytes));
+    }
     #[test]
     fn session_profiles_are_validated_bounded_and_independent() {
         let mut profile = crate::game_cache::Profile::default();

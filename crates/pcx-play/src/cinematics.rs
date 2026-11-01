@@ -949,6 +949,12 @@ impl FdfCatalog {
         ))
     }
 
+    /// Whether the authored transmission panel and its speaker/dialogue text
+    /// frames are all present for cinematic playback.
+    pub fn has_cinematic_panel(&self) -> bool {
+        self.cinematic_panel().is_some()
+    }
+
     /// Bind every local authored anchor. Inherited records/children remain graph edges.
     /// The caller supplies parent/active context; this never creates a screen rectangle.
     pub fn relationships(

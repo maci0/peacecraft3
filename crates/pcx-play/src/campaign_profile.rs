@@ -119,6 +119,20 @@ pub(super) fn sections_present(bytes: &[u8]) -> Result<(bool, bool), String> {
     Ok((envelope.cache.is_some(), envelope.progress.is_some()))
 }
 
+/// Persisted progress section bytes without the cache payload, for menus and
+/// headless harnesses. Legacy cache-only profiles carry no progress section
+/// and report `None`; malformed envelopes refuse.
+pub(super) fn progress_bytes(bytes: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    if !bytes.starts_with(MAGIC) {
+        // Cache-only legacy profile; validated by the game-cache decoder.
+        crate::game_cache::Profile::decode(bytes, BUDGET)?;
+        return Ok(None);
+    }
+    let envelope = Envelope::parse(bytes)?;
+    envelope.validate()?;
+    envelope.progress.map(copy).transpose()
+}
+
 struct Shared {
     storage: Arc<dyn Storage>,
     lock: Mutex<()>,
