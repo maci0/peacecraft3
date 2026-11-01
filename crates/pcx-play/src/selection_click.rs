@@ -58,6 +58,9 @@ mod tests {
             id: handle(n),
             own,
             structure: false,
+            hero: false,
+            priority: 0,
+            kind: *b"hpea",
         }
     }
 

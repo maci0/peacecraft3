@@ -8,7 +8,7 @@ use pcx_sim::world::FieldValue;
 
 const PRIORITY_COLUMN: &str = "prio";
 
-fn priority(definition: &pcx_sim::world::Definition) -> Result<i32, String> {
+pub(crate) fn priority(definition: &pcx_sim::world::Definition) -> Result<i32, String> {
     let field = super::unit_positions::field(
         definition,
         SlkId::UnitData,
