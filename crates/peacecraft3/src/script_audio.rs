@@ -822,9 +822,17 @@ fn classify(
     }
     let state = objects.sound_state(id).map_err(|error| error.to_string())?;
     let Some(flags) = state.creation_flags else {
+        // `CreateMIDISound` admits `(string label, integer a, integer b)`
+        // (`sound_host.rs` contract) with no looping/3D/stop booleans, unlike
+        // `CreateSoundFromLabel`. The admitted label row keeps only the file
+        // binding (`BoundSound`: label, row, PCM bytes); the two ints are
+        // retained verbatim with no measured fade units or scheduling, and an
+        // SLK `Volume` column is neither admitted nor scaled to the
+        // `SetSoundVolumeBJ` range the fade path divides by. Looping/one-shot
+        // playback, spatial presentation and the fade target are unmeasured.
         return Ok(Classified::Refuse(
             id,
-            "CreateMIDISound records no looping or spatial input".to_string(),
+            "CreateMIDISound records no looping or spatial decision: (label, a, b) carries no looping/3D/stop booleans and the admitted row keeps only the file binding, so playback lifetime, spatial presentation and the fade/volume scale are unmeasured".to_string(),
         ));
     };
     plan_file(
@@ -2519,9 +2527,11 @@ ID;PWXL;N;E\r\n\
 C;X1;Y1;K\"label\"\r\n\
 C;X2;Y1;K\"DirectoryBase\"\r\n\
 C;X3;Y1;K\"FileNames\"\r\n\
+C;X4;Y1;K\"Volume\"\r\n\
 C;X1;Y2;K\"Tone\"\r\n\
 C;X2;Y2;K\"Media\\\"\r\n\
 C;X3;Y2;K\"a.wav\"\r\n\
+C;X4;Y2;K\"5\"\r\n\
 E\r\n";
         let bank = SoundBank::read(
             ScriptAsset {
@@ -2569,13 +2579,23 @@ E\r\n";
         let mut world = world_for(object_host, limits_for(0));
         publish(&mut world).unwrap();
         assert_eq!(count::<ScriptVoice>(&mut world), 0);
-        assert!(
-            world
-                .resource::<ScriptAudioReport>()
-                .last_refusal
-                .as_deref()
-                .is_some_and(|text| text.contains("CreateMIDISound"))
-        );
+        // The refusal names the missing decision even though the label row
+        // carries a `Volume` cell: the admitted binding keeps only the file
+        // identity, and the cell's scale against the fade path is unmeasured.
+        let reason = world
+            .resource::<ScriptAudioReport>()
+            .last_refusal
+            .as_deref()
+            .unwrap();
+        for expected in [
+            "CreateMIDISound",
+            "no looping or spatial decision",
+            "no looping/3D/stop booleans",
+            "only the file binding",
+            "fade/volume scale are unmeasured",
+        ] {
+            assert!(reason.contains(expected), "missing {expected:?}: {reason}");
+        }
     }
 
     #[test]
