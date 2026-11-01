@@ -1461,6 +1461,171 @@ fn learned_buttons_list_only_abilities_with_authored_art_and_slot() {
     );
 }
 
+fn fractional_tables(data_a1: &str, data_a2: &str, profile: &str) -> DefaultTables {
+    let data = sylk(
+        &[
+            "alias",
+            "code",
+            "levels",
+            "reqLevel",
+            "levelSkip",
+            "DataA1",
+            "DataA2",
+            "UnitID1",
+            "UnitID2",
+            "DataB1",
+            "DataB2",
+        ],
+        &[
+            &["L000", "L000", "1", "0", "0"],
+            &[
+                "L001", "L001", "3", "1", "0", data_a1, data_a2, "u001", "u002", "7", "8",
+            ],
+            &["L002", "L002", "1", "4", "3"],
+            &["Yher", "Yher", "1", "0", "0"],
+        ],
+    );
+    let meta = sylk(
+        &[
+            "ID", "field", "slk", "index", "type", "category", "repeat", "data",
+        ],
+        &[
+            &[
+                "adat",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "1",
+                "1",
+            ],
+            &[
+                "auni",
+                "UnitID",
+                "AbilityData",
+                "-1",
+                "unitCode",
+                "stats",
+                "1",
+                "0",
+            ],
+            &[
+                "alev",
+                "levels",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+            &[
+                "arlv",
+                "reqLevel",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+            &[
+                "alsk",
+                "levelSkip",
+                "AbilityData",
+                "-1",
+                "int",
+                "stats",
+                "0",
+                "0",
+            ],
+            &["ahky", "Hotkey", "Profile", "0", "char", "text", "0", "0"],
+            &["atip", "Tip", "Profile", "0", "string", "text", "1", "0"],
+            &[
+                "aubt", "UberTip", "Profile", "0", "string", "text", "1", "0",
+            ],
+            &["aart", "Art", "Profile", "0", "icon", "art", "0", "0"],
+            &["abpx", "Buttonpos", "Profile", "0", "int", "art", "0", "0"],
+            &["abpy", "Buttonpos", "Profile", "1", "int", "art", "0", "0"],
+        ],
+    );
+    DefaultTables::from_bytes(
+        Identity {
+            install: source().install,
+            edition_version: "fixture".into(),
+        },
+        &[
+            (SlkId::AbilityData.path(), data.as_slice()),
+            (SlkId::AbilityMetaData.path(), meta.as_slice()),
+        ],
+        &[("Units\\SyntheticAbilityFunc.txt", profile.as_bytes())],
+        pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: 4,
+            max_asset_bytes: 1 << 16,
+            max_aggregate_input_bytes: 1 << 18,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn learned_tooltips_truncate_fractional_data_cells_end_to_end() {
+    let profile = "[L001]\nTip=First,Second,Third\nUberTip=\"Heals <L001,DataA1>, now.\",\"Heals <L001,DataA2>.\",Third\n";
+    let tables = fractional_tables("1.5", "-2.5", profile);
+    let mut vm = host_with_tables(NATIVES, "L001", Overlay::default(), "", 8, tables);
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("hero")
+    };
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (tip.title.as_str(), tip.description.as_str()),
+        ("First", "Heals 1, now.")
+    );
+    raise(&mut vm, 3);
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (tip.title.as_str(), tip.description.as_str()),
+        ("Second", "Heals -2.")
+    );
+}
+
+#[test]
+fn learned_tooltips_expand_fractional_percent_cells_end_to_end() {
+    let profile =
+        "[L001]\nTip=First,Second,Third\nUberTip=\"Drains <L001,DataA1,%>%.\",Second,Third\n";
+    let tables = fractional_tables("0.333", "4", profile);
+    let mut vm = host_with_tables(NATIVES, "L001", Overlay::default(), "", 8, tables);
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("H") else {
+        panic!("hero")
+    };
+    learn(&mut vm, *b"L001");
+    let tip = vm
+        .host()
+        .inner
+        .ability_tooltip(unit, *b"L001")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (tip.title.as_str(), tip.description.as_str()),
+        ("First", "Drains 33%.")
+    );
+}
+
 #[test]
 fn learned_buttons_accept_a_map_slot_and_skip_slots_without_art() {
     let slot = |field, value| pcx_objects::Mod {
