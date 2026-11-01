@@ -930,9 +930,18 @@ fn wanted(
     source: &Source,
 ) -> Result<Option<View>, String> {
     let rules = &source.rules;
-    let [id] = objects.selection() else {
+    // Single-detail text is drawn only for exactly one selected unit. With two
+    // or more units the group panel owns the information frame instead (the
+    // detail frame and the group grid are both SetAllPoints children of the
+    // same info frame, and the grid covers the detail rows; see
+    // docs/re-notes/input-selection-rules.md). Portrait, inventory and the
+    // command card follow the active subgroup's representative through
+    // `active_unit`; this panel stays hidden so it cannot overlap that grid.
+    let selection = objects.selection();
+    if selection.len() != 1 {
         return Ok(None);
-    };
+    }
+    let id = &selection[0];
     let unit = objects.executed_unit(*id).map_err(|e| e.to_string())?;
     if !unit.shown || unit.combat.as_ref().is_some_and(|c| c.dead) {
         return Ok(None);

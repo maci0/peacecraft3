@@ -260,8 +260,16 @@ The camera position, target, field of view and clips come from `CAMS`; `KCTR`,
 `KTTR` and `KCRL` retain their local/global animation clocks and interpolation.
 The renderer keeps source Z-up coordinates and reuses the model renderer's camera
 projection. It does not fit a camera to the model bounds. Models without a camera
-currently refuse. Portrait idle selection follows source sequence order; speech,
-acknowledgement-driven animation and rarity selection remain unfinished.
+currently refuse. Portrait idle keeps every authored `portrait` sequence without
+a `talk` token; speech prefers authored `portrait talk`, then `talk`. Idle
+variants re-draw over the shipped SEQS rarity weights on each completed loop
+through a deterministic splitmix draw over the unit id and cycle count; the
+draw source is a recreation choice, not native RNG parity. Speech holds Talk
+while the unit's ack row (`<unitSound><Suffix>`, shipped bytes) stays live as
+a `GameSound`, linked by the unit id retained when the voice starts. Silence
+returns to the current idle; a non-looping Talk loops while the voice plays and
+a non-looping idle advances instead of freezing. Invalid rarity weights refuse
+rather than inventing a pick.
 
 Native evidence and locally extracted model inspections remain ignored under
 `.scratch/campaign-portrait/`. The first desktop replay exposed a dark Footman
@@ -293,11 +301,24 @@ The preserved tested executable has SHA-256
 portrait-region changes between idle captures. The owned application and display
 were stopped. The default desktop build and formatting also pass.
 
-The isolated framebuffer's opaque empty background and the existing console-art
-overlap are composition choices. Original-client pixel parity, portrait-mask model
-composition, dialogue portraits, speech synchronization and other viewport/DPI
-combinations remain unverified. Native rendering internals are not a compatibility
-requirement; the remaining target is the same visible behaviour.
+The render target clears to transparent so the authored console backing shows
+through; the authored portrait rectangle clips it through an explicit mask node
+(the image fills the mask). A circular mask model/texture is not sourced, so no
+new mask art is invented: the checked `unit_panel_layout` operands (the
+`0x6416b0` rectangle, the `0x620ee0` shared light) and the admitted ConsoleUI
+and SimpleInfoPanel FDF supply no circular mask operand, and `retire` now
+explicitly despawns the portrait camera so selection switches and same-handle
+hero revivals cannot leave a stale camera behind. Speech holds the authored
+Talk variant exactly while the ack row's `GameSound` stays live for the
+retained unit id; idle spans are the authored SEQS durations with no invented
+hold, delay or blend, so original-client speech/idle cadence parity remains
+unqualified. Multi-unit display follows `active_unit` (the first unit of the
+active subgroup), so Tab and group-button subgroup changes switch the portrait
+through the scene Key; the single-detail text panel stays hidden for
+multi-selections per the group-panel rule. Original-client pixel parity,
+dialogue portraits and other viewport/DPI combinations remain unverified.
+Native rendering internals are not a compatibility requirement; the remaining
+target is the same visible behaviour.
 
 ## Mounted opening-chapter console (2026-10-25)
 

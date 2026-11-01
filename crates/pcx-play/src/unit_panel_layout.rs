@@ -547,6 +547,20 @@ impl Rules {
         {
             return Err("unit panel: XP frame constructor/width setter".into());
         }
+        // The shared status-bar constructor outsets its background rectangle past
+        // all four bar corners. The same anchor sites already qualify the hero-bar
+        // background in hero_bar_layout; admitting them here pins the XP-border
+        // background edge construction to the reviewed image.
+        for (site, point) in [
+            (0x621a25u32, 0u8),
+            (0x621a4d, 2),
+            (0x621a7c, 6),
+            (0x621aae, 8),
+        ] {
+            if r.bytes(site, 5, true)? != [0x6a, point, 0x56, 0x6a, point] {
+                return Err("unit panel: XP status-bar background anchors".into());
+            }
+        }
         let experience = ExperienceBar {
             width: r.number(0x61e497, &[0xc7, 4, 0x24])?,
             frame: r.string(0x632c1a)?,
@@ -1063,6 +1077,18 @@ mod tests {
         put(&mut bad, 0x65b83c, &[0x83, 0xf8, 255]);
         assert!(decode(&bad).is_err());
     }
+    #[test]
+    fn xp_background_anchors_follow_the_shared_status_bar_constructor() {
+        let rules = decode(&fixture()).unwrap().experience;
+        assert_eq!(rules.background, 0x44332211);
+        assert_eq!(rules.inset, 0.0023);
+        let mut bad = fixture();
+        put(&mut bad, 0x621a4d, &[0x6a, 3, 0x56, 0x6a, 3]);
+        assert!(decode(&bad).is_err());
+        let mut bad = fixture();
+        bad.remove(&0x621a7c);
+        assert!(decode(&bad).is_err());
+    }
     fn fixture() -> BTreeMap<u32, u8> {
         let mut map = BTreeMap::new();
         let mut pointer = 0x1000;
@@ -1201,6 +1227,14 @@ mod tests {
         op(&mut map, 0x6219f4, &[0xc7, 0x45, 0x10], 0x44332211);
         op(&mut map, 0x621a00, &[0xf3, 0x0f, 0x10, 5], 0x4040);
         put(&mut map, 0x4040, &0.0023f32.to_le_bytes());
+        for (site, point) in [
+            (0x621a25_u32, 0u8),
+            (0x621a4d, 2),
+            (0x621a7c, 6),
+            (0x621aae, 8),
+        ] {
+            put(&mut map, site, &[0x6a, point, 0x56, 0x6a, point]);
+        }
         op(&mut map, 0x621ca4, &[0xc7, 4, 0x24], 0f32.to_bits());
         op(&mut map, 0x621c9c, &[0xc7, 0x44, 0x24, 4], 1f32.to_bits());
         op(&mut map, 0x65b97d, &[0xf3, 0x0f, 0x10, 0x0d], 0x4050);
