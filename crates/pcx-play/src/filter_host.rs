@@ -180,7 +180,11 @@ impl ObjectHost {
         if admitted.retained >= admitted.max_records {
             return Err(self.inner.error(NATIVE, Failure::Budget("filter wrappers")));
         }
-        // shortcut: one token per successful call; revisit if native repeated-code identity requires interning.
+        // Recreation choice: one distinct wrapper token per successful `Filter`
+        // call, even for repeated `code` values. Native repeated-code identity
+        // (intern vs distinct) remains unqualified; see TRACKER filter-wrappers
+        // frontier and `docs/re-notes/script-filter-wrappers.md`. Revisit only
+        // with a native repeated-code trace; do not intern by assumption.
         let id = self.inner.allocate(
             Entry::Filter {
                 function: *function,
