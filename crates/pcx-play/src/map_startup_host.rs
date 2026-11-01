@@ -248,12 +248,16 @@ pub struct ResolvedNewGame {
 pub enum DefaultDifficultyObservation {
     /// `native_fallback` is the ordinal the selected image returns without a profile entry.
     NoProfile { native_fallback: i32 },
+    /// An explicit profile-sourced ordinal. Admission validates it against the
+    /// selected `ConvertGameDifficulty` domain exactly like the native fallback.
+    Profile { ordinal: i32 },
 }
 
 impl DefaultDifficultyObservation {
     fn fallback(&self) -> i32 {
         match self {
             Self::NoProfile { native_fallback } => *native_fallback,
+            Self::Profile { ordinal } => *ordinal,
         }
     }
 }

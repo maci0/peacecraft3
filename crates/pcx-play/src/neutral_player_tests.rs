@@ -119,6 +119,7 @@ fn context_with_wts(
                 catalog_identity: &identity("selected-catalog"),
                 catalog: &EmptyCatalog,
                 required_fields: &[],
+                trigger_catalog: None,
             },
             budget,
         )

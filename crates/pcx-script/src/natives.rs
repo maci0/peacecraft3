@@ -215,6 +215,12 @@ impl NativeTable {
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }
+
+    /// Declared native names with their signatures, in sorted order.
+    /// Used by coverage accounting; dispatch still goes through `get`/`call`.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Native)> {
+        self.by_name.iter()
+    }
 }
 
 /// The natives this table can run, keyed by the exact spelled name. Vanilla is

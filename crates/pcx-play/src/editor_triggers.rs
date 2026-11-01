@@ -86,6 +86,24 @@ pub fn compile_editor_triggers_with_objects(
     catalog: &Catalog,
     records: MapRecords<'_>,
 ) -> Result<MapScripts, EditorTriggerError> {
+    compile_editor_triggers_with_objects_and_wts(
+        identity, common, blizzard, wtg, wct, None, catalog, records,
+    )
+}
+
+/// Same as above with the map's `war3map.wts` strings wired to the compiled
+/// program, so `TRIGSTR_` in lowered triggers and custom text resolves
+/// through the same retained table as the JASS-first path.
+pub fn compile_editor_triggers_with_objects_and_wts(
+    identity: AssetIdentity,
+    common: ScriptAsset<'_>,
+    blizzard: ScriptAsset<'_>,
+    wtg: &[u8],
+    wct: &[u8],
+    wts: Option<(&'static str, &[u8])>,
+    catalog: &Catalog,
+    records: MapRecords<'_>,
+) -> Result<MapScripts, EditorTriggerError> {
     let arity = catalog
         .arity()
         .map_err(|e| EditorTriggerError::Wtg(e.to_string()))?;
@@ -110,6 +128,10 @@ pub fn compile_editor_triggers_with_objects(
         None => String::new(),
     };
     let jass = editor_object_globals::merge_region_init(&jass, &region_init)?;
+    let wts_asset: Option<ScriptAsset<'_>> = match wts {
+        Some((label, bytes)) => Some(ScriptAsset { label, bytes }),
+        None => None,
+    };
     MapScripts::compile(
         identity,
         common,
@@ -118,7 +140,7 @@ pub fn compile_editor_triggers_with_objects(
             label: LOWERED_LABEL,
             bytes: jass.as_bytes(),
         },
-        None,
+        wts_asset,
     )
     .map_err(EditorTriggerError::Compile)
 }
@@ -151,6 +173,49 @@ pub fn compile_editor_map_scripts(
         blizzard,
         &wtg,
         &wct,
+        catalog,
+        MapRecords {
+            regions: regions.as_ref(),
+            ..Default::default()
+        },
+    )?)
+}
+
+/// Same as `compile_editor_map_scripts` with the map's `war3map.wts`
+/// strings wired to the compiled program. `war3map.j` is still never read.
+pub fn compile_editor_map_scripts_with_wts(
+    map: &Map<'_>,
+    source_label: &str,
+    identity: AssetIdentity,
+    common: ScriptAsset<'_>,
+    blizzard: ScriptAsset<'_>,
+    catalog: &Catalog,
+    budget: ReadBudget,
+) -> Result<MapScripts, EditorMapError> {
+    let member = |name: &'static str| {
+        map.extract_checked(source_label, name, budget)?
+            .ok_or(EditorMapError::MissingMember(name))
+    };
+    let wtg = member("war3map.wtg")?;
+    let wct = member("war3map.wct")?;
+    let wts_bytes: Option<Vec<u8>> = map
+        .extract_checked(source_label, "war3map.wts", budget)?
+        .map(|bytes| bytes);
+    let regions = map
+        .extract_checked(source_label, "war3map.w3r", budget)?
+        .map(|bytes| Regions::parse(&bytes))
+        .transpose()?;
+    let wts_leaked: Option<(&'static str, &'static [u8])> = wts_bytes.as_ref().map(|bytes| {
+        let leaked: &'static [u8] = Box::leak(bytes.clone().into_boxed_slice());
+        ("war3map.wts", leaked)
+    });
+    Ok(compile_editor_triggers_with_objects_and_wts(
+        identity,
+        common,
+        blizzard,
+        &wtg,
+        &wct,
+        wts_leaked,
         catalog,
         MapRecords {
             regions: regions.as_ref(),

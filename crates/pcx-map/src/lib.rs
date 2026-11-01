@@ -131,8 +131,10 @@ pub mod cameras;
 pub mod doodads;
 pub mod grid_alignment;
 pub mod info;
+pub mod ini;
 pub mod minimap;
 pub mod shadows;
+pub mod wpmp;
 
 pub mod pathing;
 pub mod regions;
@@ -146,6 +148,8 @@ pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};
 
 pub use doodads::{Doodad, Doodads, ItemDropData, TerrainDoodad};
 pub use info::{Force, MapInfo, Player};
+pub use ini::{Ini, INI_NAME, SCRIPT_MEMBERS, preferred_script};
+pub use wpmp::{Wpmp, WPMP_NAME};
 pub use minimap::{Marker, MinimapImage, MinimapImageKind, MinimapMarkers};
 pub use shadows::Shadows;
 
@@ -300,6 +304,10 @@ pub enum Error {
     },
     #[error("map archive has no {0}")]
     MissingContent(&'static str),
+    #[error("map init file: {0}")]
+    BadIni(String),
+    #[error("map shared data: {0}")]
+    BadWpmp(String),
     #[error("no shipped byte proves a layout for {0}; refusing to invent one")]
     UnprovenContent(&'static str),
     #[error("blp: {0}")]
@@ -648,6 +656,63 @@ impl<'a> Map<'a> {
             }
         }
         Err(Error::MissingContent(minimap::MINIMAP_IMAGE_NAME))
+    }
+
+    /// Decode `war3map.ini` when the archive carries it. Custom maps may omit
+    /// it; campaign maps usually do. A present but malformed file is refused.
+    pub fn ini(&self) -> Result<Option<Ini>, Error> {
+        match self.extract(INI_NAME) {
+            Err(_) => Ok(None),
+            Ok(bytes) => Ini::from_bytes(bytes).map(Some).map_err(Error::BadIni),
+        }
+    }
+
+    /// Retain `war3map.wpmp` allied shared data when the archive carries it.
+    /// The layout is unmeasured, so no field is decoded; the bytes are
+    /// retained with provenance for the runtime to refuse loudly at use.
+    pub fn wpmp(&self) -> Result<Option<Wpmp>, Error> {
+        match self.extract(WPMP_NAME) {
+            Err(_) => Ok(None),
+            Ok(bytes) => Wpmp::from_bytes(bytes)
+                .map(Some)
+                .map_err(Error::BadWpmp),
+        }
+    }
+
+    /// Which script source the map selects: the init file's declaration when
+    /// it names a carried member, else `war3map.j` (JASS-first maps), else the
+    /// `wtg`+`wct` editor pair. Returns `None` when the archive carries
+    /// neither path.
+    pub fn preferred_script_source(&self) -> Option<&'static str> {
+        let present: Vec<&str> = [
+            "war3map.j",
+            "war3map.wtg",
+            "war3map.wct",
+            INI_NAME,
+            WPMP_NAME,
+        ]
+        .into_iter()
+        .filter(|n| self.extract(n).is_ok())
+        .collect();
+        let ini = self.ini().ok().flatten();
+        preferred_script(ini.as_ref(), &present)
+    }
+
+    /// Names of the seven object-edit members the archive carries, in
+    /// canonical order. Absent members are simply not listed.
+    pub fn object_members(&self) -> Vec<&'static str> {
+        [
+            "war3map.w3u",
+            "war3map.w3t",
+            "war3map.w3a",
+            "war3map.w3b",
+            "war3map.w3d",
+            "war3map.w3h",
+            "war3map.w3q",
+        ]
+        .into_iter()
+        .filter(|n| self.extract(n).is_ok())
+        .collect()
     }
 
     /// Byte length of the file.

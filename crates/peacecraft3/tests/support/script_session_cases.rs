@@ -95,6 +95,7 @@ fn admit(map_source: &str, wts: &[u8], label: &str) -> MapAdmission {
                 catalog_identity: &identity("selected-catalog"),
                 catalog: &fixtures::catalog(),
                 required_fields: &[*b"STAT"],
+            trigger_catalog: None,
             },
             budget,
         )

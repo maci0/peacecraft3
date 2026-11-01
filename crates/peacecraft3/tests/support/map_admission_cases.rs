@@ -75,6 +75,7 @@ impl Fixture {
             catalog_identity: &self.catalog_identity,
             catalog: &self.catalog,
             required_fields: &FIELDS,
+            trigger_catalog: None,
         }
     }
     fn budget(&self, map: &Map<'_>) -> MapAdmissionBudget {

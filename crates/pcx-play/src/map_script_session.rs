@@ -434,6 +434,9 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Ok(delivered);
             };
             let result = (|| -> Result<(), TimerSessionError> {
+                // Expiry-trigger order: every subscribed trigger's conditions
+                // (all evaluated, then combined) and actions run before the
+                // direct handler, which observes cleared trigger/event context.
                 for (index, trigger) in expiry.triggers().iter().enumerate() {
                     if !self
                         .host()
