@@ -402,6 +402,7 @@ impl ObjectHost {
         self.unit_vision_declaration(&declaration_source)?;
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
+        self.unit_revive_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
         self.unit_buff_declarations(&declaration_source)?;
@@ -1339,6 +1340,9 @@ impl ObjectHost {
         if let Some(result) = self.unit_pause_native(name, args) {
             return Some(result);
         }
+        if let Some(result) = self.unit_revive_native(name, args) {
+            return Some(result);
+        }
         if let Some(result) = self.unit_sleep_native(name, args) {
             return Some(result);
         }
@@ -1663,6 +1667,19 @@ impl ObjectHost {
         } else {
             None
         };
+        // Producer-transfer cleanup: a transferred producer keeps no training
+        // queue. Refund remaining entries per-entry with the admitted rate and
+        // release active food, without training events, before the owner
+        // changes. Pending construction reservations are released the same way.
+        // Errors propagate directly so the `fail` borrow ends at the color
+        // block above and does not span these mutable calls.
+        if self.producer_has_training(*unit) {
+            let cleanup = self.prepare_training_death(*unit)?;
+            if let Some(cleanup) = cleanup {
+                self.commit_training_death(cleanup);
+            }
+        }
+        self.interrupt_unit_construction(*unit)?;
         let guard = if self.guard_managed_owner(*player)? {
             let record = self.executed_unit(*unit)?;
             let eligible =
