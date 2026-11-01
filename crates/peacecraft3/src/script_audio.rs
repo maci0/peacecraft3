@@ -231,7 +231,64 @@ pub fn install(app: &mut App) {
             apply_category_gains
                 .in_set(ScriptAudioPlayback)
                 .after(advance_fades),
+        )
+        .add_systems(
+            Update,
+            log_audibility_probe.in_set(ScriptAudioPlayback).after(apply_category_gains),
         );
+}
+
+/// Temporary audibility diagnostic for the reported total silence: a throttled
+/// one-line summary distinguishing "no voices spawned" (admission/trigger gap)
+/// from "voices spawned but not heard" (backend/gain gap). Remove once the
+/// silence is root-caused; the per-voice refusal path already warns inline.
+fn log_audibility_probe(
+    mut session: ResMut<MapScriptSession<MapStartupHost>>,
+    voices: Query<(&ScriptVoice, Option<&AudioSink>)>,
+    report: Res<ScriptAudioReport>,
+    time: Res<Time<Real>>,
+    mut last_logged: Local<f64>,
+) {
+    let elapsed = time.elapsed_secs_f64();
+    // Log at most every five app seconds, plus once at startup.
+    if elapsed - *last_logged < 5.0 && *last_logged > 0.0 {
+        return;
+    }
+    *last_logged = elapsed;
+    let mut total = 0usize;
+    let mut with_sink = 0usize;
+    let mut paused = 0usize;
+    let mut empty = 0usize;
+    let mut muted = 0usize;
+    let mut silent_volume = 0usize;
+    for (_, sink) in &voices {
+        total += 1;
+        if let Some(sink) = sink {
+            with_sink += 1;
+            paused += usize::from(sink.is_paused());
+            empty += usize::from(sink.empty());
+            muted += usize::from(sink.is_muted());
+            silent_volume += usize::from(matches!(
+                sink.volume(),
+                bevy::audio::Volume::Linear(0.0) | bevy::audio::Volume::Decibels(f32::NEG_INFINITY)
+            ));
+        }
+    }
+    tracing::info!(
+        session = session.session_witness().is_some(),
+        host = session.host().is_some(),
+        voices = total,
+        with_sink,
+        paused,
+        empty,
+        muted,
+        silent_volume,
+        played = report.played,
+        refusals = report.refusal_count,
+        admission_error = ?report.admission_error,
+        last_refusal = ?report.last_refusal,
+        "script-audio audibility probe",
+    );
 }
 
 fn play_published_script_sounds(
