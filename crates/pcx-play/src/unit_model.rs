@@ -230,6 +230,14 @@ pub struct BlendSample<'a> {
     pub weight: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipTiming {
+    pub name: String,
+    pub interval: [u32; 2],
+    pub rate: f64,
+    pub time_scale: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sample {
     pub interval: [u32; 2],
@@ -266,6 +274,20 @@ impl Animation {
     /// Whether the model declares a sequence matching `name`. `select` ignores misses.
     pub fn has_sequence(&self, name: &str) -> bool {
         self.model.select(name).is_some()
+    }
+    /// Timing probe for the corpse-timing comparison harness: the current
+    /// authored sequence name and interval, plus the fitted playback rate and
+    /// explicit time scale. All values are sampled from the retained model and
+    /// animation state, never invented.
+    pub fn clip_timing(&self) -> Option<ClipTiming> {
+        let index = self.sequence?;
+        let sequence = self.model.sequences.get(index)?;
+        Some(ClipTiming {
+            name: sequence.name.clone(),
+            interval: [sequence.interval_start, sequence.interval_end],
+            rate: self.rate,
+            time_scale: self.time_scale,
+        })
     }
     /// Select `name` at `now`. `unit_speed` is the unit's movement speed for a
     /// moving sequence: the sequence then plays at `unit_speed / move_speed` of its

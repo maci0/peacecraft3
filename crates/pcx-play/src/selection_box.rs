@@ -253,13 +253,22 @@ impl Gesture {
     }
 }
 
-/// A unit the box may take, already live, shown and visible to the local player.
+/// A unit the box may take, already live, shown, selectable and visible to the
+/// local player. `hero`, `priority` (`UnitData/prio`) and `kind` order the cap:
+/// heroes first, then descending priority, then ascending rawcode; ties keep unit
+/// creation order (the caller's slice order). The original's choice past 12 is not
+/// established (`campaign-box-selection.md`); this deterministic order is a
+/// recreation choice that reuses the subgroup ordering evidence in
+/// `input-selection-rules.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Candidate {
     pub id: HandleId,
     /// Owned by the local player.
     pub own: bool,
     pub structure: bool,
+    pub hero: bool,
+    pub priority: i32,
+    pub kind: [u8; 4],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,14 +296,29 @@ pub enum Refusal {
 
 fn capped(candidates: impl Iterator<Item = Candidate>, cap: usize) -> Pick {
     let mut units: Vec<Candidate> = candidates.collect();
+    // Stable: heroes, then prio descending, then rawcode ascending. Input order
+    // is unit creation order, so ties keep it.
+    units.sort_by(|a, b| {
+        b.hero
+            .cmp(&a.hero)
+            .then_with(|| b.priority.cmp(&a.priority))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
     let truncated = units.len() > cap;
     units.truncate(cap);
     Pick { units, truncated }
 }
 
 /// Selects from the best tier present: own units, then own structures. A box with
-/// only other players' units takes one; several are refused because no rule for
-/// them is established. An empty box is `Ok(None)`.
+/// only other players' units takes one; several are reported so the caller can
+/// keep the current selection like an empty sweep (observation,
+/// `campaign-box-selection.md`). The native tiers are applied in `0x5ffae0`
+/// through `0x5fa130`; the end-drag commit (`0x5f9b40`) calls the pick
+/// (`0x601410`) then the distance sort (`0x6010e0`) before that filter, so a
+/// loud refusal would not match the client's silent keep. An empty box is
+/// `Ok(None)`. Within a tier the cap keeps hero/`prio`/rawcode order
+/// (recreation choice, see [`Candidate`]); the original's choice past the cap
+/// is not established and is reported via [`Pick::truncated] by the caller.
 pub fn pick_box(hits: &[Candidate], cap: usize) -> Result<Option<Pick>, Refusal> {
     let own_units = || hits.iter().filter(|c| c.own && !c.structure).copied();
     let own_structures = || hits.iter().filter(|c| c.own && c.structure).copied();
@@ -315,7 +339,11 @@ pub fn pick_box(hits: &[Candidate], cap: usize) -> Result<Option<Pick>, Refusal>
 }
 
 /// Shift adds to the current selection without toggling. It applies only while the
-/// selection and the new pick are all owned.
+/// selection and the new pick are all owned; a mix keeps the current selection
+/// in the drag-box caller (silent, like an empty sweep) instead of inventing an
+/// addition. The `0x5ffae0` Shift path (`0x83fea0`) proceeds through the same
+/// `0x4efc40` add routine that carries the second cap compare, so the client's
+/// add does not loud-refuse either.
 pub fn add_to_selection(current: &[Candidate], pick: &Pick, cap: usize) -> Result<Pick, Refusal> {
     if current.iter().chain(&pick.units).any(|c| !c.own) {
         return Err(Refusal::MixedAdditive);
@@ -336,10 +364,13 @@ pub fn add_to_selection(current: &[Candidate], pick: &Pick, cap: usize) -> Resul
 }
 
 /// Double click: every own candidate sharing the clicked unit's type. Another
-/// player's unit is never grouped. `None` when `clicked` is not among `hits`.
+/// player's unit is never grouped, and a hero never groups: two heroes of one
+/// type are two subgroups (`0x4efe80` with `0x696810`, see
+/// `input-selection-rules.md`), so a hero double click stays a single
+/// selection. `None` when `clicked` is not among `hits`.
 pub fn same_type(hits: &[(Candidate, [u8; 4])], clicked: HandleId, cap: usize) -> Option<Pick> {
     let (target, rawcode) = hits.iter().find(|(c, _)| c.id == clicked)?;
-    if !target.own {
+    if !target.own || target.hero {
         return Some(Pick {
             units: vec![*target],
             truncated: false,
@@ -347,7 +378,7 @@ pub fn same_type(hits: &[(Candidate, [u8; 4])], clicked: HandleId, cap: usize) -
     }
     Some(capped(
         hits.iter()
-            .filter(|(c, code)| c.own && code == rawcode)
+            .filter(|(c, code)| c.own && !c.hero && code == rawcode)
             .map(|(c, _)| *c),
         cap,
     ))
@@ -382,6 +413,9 @@ mod tests {
             id: handle(n),
             own,
             structure: false,
+            hero: false,
+            priority: 0,
+            kind: *b"hpea",
         }
     }
 
