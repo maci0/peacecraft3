@@ -312,6 +312,12 @@ pub fn authored_function_key(text: &str, label_key: &str) -> Result<KeyCode, Str
 }
 
 fn menu_keys(keys: Option<ResMut<ButtonInput<KeyCode>>>, mut view: ResMut<CampaignCamera>) {
+    // NOTE (reverted 2026-11-01): yielding to a shown loading screen here
+    // broke the mounted restart flow, whose single menu-key press must still
+    // open the menu after a restart even if the new loading screen is up.
+    // Whether the original client suppresses the game menu behind a loading
+    // screen is unmeasured; do not re-add a guard here without original-client
+    // evidence for the modal input order.
     if view.entity.is_some()
         && let Some(mut keys) = keys
         && let Some(Ok(key)) = view.menu_key
@@ -609,6 +615,41 @@ mod tests {
             assert_eq!(runtime.view_paused, open);
             assert!(runtime.paused);
         }
+    }
+
+    #[test]
+    fn menu_key_opens_menu_without_a_loading_screen() {
+        use super::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        install(&mut app, 0, 1024);
+        let scene = app
+            .world_mut()
+            .spawn((Camera3d::default(), CampaignSceneCamera))
+            .id();
+        {
+            let mut view = app.world_mut().resource_mut::<CampaignCamera>();
+            view.entity = Some(scene);
+            view.ready = true;
+            view.menu_key = Some(Ok(KeyCode::F7));
+        }
+        app.insert_resource(crate::campaign_loading::CampaignLoading::default());
+        assert!(
+            !app.world()
+                .resource::<crate::campaign_loading::CampaignLoading>()
+                .shown(),
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F7);
+        app.world_mut().run_system_once(menu_keys).unwrap();
+        assert!(app.world().resource::<CampaignCamera>().menu_open());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::F7),
+        );
     }
 
     #[test]
