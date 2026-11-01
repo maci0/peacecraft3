@@ -151,6 +151,71 @@ lights and shows a background-unavailable notice. No substitute lighting or
 particle behavior is invented. These are remaining renderer frontiers, not
 successful visual-parity gates.
 
+## Selector/profile/foliage follow-up (2026-11-01, `work/selector-own/menu`)
+
+Implemented in the agent's own worktree from `main` at `9d60eff`, claimed
+through `tools/parallel-claim.sh` under `selector-foliage`; no shared-checkout
+edits, no `-s ours` merges, no test runs in this slice. All values below come
+from the shipped assets or the submitted frame; nothing is copied from a
+screenshot fit.
+
+- **Authored `SortFarZ` admitted (Night Elf PRE2).** `menu_particles::spawn`
+  now propagates each profile's authored `SORT_FAR_Z` flag (via
+  `DrawRequirements`, themselves derived from `profile.flags`) into its
+  `SourceOrder` instead of forcing `false`, and
+  `menu_particle_order::order_phase` sorts flagged batches far-to-near on
+  Bevy's submitted distance rather than refusing with
+  `SortFarZNeedsParticleSort` (variant removed). Intra-emitter quad order
+  still comes from the CPU `sort_pieces` path over the same authored profiles.
+  Non-flagged items keep the explicit priority/class/declaration order, and
+  budget/duplicate-entity/duplicate-ordinal refusals are unchanged. Shipped-byte
+  evidence: `SORT_FAR_Z = 0x10000` in `pcx-gfx/src/mdx_particles.rs`; the
+  Night Elf scene's refusal string is the pre-existing failure mode, not a new
+  claim. Rendered comparison against the original capture remains open.
+- **Static-parented point lights admitted (Bonus backdrop).**
+  `menu_lighting::Lighting::checked` no longer refuses every parented light:
+  a parent joint that exists in the authored `RuntimePlan` and carries no
+  animation tracks is admitted at its authored rest pivot, preserving the
+  existing node-track sampling for the light's own animation. Animated parents
+  and non-joint parents still refuse explicitly instead of inventing a
+  transform. Shipped-byte evidence: `parent_id` on the `LITE` record and the
+  joint's own track list; no parent pose is guessed. Whether the Bonus scene's
+  parents are all static, and rendered parity of the admitted lights, remain
+  open.
+- **Foliage cutout shading (dark cards).** Alpha-tested (`filterMode 1`)
+  geosets now draw double-sided in `mainmenu_scene::preflight_geosets`, so
+  open cutout cards shade both faces from the same authored material instead
+  of rendering their back faces black under single-sided CPU vertex lighting.
+  The gate is the authored `filterMode` word, not the unproved `TwoSided`
+  shading bit (culling stays off per the module docs); closed cutout geometry
+  is unaffected (back faces stay depth-hidden) and front faces shade exactly
+  as before. The native cutout reference (from the selected client image)
+  still overrides the `Mask` cutoff. This is a reconstruction choice for the
+  unproved native two-sided policy; original-client pixel parity remains open.
+- **Exact full-screen fades.** `menu_fade::Fade::draw` now samples the fade
+  opacity with the actual presentation elapsed for global-sequence tracks
+  instead of a hard-coded `0`, matching the clip-frame path used elsewhere.
+  Cover/reveal intervals, endpoints (`Birth` `[0,1]`, `Death` `[1,0]`) and
+  durations stay derived from the shipped `SlidingDoors` model. Frame-exact
+  timing against the original remains unclaimed.
+- **Selector gating: `DefaultOpen` is the sole gate, closed is unselectable.**
+  `parse_campaign_index` retains each campaign's authored `DefaultOpen`
+  (absent stays closed, anything but `0`/`1` refuses); selection, mission
+  launch, disabled art and the disabled label colour already gate on it in
+  `native_campaign` (untouched here — owned by the `escape-menu` lane).
+  Completion-based unlocks are not modelled: no shipped asset carries them,
+  so none are invented. What this slice adds, in the owned `glue_menu` layer,
+  is `enforce_disabled_unselectable`: a disabled button owns no tab stop and
+  takes no pointer input, closing the focus/hover holes around the existing
+  action-dispatch filters. Closed campaigns therefore have no path to
+  selection, focus, hover or launch.
+
+Synthetic parser tests were updated to the admitted behavior (SortFarZ
+far-to-near ordering, duplicate/budget refusals retained); no original-asset
+test was run in this slice. A fresh rendered comparison (Night Elf foliage,
+Bonus lights, entry/Back fades) and the full workspace gates belong to the
+release lane.
+
 ## Validation
 
 The entrance source passes 709 application tests (55 library and 654 binary),

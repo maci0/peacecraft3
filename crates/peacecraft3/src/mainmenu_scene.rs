@@ -1339,6 +1339,16 @@ pub fn preflight_geosets<'a>(
                 fog_enabled,
                 alpha_mode: flags.alpha_mode,
                 cull_mode: back_face_culling(layer.properties.shading_flags, culls_back_faces),
+                // Alpha-tested cutout cards (foliage) are open geometry drawn
+                // with culling off: without two-sided shading their back faces
+                // sample the flipped normal as unlit and render as dark cards
+                // with fringed edges. Bevy flips the backface normal for
+                // double-sided materials, so both sides of an open card shade
+                // from the same authored material. Closed cutout geometry is
+                // unaffected (its back faces stay depth-hidden), and front
+                // faces shade exactly as before. This is a reconstruction
+                // choice for the unproved native two-sided policy.
+                double_sided: layer.properties.filter_mode == 1,
                 ..default()
             },
             layer.properties.filter_mode,

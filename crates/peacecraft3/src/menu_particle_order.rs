@@ -44,10 +44,15 @@ pub enum OrderFailure {
     Allocation,
     DuplicateOrdinal,
     DuplicateEntity,
-    SortFarZNeedsParticleSort,
 }
 
 /// Reorders only this owner's existing phase slots. Untagged items keep their slots and get no invented plane.
+///
+/// Authored `SortFarZ` batches sort far-to-near by their actual submitted
+/// distance instead of refusing: the CPU mesh already sorts quads within each
+/// emitter (`menu_particles::sort_pieces`), and this orders the emitter batches
+/// themselves. Non-flagged items keep the explicit record order. Distances are
+/// Bevy's submitted values, not invented planes.
 pub fn order_phase(
     phase: &mut SortedRenderPhase<Transparent3d>,
     owner: MainEntity,
@@ -68,26 +73,46 @@ pub fn order_phase(
         else {
             continue;
         };
-        if order.sort_far_z {
-            return Err(OrderFailure::SortFarZNeedsParticleSort);
+        selected.push((slot, item.entity.1, *order, item.distance));
+    }
+    selected.sort_by(|a, b| {
+        a.2.priority_plane.cmp(&b.2.priority_plane).then_with(|| {
+            match (a.2.sort_far_z, b.2.sort_far_z) {
+                // Far-to-near on the submitted distance; ties keep record order.
+                (true, true) => {
+                    b.3.total_cmp(&a.3)
+                        .then_with(|| a.2.kind.cmp(&b.2.kind))
+                        .then_with(|| a.2.ordinal.cmp(&b.2.ordinal))
+                }
+                (true, false) | (false, true) => {
+                    a.2.kind
+                        .cmp(&b.2.kind)
+                        .then_with(|| a.2.ordinal.cmp(&b.2.ordinal))
+                }
+                (false, false) => {
+                    a.2.kind
+                        .cmp(&b.2.kind)
+                        .then_with(|| a.2.ordinal.cmp(&b.2.ordinal))
+                }
+            }
+        })
+    });
+    let mut seen = std::collections::HashSet::new();
+    for (_, _, order, _) in &selected {
+        // `SourceKind` carries no `Hash`, so the check keys on its explicit
+        // declaration order instead.
+        if !seen.insert((order.kind as u8, order.ordinal)) {
+            return Err(OrderFailure::DuplicateOrdinal);
         }
-        selected.push((slot, item.entity.1, *order));
     }
-    selected.sort_unstable_by_key(|(_, _, order)| (order.kind, order.ordinal));
-    if selected
-        .windows(2)
-        .any(|w| w[0].2.kind == w[1].2.kind && w[0].2.ordinal == w[1].2.ordinal)
-    {
-        return Err(OrderFailure::DuplicateOrdinal);
-    }
-    // Recreation convention: signed priority, then geometry/PRE2 class and declaration order.
-    selected
-        .sort_unstable_by_key(|(_, _, order)| (order.priority_plane, order.kind, order.ordinal));
+    // `selected` already carries the recreation order: signed priority, then
+    // geometry/PRE2 class and declaration order, with authored `SortFarZ`
+    // batches far-to-near on their submitted distance.
     let mut slots = Vec::new();
     slots
         .try_reserve_exact(selected.len())
         .map_err(|_| OrderFailure::Allocation)?;
-    slots.extend(selected.iter().map(|(slot, _, _)| *slot));
+    slots.extend(selected.iter().map(|(slot, _, _, _)| *slot));
     slots.sort_unstable();
     let mut ranks = MainEntityHashMap::default();
     ranks
@@ -98,7 +123,7 @@ pub fn order_phase(
             return Err(OrderFailure::DuplicateEntity);
         }
     }
-    for (slot, (_, entity, _)) in slots.into_iter().zip(selected.iter()) {
+    for (slot, (_, entity, _, _)) in slots.into_iter().zip(selected.iter()) {
         ranks.insert(*entity, slot);
     }
     phase
@@ -299,7 +324,7 @@ mod tests {
         assert_eq!(ids(&phase), vec![e[1], e[2], e[0], e[3]]);
     }
     #[test]
-    fn budget_sort_far_z_and_duplicate_source_records_refuse_transactionally() {
+    fn budget_and_duplicate_source_records_refuse_transactionally() {
         let (_world, e) = entities();
         let mut phase = SortedRenderPhase::default();
         add(&mut phase, &e[..2]);
@@ -313,18 +338,28 @@ mod tests {
             Err(OrderFailure::Budget)
         );
         assert_eq!(ids(&phase), before);
-        orders.get_mut(&e[0]).unwrap().sort_far_z = true;
-        assert_eq!(
-            order_phase(&mut phase, e[7], &orders, 2),
-            Err(OrderFailure::SortFarZNeedsParticleSort)
-        );
-        assert_eq!(ids(&phase), before);
-        orders.get_mut(&e[0]).unwrap().sort_far_z = false;
         orders.get_mut(&e[1]).unwrap().ordinal = 1;
         assert_eq!(
             order_phase(&mut phase, e[7], &orders, 2),
             Err(OrderFailure::DuplicateOrdinal)
         );
         assert_eq!(ids(&phase), before);
+    }
+    #[test]
+    fn flagged_batches_order_far_to_near_on_submitted_distance() {
+        let (_world, e) = entities();
+        let mut phase = SortedRenderPhase::default();
+        // Distances are the slot indices: e[0] near (0.0), e[1] far (1.0).
+        add(&mut phase, &e[..2]);
+        let mut orders = MainEntityHashMap::from_iter([
+            (e[0], key(e[7], 0, SourceKind::Particle, 1)),
+            (e[1], key(e[7], 0, SourceKind::Particle, 2)),
+        ]);
+        for entity in [e[0], e[1]] {
+            orders.get_mut(&entity).unwrap().sort_far_z = true;
+        }
+        assert_eq!(order_phase(&mut phase, e[7], &orders, 2), Ok(2));
+        // Declaration ordinals say e[0] first; the authored depth policy wins.
+        assert_eq!(ids(&phase), vec![e[1], e[0]]);
     }
 }
