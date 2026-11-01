@@ -17,53 +17,56 @@ pub(super) fn source_integer(format: &str, value: i32) -> Result<String, String>
     Ok(format!("{prefix}{value}{suffix}"))
 }
 
-fn whole_percent(value: &str) -> Result<String, String> {
-    if value.len() > MAX_TEXT {
-        return Err("tooltip percentage text budget".into());
+/// Native tooltip value formatting, read from the original client's template
+/// expander (`Warcraft III.exe` text around `0x5cef30`, reviewed image
+/// `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`).
+/// The modifier dispatch at `0x5cf0e5` multiplies by `100.0f` (`0xe69598`) for
+/// `%`, takes the absolute value for `+` (sign-mask at `0xe78370`), records a
+/// sticky per-template flag for `.`, and otherwise keeps the looked-up float.
+/// Profile decimals are canonical `[+-]?digits[.digits]` text; anything else
+/// never comes out of an admitted table and is refused here instead of
+/// guessing how the native loaders would parse it.
+fn canonical_decimal(text: &str) -> bool {
+    let text = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    for byte in text.bytes() {
+        match byte {
+            b'0'..=b'9' => seen_digit = true,
+            b'.' if !seen_dot => seen_dot = true,
+            _ => return false,
+        }
     }
-    let (negative, digits) = if let Some(v) = value.strip_prefix('-') {
-        (true, v)
+    seen_digit
+}
+
+/// State 4 (`0x5cf14b`) truncates toward zero and prints `%d` (`0xe6ddd8`)
+/// unless the `.` flag is set, in which case an exactly integral value still
+/// prints as an integer and any other value prints with `%.1f`. Contrast case
+/// for faithfulness: a plain `<row,field>` token holding `1.5` prints `1`,
+/// not `1.5`.
+fn trunc_native(value: f32) -> i32 {
+    // `cvttss2si` invalid semantics: out-of-range, infinite and NaN inputs
+    // yield `i32::MIN` instead of saturating.
+    if value.is_finite() && (-2147483648.0..2147483648.0).contains(&value) {
+        value as i32
     } else {
-        (false, value.strip_prefix('+').unwrap_or(value))
-    };
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    if (whole.is_empty() && fraction.is_empty())
-        || !whole
-            .bytes()
-            .chain(fraction.bytes())
-            .all(|c| c.is_ascii_digit())
-    {
-        return Err("tooltip percentage is not a decimal number".into());
+        i32::MIN
     }
-    let fraction = fraction.trim_end_matches('0');
-    // shortcut: fractional percentages refuse until the native rounding policy is qualified.
-    if fraction.len() > 2 {
-        return Err("fractional tooltip percentage formatting is unsupported".into());
+}
+
+/// Render one looked-up tooltip number the way state 4 does.
+fn render_native(value: f32, dotted: bool) -> String {
+    if dotted {
+        let truncated = trunc_native(value);
+        if truncated as f32 == value {
+            return truncated.to_string();
+        }
+        // `%.1f` over the `cvtss2sd`-widened value. Widening is exact and both
+        // formatters round the same binary value half-even, so `{:.1}` agrees.
+        return format!("{value:.1}");
     }
-    let integer = if whole.is_empty() {
-        0
-    } else {
-        whole
-            .parse::<i128>()
-            .map_err(|_| "tooltip percentage overflow")?
-    };
-    let decimal = if fraction.is_empty() {
-        0
-    } else {
-        fraction
-            .parse::<i128>()
-            .map_err(|_| "tooltip percentage overflow")?
-    };
-    let scaled = integer
-        .checked_mul(100)
-        .and_then(|v| v.checked_add(decimal * 10_i128.pow(2 - fraction.len() as u32)))
-        .ok_or("tooltip percentage overflow")?;
-    let signed = if negative {
-        scaled.checked_neg().ok_or("tooltip percentage overflow")?
-    } else {
-        scaled
-    };
-    Ok(signed.to_string())
+    trunc_native(value).to_string()
 }
 
 pub(super) fn expand(
@@ -79,6 +82,8 @@ pub(super) fn expand(
     let mut result = String::with_capacity(raw.len());
     let mut tail = raw;
     let mut tokens = 0;
+    // Sticky native quirk, set by `.` and never cleared within one template.
+    let mut dotted = false;
     while let Some(start) = tail.find('<') {
         if result
             .len()
@@ -96,9 +101,11 @@ pub(super) fn expand(
         let (row, field) = token
             .split_once(',')
             .ok_or_else(|| format!("unsupported tooltip reference <{token}>"))?;
-        let (field, percentage) = match field.split_once(',') {
-            None => (field, false),
-            Some((field, "%")) => (field, true),
+        let (field, modifier) = match field.split_once(',') {
+            None => (field, None),
+            Some((field, "%")) => (field, Some('%')),
+            Some((field, "+")) => (field, Some('+')),
+            Some((field, ".")) => (field, Some('.')),
             _ => return Err(format!("unsupported tooltip modifier <{token}>")),
         };
         let row: [u8; 4] = row
@@ -120,11 +127,27 @@ pub(super) fn expand(
         if value.contains(['<', '>']) {
             return Err(format!("nested tooltip reference <{token}>"));
         }
-        let value = if percentage {
-            whole_percent(&value).map_err(|e| format!("tooltip <{token}>: {e}"))?
-        } else {
-            value
-        };
+        // Looked-up cells are numeric profile text; the native expander works
+        // on the parsed float, so the same nearest-`f32` value is compared and
+        // formatted here.
+        if !canonical_decimal(&value) {
+            return Err(format!("tooltip <{token}>: value is not a number"));
+        }
+        let mut number: f32 = value
+            .parse()
+            .map_err(|_| format!("tooltip <{token}>: value is not a number"))?;
+        match modifier {
+            None => {}
+            Some('%') => number *= 100.0,
+            Some('+') => number = number.abs(),
+            Some('.') => dotted = true,
+            // Validated above; retained for exhaustiveness.
+            Some(_) => return Err(format!("unsupported tooltip modifier <{token}>")),
+        }
+        if !number.is_finite() {
+            return Err(format!("tooltip <{token}>: value is not a number"));
+        }
+        let value = render_native(number, dotted);
         if result
             .len()
             .checked_add(value.len())
@@ -261,13 +284,16 @@ mod tests {
     }
 
     #[test]
-    fn whole_percentage_tokens_preserve_literal_percent_and_refuse_ambiguous_rounding() {
+    fn percent_tokens_multiply_by_a_hundred_like_the_native_expander() {
         for (raw, expected) in [
             ("0.83", "83"),
             (".07", "7"),
             ("-0.3700", "-37"),
             ("1.25", "125"),
             ("+2", "200"),
+            // `%` never selects the float-aware rendering (only `.` sets that
+            // flag), so a fractional scaled value truncates like a plain one.
+            ("0.333", "33"),
         ] {
             assert_eq!(
                 expand("<TEST,DataC1,%>%", |_, field| {
@@ -279,8 +305,8 @@ mod tests {
             );
         }
         for raw in [
-            "0.333",
             "NaN",
+            "inf",
             "1e-2",
             "",
             "1.2.3",
@@ -292,6 +318,71 @@ mod tests {
             );
         }
         assert!(expand("<TEST,DataC1,%,extra>", |_, _| unreachable!()).is_err());
+    }
+
+    #[test]
+    fn dot_tokens_render_float_aware_native_values() {
+        // `%.1f` branch: fractional values keep one decimal.
+        for (raw, expected) in [("1.5", "1.5"), ("4.5", "4.5"), ("3", "3"), ("2.0", "2")] {
+            assert_eq!(
+                expand("<TEST,DataA1,.>", |_, field| {
+                    assert_eq!(field, "DataA1");
+                    Ok(raw.into())
+                })
+                .unwrap(),
+                expected,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_tokens_truncate_like_the_native_expander() {
+        // Without a modifier the native state always prints `%d` of the
+        // truncated float, so a fractional plain token loses its fraction.
+        assert_eq!(
+            expand("armor <TEST,DataA1> done", |_, _| Ok("1.5".into())).unwrap(),
+            "armor 1 done"
+        );
+        assert_eq!(expand("<TEST,DataA1>", |_, _| Ok("3".into())).unwrap(), "3");
+    }
+
+    #[test]
+    fn plus_tokens_render_the_absolute_value_as_an_integer() {
+        assert_eq!(
+            expand("<TEST,DataA1,+>", |_, _| Ok("-2.5".into())).unwrap(),
+            "2"
+        );
+    }
+
+    #[test]
+    fn dot_selection_is_sticky_within_one_template_like_the_native_flag() {
+        // The native `.` flag is set once per template expansion and never
+        // cleared, so a later plain token in the same template renders
+        // float-aware while an earlier plain token in another template does
+        // not.
+        assert_eq!(
+            expand("<AAAA,DataA1,.><BBBB,DataA1>", |row, _| Ok(
+                if row[0] == b'A' {
+                    "3".into()
+                } else {
+                    "2.5".into()
+                }
+            ))
+            .unwrap(),
+            "32.5"
+        );
+        assert_eq!(
+            expand("<BBBB,DataA1><AAAA,DataA1,.>", |row, _| Ok(
+                if row[0] == b'A' {
+                    "3".into()
+                } else {
+                    "2.5".into()
+                }
+            ))
+            .unwrap(),
+            "23"
+        );
     }
 
     #[test]
