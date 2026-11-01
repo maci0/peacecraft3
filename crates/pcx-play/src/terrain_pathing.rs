@@ -154,6 +154,105 @@ impl TerrainPathing {
     }
 }
 
+/// One authored cliff tile: tile-grid position and the maximum W3E elevation
+/// layer (`byte6` low nibble) of its four corners.
+///
+/// Only tiles whose four corners disagree on the layer are retained. Tiles
+/// with a uniform layer read that layer from the nearest corner, so they need
+/// no overlay entry. Positions are tile indices, not world coordinates, so no
+/// world scale is invented here; the caller converts its query to tile units
+/// with the same admitted tile size it uses for corner indexing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CliffRect {
+    pub tile: [u32; 2],
+    pub level: u8,
+}
+
+/// Authored-terrain population of the spatial-rect layer the selected
+/// `0x7044b0` cliff lookup also samples (`docs/re-notes/ai-construction.md`).
+///
+/// The native combines the terrain corner value with the maximum value from
+/// any matching separately stored spatial rectangle. The dynamic runtime
+/// registrations behind that layer are unestablished in either original probe,
+/// so this populates the authored part only: one rect per W3E tile whose
+/// corners disagree on the elevation layer, carrying that tile's maximum.
+/// Runtime region, texture or movement registrations carry no qualified cliff
+/// contribution and are not consulted here; that mapping stays open.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CliffOverlay {
+    rects: Vec<CliffRect>,
+    width: u32,
+    height: u32,
+}
+
+impl CliffOverlay {
+    /// Derive the overlay from the admitted map terrain. Tile corner layers
+    /// come from the asset bytes; nothing is measured or defaulted.
+    pub fn of_terrain(terrain: &pcx_map::Terrain) -> Result<Self, &'static str> {
+        let (width, height) = (terrain.width(), terrain.height());
+        let tiles = u64::from(width) * u64::from(height);
+        if tiles > usize::MAX as u64 {
+            return Err("cliff overlay tile count overflow");
+        }
+        let mut rects = Vec::new();
+        rects
+            .try_reserve_exact(tiles as usize)
+            .map_err(|_| "cliff overlay allocation")?;
+        for ty in 0..height {
+            for tx in 0..width {
+                let corners = [
+                    terrain.corner(tx, ty),
+                    terrain.corner(tx + 1, ty),
+                    terrain.corner(tx, ty + 1),
+                    terrain.corner(tx + 1, ty + 1),
+                ];
+                let mut layers = [0u8; 4];
+                for (slot, corner) in layers.iter_mut().zip(corners) {
+                    *slot = corner
+                        .ok_or("cliff overlay missing authored corner")?
+                        .layer_height();
+                }
+                if layers.iter().all(|&layer| layer == layers[0]) {
+                    continue;
+                }
+                let level = *layers.iter().max().expect("four corners");
+                rects.push(CliffRect { tile: [tx, ty], level });
+            }
+        }
+        rects.shrink_to_fit();
+        Ok(Self {
+            rects,
+            width,
+            height,
+        })
+    }
+
+    /// The tile-grid dimensions the overlay was derived from.
+    pub fn dimensions(&self) -> [u32; 2] {
+        [self.width, self.height]
+    }
+
+    /// Authored cliff rects, one per layer-varying tile, in row-major order.
+    pub fn rects(&self) -> &[CliffRect] {
+        &self.rects
+    }
+
+    /// Maximum authored layer over the tile containing a tile-grid position,
+    /// or `None` when that tile's corners agree (the corner value applies).
+    pub fn level_at_tile(&self, tile: [u32; 2]) -> Option<u8> {
+        let [tx, ty] = tile;
+        if tx >= self.width || ty >= self.height {
+            return None;
+        }
+        // Row-major order matches construction; a binary search avoids an
+        // unbounded scan while keeping the storage a plain rect list.
+        self.rects
+            .binary_search_by_key(&(ty, tx), |rect| (rect.tile[1], rect.tile[0]))
+            .ok()
+            .map(|index| self.rects[index].level)
+    }
+}
+
 #[cfg(test)]
 #[path = "terrain_pathing_tests.rs"]
 pub(crate) mod tests;

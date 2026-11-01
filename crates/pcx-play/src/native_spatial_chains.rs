@@ -176,6 +176,8 @@ pub enum Error {
     DuplicateEntry(u64),
     #[error("spatial entry {0} has no movement rectangle")]
     MissingMovement(u64),
+    #[error("spatial entry {0} is a movement entry")]
+    MovementEntry(u64),
     #[error("spatial entry {0} exclusion count is unbalanced")]
     Exclusion(u64),
     #[error("spatial entry capacity {0} is exhausted")]
@@ -958,6 +960,24 @@ impl LiveChains {
         let sequence = self.next_sequence()?;
         self.chains
             .region(old, identity, self.chains.removal_class)?;
+        self.entries.remove(index);
+        self.sequence = sequence;
+        Ok(sequence)
+    }
+
+    /// Drop a non-movement entry's shared state. The caller inserts removal
+    /// links for every rectangle it registered first; movement entries must
+    /// use [`Self::retire_movement`] so their overlap links stay consistent.
+    pub fn drop_entry(&mut self, identity: u64) -> Result<u64, Error> {
+        let index = self.entry(identity)?;
+        let entry = self.entries[index];
+        if entry.exclusions != 0 {
+            return Err(Error::Exclusion(identity));
+        }
+        if entry.movement.is_some() {
+            return Err(Error::MovementEntry(identity));
+        }
+        let sequence = self.next_sequence()?;
         self.entries.remove(index);
         self.sequence = sequence;
         Ok(sequence)

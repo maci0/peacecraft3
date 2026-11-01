@@ -111,7 +111,19 @@ impl Catalog {
                 .transpose()
                 .map(Option::unwrap_or_default)
         };
-        let destructables = overlay("war3map.w3b")?;
+        let destructables = {
+            // `war3map.w3h` carries destructables; `war3map.w3b` is the buff
+            // family and must not supply destructable stats. Older community
+            // notes conflate the two, so a legacy `w3b` destructable-shaped
+            // member is merged only when `w3h` is absent, and a buff-shaped
+            // `w3b` never reaches the destructable catalog.
+            let primary = overlay("war3map.w3h")?;
+            if !primary.mods.is_empty() || !primary.custom.is_empty() {
+                primary
+            } else {
+                overlay("war3map.w3b")?
+            }
+        };
         let decorations = overlay("war3map.w3d")?;
         Ok(Self {
             objects: DestructableCatalog::new(tables, destructables.clone(), decorations.clone()),

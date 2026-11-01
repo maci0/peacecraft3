@@ -47,6 +47,19 @@ impl ObjectHost {
         self.doodads.iter().flatten()
     }
 
+    /// Placed-doodad animation snapshot for the renderer and diagnostics:
+    /// total rows, shown rows and rows with a live appearance.
+    pub fn placed_doodad_snapshot_counts(&self) -> Option<(usize, usize, usize)> {
+        let rows = self.doodads.as_ref()?;
+        let mut shown = 0;
+        let mut live = 0;
+        for row in rows {
+            shown += usize::from(row.shown);
+            live += usize::from(row.appearance.is_ok());
+        }
+        Some((rows.len(), shown, live))
+    }
+
     pub(super) fn doodad_native(
         &mut self,
         name: &str,

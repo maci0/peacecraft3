@@ -1276,3 +1276,20 @@ the paid queue. These are engine scheduling tests, not an original
 client or full mission replay. The earlier pending builder still stalled in the
 actual mission until the route replaced it at clock 520; its travel is not claimed
 fixed by either the earlier partial-route work or this scheduling correction.
+
+## Bridge-deck admission and bank/pitch orientation (2026-11-01)
+
+`BridgeDeckTable` admits doodad deck heights from a caller-supplied SLK
+through caller-supplied path/height column names; `WaterPublication::decks`
+is `None` until admitted, preserving the prior surface-only behavior.
+`BridgeCrossing` keeps the sampled ground/water surface for motion and
+reports the deck gap separately. `trajectory_bridge_crossings` samples the
+existing `trajectory_surface` and pairs each step with the admitted deck at
+that point. `trajectory_surface` itself is unchanged.
+
+`BankPitch` adds caller-derived pitch/bank to unit actors: yaw still comes
+from executed facing, `level()` reproduces the existing yaw-only pose
+exactly, and `from_ground_normal` derives bounded pitch/bank from a
+caller-supplied ground normal. `transform_for_oriented` positions exactly
+like `transform_for` and only changes rotation. Native orientation parity
+and the trajectory playback consumer remain open.
