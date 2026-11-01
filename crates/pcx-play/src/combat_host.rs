@@ -1360,6 +1360,10 @@ impl ObjectHost {
     }
 
     /// Kill a live unit: stop it, free its occupancy, play death, queue events.
+    /// Hidden units count as live providers until killed and are killed by this
+    /// path: eligibility checks combat death only and never reuses the visible
+    /// combat-targeting filter (`weapon_target`/`live`), per the qualified
+    /// hidden-unit observation.
     pub(crate) fn kill_unit(
         &mut self,
         unit: HandleId,

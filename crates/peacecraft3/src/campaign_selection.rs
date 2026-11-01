@@ -65,9 +65,30 @@ fn circle_look(
     Some((format!("{}{TEXTURE_SUFFIX}", band.texture), colour))
 }
 
+/// Dotted-band look for the live drag preselect. The profile authors a dotted
+/// texture per band; the exe's `CPreselectUI` draw rule was not read, so using
+/// it here is a recreation choice.
+fn preselect_look(
+    circles: &pcx_objects::editor::selection::SelectionCircles,
+    size: f32,
+    relation: Relation,
+) -> Option<(String, [u8; 4])> {
+    let band = circles
+        .bands
+        .iter()
+        .find(|band| band.max_size.is_none_or(|max| size < max))?;
+    let colour = match relation {
+        Relation::Friend => circles.friend,
+        Relation::Neutral => circles.neutral,
+        Relation::Enemy => circles.enemy,
+    };
+    Some((format!("{}{TEXTURE_SUFFIX}", band.dotted), colour))
+}
+
 #[derive(SystemParam)]
 struct Inputs<'w> {
     input: Res<'w, crate::campaign_input::CampaignInput>,
+    drag: Option<Res<'w, crate::campaign_box_select::BoxSelect>>,
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
     ground: Res<'w, GroundPublication>,
@@ -99,6 +120,7 @@ fn draw(
 ) {
     let Inputs {
         input,
+        drag,
         requests,
         sources,
         ground,
@@ -129,6 +151,16 @@ fn draw(
         return;
     }
     let mut wanted = wanted_circles(&mut session, &input, &ground, &mut state.last_error);
+    // Live drag preselect uses the authored dotted band (`CPreselectUI` exists in
+    // the exe; its draw rule was not read, so the dotted band is a recreation
+    // choice that reuses the profile's own preselect texture).
+    wanted.extend(preselect_circles(
+        &mut session,
+        &input,
+        drag.as_deref(),
+        &ground,
+        &mut state.last_error,
+    ));
     let z_offset = if wanted.is_empty() {
         None
     } else {
@@ -367,6 +399,76 @@ fn wanted_circles(
             Ok(Some(circle)) => wanted.push(circle),
             Ok(None) => {}
             Err(error) => *last_error = Some(format!("selection circle for unit {id:?}: {error}")),
+        }
+    }
+    wanted
+}
+
+/// Dotted circles for the live box-drag preselect. Units already selected keep
+/// their solid circle from [`wanted_circles`]; this adds only the rest.
+fn preselect_circles(
+    session: &mut MapScriptSession<MapStartupHost>,
+    input: &crate::campaign_input::CampaignInput,
+    drag: Option<&crate::campaign_box_select::BoxSelect>,
+    ground: &GroundPublication,
+    last_error: &mut Option<String>,
+) -> Wanted {
+    let Some(ids) = drag.map(|drag| drag.preselect()) else {
+        return Vec::new();
+    };
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    if !ground
+        .context
+        .as_ref()
+        .zip(session.context())
+        .is_some_and(|(ground, active)| Arc::ptr_eq(ground, active))
+    {
+        return Vec::new();
+    }
+    let (Some(circles), Some(context), Some(host)) = (
+        input.circles.as_ref(),
+        ground.context.as_ref(),
+        session.host(),
+    ) else {
+        return Vec::new();
+    };
+    let objects = host.objects();
+    let selected: std::collections::BTreeSet<HandleId> =
+        objects.selection().iter().copied().collect();
+    let mut wanted = Vec::new();
+    for &id in ids {
+        if selected.contains(&id) {
+            continue;
+        }
+        let circle = (|| -> Result<_, String> {
+            let unit = objects
+                .executed_unit(id)
+                .map_err(|error| error.to_string())?;
+            if !unit.shown || unit.combat.as_ref().is_some_and(|c| c.dead) {
+                return Ok(None);
+            }
+            let [x, y] = unit.position.ok_or("missing unit position")?;
+            let z = pcx_tera::world::sample_world_z(&context.terrain, x, y)
+                .ok_or("unit position outside admitted terrain")?;
+            let scale = crate::campaign_actors::scalar(&unit.definition, "scale")?;
+            let size = scale * circles.scale_factor;
+            let relation = objects
+                .local_relation(id)
+                .ok_or("missing local-player relationship")?;
+            let look =
+                preselect_look(circles, size, relation).ok_or("missing selection texture band")?;
+            let transform = Transform::from_xyz(x, z, -y).with_scale(Vec3::new(size, 1.0, size));
+            if !transform.is_finite() {
+                return Err("non-finite circle transform".into());
+            }
+            Ok(Some((id, transform, look)))
+        })();
+        match circle {
+            Ok(Some(circle)) => wanted.push(circle),
+            Ok(None) => {}
+            Err(error) => *last_error = Some(format!("preselect circle for unit {id:?}: {error}")),
         }
     }
     wanted
