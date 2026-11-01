@@ -24,6 +24,9 @@ pub struct MapAdmissionInputs<'a, C> {
     pub catalog_identity: &'a AssetIdentity,
     pub catalog: &'a C,
     pub required_fields: &'a [[u8; 4]],
+    /// TriggerData of the same edition/version for the editor trigger path.
+    /// `None` leaves `war3map.wtg` compilation refusing loudly.
+    pub trigger_catalog: Option<std::sync::Arc<pcx_trig::catalog::Catalog>>,
 }
 /// Explicit input policy, not a native admission or total-memory guarantee.
 #[derive(Clone, Copy)]
@@ -51,6 +54,8 @@ pub enum MapAdmissionError {
     },
     #[error(transparent)]
     Input(#[from] MapScriptImportError),
+    #[error("editor triggers in {map}: {source}")]
+    Editor { map: String, source: String },
     #[error("{map}: required member {member} is absent")]
     MissingMember { map: String, member: &'static str },
     #[error("{member}: {source}")]
@@ -98,6 +103,19 @@ pub struct ParsedMapContext {
     pub alignment: GridAlignment,
     pub world: ImportedWorld,
     pub scripts: Arc<MapScripts>,
+    /// `war3map.ini` when the archive carries it, with script-selection provenance.
+    pub ini: Option<pcx_map::Ini>,
+    /// `war3map.wpmp` allied shared data, retained opaque; layout is unmeasured
+    /// so gameplay use refuses loudly with the map label.
+    pub wpmp: Option<pcx_map::Wpmp>,
+    /// Which script member was compiled: `war3map.j` or `war3map.wtg`.
+    pub script_source: String,
+    /// Declared object tables from `war3map.w3i`; the join key into the
+    /// object-editor overlays below.
+    pub declared_tables: Vec<pcx_map::info::TableList>,
+    /// Parsed object-edit overlays for all seven `W3?` families the archive
+    /// carries, keyed by member name. Absent members stay absent.
+    pub object_overlays: std::collections::BTreeMap<String, pcx_objects::editor::Overlay>,
 }
 fn identity(input: &'static str, identity: &AssetIdentity) -> Result<(), MapAdmissionError> {
     for (field, value) in [
@@ -210,16 +228,70 @@ pub fn prepare_map_context<C: ObjectCatalog>(
                 member: name,
             })?;
     }
-    let script_bytes = archive
+    // Optional map-compat members: init selection, shared data, strings and
+    // both script paths. Presence is preflighted; absence is not an error.
+    let ini_size = archive
+        .preflight_member("war3map.ini", budget.scripts.max_wts_bytes)
+        .map_err(|source| MapAdmissionError::Read {
+            member: "war3map.ini",
+            source,
+        })?
+        .unwrap_or(0);
+    let wpmp_size = archive
+        .preflight_member("war3map.wpmp", budget.scripts.max_wts_bytes)
+        .map_err(|source| MapAdmissionError::Read {
+            member: "war3map.wpmp",
+            source,
+        })?
+        .unwrap_or(0);
+    let j_size = archive
         .preflight_member("war3map.j", budget.scripts.max_script_bytes)
         .map_err(|source| MapAdmissionError::Read {
             member: "war3map.j",
             source,
         })?
-        .ok_or_else(|| MapScriptImportError::MissingScriptMember {
-            map: label.into(),
-            member: "war3map.j",
-        })?;
+        .unwrap_or(0);
+    let wtg_size = archive
+        .preflight_member("war3map.wtg", budget.scripts.max_script_bytes)
+        .map_err(|source| MapAdmissionError::Read {
+            member: "war3map.wtg",
+            source,
+        })?
+        .unwrap_or(0);
+    let wct_size = archive
+        .preflight_member("war3map.wct", budget.scripts.max_script_bytes)
+        .map_err(|source| MapAdmissionError::Read {
+            member: "war3map.wct",
+            source,
+        })?
+        .unwrap_or(0);
+    let mut object_sizes: Vec<(&'static str, usize)> = Vec::new();
+    for member in [
+        "war3map.w3u",
+        "war3map.w3t",
+        "war3map.w3a",
+        "war3map.w3b",
+        "war3map.w3d",
+        "war3map.w3h",
+        "war3map.w3q",
+    ] {
+        let size = archive
+            .preflight_member(member, budget.scripts.max_decoded_bytes)
+            .map_err(|source| MapAdmissionError::Read { member, source })?
+            .unwrap_or(0);
+        if size > 0 {
+            object_sizes.push((member, size));
+        }
+    }
+    let present: Vec<&str> = [
+        ("war3map.j", j_size),
+        ("war3map.wtg", wtg_size),
+        ("war3map.wct", wct_size),
+    ]
+    .into_iter()
+    .filter(|(_, size)| *size > 0)
+    .map(|(name, _)| name)
+    .collect();
     let wts_bytes = archive
         .preflight_member("war3map.wts", budget.scripts.max_wts_bytes)
         .map_err(|source| MapAdmissionError::Read {
@@ -229,7 +301,7 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         .unwrap_or(0);
     map_scripts_import::aggregate(
         label,
-        &[raw.len(), prelude_bytes, script_bytes, wts_bytes],
+        &[raw.len(), prelude_bytes, j_size, wts_bytes, wtg_size, wct_size],
         budget.scripts.max_aggregate_input_bytes,
     )?;
     map_scripts_import::aggregate(
@@ -237,8 +309,10 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         &[
             raw.len(),
             prelude_bytes,
-            script_bytes,
+            j_size,
             wts_bytes,
+            wtg_size,
+            wct_size,
             sizes[0],
             sizes[1],
             sizes[2],
@@ -296,17 +370,106 @@ pub fn prepare_map_context<C: ObjectCatalog>(
     })?;
     let info = MapInfo::from_bytes(extract("war3map.w3i", budget.info_bytes)?)
         .map_err(|error| parse_error("war3map.w3i", error))?;
+    let declared_tables = info.table_lists().to_vec();
     let units = Units::parse(&extract("war3mapUnits.doo", budget.units_bytes)?)
         .map_err(|error| parse_error("war3mapUnits.doo", error.into()))?;
+    let mut extract_optional =
+        |name: &'static str, limit: usize| -> Result<Option<Vec<u8>>, MapAdmissionError> {
+            let bytes = archive
+                .extract(name, limit)
+                .map_err(|source| MapAdmissionError::Read {
+                    member: name,
+                    source,
+                })?;
+            if let Some(bytes) = bytes {
+                digests.push(SourceDigest {
+                    label: format!("{label}:{name}"),
+                    hash: pcx_script::fnv1a64(&bytes),
+                });
+                Ok(Some(bytes))
+            } else {
+                Ok(None)
+            }
+        };
+    let ini = extract_optional("war3map.ini", budget.scripts.max_wts_bytes)?
+        .map(|bytes| {
+            pcx_map::Ini::from_bytes(bytes).map_err(|reason| MapAdmissionError::Parse {
+                map: label.into(),
+                member: "war3map.ini",
+                source: pcx_map::Error::BadIni(reason),
+            })
+        })
+        .transpose()?;
+    let wpmp = extract_optional("war3map.wpmp", budget.scripts.max_wts_bytes)?
+        .map(|bytes| {
+            pcx_map::Wpmp::from_bytes(bytes).map_err(|reason| MapAdmissionError::Parse {
+                map: label.into(),
+                member: "war3map.wpmp",
+                source: pcx_map::Error::BadWpmp(reason),
+            })
+        })
+        .transpose()?;
+    let mut object_overlays = std::collections::BTreeMap::new();
+    for (member, _) in object_sizes {
+        let bytes = extract_optional(member, budget.scripts.max_decoded_bytes)?
+            .expect("preflighted object member is present");
+        let file = pcx_objects::ObjectFile::parse(member, &bytes).map_err(|error| {
+            MapAdmissionError::Parse {
+                map: label.into(),
+                member,
+                source: pcx_map::Error::Extraction(error.into()),
+            }
+        })?;
+        object_overlays.insert(
+            member.to_string(),
+            pcx_objects::editor::Overlay::of(&file),
+        );
+    }
+    let selection = pcx_map::preferred_script(ini.as_ref(), &present).ok_or_else(|| {
+        MapAdmissionError::MissingMember {
+            map: label.into(),
+            member: "war3map.j",
+        }
+    })?;
+    let script_source = selection.to_string();
     drop(archive);
-    let scripts = map_scripts_import::import_map_scripts(
-        input.map,
-        label,
-        input.map_identity.clone(),
-        input.common.asset,
-        input.blizzard.asset,
-        budget.scripts,
-    )?;
+    let scripts = match selection {
+        "war3map.j" => map_scripts_import::import_map_scripts(
+            input.map,
+            label,
+            input.map_identity.clone(),
+            input.common.asset,
+            input.blizzard.asset,
+            budget.scripts,
+        )
+        .map_err(MapAdmissionError::Input)?,
+        _ => {
+            let catalog = input.trigger_catalog.as_ref().ok_or_else(|| {
+                MapAdmissionError::MissingMember {
+                    map: label.into(),
+                    member: "war3map.wtg",
+                }
+            })?;
+            crate::editor_triggers::compile_editor_map_scripts_with_wts(
+                input.map,
+                label,
+                input.map_identity.clone(),
+                input.common.asset,
+                input.blizzard.asset,
+                catalog,
+                pcx_mpq::checked::ReadBudget {
+                    max_archive_bytes: budget.scripts.max_archive_bytes,
+                    max_archive_table_bytes: budget.scripts.max_archive_table_bytes,
+                    max_raw_packed_bytes: budget.scripts.max_raw_packed_bytes,
+                    max_decoded_bytes: budget.scripts.max_decoded_bytes,
+                },
+            )
+            .map_err(|error| MapAdmissionError::Editor {
+                map: label.into(),
+                source: error.to_string(),
+            })?
+        }
+    };
     let mut required_fields = Vec::new();
     required_fields
         .try_reserve_exact(input.required_fields.len())
@@ -358,5 +521,10 @@ pub fn prepare_map_context<C: ObjectCatalog>(
         alignment,
         world,
         scripts,
+        ini,
+        wpmp,
+        script_source,
+        declared_tables,
+        object_overlays,
     })
 }

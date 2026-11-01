@@ -78,6 +78,7 @@ pub struct ObjectHost {
     startup_clock: Option<clock::StartupClockState>,
     numeric: Option<crate::script_numeric::NumericPolicy>,
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
+    cliff_overlay: Option<crate::terrain_pathing::CliffOverlay>,
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
     unit_placement: Option<crate::unit_placement::Placement>,
     destructable_catalog: Option<destructables::DestructableCatalog>,
@@ -265,6 +266,7 @@ impl ObjectHost {
             startup_clock: None,
             numeric: None,
             terrain_pathing: None,
+            cliff_overlay: None,
             initial_blight: None,
             unit_placement: None,
             destructable_catalog: None,
@@ -323,6 +325,10 @@ impl ObjectHost {
             pings: Vec::new(),
             selection: None,
             active_subgroup: None,
+            select_enabled: None,
+            drag_select_enabled: None,
+            preselect_enabled: None,
+            unit_selectable: std::collections::BTreeMap::new(),
             fog_modifiers: false,
             shared_vision: None,
             effects: false,
@@ -1662,7 +1668,19 @@ mod ally_colors;
 
 #[path = "unit_decay_host.rs"]
 mod decay;
+pub use decay::CorpseTiming;
+
+#[path = "unit_revive_host.rs"]
+mod revive;
 
 #[path = "leaderboard_host.rs"]
 mod leaderboards;
 pub use leaderboards::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};
+
+#[path = "world_snapshot_host.rs"]
+mod world_snapshots;
+pub use world_snapshots::WorldSnapshot;
+
+#[path = "native_coverage_host.rs"]
+mod native_coverages;
+pub use native_coverages::NativeCoverage;
