@@ -388,3 +388,103 @@ pub mod udp;
 
 #[cfg(test)]
 mod tests;
+
+/// Caller-supplied fields for one `W3GS_GAMEINFO` advertisement. Layout
+/// follows pinned GHost++ `SEND_W3GS_GAMEINFO`: product, version, host
+/// counter, entry key, game name, one name-suffix byte, the encoded stat
+/// string, and the 22-byte fixed tail. The stat string is encoded here with
+/// the same odd-byte relation the parser inverts.
+#[derive(Debug, Clone, Copy)]
+pub struct GameAdvertisement<'a> {
+    /// Selected product and full version word.
+    pub profile: DiscoveryProfile,
+    /// Raw host counter.
+    pub host_counter: u32,
+    /// Raw entry key.
+    pub entry_key: u32,
+    /// Game-name bytes, nonempty and unterminated.
+    pub game_name: &'a [u8],
+    /// Byte after the game-name terminator; meaning unassigned.
+    pub name_suffix: u8,
+    /// Four map-flag bytes, wire order.
+    pub map_flags: [u8; 4],
+    /// Unspecified byte between flags and dimensions.
+    pub stat_reserved: u8,
+    /// Stored width and height words.
+    pub map_dimensions: [u16; 2],
+    /// Four map-checksum bytes.
+    pub map_crc: [u8; 4],
+    /// Protocol path bytes, nonempty and unterminated.
+    pub map_path: &'a [u8],
+    /// Host-name bytes without the terminator.
+    pub host_name: &'a [u8],
+    /// Opaque extension bytes the supplied 1.29.2 client appends; retained raw.
+    pub stat_extension: &'a [u8],
+    /// Advertised total slots; never allocates records.
+    pub slots_total: u32,
+    /// Game-type bytes, wire order.
+    pub game_type: [u8; 4],
+    /// Unspecified word in the fixed tail, without guessed semantics.
+    pub tail_word: [u8; 4],
+    /// Advertised open slots, independent of total slots.
+    pub slots_open: u32,
+    /// Advertised uptime word, not a local clock.
+    pub uptime: u32,
+    /// Advertised little-endian game port.
+    pub port: u16,
+}
+
+/// Encodes a `W3GS_GAMEINFO` advertisement from caller fields.
+pub fn encode_game_info(ad: &GameAdvertisement<'_>) -> Result<Vec<u8>, DiscoveryError> {
+    use DiscoveryError as E;
+    for (what, bytes, cap) in [
+        ("game name", ad.game_name, 31usize),
+        ("map path", ad.map_path, 255usize),
+        ("host name", ad.host_name, 31usize),
+    ] {
+        if bytes.is_empty() || bytes.contains(&0) {
+            return Err(E::Packet(match what {
+                "game name" => "game name is empty or NUL-bearing",
+                "map path" => "map path is empty or NUL-bearing",
+                _ => "host name is empty or NUL-bearing",
+            }));
+        }
+        if bytes.len() > cap {
+            return Err(E::Packet("advertisement field exceeds its caller ceiling"));
+        }
+    }
+    if ad.stat_extension.len() > 64 {
+        return Err(E::Packet("stat extension exceeds its caller ceiling"));
+    }
+    let mut stat = Vec::with_capacity(
+        13 + ad.map_path.len() + ad.host_name.len() + ad.stat_extension.len(),
+    );
+    stat.extend_from_slice(&ad.map_flags);
+    stat.push(ad.stat_reserved);
+    stat.extend_from_slice(&ad.map_dimensions[0].to_le_bytes());
+    stat.extend_from_slice(&ad.map_dimensions[1].to_le_bytes());
+    stat.extend_from_slice(&ad.map_crc);
+    stat.extend_from_slice(ad.map_path);
+    stat.push(0);
+    stat.extend_from_slice(ad.host_name);
+    stat.push(0);
+    stat.extend_from_slice(ad.stat_extension);
+    let encoded = super::lobby::encode_stat_string(&stat);
+    let mut body = Vec::with_capacity(38 + ad.game_name.len() + encoded.len());
+    body.extend_from_slice(&ad.profile.product);
+    body.extend_from_slice(&ad.profile.version.to_le_bytes());
+    body.extend_from_slice(&ad.host_counter.to_le_bytes());
+    body.extend_from_slice(&ad.entry_key.to_le_bytes());
+    body.extend_from_slice(ad.game_name);
+    body.push(0);
+    body.push(ad.name_suffix);
+    body.extend_from_slice(&encoded);
+    body.push(0);
+    body.extend_from_slice(&ad.slots_total.to_le_bytes());
+    body.extend_from_slice(&ad.game_type);
+    body.extend_from_slice(&ad.tail_word);
+    body.extend_from_slice(&ad.slots_open.to_le_bytes());
+    body.extend_from_slice(&ad.uptime.to_le_bytes());
+    body.extend_from_slice(&ad.port.to_le_bytes());
+    super::encode(W3GS_FAMILY, GAMEINFO_ID, &body).map_err(|_| E::Packet("advertisement exceeds the frame ceiling"))
+}

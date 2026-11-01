@@ -317,6 +317,20 @@ impl Resolver {
             cache.values().map(|asset| asset.bytes.len()).sum(),
         ))
     }
+    /// Release retained preload winners without touching loose overrides.
+    /// Asset-derived presentation timing owns when this runs; no bytes are invented.
+    pub fn release_preloaded(&self) -> Result<(usize, usize), Error> {
+        let mut cache = self
+            .preloaded
+            .lock()
+            .map_err(|_| Error::PreloadCache("poisoned"))?;
+        let usage = (
+            cache.len(),
+            cache.values().map(|asset| asset.bytes.len()).sum(),
+        );
+        cache.clear();
+        Ok(usage)
+    }
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "assets.resolve")
