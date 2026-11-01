@@ -132,8 +132,18 @@ fn is_portrait_idle(name: &str) -> bool {
 }
 fn is_portrait_talk(name: &str) -> bool {
     let tokens = portrait_tokens(name);
-    (tokens.first().is_some_and(|t| t == "portrait") && tokens.get(1).is_some_and(|t| t == "talk"))
+    is_portrait_talk_full(&tokens)
         || tokens.first().is_some_and(|t| t == "talk")
+}
+/// Authored `portrait talk` (first token `portrait`, second `talk`): the
+/// preferred speech variant per the wiring plan, falling back to bare `talk`.
+/// `PortraitAnims.slk` (`UI\SoundInfo\PortraitAnims.slk`) is the specified
+/// label table joining ack rows to portrait variants; variant selection across
+/// several talk clips stays with that table once its anim-index semantics are
+/// qualified, so no label is hard-coded here.
+fn is_portrait_talk_full(tokens: &[String]) -> bool {
+    tokens.first().is_some_and(|t| t == "portrait")
+        && tokens.get(1).is_some_and(|t| t == "talk")
 }
 fn splitmix64(mut x: u64) -> u64 {
     // Deterministic application draw over authored rarity weights.
@@ -447,15 +457,23 @@ fn prepare(
     };
     let mdl = pcx_mdl::Mdlx::parse(&source.bytes).map_err(|e| e.to_string())?;
     // Authored idle/speech variants: idle keeps every `portrait` sequence
-    // without a `talk` token; speech prefers `portrait talk`, then `talk`.
-    // Sequence names and SEQS rarity weights are shipped bytes; the weighted
-    // draw over them is a deterministic recreation choice.
+    // without a `talk` token; speech prefers `portrait talk`, then bare
+    // `talk`, keeping source order inside each bucket. Sequence names and
+    // SEQS rarity weights are shipped bytes; the weighted draw over them is
+    // a deterministic recreation choice. XP/panel adjacency stays with the
+    // shared `UnitPanel::portrait_binding` parent/viewport and
+    // `Portrait::rect` widescreen branch; hero XP is read through
+    // `hero_experience_range` by the panel, never duplicated here.
     let mut idle: Vec<usize> = Vec::new();
     let mut idle_weights: Vec<f32> = Vec::new();
-    let mut talk: Vec<usize> = Vec::new();
+    let mut portrait_talk: Vec<usize> = Vec::new();
+    let mut bare_talk: Vec<usize> = Vec::new();
     for (index, sequence) in source.sequences.iter().enumerate() {
-        if is_portrait_talk(&sequence.name) {
-            talk.push(index);
+        let tokens = portrait_tokens(&sequence.name);
+        if is_portrait_talk_full(&tokens) {
+            portrait_talk.push(index);
+        } else if is_portrait_talk(&sequence.name) {
+            bare_talk.push(index);
         } else if is_portrait_idle(&sequence.name) {
             idle.push(index);
             idle_weights.push(sequence.rarity());
@@ -572,7 +590,7 @@ fn prepare(
         receipts,
         idle,
         idle_weights,
-        talk: talk.into_iter().next(),
+        talk: portrait_talk.into_iter().chain(bare_talk).next(),
     })
 }
 fn pose(pose: pcx_gfx::mdx_camera::Pose) -> Result<Transform, String> {
