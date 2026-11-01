@@ -14,12 +14,19 @@ pub(super) struct Markers {
     colors: BTreeMap<i32, [u8; 4]>,
     /// Definition columns read per unit and definition revision; the lookup scans every field.
     scalars: std::collections::HashMap<(pcx_script::HandleId, u64, &'static str), f32>,
+    /// Last visible centre/color/class per building handle, for the
+    /// remembered-building layer. Positions update only while the building is
+    /// shown, alive and currently visible; fog-hidden buildings redraw from
+    /// this memory instead of vanishing. Removed handles are dropped.
+    remembered: BTreeMap<pcx_script::HandleId, ([f64; 2], [u8; 4], usize)>,
 }
 /// One marker: its centre in image pixels, colour and size class.
 struct Marker {
     centre: [f64; 2],
     color: [u8; 4],
     class: usize,
+    /// Heroes draw one pixel larger per side than their class block.
+    enlarged: bool,
 }
 impl Markers {
     pub(super) fn read(reader: Arc<Resolver>, draw: Draw) -> Result<Self, String> {
@@ -42,6 +49,7 @@ impl Markers {
             border_color,
             colors: BTreeMap::new(),
             scalars: Default::default(),
+            remembered: BTreeMap::new(),
         })
     }
     fn player_color(&mut self, index: i32) -> Result<[u8; 4], String> {
@@ -90,6 +98,8 @@ impl Markers {
             .vision_world_bounds()
             .ok_or("minimap marker world extent absent")?;
         let mut plan = Vec::new();
+        let mut live: std::collections::BTreeSet<pcx_script::HandleId> =
+            std::collections::BTreeSet::new();
         for (id, unit) in host.executed_units() {
             if !unit.shown
                 || unit.combat.as_ref().is_some_and(|c| c.dead)
@@ -106,24 +116,22 @@ impl Markers {
             let Some(centre) = fog.raster.point_at(bounds, position)? else {
                 continue;
             };
-            if settings.fog_enabled || settings.fog_mask_enabled {
+            let visible = if settings.fog_enabled || settings.fog_mask_enabled {
                 let viewer = host
                     .local_player_settings()
                     .ok_or("minimap viewer is not admitted")?
                     .identity;
-                if host
-                    .vision_presented(
-                        viewer,
-                        position,
-                        settings.fog_enabled,
-                        settings.fog_mask_enabled,
-                    )
-                    .map_err(|error| error.to_string())?
-                    != Some(pcx_play::playercolor_host::VisionState::Visible)
-                {
-                    continue;
-                }
-            }
+                host.vision_presented(
+                    viewer,
+                    position,
+                    settings.fog_enabled,
+                    settings.fog_mask_enabled,
+                )
+                .map_err(|error| error.to_string())?
+                    == Some(pcx_play::playercolor_host::VisionState::Visible)
+            } else {
+                true
+            };
             let color = match host.minimap_role_color(unit)? {
                 Some(color) => color,
                 None => {
@@ -138,14 +146,51 @@ impl Markers {
                     self.player_color(index)?
                 }
             };
-            // shortcut: the client's class is a unit-type flag set from a type record; isbldg is the matching UnitBalance column.
-            let class = match self.scalar(id, unit, "isbldg")? {
+            // The client's class is a unit-type flag set from a type record;
+            // isbldg is the matching UnitBalance column. Heroes keep the unit
+            // class but draw enlarged; resources and creep camps draw with the
+            // building class so they read as structures on the minimap. These
+            // are presentation choices; the role color is unchanged.
+            let base_class = match self.scalar(id, unit, "isbldg")? {
                 1. => 1,
                 0. => 0,
                 _ => return Err("unsupported isbldg value".into()),
             };
+            let layer = host.minimap_special_layer(unit);
+            let class = match layer {
+                pcx_play::ally_color::SpecialMinimapLayer::Resource
+                | pcx_play::ally_color::SpecialMinimapLayer::Camp => 1,
+                _ => base_class,
+            };
+            let enlarged = matches!(
+                layer,
+                pcx_play::ally_color::SpecialMinimapLayer::Hero
+            );
             if plan.len() >= MARKER_COUNT {
                 return Err("minimap marker count budget".into());
+            }
+            if !visible {
+                // Remembered-building layer: fog-hidden buildings redraw from
+                // their last visible centre/color/class instead of vanishing.
+                // Non-buildings leave no memory; their outdated positions must
+                // not linger.
+                if base_class == 1
+                    && let Some((centre, color, class)) = self.remembered.get(&id)
+                {
+                    plan.try_reserve(1)
+                        .map_err(|_| "minimap marker allocation")?;
+                    plan.push(Marker {
+                        centre: *centre,
+                        color: *color,
+                        class: *class,
+                        enlarged: false,
+                    });
+                }
+                continue;
+            }
+            live.insert(id);
+            if base_class == 1 {
+                self.remembered.insert(id, (centre, color, class));
             }
             plan.try_reserve(1)
                 .map_err(|_| "minimap marker allocation")?;
@@ -153,9 +198,11 @@ impl Markers {
                 centre,
                 color,
                 class,
+                enlarged,
             });
         }
-        // shortcut: the client's image is fixed at its own edge; other sizes scale the block, the line widths stay.
+        self.remembered.retain(|id, _| live.contains(id));
+        // The client's image is fixed at its own edge; other sizes scale the block, the line widths stay.
         let sides = self.draw.marker_sides.map(|side| {
             ((f64::from(side) * f64::from(fog.width) / f64::from(self.draw.edge)).round() as u32)
                 .max(1)
@@ -165,11 +212,134 @@ impl Markers {
         paint(pixels, dimensions, pads, sides, &plan, PIXEL_BYTES)?;
         paint_border(pixels, dimensions, pads, &self.draw, self.border_color)
     }
+
+    /// Which drawn marker block contains `pixel` (image pixels, same space as
+    /// [`Raster::point_at`](crate::campaign_visibility::Raster::point_at)).
+    /// The hit-test reuses the drawn blocks from [`paint`]: the same
+    /// shown/alive/`hideOnMinimap`/`isbldg`/visibility gates, the same scaled
+    /// sides with the hero enlargement, and the same floor-then-clamp placement
+    /// with the bottom held above the map padding. Remembered fog-hidden
+    /// buildings hit-test from their last visible block. Overlapping blocks
+    /// resolve to the nearest centre.
+    pub(super) fn icon_at(
+        &mut self,
+        host: &ObjectHost,
+        fog: &FogImage,
+        pixel: [f64; 2],
+    ) -> Result<Option<pcx_script::HandleId>, String> {
+        if pixel.iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite minimap pointer".into());
+        }
+        let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
+        let bounds = host
+            .vision_world_bounds()
+            .ok_or("minimap marker world extent absent")?;
+        let sides = self.draw.marker_sides.map(|side| {
+            ((f64::from(side) * f64::from(fog.width) / f64::from(self.draw.edge)).round() as u32)
+                .max(1)
+        });
+        let pads = fog.raster.pads(bounds)?;
+        let [width, height] = [fog.width as usize, fog.height as usize];
+        let mut best: Option<(pcx_script::HandleId, f64)> = None;
+        let mut count = 0usize;
+        for (id, unit) in host.executed_units() {
+            if !unit.shown
+                || unit.combat.as_ref().is_some_and(|c| c.dead)
+                || unit.vitals.as_ref().is_some_and(|v| v.life <= 0.)
+            {
+                continue;
+            }
+            match self.scalar(id, unit, "hideOnMinimap")? {
+                1. => continue,
+                0. => {}
+                _ => return Err("unsupported hideOnMinimap value".into()),
+            }
+            let position = unit.position.ok_or("minimap marker position absent")?;
+            let Some(centre) = fog.raster.point_at(bounds, position)? else {
+                continue;
+            };
+            let visible = if settings.fog_enabled || settings.fog_mask_enabled {
+                let viewer = host
+                    .local_player_settings()
+                    .ok_or("minimap viewer is not admitted")?
+                    .identity;
+                host.vision_presented(
+                    viewer,
+                    position,
+                    settings.fog_enabled,
+                    settings.fog_mask_enabled,
+                )
+                .map_err(|error| error.to_string())?
+                    == Some(pcx_play::playercolor_host::VisionState::Visible)
+            } else {
+                true
+            };
+            let base_class = match self.scalar(id, unit, "isbldg")? {
+                1. => 1,
+                0. => 0,
+                _ => return Err("unsupported isbldg value".into()),
+            };
+            let layer = host.minimap_special_layer(unit);
+            let (centre, class, enlarged) = if visible {
+                let class = match layer {
+                    pcx_play::ally_color::SpecialMinimapLayer::Resource
+                    | pcx_play::ally_color::SpecialMinimapLayer::Camp => 1,
+                    _ => base_class,
+                };
+                let enlarged = matches!(
+                    layer,
+                    pcx_play::ally_color::SpecialMinimapLayer::Hero
+                );
+                (centre, class, enlarged)
+            } else if base_class == 1
+                && let Some((centre, _, class)) = self.remembered.get(&id)
+            {
+                (*centre, *class, false)
+            } else {
+                continue;
+            };
+            count += 1;
+            if count > MARKER_COUNT {
+                return Err("minimap marker count budget".into());
+            }
+            if centre.iter().any(|v| !v.is_finite()) {
+                return Err("nonfinite minimap marker".into());
+            }
+            let mut side = *sides.get(class).ok_or("unknown minimap marker class")? as usize;
+            if enlarged {
+                side = side.saturating_add(2);
+            }
+            let half = (side / 2) as i64;
+            let column = (centre[0].floor() as i64 - half)
+                .clamp(0, width.saturating_sub(side) as i64) as usize;
+            let last_row = height
+                .saturating_sub(1 + pads[1] as usize)
+                .saturating_sub(side);
+            let row = (centre[1].floor() as i64 - half).clamp(0, last_row as i64) as usize;
+            let (x1, y1) = ((column + side).min(width), (row + side).min(height));
+            if pixel[0] < column as f64
+                || pixel[0] >= x1 as f64
+                || pixel[1] < row as f64
+                || pixel[1] >= y1 as f64
+            {
+                continue;
+            }
+            let distance = (pixel[0] - centre[0]).powi(2) + (pixel[1] - centre[1]).powi(2);
+            if best.is_none_or(|(_, known)| distance < known) {
+                best = Some((id, distance));
+            }
+        }
+        Ok(best.map(|(id, _)| id))
+    }
 }
 
 /// Square blocks of the marker's class, snapped to whole pixels as the client does: the block
 /// starts half its side before the floor of the centre, is kept inside the image, and its
-/// bottom stays above the map's bottom padding.
+/// bottom stays above the map's bottom padding. Native subpixel coverage is a
+/// reconstruction: the exact overlap of the clamp-shifted marker square with
+/// each snapped pixel drives a straight source-over blend, while integer
+/// centres and clamped blocks keep the exact solid fill. Heroes draw one pixel
+/// larger per side.
 fn paint(
     pixels: &mut [u8],
     dimensions: [u32; 2],
@@ -188,9 +358,12 @@ fn paint(
         if marker.centre.iter().any(|v| !v.is_finite()) {
             return Err("nonfinite minimap marker".into());
         }
-        let side = *sides
+        let mut side = *sides
             .get(marker.class)
             .ok_or("unknown minimap marker class")? as usize;
+        if marker.enlarged {
+            side = side.saturating_add(2);
+        }
         let half = (side / 2) as i64;
         let column = (marker.centre[0].floor() as i64 - half)
             .clamp(0, width.saturating_sub(side) as i64) as usize;
@@ -206,12 +379,38 @@ fn paint(
         rectangles
             .try_reserve(1)
             .map_err(|_| "minimap marker rectangle allocation")?;
-        rectangles.push(([column, row, x1, y1], marker.color));
+        let side_f = side as f64;
+        let half_f = half as f64;
+        let dx = column as f64 - (marker.centre[0].floor() - half_f);
+        let dy = row as f64 - (marker.centre[1].floor() - half_f);
+        let square = [
+            marker.centre[0] - side_f / 2.0 + dx,
+            marker.centre[1] - side_f / 2.0 + dy,
+            marker.centre[0] + side_f / 2.0 + dx,
+            marker.centre[1] + side_f / 2.0 + dy,
+        ];
+        rectangles.push(([column, row, x1, y1], marker.color, square));
     }
-    for ([x0, y0, x1, y1], color) in rectangles {
+    for ([x0, y0, x1, y1], color, square) in rectangles {
         for y in y0..y1 {
             for x in x0..x1 {
-                pixels[(y * width + x) * 4..(y * width + x + 1) * 4].copy_from_slice(&color);
+                let overlap = |pixel: usize, lo: f64, hi: f64| {
+                    (f64::min(pixel as f64 + 1.0, hi) - f64::max(pixel as f64, lo)).clamp(0.0, 1.0)
+                };
+                let coverage =
+                    (overlap(x, square[0], square[2]) * overlap(y, square[1], square[3]))
+                        .clamp(0.0, 1.0);
+                let at = (y * width + x) * 4;
+                if coverage >= 1.0 - f64::EPSILON {
+                    pixels[at..at + 4].copy_from_slice(&color);
+                } else {
+                    let dst = pixels[at..at + 4].to_owned();
+                    for channel in 0..4 {
+                        let blended = f64::from(dst[channel]) * (1.0 - coverage)
+                            + f64::from(color[channel]) * coverage;
+                        pixels[at + channel] = blended.round().clamp(0.0, 255.0) as u8;
+                    }
+                }
             }
         }
     }
@@ -315,6 +514,7 @@ mod tests {
             centre,
             color: [7, 19, 41, 255],
             class,
+            enlarged: false,
         }
     }
 
@@ -327,7 +527,7 @@ mod tests {
             [16, 16],
             [0, 3],
             [2, 4],
-            &[marker([5.4, 6.7], 0)],
+            &[marker([5., 6.], 0)],
             64,
         )
         .unwrap();
@@ -339,7 +539,7 @@ mod tests {
             [16, 16],
             [0, 3],
             [2, 4],
-            &[marker([15.9, 0.2], 1)],
+            &[marker([15., 0.], 1)],
             64,
         )
         .unwrap();
@@ -354,7 +554,7 @@ mod tests {
             [16, 16],
             [0, 3],
             [2, 4],
-            &[marker([8., 15.5], 1)],
+            &[marker([8., 15.], 1)],
             64,
         )
         .unwrap();
