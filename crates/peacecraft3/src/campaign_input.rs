@@ -250,6 +250,10 @@ pub(crate) fn activate_button(
             immediate_command(host, input, button.unit, kind, false);
             return;
         }
+        crate::campaign_command_card::Kind::TrainCancel(slot) => {
+            cancel_training(host, input, button.unit, slot);
+            return;
+        }
         crate::campaign_command_card::Kind::Standard(kind) => {
             if let Err(error) =
                 activate_standard(host, input, button.unit, kind, button.session.clone())
@@ -291,6 +295,7 @@ pub(crate) fn activate_button(
             }
             crate::campaign_command_card::Kind::Standard(_)
             | crate::campaign_command_card::Kind::Train(_)
+            | crate::campaign_command_card::Kind::TrainCancel(_)
             | crate::campaign_command_card::Kind::SkillMenu
             | crate::campaign_command_card::Kind::SkillCancel
             | crate::campaign_command_card::Kind::Learn(_)
@@ -314,6 +319,31 @@ fn cancel_construction(host: &mut MapStartupHost, input: &mut CampaignInput, sit
     let clock = objects.timer_game_time();
     match objects.cancel_unit_construction(site) {
         Ok(true) => record_command(input, clock, PlayerCommand::CancelConstruction { site }),
+        Ok(false) => {}
+        Err(error) => input.last_error = Some(error.to_string()),
+    }
+}
+
+/// Cancels one shared training-queue entry by FIFO slot. Stale sessions never
+/// reach this path: [`command_button`] only activates buttons whose session
+/// matches the live session. Repeats are silent; a refused refund or a
+/// changed owner is reported instead of retried.
+fn cancel_training(
+    host: &mut MapStartupHost,
+    input: &mut CampaignInput,
+    producer: HandleId,
+    slot: usize,
+) {
+    input.command = None;
+    input.build = None;
+    let objects = host.objects_mut();
+    let clock = objects.timer_game_time();
+    match objects.cancel_unit_training(producer, slot) {
+        Ok(true) => record_command(
+            input,
+            clock,
+            PlayerCommand::CancelTraining { producer, slot },
+        ),
         Ok(false) => {}
         Err(error) => input.last_error = Some(error.to_string()),
     }
@@ -927,7 +957,9 @@ pub(crate) fn pick_sight(
     }
 }
 
-/// The nearest shown, living unit the viewer sees whose selection circle covers `point`.
+/// The nearest shown, living, selectable unit the viewer sees whose selection
+/// circle covers `point`. Unselectable units (`BlzUnitDisableSelection`, `Aloc`)
+/// are skipped the way the down handler tests its per-unit flag (`0x5fd820`).
 /// `Err` is a vision read that failed; the pick must stop there.
 fn unit_at(
     objects: &ObjectHost,
@@ -939,6 +971,7 @@ fn unit_at(
     let picked = objects
         .executed_units()
         .filter(|(_, unit)| unit.shown && unit.combat.as_ref().is_none_or(|c| !c.dead))
+        .filter(|(id, _)| objects.is_unit_selectable(*id))
         .filter_map(|(id, unit)| {
             let [x, y] = unit.position?;
             if let Some((viewer, fog, mask)) = visibility {
@@ -1033,6 +1066,7 @@ pub(crate) enum MinimapAction {
 }
 
 /// The minimap has point targets; unit-targeted spells cancel as on bare ground.
+/// Shift-queued Move/Attack/Patrol stay armed (`0x5fd2f0` reads Shift when it sends the order).
 pub(crate) fn minimap_action(
     input: &mut CampaignInput,
     session: Option<Weak<()>>,
@@ -1043,11 +1077,14 @@ pub(crate) fn minimap_action(
         return MinimapAction::Cancel;
     }
     if let Some(armed) = input.command.take().filter(|a| a.is_for(session)) {
-        return match armed.kind {
+        match armed.kind {
             crate::campaign_command_card::Kind::Standard(kind) if primary && !kind.immediate() => {
-                MinimapAction::PointOrder(kind)
+                if matches!(kind, Kind::Move | Kind::Attack | Kind::Patrol) && input.queue_orders {
+                    input.command = Some(armed);
+                }
+                return MinimapAction::PointOrder(kind);
             }
-            _ => MinimapAction::Cancel,
+            _ => return MinimapAction::Cancel,
         };
     }
     if primary {
@@ -1351,6 +1388,10 @@ fn click(
         }
     }
     if select {
+        if !objects.select_allowed() {
+            // `EnableSelect(false)`: clicks change nothing, as in the client.
+            return;
+        }
         if let Some(unit) = picked {
             if finished.is_some_and(|click| click.double || game_input.ctrl.held())
                 && let Some(cap) = boxes.cap()

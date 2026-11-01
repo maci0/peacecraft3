@@ -6,6 +6,15 @@
 //! release, selects the units whose projected selection circle it touches. The
 //! pick rules, the selection cap and the double-click window come from
 //! [`pcx_play::selection_box`]; evidence is in `docs/re-notes/campaign-box-selection.md`.
+//!
+//! Native pick geometry (`0x601410`, about 1,000 decompiled lines, not read in
+//! full) sets up its own projection and filters on per-object flag bits and
+//! virtual calls. The recreation does not reproduce that; it projects each
+//! live, shown, selectable and visible unit's selection circle (UnitUI `scale`
+//! times `ScaleFactor`, 16 samples at terrain height) through the real scene
+//! camera and takes units whose projected circle touches the rectangle
+//! (inference, `campaign-box-selection.md`). Items and destructables never
+//! enter a box pick.
 use std::sync::Weak;
 
 use bevy::{picking::Pickable, prelude::*, window::PrimaryWindow};
@@ -15,7 +24,8 @@ use pcx_play::{
     playercolor_host::{ObjectHost, VisionState},
     scripts::AssetIdentity,
     selection_box::{
-        Candidate, Finish, Gesture, Parameters, Pick, Rect, add_to_selection, pick_box,
+        Candidate, Finish, Gesture, Parameters, Pick, Rect, Refusal, add_to_selection,
+        pick_box,
     },
 };
 use pcx_script::HandleId;
@@ -24,10 +34,21 @@ use peacecraft3::map_script_session::MapScriptSession;
 use crate::campaign_input::{Buttons, CampaignInput, Picking};
 
 /// Points sampled around a selection circle when projecting it to the screen
-/// (numerical method only).
+/// (numerical method only). The native pick (`0x601410`) sets up its own
+/// projection (base loads at `0x601455` from `0x1161b54`, per-press origin in
+/// `+0x54`) and filters candidates on `test byte [esi+0x20], 2` at `0x601701`
+/// and `test dword [esi+0x48c], 0x400` at `0x601707`, with a distance sort in
+/// `0x6010e0` before the tier filter in `0x5ffae0` through `0x5fa130`. Those
+/// flag meanings are not established, so this footprint stays the recreation's
+/// inference: the selection circle (UnitUI `scale` times `ScaleFactor`).
 const FOOTPRINT_SAMPLES: usize = 16;
-/// Stroke width of the outline in logical pixels; the original draws a one pixel
-/// line at 1024x768 (`campaign-box-selection.md`, observation).
+/// Stroke width of the outline in logical pixels. The draw routine `0x5ff0e0`
+/// passes `[SelectionCircle] ColorFriend` (`+0xfc`) as the line colour with
+/// primitive type 2 and no width operand; `0x5ff240` draws the same lines in
+/// `0xf0ffffff`. A Direct3D line list has no width state, so the width is one
+/// device pixel at every resolution. The 2 px vertical / 1 px horizontal edges
+/// sampled at 1024x768 are the rasterization of that 1 px line, not a width
+/// parameter (`campaign-box-selection.md`).
 const OUTLINE_PX: f32 = 1.0;
 /// Between the minimap root (10) and the world.
 const OUTLINE_Z: i32 = 9;
@@ -46,16 +67,30 @@ pub(crate) struct BoxSelect {
     session: Option<Weak<()>>,
     finished: Option<Click>,
     outline: Option<Entity>,
+    /// Live preselect during the drag: the units the current rectangle would
+    /// take under the committed pick tiers, in pick order. The original shows
+    /// their selection circles while the button is held (`CPreselectUI` exists
+    /// in the exe; its draw rule was not read). The recreation publishes the
+    /// set here; [`crate::campaign_selection`] draws it with the authored
+    /// dotted band. Empty when no drag is active or preselect is disabled.
+    preselect: Vec<HandleId>,
 }
 
 impl BoxSelect {
     /// Rules are admitted, so a left press starts a gesture rather than selecting at once.
+    /// Script `EnableDragSelect(false)` is honoured at press time in
+    /// [`gesture_input`], not here, so headless rigs keep offering the gesture.
     pub fn ready(&self) -> bool {
         matches!(self.parameters, Some(Ok(_)))
     }
 
     pub fn take_click(&mut self) -> Option<Click> {
         self.finished.take()
+    }
+
+    /// Units the live drag would take, for the preselect circles.
+    pub fn preselect(&self) -> &[HandleId] {
+        &self.preselect
     }
 
     pub fn cap(&self) -> Option<usize> {
@@ -148,6 +183,7 @@ pub(crate) fn gesture_input(
         state.session = witness;
         state.gesture.cancel();
         state.finished = None;
+        state.preselect.clear();
     }
     let (Some(mouse), Some(keys)) = (buttons.mouse, buttons.keys) else {
         return;
@@ -163,11 +199,21 @@ pub(crate) fn gesture_input(
         return;
     };
     let armed = input.command.is_some() || input.build.is_some();
+    let drag_allowed = session
+        .host()
+        .is_none_or(|host| host.objects().drag_select_allowed());
     if state.gesture.is_active() && (armed || !pointer_open(&picking, &hud, false)) {
         state.gesture.cancel();
+        state.preselect.clear();
+    }
+    if !drag_allowed && state.gesture.is_active() {
+        // `EnableDragSelect(false)`: no box starts and an in-flight drag dies.
+        state.gesture.cancel();
+        state.preselect.clear();
     }
     if state.gesture.is_active() && keys.just_pressed(KeyCode::Escape) {
         state.gesture.cancel();
+        state.preselect.clear();
         input.escape_cancelled_drag = true;
     }
     let additive = picking.game_input.shift.held();
@@ -177,6 +223,7 @@ pub(crate) fn gesture_input(
         && !armed
         && !picking.game_input.alt.held()
         && state.ready()
+        && drag_allowed
         && let Some(cursor) = window.cursor_position()
         && viewport.contains(cursor)
         && pointer_open(&picking, &hud, true)
@@ -190,12 +237,53 @@ pub(crate) fn gesture_input(
             viewport.height(),
             &parameters,
         );
+        state.preselect.clear();
     }
     if state.gesture.is_active() {
         if let Some(cursor) = window.cursor_position() {
             state
                 .gesture
                 .track(cursor.clamp(viewport.min, viewport.max).to_array());
+        }
+        // Live preselect: what the current rectangle would commit, for the
+        // dotted circles. Best effort; a failed read clears rather than reports.
+        if let Some(rect) = state.gesture.rect() {
+            let preselect_on = session.host().is_some_and(|host| {
+                host.objects().preselect_allowed()
+                    && host.objects().select_allowed()
+                    && host.objects().drag_select_allowed()
+            }) && drag_allowed;
+            if preselect_on
+                && let Some(context) = picking.ground.context.as_ref()
+                && let Some(host) = session.host()
+            {
+                let view = Projector {
+                    terrain: &context.terrain,
+                    camera,
+                    transform,
+                };
+                match hits(&view, &mut input, host.objects(), rect) {
+                    Ok(found) => {
+                        let candidates: Vec<Candidate> =
+                            found.into_iter().map(|(c, _)| c).collect();
+                        match state.cap() {
+                            Some(cap) => match pick_box(&candidates, cap) {
+                                Ok(Some(pick)) => {
+                                    state.preselect = pick.ids();
+                                }
+                                Ok(None) => state.preselect.clear(),
+                                Err(_) => state.preselect.clear(),
+                            },
+                            None => state.preselect.clear(),
+                        }
+                    }
+                    Err(_) => state.preselect.clear(),
+                }
+            } else {
+                state.preselect.clear();
+            }
+        } else {
+            state.preselect.clear();
         }
         if mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left) {
             let cursor = window
@@ -207,6 +295,7 @@ pub(crate) fn gesture_input(
                     additive,
                     double,
                 }) => {
+                    state.preselect.clear();
                     state.finished = Some(Click {
                         at,
                         additive,
@@ -214,6 +303,7 @@ pub(crate) fn gesture_input(
                     });
                 }
                 Some(Finish::Box { rect, additive }) => {
+                    state.preselect.clear();
                     let result = match picking.ground.context.as_ref() {
                         Some(context) => select_box(
                             &Projector {
@@ -338,17 +428,39 @@ fn select_box(
         return Ok(());
     };
     let objects = host.objects_mut();
+    if !objects.select_allowed() || !objects.drag_select_allowed() {
+        // `EnableSelect(false)` / `EnableDragSelect(false)`: the drag commits nothing.
+        return Ok(());
+    }
     let found: Vec<Candidate> = hits(view, input, objects, rect)?
         .into_iter()
         .map(|(candidate, _)| candidate)
         .collect();
-    let Some(pick) = pick_box(&found, cap).map_err(|e| e.to_string())? else {
+    let pick = match pick_box(&found, cap) {
+        Ok(pick) => pick,
+        // Several foreign units: keep the current selection like an empty sweep.
+        // The pure function still reports `SeveralForeign` for callers that need
+        // the explicit signal; the drag-box UI stays silent (recreation choice,
+        // `campaign-box-selection.md`). The native commit path shows no loud
+        // refusal here either (it filters through `0x5ffae0`/`0x5fa130`).
+        Err(Refusal::SeveralForeign(_)) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let Some(pick) = pick else {
         return Ok(());
     };
     apply(objects, input, pick, additive, cap)
 }
 
-/// Selects every own unit of the clicked unit's type inside the viewport.
+/// Selects every own non-hero unit of the clicked unit's type inside the viewport.
+/// A hero double click stays single (heroes never share a subgroup). Another
+/// player's unit stays single. The native end-drag only reaches the grouping
+/// routine `0x5fff10` when the point pick holds exactly one unit
+/// (`cmp [ebp-0x38], 1` at `0x5f9ddc` after `0x601410`+`0x6010e0`); the
+/// double-click test itself compares the press against the previous press
+/// within `0x0.01` on each axis (`0x5f9d2e..0x5f9d6b`, `andps` with
+/// `0xe78370`, `comiss` against `0xe7e968`). `clicked` must be among the
+/// viewport hits or there is nothing to group.
 pub(crate) fn double_click_group(
     view: &Projector,
     input: &mut CampaignInput,
@@ -357,6 +469,9 @@ pub(crate) fn double_click_group(
     cap: usize,
     additive: bool,
 ) -> Result<(), String> {
+    if !objects.select_allowed() {
+        return Ok(());
+    }
     let viewport = view
         .camera
         .logical_viewport_rect()
@@ -385,7 +500,15 @@ fn apply(
             .iter()
             .filter_map(|&id| objects.box_candidate(id).transpose())
             .collect::<Result<_, _>>()?;
-        add_to_selection(&current, &pick, cap).map_err(|e| e.to_string())?
+        match add_to_selection(&current, &pick, cap) {
+            Ok(merged) => merged,
+            // Shift mixing other players' units: keep the current selection like
+            // an empty sweep. The pure function still reports `MixedAdditive`;
+            // the UI stays silent (recreation choice). The `0x5ffae0` Shift path
+            // (`0x83fea0`) proceeds through `0x4efc40` without a loud refusal.
+            Err(Refusal::MixedAdditive) => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        }
     } else {
         pick
     };
@@ -403,7 +526,7 @@ fn apply(
     if pick.truncated {
         input.last_error = Some(format!(
             "more than {cap} selectable units; the original's choice among them is not \
-             established, kept the first {cap} in unit creation order"
+             established, kept hero/prio/rawcode order (ties in unit creation order)"
         ));
     }
     Ok(())
@@ -427,13 +550,15 @@ pub(crate) fn draw_outline(
     let [a, r, g, b] = circles.friend;
     let colour = Color::srgba_u8(r, g, b, a);
     let (w, h) = (window.width(), window.height());
+    // One device pixel at every resolution (exe, see `OUTLINE_PX`).
+    let px = OUTLINE_PX;
     let place = |node: &mut Node| {
         node.position_type = PositionType::Absolute;
         node.left = Val::Percent(rect.min[0] / w * 100.0);
         node.top = Val::Percent(rect.min[1] / h * 100.0);
         node.width = Val::Percent((rect.max[0] - rect.min[0]) / w * 100.0);
         node.height = Val::Percent((rect.max[1] - rect.min[1]) / h * 100.0);
-        node.border = UiRect::all(Val::Px(OUTLINE_PX));
+        node.border = UiRect::all(Val::Px(px));
     };
     if let Some(entity) = state.outline
         && let Ok((mut node, mut border)) = nodes.get_mut(entity)

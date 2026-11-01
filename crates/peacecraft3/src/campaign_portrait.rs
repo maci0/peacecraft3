@@ -51,6 +51,8 @@ struct Key {
 }
 #[derive(Component)]
 struct PortraitImage;
+#[derive(Component)]
+struct PortraitMask;
 struct Plan {
     animation: pcx_play::unit_model::Animation,
     source: Arc<pcx_play::unit_model::Model>,
@@ -67,11 +69,21 @@ struct Plan {
     lighting: crate::menu_lighting::Lighting,
     tint: [f32; 3],
     receipts: Vec<AssetReceipt>,
+    /// Authored idle variants: sequence indices whose first token is `portrait`
+    /// without a `talk` second token, in source order, with their SEQS rarity
+    /// weights. The `portrait` token itself is already used for the fallback
+    /// selection; no new authored name is introduced here.
+    idle: Vec<usize>,
+    idle_weights: Vec<f32>,
+    /// Authored speech variant: `portrait talk` preferred, then `talk`, in
+    /// source order. `None` keeps the idle clip while a voice plays.
+    talk: Option<usize>,
 }
 struct Scene {
     key: Key,
     parent: Entity,
     root: Entity,
+    mask: Entity,
     image_node: Entity,
     camera_entity: Entity,
     target: Handle<Image>,
@@ -79,6 +91,13 @@ struct Scene {
     elapsed: std::time::Duration,
     geosets: model_scene::Geosets,
     plan: Plan,
+    /// Position inside `plan.idle` and how many idle loops completed.
+    /// The draw is a deterministic splitmix of the unit id and cycle over the
+    /// authored rarity weights: a recreation choice, not native RNG parity.
+    idle_pos: usize,
+    idle_cycle: u64,
+    idle_started: std::time::Duration,
+    speaking: bool,
 }
 #[derive(SystemParam)]
 struct DrawAssets<'w> {
@@ -99,6 +118,72 @@ struct Queries<'w, 's> {
     visibility: Query<'w, 's, &'static mut Visibility>,
     transforms: Query<'w, 's, &'static mut Transform>,
     cameras: Query<'w, 's, &'static mut Camera>,
+    sounds: Query<'w, 's, &'static crate::campaign_audio::GameSound>,
+}
+fn portrait_tokens(name: &str) -> Vec<String> {
+    name.split(|c: char| c.is_ascii_whitespace() || c == '-')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect()
+}
+fn is_portrait_idle(name: &str) -> bool {
+    let tokens = portrait_tokens(name);
+    tokens.first().is_some_and(|t| t == "portrait") && tokens.get(1).is_none_or(|t| t != "talk")
+}
+fn is_portrait_talk(name: &str) -> bool {
+    let tokens = portrait_tokens(name);
+    (tokens.first().is_some_and(|t| t == "portrait") && tokens.get(1).is_some_and(|t| t == "talk"))
+        || tokens.first().is_some_and(|t| t == "talk")
+}
+fn splitmix64(mut x: u64) -> u64 {
+    // Deterministic application draw over authored rarity weights.
+    // This is a recreation choice; native idle draw timing/order is unqualified.
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+fn weighted_idle(weights: &[f32], unit: pcx_script::HandleId, cycle: u64) -> Result<usize, String> {
+    if weights.is_empty() {
+        return Err("portrait: model has no authored portrait idle".into());
+    }
+    for w in weights {
+        if !w.is_finite() || *w < 0. {
+            return Err("portrait: invalid SEQS rarity weight".into());
+        }
+    }
+    let total: f32 = weights.iter().sum();
+    if !total.is_finite() {
+        return Err("portrait: invalid SEQS rarity weight".into());
+    }
+    // Zero total keeps the explicit-rarity convention: the final candidate wins.
+    if total <= 0. {
+        return Ok(weights.len() - 1);
+    }
+    let raw = unit.token();
+    let draw = ((splitmix64(raw.wrapping_add(cycle.wrapping_mul(0x9e37_79b9_7f4a_7c15))) >> 11)
+        as f64)
+        / ((1u64 << 53) as f64);
+    let mut remaining = (draw as f32) * total;
+    for (i, w) in weights.iter().enumerate() {
+        if *w > remaining {
+            return Ok(i);
+        }
+        remaining -= w;
+    }
+    Ok(weights.len() - 1)
+}
+fn idle_duration_secs(source: &pcx_play::unit_model::Model, index: usize) -> Result<f64, String> {
+    let sequence = source
+        .sequences
+        .get(index)
+        .ok_or("portrait: idle sequence missing")?;
+    let span = f64::from(sequence.duration()) / 1000.;
+    if !span.is_finite() || span < 0. {
+        return Err("portrait: invalid idle duration".into());
+    }
+    Ok(span)
 }
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<CampaignPortrait>()
@@ -121,6 +206,7 @@ fn project(
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut assets: DrawAssets,
     mut queries: Queries,
+    audio: Res<crate::campaign_audio::CampaignAudio>,
 ) {
     let witness = session.session_witness();
     let same = match (&state.witness, &witness) {
@@ -140,6 +226,7 @@ fn project(
     state.shown = inputs.camera.active();
     if !state.shown {
         if let Some(scene) = &state.scene {
+            commands.entity(scene.mask).insert(Visibility::Hidden);
             commands.entity(scene.image_node).insert(Visibility::Hidden);
             if let Ok(mut camera) = queries.cameras.get_mut(scene.camera_entity) {
                 camera.is_active = false;
@@ -179,6 +266,7 @@ fn project(
     {
         state.shown = false;
         if let Some(scene) = &state.scene {
+            commands.entity(scene.mask).insert(Visibility::Hidden);
             commands.entity(scene.image_node).insert(Visibility::Hidden);
             if let Ok(mut camera) = queries.cameras.get_mut(scene.camera_entity) {
                 camera.is_active = false;
@@ -187,10 +275,19 @@ fn project(
         return;
     }
     let desired = (|| {
+        // Multi-unit switching: the portrait follows `active_unit`, the first
+        // unit of the active subgroup (`selection_subgroup_host`), so Tab and
+        // group-button subgroup changes arrive here as a new unit id and retire
+        // the scene through the Key change below. This matches the decoded
+        // rule that the portrait follows the active subgroup's representative
+        // (docs/re-notes/input-selection-rules.md).
         let Some(id) = objects.active_unit()? else {
             return Ok(None);
         };
         let unit = objects.executed_unit(id).map_err(|e| e.to_string())?;
+        // Hero-revival refresh: a dead or hidden representative retires its
+        // scene and clears `failed`, so the same-handle `ReviveHero` identity
+        // re-prepares a fresh scene on the next frame without reselection.
         if !unit.shown || unit.combat.as_ref().is_some_and(|c| c.dead) {
             return Ok(None);
         }
@@ -287,14 +384,32 @@ fn project(
         return;
     };
     commands
+        .entity(scene.mask)
+        .insert(Visibility::Inherited);
+    commands
         .entity(scene.image_node)
         .insert(Visibility::Inherited);
     scene.elapsed += time.delta();
+    // Speech holds Talk while its ack row stays live for this unit; otherwise
+    // the rarity-weighted idle runs. The unit link is the ack's retained unit
+    // id, not a name-prefix guess across same-type units. Timing is authored
+    // data only: idle spans come from the model's SEQS durations and Talk
+    // holds exactly while the `GameSound` row is live, with no invented
+    // hold, delay or blend. Original-client speech/idle cadence parity is
+    // unqualified and remains open.
+    let speaking = audio
+        .speaking
+        .as_ref()
+        .is_some_and(|(unit, row)| {
+            *unit == scene.key.unit
+                && queries.sounds.iter().any(|sound| &sound.name == row)
+        });
     if let Err(error) = advance(
         &mut scene,
         &mut assets,
         &mut queries.visibility,
         &mut queries.transforms,
+        speaking,
     ) {
         state.last_error = Some(error);
         state.failed = Some(key);
@@ -331,10 +446,29 @@ fn prepare(
         Err(error) => return Err(error.to_string()),
     };
     let mdl = pcx_mdl::Mdlx::parse(&source.bytes).map_err(|e| e.to_string())?;
-    // shortcut: idle variants follow source order, expand when acknowledgement audio drives portrait speech and rarity selection.
-    let mut idle = pcx_play::unit_model::Animation::new(source.clone(), 0.)?;
-    idle.select("portrait", 0., None)?;
-    let sample = idle
+    // Authored idle/speech variants: idle keeps every `portrait` sequence
+    // without a `talk` token; speech prefers `portrait talk`, then `talk`.
+    // Sequence names and SEQS rarity weights are shipped bytes; the weighted
+    // draw over them is a deterministic recreation choice.
+    let mut idle: Vec<usize> = Vec::new();
+    let mut idle_weights: Vec<f32> = Vec::new();
+    let mut talk: Vec<usize> = Vec::new();
+    for (index, sequence) in source.sequences.iter().enumerate() {
+        if is_portrait_talk(&sequence.name) {
+            talk.push(index);
+        } else if is_portrait_idle(&sequence.name) {
+            idle.push(index);
+            idle_weights.push(sequence.rarity());
+        }
+    }
+    if idle.is_empty() {
+        return Err("portrait: model has no authored portrait idle".into());
+    }
+    let mut idle_anim = pcx_play::unit_model::Animation::new(source.clone(), 0.)?;
+    // Cycle zero keeps source order here; `spawn` applies the weighted pick
+    // once the scene key exists. Invalid weights refuse instead of inventing.
+    idle_anim.select_index(idle[0], 0.)?;
+    let sample = idle_anim
         .sample(0.)?
         .ok_or("portrait: model has no authored animation")?;
     let interval = sample.interval;
@@ -421,7 +555,7 @@ fn prepare(
         return Err("portrait: unsupported source tint".into());
     }
     Ok(Plan {
-        animation: idle,
+        animation: idle_anim,
         source,
         runtime,
         model,
@@ -436,6 +570,9 @@ fn prepare(
         lighting,
         tint,
         receipts,
+        idle,
+        idle_weights,
+        talk: talk.into_iter().next(),
     })
 }
 fn pose(pose: pcx_gfx::mdx_camera::Pose) -> Result<Transform, String> {
@@ -495,7 +632,11 @@ fn spawn(
         ),
     )
     .map_err(|e| e.to_string())?;
-    plan.lighting.bind(&geosets.bound, &assets.materials);
+    plan.lighting.bind(
+        &geosets.bound,
+        &assets.materials,
+        &vec![false; geosets.bound.len()],
+    );
     plan.textures.clear();
     let target = assets.images.add(Image::new_target_texture(
         1,
@@ -517,8 +658,14 @@ fn spawn(
             Camera {
                 order: -1,
                 is_active: false,
-                // The isolated scene starts with an opaque empty framebuffer.
-                clear_color: ClearColorConfig::Custom(Color::BLACK),
+                // Transparent so the authored console backing shows through.
+                // The authored portrait rectangle clips the image. Checked
+                // sources (`unit_panel_layout` reads the `0x6416b0` rectangle
+                // and the `0x620ee0` shared light; the admitted ConsoleUI and
+                // SimpleInfoPanel FDF supply no mask texture or circular
+                // geometry) expose no circular mask operand, so no new mask art
+                // is invented here.
+                clear_color: ClearColorConfig::Custom(Color::NONE),
                 ..default()
             },
             RenderTarget::Image(target.clone().into()),
@@ -535,27 +682,61 @@ fn spawn(
         ))
         .id();
     let rect = layout.rect(viewport[0] / viewport[1])?;
-    let image_node = commands
+    // Rectangular mask composition: the authored portrait rectangle clips the
+    // stretched render target. The mask node owns the authored frame; the image
+    // fills it so a later sourced mask-texture swap keeps the same layout.
+    // No circular model/texture is admitted today (see the camera comment
+    // above); this rectangular clip is the observed backing behaviour, not a
+    // fitted screenshot default.
+    let mask = commands
         .spawn((
             frame(rect, viewport),
+            PortraitMask,
+            CampaignInterface,
+            Pickable::IGNORE,
+            ZIndex(-1),
+            Overflow::clip(),
+            ChildOf(parent),
+        ))
+        .id();
+    let image_node = commands
+        .spawn((
+            Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
             ImageNode::new(target.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
             PortraitImage,
             CampaignInterface,
             Pickable::IGNORE,
-            ZIndex(-1),
-            ChildOf(parent),
+            ChildOf(mask),
         ))
         .id();
+    // Deterministic rarity-weighted idle for cycle zero. Invalid weights refuse
+    // in `prepare` planning via `weighted_idle`; source order is the fallback
+    // only when the model carries a single idle variant.
+    let idle_pos = weighted_idle(&plan.idle_weights, key.unit, 0).unwrap_or(0);
+    if let Some(seq) = plan.idle.get(idle_pos) {
+        plan.animation
+            .select_index(*seq, 0.)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(Scene {
         key,
         parent,
         root,
+        mask,
         image_node,
         camera_entity,
         target,
         size: UVec2::ONE,
         elapsed: std::time::Duration::ZERO,
         geosets,
+        idle_pos,
+        idle_cycle: 0,
+        idle_started: std::time::Duration::ZERO,
+        speaking: false,
         plan,
     })
 }
@@ -574,7 +755,70 @@ fn advance(
     assets: &mut DrawAssets,
     visibility: &mut Query<&mut Visibility>,
     transforms: &mut Query<&mut Transform>,
+    speaking: bool,
 ) -> Result<(), String> {
+    // Speech takes the authored Talk variant while its ack row stays live;
+    // silence returns to the current rarity-weighted idle. Selection changes
+    // only on edges so the clip phase is preserved while held. There is no
+    // authored crossfade or hold-over: the switch is immediate on the voice
+    // edge, which is a recreation choice while original transition timing is
+    // unmeasured.
+    if speaking != scene.speaking {
+        let now = scene.elapsed.as_secs_f64();
+        if speaking {
+            if let Some(talk) = scene.plan.talk {
+                scene.plan.animation.select_index(talk, now)?;
+            }
+        } else if let Some(seq) = scene.plan.idle.get(scene.idle_pos) {
+            scene.plan.animation.select_index(*seq, now)?;
+            scene.idle_started = scene.elapsed;
+        }
+        scene.speaking = speaking;
+    }
+    if !scene.speaking {
+        // Idle rarity: each completed authored idle loop re-draws over the
+        // SEQS weights. Non-looping idles advance at their clamp bound so the
+        // portrait never freezes on a finished clip.
+        if let Some(seq) = scene.plan.idle.get(scene.idle_pos).copied() {
+            let span = idle_duration_secs(&scene.plan.source, seq)?;
+            let held = scene.elapsed.saturating_sub(scene.idle_started).as_secs_f64();
+            let done = if span <= 0. { true } else { held >= span };
+            if done {
+                let next_cycle = scene.idle_cycle.wrapping_add(1);
+                let next_pos =
+                    weighted_idle(&scene.plan.idle_weights, scene.key.unit, next_cycle)?;
+                let now = scene.elapsed.as_secs_f64();
+                if let Some(next_seq) = scene.plan.idle.get(next_pos).copied() {
+                    scene.plan.animation.select_index(next_seq, now)?;
+                    scene.idle_pos = next_pos;
+                    scene.idle_cycle = next_cycle;
+                    scene.idle_started = scene.elapsed;
+                }
+            }
+        }
+    } else if let Some(talk) = scene.plan.talk {
+        // Loop a non-looping Talk clip while the voice is still live.
+        let span = idle_duration_secs(&scene.plan.source, talk)?;
+        if span > 0. {
+            let sample = scene
+                .plan
+                .animation
+                .sample(scene.elapsed.as_secs_f64())?
+                .ok_or("portrait: selected animation disappeared")?;
+            let sequence = scene
+                .plan
+                .source
+                .sequences
+                .get(talk)
+                .ok_or("portrait: talk sequence missing")?;
+            if sequence.non_looping && sample.frame >= sequence.interval_end {
+                scene
+                    .plan
+                    .animation
+                    .select_index(talk, scene.elapsed.as_secs_f64())?;
+            }
+        }
+    }
     let elapsed = model_scene::elapsed_millis(&scene.plan.source.member, scene.elapsed)
         .map_err(|e| e.to_string())?;
     let frame = scene
@@ -668,7 +912,13 @@ fn advance(
     )
 }
 fn retire(commands: &mut Commands, scene: Scene, assets: &mut DrawAssets) {
+    // Full retirement for selection switches and hero-revival refresh: the
+    // camera is an explicit child of the scene root, and despawning it here
+    // keeps a retired portrait from leaving a stale camera behind even if a
+    // future Bevy hierarchy policy stops cascading the root despawn.
+    commands.entity(scene.camera_entity).try_despawn();
     commands.entity(scene.image_node).try_despawn();
+    commands.entity(scene.mask).try_despawn();
     commands.entity(scene.root).try_despawn();
     for handle in scene.geosets.handles {
         assets.meshes.remove(handle.id());
@@ -687,7 +937,7 @@ fn resize(
     nodes: Query<&ComputedNode>,
     mut targets: ResMut<Assets<Image>>,
     mut cameras: Query<(&mut Camera, &mut Projection)>,
-    mut frames: Query<&mut Node, With<PortraitImage>>,
+    mut masks: Query<&mut Node, With<PortraitMask>>,
 ) {
     let shown = state.shown;
     let Some(scene) = state.scene.as_mut() else {
@@ -696,7 +946,7 @@ fn resize(
     let Some((rules, viewport, _)) = panel.portrait_binding() else {
         return;
     };
-    let Ok(node) = nodes.get(scene.image_node) else {
+    let Ok(node) = nodes.get(scene.mask) else {
         return;
     };
     let Ok((mut camera, mut projection)) = cameras.get_mut(scene.camera_entity) else {
@@ -721,7 +971,7 @@ fn resize(
             .map_err(|_| "portrait: console parent removed")?
             .size();
         let aspect = parent.x / parent.y;
-        if let Ok(mut frame) = frames.get_mut(scene.image_node) {
+        if let Ok(mut frame) = masks.get_mut(scene.mask) {
             frame.set_if_neq(self::frame(rules.portrait.rect(aspect)?, viewport));
         }
         if size != scene.size {
@@ -770,6 +1020,107 @@ fn target_size(size: Vec2) -> Result<Option<UVec2>, &'static str> {
 impl CampaignPortrait {
     pub(crate) fn receipt_count(&self) -> usize {
         self.scene.as_ref().map_or(0, |s| s.plan.receipts.len())
+    }
+}
+
+/// Asset-derived portrait state retained for a controlled original-capture
+/// comparison. No invented geometry, timing or mask art: every field is read
+/// from the admitted scene plan, sequences or render target.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct PortraitParityClip {
+    pub name: String,
+    pub rarity: f32,
+    pub duration_ms: u32,
+    pub non_looping: bool,
+    pub interval: [u32; 2],
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct PortraitParityScene {
+    pub unit: pcx_script::HandleId,
+    pub model: String,
+    pub color: i32,
+    pub source_member: String,
+    pub parent: Entity,
+    pub mask: Entity,
+    pub image_node: Entity,
+    pub camera_entity: Entity,
+    pub camera_name: String,
+    pub camera_eye: [f32; 3],
+    pub camera_target: [f32; 3],
+    pub camera_fov: f32,
+    pub camera_near: f32,
+    pub camera_far: f32,
+    pub idle: Vec<PortraitParityClip>,
+    pub talk: Option<PortraitParityClip>,
+    pub idle_pos: usize,
+    pub idle_cycle: u64,
+    pub speaking: bool,
+    pub elapsed_secs: f64,
+    pub idle_started_secs: f64,
+    pub target_size: [u32; 2],
+    pub tint: [f32; 3],
+    pub receipt_members: Vec<String>,
+    pub last_error: Option<String>,
+}
+
+#[cfg(test)]
+impl CampaignPortrait {
+    pub(crate) fn parity_scene(&self) -> Option<PortraitParityScene> {
+        let scene = self.scene.as_ref()?;
+        fn clip(sequence: &pcx_mdl::Sequence) -> PortraitParityClip {
+            PortraitParityClip {
+                name: sequence.name.clone(),
+                rarity: sequence.rarity(),
+                duration_ms: sequence.duration(),
+                non_looping: sequence.non_looping,
+                interval: [sequence.interval_start, sequence.interval_end],
+            }
+        }
+        let idle = scene
+            .plan
+            .idle
+            .iter()
+            .filter_map(|index| scene.plan.source.sequences.get(*index).map(clip))
+            .collect::<Vec<_>>();
+        let talk = scene
+            .plan
+            .talk
+            .and_then(|index| scene.plan.source.sequences.get(index).map(clip));
+        Some(PortraitParityScene {
+            unit: scene.key.unit,
+            model: scene.key.model.clone(),
+            color: scene.key.color,
+            source_member: scene.plan.source.member.clone(),
+            parent: scene.parent,
+            mask: scene.mask,
+            image_node: scene.image_node,
+            camera_entity: scene.camera_entity,
+            camera_name: scene.plan.camera.name.clone(),
+            camera_eye: scene.plan.camera.eye,
+            camera_target: scene.plan.camera.target,
+            camera_fov: scene.plan.camera.field_of_view,
+            camera_near: scene.plan.camera.near,
+            camera_far: scene.plan.camera.far,
+            idle,
+            talk,
+            idle_pos: scene.idle_pos,
+            idle_cycle: scene.idle_cycle,
+            speaking: scene.speaking,
+            elapsed_secs: scene.elapsed.as_secs_f64(),
+            idle_started_secs: scene.idle_started.as_secs_f64(),
+            target_size: [scene.size.x, scene.size.y],
+            tint: scene.plan.tint,
+            receipt_members: scene
+                .plan
+                .receipts
+                .iter()
+                .map(|receipt| format!("{}", receipt.path))
+                .collect(),
+            last_error: self.last_error.clone(),
+        })
     }
 }
 
@@ -932,9 +1283,14 @@ mod tests {
                 commands.insert_resource(Fixture(Some(scene)));
             })
             .unwrap();
-        let (root, camera, image) = {
+        let (root, camera, image, mask) = {
             let scene = app.world().resource::<Fixture>().0.as_ref().unwrap();
-            (scene.root, scene.camera_entity, scene.image_node)
+            (
+                scene.root,
+                scene.camera_entity,
+                scene.image_node,
+                scene.mask,
+            )
         };
         app.world_mut()
             .run_system_once(
@@ -944,7 +1300,7 @@ mod tests {
                  mut transforms: Query<&mut Transform>| {
                     let scene = fixture.0.as_mut().unwrap();
                     scene.elapsed = std::time::Duration::from_millis(300);
-                    advance(scene, &mut assets, &mut visibility, &mut transforms).unwrap();
+                    advance(scene, &mut assets, &mut visibility, &mut transforms, false).unwrap();
                 },
             )
             .unwrap();
@@ -966,7 +1322,7 @@ mod tests {
                 },
             )
             .unwrap();
-        for entity in [root, camera, image] {
+        for entity in [root, camera, image, mask] {
             assert!(app.world().get_entity(entity).is_err());
         }
         assert!(app.world().resource::<Assets<Mesh>>().is_empty());

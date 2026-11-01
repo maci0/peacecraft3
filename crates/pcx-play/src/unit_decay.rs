@@ -45,6 +45,16 @@ impl Rules {
             dissipate,
         })
     }
+    /// Gameplay phase durations in logical seconds, in MiscData order
+    /// `[flesh, bone, structure, dissipate]`, with per-profile provenance in
+    /// `sources`. Used by the corpse-timing comparison harness; the values
+    /// remain source-derived, never copied constants.
+    pub fn phase_durations(&self) -> [f64; 4] {
+        [self.flesh, self.bone, self.structure, self.dissipate]
+    }
+    pub fn duration_sources(&self) -> &[String] {
+        &self.sources
+    }
     fn durations(
         profiles: &[(&str, &[u8])],
         max_bytes: usize,
@@ -127,7 +137,7 @@ pub enum Phase {
     Hidden,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Kind {
+pub enum Kind {
     Unit,
     Structure,
     Hero,
@@ -152,6 +162,36 @@ impl State {
     }
     pub fn deadline(&self) -> Option<f64> {
         self.deadline
+    }
+    pub fn remaining(&self) -> f64 {
+        self.remaining
+    }
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+    pub fn death_duration(&self) -> f64 {
+        self.death
+    }
+    /// Native-qualified suspension phases: dead Flesh/Bone only.
+    /// Selected-image handler `4af8e0` qualifies those states before action
+    /// retirement; Dying/Dissipating/Remains/Hidden never acquire a decay timer
+    /// suspension here. This predicate is source-derived; the resume-remaining
+    /// policy below remains a labeled recreation choice.
+    pub(crate) fn suspend_eligible(&self) -> bool {
+        matches!(self.phase, Phase::Flesh | Phase::Bone)
+    }
+    /// Save the current phase's remaining lifetime and clear its deadline.
+    /// Leaves animation playback untouched: script-driven freezing stays with
+    /// `SetUnitTimeScale`, not with decay suspension.
+    pub(crate) fn suspend_at(&mut self, now: f64) {
+        self.remaining = self.deadline.map_or(0., |at| (at - now).max(0.));
+        self.deadline = None;
+        self.suspended = true;
+    }
+    /// Restore the saved remaining lifetime at the current clock.
+    pub(crate) fn resume_at(&mut self, now: f64) -> Result<(), String> {
+        self.suspended = false;
+        self.schedule(now, self.remaining)
     }
     pub(crate) fn begin(&mut self, now: f64) -> Result<(), String> {
         self.phase = Phase::Dying;

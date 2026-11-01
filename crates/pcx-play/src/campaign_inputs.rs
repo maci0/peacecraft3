@@ -99,8 +99,13 @@ pub fn prepare_new_game(
         max_parked_threads: 65536,
     });
     let map = pcx_map::Map::parse(&map_sources.map_bytes).map_err(|e| e.to_string())?;
-    let edits = map
-        .extract_checked(
+    // Upgrade overrides come from the admitted object overlays when present
+    // (`war3map.w3q`), falling back to a direct member read for callers that
+    // bypass admission. The overlay is exact bytes, never a guessed default.
+    let edit_bytes: Option<Vec<u8>> = if context.object_overlays.contains_key("war3map.w3q") {
+        None
+    } else {
+        map.extract_checked(
             &map_sources.map_label,
             "war3map.w3q",
             pcx_mpq::checked::ReadBudget {
@@ -110,7 +115,8 @@ pub fn prepare_new_game(
                 max_decoded_bytes: 4 << 20,
             },
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    };
     let stock_misc = reader
         .resolve_bounded("Units/MiscData.txt", 4 << 20)
         .map_err(|e| e.to_string())?;
@@ -270,15 +276,18 @@ pub fn prepare_new_game(
         GAME_CAMERA_ZOOM,
         2 << 20,
     )?;
-    let upgrades = edits
-        .as_ref()
-        .map(|bytes| {
-            pcx_objects::ObjectFile::parse("war3map.w3q", bytes)
-                .map(|file| pcx_objects::editor::Overlay::of(&file))
-                .map_err(|e| e.to_string())
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let upgrades = match context.object_overlays.get("war3map.w3q") {
+        Some(overlay) => overlay.clone(),
+        None => edit_bytes
+            .as_ref()
+            .map(|bytes| {
+                pcx_objects::ObjectFile::parse("war3map.w3q", bytes)
+                    .map(|file| pcx_objects::editor::Overlay::of(&file))
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()?
+            .unwrap_or_default(),
+    };
     let initial_alliances =
         crate::player_alliance_rules::Rules::reviewed_legacy(image, client.clone())?;
     let research = crate::upgrade_research::Rules::read(
@@ -426,14 +435,24 @@ pub fn prepare(
         progression.push((map_sources.map_label.as_str(), bytes.as_slice()));
     }
     let progression = pcx_objects::editor::hero::Progression::read(&progression, 8 << 20)?;
-    let ability_bytes = map
-        .extract_checked(&map_sources.map_label, "war3map.w3a", budget)
-        .map_err(|e| e.to_string())?;
-    let abilities = match ability_bytes {
-        Some(bytes) => pcx_objects::editor::Overlay::of(
-            &pcx_objects::ObjectFile::parse("war3map.w3a", &bytes).map_err(|e| e.to_string())?,
-        ),
-        None => pcx_objects::editor::Overlay::default(),
+    // Ability overrides prefer the admitted overlays (`war3map.w3a`); buff
+    // (`w3b`), doodad (`w3d`), destructable (`w3h`) and item/unit families are
+    // retained in `object_overlays` for their own consumers. Direct member
+    // reads remain only for callers that bypass admission.
+    let abilities = match context.object_overlays.get("war3map.w3a") {
+        Some(overlay) => overlay.clone(),
+        None => {
+            let ability_bytes = map
+                .extract_checked(&map_sources.map_label, "war3map.w3a", budget)
+                .map_err(|e| e.to_string())?;
+            match ability_bytes {
+                Some(bytes) => pcx_objects::editor::Overlay::of(
+                    &pcx_objects::ObjectFile::parse("war3map.w3a", &bytes)
+                        .map_err(|e| e.to_string())?,
+                ),
+                None => pcx_objects::editor::Overlay::default(),
+            }
+        }
     };
     let holy_light_art = holy_light_art(reader, &tables, &abilities)?;
     let camera_config = reader
