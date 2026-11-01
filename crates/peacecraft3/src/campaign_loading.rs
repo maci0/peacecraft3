@@ -657,6 +657,16 @@ fn advance_loading(mut loading: ResMut<CampaignLoading>, state: LoadState, press
     if pressed {
         loading.press();
     }
+    // A screen that finished loading but whose session is gone (quit to
+    // menu) can never start its game; dismiss it so it stops holding the
+    // simulation and blocking menu input. This runs after press handling so
+    // a simultaneous press is still consumed above. Screens still loading
+    // keep waiting for admission: reaching AwaitKey required all four
+    // readiness signals, so a vanished session means the load it waited for
+    // was exited, not that it is pending.
+    if loading.phase() == Phase::AwaitKey && session.context().is_none() {
+        loading.cancel();
+    }
 }
 
 /// The loading state is current for the frame once this set has run.
