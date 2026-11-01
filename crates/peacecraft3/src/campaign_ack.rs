@@ -70,7 +70,7 @@ fn ack_for(
 }
 
 /// The UnitUI `unitSound` of a unit definition. `-`, `_` and empty mean no sound set.
-fn unit_sound(definition: &Definition) -> Result<Option<String>, String> {
+pub(crate) fn unit_sound(definition: &Definition) -> Result<Option<String>, String> {
     let mut fields = definition.fields.iter().filter(|(_, field)| {
         field.metadata.as_ref().is_some_and(|metadata| {
             matches!(&metadata.source,
@@ -144,6 +144,11 @@ fn unit_voices(
     let effects = sources.settings.audio.effective_effects();
     if let Err(error) = audio.play(ACK_TABLE, &name, effects, &mut commands, &mut assets, &live) {
         audio.report(error);
+    } else {
+        // The portrait holds its Talk variant while this row stays live.
+        // The row name is the shipped `<unitSound><Suffix>` key, so the unit link
+        // is source-derived rather than a second command log.
+        audio.speaking = Some((unit, name));
     }
 }
 

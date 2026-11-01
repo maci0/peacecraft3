@@ -331,3 +331,52 @@ fn engine_properties_select_authored_form_without_changing_explicit_script_selec
     animation.select_engine("still", 0., None).unwrap();
     assert_eq!(animation.sequence, Some(1));
 }
+
+#[test]
+fn portrait_idle_and_talk_use_admitted_delimiters_and_rarity_extremum() {
+    let r = rules();
+    let m = model(&[
+        ("portrait", 0.2),
+        ("portrait still", 0.9),
+        ("portrait talk", 0.9),
+        ("talk", 0.7),
+        ("stand", 0.5),
+    ]);
+    // Frequent keeps the maximum SEQS weight; Rare the minimum from rare_initial.
+    assert_eq!(r.portrait_idle_candidates(&m, 0).unwrap(), [1]);
+    assert_eq!(r.portrait_idle_candidates(&m, 7).unwrap(), [0]);
+    assert_eq!(r.portrait_talk_candidates(&m, 0).unwrap(), [2]);
+    assert_eq!(r.portrait_talk_candidates(&m, 7).unwrap(), [3]);
+    // "portrait,talk" splits on the admitted comma into talk, not idle.
+    let m = model(&[("portrait,talk", 0.4)]);
+    assert!(r.portrait_idle_candidates(&m, 0).unwrap().is_empty());
+    assert_eq!(r.portrait_talk_candidates(&m, 0).unwrap(), [0]);
+    // A model without portrait sequences reports empty; the render layer owns
+    // the fallback rather than this decoder inventing one.
+    let m = model(&[("stand", 0.5)]);
+    assert!(r.portrait_idle_candidates(&m, 0).unwrap().is_empty());
+    assert!(r.portrait_talk_candidates(&m, 0).unwrap().is_empty());
+    assert!(
+        r.portrait_idle_candidates(&model(&[("portrait", f32::NAN)]), 0)
+            .is_err()
+    );
+    // Stream-backed picks stay inside the extremum set and repeat per stream.
+    let policy = Arc::new(crate::script_random::profile::fixture());
+    let mut r = rules();
+    r.image_sha256 = *policy.image_sha256();
+    let mut a = State::new(r, policy).unwrap();
+    let mut b = a.clone();
+    let m = model(&[
+        ("portrait", 0.2),
+        ("portrait still", 0.9),
+        ("portrait talk", 0.9),
+        ("talk", 0.7),
+    ]);
+    assert_eq!(
+        a.choose_portrait(&m, false, 0).unwrap(),
+        b.choose_portrait(&m, false, 0).unwrap()
+    );
+    assert_eq!(a.choose_portrait(&m, false, 0).unwrap(), 1);
+    assert_eq!(a.choose_portrait(&m, true, 7).unwrap(), 3);
+    assert!(a.choose_portrait(&model(&[("stand", 0.5)]), false, 0).is_err());
+}

@@ -359,6 +359,80 @@ impl Rules {
     ) -> Result<Vec<usize>, String> {
         self.candidates_mode(model, name, props, false)
     }
+    /// Literal portrait words over the admitted model delimiters. Tag ids are
+    /// not used here: portrait/talk arbitration (acknowledgement audio drives
+    /// the speaking clock) stays with the render layer, which owns that clock.
+    fn portrait_words(&self, name: &str) -> Vec<String> {
+        name.split(|c: char| self.model_delimiters.contains(c))
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase())
+            .collect()
+    }
+    fn portrait_candidates(
+        &self,
+        model: &crate::unit_model::Model,
+        talk: bool,
+        rarity: i32,
+    ) -> Result<Vec<usize>, String> {
+        if model.sequences.len() > self.sequence_limit {
+            return Err("animation rarity source sequence index budget".into());
+        }
+        let mut selected: Vec<usize> = model
+            .sequences
+            .iter()
+            .enumerate()
+            .filter(|(_, sequence)| {
+                let words = self.portrait_words(&sequence.name);
+                let first = words.first().map(String::as_str);
+                let second = words.get(1).map(String::as_str);
+                if talk {
+                    (first == Some("portrait") && second == Some("talk"))
+                        || first == Some("talk")
+                } else {
+                    first == Some("portrait") && second != Some("talk")
+                }
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same extremum convention as explicit rarity: the Frequent branch keeps
+        // the maximum SEQS weight, the Rare branch the minimum from rare_initial.
+        let rare = rarity == self.rare;
+        let mut extremum = if rare { self.rare_initial } else { 0. };
+        for index in &selected {
+            let n = model.sequences[*index].rarity();
+            if !n.is_finite() || n < 0. {
+                return Err("animation rarity requires finite nonnegative SEQS weights".into());
+            }
+            extremum = if rare {
+                extremum.min(n)
+            } else {
+                extremum.max(n)
+            };
+        }
+        selected.retain(|index| model.sequences[*index].rarity() == extremum);
+        Ok(selected)
+    }
+    /// Portrait idle sequences at the admitted rarity extremum, in source order.
+    /// An empty result reports that the model carries no portrait idle; the
+    /// render layer decides the fallback, not this decoder.
+    pub(crate) fn portrait_idle_candidates(
+        &self,
+        model: &crate::unit_model::Model,
+        rarity: i32,
+    ) -> Result<Vec<usize>, String> {
+        self.portrait_candidates(model, false, rarity)
+    }
+    /// Portrait speech sequences at the admitted rarity extremum, in source order.
+    pub(crate) fn portrait_talk_candidates(
+        &self,
+        model: &crate::unit_model::Model,
+        rarity: i32,
+    ) -> Result<Vec<usize>, String> {
+        self.portrait_candidates(model, true, rarity)
+    }
     fn candidates_mode(
         &self,
         model: &crate::unit_model::Model,
@@ -534,6 +608,26 @@ impl State {
             remaining -= weight;
         }
         Ok(weights.len() - 1)
+    }
+    /// Stream-backed portrait pick over the admitted idle/talk extremum set.
+    /// Empty means the model carries no such sequences; the render layer owns
+    /// that fallback. Draws share the independent model stream, never the
+    /// script primary or secondary stream.
+    pub fn choose_portrait(
+        &mut self,
+        model: &crate::unit_model::Model,
+        talk: bool,
+        rarity: i32,
+    ) -> Result<usize, String> {
+        let indexed = self.rules.portrait_candidates(model, talk, rarity)?;
+        if indexed.is_empty() {
+            return Err("animation rarity portrait sequences absent".into());
+        }
+        let weights = indexed
+            .iter()
+            .map(|index| model.sequences[*index].rarity())
+            .collect::<Vec<_>>();
+        Ok(indexed[self.choose(&weights)?])
     }
 }
 #[cfg(test)]

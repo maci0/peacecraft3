@@ -324,13 +324,13 @@ struct ActorQueries<'w, 's> {
 }
 
 #[derive(Clone, Copy)]
-struct WaterSurface {
-    mapping: pcx_tera::world::Mapping,
-    offset: f32,
+pub(crate) struct WaterSurface {
+    pub(crate) mapping: pcx_tera::world::Mapping,
+    pub(crate) offset: f32,
 }
 
 impl WaterSurface {
-    fn read(
+    pub(crate) fn read(
         reader: &Resolver,
         rules: &pcx_play::unit_placement::Rules,
         terrain: &pcx_map::Terrain,
@@ -439,6 +439,184 @@ fn transform_for(
         return Err("nonfinite unit actor transform".into());
     }
     Ok(transform)
+}
+
+/// Bank/pitch orientation supplement for unit actors. Yaw always comes from
+/// the executed facing; pitch and bank default to level flight and are only
+/// nonzero when derived from caller-supplied sources (terrain-normal slope or
+/// movement banking). No tilt is invented here; an absent normal keeps the
+/// existing yaw-only pose.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[allow(dead_code)]
+pub struct BankPitch {
+    pub pitch: f32,
+    pub bank: f32,
+}
+
+impl BankPitch {
+    pub fn level() -> Self {
+        Self { pitch: 0.0, bank: 0.0 }
+    }
+
+    /// Derive pitch/bank from a caller-supplied ground normal in world space.
+    /// A missing or nonfinite normal refuses; a near-vertical normal yields
+    /// level flight. This is recreation geometry, not a native-orientation claim.
+    pub fn from_ground_normal(normal: [f32; 3]) -> Result<Self, String> {
+        let [x, y, z] = normal;
+        if ![x, y, z].iter().all(|v| v.is_finite()) {
+            return Err("nonfinite ground normal for bank/pitch".into());
+        }
+        let len = (x * x + y * y + z * z).sqrt();
+        if !len.is_finite() || len <= 0.0 {
+            return Err("degenerate ground normal for bank/pitch".into());
+        }
+        if z / len > 0.999 {
+            return Ok(Self::level());
+        }
+        // Pitch about the lateral axis, bank about the forward axis, both
+        // bounded so steep normals cannot flip an actor.
+        let pitch = (-y / len).clamp(-0.5, 0.5).asin();
+        let bank = (x / len).clamp(-0.5, 0.5).asin();
+        if !pitch.is_finite() || !bank.is_finite() {
+            return Err("nonfinite bank/pitch from ground normal".into());
+        }
+        Ok(Self { pitch, bank })
+    }
+
+    /// Compose yaw (executed facing, degrees) with this pitch/bank. Order is
+    /// yaw, then pitch, then bank, matching the existing yaw-only convention
+    /// with level pitch/bank reducing to it exactly.
+    pub fn rotation(self, face_degrees: f32) -> Result<Quat, String> {
+        if ![face_degrees, self.pitch, self.bank]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Err("nonfinite bank/pitch orientation".into());
+        }
+        Ok(Quat::from_rotation_y(face_degrees.to_radians())
+            * Quat::from_rotation_x(
+                -std::f32::consts::FRAC_PI_2 + self.pitch,
+            )
+            * Quat::from_rotation_z(self.bank))
+    }
+}
+
+/// Oriented variant of [`transform_for`]: yaw from executed facing plus a
+/// caller-derived pitch/bank. `BankPitch::level()` reproduces `transform_for`
+/// exactly; nonzero values tilt the actor without changing its position.
+#[allow(dead_code)]
+pub fn transform_for_oriented(
+    unit: &ExecutedUnit,
+    terrain: &pcx_map::Terrain,
+    scale: f32,
+    height: f32,
+    water: Option<f32>,
+    orientation: BankPitch,
+) -> Result<Transform, String> {
+    let [x, y] = unit.position.ok_or("unit has no accepted world position")?;
+    let z = water
+        .or_else(|| pcx_tera::world::sample_world_z(terrain, x, y))
+        .ok_or("unit position is outside admitted terrain")?
+        + unit.flight_height.unwrap_or(height);
+    let transform = Transform::from_translation(Vec3::new(x, z, -y))
+        .with_rotation(orientation.rotation(unit.face)?)
+        .with_scale(Vec3::splat(scale));
+    if !transform.is_finite() {
+        return Err("nonfinite oriented unit actor transform".into());
+    }
+    Ok(transform)
+}
+/// Elevation along a movement segment for floating/amphibious trajectories.
+/// Samples the admitted ground (including its cliff-layer elevation) and the
+/// `Water.slk` surface at each step and keeps the mover-appropriate surface,
+/// so boats follow authored water levels and amphibians ride the higher of
+/// floor and water instead of a straight-line lerp. Doodad bridge decks use
+/// the separately admitted [`peacecraft3::map_ground::BridgeDeckTable`]: a segment
+/// that crosses a bridge keeps the water/ground surface and the caller records
+/// the deck gap through [`peacecraft3::map_ground::BridgeCrossing`] rather than
+/// inventing a deck height. Orientation uses [`BankPitch`]; the playback
+/// consumer supplies pitch/bank from caller-admitted normals.
+///
+/// The movement-trajectory playback consumer is the next slice; this is the
+/// admitted elevation query it will sample.
+#[allow(dead_code)]
+fn trajectory_surface(
+    from: [f32; 2],
+    to: [f32; 2],
+    steps: usize,
+    surface: WaterSurface,
+    terrain: &pcx_map::Terrain,
+    edition: &str,
+    source: &str,
+    movement: pcx_play::unit_placement::Movement,
+) -> Result<Vec<f32>, String> {
+    if steps == 0 || steps > 4096 {
+        return Err("trajectory sample count out of bounds".into());
+    }
+    if ![from, to].iter().flatten().all(|v| v.is_finite()) {
+        return Err("nonfinite trajectory endpoint".into());
+    }
+    let water_data = pcx_tera::WaterData::new(terrain, edition, source).map_err(|e| e.to_string())?;
+    let mut heights = Vec::new();
+    heights.try_reserve_exact(steps + 1).map_err(|_| "trajectory allocation")?;
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let x = from[0] + (to[0] - from[0]) * t;
+        let y = from[1] + (to[1] - from[1]) * t;
+        let ground = surface
+            .mapping
+            .sample_ground(terrain, x, y)
+            .ok_or("trajectory point is outside admitted terrain")?;
+        let water = water_data
+            .sample_surface(x, y, surface.mapping, surface.offset)
+            .map_err(|e| e.to_string())?;
+        let z = match movement {
+            pcx_play::unit_placement::Movement::Float => water.unwrap_or(ground),
+            pcx_play::unit_placement::Movement::Amphibious => {
+                water.map_or(ground, |z| ground.max(z))
+            }
+            _ => ground,
+        };
+        if !z.is_finite() {
+            return Err("nonfinite trajectory surface".into());
+        }
+        heights.push(z);
+    }
+    Ok(heights)
+}
+
+/// Bridge-aware trajectory samples. `surface` heights come from
+/// [`trajectory_surface`]; `deck_at` resolves an admitted deck height for the
+/// sampled point (or `None` when no bridge footprint covers it). Motion keeps
+/// the surface height; the returned crossings preserve the deck gap per step
+/// instead of lifting motion onto an invented deck.
+pub(crate) fn trajectory_bridge_crossings(
+    from: [f32; 2],
+    to: [f32; 2],
+    steps: usize,
+    surface: WaterSurface,
+    terrain: &pcx_map::Terrain,
+    edition: &str,
+    source: &str,
+    movement: pcx_play::unit_placement::Movement,
+    deck_at: impl Fn(f32, f32) -> Option<f32>,
+) -> Result<Vec<peacecraft3::map_ground::BridgeCrossing>, String> {
+    let heights = trajectory_surface(from, to, steps, surface, terrain, edition, source, movement)?;
+    let mut crossings = Vec::new();
+    crossings
+        .try_reserve_exact(heights.len())
+        .map_err(|_| "trajectory bridge allocation")?;
+    for (step, surface_height) in heights.into_iter().enumerate() {
+        let t = step as f32 / steps as f32;
+        let x = from[0] + (to[0] - from[0]) * t;
+        let y = from[1] + (to[1] - from[1]) * t;
+        let deck = deck_at(x, y).filter(|h| h.is_finite());
+        crossings.push(peacecraft3::map_ground::BridgeCrossing {
+            deck,
+            surface: surface_height,
+        });
+    }
+    Ok(crossings)
 }
 
 fn look_at_target<'a>(
