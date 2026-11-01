@@ -102,8 +102,24 @@ impl Lighting {
             if !ids.insert(l.object_id) || runtime.joints.index_of(l.object_id).is_some() {
                 return Err(fail("duplicate light node identity"));
             }
-            if l.kind != pcx_mdl::LightKind::Omnidirectional || l.parent_id != -1 {
-                return Err(fail("only unparented point lights are supported"));
+            if l.kind != pcx_mdl::LightKind::Omnidirectional {
+                return Err(fail("only point lights are supported"));
+            }
+            // Parented point lights (the Bonus backdrop) ride their authored
+            // rest pivot when the parent joint is static. An animated parent
+            // would move the light through poses this sampler does not own, so
+            // it stays a reported refusal instead of an invented transform.
+            // A parent that is not a joint at all is malformed input.
+            if l.parent_id != -1 {
+                let parent = runtime
+                    .joints
+                    .joints()
+                    .iter()
+                    .find(|joint| joint.object_id == l.parent_id as u32)
+                    .ok_or_else(|| fail("missing authored light parent joint"))?;
+                if !parent.tracks.is_empty() {
+                    return Err(fail("animated light parents are unsupported"));
+                }
             }
             let position = runtime
                 .joints

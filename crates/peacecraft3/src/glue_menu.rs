@@ -415,7 +415,13 @@ pub fn install(app: &mut App) {
     .add_systems(PreUpdate, shortcut_keys.after(bevy::input::InputSystems))
     .add_systems(
         Update,
-        (load_art, show_states, place_shadows, update_setting_art),
+        (
+            load_art,
+            show_states,
+            place_shadows,
+            update_setting_art,
+            enforce_disabled_unselectable,
+        ),
     );
 }
 
@@ -1538,6 +1544,40 @@ fn show_states(
             node.left = left;
             node.top = top;
         }
+    }
+}
+
+/// A disabled button owns no tab stop and takes no pointer input.
+///
+/// Activation is already filtered (`button_actions`, `shortcut_keys`, and the
+/// campaign selection/launch gates check the authored `DefaultOpen`), but a
+/// closed campaign row would otherwise remain tab-focusable and hoverable.
+/// Re-anchor and state rendering already skip disabled buttons, so this only
+/// removes what they ignore: stripping `TabIndex` keeps keyboard focus off
+/// closed rows, and `Pickable::IGNORE` keeps them unhoverable and unclickable.
+/// Closed therefore means unselectable by every input path, not just by action
+/// dispatch. Completion-based unlocks are not modelled anywhere: no shipped
+/// asset carries them, so `DefaultOpen` stays the sole availability gate and a
+/// closed campaign has no path to selection, focus, hover or launch.
+fn enforce_disabled_unselectable(
+    mut commands: Commands,
+    unpickable: Query<Entity, (With<UiButton>, With<InteractionDisabled>, Without<Pickable>)>,
+    unfocusable: Query<
+        Entity,
+        (
+            With<UiButton>,
+            With<InteractionDisabled>,
+            With<bevy::input_focus::tab_navigation::TabIndex>,
+        ),
+    >,
+) {
+    for entity in &unpickable {
+        commands.entity(entity).insert(Pickable::IGNORE);
+    }
+    for entity in &unfocusable {
+        commands
+            .entity(entity)
+            .remove::<bevy::input_focus::tab_navigation::TabIndex>();
     }
 }
 

@@ -309,11 +309,14 @@ impl Fade {
         } else {
             (&self.cover, self.elapsed)
         };
+        // Global-sequence tracks run on presentation elapsed, not the clip
+        // frame: sampling them at zero would freeze an authored global fade.
+        let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
         scene::apply_opacity(
             &clip.opacity,
             &self.geosets.bound,
             clip.frame(elapsed),
-            0,
+            elapsed_ms,
             materials,
             visibility,
         );

@@ -347,6 +347,9 @@ impl Prepared<'_> {
             );
         }
         for (ordinal, requirement) in self.requirements.into_iter().enumerate() {
+            // Authored per-profile depth policy, read before the requirement
+            // moves into its material.
+            let sort_far_z = requirement.sort_far_z;
             let material = assets.materials.add(particle_material(
                 requirement,
                 bindings.images[&requirement.texture].clone(),
@@ -370,8 +373,11 @@ impl Prepared<'_> {
                     priority_plane: requirement.priority_plane,
                     kind: SourceKind::Particle,
                     ordinal: ordinal as u32,
-                    // Depth sorting within the emitter is fulfilled in the CPU mesh below.
-                    sort_far_z: false,
+                    // Authored per-profile depth policy: intra-emitter far-to-near
+                    // order is fulfilled by the CPU mesh below, while the render
+                    // phase orders emitter batches far-to-near (see
+                    // `menu_particle_order::order_phase`).
+                    sort_far_z,
                 },
             );
             self.emitters.push(Emitter {
