@@ -135,6 +135,58 @@ fn minimize_command(
 }
 
 #[test]
+fn the_cli_refuses_missing_arguments_and_unreadable_files() {
+    // Arity: no arguments, one, and three are all usage refusals, and the
+    // usage line stays on stderr with stdout unused.
+    for args in [
+        Vec::<String>::new(),
+        vec!["a.trace".to_string()],
+        vec![
+            "a.trace".to_string(),
+            "b.trace".to_string(),
+            "c.trace".to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_pcx-diff"))
+            .args(&args)
+            .output()
+            .expect("pcx-diff must run");
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        assert!(output.stdout.is_empty(), "args={args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("usage:"),
+            "args={args:?}"
+        );
+    }
+    // A file that cannot be read is a refusal, not a panic.
+    let missing = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pcx-diff-absent.trace");
+    let output = Command::new(env!("CARGO_BIN_EXE_pcx-diff"))
+        .arg(&missing)
+        .arg(&missing)
+        .output()
+        .expect("pcx-diff must run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot read"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // `minimize` without its budget is a usage refusal too.
+    let output = Command::new(env!("CARGO_BIN_EXE_pcx-diff"))
+        .arg("minimize")
+        .output()
+        .expect("pcx-diff must run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage:"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn minimize_cli_runs_fresh_pairs_and_reports_corpus_minimum() {
     let (left, right) = minimize_files("minimize-positive", "synthetic.map", "");
     let output = minimize_command(&left, &right, &["8", "20", "20", "6", "3", "6", "8", "1"]);
