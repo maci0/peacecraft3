@@ -126,6 +126,18 @@ also covers one `CustomScriptCode` action: the stored string is emitted verbatim
 into the actions function, so the lowered and hand-written traces share the extra
 `DisplayTextToPlayer(Player(0), "custom")` call. No shipped map contains
 `CustomScriptCode` (probe count 0), so that leg is synthetic coverage only.
+
+The second test in that file covers the forms the editor expands into control
+flow — the conditional action (`IfThenElse`), the numeric loop (`ForLoopA`) and
+the loop over a declared integer (`ForLoopVar`). For those the desugar must
+reproduce the editor's compiled script *exactly*, and the test asserts the
+lowered source equals the hand-written script byte for byte before comparing
+the two traces. The synthetic graph is one trigger with a timer event and those
+three actions; the hand-written script is the editor's shape for it, with the
+loop's index globals declared by `Blizzard.j` the way the game declares them.
+Both programs make the same nine native calls in the same order and leave
+`udg_Count` at 3, `bj_forLoopAIndex` at 4 and `bj_forLoopAIndexEnd` at 3.
+
 It does not cover timers firing, condition evaluation, or the native game.
 
 ## Refused (named, whole map)

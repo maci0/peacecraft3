@@ -41,3 +41,11 @@ editor-expanded names. No shipped campaign map contains `ForLoopVar` (probe coun
   the same comparison and step `ForLoopA` already writes with
   `bj_forLoopAIndex`. Checked by `for_loop_var_indexes_the_declared_integer` in
   `crates/pcx-trig/src/lower.rs` and `crates/pcx-trig/tests/lower_wtg.rs`.
+- 2026-11-02: the conditional action and the two numeric loops now have an
+  explicit VM comparison. `crates/pcx-play/tests/editor_trigger_vm.rs` lowers a
+  synthetic trigger graph that uses `IfThenElse`, `ForLoopA` and `ForLoopVar`,
+  and the desugared source must equal the editor's compiled script byte for
+  byte; both programs then make the same native calls in the same order and
+  leave the same globals. No shipped map contains these forms as a graph (the
+  differential covers them on the shipped maps), so this leg is synthetic
+  coverage of the forms the editor expands.
