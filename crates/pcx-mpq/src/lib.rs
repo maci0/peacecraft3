@@ -620,6 +620,28 @@ impl MpqArchive {
         let block = *self
             .find_block(path)
             .ok_or_else(|| Error::NotFound(path.to_string()))?;
+        // The block's position and packed length come from the archive's own
+        // block table, so a malformed archive can place a member anywhere.
+        // The extent the member occupies on disk must lie inside the archive,
+        // which is what `read_block_raw` reads below; the header already
+        // checks the archive's declared size against the real length of the
+        // file, so this bound is against bytes that actually exist.
+        //
+        // The *decoded* size is not bounded here: a compressed member may
+        // legitimately decode to more bytes than the archive holds, which is
+        // what the shipped `Maps\(4)Adrenaline.w3m` members do.
+        let archive_size = usize::try_from(self.header.archive_size)
+            .map_err(|_| Error::Unsupported("archive size does not fit a usize"))?;
+        let file_pos = usize::try_from(block.file_pos)
+            .map_err(|_| Error::Unsupported("member position does not fit a usize"))?;
+        let packed = usize::try_from(block.compressed_size)
+            .map_err(|_| Error::Unsupported("member length does not fit a usize"))?;
+        let end = file_pos
+            .checked_add(packed)
+            .ok_or(Error::Unsupported("member extent overflows"))?;
+        if archive_size != 0 && end > archive_size {
+            return Err(Error::Unsupported("member lies outside the archive"));
+        }
         let raw = self.read_block_raw(&block)?;
         let key = payload::file_key(path, block.file_pos, block.file_size, block.flags);
         let sector_size = self.header.sector_size();
@@ -1472,5 +1494,197 @@ mod memory_tests {
         // Reading past the end must fail rather than return zero-filled bytes.
         let past = from_memory.read_at(bytes.len() as u64 + 64, 16);
         assert!(past.is_err(), "a read past the end must be an error");
+    }
+
+    /// A hostile archive places a member outside the archive it lives in, and
+    /// the reader must refuse it instead of reading past the bytes it holds.
+    ///
+    /// The position and packed length come from the block table, so they are
+    /// entirely under the archive's control. The extent the member occupies on
+    /// disk must lie inside the archive, which is what the reader reads.
+    #[test]
+    fn a_member_outside_the_archive_is_refused() {
+        /// The reader decrypts the tables, so a fixture must encrypt them the
+        /// way the writer did. This is the writer's inverse schedule.
+        fn encrypt(data: &mut [u8], key: u32) {
+            let table = crypt::table();
+            let mut seed1 = key;
+            let mut seed2 = 0xEEEE_EEEEu32;
+            for chunk in data.as_chunks_mut::<4>().0 {
+                seed2 = seed2.wrapping_add(table[0x400 + (seed1 & 0xFF) as usize]);
+                let plain = u32::from_le_bytes(*chunk);
+                chunk.copy_from_slice(&(plain ^ seed1.wrapping_add(seed2)).to_le_bytes());
+                seed1 = ((!seed1) << 0x15).wrapping_add(0x1111_1111) | (seed1 >> 0x0B);
+                seed2 = plain
+                    .wrapping_add(seed2)
+                    .wrapping_add(seed2 << 5)
+                    .wrapping_add(3);
+            }
+        }
+
+        /// One archive whose single member starts at `file_at` and is
+        /// `compressed` bytes long.
+        fn archive_with(file_at: u32, compressed: u32) -> MpqArchive {
+            const MEMBER: &str = "outside.bin";
+            let block_at = 0x80u32;
+            let archive_size = block_at + 16;
+            let (name1, name2) = hash::hash_string_both(MEMBER);
+            let slot = hash::start_slot(MEMBER, 4);
+
+            // The header, the hash table and the block table, laid out the way
+            // the reader expects.
+            let mut raw = b"MPQ\x1a".to_vec();
+            raw.extend(32u32.to_le_bytes()); // header size
+            raw.extend(archive_size.to_le_bytes()); // archive size
+            raw.extend(0u16.to_le_bytes()); // format version
+            raw.push(3); // sector size shift
+            raw.push(0); // hash table size
+            raw.extend(0x40u32.to_le_bytes()); // hash table position
+            raw.extend(block_at.to_le_bytes()); // block table position
+            raw.extend(4u32.to_le_bytes()); // hash entries
+            raw.extend(1u32.to_le_bytes()); // block entries
+            raw.extend([0u8; 8]); // the two undecoded words
+            debug_assert_eq!(raw.len(), 0x28);
+            raw.resize(0x40, 0);
+            raw.extend_from_slice(&[0u8; 64]); // the hash table's empty slots
+
+            // The member's own name at its probe slot.
+            let mut hashes = vec![0xffu8; 64];
+            let entry = &mut hashes[slot * 16..slot * 16 + 16];
+            entry[..4].copy_from_slice(&name1.to_le_bytes());
+            entry[4..8].copy_from_slice(&name2.to_le_bytes());
+            entry[8..12].fill(0);
+            entry[12..].copy_from_slice(&0u32.to_le_bytes());
+            encrypt(&mut hashes, hash::hash_table_key());
+            raw[0x40..0x40 + 64].copy_from_slice(&hashes);
+
+            // The block table: the member exists, and its position and packed
+            // length are the ones under test.
+            let mut block = Vec::new();
+            for word in [
+                file_at,
+                compressed,
+                compressed,
+                flags::EXISTING | flags::SINGLE_UNIT,
+            ] {
+                block.extend(word.to_le_bytes());
+            }
+            encrypt(&mut block, hash::block_table_key());
+            raw.extend_from_slice(&block);
+
+            MpqArchive::from_bytes(raw, "hostile").expect("the archive opens")
+        }
+
+        // A member that starts inside the archive but runs past its end is
+        // refused: the packed bytes it claims are not there.
+        let mut outside = archive_with(0x80, 0x1000);
+        assert!(matches!(
+            outside.extract("outside.bin"),
+            Err(Error::Unsupported("member lies outside the archive"))
+        ));
+
+        // A member whose position itself is past the end is refused too.
+        let mut past = archive_with(0x10_0000, 4);
+        assert!(matches!(
+            past.extract("outside.bin"),
+            Err(Error::Unsupported("member lies outside the archive"))
+        ));
+
+        // A member that fits is read: the bound must not refuse an ordinary
+        // archive.
+        let mut inside = archive_with(0x40, 4);
+        assert!(
+            inside.extract("outside.bin").is_ok(),
+            "a member inside the archive must extract"
+        );
+    }
+
+    /// A member may legitimately decode to more bytes than the archive holds.
+    ///
+    /// The shipped `Maps\(4)Adrenaline.w3m` carries two such members: 65 536
+    /// and 65 552 bytes decoded out of a 64 313-byte archive. The on-disk
+    /// extent is what the reader bounds, because that is what it reads; the
+    /// decoded size is the codec's business.
+    #[test]
+    fn a_member_decoding_to_more_than_the_archive_is_not_refused() {
+        /// The reader decrypts the tables, so a fixture must encrypt them the
+        /// way the writer did. This is the writer's inverse schedule.
+        fn encrypt(data: &mut [u8], key: u32) {
+            let table = crypt::table();
+            let mut seed1 = key;
+            let mut seed2 = 0xEEEE_EEEEu32;
+            for chunk in data.as_chunks_mut::<4>().0 {
+                seed2 = seed2.wrapping_add(table[0x400 + (seed1 & 0xFF) as usize]);
+                let plain = u32::from_le_bytes(*chunk);
+                chunk.copy_from_slice(&(plain ^ seed1.wrapping_add(seed2)).to_le_bytes());
+                seed1 = ((!seed1) << 0x15).wrapping_add(0x1111_1111) | (seed1 >> 0x0B);
+                seed2 = plain
+                    .wrapping_add(seed2)
+                    .wrapping_add(seed2 << 5)
+                    .wrapping_add(3);
+            }
+        }
+
+        const MEMBER: &str = "wide.bin";
+        // The member's packed bytes come first, then the hash table, then
+        // the block table: the header requires the tables to end at the
+        // archive's end.
+        let file_at = 0x40u32;
+        let hash_at = file_at + 4;
+        let block_at = hash_at + 64;
+        let archive_size = block_at + 16;
+        let (name1, name2) = hash::hash_string_both(MEMBER);
+        let slot = hash::start_slot(MEMBER, 4);
+
+        let mut raw = b"MPQ\x1a".to_vec();
+        raw.extend(32u32.to_le_bytes()); // header size
+        raw.extend(archive_size.to_le_bytes()); // archive size
+        raw.extend(0u16.to_le_bytes()); // format version
+        raw.push(3); // sector size shift
+        raw.push(0); // hash table size
+        raw.extend(hash_at.to_le_bytes()); // hash table position
+        raw.extend(block_at.to_le_bytes()); // block table position
+        raw.extend(4u32.to_le_bytes()); // hash entries
+        raw.extend(1u32.to_le_bytes()); // block entries
+        raw.extend([0u8; 8]); // the two undecoded words
+        debug_assert_eq!(raw.len(), 0x28);
+        raw.resize(file_at as usize, 0);
+        raw.extend_from_slice(&[1, 2, 3, 4]); // the member's packed bytes
+
+        let mut hashes = vec![0xffu8; 64];
+        let entry = &mut hashes[slot * 16..slot * 16 + 16];
+        entry[..4].copy_from_slice(&name1.to_le_bytes());
+        entry[4..8].copy_from_slice(&name2.to_le_bytes());
+        entry[8..12].fill(0);
+        entry[12..].copy_from_slice(&0u32.to_le_bytes());
+        encrypt(&mut hashes, hash::hash_table_key());
+        raw.extend_from_slice(&hashes);
+
+        // The block table, then the member's four packed bytes after it, so
+        // the two do not overlap. The member declares a decoded size far
+        // larger than the archive holds.
+        let mut block = Vec::new();
+        for word in [file_at, 4, u32::MAX, flags::EXISTING | flags::SINGLE_UNIT] {
+            block.extend(word.to_le_bytes());
+        }
+        encrypt(&mut block, hash::block_table_key());
+        raw.extend_from_slice(&block);
+
+        let mut archive = MpqArchive::from_bytes(raw, "wide").expect("the archive opens");
+        let found = archive
+            .find_block(MEMBER)
+            .expect("the member is found")
+            .file_size;
+        assert_eq!(found, u32::MAX);
+        // The decoded size is the codec's business: the reader refuses the
+        // member because its packed bytes do not produce that many, not
+        // because the claim exceeds the archive.
+        assert!(
+            !matches!(
+                archive.extract(MEMBER),
+                Err(Error::Unsupported("member lies outside the archive"))
+            ),
+            "a decoded size larger than the archive must not be refused as an extent"
+        );
     }
 }
