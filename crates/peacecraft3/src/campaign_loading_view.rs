@@ -24,8 +24,6 @@ const UI_FILE_BYTES: u64 = 4 << 20;
 const FONT_BYTES: u64 = 32 << 20;
 /// Skin key that names the bar model (`UI\war3skins.txt`).
 const BAR_MODEL_KEY: &str = "LoadingProgressBar";
-/// Sequence of the bar model the progress poses: the first.
-const BAR_SEQUENCE: usize = 0;
 /// Upper bound on one texture read for a map-supplied loading model, matching
 /// the background model's own ceiling in `campaign_score_model`.
 const CUSTOM_TEXTURE_BYTES: u64 = 16 << 20;
@@ -609,7 +607,7 @@ fn build(
                 rect: background_rect,
                 unlit: SPRITES_UNLIT,
             },
-            Some(0),
+            None,
         )?,
     };
     background.driven = false;
@@ -626,7 +624,7 @@ fn build(
             },
             unlit: SPRITES_UNLIT,
         },
-        Some(BAR_SEQUENCE),
+        None,
     )?;
     bar.driven = true;
     let plans = vec![background, bar];
