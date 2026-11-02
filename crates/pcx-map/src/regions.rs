@@ -48,6 +48,22 @@ impl Regions {
             return Err(RegionError::UnsupportedVersion(version));
         }
         let count = cursor.u32()?;
+        // Validate the record count against the remaining bytes before
+        // allocating or looping: every region carries at least four bound
+        // words (16 bytes), so a count needing more than that is malformed.
+        let remaining = data.len().saturating_sub(cursor.at);
+        let Some(minimum) = (count as usize).checked_mul(16) else {
+            return Err(RegionError::Truncated {
+                at: cursor.at,
+                need: usize::MAX,
+            });
+        };
+        if minimum > remaining {
+            return Err(RegionError::Truncated {
+                at: cursor.at,
+                need: minimum,
+            });
+        }
         let mut regions = Vec::new();
         for _ in 0..count {
             let words = [
@@ -196,6 +212,18 @@ mod tests {
         assert!(matches!(
             Regions::parse(&longer),
             Err(RegionError::TrailingBytes { .. })
+        ));
+    }
+    #[test]
+    fn oversized_record_count_is_refused_before_traversal() {
+        // A count that cannot fit in the remaining bytes is refused rather
+        // than driving a huge allocation or loop.
+        let mut data = Vec::new();
+        data.extend(5u32.to_le_bytes()); // version
+        data.extend(1_000_000u32.to_le_bytes()); // absurd count
+        assert!(matches!(
+            Regions::parse(&data),
+            Err(RegionError::Truncated { .. })
         ));
     }
 }
