@@ -61,6 +61,30 @@ impl ObjectHost {
             "DestroyFogModifier",
             "GetWorldBounds",
             "Rect",
+            "CreateTimer",
+            "DestroyTimer",
+            "CreateGroup",
+            "DestroyGroup",
+            "GroupClear",
+            "GroupAddUnit",
+            "GroupRemoveUnit",
+            "FirstOfGroup",
+            "IsUnitInGroup",
+            "GetEnumUnit",
+            "CreateUnit",
+            "CreateUnitAtLoc",
+            "CreateBlightedGoldmine",
+            "GetUnitDefaultAcquireRange",
+            "IssueImmediateOrder",
+            "IssueImmediateOrderById",
+            "IsUnitAlly",
+            "IsUnitEnemy",
+            "ForGroup",
+            "SetUnitsFlee",
+            "SquareRoot",
+            "Sin",
+            "Cos",
+            "Atan2",
         ]
     }
 
@@ -91,5 +115,20 @@ impl ObjectHost {
             unsupported,
             library_functions: self.inner.program.functions().len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ObjectHost;
+
+    #[test]
+    fn supported_names_are_unique_and_nonempty() {
+        let names = ObjectHost::supported_native_names();
+        assert!(!names.is_empty());
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "duplicate entries: {names:?}");
     }
 }
