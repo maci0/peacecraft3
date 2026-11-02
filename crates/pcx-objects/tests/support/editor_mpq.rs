@@ -83,4 +83,3 @@ fn table_mut(bytes: &mut [u8], hash: bool, mutate: impl FnOnce(&mut [u8])) {
     mutate(table);
     encrypt(table, key);
 }
-
