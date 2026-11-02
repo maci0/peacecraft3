@@ -44,6 +44,14 @@ uses the current synthetic simulation's behavior; actual selection parity is unp
 `runs * (ticks * (spawns + 1) + scheduled_actions)`. It is a harness work gate, not a
 measurement of combat cost. No timing or FPS threshold decides pass/fail.
 
+The campaign chapters under `tests/play/<campaign>/` carry one scenario each. They
+record the chapter's map identity and probe the harness simulation with a unit, an
+RNG draw and a timer; they assert no original-game outcome.
+`crates/pcx-play/tests/chapter_scenarios.rs` runs every one of them, requires its
+own expectations to hold and requires 100 consecutive runs to produce byte-identical
+traces. A scenario checked in under `tests/play` must be listed there, so a new
+chapter cannot be added without being executed.
+
 The runner checks that the 64-bit tick count fits the platform's `usize` and
 `TickRecord` vector layout before creating the world. It reserves trace storage
 fallibly: an unrepresentable layout returns `RunError::TraceCapacity`, and a

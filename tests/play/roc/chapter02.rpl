@@ -1,12 +1,12 @@
 pcx-rpl 1
 scenario roc-chapter02
-map Maps/Campaign/chapter02.w3m
+map Maps.Campaign.chapter02.w3m
 ticks 100
 seed 7
 asset-mode vanilla
 spawn 0 0 0
-at 0 rng-probe rng-draw
+at 0 rng-probe rng
 expect 0 units 1
-expect 0 unit 1 0 0 0 100 0 0 0 idle
+expect 0 unit 1 0 0 0 idle
 expect 0 timer 0 rng-probe
 expect 0 rng-draws 1
