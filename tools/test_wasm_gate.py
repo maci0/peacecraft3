@@ -95,6 +95,10 @@ class WasmGateTests(unittest.TestCase):
         root = repository_root()
         cases = [
             ('pcx-sim', []),
+            # The script parser bounds a hostile script's nesting by measuring
+            # the descent's stack use, so its refusal has to hold on a 32-bit
+            # stack as well.
+            ('pcx-script', []),
             ('pcx-play', ['--test', 'trace_capacity']),
             # The generator's CLI case spawns a process, which the 32-bit
             # WebAssembly path cannot do; the rest of that target is the

@@ -78,9 +78,19 @@ provide — the campaign data set's file-backed cases and the native coverage
 audit, which reads the crate's own sources — so they stay native-only. Every
 other group passes at 32-bit.
 
+Of the forty `pcx-play` integration targets, thirty-three pass at 32-bit.
+The seven that do not need a host the WebAssembly path does not provide:
+`chapter_scenarios` and `headless_startup` want a filesystem, and
+`pcx_diff_cli`, `playgen_cli`, `playrun_cli`, `playrun_script_cli` and the
+generator's own CLI case want to spawn a process.
+
 `pcx-sim`'s whole suite — its library, the column lookup, the coordinate
 bounds, the pathing and movement admission, the selection, the world grid, the
 world import and the determinism cases — passes as actual 32-bit WebAssembly.
+`pcx-script`'s whole library suite passes there too, including the refusal of
+a hostile script whose nesting is deeper than the parser bounds: that guard
+measures the descent's stack use rather than assuming a frame size, so it holds
+on a 32-bit stack as well.
 
 These are platform-safety checks on the tested boundaries. They are not
 browser or native-game execution, and they do not prove Warcraft III parity.
