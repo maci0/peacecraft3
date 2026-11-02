@@ -222,7 +222,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "pcx-assets"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-casc",
  "pcx-mpq",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-blp"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "jpeg-decoder",
  "pcx-mpq",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-casc"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "flate2",
  "md5",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mdl"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-mpq",
  "thiserror",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "flate2",
  "implode",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-play"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-assets",
  "pcx-map",
@@ -308,14 +308,14 @@ dependencies = [
 
 [[package]]
 name = "pcx-script"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pcx-sim"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-map",
  "pcx-objects",
@@ -324,21 +324,21 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pcx-tga"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pcx-trig"
-version = "0.7.0"
+version = "0.10.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
