@@ -354,17 +354,12 @@ fn an_empty_sweep_keeps_the_selection() {
 }
 
 #[test]
-fn several_other_player_units_are_refused_loudly() {
+fn several_other_player_units_keep_the_selection_silent() {
     let mut rig = Rig::new(&[(1, PEON, [40.0, 40.0]), (1, PEON, [56.0, 40.0])], SCREEN);
     let (min, max) = rig.around([40.0, 40.0], [56.0, 40.0], 6.0);
     rig.sweep(min, max);
     assert!(rig.selection().is_empty());
-    assert!(
-        rig.error()
-            .is_some_and(|e| e.contains("2 units of other players")),
-        "{:?}",
-        rig.error()
-    );
+    assert!(rig.error().is_none(), "{:?}", rig.error());
 }
 
 #[test]
