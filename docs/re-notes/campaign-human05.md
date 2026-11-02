@@ -101,7 +101,7 @@ Each has a synthetic nonstock test. Refusals are listed in the order they appear
     the request answers false with nothing ordered (exe 0xac3070, 0xac2b00), so that case no longer
     refuses; a unit that lists the kind in `Builds` or `Upgrade` still does. See
     [AI construction](ai-construction.md). Test:
-    `ai_structure_requests_answer_false_without_a_builder_and_refuse_placement_with_one`.
+    `ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_placement_data`.
 
 ## Furthest verified state
 
