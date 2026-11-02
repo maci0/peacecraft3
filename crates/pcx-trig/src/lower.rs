@@ -38,7 +38,7 @@ const MAP_INITIALIZATION_EVENT: &str = "MapInitializationEvent";
 /// that check, so only a call-shaped `ForLoopVar` is still refused. `ForLoopA`,
 /// `ForLoopB`, `IfThenElse` and `ReturnAction` are lowered in `statement` and
 /// are not listed.
-const EDITOR_EXPANDED: [&str; 10] = [
+const EDITOR_EXPANDED: [&str; 9] = [
     "AndMultiple",
     "OrMultiple",
     "IfThenElseMultiple",
@@ -48,7 +48,6 @@ const EDITOR_EXPANDED: [&str; 10] = [
     "ForLoopVar",
     "ForForceMultiple",
     "ForGroupMultiple",
-    "CustomScriptCode",
 ];
 
 /// Lowers `wtg` to JASS, using `catalog` for names, preset code text and variable types.
@@ -491,6 +490,22 @@ impl<'c> Lowerer<'c> {
                     .map(|line| format!("// {line}"))
                     .collect::<Vec<_>>()
                     .join("\n"))
+            }
+            "CustomScriptCode" => {
+                self.definition(name, Kind::Action)?;
+                let [code] = params else {
+                    return Err(malformed(&self.trigger, "CustomScriptCode arity".into()));
+                };
+                if code.kind != ParamKind::Str {
+                    return Err(malformed(
+                        &self.trigger,
+                        "CustomScriptCode text that is not a string".into(),
+                    ));
+                }
+                // The editor writes the authored code verbatim into the actions
+                // function, so the stored string is emitted as JASS unchanged.
+                let code = text(&code.value, &self.trigger, "custom script")?;
+                Ok(code.to_string())
             }
             "SetVariable" => {
                 let [target, value] = params else {

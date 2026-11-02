@@ -26,8 +26,8 @@ The index must be a declared `integer` variable. Anything else is
 (`editor-expanded ForLoopVar`), because it remains in `EDITOR_EXPANDED`.
 
 `AndMultiple`, `OrMultiple`, `IfThenElseMultiple`, `ForLoopAMultiple`,
-`ForLoopBMultiple`, `ForLoopVarMultiple`, `ForForceMultiple`, `ForGroupMultiple`,
-and `CustomScriptCode` stay refused.
+`ForLoopBMultiple`, `ForLoopVarMultiple`, `ForForceMultiple` and
+`ForGroupMultiple` stay refused. `CustomScriptCode` is now lowered.
 
 `docs/re-notes/wtg-lowering.md` records this action separately from the refused
 editor-expanded names. No shipped campaign map contains `ForLoopVar` (probe count

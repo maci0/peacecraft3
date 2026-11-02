@@ -40,6 +40,7 @@ ForLoopA=0,integer,integer,code
 ForLoopVar=1,integervar,integer,integer,code
 AndMultiple=1,nothing
 CommentString=0,scriptcode
+CustomScriptCode=1,scriptcode
 SetVariable=0,AnyGlobal,Null
 ReturnAction=0,nothing
 ConditionalTriggerExecute=0,integer
@@ -672,6 +673,36 @@ fn for_loop_var_indexes_the_declared_integer() {
             construct: "ForLoopVar index that is not an integer variable".into(),
         }
     );
+}
+
+#[test]
+fn custom_script_code_is_emitted_verbatim() {
+    let jass = lower_bytes(&lone(
+        "Code",
+        vec![eca(
+            2,
+            "CustomScriptCode",
+            true,
+            vec![string("call DoNothing()\nset udg_Count = udg_Count + 1")],
+        )],
+    ))
+    .unwrap();
+    assert!(
+        jass.contains(
+            "function Trig_Code_Actions takes nothing returns nothing\n    call DoNothing()\n    set udg_Count = udg_Count + 1\nendfunction\n"
+        ),
+        "{jass}"
+    );
+    let bad = lone(
+        "Code",
+        vec![eca(
+            2,
+            "CustomScriptCode",
+            true,
+            vec![param(0, "X", None, None)],
+        )],
+    );
+    assert!(lower_bytes(&bad).is_err());
 }
 
 #[test]

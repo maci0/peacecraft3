@@ -130,7 +130,10 @@ does not cover timers firing, condition evaluation, or the native game.
   `OrMultiple`, `IfThenElseMultiple`, `ForLoopAMultiple`, `ForLoopBMultiple`,
   `ForLoopVarMultiple`, `ForForceMultiple`, `ForGroupMultiple`.
   Probe counts over the 44 shipped maps are 0 for each.
-- `CustomScriptCode`: 0 occurrences in the shipped maps; no evidence for its emission.
+- `CustomScriptCode` is now lowered: its stored string is emitted verbatim as
+  JASS into the actions function, mirroring `CommentString`'s text handling.
+  No shipped map contains it (probe count 0), so this is a synthetic-coverage
+  slice rather than a verified campaign change.
 - Run-on-initialization triggers: 0 occurrences in the shipped maps.
 - Initially-off custom-text triggers (no shipped case; the editor text would decide).
 - `MapInitializationEvent` combined with other events.
