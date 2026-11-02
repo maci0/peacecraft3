@@ -110,7 +110,7 @@ fn execute() -> Result<(), (u8, String)> {
     {
         return Err((1, divergence.to_string()));
     }
-    println!(
+    eprintln!(
         "passed scenario={} runs={runs} ticks={} work={work} hash={:016x}",
         first.header.scenario,
         first.header.tick_count,
