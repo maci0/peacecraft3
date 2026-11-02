@@ -1475,6 +1475,20 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
       open. The refusals are now a visible `blpx info` census row rather than a silent gap.
 - [x] `pcx-tga`: RLE + uncompressed, 16/24/32 bpp — **383 / 383** on 1.28c,
        **435 / 435** on 1.29b, 0 unread, 0 failed on both
+- [x] `pcx-tga`: the raster size comes from the header, so a malformed file can
+       claim any raster. The claim reached `vec![0u8; total * 4]` unchecked: an
+       18-byte header claiming 65535x65535 asked for 17,179,344,900 bytes, and on
+       a 32-bit target `total * 4` wrapped to 4,294,443,012 instead, so the
+       buffer was wrong-sized and desynchronized from the pixel count. The size
+       is now computed with checked arithmetic and bounded before anything is
+       reserved, and the reservation is fallible; a raster over the budget is
+       refused with `RasterTooLarge`. The budget is derived from the shipped
+       assets: across the `.tga` files in both local installs (383 entries in the
+       1.28c tree, 290 in the Legacy tree, 434 distinct files) the largest raster
+       is 256x256, which decodes to 262,144 bytes, and the budget is sixteen
+       times that measured maximum. The decoded bytes of all 673 shipped files
+       are unchanged — the combined digest of every decoded raster is identical
+       before and after.
 - [x] `pcx-mdl`: `MDLX` container walk — **3,234 / 3,234** shipped models, all v800
 - [x] `pcx-mdl`: `MODL` name + model extents
 - [x] `pcx-mdl`: `SEQS` animation timeline (132-byte records)
