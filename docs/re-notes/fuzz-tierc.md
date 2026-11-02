@@ -64,6 +64,10 @@ recipe version. Shorter-horizon / fewer-unit reduction is their lane.
   tick/unit/action/work/output ceilings (`fuzz_corpus::tests`). The
   4,096-byte filing bound is enforced with a UTF-8 char-boundary backoff and
   covered by `fuzz_report::tests`.
+- Every corpus entry regenerates byte for byte, generates a distinct scenario
+  body — compared without the scenario and map identity lines, so a generator
+  that ignored the seed would be caught — and traces byte-identically across
+  repeated runs (`fuzz_corpus::tests`).
 - Real terrain/tileset fuzzing waits on map-container wiring owned
   elsewhere; the map tag here is a synthetic identity only.
 - Whether the corpus should also cover `hd`/`reforged` asset modes or

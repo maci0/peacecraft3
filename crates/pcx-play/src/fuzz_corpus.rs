@@ -124,6 +124,7 @@ pub fn corpus_entry_for_seed(seed: u64) -> Option<CorpusEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn corpus_stays_within_generation_ceilings() {
@@ -173,6 +174,96 @@ mod tests {
                 "seed={seed} output={} over limit={}",
                 rpl.len(),
                 crate::fuzz_scenario::default_limits().max_output_bytes,
+            );
+        }
+    }
+
+    /// The scenario body with the identity lines removed.
+    ///
+    /// The name carries the seed and the map tag is picked from the seed, so
+    /// neither alone can show that two entries differ: a generator that
+    /// ignored the seed would still give every entry its own name and map.
+    /// What is left are the simulation inputs and the expectation.
+    fn body_of(rpl: &str) -> String {
+        rpl.lines()
+            .filter(|line| !line.starts_with("scenario ") && !line.starts_with("map "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn every_corpus_entry_regenerates_byte_for_byte() {
+        let domains = crate::fuzz_scenario::default_domains();
+        let limits = crate::fuzz_scenario::default_limits();
+        for (index, entry) in corpus_entries().iter().enumerate() {
+            let generate = || {
+                crate::fuzz_scenario::generate_one(
+                    entry.seed,
+                    index,
+                    entry.ticks,
+                    entry.units,
+                    entry.actions,
+                    &domains,
+                    limits,
+                )
+                .map(|(rpl, _)| rpl)
+            };
+            let first = generate().unwrap();
+            let second = generate().unwrap();
+            assert_eq!(first, second, "seed={} index={index}", entry.seed);
+        }
+    }
+
+    #[test]
+    fn every_corpus_entry_generates_a_distinct_scenario_body() {
+        // A corpus whose entries all generated the same scenario would test
+        // one input thirty-two times.
+        let domains = crate::fuzz_scenario::default_domains();
+        let limits = crate::fuzz_scenario::default_limits();
+        let mut seen: BTreeMap<String, u64> = BTreeMap::new();
+        for (index, entry) in corpus_entries().iter().enumerate() {
+            let (rpl, _) = crate::fuzz_scenario::generate_one(
+                entry.seed,
+                index,
+                entry.ticks,
+                entry.units,
+                entry.actions,
+                &domains,
+                limits,
+            )
+            .unwrap();
+            let body = body_of(&rpl);
+            assert!(
+                seen.insert(body, entry.seed).is_none(),
+                "seed={} index={index} repeats another entry's scenario body",
+                entry.seed,
+            );
+        }
+        assert_eq!(seen.len(), SEED_CORPUS.len());
+    }
+
+    #[test]
+    fn every_corpus_entry_traces_byte_identically_across_runs() {
+        let domains = crate::fuzz_scenario::default_domains();
+        let limits = crate::fuzz_scenario::default_limits();
+        for (index, entry) in corpus_entries().iter().enumerate() {
+            let (rpl, _) = crate::fuzz_scenario::generate_one(
+                entry.seed,
+                index,
+                entry.ticks,
+                entry.units,
+                entry.actions,
+                &domains,
+                limits,
+            )
+            .unwrap();
+            let parsed = crate::Rpl::parse(&rpl).unwrap();
+            let expected = parsed.run().unwrap().encode();
+            assert_eq!(
+                parsed.run().unwrap().encode(),
+                expected,
+                "seed={} index={index}",
+                entry.seed,
             );
         }
     }
