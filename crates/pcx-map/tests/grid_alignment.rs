@@ -153,12 +153,23 @@ fn largest_representable_corner_grid_has_exact_u64_products() {
 
 // Fail closed for every error, retaining the local map/member context without
 // printing error payloads that can contain original bytes or extracted text.
-fn require_member<T, E>(result: Result<T, E>, path: &std::path::Path, member: &str) -> T {
-    result.unwrap_or_else(|_| {
-        panic!(
+// The refusal is returned rather than raised so that a test can read it
+// without catching a panic: a target that cannot unwind has no way to catch
+// one.
+fn member_refusal<T, E>(
+    result: Result<T, E>,
+    path: &std::path::Path,
+    member: &str,
+) -> Result<T, String> {
+    result.map_err(|_| {
+        format!(
             "{path:?}: {member}: missing, malformed, or unsupported; cannot check grid alignment"
         )
     })
+}
+
+fn require_member<T, E>(result: Result<T, E>, path: &std::path::Path, member: &str) -> T {
+    member_refusal(result, path, member).unwrap_or_else(|message| panic!("{message}"))
 }
 
 #[test]
@@ -180,11 +191,9 @@ fn original_check_refuses_missing_and_corrupt_members_with_context() {
         }),
     ];
     for (member, error) in failures {
-        let panic = std::panic::catch_unwind(|| {
-            require_member::<(), _>(Err(error()), std::path::Path::new("synthetic.w3m"), member);
-        })
-        .unwrap_err();
-        let message = panic.downcast_ref::<String>().unwrap();
+        let message =
+            member_refusal::<(), _>(Err(error()), std::path::Path::new("synthetic.w3m"), member)
+                .unwrap_err();
         assert!(message.contains("synthetic.w3m"));
         assert!(message.contains(member));
         assert!(message.contains("cannot check grid alignment"));

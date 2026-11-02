@@ -84,6 +84,12 @@ The seven that do not need a host the WebAssembly path does not provide:
 `pcx_diff_cli`, `playgen_cli`, `playrun_cli`, `playrun_script_cli` and the
 generator's own CLI case want to spawn a process.
 
+`pcx-map`'s whole suite passes at 32-bit as well. One of its tests read the
+refusal message by catching a panic, which a WebAssembly target cannot do:
+the panic strategy there is abort, so the catch never returns and the target
+died. The refusal is now returned rather than raised, so the same context is
+checked without unwinding.
+
 `pcx-sim`'s whole suite — its library, the column lookup, the coordinate
 bounds, the pathing and movement admission, the selection, the world grid, the
 world import and the determinism cases — passes as actual 32-bit WebAssembly.
