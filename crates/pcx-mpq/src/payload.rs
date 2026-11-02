@@ -800,7 +800,10 @@ mod tests {
         assert_eq!(decode_block(b"", 0, 0, 0, 0).unwrap(), Vec::<u8>::new());
         assert!(matches!(
             decode_block(b"", 0, 1, 0, 0),
-            Err(PayloadError::SizeMismatch { file_size: 1, produced: 0 })
+            Err(PayloadError::SizeMismatch {
+                file_size: 1,
+                produced: 0
+            })
         ));
     }
 
