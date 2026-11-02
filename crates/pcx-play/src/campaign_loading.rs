@@ -30,6 +30,10 @@ const MAX_IMAGE_SECTIONS: usize = 96;
 const FAST_STEP_VA: u32 = 0xe7_e968;
 const SLOW_STEP_VA: u32 = 0xe8_df60;
 const FULL_VA: u32 = 0xe6_9584;
+/// Virtual address of the text-fit scale immediate the loading-screen
+/// constructor pushes for `0x53fba0`: `mov DWORD PTR [esp],imm32` at
+/// `0x55905b`, so the operand sits at `0x55905e`.
+const FIT_SCALE_VA: u32 = 0x55_905e;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LoadingError {
@@ -503,6 +507,48 @@ impl ProgressRules {
     }
 }
 
+/// Scale operand the original passes to its loading-text fitting routine
+/// (`0x53fba0`), read from the reviewed image. The routine's shape (a
+/// measure/count/wrap loop over caller buffers) is decoded in
+/// `docs/re-notes/campaign-loading-screen.md`; reproducing its breaks needs
+/// glyph measurement the recreation has no source for, so the operand is
+/// admitted here and not consumed yet.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FitScale {
+    /// Second argument of `0x53fba0`; the routine divides it by its third.
+    pub scale: f32,
+}
+
+impl FitScale {
+    /// Read the operand from the reviewed Legacy image; any other image refuses.
+    pub fn read(image: &[u8]) -> Result<Self, LoadingError> {
+        if image.len() > MAX_IMAGE_BYTES || sha256(image) != REVIEWED_IMAGE {
+            return Err(LoadingError::Image("unsupported client image"));
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: MAX_IMAGE_BYTES,
+                profile_bytes: 128,
+                sections: MAX_IMAGE_SECTIONS,
+            },
+        )
+        .map_err(|_| LoadingError::Image("invalid PE image"))?;
+        Self::decode(|va| {
+            let bytes = pe.read_from(va, false).ok()?.get(..4)?.try_into().ok()?;
+            Some(f32::from_le_bytes(bytes))
+        })
+    }
+
+    fn decode(read: impl Fn(u32) -> Option<f32>) -> Result<Self, LoadingError> {
+        let scale = read(FIT_SCALE_VA).ok_or(LoadingError::Image("missing text-fit scale"))?;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(LoadingError::Image("text-fit scale is not positive finite"));
+        }
+        Ok(Self { scale })
+    }
+}
+
 /// Displayed and target progress of the bar, in the original's units where
 /// [`ProgressRules::full`] is the end.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -850,5 +896,37 @@ NumScreens=1
         let rules = ProgressRules::read(&image).unwrap();
         println!("{rules:?}");
         assert!(rules.slow_step < rules.fast_step && rules.fast_step < rules.full);
+    }
+
+    #[test]
+    fn text_fit_scale_must_be_positive_finite() {
+        let admitted = f32::from_bits(0x3E2C_CCCD);
+        assert_eq!(
+            FitScale::decode(|_| Some(admitted)),
+            Ok(FitScale { scale: admitted })
+        );
+        for bad in [0.0, -0.5, f32::NAN, f32::INFINITY] {
+            assert!(FitScale::decode(|_| Some(bad)).is_err(), "{bad:?}");
+        }
+        assert_eq!(
+            FitScale::decode(|_| None),
+            Err(LoadingError::Image("missing text-fit scale"))
+        );
+        assert_eq!(
+            FitScale::read(b"not the reviewed image"),
+            Err(LoadingError::Image("unsupported client image"))
+        );
+    }
+
+    /// Original-input gate: `PEACECRAFT3_LEGACY_DIR` is the selected 1.29.2.9231 install.
+    #[test]
+    #[ignore = "requires PEACECRAFT3_LEGACY_DIR pointing at the selected Legacy install"]
+    fn the_selected_image_supplies_the_text_fit_scale() {
+        let dir = std::env::var_os("PEACECRAFT3_LEGACY_DIR")
+            .expect("set PEACECRAFT3_LEGACY_DIR to the selected 1.29.2.9231 install");
+        let image = std::fs::read(std::path::Path::new(&dir).join("Warcraft III.exe")).unwrap();
+        let fit = FitScale::read(&image).unwrap();
+        println!("{fit:?}");
+        assert_eq!(fit.scale.to_bits(), 0x3E2C_CCCD);
     }
 }

@@ -56,8 +56,22 @@ which is outside the campaign case.
 
 **exe.** Title and subtitle are set into `LoadingTitleText` and
 `LoadingSubtitleText` from header `+0x550` and `+0x5b1`; the loading text is fitted
-by `0x53fba0` and set into `LoadingText`. The fitting algorithm (the `0.17` constant
-at `0x55905b`) is not decoded.
+by `0x53fba0` (seven stack arguments, returns at `0x53fd23`) and set into
+`LoadingText`. Decoded statically with `objdump -M intel` (no REA session;
+the REA toolchain was unhealthy when this was read, so no Ghidra dossier
+exists yet). The routine takes the output buffer, a scale float it divides by
+its third float (`divss`, so the quotient estimates a count), and four further
+caller words. The constructor's call at `0x55905b` passes the scale as the
+immediate `0x3E2CCCCD` (0.16875 — the earlier `0.17` record was a rounding)
+with `mov DWORD PTR [esp],imm32`; the operand sits at VA `0x55905e`. Structure:
+a measure call (`0x960710`, the UI text-measure path through `0xab29d0` /
+`0x95f690` / `0x7e3a80`) returns a segment count — zero NUL-terminates the
+second caller buffer and returns, one copies the text whole (`0x433500`),
+otherwise each segment is bounded-copied (`min(len, 0x200)+1`) and appended
+(`0x433140`) in a loop. The fourth argument feeds the measure call, the sixth
+is that second caller buffer, and the seventh is passed as the append bound.
+Not established: the roles of the third float (the divisor) and the measure
+internals, including which font metric supplies the widths.
 
 ## Frames
 
@@ -182,7 +196,12 @@ gameplay starts only afterwards. The message type `0xd` is read as key-down;
   these sequences once is not established.
 - The post-load bar sequence in state 1 (`[ebp-0x88] = 4`, `0x966c10`) does not map to
   `LoadBar.mdx` (two sequences). The bar holds its end frame; unresolved.
-- Not implemented: the text-fitting routine (`0x53fba0`).
+- The fitting routine (`0x53fba0`) is decoded structurally above, and its
+  scale operand is admitted from the reviewed image (`FitScale::read`, pinned
+  by `the_selected_image_supplies_the_text_fit_scale` to bits `0x3E2CCCCD`).
+  The view still sets the full header text with no fitting: reproducing the
+  original breaks needs glyph measurement the recreation has no source for,
+  so the operand is admitted but not consumed. Not implemented.
 
 ## Load end without a camera, and audio
 
