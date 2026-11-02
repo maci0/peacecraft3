@@ -117,6 +117,15 @@ pub fn generate_one(
     domains: &FuzzDomains<'_>,
     limits: Limits,
 ) -> Result<(String, RunConfig), crate::generator::Error> {
+    // The map is picked before the generator sees the domains, so an empty
+    // candidate list has to be refused here rather than dividing by its
+    // length.
+    if domains.maps.is_empty() {
+        return Err(crate::generator::Error::Invalid {
+            field: "maps",
+            reason: "must not be empty",
+        });
+    }
     let scenario_name = format!("fuzz.s{seed}.{index}");
     let mut picker = Rng::new(
         seed.wrapping_add(index as u64)
@@ -166,4 +175,61 @@ pub fn generate_corpus() -> Result<Vec<(u64, String)>, crate::generator::Error> 
         out.push((entry.seed, rpl));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn domains<'a>(
+        maps: &'a [&'a str],
+        owners: &'a [u8],
+        kinds: &'a [ActionKind],
+    ) -> FuzzDomains<'a> {
+        FuzzDomains {
+            maps,
+            owners,
+            x: RangeInclusive::new(-20, 20),
+            y: RangeInclusive::new(-20, 20),
+            action_kinds: kinds,
+        }
+    }
+
+    #[test]
+    fn an_empty_candidate_list_is_refused_before_anything_is_selected() {
+        let limits = default_limits();
+        // No map to pick from: refusing is the only answer, and the choice
+        // must not divide by the length of an empty list.
+        let empty_maps = domains(&[], &[0], &[ActionKind::Move]);
+        assert!(matches!(
+            generate_one(1, 0, 4, 1, 1, &empty_maps, limits),
+            Err(crate::generator::Error::Invalid { field: "maps", .. })
+        ));
+        // No owner and no action kind: the generator refuses those domains
+        // itself, and the refusal reaches the caller instead of a panic.
+        let empty_owners = domains(&["synthetic.fuzz.plain"], &[], &[ActionKind::Move]);
+        assert!(matches!(
+            generate_one(1, 0, 4, 1, 1, &empty_owners, limits),
+            Err(crate::generator::Error::Invalid {
+                field: "owners",
+                ..
+            })
+        ));
+        let empty_kinds = domains(&["synthetic.fuzz.plain"], &[0], &[]);
+        assert!(matches!(
+            generate_one(1, 0, 4, 1, 1, &empty_kinds, limits),
+            Err(crate::generator::Error::Invalid {
+                field: "action kinds",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_candidate_list_with_one_entry_generates_that_entry() {
+        let limits = default_limits();
+        let one = domains(&["synthetic.fuzz.plain"], &[0], &[ActionKind::Move]);
+        let (rpl, _) = generate_one(1, 0, 4, 1, 1, &one, limits).unwrap();
+        assert!(rpl.contains("map synthetic.fuzz.plain"), "{rpl}");
+    }
 }

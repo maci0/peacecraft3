@@ -68,6 +68,9 @@ recipe version. Shorter-horizon / fewer-unit reduction is their lane.
   body — compared without the scenario and map identity lines, so a generator
   that ignored the seed would be caught — and traces byte-identically across
   repeated runs (`fuzz_corpus::tests`).
+- The candidate domains are refused rather than selected from: an empty map
+  list, an empty owner list and an empty action-kind list each come back as a
+  typed error instead of a division by an empty list (`fuzz_scenario::tests`).
 - Real terrain/tileset fuzzing waits on map-container wiring owned
   elsewhere; the map tag here is a synthetic identity only.
 - Whether the corpus should also cover `hd`/`reforged` asset modes or
