@@ -75,3 +75,12 @@ Each run reports user-mode instructions from `perf stat -e instructions:u`, allo
 ## Render and HUD workload
 
 The ignored fixture `campaign_entry_gpu_tests::mounted_campaign_render_cpu_workload` drives the production app offscreen on software Vulkan through the menu and Prologue02 and records, per 256-update phase, allocator calls and bytes, entity and asset-write counts, mesh and buffer upload bytes, and the renderer's draw, bind-group and buffer counters (the vendored `bevy_render::render_stats`). A run with `PCX_RENDER_BUDGET=tools/perf/budgets/render.json` fails when a counter exceeds its bound in that file; bounds only go down (`python3 tools/perf/render_budget.py`). Frame SHA-256 digests must stay equal across a change, instruction counts, elapsed time and FPS are reports. The workload, results, budget procedure and GPU measurement steps are in [render and HUD CPU work](performance/render-cpu.md).
+
+## The budget tools' own tests
+
+```sh
+python3 -m unittest discover -s tools/perf -t tools/perf -p 'test_*.py'
+```
+
+The tools that decide whether a change is a regression have their own tests, so a mistake in the decision itself cannot pass a bad change or fail a good one. `test_assets.py` covers what counts as an asset budget violation, that `lower` refuses to raise a counter or change a digest or the fixed-work count and only lowers, and that `compare` reports changed digests, changed work, more allocation calls and grown instructions. `test_sim_run.py` covers the simulation gate's counters and digests, that a budget above the committed one is refused so budgets only go down, and that budgets measured on other inputs are not a comparison. `test_render_budget.py` covers the render headroom each counter class gets, how observations merge into one limit, and that a limit which would rise is refused with nothing written. Every case runs on synthetic reports: no original assets, no `perf`, no measurement and no GPU are needed.
+
