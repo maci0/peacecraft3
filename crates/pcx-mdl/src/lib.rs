@@ -1037,9 +1037,12 @@ fn read_cstr_bounded(d: &[u8], at: usize, max: usize) -> String {
 /// than failing the whole record — the shipped set contains one bone whose
 /// name is entirely zero bytes.
 fn read_bone_name(d: &[u8], at: usize) -> String {
-    let field = &d[at + 4..at + 4 + 80];
-    let end = field.iter().position(|b| *b == 0).unwrap_or(field.len());
-    String::from_utf8_lossy(&field[..end]).into_owned()
+    // Clamp to the available bytes so a truncated model cannot panic here.
+    let start = (at + 4).min(d.len());
+    let end = (start + 80).min(d.len());
+    let field = &d[start..end];
+    let nul = field.iter().position(|b| *b == 0).unwrap_or(field.len());
+    String::from_utf8_lossy(&field[..nul]).into_owned()
 }
 
 /// A decoded geoset: the actual renderable mesh.
