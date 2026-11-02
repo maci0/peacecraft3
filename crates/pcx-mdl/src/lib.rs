@@ -1020,8 +1020,10 @@ impl Skeleton {
 
 fn read_cstr_bounded(d: &[u8], at: usize, max: usize) -> String {
     // Never index past the end of the input: a malformed or truncated model
-    // must not panic here. Clamp the search window to the available bytes.
-    let available = d.len().saturating_sub(at);
+    // must not panic here. Clamp the start as well as the search window to
+    // the available bytes.
+    let at = at.min(d.len());
+    let available = d.len() - at;
     let window = available.min(max);
     let end = d[at..at + window]
         .iter()
@@ -1038,8 +1040,10 @@ fn read_cstr_bounded(d: &[u8], at: usize, max: usize) -> String {
 /// name is entirely zero bytes.
 fn read_bone_name(d: &[u8], at: usize) -> String {
     // Clamp to the available bytes so a truncated model cannot panic here.
-    let start = (at + 4).min(d.len());
-    let end = (start + 80).min(d.len());
+    // Saturating offsets keep the helper total even for offsets that no
+    // record walk can produce.
+    let start = at.saturating_add(4).min(d.len());
+    let end = start.saturating_add(80).min(d.len());
     let field = &d[start..end];
     let nul = field.iter().position(|b| *b == 0).unwrap_or(field.len());
     String::from_utf8_lossy(&field[..nul]).into_owned()
@@ -4122,6 +4126,38 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn name_readers_never_index_past_the_input() {
+        // Synthetic truncated-model fixtures: the best-effort name helpers
+        // recover what fits and never panic, even when the offset itself is
+        // past the end of the input.
+        let named = b"Ab\0xxxxxxxxxx";
+        assert_eq!(super::read_cstr_bounded(named, 0, 80), "Ab");
+        // No NUL inside the window: clamped to the window, not the whole tail.
+        assert_eq!(super::read_cstr_bounded(b"abcdefgh", 0, 4), "abcd");
+        // Offset at and past the end: empty, no panic.
+        assert_eq!(super::read_cstr_bounded(named, named.len(), 80), "");
+        assert_eq!(super::read_cstr_bounded(named, named.len() + 40, 80), "");
+        assert_eq!(super::read_cstr_bounded(named, usize::MAX, 80), "");
+        assert_eq!(super::read_cstr_bounded(&[], 0, 80), "");
+        assert_eq!(super::read_cstr_bounded(&[], usize::MAX, 80), "");
+
+        // Bone names: a four-byte size word is skipped, then an 80-byte field.
+        let mut bone = vec![0u8; 84];
+        bone[0..4].copy_from_slice(&0x1234u32.to_le_bytes());
+        bone[4..7].copy_from_slice(b"Hi\0");
+        assert_eq!(super::read_bone_name(&bone, 0), "Hi");
+        // An entirely zero field (as shipped once): empty, no error.
+        assert_eq!(super::read_bone_name(&[0u8; 84], 0), "");
+        // Truncated field: clamped to the available bytes.
+        assert_eq!(super::read_bone_name(&bone[..10], 0), "Hi");
+        // Offset past the end, including overflow-adjacent values.
+        assert_eq!(super::read_bone_name(&bone, bone.len()), "");
+        assert_eq!(super::read_bone_name(&bone, bone.len() + 1000), "");
+        assert_eq!(super::read_bone_name(&bone, usize::MAX), "");
+        assert_eq!(super::read_bone_name(&[], usize::MAX), "");
+    }
 
     #[test]
     fn light_colour_curves_keep_their_vector_stride_and_channels() {
