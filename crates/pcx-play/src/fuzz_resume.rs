@@ -314,4 +314,30 @@ mod tests {
             assert_eq!(actual, expected, "split={split}");
         }
     }
+
+    #[test]
+    fn every_corpus_entry_resumes_to_the_uninterrupted_trace() {
+        let entries = crate::fuzz_corpus::corpus_entries();
+        let domains = crate::fuzz_scenario::default_domains();
+        let limits = crate::fuzz_scenario::default_limits();
+        for (index, entry) in entries.iter().enumerate() {
+            let (rpl, _) = crate::fuzz_scenario::generate_one(
+                entry.seed,
+                index,
+                entry.ticks,
+                entry.units,
+                entry.actions,
+                &domains,
+                limits,
+            )
+            .unwrap();
+            let parsed = crate::Rpl::parse(&rpl).unwrap();
+            assert_eq!(parsed.config.seed, entry.seed, "index={index}");
+            let expected = parsed.run().unwrap().encode();
+            let actual = run_via_resume(&parsed.scenario, &parsed.config, entry.ticks / 2)
+                .unwrap()
+                .encode();
+            assert_eq!(actual, expected, "seed={} index={index}", entry.seed);
+        }
+    }
 }

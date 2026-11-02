@@ -57,6 +57,7 @@ recipe version. Shorter-horizon / fewer-unit reduction is their lane.
 ## Open items
 
 - `run_via_resume == run` passes at four split points in the smoke scenario,
+  at the midpoint split for every one of the 32 corpus entries end to end,
   and a zero-length checkpoint of a `u64::MAX`-tick synthetic scenario succeeds
   without reserving the full trace (`fuzz_resume::tests`). The fixed 32-entry
   corpus generates within `default_limits` and every entry stays inside the
