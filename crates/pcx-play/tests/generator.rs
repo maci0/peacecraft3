@@ -244,6 +244,51 @@ fn exact_output_work_and_cardinality_budgets_are_enforced() {
 }
 
 #[test]
+fn the_work_model_is_one_shared_definition() {
+    // The model is `ticks * (units + 1) + actions`. The generator's ceiling
+    // and the `playrun` command's `--max-work` gate both read it, so a change
+    // to the count has to be made here rather than in one of the two callers.
+    assert_eq!(pcx_play::generator::work_estimate(7, 3, 12), 40);
+    assert_eq!(pcx_play::generator::work_estimate(100, 4, 8), 508);
+    // The checked-in corpus entry's shape: 12 ticks, 8 units and 24 actions.
+    // The generation note names 132 for it, and `playrun` is run against the
+    // same file with 100 runs and a 13,200 limit, so the number is pinned on
+    // both sides of the command.
+    assert_eq!(pcx_play::generator::work_estimate(12, 8, 24), 132);
+    // A run with no units still pays for its ticks: the `+ 1` is the tick
+    // itself, not a unit.
+    assert_eq!(pcx_play::generator::work_estimate(1, 0, 0), 1);
+    assert_eq!(pcx_play::generator::work_estimate(0, 0, 5), 5);
+    // The count is exact, not saturating: the largest tick count and the
+    // largest unit count still name their own product.
+    assert_eq!(
+        pcx_play::generator::work_estimate(u64::MAX, usize::MAX, usize::MAX),
+        u128::from(u64::MAX) * (usize::MAX as u128 + 1) + usize::MAX as u128
+    );
+}
+
+#[test]
+fn the_generator_enforces_exactly_the_shared_work_model() {
+    let work = pcx_play::generator::work_estimate(7, 3, 12);
+    let at = Limits {
+        max_work: u64::try_from(work).unwrap(),
+        ..limits()
+    };
+    // At the model's value the scenario is admitted, and one work unit below
+    // it the same scenario is refused: the ceiling is the model, not an
+    // approximation of it.
+    assert!(generate(&spec(), &config(1), at).is_ok());
+    let below = Limits {
+        max_work: u64::try_from(work).unwrap() - 1,
+        ..at
+    };
+    assert!(matches!(
+        generate(&spec(), &config(1), below),
+        Err(Error::Limit { field: "work", .. })
+    ));
+}
+
+#[test]
 fn fresh_generated_pair_runs_integrate_with_seed_minimization() {
     use pcx_play::minimize::{MinimizationConfig, minimize_differential_seed};
     let left_spec = MovementSpec {

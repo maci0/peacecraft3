@@ -65,13 +65,16 @@ fn execute() -> Result<(), (u8, String)> {
     let source = std::fs::read_to_string(&path).map_err(|e| (2, format!("{path}: {e}")))?;
     let rpl = Rpl::parse(&source).map_err(|e| (2, format!("{path}:{e}")))?;
     // A conservative, reproducible harness work estimate; never a timing gate.
-    let work = rpl
-        .scenario
-        .ticks
-        .checked_mul(rpl.scenario.spawns.len() as u64 + 1)
-        .and_then(|w| w.checked_add(rpl.scenario.script.len() as u64))
-        .and_then(|w| w.checked_mul(runs as u64))
-        .ok_or((2, "work estimate overflow".into()))?;
+    // The model is the generator's, so this gate and the generator's own
+    // ceiling cannot drift apart.
+    let work = pcx_play::generator::work_estimate(
+        rpl.scenario.ticks,
+        rpl.scenario.spawns.len(),
+        rpl.scenario.script.len(),
+    )
+    .checked_mul(u128::from(runs as u64))
+    .and_then(|work| u64::try_from(work).ok())
+    .ok_or((2, "work estimate overflow".into()))?;
     if max_work.is_some_and(|max| work > max) {
         return Err((
             1,

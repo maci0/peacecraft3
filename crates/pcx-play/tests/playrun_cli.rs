@@ -55,6 +55,51 @@ fn checked_scenario_cli_baseline_determinism_and_work_limit() {
 }
 
 #[test]
+fn the_work_gate_counts_the_shared_work_model() {
+    // The gate's work number is the generator's model, so the command cannot
+    // drift from the ceiling the generator enforces. The checked-in corpus
+    // entry is the one the generation note names: 12 ticks, 8 units and 24
+    // actions, so 12 * (8 + 1) + 24 = 132 per run.
+    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/play/synthetic/generated-movement/seed-0.rpl");
+    let source = std::fs::read_to_string(&input).unwrap();
+    let rpl = pcx_play::Rpl::parse(&source).unwrap();
+    let per_run = pcx_play::generator::work_estimate(
+        rpl.scenario.ticks,
+        rpl.scenario.spawns.len(),
+        rpl.scenario.script.len(),
+    );
+    assert_eq!(per_run, 132, "the checked-in entry's work");
+    let runs = 100u64;
+    let limit = u64::try_from(per_run * u128::from(runs)).unwrap();
+    let output = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("playrun-work.trace");
+    let call = |options: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_playrun"))
+            .arg(&input)
+            .arg(&output)
+            .args(options)
+            .output()
+            .unwrap()
+    };
+    // Exactly at the model's total the run is admitted.
+    let admitted = call(&["--runs", "100", "--max-work", &limit.to_string()]);
+    assert!(
+        admitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&admitted.stderr)
+    );
+    // One work unit below it the run is refused, and the refusal names the
+    // model's own number rather than a count of its own.
+    let refused = call(&["--runs", "100", "--max-work", &(limit - 1).to_string()]);
+    assert_eq!(refused.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(&format!("work {limit} exceeds limit {}", limit - 1)),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn malformed_invocations_are_refused_on_stderr_with_silent_stdout() {
     let scenario = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/play/synthetic/ordering/same-tick.rpl");

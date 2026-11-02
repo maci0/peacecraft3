@@ -103,6 +103,25 @@ fn invalid_arguments_are_refused_on_stderr_with_silent_stdout() {
 }
 
 #[test]
+fn the_work_budget_refusal_names_the_work_budget() {
+    // The tenth argument is the work budget, so a request it cannot afford
+    // is refused in those words. The number it names is the request's own
+    // work, counted by the shared model.
+    let mut args = base_args();
+    *args.get_mut(8).unwrap() = "1";
+    let result = playgen(&args);
+    assert_eq!(result.status.code(), Some(2));
+    assert!(result.stdout.is_empty(), "a refused run emits no scenario");
+    let stderr = stderr_of(&result);
+    // 100 ticks, 4 units and 8 actions cost 100 * (4 + 1) + 8 = 508.
+    assert!(stderr.contains("work requires 508"), "{stderr}");
+    assert!(
+        !stderr.contains("ticks requires"),
+        "the budget is a work budget, not a tick limit: {stderr}"
+    );
+}
+
+#[test]
 fn the_output_ceiling_refuses_instead_of_truncating() {
     // 16 bytes cannot hold the header, so the run is refused rather than
     // emitting a truncated scenario that would still parse.

@@ -84,7 +84,11 @@ fn execute() -> Result<String, String> {
             // CLI resource policy, not native unit/action limits.
             max_units: 1024,
             max_actions: 16_384,
-            max_ticks: max_work,
+            // The tenth argument is a work budget, not a tick limit, so the
+            // tick ceiling is the request itself and the budget is the one
+            // ceiling that can refuse. A refusal then names the work the
+            // request costs instead of a tick limit the caller never set.
+            max_ticks: ticks,
             max_fix_rows: 0,
             max_work,
             max_output_bytes,

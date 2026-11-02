@@ -34,8 +34,19 @@ pub struct MovementSpec<'a> {
     pub action_kinds: &'a [ActionKind],
 }
 
+/// The harness work model: `ticks * (units + 1) + actions`.
+///
+/// One definition for every work ceiling, so the generator's
+/// [`Limits::max_work`] and the `playrun` command's `--max-work` gate cannot
+/// drift apart. This counts the deterministic work a run performs; it is a
+/// harness convention, not a native work model, a frame-time budget or a
+/// claim about the original client's cost.
+pub fn work_estimate(ticks: u64, units: usize, actions: usize) -> u128 {
+    u128::from(ticks) * (units as u128 + 1) + actions as u128
+}
+
 /// Explicit generation/output ceilings. Work counts ticks * (units + 1) +
-/// actions, matching playrun's single-run estimate. It does not bound compiler,
+/// actions, as [`work_estimate`] defines it. It does not bound compiler,
 /// runner or oracle memory, or establish a frame-time limit.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -173,7 +184,7 @@ fn validate(spec: &MovementSpec<'_>, config: &RunConfig, limits: Limits) -> Resu
     )?;
     let ticks = usize::try_from(spec.ticks).map_err(|_| Error::Layout { field: "ticks" })?;
     Layout::array::<TickRecord>(ticks).map_err(|_| Error::Layout { field: "ticks" })?;
-    let work = u128::from(spec.ticks) * (spec.units as u128 + 1) + spec.actions as u128;
+    let work = work_estimate(spec.ticks, spec.units, spec.actions);
     ceiling("work", work, limits.max_work.into())?;
     if spec.owners.is_empty() {
         return Err(invalid("owners", "must not be empty"));

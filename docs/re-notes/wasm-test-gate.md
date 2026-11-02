@@ -62,11 +62,12 @@ The 32-bit cases the documentation claims, run as actual 32-bit WebAssembly:
 - `crates/pcx-play/tests/trace_capacity.rs` — three cases, including
   `tick_count_larger_than_usize_is_not_truncated`, which only exists on a
   32-bit target, and `unrepresentable_trace_layout_is_a_typed_error_before_allocation`.
-- `crates/pcx-play/tests/generator.rs` — eight cases, including the complete
+- `crates/pcx-play/tests/generator.rs` — ten cases, including the complete
   signed-coordinate domain, the exact output/work/cardinality budgets (the
   oversized tick layout, the exhausted unit-ID capacity and the output-byte
-  refusal), and 100 byte-identical fresh runs of one generated scenario and of
-  the checked-in seed corpus.
+  refusal), the shared work model the generator's ceiling and `playrun`'s
+  `--max-work` gate both count, and 100 byte-identical fresh runs of one
+  generated scenario and of the checked-in seed corpus.
 
 A sweep of `pcx-play`'s library tests at 32-bit found one assertion that was
 a 64-bit observation rather than a requirement: the town centre's payload
