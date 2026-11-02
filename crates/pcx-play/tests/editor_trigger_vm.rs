@@ -25,6 +25,7 @@ endfunction
 function Trig_Start_Actions takes nothing returns nothing
     set udg_Count = (udg_Count + 1)
     call DisplayTextToPlayer(Player(0), \"hi\")
+    call DisplayTextToPlayer(Player(0), \"custom\")
 endfunction
 
 function InitTrig_Start takes nothing returns nothing

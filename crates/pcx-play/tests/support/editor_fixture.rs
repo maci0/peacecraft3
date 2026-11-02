@@ -21,6 +21,7 @@ TriggerRegisterTimerEventSingle=0,real
 [TriggerActions]
 DisplayTextToPlayer=0,player,string
 SetVariable=0,AnyGlobal,Null
+CustomScriptCode=1,string
 [TriggerCalls]
 OperatorInt=0,1,integer,integer,ArithmeticOperator,integer
 ";
@@ -148,6 +149,15 @@ pub fn wtg() -> Vec<u8> {
             2,
             "DisplayTextToPlayer",
             vec![param(0, "PlayerOne", None), param(3, "hi", None)],
+        ),
+        eca(
+            2,
+            "CustomScriptCode",
+            vec![param(
+                3,
+                "call DisplayTextToPlayer(Player(0), \"custom\")",
+                None,
+            )],
         ),
     ];
     v.extend(trigger("Start", true, &start_ecas));
