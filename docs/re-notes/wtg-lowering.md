@@ -122,7 +122,11 @@ script with the same behavior in the VM under one recording host. The recording 
 logs every native call with code arguments named by their function. The test asserts
 the same native trace, the same final `udg_Count` (6), and that the disabled trigger
 is absent. It covers globals, actions, events, init order and disabled triggers. It
-does not cover timers firing, condition evaluation, or the native game.
+also covers one `CustomScriptCode` action: the stored string is emitted verbatim
+into the actions function, so the lowered and hand-written traces share the extra
+`DisplayTextToPlayer(Player(0), "custom")` call. No shipped map contains
+`CustomScriptCode` (probe count 0), so that leg is synthetic coverage only.
+It does not cover timers firing, condition evaluation, or the native game.
 
 ## Refused (named, whole map)
 
