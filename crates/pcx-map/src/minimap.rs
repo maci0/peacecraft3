@@ -115,7 +115,20 @@ impl MinimapMarkers {
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, Error> {
         let version = u32_at(&bytes, 0)?;
         let n = u32_at(&bytes, 4)? as usize;
-        let need = 8 + n * MARKER_RECORD;
+        let Some(records) = n.checked_mul(MARKER_RECORD) else {
+            return Err(Error::MinimapSize {
+                markers: n,
+                have: bytes.len(),
+                need: usize::MAX,
+            });
+        };
+        let Some(need) = 8usize.checked_add(records) else {
+            return Err(Error::MinimapSize {
+                markers: n,
+                have: bytes.len(),
+                need: usize::MAX,
+            });
+        };
         if need != bytes.len() {
             return Err(Error::MinimapSize {
                 markers: n,
