@@ -286,6 +286,41 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual([a['name'] for a in command['args']], ['--run-dir', '--label'])
         self.assertEqual(sorted(command['stdout_schema']['required']), ['bytes', 'replay', 'sha256'])
 
+    def test_every_command_schema_matches_the_actual_parser(self):
+        """The offline schema is the CLI's own introspection; it must not drift.
+
+        `schema` prints what the tool claims to accept. Every command's
+        declared arguments, their required-ness and their kind come from the
+        same parser that runs the command, so a change to one without the
+        other would make the published contract untrue.
+        """
+        schema = json.loads((HERE / 'schema.json').read_text())
+        parser = ref.parser()
+        subparsers = next(action for action in parser._actions
+                          if isinstance(action, argparse._SubParsersAction))
+        declared = {command['name']: command for command in schema['commands']}
+        self.assertEqual(list(declared), list(subparsers.choices))
+        for name, subparser in subparsers.choices.items():
+            command = declared[name]
+            options = {option: action for option, action in subparser._option_string_actions.items()
+                       if action.dest != 'help'}
+            self.assertEqual(sorted(arg['name'] for arg in command['args']), sorted(options), name)
+            for arg in command['args']:
+                action = options[arg['name']]
+                self.assertEqual(arg.get('required', False), action.required, f'{name} {arg["name"]}')
+                if isinstance(action, argparse._AppendAction):
+                    kind = 'string[]'
+                elif action.type in (int, ref.positive):
+                    kind = 'integer'
+                else:
+                    kind = 'string'
+                self.assertEqual(arg['type'], kind, f'{name} {arg["name"]}')
+        globals_declared = schema['global_args']
+        format_action = parser._option_string_actions['--format']
+        self.assertEqual([arg['name'] for arg in globals_declared], ['--format'])
+        self.assertEqual(globals_declared[0]['enum'], list(format_action.choices))
+        self.assertEqual(globals_declared[0]['default'], format_action.default)
+
 
 if __name__ == '__main__':
     unittest.main()

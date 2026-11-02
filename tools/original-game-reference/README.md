@@ -461,7 +461,10 @@ danger-zone surface.
 `reference.py schema` declares the v0.3 candidate, pinned to published schema bytes
 whose SHA-256 is checked against the accompanying published CHECKSUMS.txt. The
 candidate can change upstream. Schema validation and subprocess tests are distinct
-from full CLI Spec conformance; full conformance is not claimed.
+from full CLI Spec conformance; full conformance is not claimed. Every command's
+declared arguments, their required-ness and their kind are checked against the
+same parser that runs the command, so the offline introspection cannot drift from
+the implementation.
 
 ```sh
 python -m venv .scratch/reference-test-env

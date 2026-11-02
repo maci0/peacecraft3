@@ -97,8 +97,9 @@
         },
         {
           "name": "--game-arg",
-          "type": "string",
-          "required": false
+          "type": "string[]",
+          "required": false,
+          "description": "Repeatable game switch, passed as separate argv entries."
         }
       ],
       "stdout_schema": {
