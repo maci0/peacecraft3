@@ -130,14 +130,18 @@ fn a_single_variation_model_must_be_an_unambiguous_source_member() {
         .unwrap(),
         "synthetic/decoration.mdx"
     );
-    assert!(
+    // A shipped single-variation doodad can carry both spellings; the
+    // exact variation name wins and the direct name is only a fallback for
+    // decorations shipped without suffixed files.
+    assert_eq!(
         model_member(
             "Synthetic\\Decoration",
             0,
             1,
             ["synthetic/decoration.mdx", "synthetic/decoration0.mdx"].into_iter()
         )
-        .is_err()
+        .unwrap(),
+        "synthetic/decoration0.mdx"
     );
     assert!(
         model_member(

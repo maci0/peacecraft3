@@ -1032,6 +1032,40 @@ impl<'a> Visual<'a> {
             Self::Sky(..) => Ok((sky::MODEL_SCALE, 0.0, [1.0; 3])),
         }
     }
+    /// Non-unit owner name for the empty replaceable-slot refusal; units and
+    /// the sky dome resolve through the shared unit slot path instead.
+    fn replaceable_owner(self) -> Option<&'static str> {
+        match self {
+            Self::Item(..) => Some("item"),
+            Self::Doodad(..) => Some("doodad"),
+            Self::Destructable(..) => Some("destructable"),
+            Self::Unit(..) | Self::Sky(..) => None,
+        }
+    }
+}
+
+/// Resolve an empty replaceable texture slot through the indexed team families.
+/// Doodad team slots share the unit palette; every other non-unit slot refuses
+/// with its visual kind so failures name the actual actor.
+fn empty_slot_path<'a>(
+    visual: Visual<'_>,
+    slot: u32,
+    paths: impl Iterator<Item = &'a pcx_assets::AssetPath>,
+    palette: &TeamPalette,
+    color: i32,
+) -> Result<String, String> {
+    if let Some(owner) = visual.replaceable_owner()
+        && !(owner == "doodad" && matches!(slot, 1 | 2))
+    {
+        return Err(format!(
+            "{owner} has unsupported replaceable texture slot {slot}"
+        ));
+    }
+    // Empty slots 1/2 use the indexed team-color/glow families; full paths come from the selected inventory.
+    match slot {
+        1 | 2 => palette.path(paths, slot, color),
+        slot => Err(format!("unsupported empty unit texture slot {slot}")),
+    }
 }
 
 struct ActorSource<'a> {
@@ -1126,20 +1160,8 @@ impl Actor {
                 texture.path.clone_from(path);
             }
             if texture.path.is_empty() {
-                if matches!(
-                    visual,
-                    Visual::Item(..) | Visual::Doodad(..) | Visual::Destructable(..)
-                ) {
-                    return Err(format!(
-                        "item has unsupported replaceable texture slot {}",
-                        texture.slot
-                    ));
-                }
-                // Empty slots 1/2 use the indexed team-color/glow families; full paths come from the selected inventory.
-                texture.path = match texture.slot {
-                    1 | 2 => palette.path(reader.paths(), texture.slot, color)?,
-                    slot => return Err(format!("unsupported empty unit texture slot {slot}")),
-                };
+                texture.path =
+                    empty_slot_path(visual, texture.slot, reader.paths(), palette, color)?;
             }
             let decoded = assets.textures.get_or_decode(&texture.path, || {
                 let raw = reader
@@ -2853,6 +2875,144 @@ mod tests {
         assert!(
             TeamPalette::read(b"[Default]\nTeamColors=1\nTeamColor=A\nTeamColor=B\nTeamGlow=C\n")
                 .is_err()
+        );
+    }
+
+    fn slot_palette() -> (TeamPalette, Vec<pcx_assets::AssetPath>) {
+        let source =
+            b"[Default]\nTeamColors=2\nTeamColor=Selected/TeamColor\nTeamGlow=Selected/TeamGlow\n";
+        let palette = TeamPalette::read(source).unwrap();
+        let paths = [
+            "Selected/TeamColor00.blp",
+            "Selected/TeamColor01.blp",
+            "Selected/TeamGlow00.blp",
+            "Selected/TeamGlow01.blp",
+        ]
+        .map(|s| pcx_assets::AssetPath::new(s).unwrap())
+        .to_vec();
+        (palette, paths)
+    }
+
+    fn synthetic_animation() -> pcx_play::unit_model::Animation {
+        let model = Arc::new(pcx_play::unit_model::Model {
+            origin: pcx_play::scripts::AssetIdentity {
+                source: "synthetic".into(),
+                edition: "fixture".into(),
+                version: "test".into(),
+            },
+            member: "Synthetic/Decoration.mdx".into(),
+            bytes: Arc::from([]),
+            sequences: Vec::new(),
+            blend_time_ms: 0,
+            joints: Vec::new(),
+            global_sequences: Vec::new(),
+        });
+        pcx_play::unit_model::Animation::new(model, 0.).unwrap()
+    }
+
+    fn doodad_parts() -> (
+        pcx_play::campaign_placement::PlacedDoodad,
+        pcx_play::campaign_placement::DoodadAppearance,
+    ) {
+        let row = pcx_play::campaign_placement::PlacedDoodad {
+            source: pcx_map::Doodad {
+                type_id: *b"Zx91",
+                variation: 0,
+                position: [0., 0., 0.],
+                angle: 0.,
+                scale: [1., 1., 1.],
+                flags: 2,
+                life: 255,
+                creation_number: 71,
+            },
+            shown: true,
+            point_selection: false,
+            appearance: Err("model not needed by empty-slot resolution".into()),
+        };
+        let appearance = pcx_play::campaign_placement::DoodadAppearance {
+            tint: [1.; 3],
+            animation: synthetic_animation(),
+        };
+        (row, appearance)
+    }
+
+    #[test]
+    fn doodad_team_slots_fill_from_the_palette() {
+        let (palette, paths) = slot_palette();
+        let (row, appearance) = doodad_parts();
+        let visual = Visual::Doodad(&row, &appearance);
+        for (slot, expected) in [
+            (1, "selected/teamcolor00.blp"),
+            (2, "selected/teamglow00.blp"),
+        ] {
+            assert_eq!(
+                empty_slot_path(visual, slot, paths.iter(), &palette, 0).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn non_team_slots_refuse_with_the_visual_kind() {
+        let (palette, paths) = slot_palette();
+        let (row, appearance) = doodad_parts();
+        assert_eq!(
+            empty_slot_path(
+                Visual::Doodad(&row, &appearance),
+                3,
+                paths.iter(),
+                &palette,
+                0
+            )
+            .unwrap_err(),
+            "doodad has unsupported replaceable texture slot 3"
+        );
+        let item = pcx_play::playercolor_host::ExecutedItem {
+            definition: Definition {
+                rawcode: *b"I001",
+                base_rawcode: "I001".into(),
+                kind: ObjectKind::Item,
+                fields: BTreeMap::new(),
+                modifications: Vec::new(),
+            },
+            source: pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "fixture".into(),
+            },
+            x: 0.,
+            y: 0.,
+            held_by: None,
+            shown: Some(true),
+            invulnerable: None,
+            droppable: None,
+            drop_on_death: None,
+            claimed: false,
+            consumed: false,
+        };
+        let animation = synthetic_animation();
+        assert_eq!(
+            empty_slot_path(
+                Visual::Item(&item, &animation),
+                1,
+                paths.iter(),
+                &palette,
+                0
+            )
+            .unwrap_err(),
+            "item has unsupported replaceable texture slot 1"
+        );
+        let unit = unit();
+        assert_eq!(
+            empty_slot_path(
+                Visual::Unit(&unit, None, None),
+                3,
+                paths.iter(),
+                &palette,
+                0
+            )
+            .unwrap_err(),
+            "unsupported empty unit texture slot 3"
         );
     }
 }

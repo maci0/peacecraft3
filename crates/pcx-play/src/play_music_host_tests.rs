@@ -266,3 +266,51 @@ fn admission_refuses_duplicates_overflow_signature_and_source() {
         matches!(host(&common, map).with_play_music(8), Err(e) if e.failure == Failure::Source)
     );
 }
+#[test]
+fn skips_admission_silently_when_no_music_natives_declared() {
+    const NO_MUSIC: &str = "type agent extends handle\ntype timer extends agent\ntype playercolor extends handle\nconstant native ConvertPlayerColor takes integer i returns playercolor\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nglobals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n";
+    let mut h = host(NO_MUSIC, "");
+    assert!(h.play_music_request().is_none());
+    assert!(h.stop_music_fade_out().is_none());
+    assert!(h.resume_music_requests().is_none());
+    assert!(h.music_volume_request().is_none());
+    assert!(h.music_play_position_request().is_none());
+    assert!(h.thematic_music_ex_request().is_none());
+    assert!(h.thematic_play_position_request().is_none());
+    assert!(
+        h.native("PlayMusic", &[Value::Str("Music".into())])
+            .unwrap_err()
+            .contains("unsupported by this host"),
+        "undeclared music natives must stay unsupported before admission"
+    );
+    let mut h = h.with_play_music(64).unwrap();
+    assert!(h.play_music_request().is_none());
+    assert!(h.stop_music_fade_out().is_none());
+    assert!(h.resume_music_requests().is_some_and(|count| count == 0));
+    assert!(h.music_volume_request().is_none());
+    assert!(h.music_play_position_request().is_none());
+    assert!(h.thematic_music_ex_request().is_none());
+    assert!(h.thematic_play_position_request().is_none());
+    // The skip installs the same dispatch surface as full admission: the call
+    // is retained and refused as unqualified playback, not as unsupported.
+    let err = h
+        .native("PlayMusic", &[Value::Str("Music".into())])
+        .unwrap_err();
+    assert!(err.contains("PlayMusic"), "unexpected refusal: {err}");
+    assert!(err.contains("unqualified"), "unexpected refusal: {err}");
+    assert!(
+        !err.contains("unsupported by this host"),
+        "unexpected refusal: {err}"
+    );
+}
+#[test]
+fn missing_create_timer_with_music_natives_is_a_source_failure() {
+    // `ObjectHost::checked` already requires `CreateTimer`, so a prelude
+    // without it can only reach admission with the timer declared elsewhere;
+    // the foreign source still fails the single-source playback surface.
+    let common = COMMON.replace("native CreateTimer takes nothing returns timer\n", "");
+    let map = "native CreateTimer takes nothing returns timer\n";
+    assert!(
+        matches!(host(&common, map).with_play_music(8), Err(e) if e.failure == Failure::Source)
+    );
+}

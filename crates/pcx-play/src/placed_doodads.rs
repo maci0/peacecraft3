@@ -239,15 +239,22 @@ pub(crate) fn model_member<'a>(
     let stem = path.as_str().strip_suffix(".mdx").unwrap_or(path.as_str());
     let varied = format!("{stem}{variation}.mdx");
     let direct = format!("{stem}.mdx");
-    let mut found =
-        paths.filter(|p| *p == varied || (count == 1 && variation == 0 && *p == direct));
-    let member = found
-        .next()
-        .ok_or_else(|| format!("{file}: no source model for variation {variation}"))?;
-    if found.next().is_some() {
-        return Err(format!("{file}: ambiguous direct/varied model"));
+    // The exact variation name wins; the direct name is only a fallback for
+    // single-variation decorations shipped without suffixed files. Shipped
+    // archives carry both spellings for at least one single-variation
+    // doodad, and the original loads the map, so an ambiguous pair must
+    // resolve instead of refusing; which spelling the original prefers when
+    // both exist is unmeasured.
+    let mut fallback = None;
+    for candidate in paths {
+        if candidate == varied {
+            return Ok(varied);
+        }
+        if fallback.is_none() && count == 1 && variation == 0 && candidate == direct {
+            fallback = Some(direct.clone());
+        }
     }
-    Ok(member.to_owned())
+    fallback.ok_or_else(|| format!("{file}: no source model for variation {variation}"))
 }
 
 #[cfg(test)]
