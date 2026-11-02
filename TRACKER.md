@@ -20,10 +20,13 @@
   caller file and an admitted SLK row. Group target orders reuse the per-unit
   target consumers. A point `smart` order resolves through the existing ground
   rules. `ForceCinematicSubtitles` stores the executed flag. `ForLoopVar` lowers
-  to the declared integer. Regions, cliffs, RNG, and the expiry-trigger order
-  stay open. See `docs/re-notes/slice-sound-binding.md`,
-  `docs/re-notes/slice-group-enum.md`, `docs/re-notes/slice-orders.md`,
-  `docs/re-notes/slice-dialogue.md`, and `docs/re-notes/slice-wtg-desugar.md`.
+  to the declared integer. The parser refuses a hostile script by nesting depth
+  and by measured stack use instead of overflowing the Rust stack. Regions,
+  cliffs, RNG, and the expiry-trigger order stay open. See
+  `docs/re-notes/slice-sound-binding.md`, `docs/re-notes/slice-group-enum.md`,
+  `docs/re-notes/slice-orders.md`, `docs/re-notes/slice-dialogue.md`,
+  `docs/re-notes/slice-wtg-desugar.md`, and
+  `docs/re-notes/script-parse-bounds.md`.
 
 - [~] Campaign loading screen. Launching a mission opens the original loading
   screen: `Loading.fdf` frames, the background model and sequence the map header

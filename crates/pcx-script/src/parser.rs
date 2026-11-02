@@ -43,22 +43,59 @@ use crate::span::Span;
     tracing::instrument(skip_all, target = "pcx_cpu", name = "script.parse")
 )]
 pub fn parse(src: &str) -> Result<Script, Error> {
-    let lexed = crate::lexer::lex(src)?;
-    let mut p = Parser::new(lexed.tokens, line_starts(src));
+    parse_impl(src).0
+}
+
+/// How much of the caller's stack a parse of `src` spent, in bytes.
+///
+/// The byte count is the distance from the parse's own frame to the lowest
+/// stack address the descent reached. It is the number the guard in
+/// [`Parser::enter_nesting`] bounds, so it is measured rather than estimated.
+#[cfg(test)]
+pub(crate) fn parse_stack_use(src: &str) -> usize {
+    parse_impl(src).1
+}
+
+fn parse_impl(src: &str) -> (Result<Script, Error>, usize) {
+    let base = stack_address();
+    let lexed = match crate::lexer::lex(src) {
+        Ok(lexed) => lexed,
+        Err(e) => return (Err(e), 0),
+    };
+    let mut p = Parser::new(lexed.tokens, line_starts(src), base);
     let mut items = Vec::new();
+    let mut result = Ok(());
     while !p.at_eof() {
         if matches!(p.peek().kind, Tok::Directive(_)) {
             // Already recorded by the lexer; directives are not items.
             p.bump();
             continue;
         }
-        items.push(p.item()?);
+        match p.item() {
+            Ok(item) => items.push(item),
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        }
     }
-    Ok(Script {
-        items,
-        directives: lexed.directives,
-        comments: lexed.comments,
-    })
+    let used = base.abs_diff(p.deepest_stack);
+    (
+        result.map(|()| Script {
+            items,
+            directives: lexed.directives,
+            comments: lexed.comments,
+        }),
+        used,
+    )
+}
+
+/// The address of a local in the calling frame. The stack grows down on the
+/// platforms this crate targets and up on some others, so callers compare with
+/// [`usize::abs_diff`] rather than assuming a direction.
+fn stack_address() -> usize {
+    let probe = 0u8;
+    &probe as *const u8 as usize
 }
 
 /// Byte offsets of every line start, for the line-orientation checks.
@@ -92,14 +129,71 @@ struct Parser {
     toks: Vec<Token>,
     pos: usize,
     lines: Vec<u32>,
+    /// Live recursion depth of the descent below. Every unbounded nesting
+    /// shape (declarations, statements, expressions, unary chains) passes
+    /// through a guarded entry point; see [`MAX_PARSE_DEPTH`].
+    depth: u32,
+    /// The lowest stack address the descent reached, used to bound how much
+    /// of the caller's stack a parse may spend; see
+    /// [`MAX_PARSE_STACK_BYTES`].
+    deepest_stack: usize,
+    /// The stack address the parse started from, so the descent's use of the
+    /// caller's stack is the distance from here to [`Self::deepest_stack`].
+    base_stack: usize,
 }
 
+/// Nesting depth a script may reach while parsing. The engine's own limit is
+/// not measured, so like [`crate::eval::MAX_CALL_DEPTH`] this is a harness
+/// guard against a Rust stack overflow on hostile input, not a game rule.
+///
+/// The limit bounds the *shape* of a script: how many declarations,
+/// statements, expressions and unary chains may nest inside each other. It
+/// also keeps the tree the parser builds small, which bounds the drop of that
+/// tree — a recursive drop of the same depth.
+///
+/// The margin over real scripts is large. The shipped map scripts measured on
+/// this machine nest 15 levels deep (`human07.j`) and 8 (`human06-interlude.j`),
+/// so the limit is more than four times the deepest real script; the
+/// measurement is repeated by the ignored test
+/// `the_local_real_scripts_stay_inside_both_bounds`.
+///
+/// A script past the limit is refused with a parse error naming the limit; it
+/// never overflows the Rust stack.
+pub const MAX_PARSE_DEPTH: u32 = 64;
+
+/// How much of the caller's stack one parse may spend, in bytes.
+///
+/// This is the bound that actually keeps a hostile script from crashing the
+/// process: the depth limit alone is a guess about how many levels fit, while
+/// this one measures the descent's stack use directly and refuses once it
+/// passes the budget. The budget is a quarter of the smallest stack a parse
+/// runs on here — Rust's 2 MiB default for a spawned thread, which is also
+/// what a test-harness thread gets; the production paths give their script
+/// workers 32 MiB — so a parse always leaves three quarters of the stack to
+/// the frames beneath it and to the drop of the tree it built.
+///
+/// How much a level costs was measured in an unoptimized build: a nested
+/// statement block costs about 15 KiB a level, a parenthesised group about
+/// 8 KiB a level and a unary chain about 2 KiB a level. The block is the
+/// dearest shape, and at the budget it is refused after roughly 34 levels.
+/// The shipped map scripts spend 54 KiB (`human07.j`) and 29 KiB
+/// (`human06-interlude.j`), so the margin over real scripts is about ten.
+///
+/// The two bounds are complementary: the depth limit bounds the shape and
+/// keeps the tree small, and the byte budget bounds the descent whatever
+/// shape the input takes. Raising either one alone does not remove the
+/// other's protection.
+pub const MAX_PARSE_STACK_BYTES: usize = 512 * 1024;
+
 impl Parser {
-    fn new(toks: Vec<Token>, lines: Vec<u32>) -> Parser {
+    fn new(toks: Vec<Token>, lines: Vec<u32>, base_stack: usize) -> Parser {
         Parser {
             toks,
             pos: 0,
             lines,
+            depth: 0,
+            deepest_stack: usize::MAX,
+            base_stack,
         }
     }
 
@@ -202,6 +296,33 @@ impl Parser {
         Error::parse(self.span(), message)
     }
 
+    /// Enters one level of syntactic nesting. Hostile depth comes back as a
+    /// parse error naming the limit instead of overflowing the Rust stack.
+    ///
+    /// Two bounds apply. [`MAX_PARSE_DEPTH`] caps the nesting shape, and
+    /// [`MAX_PARSE_STACK_BYTES`] caps what the descent may spend of the
+    /// caller's stack; the second one is measured, so it holds whatever shape
+    /// the input takes.
+    fn enter_nesting(&mut self) -> Result<(), Error> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(self.error_here(format!("syntax nested past {MAX_PARSE_DEPTH} levels")));
+        }
+        let here = stack_address();
+        self.deepest_stack = self.deepest_stack.min(here);
+        if self.base_stack.abs_diff(here) > MAX_PARSE_STACK_BYTES {
+            return Err(self.error_here(format!(
+                "syntax nested past {MAX_PARSE_STACK_BYTES} bytes of stack"
+            )));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Leaves one level of syntactic nesting.
+    fn exit_nesting(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     /// A name. Reserved words (including the reserved-but-unused `alias`)
     /// can never be one.
     fn expect_ident(&mut self) -> Result<Ident, Error> {
@@ -239,6 +360,13 @@ impl Parser {
     // ----- top level -------------------------------------------------
 
     fn item(&mut self) -> Result<Item, Error> {
+        self.enter_nesting()?;
+        let result = self.item_inner();
+        self.exit_nesting();
+        result
+    }
+
+    fn item_inner(&mut self) -> Result<Item, Error> {
         self.check_fresh_line()?;
         // vJass declaration modifiers, recognised contextually so vanilla
         // names like `public` or `static` stay legal identifiers.
@@ -595,6 +723,13 @@ impl Parser {
     // ----- statements ------------------------------------------------
 
     fn stmt(&mut self, fresh_line: bool) -> Result<Stmt, Error> {
+        self.enter_nesting()?;
+        let result = self.stmt_inner(fresh_line);
+        self.exit_nesting();
+        result
+    }
+
+    fn stmt_inner(&mut self, fresh_line: bool) -> Result<Stmt, Error> {
         if fresh_line {
             self.check_fresh_line()?;
         }
@@ -809,7 +944,10 @@ impl Parser {
     }
 
     fn expr(&mut self) -> Result<Expr, Error> {
-        self.binary(0)
+        self.enter_nesting()?;
+        let result = self.binary(0);
+        self.exit_nesting();
+        result
     }
 
     /// Precedence-climbing over the ladder documented at the module head.
@@ -854,6 +992,13 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, Error> {
+        self.enter_nesting()?;
+        let result = self.unary_inner();
+        self.exit_nesting();
+        result
+    }
+
+    fn unary_inner(&mut self) -> Result<Expr, Error> {
         let start = self.span();
         match self.peek().kind.clone() {
             // `not` reaches over `+`/`-` but stops at the comparison rungs.

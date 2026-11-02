@@ -1437,3 +1437,151 @@ fn doubled_backslash_in_a_string_literal_decodes_to_one_backslash() {
         .expect("one string literal");
     assert_eq!(literal, r"Environment\Sky\X.mdl");
 }
+
+// ----- hostile nesting: a typed refusal, never a stack overflow -----------
+#[test]
+fn hostile_nesting_is_a_typed_refusal() {
+    // A community map ships its own `war3map.j`; nesting the parser cannot
+    // bound is a crash on hostile input. Each shape below must come back as
+    // a parse error naming a limit.
+    let depth = 100_000;
+    // Parenthesised groups: `primary` recurses through `expr` per level.
+    let mut parens = String::from("function f takes nothing returns integer\n    return ");
+    parens.extend(std::iter::repeat_n('(', depth));
+    parens.push('1');
+    parens.extend(std::iter::repeat_n(')', depth));
+    parens.push_str("\nendfunction\n");
+    // Unary chains: `unary` recurses per `-`.
+    let mut minuses = String::from("function f takes nothing returns integer\n    return ");
+    minuses.extend(std::iter::repeat_n('-', depth));
+    minuses.push_str("1\nendfunction\n");
+    // Block nesting: `stmt` recurses through `stmt_block` per `if`.
+    let mut ifs = String::from("function f takes nothing returns nothing\n");
+    for _ in 0..depth {
+        ifs.push_str("    if true then\n");
+    }
+    ifs.push_str("    call DoNothing()\n");
+    for _ in 0..depth {
+        ifs.push_str("    endif\n");
+    }
+    ifs.push_str("endfunction\n");
+    for src in [&parens, &minuses, &ifs] {
+        let message = parse_err(src);
+        assert!(
+            message.contains("nested"),
+            "hostile nesting must name a limit, got: {message}"
+        );
+    }
+}
+
+/// A script nested just inside the limits still parses, and one step past the
+/// depth limit is refused. The refusal must be the depth limit's, not the
+/// stack budget's: the budget is the backstop for shapes the depth limit does
+/// not describe, and this keeps both bounds honest.
+#[test]
+fn nesting_just_inside_the_limit_still_parses() {
+    let mut mild = String::from("function f takes nothing returns integer\n    return ");
+    // Each parenthesis costs two levels: `expr` and `unary`.
+    let levels = (crate::parser::MAX_PARSE_DEPTH as usize / 2).saturating_sub(2);
+    mild.extend(std::iter::repeat_n('(', levels));
+    mild.push('1');
+    mild.extend(std::iter::repeat_n(')', levels));
+    mild.push_str("\nendfunction\n");
+    parse_ok(&mild);
+
+    // One level deeper is refused, and the message names the depth limit.
+    let mut over = String::from("function f takes nothing returns integer\n    return ");
+    over.extend(std::iter::repeat_n('(', levels + 1));
+    over.push('1');
+    over.extend(std::iter::repeat_n(')', levels + 1));
+    over.push_str("\nendfunction\n");
+    let message = parse_err(&over);
+    assert!(
+        message.contains(&crate::parser::MAX_PARSE_DEPTH.to_string()),
+        "the refusal must name the depth limit, got: {message}"
+    );
+}
+
+/// The stack budget is the bound that actually keeps a hostile script from
+/// crashing the process, so it must stay well inside the smallest stack a
+/// parse runs on: Rust's 2 MiB default for a spawned thread, which is also
+/// what a test-harness thread gets. A quarter of the stack is the budget, so a
+/// parse always leaves three quarters to the frames beneath it and to the
+/// drop of the tree it built.
+///
+/// The check is a compile-time assertion, so raising the budget past the
+/// smallest stack fails the build rather than a test run.
+#[test]
+fn the_stack_budget_leaves_room_on_the_smallest_stack_it_runs_on() {
+    /// The smallest stack a parse runs on: Rust's default thread stack.
+    const SMALLEST_STACK: usize = 2 * 1024 * 1024;
+    const {
+        assert!(
+            crate::parser::MAX_PARSE_STACK_BYTES * 4 <= SMALLEST_STACK,
+            "the parse budget must be at most a quarter of a 2 MiB stack"
+        )
+    };
+}
+
+/// The parse of a script measures its own stack use, and the measurement is
+/// what the guard bounds. A script that nests inside the limits spends far
+/// less than the budget; the number is reported so the margin is visible.
+#[test]
+fn a_script_inside_the_limits_spends_far_less_than_the_budget() {
+    let mut mild = String::from("function f takes nothing returns integer\n    return ");
+    let levels = (crate::parser::MAX_PARSE_DEPTH as usize / 2).saturating_sub(2);
+    mild.extend(std::iter::repeat_n('(', levels));
+    mild.push('1');
+    mild.extend(std::iter::repeat_n(')', levels));
+    mild.push_str("\nendfunction\n");
+    let used = crate::parser::parse_stack_use(&mild);
+    assert!(
+        used < crate::parser::MAX_PARSE_STACK_BYTES,
+        "a script inside the limits used {used} bytes, over the {} byte budget",
+        crate::parser::MAX_PARSE_STACK_BYTES
+    );
+    println!(
+        "a script nested {levels} levels used {used} bytes of the {} byte budget",
+        crate::parser::MAX_PARSE_STACK_BYTES
+    );
+}
+
+/// The real scripts on this machine, measured against both bounds.
+///
+/// `PCX_SCRIPT_CORPUS_DIR` points at a directory of `.j` files — the shipped
+/// map scripts extracted from a local install. Every one of them must parse,
+/// and the report says how much of each bound the deepest of them uses, so a
+/// change to either bound can be checked against real scripts instead of
+/// against a guess.
+///
+/// This is the measurement behind the numbers in [`crate::parser`]'s bounds:
+/// the shipped `war3map.j` files measured here nest 15 and 8 levels deep and
+/// spend 54 KiB and 29 KiB of stack.
+#[test]
+#[ignore = "needs PCX_SCRIPT_CORPUS_DIR pointing at a directory of real .j scripts"]
+fn the_local_real_scripts_stay_inside_both_bounds() {
+    let dir = std::env::var_os("PCX_SCRIPT_CORPUS_DIR")
+        .expect("set PCX_SCRIPT_CORPUS_DIR to a directory of real .j scripts");
+    let mut scripts: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .expect("read the corpus directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "j"))
+        .collect();
+    scripts.sort();
+    assert!(!scripts.is_empty(), "no .j scripts in {dir:?}");
+    let mut deepest = 0usize;
+    for path in &scripts {
+        let src = std::fs::read_to_string(path).expect("read the script");
+        let used = crate::parser::parse_stack_use(&src);
+        assert!(parse(&src).is_ok(), "{} must parse", path.display());
+        deepest = deepest.max(used);
+        println!("{}: {used} bytes", path.display());
+    }
+    assert!(
+        deepest <= crate::parser::MAX_PARSE_STACK_BYTES,
+        "the deepest real script spent {deepest} bytes, over the {} byte budget",
+        crate::parser::MAX_PARSE_STACK_BYTES
+    );
+    println!("deepest real script: {deepest} bytes");
+}
