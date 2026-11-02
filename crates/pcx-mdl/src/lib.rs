@@ -1019,11 +1019,15 @@ impl Skeleton {
 }
 
 fn read_cstr_bounded(d: &[u8], at: usize, max: usize) -> String {
-    let end = d[at..at + max]
+    // Never index past the end of the input: a malformed or truncated model
+    // must not panic here. Clamp the search window to the available bytes.
+    let available = d.len().saturating_sub(at);
+    let window = available.min(max);
+    let end = d[at..at + window]
         .iter()
         .position(|b| *b == 0)
         .map(|i| at + i)
-        .unwrap_or(at + max);
+        .unwrap_or(at + window);
     String::from_utf8_lossy(&d[at..end]).into_owned()
 }
 
