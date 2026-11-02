@@ -37,6 +37,8 @@ impl ObjectHost {
             "SetTerrainFogEx",
             "ResetTerrainFog",
             "TriggerRegisterGameEvent",
+            "TriggerRegisterTimerEvent",
+            "TriggerRegisterTimerExpireEvent",
             "ConvertGameEvent",
             "EnumItemsInRect",
             "EnumDestructablesInRect",
