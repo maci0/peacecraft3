@@ -89,5 +89,11 @@ prove harness reproducibility, not Warcraft III fidelity.
 Verification also includes native library/binary builds, scoped strict Clippy,
 linked `wasm32-unknown-unknown` library/binaries and four actual 32-bit WASM cases:
 oversized tick layout, exhausted unit-ID capacity, the complete signed-coordinate
-domain and an output-byte refusal. These checks establish platform safety for
-the tested boundaries, not browser or native-game execution.
+domain and an output-byte refusal. `cargo test --target wasm32-unknown-unknown` does
+not execute the tests: that target's binaries export `main` rather than the WASI
+command `_start`, so `wasmtime run` only instantiates them and the harness's result
+has nowhere to go. The 32-bit cases are run on `wasm32-wasip1`, which reports the
+result and its exit code; the procedure and the guard that keeps it honest are in
+[the 32-bit WebAssembly test gate](re-notes/wasm-test-gate.md). These checks
+establish platform safety for the tested boundaries, not browser or native-game
+execution.

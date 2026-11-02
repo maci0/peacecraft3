@@ -1,2 +1,10 @@
 [target.wasm32-unknown-unknown]
 runner = ["wasmtime", "run"]
+
+# The 32-bit WebAssembly test gate. wasm32-unknown-unknown binaries export
+# `main` rather than the WASI command `_start`, so `wasmtime run` only
+# instantiates them and a test result has nowhere to go; wasm32-wasip1 has a
+# console and a process exit, so the harness's result and exit code are real.
+# See docs/re-notes/wasm-test-gate.md.
+[target.wasm32-wasip1]
+runner = ["wasmtime", "run", "--dir", "."]
