@@ -304,6 +304,27 @@ mod tests {
     }
 
     #[test]
+    fn a_checkpoint_beyond_the_platform_is_refused_before_allocation() {
+        // The prefix is checked against the platform's tick layout before any
+        // storage is reserved. A 64-bit tick count is out of range on both a
+        // 32-bit target, where it does not fit a `usize`, and a 64-bit one,
+        // where the tick vector does not fit the address space.
+        let scenario = Scenario {
+            name: "capacity-fixture".into(),
+            map: "synthetic.capacity".into(),
+            ticks: u64::MAX,
+            spawns: Vec::new(),
+            script: Vec::new(),
+        };
+
+        let error = run_head(&scenario, &smoke_config(), u64::MAX).unwrap_err();
+        assert!(
+            matches!(error, RunError::TraceCapacity { ticks, .. } if ticks == u64::MAX),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn checkpoint_resume_matches_the_uninterrupted_trace() {
         let scenario = smoke();
         let config = smoke_config();
