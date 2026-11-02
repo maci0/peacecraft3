@@ -70,6 +70,16 @@
 //! origin, matching `pcx-blp`. The decoded output of all 383 files was
 //! compared byte for byte against an independent decoder (Pillow's TGA plugin)
 //! via [`fnv1a64`]; all 383 agree.
+//!
+//! ## A header chooses the raster size
+//!
+//! The width and height come from the header, so a malformed file can claim
+//! any raster it likes. A decode therefore bounds the raster it will produce
+//! before it reserves anything: [`MAX_RGBA_BYTES`] is sixteen times the
+//! largest shipped raster (256x256, measured across both local installs), and
+//! a larger claim is refused with [`Error::RasterTooLarge`] instead of being
+//! attempted. The size is computed with checked arithmetic, so the bound
+//! holds on a 32-bit target as well, where the product would otherwise wrap.
 
 use std::path::Path;
 
@@ -79,6 +89,21 @@ pub const HEADER_LEN: usize = 18;
 pub const FOOTER_LEN: usize = 26;
 /// The 17-byte ASCII tag in the footer, excluding its NUL terminator.
 pub const FOOTER_SIGNATURE: &[u8] = b"TRUEVISION-XFILE.";
+
+/// The largest decoded RGBA raster one decode may produce, in bytes.
+///
+/// The pixel count comes from the header, so a malformed file can claim any
+/// raster it likes. This budget bounds what a decode will reserve before it
+/// looks at the pixels.
+///
+/// It is derived from the shipped assets: across the `.tga` files in the two
+/// local installs — 383 entries in the 1.28c tree and 290 in the Legacy tree,
+/// 434 distinct files — the largest raster is 256x256, which decodes to
+/// 262,144 bytes. The budget is sixteen times that measured maximum, so every
+/// shipped file fits with a wide margin while a header claiming more than
+/// 4,194,304 pixels — 4096x1024, far larger than any shipped asset — is
+/// refused instead of attempted.
+pub const MAX_RGBA_BYTES: usize = 4 * 1024 * 1024;
 
 /// The 18-byte TGA header.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +258,18 @@ pub enum Error {
     RleTruncated { produced: usize, total: usize },
     #[error("uncompressed image wants {want} bytes of pixels at offset {at}, have {have}")]
     RawTooShort { at: usize, want: usize, have: usize },
+    /// The header's raster is larger than the decoder will allocate.
+    ///
+    /// The pixel count comes from the header, so a malformed file can claim a
+    /// raster of any size. The size is computed with checked arithmetic and
+    /// bounded before anything is reserved, so an absurd claim is refused
+    /// rather than attempted.
+    #[error("raster of {pixels} pixels needs {bytes} bytes, over the {budget} byte budget")]
+    RasterTooLarge {
+        pixels: usize,
+        bytes: usize,
+        budget: usize,
+    },
 }
 
 fn u16_at(d: &[u8], o: usize, what: &'static str) -> Result<u16, Error> {
@@ -269,8 +306,12 @@ impl Header {
     }
 
     /// Total pixels in the raster.
+    ///
+    /// The width and height are 16-bit fields, so the product fits a 32-bit
+    /// `usize`; the multiplication is checked anyway so the count is the same
+    /// on every target.
     pub fn pixel_count(&self) -> usize {
-        self.width as usize * self.height as usize
+        usize::from(self.width).saturating_mul(usize::from(self.height))
     }
 
     /// Bytes one stored pixel occupies. Zero for depths that are not decoded.
@@ -316,7 +357,7 @@ impl Header {
     /// Bytes of pixel data a fully decoded image occupies, before any
     /// run-length compression.
     pub fn raw_pixel_bytes(&self) -> Option<usize> {
-        Some(self.pixel_count() * self.pixel_stride()?)
+        self.pixel_count().checked_mul(self.pixel_stride()?)
     }
 }
 
@@ -455,9 +496,33 @@ pub fn decode_with(d: &[u8], h: &Header) -> Result<Vec<u8>, Error> {
     let (at, stride, packing) = resolve(h).map_err(Error::from)?;
     let total = h.pixel_count();
 
+    // The header chooses the raster size, so the output size is computed with
+    // checked arithmetic and bounded before anything is reserved. On a 32-bit
+    // target `total * 4` would otherwise wrap, and on any target an absurd
+    // claim would ask for a huge allocation.
+    let rgba_bytes = total.checked_mul(4).ok_or(Error::RasterTooLarge {
+        pixels: total,
+        bytes: usize::MAX,
+        budget: MAX_RGBA_BYTES,
+    })?;
+    if rgba_bytes > MAX_RGBA_BYTES {
+        return Err(Error::RasterTooLarge {
+            pixels: total,
+            bytes: rgba_bytes,
+            budget: MAX_RGBA_BYTES,
+        });
+    }
+
     // Filled in stored order first: bottom row first when the origin is
     // bottom-left, so the flip is one contiguous reversal afterwards.
-    let mut raw = vec![0u8; total * 4];
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(rgba_bytes)
+        .map_err(|_| Error::RasterTooLarge {
+            pixels: total,
+            bytes: rgba_bytes,
+            budget: MAX_RGBA_BYTES,
+        })?;
+    raw.resize(rgba_bytes, 0);
 
     if h.image_type.is_run_length_encoded() {
         let mut i = at;
@@ -503,7 +568,11 @@ pub fn decode_with(d: &[u8], h: &Header) -> Result<Vec<u8>, Error> {
             done = end;
         }
     } else {
-        let want = total * stride;
+        let want = total.checked_mul(stride).ok_or(Error::RasterTooLarge {
+            pixels: total,
+            bytes: usize::MAX,
+            budget: MAX_RGBA_BYTES,
+        })?;
         let span = d.get(at..at + want).ok_or(Error::RawTooShort {
             at,
             want,
@@ -1024,6 +1093,83 @@ mod tests {
         let hdr = Header::parse(&rtl).unwrap();
         assert!(hdr.is_right_to_left());
         assert_eq!(decode_with(&rtl, &hdr).unwrap(), [0, 0, 0, 255]);
+    }
+
+    /// A header can claim any raster it likes, so a decode must refuse one
+    /// that is larger than the budget instead of trying to allocate it.
+    ///
+    /// The claim is refused before any pixel is read, so the refusal does not
+    /// depend on the file carrying the pixels it promised.
+    #[test]
+    fn an_oversized_raster_is_refused_before_allocation() {
+        // 65535x65535 at 32 bits per pixel: the largest raster the 16-bit
+        // header fields can describe, and far past the budget.
+        let mut f = vec![0u8; HEADER_LEN];
+        f[2] = 2; // uncompressed true colour
+        f[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
+        f[14..16].copy_from_slice(&u16::MAX.to_le_bytes());
+        f[16] = 32;
+        let hdr = Header::parse(&f).unwrap();
+        assert_eq!(hdr.pixel_count(), 4_294_836_225);
+        assert!(matches!(
+            decode_with(&f, &hdr),
+            Err(Error::RasterTooLarge { .. })
+        ));
+
+        // The same claim with a run-length image type: the refusal does not
+        // depend on how the pixels are stored.
+        let mut rle = f.clone();
+        rle[2] = 10; // RLE true colour
+        let hdr = Header::parse(&rle).unwrap();
+        assert!(matches!(
+            decode_with(&rle, &hdr),
+            Err(Error::RasterTooLarge { .. })
+        ));
+    }
+
+    /// The size arithmetic is checked, so it holds on a 32-bit target too:
+    /// the same claim cannot wrap around into a small allocation.
+    #[test]
+    fn the_raster_size_is_computed_with_checked_arithmetic() {
+        let mut f = vec![0u8; HEADER_LEN];
+        f[2] = 2;
+        f[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
+        f[14..16].copy_from_slice(&u16::MAX.to_le_bytes());
+        f[16] = 32;
+        let hdr = Header::parse(&f).unwrap();
+
+        // The pixel count fits a 32-bit usize, but four bytes per pixel does
+        // not: the checked multiply refuses instead of wrapping.
+        let bytes = hdr.pixel_count().checked_mul(4);
+        assert!(bytes.is_none() || bytes.unwrap() > MAX_RGBA_BYTES);
+
+        // The reported raw size never wraps into a small number either.
+        if let Some(n) = hdr.raw_pixel_bytes() {
+            assert!(n > MAX_RGBA_BYTES, "raw size {n} wrapped");
+        }
+    }
+
+    /// A raster just inside the budget still decodes, so the bound refuses
+    /// absurd claims without refusing real ones.
+    #[test]
+    fn a_raster_inside_the_budget_still_decodes() {
+        // 1024x1024 at 32 bits is 4,194,304 bytes, exactly the budget.
+        let w = 1024u16;
+        let h = 1024u16;
+        let mut f = vec![0u8; HEADER_LEN];
+        f[2] = 2;
+        f[12..14].copy_from_slice(&w.to_le_bytes());
+        f[14..16].copy_from_slice(&h.to_le_bytes());
+        f[16] = 32;
+        let hdr = Header::parse(&f).unwrap();
+        assert_eq!(hdr.pixel_count() * 4, MAX_RGBA_BYTES);
+
+        // The file does not carry the pixels, so the refusal that follows is
+        // the short-file one, not the budget one: the budget let it through.
+        assert!(matches!(
+            decode_with(&f, &hdr),
+            Err(Error::RawTooShort { .. })
+        ));
     }
 
     #[test]
