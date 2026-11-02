@@ -101,7 +101,11 @@ impl Header {
 
     /// `0x200 << sector_size_shift`. All four shipped archives use `3`.
     pub fn sector_size(&self) -> u32 {
-        0x200u32 << self.sector_size_shift
+        // Preserve invalid shifts as zero so checked readers can refuse them.
+        0x200u64
+            .checked_shl(u32::from(self.sector_size_shift))
+            .and_then(|size| u32::try_from(size).ok())
+            .unwrap_or(0)
     }
 
     /// Byte length of the hash table.
@@ -192,5 +196,18 @@ mod tests {
             Header::parse(&mut cur),
             Err(HeaderParseError::BadMagic(_))
         ));
+    }
+
+    #[test]
+    fn sector_size_rejects_values_that_do_not_fit_u32() {
+        let mut header = Header {
+            sector_size_shift: 22,
+            ..Header::default()
+        };
+        assert_eq!(header.sector_size(), 0x8000_0000);
+        header.sector_size_shift = 23;
+        assert_eq!(header.sector_size(), 0);
+        header.sector_size_shift = u8::MAX;
+        assert_eq!(header.sector_size(), 0);
     }
 }

@@ -146,7 +146,7 @@ pub fn file_key(path: &str, file_pos: u32, file_size: u32, block_flags: u32) -> 
 
 /// Number of sectors a multi-sector block has.
 pub fn sector_count(file_size: u32, sector_size: u32) -> usize {
-    if file_size == 0 {
+    if file_size == 0 || sector_size == 0 {
         return 0;
     }
     (file_size - 1) as usize / sector_size as usize + 1
@@ -451,6 +451,15 @@ pub fn decode_block_with_huffman(
     sector_size: u32,
     table: Option<&crate::huffman::HuffmanTable>,
 ) -> Result<Vec<u8>, PayloadError> {
+    if sector_size == 0 {
+        if file_size == 0 {
+            return Ok(Vec::new());
+        }
+        return Err(PayloadError::SizeMismatch {
+            file_size: file_size as usize,
+            produced: 0,
+        });
+    }
     let mut out = Vec::with_capacity(file_size as usize);
     let encrypted = block_flags & flags::ENCRYPTED != 0;
 
@@ -782,6 +791,17 @@ mod tests {
                 Err(PayloadError::SectorOutOfRange { .. })
             ));
         }
+    }
+
+    #[test]
+    fn zero_sector_size_is_empty_only_for_empty_files_and_refuses_decode() {
+        assert_eq!(sector_count(0, 0), 0);
+        assert_eq!(sector_count(1, 0), 0);
+        assert_eq!(decode_block(b"", 0, 0, 0, 0).unwrap(), Vec::<u8>::new());
+        assert!(matches!(
+            decode_block(b"", 0, 1, 0, 0),
+            Err(PayloadError::SizeMismatch { file_size: 1, produced: 0 })
+        ));
     }
 
     #[test]
