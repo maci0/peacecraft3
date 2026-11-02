@@ -61,19 +61,19 @@ pub fn run_head(
 ) -> Result<ResumeState, RunError> {
     validate(scenario, config)?;
     let upto = upto.min(scenario.ticks);
-    let tick_count = usize::try_from(scenario.ticks)
+    let tick_count = usize::try_from(upto)
         .ok()
         .filter(|&n| std::alloc::Layout::array::<TickRecord>(n).is_ok())
         .ok_or_else(|| RunError::TraceCapacity {
             scenario: scenario.name.clone(),
-            ticks: scenario.ticks,
+            ticks: upto,
         })?;
     let mut ticks: Vec<TickRecord> = Vec::new();
     ticks
         .try_reserve_exact(tick_count)
         .map_err(|source| RunError::TraceAllocation {
             scenario: scenario.name.clone(),
-            ticks: scenario.ticks,
+            ticks: upto,
             source,
         })?;
 
@@ -281,4 +281,37 @@ fn validate(scenario: &Scenario, config: &RunConfig) -> Result<(), RunError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenario::{smoke, smoke_config};
+
+    #[test]
+    fn zero_length_checkpoint_does_not_reserve_the_full_scenario() {
+        let scenario = Scenario {
+            name: "empty-prefix".into(),
+            map: "synthetic.empty-prefix".into(),
+            ticks: u64::MAX,
+            spawns: Vec::new(),
+            script: Vec::new(),
+        };
+
+        let state = run_head(&scenario, &smoke_config(), 0).unwrap();
+        assert_eq!(state.next_tick, 0);
+        assert!(state.ticks.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_resume_matches_the_uninterrupted_trace() {
+        let scenario = smoke();
+        let config = smoke_config();
+        let expected = crate::run(&scenario, &config).unwrap().encode();
+
+        for split in [0, 1, scenario.ticks / 2, scenario.ticks] {
+            let actual = run_via_resume(&scenario, &config, split).unwrap().encode();
+            assert_eq!(actual, expected, "split={split}");
+        }
+    }
 }

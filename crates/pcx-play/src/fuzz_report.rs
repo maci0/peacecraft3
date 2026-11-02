@@ -93,8 +93,13 @@ RPL prefix:\n```\n{snippet}```\n",
         snippet = snippet,
     );
     if out.len() > MAX_FILING_BYTES {
-        out.truncate(MAX_FILING_BYTES);
-        out.push_str("\n…(truncated to filing bound)\n");
+        const MARKER: &str = "\n…(truncated to filing bound)\n";
+        let mut end = MAX_FILING_BYTES - MARKER.len();
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+        out.push_str(MARKER);
     }
     out
 }
@@ -111,5 +116,42 @@ fn rpl_snippet(rpl: &str) -> &str {
     match prefix.rfind('\n') {
         Some(index) => &prefix[..index + 1],
         None => prefix,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenario::{smoke, smoke_config};
+
+    #[test]
+    fn filing_stays_within_byte_limit_and_preserves_utf8() {
+        let trace = crate::run(&smoke(), &smoke_config()).unwrap();
+        // The RPL snippet alone is capped at MAX_RPL_SNIPPET_BYTES, so a
+        // large RPL by itself never trips the filing bound. Force the
+        // bound through the divergence payload instead, with a multibyte
+        // value that also exercises the char-boundary backoff.
+        let divergence = Divergence {
+            tick: None,
+            field: "λ".repeat(5_000),
+            left: "1".into(),
+            right: "2".into(),
+        };
+        let rpl = "λ".repeat(5_000);
+        let filing = DivergenceFiling {
+            scenario: "scenario",
+            map: "map",
+            seed: 1,
+            corpus_index: 0,
+            rpl: &rpl,
+            divergence: &divergence,
+            left: &trace,
+            right: &trace,
+        };
+
+        let entry = format_tracker_entry(&filing);
+        assert!(entry.len() <= MAX_FILING_BYTES);
+        assert!(entry.ends_with("\n…(truncated to filing bound)\n"));
+        assert!(std::str::from_utf8(entry.as_bytes()).is_ok());
     }
 }

@@ -120,3 +120,60 @@ pub fn corpus_entry_for_seed(seed: u64) -> Option<CorpusEntry> {
         .into_iter()
         .find(|entry| entry.seed == seed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corpus_stays_within_generation_ceilings() {
+        let limits = crate::fuzz_scenario::default_limits();
+        let entries = corpus_entries();
+        assert_eq!(entries.len(), SEED_CORPUS.len());
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.recipe, CORPUS_RECIPE_VERSION, "index={index}");
+            assert!(
+                u128::from(entry.ticks) <= u128::from(limits.max_ticks),
+                "index={index} ticks={} over limit={}",
+                entry.ticks,
+                limits.max_ticks,
+            );
+            assert!(
+                entry.units <= limits.max_units,
+                "index={index} units={} over limit={}",
+                entry.units,
+                limits.max_units,
+            );
+            assert!(
+                entry.actions <= limits.max_actions,
+                "index={index} actions={} over limit={}",
+                entry.actions,
+                limits.max_actions,
+            );
+            let work = u128::from(entry.ticks) * u128::from(entry.units as u64 + 1)
+                + u128::from(entry.actions as u64);
+            assert!(
+                work <= u128::from(limits.max_work),
+                "index={index} work={work} over limit={}",
+                limits.max_work,
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_generation_succeeds_within_limits() {
+        let corpus = crate::fuzz_scenario::generate_corpus()
+            .expect("fixed corpus must generate within default limits");
+        assert_eq!(corpus.len(), SEED_CORPUS.len());
+        for (seed, rpl) in &corpus {
+            assert!(corpus_entry_for_seed(*seed).is_some());
+            assert!(!rpl.is_empty(), "seed={seed}");
+            assert!(
+                rpl.len() <= crate::fuzz_scenario::default_limits().max_output_bytes,
+                "seed={seed} output={} over limit={}",
+                rpl.len(),
+                crate::fuzz_scenario::default_limits().max_output_bytes,
+            );
+        }
+    }
+}

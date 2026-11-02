@@ -56,9 +56,13 @@ recipe version. Shorter-horizon / fewer-unit reduction is their lane.
 
 ## Open items
 
-- No test runs were made in this lane (per tasking). Continuity
-  (`run_via_resume == run`), corpus generation ceilings and filing bounds
-  still need execution in the release lane.
+- `run_via_resume == run` passes at four split points in the smoke scenario,
+  and a zero-length checkpoint of a `u64::MAX`-tick synthetic scenario succeeds
+  without reserving the full trace (`fuzz_resume::tests`). The fixed 32-entry
+  corpus generates within `default_limits` and every entry stays inside the
+  tick/unit/action/work/output ceilings (`fuzz_corpus::tests`). The
+  4,096-byte filing bound is enforced with a UTF-8 char-boundary backoff and
+  covered by `fuzz_report::tests`.
 - Real terrain/tileset fuzzing waits on map-container wiring owned
   elsewhere; the map tag here is a synthetic identity only.
 - Whether the corpus should also cover `hd`/`reforged` asset modes or
