@@ -3,7 +3,7 @@
 `ObjectHost::with_sound_environments(SoundEnvironmentInput)` admits the native from the
 loaded declaration (`takes string environmentName returns nothing`). The input holds the
 records from every `UI\SoundInfo` table with an `EnvironmentType` header
-(`SoundSources::read`, `crates/peacecraft3/src/campaign_assets.rs`), the executable
+(`SoundSources::read`, `crates/pcx-play/src/campaign_assets.rs`), the executable
 tables (`pcx_play::sound_environment::tables`), and the window in milliseconds
 (`NATIVE_WINDOW_MS`). Admission applies every record against the tables, so a record
 that cannot be written (fractional int cell, missing row) refuses admission. Without
