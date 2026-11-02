@@ -1342,6 +1342,15 @@ evidence for independent AI globals and synchronous initial execution are record
       actual WASM; intermediate arithmetic/layout bounds are checked before
       allocation. A selected-primary differential records 29 matching roundtrips
       and two shared refusals across 31 synthetic vectors; no native parity claim.
+- [x] `pcx-mpq`: a member's on-disk extent is bounded by the archive that holds
+      it. The position and packed length come from the archive's own block
+      table, so a malformed archive could place a member anywhere and the
+      reader read from it. `file_pos + compressed_size` must now lie inside the
+      archive, with checked arithmetic, and the member is refused before
+      anything is read. The bound is on the packed extent, not on the decoded
+      size: the shipped `Maps\(4)Adrenaline.w3m` carries two members decoding to
+      65 536 and 65 552 bytes out of a 64 313-byte archive, whose packed
+      extents are inside it. Two synthetic fixtures pin both sides of the rule.
 - [~] `pcx-mpq`: other compression chains and original sparse-member acceptance
   `[work/mpq-chains/methods]` claimed from `29b6f07`: explicit mask taxonomy
   (`BZIP2`/`LZMA`-exact/sparse-other/unknown refusals) without new decoders.
