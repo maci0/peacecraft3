@@ -947,7 +947,7 @@ things the skeleton exists to prove:
   `unchanged` (exit 0) or `diverge tick=<n|header> field=<path> left=<v> right=<v>`
   (exit 1), comparing header identity first, then ticks in order, then the record tail.
 
-**Done when:** `cargo run -p tools/playrun -- tests/play/roc/tutorial.rpl` emits a trace that
+**Done when:** `cargo run -p pcx-play --bin playrun -- tests/play/roc/chapter01.rpl <trace> --runs 100` emits a trace that
 is byte-identical across 100 consecutive runs, and `pcx-diff` reports `unchanged` against a
 baseline captured from the original.
 
