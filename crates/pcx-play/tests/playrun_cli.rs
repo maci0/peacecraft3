@@ -36,11 +36,22 @@ fn checked_scenario_cli_baseline_determinism_and_work_limit() {
     assert_eq!(work_failure.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&work_failure.stderr).contains("work"));
     let mut trace = pcx_play::Trace::decode(&std::fs::read(&baseline).unwrap()).unwrap();
+    let original_seed = trace.header.seed;
     trace.header.seed += 1;
     std::fs::write(&baseline, trace.encode()).unwrap();
+    // Remove the previous output so the retained candidate cannot be a
+    // leftover from the earlier successful run.
+    std::fs::remove_file(&output).unwrap();
     let diff = call(&["--baseline", baseline.to_str().unwrap()]);
     assert_eq!(diff.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&diff.stderr).contains("field=seed"));
+    // A comparison failure retains the candidate trace for diagnosis, and it
+    // is the candidate, not the baseline it was compared against.
+    let retained = pcx_play::Trace::decode(&std::fs::read(&output).unwrap()).unwrap();
+    assert_eq!(retained.header.seed, original_seed);
+    let source = std::fs::read_to_string(&input).unwrap();
+    let rpl = pcx_play::Rpl::parse(&source).unwrap();
+    assert_eq!(retained.encode(), rpl.run().unwrap().encode());
 }
 
 #[test]
