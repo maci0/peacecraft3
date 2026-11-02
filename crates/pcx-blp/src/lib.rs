@@ -662,7 +662,7 @@ pub fn decode_jpeg_with_limit(
     if usize::from(info.width) != w as usize || usize::from(info.height) != hh as usize {
         return Err(Error::UnrecognisedMip {
             index,
-            size: usize::from(info.width) * usize::from(info.height),
+            size: usize::from(info.width).saturating_mul(usize::from(info.height)),
             w,
             h: hh,
         });
