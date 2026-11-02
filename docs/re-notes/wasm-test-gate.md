@@ -79,11 +79,12 @@ provide — the campaign data set's file-backed cases and the native coverage
 audit, which reads the crate's own sources — so they stay native-only. Every
 other group passes at 32-bit.
 
-Of the forty `pcx-play` integration targets, thirty-three pass at 32-bit.
-The seven that do not need a host the WebAssembly path does not provide:
+Of the forty-one `pcx-play` integration targets, thirty-four pass at 32-bit.
+The eight that do not need a host the WebAssembly path does not provide:
 `chapter_scenarios` and `headless_startup` want a filesystem, and
-`pcx_diff_cli`, `playgen_cli`, `playrun_cli`, `playrun_script_cli` and the
-generator's own CLI case want to spawn a process.
+`pcx_corpus_cli`, `pcx_diff_cli`, `playgen_cli`, `playrun_cli`,
+`playrun_script_cli` and the generator's own CLI case want to spawn a
+process.
 
 `pcx-map`'s whole suite passes at 32-bit as well. One of its tests read the
 refusal message by catching a panic, which a WebAssembly target cannot do:
