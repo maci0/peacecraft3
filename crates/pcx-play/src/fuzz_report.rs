@@ -122,7 +122,64 @@ fn rpl_snippet(rpl: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::{smoke, smoke_config};
+    use crate::scenario::{RunConfig, smoke, smoke_config};
+    use crate::trace::AssetMode;
+
+    #[test]
+    fn a_filing_names_the_reproducer_and_its_artifact_is_name_safe() {
+        let left = crate::run(&smoke(), &smoke_config()).unwrap();
+        let right = crate::run(
+            &smoke(),
+            &RunConfig {
+                asset_mode: AssetMode::Reforged,
+                ..smoke_config()
+            },
+        )
+        .unwrap();
+        let divergence = crate::first_divergence(&left, &right).expect("a header divergence");
+        let rpl = "pcx-rpl 1\nscenario fuzz.s1.0\n";
+        // A scenario and map identity that are not name-safe: the artifact
+        // name must not inherit either of them.
+        let filing = DivergenceFiling {
+            scenario: "fuzz/s 1",
+            map: "synthetic.fuzz/plain 1",
+            seed: 1,
+            corpus_index: 0,
+            rpl,
+            divergence: &divergence,
+            left: &left,
+            right: &right,
+        };
+        let entry = format_tracker_entry(&filing);
+
+        // The seed, the corpus index and the recipe regenerate the entry.
+        assert!(entry.contains("seed 1"), "{entry}");
+        assert!(entry.contains("index 0"), "{entry}");
+        assert!(
+            entry.contains(&format!("recipe {}", CORPUS_RECIPE_VERSION)),
+            "{entry}"
+        );
+        // Both trace hashes are named, and they differ.
+        let left_hash = format!("{:016x}", left.canonical_hash());
+        let right_hash = format!("{:016x}", right.canonical_hash());
+        assert_ne!(left_hash, right_hash);
+        assert!(entry.contains(&left_hash), "{entry}");
+        assert!(entry.contains(&right_hash), "{entry}");
+        // The one-line divergence report is carried verbatim.
+        assert!(entry.contains(&divergence.to_string()), "{entry}");
+        // The artifact name is name-safe, so it can be written into a
+        // directory without escaping, and it takes nothing from the caller.
+        let artifact = artifact_name(1, 0, &divergence);
+        assert!(
+            artifact
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
+            "{artifact}"
+        );
+        assert!(!artifact.contains('/'), "{artifact}");
+        assert!(!artifact.contains(' '), "{artifact}");
+        assert!(entry.contains(&artifact), "{entry}");
+    }
 
     #[test]
     fn filing_stays_within_byte_limit_and_preserves_utf8() {
