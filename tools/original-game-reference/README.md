@@ -432,6 +432,11 @@ python tools/original-game-reference/campaign_agent.py play \
   --run-dir .scratch/original-reference-1 --provider openrouter --steps 50
 ```
 
+The agent's `schema` command publishes the same v0.3 candidate shape. Its
+declared arguments, their required-ness, their closed choices and their
+defaults are checked against the parser that runs them, so the offline
+introspection cannot drift from the implementation.
+
 Reign of Chaos Human chapter one is `Maps\Campaign\Human01.w3m` inside
 `War3Local.mpq`. Stage it under the prepared game tree and launch it with the
 reference, using `-classic` so the executable reports Reign of Chaos:

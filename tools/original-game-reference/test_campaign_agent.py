@@ -69,6 +69,51 @@ class CampaignAgentTests(unittest.TestCase):
         self.assertFalse(result.stdout)
         self.assertEqual(json.loads(result.stderr)['error']['kind'], 'campaign_failed')
 
+    def test_every_command_schema_matches_the_actual_parser(self):
+        """The offline schema is the CLI's own introspection; it must not drift.
+
+        Every command's declared arguments, their required-ness, their closed
+        choices and their declared defaults come from the same parser that
+        runs the command, so a change to one without the other would make the
+        published contract untrue.
+        """
+        schema = json.loads((HERE / 'campaign-schema.json').read_text())
+        parser = agent.parser()
+        subparsers = next(action for action in parser._actions
+                          if isinstance(action, argparse._SubParsersAction))
+        declared = {command['name']: command for command in schema['commands']}
+        self.assertEqual(list(declared), list(subparsers.choices))
+        for name, subparser in subparsers.choices.items():
+            options = {option: action for option, action in subparser._option_string_actions.items()
+                       if action.dest != 'help'}
+            command = declared[name]
+            self.assertEqual(sorted(arg['name'] for arg in command['args']), sorted(options), name)
+            for arg in command['args']:
+                action = options[arg['name']]
+                self.assertEqual(arg.get('required', False), action.required,
+                                 f'{name} {arg["name"]}')
+                if 'enum' in arg:
+                    self.assertEqual(list(arg['enum']), list(action.choices),
+                                     f'{name} {arg["name"]}')
+                if 'default' in arg:
+                    self.assertEqual(arg['default'], action.default, f'{name} {arg["name"]}')
+                if arg['type'] == 'path':
+                    continue  # a domain type the parser cannot express
+                if isinstance(action, argparse._AppendAction):
+                    kind = 'string[]'
+                elif action.type is agent.step_count:
+                    kind = 'integer'
+                elif action.type is agent.pause_value:
+                    kind = 'number'
+                else:
+                    kind = 'string'
+                self.assertEqual(arg['type'], kind, f'{name} {arg["name"]}')
+        globals_declared = schema['global_args']
+        format_action = parser._option_string_actions['--format']
+        self.assertEqual([arg['name'] for arg in globals_declared], ['--format'])
+        self.assertEqual(globals_declared[0]['enum'], list(format_action.choices))
+        self.assertEqual(globals_declared[0]['default'], format_action.default)
+
     def test_fit_size_scales_into_the_vision_limit(self):
         self.assertEqual(agent.fit_size(1920, 1080), (1568, 882))
         self.assertEqual(agent.fit_size(100, 100), (280, 280))
