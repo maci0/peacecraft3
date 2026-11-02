@@ -505,9 +505,11 @@ implementations, and the traces are compared. Divergences are auto-filed into
 `TRACKER.md` with the minimal reproducing seed. This is how RNG parity and combat-ordering
 parity actually get closed out, rather than argued.
 
-**Definition of done for the project as a whole:** `cargo test --workspace --features play`
+**Definition of done for the project as a whole:** `cargo test --workspace --features pcx-play/test-fixtures,peacecraft3/test-fixtures,pcx-net/session-server`
 runs Tier A green against every shipped campaign, and Tier C reports zero unexplained
-divergences over a fixed seed corpus.
+divergences over a fixed seed corpus. The features are named because the targets
+behind them are skipped otherwise: `test-fixtures` gates the synthetic inventory and
+ECS tests, and `session-server` gates the lockstep server's own targets.
 
 ### 3.6 Launcher and game modes
 
@@ -1498,7 +1500,7 @@ layer in the trace header.
 Run §3.5 Tier A across every chapter of every stock campaign and Tier B to completion,
 against baselines pinned to REA evidence ids.
 
-**Done when:** `cargo test --workspace --features play` passes Tier A for all shipped
+**Done when:** `cargo test --workspace --features pcx-play/test-fixtures,peacecraft3/test-fixtures,pcx-net/session-server` passes Tier A for all shipped
 campaigns and maps, and Tier C reports zero unexplained divergences over the seed corpus.
 
 ---
