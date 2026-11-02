@@ -44,6 +44,17 @@ Limits of this path: a test that spawns a process cannot run there. The
 takes the whole binary with it, so the process-spawning tests are skipped
 rather than left to fail.
 
+Skipping is done by the test filter, not by the build: nothing in these test
+targets is compiled out for `wasm32-wasip1`. The filter has to be named, and
+without it the process-spawning test traps and takes the whole binary with it,
+so the run fails even though the cases under test passed:
+
+```sh
+CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir ." \
+  cargo test --release --target wasm32-wasip1 -p pcx-play --test generator \
+  -- --skip cli_emits_executable_rpl_and_refusals_do_not_emit_partial_output
+```
+
 ## What was verified this way
 
 The 32-bit cases the documentation claims, run as actual 32-bit WebAssembly:
