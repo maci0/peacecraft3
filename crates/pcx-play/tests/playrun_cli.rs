@@ -22,7 +22,10 @@ fn checked_scenario_cli_baseline_determinism_and_work_limit() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(String::from_utf8_lossy(&result.stderr).contains("runs=100")); // `passed` is a diagnostic; the trace file is the data artifact.
-    assert!(result.stdout.is_empty(), "stdout carries no data channel here");
+    assert!(
+        result.stdout.is_empty(),
+        "stdout carries no data channel here"
+    );
     std::fs::copy(&output, &baseline).unwrap();
     assert!(
         call(&["--baseline", baseline.to_str().unwrap()])
