@@ -68,6 +68,20 @@ The 32-bit cases the documentation claims, run as actual 32-bit WebAssembly:
   refusal), and 100 byte-identical fresh runs of one generated scenario and of
   the checked-in seed corpus.
 
+A sweep of `pcx-play`'s library tests at 32-bit found one assertion that was
+a 64-bit observation rather than a requirement: the town centre's payload
+carries a position and a handle, and only a 64-bit target's niche layout
+keeps that wider payload the same size as a position alone. Nothing depended
+on the sizes, so the observation is now scoped to the targets where it holds.
+Two of the library's test groups need a filesystem the 32-bit path does not
+provide — the campaign data set's file-backed cases and the native coverage
+audit, which reads the crate's own sources — so they stay native-only. Every
+other group passes at 32-bit.
+
+`pcx-sim`'s whole suite — its library, the column lookup, the coordinate
+bounds, the pathing and movement admission, the selection, the world grid, the
+world import and the determinism cases — passes as actual 32-bit WebAssembly.
+
 These are platform-safety checks on the tested boundaries. They are not
 browser or native-game execution, and they do not prove Warcraft III parity.
 
@@ -75,4 +89,6 @@ browser or native-game execution, and they do not prove Warcraft III parity.
 
 `tools/test_wasm_gate.py` builds a fixture with a failing test and requires
 the procedure above to report it, so a silent gate cannot be mistaken for a
-passing one. It skips when `wasmtime` or the `wasm32-wasip1` target is absent.
+passing one. It then runs the harness's own 32-bit cases through the same
+procedure, so the gate covers the harness and not only itself. It skips when
+`wasmtime` or the `wasm32-wasip1` target is absent.

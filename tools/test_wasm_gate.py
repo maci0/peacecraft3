@@ -40,6 +40,14 @@ fn a_failing_test() {
 TARGET = "wasm32-wasip1"
 
 
+def repository_root():
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / "Cargo.toml").is_file() and (parent / "AGENTS.md").is_file():
+            return parent
+    raise RuntimeError("repository root not found above " + str(here))
+
+
 def installed_targets():
     """The targets the active toolchain can build, from its sysroot."""
     try:
@@ -77,6 +85,32 @@ class WasmGateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0,
                                 "the gate must report a failing test")
             self.assertIn("a_failing_test", result.stdout + result.stderr)
+
+    def test_the_harness_cases_run_as_32_bit_webassembly(self):
+        """The harness's own 32-bit cases, run as actual 32-bit WebAssembly.
+
+        The simulation and the play-test harness must hold their determinism
+        and capacity properties at a 32-bit pointer width, not only at 64.
+        """
+        root = repository_root()
+        cases = [
+            ('pcx-sim', []),
+            ('pcx-play', ['--test', 'trace_capacity']),
+            # The generator's CLI case spawns a process, which the 32-bit
+            # WebAssembly path cannot do; the rest of that target is the
+            # complete signed-coordinate domain, the exact budgets and 100
+            # byte-identical fresh runs.
+            ('pcx-play', ['--test', 'generator', '--', '--skip',
+                          'cli_emits_executable_rpl_and_refusals_do_not_emit_partial_output']),
+        ]
+        for package, extra in cases:
+            with self.subTest(package=package, extra=extra):
+                result = subprocess.run(
+                    ["cargo", "test", "--release", "--target", TARGET, "-p", package, *extra],
+                    cwd=root, capture_output=True, text=True, timeout=3600, check=False,
+                )
+                self.assertEqual(result.returncode, 0,
+                                 (result.stdout[-2000:] + result.stderr[-2000:]))
 
 
 if __name__ == '__main__':

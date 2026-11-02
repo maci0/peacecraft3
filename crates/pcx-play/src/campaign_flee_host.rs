@@ -765,6 +765,12 @@ mod tests {
         assert!(town.primary_mine().unwrap_err().contains("missing"));
         town.center = Err("town unavailable".into());
         assert_eq!(town.primary_mine().unwrap_err(), "town unavailable");
+        // The centre's payload carries a position and a handle. On a 64-bit
+        // target the niche in `HandleId` keeps that wider payload the same
+        // size as a position alone. This is a layout observation, not a
+        // requirement: a 32-bit target lays the two out differently and
+        // nothing depends on it.
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             std::mem::size_of::<Result<[f32; 2], String>>(),
             std::mem::size_of::<Result<([f32; 2], HandleId), String>>()
