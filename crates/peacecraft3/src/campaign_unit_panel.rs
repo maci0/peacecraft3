@@ -1,6 +1,7 @@
 //! Selected-unit text projected from the canonical world onto the source console.
+use crate::hud_render::{SourceTextBox as PanelTextFrame, default_font_record, source_bottom};
 use crate::{
-    campaign_hud::upper_buttons::{image_sampler, read, skin_file, text},
+    campaign_hud::upper_buttons::{read, skin_file, source_image_sampler, text},
     fdf::Fdf,
     menu_skin::SkinTable,
     menu_text,
@@ -27,12 +28,6 @@ const MEMBER: &str = r"UI\FrameDef\UI\SimpleInfoPanel.fdf";
 const STRINGS: &str = r"UI\FrameDef\InfoPanelStrings.fdf";
 const GLOBAL_STRINGS: &str = r"UI\FrameDef\GlobalStrings.fdf";
 const CONSOLE: &str = r"UI\FrameDef\UI\ConsoleUI.fdf";
-/// Skin keys for the one hero-attribute icon. Order is the primary token, not a native table index.
-const HERO_ICON_KEYS: [&str; 3] = [
-    "InfoPanelIconHeroIconSTR",
-    "InfoPanelIconHeroIconAGI",
-    "InfoPanelIconHeroIconINT",
-];
 #[derive(Resource, Default)]
 pub(crate) struct UnitPanel {
     witness: Option<Weak<()>>,
@@ -54,7 +49,65 @@ impl UnitPanel {
         self.source.as_ref().map_or(0, |s| s.receipts.len())
     }
 }
+#[derive(Component)]
+struct PanelTextMetrics {
+    font: Handle<Font>,
+    error: Option<String>,
+}
+
+fn space_panel_text(
+    mut roots: Query<(
+        &mut PanelTextMetrics,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &Children,
+        &mut bevy::text::TextLayoutInfo,
+        &mut Node,
+    )>,
+    spans: Query<&TextSpan>,
+    fonts: Res<Assets<Font>>,
+    mut state: ResMut<UnitPanel>,
+) {
+    for (mut binding, raster, target, children, mut layout, mut node) in &mut roots {
+        if !layout.is_changed() {
+            continue;
+        }
+        let result = (|| -> Result<(), String> {
+            let Some(font) = fonts.get(&binding.font) else {
+                return Ok(());
+            };
+            let text = children
+                .iter()
+                .filter_map(|child| spans.get(child).ok())
+                .map(|span| span.0.as_str())
+                .collect::<String>();
+            if let Some(width) = crate::hud_render::space_source_line(
+                raster,
+                target,
+                font,
+                &text,
+                layout.bypass_change_detection(),
+            )? {
+                let width = Val::Px(width / target.scale_factor());
+                if node.width != width {
+                    node.width = width;
+                }
+            }
+            Ok(())
+        })();
+        binding.error = result.err();
+    }
+    let errors = roots
+        .iter()
+        .filter_map(|(binding, ..)| binding.error.as_deref())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        state.last_error = Some(errors.join("; "));
+    }
+}
+
 struct Source {
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     class: ClassHeader,
     experience: ExperienceBar,
     rules: Rules,
@@ -85,6 +138,7 @@ struct ExperienceBar {
     fill_size: Vec2,
 }
 struct ClassHeader {
+    frame: String,
     style: menu_text::TextStyle,
     offset: [f32; 2],
     format: [String; 3],
@@ -149,14 +203,21 @@ struct Inputs<'w, 's> {
 
 pub(crate) fn install(app: &mut App) {
     crate::campaign_portrait::install(app);
-    app.init_resource::<UnitPanel>().add_systems(
-        Update,
-        project
-            .in_set(UnitPanelSet)
-            .after(crate::hud_render::HudRenderSet)
-            .after(crate::campaign_input::CampaignInputSet)
-            .before(CampaignPresentationSet),
-    );
+    app.init_resource::<UnitPanel>()
+        .add_systems(
+            Update,
+            project
+                .in_set(UnitPanelSet)
+                .after(crate::hud_render::HudRenderSet)
+                .after(crate::campaign_input::CampaignInputSet)
+                .before(CampaignPresentationSet),
+        )
+        .add_systems(
+            PostUpdate,
+            space_panel_text
+                .after(bevy::ui::widget::text_system)
+                .in_set(crate::hud_render::SourceTextMetricsSet),
+        );
 }
 fn project(
     mut commands: Commands,
@@ -243,14 +304,16 @@ fn project(
             };
             Ok((
                 Rules::reviewed_legacy(image, origin.clone())?,
-                InventoryRules::reviewed_legacy(image, origin)?,
+                InventoryRules::reviewed_legacy(image, origin.clone())?,
+                Arc::new(pcx_play::font_pair_policy::PairPolicy::read(image, origin)?),
             ))
         })
-        .and_then(|(rules, inventory)| {
+        .and_then(|(rules, inventory, font_policy)| {
             load(
                 &reader,
                 rules,
                 inventory,
+                font_policy,
                 host.objects()
                     .local_race_preference_constant()
                     .map_err(|e| e.to_string())?,
@@ -360,6 +423,7 @@ fn normalize(input: &str) -> Result<String, String> {
     }
     Ok(result)
 }
+
 fn title_style(
     input: &str,
     frame: &str,
@@ -397,10 +461,43 @@ fn title_style(
         [number(x)?, number(y)?],
     ))
 }
+fn native_horizontal(value: u32) -> menu_text::JustifyH {
+    match value {
+        0 => menu_text::JustifyH::Left,
+        1 => menu_text::JustifyH::Center,
+        2 => menu_text::JustifyH::Right,
+        _ => unreachable!("validated native horizontal enum"),
+    }
+}
+fn vertical(value: u32) -> menu_text::JustifyV {
+    match value {
+        0 => menu_text::JustifyV::Top,
+        1 => menu_text::JustifyV::Middle,
+        2 => menu_text::JustifyV::Bottom,
+        _ => unreachable!("validated native vertical enum"),
+    }
+}
+fn horizontal(value: menu_text::JustifyH) -> bevy::text::Justify {
+    match value {
+        menu_text::JustifyH::Left => bevy::text::Justify::Left,
+        menu_text::JustifyH::Center => bevy::text::Justify::Center,
+        menu_text::JustifyH::Right => bevy::text::Justify::Right,
+    }
+}
+fn simple_defaults(style: &mut menu_text::TextStyle, fdf: &Fdf, name: &str, defaults: [u32; 2]) {
+    if fdf.record(name, "FontJustificationH").is_none() {
+        style.justify_h = native_horizontal(defaults[0]);
+    }
+    if fdf.record(name, "FontJustificationV").is_none() {
+        style.justify_v = vertical(defaults[1]);
+    }
+}
+
 fn load(
     reader: &pcx_assets::Resolver,
     rules: Rules,
     inventory: InventoryRules,
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     race: Option<String>,
     fonts: &mut Assets<Font>,
     images: &mut Assets<Image>,
@@ -411,16 +508,49 @@ fn load(
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let console = skin_file(&skin, &sections, &inventory.console_key)?;
     let member = text(reader, MEMBER, &mut receipts)?;
-    let (title_style, title_offset) = title_style(&member, &rules.frame, &rules.title)?;
+    let (mut title_style, title_offset) = title_style(&member, &rules.frame, &rules.title)?;
     let fdf = Fdf::parse(&normalize(&member)?).map_err(|e| e.to_string())?;
+    for frame in fdf.frames() {
+        if let Some(font) = fdf.record(&frame.name, "FrameFont") {
+            default_font_record(
+                &frame.name,
+                &font,
+                fdf.record(&frame.name, "FontFlags").as_deref(),
+            )?;
+        }
+    }
+    simple_defaults(
+        &mut title_style,
+        &fdf,
+        &rules.title,
+        rules.default_justification,
+    );
     let strings = text(reader, STRINGS, &mut receipts)?;
     let globals = text(reader, GLOBAL_STRINGS, &mut receipts)?;
-    let label_style = menu_text::render_style(&fdf, "SimpleInfoPanelLabelTextTemplate")?;
-    let value_style = menu_text::render_style(&fdf, "SimpleInfoPanelValueTextTemplate")?;
+    let mut label_style = menu_text::render_style(&fdf, "SimpleInfoPanelLabelTextTemplate")?;
+    let mut value_style = menu_text::render_style(&fdf, "SimpleInfoPanelValueTextTemplate")?;
+    simple_defaults(
+        &mut label_style,
+        &fdf,
+        "SimpleInfoPanelLabelTextTemplate",
+        rules.default_justification,
+    );
+    simple_defaults(
+        &mut value_style,
+        &fdf,
+        "SimpleInfoPanelValueTextTemplate",
+        rules.default_justification,
+    );
     if !value_style.font.eq_ignore_ascii_case(&label_style.font) {
         return Err("unit panel: stat value font".into());
     }
-    let class = class_header(&fdf, &rules.frame, &rules.title, &globals)?;
+    let mut class = class_header(&fdf, &rules.frame, &rules.title, &globals)?;
+    simple_defaults(
+        &mut class.style,
+        &fdf,
+        &class.frame,
+        rules.default_justification,
+    );
     if !class.style.font.eq_ignore_ascii_case(&value_style.font) {
         return Err("unit panel: unsupported class font differs from value font".into());
     }
@@ -497,32 +627,35 @@ fn load(
         }
         fonts.add(Font::from_bytes(bytes))
     };
+    let sampler = source_image_sampler(false, rules.texture_filters)?;
     let mut armor_icons = Vec::new();
     for key in &rules.armor_icons.keys {
         let path = skin_file(&skin, &sections, key)?;
-        armor_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+        armor_icons.push(ui_image(reader, &path, &sampler, &mut receipts, images)?);
     }
     let mut damage_icons = Vec::new();
     for key in &rules.damage_icons.keys {
         let path = skin_file(&skin, &sections, key)?;
-        damage_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+        damage_icons.push(ui_image(reader, &path, &sampler, &mut receipts, images)?);
     }
     let mut hero_icons = Vec::new();
-    for key in HERO_ICON_KEYS {
+    for key in &rules.hero_icon_keys {
         let path = skin_file(&skin, &sections, key)?;
-        hero_icons.push(ui_image(reader, &path, &mut receipts, images)?);
+        hero_icons.push(ui_image(reader, &path, &sampler, &mut receipts, images)?);
     }
     let hero_icons = <[Handle<Image>; 3]>::try_from(hero_icons)
         .map_err(|_| "unit panel: hero icon count".to_string())?;
     let fill = ui_image(
         reader,
         &skin_file(&skin, &sections, &rules.experience.fill_key)?,
+        &sampler,
         &mut receipts,
         images,
     )?;
     let border = ui_image(
         reader,
         &skin_file(&skin, &sections, &rules.experience.border_key)?,
+        &sampler,
         &mut receipts,
         images,
     )?;
@@ -531,6 +664,7 @@ fn load(
         .ok_or("unit panel: XP texture missing")?
         .size_f32();
     Ok(Source {
+        font_policy,
         experience: ExperienceBar {
             offset: bar_offset,
             height: bar_height,
@@ -563,13 +697,14 @@ fn load(
 fn ui_image(
     reader: &pcx_assets::Resolver,
     path: &str,
+    sampler: &bevy::image::ImageSamplerDescriptor,
     receipts: &mut Vec<AssetReceipt>,
     images: &mut Assets<Image>,
 ) -> Result<Handle<Image>, String> {
     let bytes = read(reader, path, 4 << 20, receipts)?;
     let texture = pcx_gfx::load_image_bounded(&bytes, path, 16 << 20).map_err(|e| e.to_string())?;
-    let mut image = pcx_gfx::viewer::rgba_image(&texture);
-    image.sampler = bevy::image::ImageSampler::Descriptor(image_sampler(false));
+    let mut image = crate::menu_composition::image(&texture);
+    image.sampler = bevy::image::ImageSampler::Descriptor(sampler.clone());
     Ok(images.add(image))
 }
 fn hero_icon_index(primary: &str) -> Result<u8, String> {
@@ -689,6 +824,7 @@ fn class_header(
         return Err("unit panel: unsupported level/class conversions".into());
     }
     Ok(ClassHeader {
+        frame: label.name.clone(),
         style: menu_text::render_style(fdf, &label.name)?,
         offset,
         format: [prefix.into(), middle.into(), suffix.into()],
@@ -1046,7 +1182,7 @@ fn wanted(
 }
 fn colour(word: u32) -> Color {
     let [a, r, g, b] = word.to_be_bytes();
-    Color::srgba_u8(r, g, b, a)
+    crate::menu_composition::colour_u8(r, g, b, a)
 }
 fn label_frame(rect: Rect, viewport: [f32; 2], justify: bevy::text::Justify) -> Node {
     Node {
@@ -1076,14 +1212,27 @@ fn text_node(
     viewport: [f32; 2],
     value: &str,
     font: &Handle<Font>,
+    policy: &Arc<pcx_play::font_pair_policy::PairPolicy>,
     height: f32,
     justify: bevy::text::Justify,
+    vertical: menu_text::JustifyV,
+    intrinsic: Option<menu_text::JustifyH>,
     foreground: Color,
     shadow: Color,
     offset: [f32; 2],
 ) {
     let frame = commands
-        .spawn((label_frame(rect, viewport, justify), Pickable::IGNORE))
+        .spawn((
+            label_frame(
+                Rect {
+                    y: rect.y - rect.height,
+                    ..rect
+                },
+                viewport,
+                justify,
+            ),
+            Pickable::IGNORE,
+        ))
         .id();
     commands.entity(parent).add_child(frame);
     let entity = commands
@@ -1093,6 +1242,34 @@ fn text_node(
                 ..default()
             },
             Text::default(),
+            crate::hud_render::source_font(policy, height / viewport[1]),
+            PanelTextFrame {
+                point: Vec2::new(
+                    rect.x
+                        + rect.width
+                            * match intrinsic {
+                                Some(menu_text::JustifyH::Center) => 0.5,
+                                Some(menu_text::JustifyH::Right) => 1.,
+                                _ => 0.,
+                            },
+                    rect.y,
+                ),
+                viewport: Vec2::from_array(viewport),
+                width: intrinsic.is_none().then_some(rect.width),
+                height: rect.height,
+                font_height: height,
+                anchor_h: intrinsic.unwrap_or(menu_text::JustifyH::Left),
+                justify_h: match justify {
+                    bevy::text::Justify::Left => menu_text::JustifyH::Left,
+                    bevy::text::Justify::Right => menu_text::JustifyH::Right,
+                    _ => menu_text::JustifyH::Center,
+                },
+                justify_v: vertical,
+            },
+            PanelTextMetrics {
+                font: font.clone(),
+                error: None,
+            },
             TextFont {
                 font: font.clone().into(),
                 font_size: bevy::text::FontSize::Vh(height / viewport[1] * 100.),
@@ -1125,7 +1302,7 @@ fn text_node(
                 },
                 TextColor(
                     span.colour
-                        .map(|c| Color::srgba(c[0], c[1], c[2], c[3]))
+                        .map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]))
                         .unwrap_or(foreground),
                 ),
             ))
@@ -1142,17 +1319,20 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
         root,
         Rect {
             x: source.info.x + source.title_offset[0],
-            y: source.info.y + source.info.height + source.title_offset[1] - style.height,
+            y: source.info.y + source.info.height + source.title_offset[1],
             width: source.info.width,
             height: style.height,
         },
         source.viewport,
         &view.name,
         &source.fonts[0],
+        &source.font_policy,
         style.height,
-        bevy::text::Justify::Center,
-        Color::srgba(r, g, b, a),
-        Color::srgba(sr, sg, sb, sa),
+        horizontal(style.justify_h),
+        style.justify_v,
+        Some(menu_text::JustifyH::Center),
+        Color::linear_rgba(r, g, b, a),
+        Color::linear_rgba(sr, sg, sb, sa),
         style.shadow_offset,
     );
     if let Some(fraction) = view.experience {
@@ -1167,20 +1347,23 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
             root,
             Rect {
                 x: source.info.x + source.title_offset[0] + class.offset[0],
-                y: source.info.y + source.info.height + source.title_offset[1]
-                    - source.title_style.height
-                    + class.offset[1]
-                    - class.style.height,
+                y: source_bottom(
+                    source.info.y + source.info.height + source.title_offset[1],
+                    source.title_style.height,
+                ) + class.offset[1],
                 width: source.info.width,
                 height: class.style.height,
             },
             source.viewport,
             value,
             &source.stat_font,
+            &source.font_policy,
             class.style.height,
-            bevy::text::Justify::Center,
-            Color::srgba(r, g, b, a),
-            Color::srgba(sr, sg, sb, sa),
+            horizontal(class.style.justify_h),
+            class.style.justify_v,
+            Some(menu_text::JustifyH::Center),
+            Color::linear_rgba(r, g, b, a),
+            Color::linear_rgba(sr, sg, sb, sa),
             class.style.shadow_offset,
         );
     }
@@ -1194,19 +1377,19 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
         text_node(
             commands,
             root,
-            Rect {
-                y: rect.y - rect.height,
-                ..rect
-            },
+            rect,
             source.viewport,
             value,
             &source.fonts[1],
+            &source.font_policy,
             source.stat_height,
             match source.rules.justification {
                 1 => bevy::text::Justify::Left,
                 2 => bevy::text::Justify::Center,
                 _ => bevy::text::Justify::Right,
             },
+            vertical(source.rules.vertical_justification),
+            None,
             colour(foreground),
             colour(source.rules.shadow),
             source.rules.shadow_offset,
@@ -1217,12 +1400,18 @@ fn paint(commands: &mut Commands, root: Entity, source: &Source, view: &View) {
     text_node(
         commands,
         root,
-        source.status_rect,
+        Rect {
+            y: source.status_rect.y + source.status_rect.height,
+            ..source.status_rect
+        },
         source.viewport,
         &source.status_text,
         &source.fonts[2],
+        &source.font_policy,
         status.height,
-        bevy::text::Justify::Right,
+        horizontal(native_horizontal(source.rules.default_justification[0])),
+        vertical(source.rules.default_justification[1]),
+        Some(menu_text::JustifyH::Right),
         colour(status.colour),
         colour(status.shadow),
         status.shadow_offset,
@@ -1236,8 +1425,10 @@ fn paint_experience(commands: &mut Commands, root: Entity, source: &Source, frac
             + source.title_offset[0]
             + (source.info.width - bar.width) / 2.
             + bar.offset[0],
-        y: source.info.y + source.info.height + source.title_offset[1] - source.title_style.height
-            + bar.offset[1]
+        y: source_bottom(
+            source.info.y + source.info.height + source.title_offset[1],
+            source.title_style.height,
+        ) + bar.offset[1]
             - bar.height,
         width: bar.width,
         height: bar.height,
@@ -1255,15 +1446,13 @@ fn paint_experience(commands: &mut Commands, root: Entity, source: &Source, frac
         ChildOf(root),
     ));
     if fraction > 0. {
+        let fill = Rect {
+            width: rect.width * fraction,
+            ..rect
+        };
         commands.spawn((
-            label_frame(
-                Rect {
-                    width: rect.width * fraction,
-                    ..rect
-                },
-                source.viewport,
-                bevy::text::Justify::Left,
-            ),
+            label_frame(fill, source.viewport, bevy::text::Justify::Left),
+            image_placement(fill, source.viewport, root),
             ImageNode {
                 image: bar.fill.clone(),
                 image_mode: bevy::ui::widget::NodeImageMode::Stretch,
@@ -1388,7 +1577,7 @@ fn paint_hero(
             &source.label_style,
         );
         let value_left = label_left + rows.hero_value_at[0];
-        let value_top = label_top - source.label_style.height + rows.hero_value_at[1];
+        let value_top = source_bottom(label_top, source.label_style.height) + rows.hero_value_at[1];
         paint_styled(
             commands,
             root,
@@ -1399,9 +1588,29 @@ fn paint_hero(
             &source.value_style,
         );
         label_left = value_left + rows.hero_step_at[0];
-        label_top = value_top - source.value_style.height + rows.hero_step_at[1];
+        label_top = source_bottom(value_top, source.value_style.height) + rows.hero_step_at[1];
     }
 }
+fn image_placement(
+    rect: Rect,
+    viewport: [f32; 2],
+    root: Entity,
+) -> crate::hud_render::SourceImageRect {
+    crate::hud_render::SourceImageRect {
+        rect: bevy::math::Rect::from_corners(
+            Vec2::new(
+                rect.x / viewport[0],
+                (viewport[1] - rect.y - rect.height) / viewport[1],
+            ),
+            Vec2::new(
+                (rect.x + rect.width) / viewport[0],
+                (viewport[1] - rect.y) / viewport[1],
+            ),
+        ),
+        root: Some(root),
+    }
+}
+
 fn paint_image(
     commands: &mut Commands,
     root: Entity,
@@ -1419,6 +1628,7 @@ fn paint_image(
                 height: percent(rect.height / source.viewport[1] * 100.),
                 ..default()
             },
+            image_placement(rect, source.viewport, root),
             ImageNode {
                 image: image.clone(),
                 image_mode: bevy::ui::widget::NodeImageMode::Stretch,
@@ -1451,7 +1661,7 @@ fn paint_pair(
         label,
         &source.label_style,
     );
-    let value_top = label_top - source.label_style.height + source.rows.value_at[1];
+    let value_top = source_bottom(label_top, source.label_style.height) + source.rows.value_at[1];
     paint_styled(
         commands,
         root,
@@ -1482,21 +1692,20 @@ fn paint_styled(
         root,
         Rect {
             x: left,
-            y: top - style.height,
+            y: top,
             width,
             height: style.height,
         },
         source.viewport,
         text,
         &source.stat_font,
+        &source.font_policy,
         style.height,
-        match style.justify_h {
-            menu_text::JustifyH::Left => bevy::text::Justify::Left,
-            menu_text::JustifyH::Center => bevy::text::Justify::Center,
-            menu_text::JustifyH::Right => bevy::text::Justify::Right,
-        },
-        Color::srgba(r, g, b, a),
-        Color::srgba(sr, sg, sb, sa),
+        horizontal(style.justify_h),
+        style.justify_v,
+        Some(menu_text::JustifyH::Left),
+        Color::linear_rgba(r, g, b, a),
+        Color::linear_rgba(sr, sg, sb, sa),
         style.shadow_offset,
     );
 }
@@ -1504,6 +1713,95 @@ fn paint_styled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_text_box_preserves_source_edges_and_intrinsic_anchors_at_each_scale() {
+        let mut frame = PanelTextFrame {
+            point: Vec2::new(0.2, 0.1),
+            viewport: Vec2::new(0.8, 0.6),
+            width: None,
+            height: 0.02,
+            font_height: 0.02,
+            anchor_h: menu_text::JustifyH::Left,
+            justify_h: menu_text::JustifyH::Left,
+            justify_v: menu_text::JustifyV::Top,
+        };
+        assert_eq!(
+            frame.origin(Vec2::new(800., 600.), Vec2::new(30., 20.)),
+            Vec2::new(200., 500.)
+        );
+        assert_eq!(
+            frame.origin(Vec2::new(1600., 1200.), Vec2::new(60., 40.)),
+            Vec2::new(400., 1000.)
+        );
+        frame.anchor_h = menu_text::JustifyH::Center;
+        frame.justify_h = menu_text::JustifyH::Center;
+        assert_eq!(
+            frame.origin(Vec2::new(800., 600.), Vec2::new(30., 20.)),
+            Vec2::new(185., 500.)
+        );
+        frame.anchor_h = menu_text::JustifyH::Right;
+        frame.justify_h = menu_text::JustifyH::Right;
+        assert_eq!(
+            frame.origin(Vec2::new(800., 600.), Vec2::new(30., 20.)),
+            Vec2::new(170., 500.)
+        );
+        frame.width = Some(0.1);
+        frame.height = 0.06;
+        frame.justify_v = menu_text::JustifyV::Middle;
+        assert_eq!(
+            frame.origin(Vec2::new(800., 600.), Vec2::new(30., 20.)),
+            Vec2::new(170., 520.)
+        );
+        frame.justify_v = menu_text::JustifyV::Bottom;
+        assert_eq!(
+            frame.origin(Vec2::new(800., 600.), Vec2::new(30., 20.)),
+            Vec2::new(170., 540.)
+        );
+    }
+    #[test]
+    fn source_bottom_retains_the_intermediate_midpoint_rounding() {
+        let top = 0.1_f32;
+        let height = 0.02_f32;
+        assert_eq!(source_bottom(top, height), (top - height).next_up());
+    }
+    #[test]
+    fn intrinsic_center_keeps_edge_conversion_before_half_pixel_rounding() {
+        let physical = Vec2::new(1280., 960.);
+        let viewport = Vec2::new(0.8, 0.6);
+        let frame = PanelTextFrame {
+            point: Vec2::new(1.5 / physical.x * viewport.x, 0.1),
+            viewport,
+            width: None,
+            height: 0.02,
+            font_height: 0.02,
+            anchor_h: menu_text::JustifyH::Center,
+            justify_h: menu_text::JustifyH::Center,
+            justify_v: menu_text::JustifyV::Top,
+        };
+        assert_eq!(frame.origin(physical, Vec2::new(5., 1.)).x, -2.);
+        assert_eq!(
+            (frame.point.x / viewport.x * physical.x).round() + (-2.5_f32).round(),
+            -1.
+        );
+    }
+    #[test]
+    fn panel_image_bounds_normalize_the_source_viewport_and_invert_y() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let placement = image_placement(
+            Rect {
+                x: 0.25,
+                y: 0.5,
+                width: 0.5,
+                height: 0.25,
+            },
+            [2., 1.],
+            root,
+        );
+        assert_eq!(placement.root, Some(root));
+        assert_eq!(placement.rect.min, Vec2::new(0.125, 0.25));
+        assert_eq!(placement.rect.max, Vec2::new(0.375, 0.5));
+    }
     #[test]
     fn experience_frame_keeps_authored_height_anchor_and_constructor_width() {
         let source = r#"Frame "SIMPLEFRAME" "P" {
@@ -1602,6 +1900,21 @@ Frame "SIMPLEFRAME" "Detail" {
         assert_eq!(style.height, 0.023);
         assert_eq!(style.colour, [0.2, 0.4, 0.6, 0.8]);
         assert_eq!(offset, [0.01, -0.02]);
+        let fdf = Fdf::parse(&normalize(source).unwrap()).unwrap();
+        let mut derived = style;
+        simple_defaults(&mut derived, &fdf, "Title", [2, 1]);
+        assert_eq!(derived.justify_h, menu_text::JustifyH::Right);
+        assert_eq!(derived.justify_v, menu_text::JustifyV::Middle);
+        let authored = source.replace(
+            "Anchor TOP,",
+            "FontJustificationH JUSTIFYLEFT,\nFontJustificationV JUSTIFYBOTTOM,\nAnchor TOP,",
+        );
+        let fdf = Fdf::parse(&normalize(&authored).unwrap()).unwrap();
+        let (mut derived, _) = title_style(&authored, "Panel", "Title").unwrap();
+        simple_defaults(&mut derived, &fdf, "Title", [2, 1]);
+        assert_eq!(derived.justify_h, menu_text::JustifyH::Left);
+        assert_eq!(derived.justify_v, menu_text::JustifyV::Bottom);
+
         for bad in [
             source.replace("TOP,", "BOTTOM,"),
             source.replace("0.01,", "NaN,"),
@@ -1749,10 +2062,6 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
             "Armor:"
         );
         assert_eq!(
-            HERO_ICON_KEYS[usize::from(hero_icon_index("STR").unwrap())],
-            "InfoPanelIconHeroIconSTR"
-        );
-        assert_eq!(
             (
                 rows.damage.as_str(),
                 rows.armor.as_str(),
@@ -1779,6 +2088,13 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
         assert_eq!(rows.strength_at, [0.0, -0.003]);
         assert_eq!(rows.hero_value_at, [0.005, 0.0]);
         assert_eq!(rows.hero_step_at, [-0.005, -0.004]);
+    }
+    #[test]
+    fn default_raster_path_accepts_font_forms_and_refuses_nondefault_flags() {
+        assert!(default_font_record("fixture", "\"Face\", 0.01", Some("\"FIXEDSIZE\"")).is_err());
+        assert!(default_font_record("fixture", "\"Face\", 0.01, \"\"", None).is_ok());
+        assert!(default_font_record("fixture", "\"Face\", 0.01, \"OUTLINE\"", None).is_err());
+        assert!(default_font_record("fixture", "\"Face\", 0.01", None).is_ok());
     }
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
@@ -1895,6 +2211,7 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
         assert!(Weak::ptr_eq(state.witness.as_ref().unwrap(), &witness));
         let status_text = state.source.as_ref().unwrap().status_text.clone();
         let status_font = state.source.as_ref().unwrap().fonts[2].id();
+        let policy = state.source.as_ref().unwrap().font_policy.clone();
         let previous = state.view.as_ref().unwrap().health.clone();
         let source = state.source.as_ref().unwrap();
         let view = state.view.as_ref().unwrap();
@@ -1908,6 +2225,28 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
             .chain(&source.damage_icons)
             .cloned()
             .collect::<Vec<_>>();
+        let image_root = state.root.unwrap();
+        let raster_roots = app
+            .world_mut()
+            .query::<(
+                &crate::hud_render::SourceFont,
+                &bevy::ui::widget::TextAtlasFilter,
+                &bevy::ui::widget::TextAlphaTest,
+            )>()
+            .iter(app.world())
+            .filter(|(font, _, _)| Arc::ptr_eq(&font.policy, &policy))
+            .inspect(|(_, filter, alpha)| {
+                assert_eq!(
+                    matches!(**filter, bevy::ui::widget::TextAtlasFilter::Nearest),
+                    policy.default_font_point_sampling()
+                );
+                assert_eq!(alpha.0, policy.font_alpha_reference());
+            })
+            .count();
+        assert!(
+            raster_roots > 0,
+            "unit-panel labels must bind the selected raster policy"
+        );
         let mut spans = app.world_mut().query::<&TextSpan>();
         assert_eq!(
             spans
@@ -1916,17 +2255,20 @@ Frame "SIMPLEFRAME" "SimpleInfoPanelIconHero" {
                 .count(),
             1
         );
-        let mut query = app.world_mut().query::<&ImageNode>();
+        let mut query = app
+            .world_mut()
+            .query::<(&ImageNode, &crate::hud_render::SourceImageRect)>();
         for expected in expected {
             let mounted = query
                 .iter(app.world())
-                .filter(|image| image.image.id() == expected)
+                .filter(|(image, _)| image.image.id() == expected)
                 .collect::<Vec<_>>();
             assert_eq!(mounted.len(), 1);
             assert_eq!(
-                mounted[0].image_mode,
+                mounted[0].0.image_mode,
                 bevy::ui::widget::NodeImageMode::Stretch
             );
+            assert_eq!(mounted[0].1.root, Some(image_root));
         }
         {
             use pcx_script::{Host, Value};

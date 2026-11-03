@@ -17,7 +17,7 @@ use std::sync::{Arc, Weak};
 use crate::hud_assets::{
     self, HudError, HudInput, PlannedArt, PlannedFrame, PlannedText, RelativeBox, ResolvedHud,
 };
-use crate::menu_text::{JustifyH, JustifyV};
+use crate::menu_text::{self, JustifyH, JustifyV};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::widget::{ImageNode, NodeImageMode};
@@ -141,6 +141,319 @@ pub struct HudArt {
     pub path: String,
     /// Authored alpha mode, when the texture block had one.
     pub alpha_mode: Option<String>,
+}
+
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SourceImageRect {
+    pub rect: Rect,
+    pub root: Option<Entity>,
+}
+
+impl SourceImageRect {
+    fn geometry(self, extent: Vec2, basis: bevy::math::Affine2) -> (Vec2, UiGlobalTransform) {
+        let mut placed = basis;
+        // D3D9 integer pixel centers become Bevy's half-integer centers.
+        placed.translation = basis.transform_point2(self.rect.center() * extent) + Vec2::splat(0.5);
+        (self.rect.size() * extent, placed.into())
+    }
+}
+
+fn position_source_images(
+    mut images: Query<(
+        &SourceImageRect,
+        &ComputedUiRenderTargetInfo,
+        &mut ComputedNode,
+        &mut UiGlobalTransform,
+    )>,
+    roots: Query<(&ComputedNode, &UiGlobalTransform), Without<SourceImageRect>>,
+) {
+    for (source, target, mut node, mut transform) in &mut images {
+        if node.is_empty() {
+            continue;
+        }
+        let (extent, basis) = if let Some(root) = source.root {
+            let Ok((node, transform)) = roots.get(root) else {
+                continue;
+            };
+            (
+                node.size(),
+                transform.affine() * bevy::math::Affine2::from_translation(-node.size() * 0.5),
+            )
+        } else {
+            (
+                target.physical_size().as_vec2(),
+                bevy::math::Affine2::IDENTITY,
+            )
+        };
+        let (size, placed) = source.geometry(extent, basis);
+        if node.size != size {
+            node.size = size;
+        }
+        if *transform != placed {
+            *transform = placed;
+        }
+    }
+}
+
+#[derive(Component, Debug)]
+pub(crate) struct SourceTextBox {
+    pub(crate) point: Vec2,
+    pub(crate) viewport: Vec2,
+    pub(crate) width: Option<f32>,
+    pub(crate) height: f32,
+    pub(crate) font_height: f32,
+    pub(crate) anchor_h: menu_text::JustifyH,
+    pub(crate) justify_h: menu_text::JustifyH,
+    pub(crate) justify_v: menu_text::JustifyV,
+}
+// Region point helpers retain the midpoint as f32 between their x87 calculations.
+fn source_edges(point: f32, extent: f32, anchor: menu_text::JustifyH) -> [f32; 2] {
+    let point = f64::from(point);
+    let half = f64::from(extent) * 0.5;
+    match anchor {
+        menu_text::JustifyH::Left => {
+            let middle = (point + half) as f32;
+            [point as f32, (2. * f64::from(middle) - point) as f32]
+        }
+        menu_text::JustifyH::Center => {
+            let left = (point - half) as f32;
+            [left, (2. * point - f64::from(left)) as f32]
+        }
+        menu_text::JustifyH::Right => {
+            let middle = (point - half) as f32;
+            [(2. * f64::from(middle) - point) as f32, point as f32]
+        }
+    }
+}
+pub(crate) fn source_bottom(top: f32, height: f32) -> f32 {
+    source_edges(top, height, menu_text::JustifyH::Right)[0]
+}
+impl SourceTextBox {
+    pub(crate) fn origin(&self, physical: Vec2, text: Vec2) -> Vec2 {
+        let width = self
+            .width
+            .unwrap_or_else(|| text.x / physical.x * self.viewport.x);
+        let weight = |value| match value {
+            menu_text::JustifyH::Left => 0.,
+            menu_text::JustifyH::Center => 0.5,
+            menu_text::JustifyH::Right => 1.,
+        };
+        let [left, right] = source_edges(self.point.x, width, self.anchor_h);
+        let bottom = source_bottom(self.point.y, self.height);
+        // The source converts both edges before justification; regrouping loses half-pixel decisions.
+        let x =
+            left / self.viewport.x + weight(self.justify_h) * ((right - left) / self.viewport.x);
+        let line = self.font_height / self.viewport.y;
+        let height = (self.point.y - bottom) / self.viewport.y;
+        let y = bottom / self.viewport.y
+            + match self.justify_v {
+                menu_text::JustifyV::Top => height,
+                menu_text::JustifyV::Middle => line + (height - line) * 0.5,
+                menu_text::JustifyV::Bottom => line,
+            };
+        Vec2::new(
+            (x * physical.x).round() + (-weight(self.justify_h) * text.x).round(),
+            physical.y - (y * physical.y).round(),
+        )
+    }
+}
+
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SourceTextMetricsSet;
+
+fn position_source_text_boxes(
+    mut roots: Query<(
+        &SourceTextBox,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &ComputedNode,
+        &bevy::text::TextLayoutInfo,
+        &mut UiGlobalTransform,
+    )>,
+) {
+    // These leaf quads use source justification after Bevy has laid out their frames.
+    for (binding, raster, target, node, layout, mut transform) in &mut roots {
+        let origin = binding.origin(target.physical_size().as_vec2(), layout.size)
+            + Vec2::from_array(raster.policy.d3d9_glyph_offset());
+        let placed = UiGlobalTransform::from_translation(origin + node.size() * 0.5);
+        if *transform != placed {
+            *transform = placed;
+        }
+    }
+}
+
+pub(crate) fn simple_justification(
+    flags: u32,
+) -> Result<(crate::menu_text::JustifyH, crate::menu_text::JustifyV), String> {
+    // CSimpleFontString justification bit identifiers, not authored flag values.
+    let horizontal = match flags & 7 {
+        1 => crate::menu_text::JustifyH::Left,
+        2 => crate::menu_text::JustifyH::Center,
+        4 => crate::menu_text::JustifyH::Right,
+        _ => return Err("unsupported simple string horizontal justification".into()),
+    };
+    let vertical = match flags & 0x38 {
+        8 => crate::menu_text::JustifyV::Top,
+        16 => crate::menu_text::JustifyV::Middle,
+        32 => crate::menu_text::JustifyV::Bottom,
+        _ => return Err("unsupported simple string vertical justification".into()),
+    };
+    Ok((horizontal, vertical))
+}
+
+pub(crate) fn default_font_record(
+    frame: &str,
+    value: &str,
+    widget_flags: Option<&str>,
+) -> Result<(), String> {
+    if widget_flags.is_some_and(|flags| !flags.trim().trim_matches('"').is_empty()) {
+        return Err(format!(
+            "source font {frame}: nondefault widget font flags are unqualified"
+        ));
+    }
+    let fields = value
+        .trim_end_matches(',')
+        .split(',')
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    match fields.as_slice() {
+        [_, _] | [_, _, "\"\""] => Ok(()),
+        _ => Err(format!(
+            "source font {frame}: nondefault or malformed font raster flags are unqualified"
+        )),
+    }
+}
+
+/// Shared default-font raster settings; placement and pair spacing remain separate.
+#[derive(Component)]
+pub(crate) struct SourceFont {
+    pub normalized_height: f32,
+    pub policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
+    error: Option<String>,
+}
+
+pub(crate) fn source_font(
+    policy: &Arc<pcx_play::font_pair_policy::PairPolicy>,
+    normalized_height: f32,
+) -> impl Bundle {
+    (
+        SourceFont {
+            normalized_height,
+            policy: policy.clone(),
+            error: None,
+        },
+        if policy.default_font_point_sampling() {
+            bevy::ui::widget::TextAtlasFilter::Nearest
+        } else {
+            bevy::ui::widget::TextAtlasFilter::Linear
+        },
+        bevy::ui::widget::TextAlphaTest(policy.font_alpha_reference()),
+    )
+}
+
+/// Reuses authored metrics and the rasterizer's actual bitmap widths for one native integer line.
+pub(crate) fn space_source_line(
+    raster: &SourceFont,
+    target: &ComputedUiRenderTargetInfo,
+    font: &Font,
+    text: &str,
+    layout: &mut bevy::text::TextLayoutInfo,
+) -> Result<Option<f32>, String> {
+    let mut origin = raster.policy.origin.clone();
+    origin.source = format!("{} selected font bytes", origin.source);
+    let metrics = pcx_play::font_pair_policy::FontMetrics::read(font.data.as_ref(), origin)?;
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() || layout.glyphs.is_empty() {
+        return Ok(None);
+    }
+    if chars.len() != layout.glyphs.len() || layout.glyphs.iter().any(|glyph| glyph.line_index != 0)
+    {
+        return Err("source font spacing: shaped cluster/multiline path is unsupported".into());
+    }
+    let pixels = raster
+        .policy
+        .pixel_height(raster.normalized_height, target.physical_size().y as f32)
+        .map_err(str::to_owned)?;
+    let baseline = metrics.baseline(pixels)?;
+    let mut widths = Vec::with_capacity(chars.len());
+    for glyph in &layout.glyphs {
+        let width = glyph.atlas_info.rect.width();
+        if !width.is_finite() || width < 0. || width.fract() != 0. {
+            return Err("source font spacing: invalid atlas width".into());
+        }
+        widths.push(if width == 0. {
+            raster
+                .policy
+                .empty_bitmap_width(pixels as u32)
+                .map_err(str::to_owned)?
+        } else {
+            width as u32
+        });
+    }
+    let mut pen = 0.;
+    let mut positions = Vec::with_capacity(chars.len());
+    for i in 0..chars.len() {
+        if i > 0 {
+            pen += raster.policy.integer_step(
+                &metrics,
+                chars[i - 1],
+                chars[i],
+                pixels,
+                widths[i - 1],
+            )?;
+        }
+        positions.push(pen + layout.glyphs[i].atlas_info.rect.width() * 0.5);
+    }
+    let width = (pen + *widths.last().unwrap() as f32).ceil();
+    for (glyph, x) in layout.glyphs.iter_mut().zip(positions) {
+        glyph.position.x = x;
+        glyph.position.y =
+            baseline + glyph.atlas_info.offset.y + glyph.atlas_info.rect.height() * 0.5;
+    }
+    layout.size.x = width;
+    Ok(Some(width))
+}
+
+fn size_source_fonts(
+    mut roots: Query<(
+        &mut SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &mut TextFont,
+        Option<&Children>,
+    )>,
+    mut spans: Query<&mut TextFont, Without<SourceFont>>,
+) {
+    for (mut binding, target, mut font, children) in &mut roots {
+        let pixels = match binding
+            .policy
+            .pixel_height(binding.normalized_height, target.physical_size().y as f32)
+        {
+            Ok(pixels) => {
+                if binding.error.is_some() {
+                    binding.error = None;
+                }
+                pixels
+            }
+            Err(error) => {
+                if binding.error.as_deref() != Some(error) {
+                    warn!(source = %binding.policy.origin.source, %error, "source font raster refused");
+                    binding.error = Some(error.into());
+                }
+                continue;
+            }
+        };
+        let size = bevy::text::FontSize::Px(pixels / target.scale_factor());
+        if font.font_size != size {
+            font.font_size = size;
+        }
+        for child in children.into_iter().flat_map(Children::iter) {
+            if let Ok(mut font) = spans.get_mut(child)
+                && font.font_size != size
+            {
+                font.font_size = size;
+            }
+        }
+    }
 }
 
 /// Face and file bound to a text frame.
@@ -288,6 +601,18 @@ pub fn install(app: &mut App) {
                 .chain()
                 .in_set(HudRenderSet)
                 .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                size_source_fonts
+                    .after(bevy::ui::UiSystems::Propagate)
+                    .before(bevy::ui::UiSystems::Content),
+                position_source_images.after(bevy::ui::UiSystems::PostLayout),
+                position_source_text_boxes
+                    .after(SourceTextMetricsSet)
+                    .after(bevy::ui::UiSystems::PostLayout),
+            ),
         );
 }
 
@@ -703,7 +1028,7 @@ fn mount_resolved(
             .unwrap_or(root);
         commands.entity(parent).add_child(entity);
         for art in &frame.art {
-            spawn_art(commands, entity, art, &image_handles);
+            spawn_art(commands, entity, root, art, &image_handles);
         }
         if let Some(text) = &frame.text {
             spawn_text(commands, entity, text, &font_handles[&text.font_path]);
@@ -765,7 +1090,7 @@ fn upload_images(
                 detail: "duplicate decoded image".into(),
             });
         }
-        let handle = images.add(pcx_gfx::viewer::rgba_image(&decoded.texture));
+        let handle = images.add(crate::menu_composition::image(&decoded.texture));
         handles.insert(decoded.path.clone(), handle);
     }
     Ok(handles)
@@ -821,6 +1146,7 @@ fn discard_fonts(fonts: &mut Assets<Font>, handles: HashMap<String, Handle<Font>
 fn spawn_art(
     commands: &mut Commands,
     parent: Entity,
+    root: Entity,
     art: &PlannedArt,
     images: &HashMap<String, Handle<Image>>,
 ) {
@@ -838,6 +1164,16 @@ fn spawn_art(
         .spawn((
             relative_node(art.relative),
             relative_component(art.relative),
+            SourceImageRect {
+                rect: Rect::from_corners(
+                    Vec2::new(art.viewport_relative.left, art.viewport_relative.top) / 100.,
+                    Vec2::new(
+                        art.viewport_relative.left + art.viewport_relative.width,
+                        art.viewport_relative.top + art.viewport_relative.height,
+                    ) / 100.,
+                ),
+                root: Some(root),
+            },
             image,
             HudArt {
                 path: art.path.clone(),
@@ -867,7 +1203,7 @@ pub(crate) fn spawn_text(
                 ..default()
             },
             bevy::text::LineHeight::RelativeToFont(1.0),
-            TextColor(srgba(text.colour)),
+            TextColor(crate::menu_composition::colour(text.colour)),
             TextLayout::new(
                 justify_text(text.justify_h),
                 if text.wrap {
@@ -878,7 +1214,7 @@ pub(crate) fn spawn_text(
             ),
             TextShadow {
                 offset: Vec2::ZERO,
-                color: srgba(text.shadow),
+                color: crate::menu_composition::colour(text.shadow),
             },
             HudTextShadow {
                 fraction: Vec2::new(text.shadow_fraction[0], text.shadow_fraction[1]),
@@ -906,7 +1242,7 @@ pub(crate) fn spawn_text(
                     ..default()
                 },
                 bevy::text::LineHeight::RelativeToFont(1.0),
-                TextColor(srgba(colour)),
+                TextColor(crate::menu_composition::colour(colour)),
                 Pickable::IGNORE,
             ))
             .id();
@@ -1027,16 +1363,37 @@ fn align_items(value: JustifyH) -> AlignItems {
     }
 }
 
-fn srgba(colour: [f32; 4]) -> Color {
-    Color::srgba(colour[0], colour[1], colour[2], colour[3])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hud_assets::{HudInput, sample_hud};
     use bevy::ecs::hierarchy::ChildOf;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn image_quads_preserve_fractional_bounds_and_root_transforms() {
+        use bevy::math::Affine2;
+        let source = SourceImageRect {
+            rect: Rect::new(0.013, 0.027, 0.184, 0.093),
+            root: None,
+        };
+        let extent = Vec2::new(100., 200.);
+        let (size, placed) = source.geometry(extent, Affine2::IDENTITY);
+        let min = placed.translation - size * 0.5;
+        assert!((min - Vec2::new(1.8, 5.9)).abs().max_element() < 0.00001);
+        assert!((size - Vec2::new(17.1, 13.2)).abs().max_element() < 0.00001);
+        let (larger, translated) =
+            source.geometry(extent * 2., Affine2::from_translation(Vec2::new(30., 50.)));
+        assert!((larger - size * 2.).abs().max_element() < 0.00001);
+        assert!(
+            (translated.translation
+                - larger * 0.5
+                - (min * 2. - Vec2::splat(0.5) + Vec2::new(30., 50.)))
+            .abs()
+            .max_element()
+                < 0.00001
+        );
+    }
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -2398,5 +2755,41 @@ mod tests {
         }
         map.extend_from_slice(&mpq);
         map
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SourceTextAnchor {
+    pub(crate) right: bool,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+
+pub(crate) struct SourceTextFrame {
+    // Normalized viewport coordinates preserve the source frame before layout rounding.
+    pub(crate) anchor: SourceTextAnchor,
+    pub(crate) width: Option<f32>,
+    pub(crate) height: f32,
+    pub(crate) justify_h: crate::menu_text::JustifyH,
+    pub(crate) justify_v: crate::menu_text::JustifyV,
+}
+
+impl SourceTextFrame {
+    pub(crate) fn text_origin(&self, viewport: Vec2, text: Vec2) -> Vec2 {
+        let h = match self.justify_h {
+            crate::menu_text::JustifyH::Left => 0.,
+            crate::menu_text::JustifyH::Center => 0.5,
+            crate::menu_text::JustifyH::Right => 1.,
+        };
+        let v = match self.justify_v {
+            crate::menu_text::JustifyV::Top => 0.,
+            crate::menu_text::JustifyV::Middle => 0.5,
+            crate::menu_text::JustifyV::Bottom => 1.,
+        };
+        let frame_width = self.width.map_or(text.x, |width| width * viewport.x);
+        let x = self.anchor.x * viewport.x
+            + (h - if self.anchor.right { 1. } else { 0. }) * frame_width;
+        let y = (1. - self.anchor.y) * viewport.y - v * (self.height * viewport.y - text.y);
+        Vec2::new(x.round() + (-h * text.x).round(), viewport.y - y.round())
     }
 }

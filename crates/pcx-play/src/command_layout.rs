@@ -23,6 +23,8 @@ pub struct Rules {
     pub viewport: [f32; 2],
     /// Addressing selected by the command-button texture setter's source flags.
     pub icon_repeat: bool,
+    /// D3DTEXF minification, magnification and mip selection for command art.
+    pub icon_filters: [u32; 3],
     /// Normal gameplay world frame, relative to the logical UI viewport.
     pub world_frame: Rect,
     frame_size: [f32; 2],
@@ -140,6 +142,7 @@ impl Rules {
         {
             return Err("command texture setter uses another UI field".into());
         }
+        let icon_filters = texture_filters(&mut crate::unit_panel_layout::Reader(&mut read))?;
         let mask = operand(&mut read, 0x887ce5, &[0x83, 0xe0], 1)?[0];
         let icon_repeat = operand(&mut read, 0x8750db, &[0x6a], 1)?[0] & mask != 0;
         if (operand(&mut read, 0x875141, &[0x6a], 1)?[0] & mask != 0) != icon_repeat {
@@ -370,6 +373,7 @@ impl Rules {
             rows,
             viewport,
             icon_repeat,
+            icon_filters,
             world_frame,
             frame_size,
             insets,
@@ -420,6 +424,49 @@ impl Rules {
         }
         Ok(slot)
     }
+}
+
+pub(crate) fn texture_filters<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>>(
+    r: &mut crate::unit_panel_layout::Reader<F>,
+) -> Result<[u32; 3], String> {
+    // CSimpleTexture's file loader preserves unknown flag bits outside this mask.
+    let preserved = r.bytes(0x887cfd, 3, true)?;
+    let forced = r.bytes(0x887d02, 3, true)?;
+    let selector = r.bytes(0x7def4a, 3, true)?;
+    if preserved[..2] != [0x83, 0xe0]
+        || forced[..2] != [0x83, 0xce]
+        || selector[..2] != [0x83, 0xe0]
+        || r.bytes(0x7def4d, 3, true)? != [0x8d, 0x34, 0x40]
+        || preserved[2] & selector[2] & !forced[2] != 0
+        || r.bytes(0x887cfa, 3, true)? != [0xc1, 0xe6, 2]
+        || selector[2] >> 2 != 0
+    {
+        return Err("unsupported texture filter selector instructions".into());
+    }
+    let index = u32::from(forced[2] & selector[2]);
+    texture_filter_record(r, index)
+}
+
+pub(crate) fn texture_filter_record<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>>(
+    r: &mut crate::unit_panel_layout::Reader<F>,
+    index: u32,
+) -> Result<[u32; 3], String> {
+    if index > 3 {
+        return Err("unsupported texture sampler index".into());
+    }
+    let mut filters = [0; 3];
+    for (filter, site) in filters.iter_mut().zip([0x7def50, 0x7def61, 0x7def74]) {
+        let table = r.word(site, &[0xff, 0x34, 0xb5])?;
+        let address = table
+            .checked_add(index * 3 * 4)
+            .ok_or("texture sampler table address overflow")?;
+        *filter = u32::from_le_bytes(r.bytes(address, 4, false)?.try_into().unwrap());
+    }
+    // D3DTEXF identifiers; mipmapped paths require a mip-preserving image loader.
+    if !matches!(filters, [1 | 2, 1 | 2, 0]) {
+        return Err("unsupported texture min/mag/mip combination".into());
+    }
+    Ok(filters)
 }
 
 #[cfg(test)]

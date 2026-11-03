@@ -1,7 +1,7 @@
 //! Source-authored upper controls and live quest log. Root placement is a
 //! recreation choice: upper controls at the viewport top left, quest log centered.
 use crate::glue_menu::{self, AdditiveImage, BackdropImage, EdgePiece};
-use crate::{fdf::Fdf, menu_skin::SkinTable, menu_text};
+use crate::{fdf::Fdf, hud_render::SourceImageRect, menu_skin::SkinTable, menu_text};
 use bevy::ecs::system::SystemParam;
 use bevy::picking::events::PointerPress;
 use bevy::prelude::*;
@@ -12,7 +12,10 @@ use peacecraft3::{
     browser_configuration::SelectedMapSources, campaign_camera::CampaignCamera,
     map_requests::MapRequests, map_script_session::MapScriptSession,
 };
-use std::{collections::HashMap, sync::Weak};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 #[path = "campaign_message_log.rs"]
 mod message_log;
@@ -100,9 +103,69 @@ struct UpperButtonArt {
     disabled: Rect,
     highlight: Rect,
     text_offset: Vec2,
+    source_text_offset: Vec2,
 }
 #[derive(Component)]
 struct UpperButtonLabel(Entity);
+#[derive(Component)]
+struct UpperTextMetrics {
+    owner: Entity,
+    point: Vec2,
+    font: Handle<Font>,
+    error: Option<String>,
+}
+
+fn space_upper_text(
+    mut roots: Query<(
+        &mut UpperTextMetrics,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &Children,
+        &mut bevy::text::TextLayoutInfo,
+        &mut Node,
+    )>,
+    spans: Query<&TextSpan>,
+    fonts: Res<Assets<Font>>,
+    mut state: ResMut<UpperControls>,
+) {
+    for (mut binding, raster, target, children, mut layout, mut node) in &mut roots {
+        if !layout.is_changed() {
+            continue;
+        }
+        let result = (|| -> Result<(), String> {
+            let Some(font) = fonts.get(&binding.font) else {
+                return Ok(());
+            };
+            let text = children
+                .iter()
+                .filter_map(|child| spans.get(child).ok())
+                .map(|span| span.0.as_str())
+                .collect::<String>();
+            if let Some(width) = crate::hud_render::space_source_line(
+                raster,
+                target,
+                font,
+                &text,
+                layout.bypass_change_detection(),
+            )? {
+                let width = Val::Px(width / target.scale_factor());
+                if node.width != width {
+                    node.width = width;
+                }
+            }
+            Ok(())
+        })();
+        binding.error = result.err();
+    }
+    let errors = roots
+        .iter()
+        .filter_map(|(binding, ..)| binding.error.as_deref())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        state.last_error = Some(errors.join("; "));
+    }
+}
+
 #[derive(Component)]
 struct UpperButtonHover(Entity);
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +251,7 @@ struct Source {
     quests_key: KeyCode,
     message_log: message_log::Art,
     fonts: HashMap<String, Handle<Font>>,
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     backdrop: glue_menu::Backdrop,
     details_backdrop: glue_menu::Backdrop,
     accept: glue_menu::Button,
@@ -222,6 +286,12 @@ pub(super) fn install(app: &mut App) {
                 .in_set(CampaignHudSet)
                 .after(peacecraft3::campaign_camera::CampaignCameraSet)
                 .before(peacecraft3::campaign_presentation::CampaignPresentationSet),
+        )
+        .add_systems(
+            PostUpdate,
+            space_upper_text
+                .after(bevy::ui::widget::text_system)
+                .in_set(crate::hud_render::SourceTextMetricsSet),
         );
 }
 fn keyboard_shortcuts(
@@ -305,6 +375,7 @@ fn capture_pointer_press(
 }
 #[derive(SystemParam)]
 struct RenderAssets<'w> {
+    launcher: Option<Res<'w, crate::launch_gui::Launcher>>,
     fonts: ResMut<'w, Assets<Font>>,
     images: ResMut<'w, Assets<Image>>,
     materials: ResMut<'w, Assets<BackdropImage>>,
@@ -321,6 +392,7 @@ fn project(
     assets: RenderAssets,
 ) {
     let RenderAssets {
+        launcher,
         mut fonts,
         mut images,
         mut materials,
@@ -407,14 +479,32 @@ fn project(
             return;
         };
         state.attempted = true;
-        let result = load(
-            &reader,
-            host.objects()
-                .local_race_preference_constant()
-                .map_err(|e| e.to_string()),
-            &mut fonts,
-            &mut images,
-        );
+        let install = launcher
+            .as_deref()
+            .and_then(crate::launch_gui::selected_install);
+        let result =
+            crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                pcx_play::font_pair_policy::PairPolicy::read(
+                    image,
+                    pcx_play::scripts::AssetIdentity {
+                        source: source.into(),
+                        edition: "selected campaign client".into(),
+                        version: "reviewed Legacy 1.29.2.9231 upper label font image".into(),
+                    },
+                )
+                .map(Arc::new)
+            })
+            .and_then(|font_policy| {
+                load(
+                    &reader,
+                    host.objects()
+                        .local_race_preference_constant()
+                        .map_err(|e| e.to_string()),
+                    font_policy,
+                    &mut fonts,
+                    &mut images,
+                )
+            });
         match result {
             Ok(mut source) => match upper(&mut commands, &mut source, &mut highlights) {
                 Ok(root) => {
@@ -562,6 +652,7 @@ pub(crate) fn text(
 fn load(
     reader: &pcx_assets::Resolver,
     race: Result<Option<String>, String>,
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     fonts: &mut Assets<Font>,
     images: &mut Assets<Image>,
 ) -> Result<Source, String> {
@@ -631,6 +722,17 @@ fn load(
             .ok_or("missing quest accept text")?,
     );
     font_styles.extend(message_log.font_styles());
+    for button in UpperButton::ALL {
+        for property in ["NormalText", "HighlightText", "DisabledText"] {
+            let (style, _) = upper_text(&fdf, button.frame(), property)?;
+            crate::hud_render::default_font_record(
+                &style,
+                &fdf.record(&style, "FrameFont")
+                    .ok_or_else(|| format!("{style}: missing FrameFont"))?,
+                fdf.record(&style, "FontFlags").as_deref(),
+            )?;
+        }
+    }
     for name in font_styles {
         let style = menu_text::render_style(&fdf, &name)?;
         if decoded_fonts.contains_key(&style.font) {
@@ -692,7 +794,7 @@ fn load(
                         .map_err(|e| format!("{path}: {e:?}"))?;
                 }
             }
-            let mut image = pcx_gfx::viewer::rgba_image(&decoded);
+            let mut image = crate::menu_composition::image(&decoded);
             image.sampler = bevy::image::ImageSampler::Descriptor(image_sampler(tiled));
             decoded_backdrops.insert((token.clone(), tiled), image);
         }
@@ -714,7 +816,7 @@ fn load(
             pcx_gfx::load_image_bounded(&bytes, &path, 16 << 20).map_err(|e| e.to_string())?;
         decoded_backdrops.insert(
             (glow.file.clone(), false),
-            pcx_gfx::viewer::rgba_image(&decoded),
+            crate::menu_composition::image(&decoded),
         );
     }
     let image_key = fdf
@@ -751,6 +853,7 @@ fn load(
     }
     let quests_key = peacecraft3::campaign_camera::authored_function_key(&globals, "KEY_QUESTS")?;
     Ok(Source {
+        font_policy,
         receipts,
         quests_key,
         message_log,
@@ -770,12 +873,12 @@ fn load(
             .collect(),
         materials: Vec::new(),
         highlights: Vec::new(),
-        image: images.add(pcx_gfx::viewer::rgba_image(&decoded)),
+        image: images.add(crate::menu_composition::image(&decoded)),
         image_size,
     })
 }
 fn colour(value: [f32; 4]) -> Color {
-    Color::srgba(value[0], value[1], value[2], value[3])
+    Color::linear_rgba(value[0], value[1], value[2], value[3])
 }
 fn label(
     commands: &mut Commands,
@@ -930,6 +1033,7 @@ fn upper_button_art(
             region("UseHighlight")?
         },
         text_offset,
+        source_text_offset: Vec2::new(x, y),
     })
 }
 fn show_button_states(
@@ -940,6 +1044,7 @@ fn show_button_states(
         &mut ImageNode,
     )>,
     mut labels: Query<(&UpperButtonLabel, &mut Node)>,
+    mut roots: Query<(&UpperTextMetrics, &mut crate::hud_render::SourceTextBox)>,
 ) {
     for (art, pressed, disabled, mut image) in &mut buttons {
         let rect = if disabled {
@@ -966,6 +1071,20 @@ fn show_button_states(
         if node.left != left || node.top != top {
             node.left = left;
             node.top = top;
+        }
+    }
+    for (binding, mut frame) in &mut roots {
+        let Ok((art, pressed, disabled, _)) = buttons.get(binding.owner) else {
+            continue;
+        };
+        let point = binding.point
+            + if pressed && !disabled {
+                art.source_text_offset
+            } else {
+                Vec2::ZERO
+            };
+        if frame.point != point {
+            frame.point = point;
         }
     }
 }
@@ -1153,6 +1272,19 @@ fn upper(
         .id();
     for (profile, rect, art, texts) in profiles {
         let name = profile.frame();
+        let image_rect = SourceImageRect {
+            root: None,
+            rect: Rect::from_corners(
+                Vec2::new(
+                    rect.left / crate::mainmenu::FRAME_W,
+                    (height - rect.top()) / crate::mainmenu::FRAME_H,
+                ),
+                Vec2::new(
+                    (rect.left + rect.width) / crate::mainmenu::FRAME_W,
+                    (height - rect.bottom) / crate::mainmenu::FRAME_H,
+                ),
+            ),
+        };
         let mut image = ImageNode::new(source.image.clone())
             .with_mode(bevy::ui::widget::NodeImageMode::Stretch);
         image.rect = Some(art.normal);
@@ -1161,6 +1293,7 @@ fn upper(
                 UiButton,
                 bevy::picking::hover::Hovered::default(),
                 art,
+                image_rect,
                 Name::new(name),
                 Node {
                     position_type: PositionType::Absolute,
@@ -1213,6 +1346,7 @@ fn upper(
                 ..default()
             },
             UpperButtonHover(button),
+            image_rect,
             Visibility::Hidden,
             Pickable::IGNORE,
         ));
@@ -1240,7 +1374,46 @@ fn upper(
                 ))
                 .id();
             commands.entity(button).add_child(wrapper);
-            label(commands, wrapper, text, source, &style)?;
+            let mut font_style = menu_text::render_style(&source.fdf, &style)?;
+            let (horizontal, vertical) =
+                crate::hud_render::simple_justification(source.font_policy.default_widget_flags())?;
+            if source.fdf.record(&style, "FontJustificationH").is_none() {
+                font_style.justify_h = horizontal;
+            }
+            if source.fdf.record(&style, "FontJustificationV").is_none() {
+                font_style.justify_v = vertical;
+            }
+            let point = Vec2::new(
+                rect.left + rect.width * 0.5,
+                crate::mainmenu::FRAME_H
+                    - (height - rect.top())
+                    - (rect.height - font_style.height) * 0.5,
+            );
+            let text = label(commands, wrapper, text, source, &style)?;
+            commands.entity(text).insert((
+                crate::hud_render::source_font(
+                    &source.font_policy,
+                    font_style.height / crate::mainmenu::FRAME_H,
+                ),
+                UpperTextMetrics {
+                    owner: button,
+                    point,
+                    font: source.fonts[&font_style.font].clone(),
+                    error: None,
+                },
+                TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap),
+                bevy::text::LineHeight::RelativeToFont(1.),
+                crate::hud_render::SourceTextBox {
+                    point,
+                    viewport: Vec2::new(crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H),
+                    width: None,
+                    height: font_style.height,
+                    font_height: font_style.height,
+                    anchor_h: menu_text::JustifyH::Center,
+                    justify_h: font_style.justify_h,
+                    justify_v: font_style.justify_v,
+                },
+            ));
         }
     }
     Ok(root)
@@ -1628,6 +1801,7 @@ mod tests {
     pub(super) fn fixture_source(fdf: Fdf) -> Source {
         let font = Handle::<Font>::default();
         Source {
+            font_policy: Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
             receipts: Vec::new(),
             fdf,
             globals: String::new(),
@@ -1777,9 +1951,9 @@ mod tests {
                 Node::default(),
             ))
             .id();
-        let normal = Color::srgba(0.2, 0.3, 0.4, 1.);
-        let highlight = Color::srgba(0.6, 0.7, 0.8, 1.);
-        let disabled = Color::srgba(0.1, 0.2, 0.3, 0.4);
+        let normal = Color::linear_rgba(0.2, 0.3, 0.4, 1.);
+        let highlight = Color::linear_rgba(0.6, 0.7, 0.8, 1.);
+        let disabled = Color::linear_rgba(0.1, 0.2, 0.3, 0.4);
         let text = world
             .spawn((
                 QuestButtonText {
@@ -1922,7 +2096,7 @@ mod tests {
             .query::<(&TextShadow, &glue_menu::FrameShadow)>()
             .single(&world)
             .unwrap();
-        assert_eq!(shadow.color, Color::srgba(0.3, 0.1, 0.2, 0.7));
+        assert_eq!(shadow.color, Color::linear_rgba(0.3, 0.1, 0.2, 0.7));
         assert_eq!(offset.0, Vec2::new(-0.003, 0.005));
         let text = world
             .query_filtered::<Entity, With<Text>>()
@@ -1942,8 +2116,8 @@ mod tests {
         assert_eq!(
             spans,
             vec![
-                ("Quest ".into(), Color::srgba(0.2, 0.4, 0.6, 0.8)),
-                ("red".into(), Color::srgba(1., 0., 0., 1.))
+                ("Quest ".into(), Color::linear_rgba(0.2, 0.4, 0.6, 0.8)),
+                ("red".into(), Color::linear_rgba(1., 0., 0., 1.))
             ]
         );
     }
@@ -1961,6 +2135,7 @@ mod tests {
                     disabled: Rect::default(),
                     highlight: Rect::default(),
                     text_offset: Vec2::ZERO,
+                    source_text_offset: Vec2::ZERO,
                 },
                 Hovered(false),
             ))
@@ -2079,7 +2254,35 @@ mod tests {
         let label = world
             .spawn((UpperButtonLabel(button), Node::default()))
             .id();
+        let point = Vec2::new(0.21, 0.44);
+        let text_root = world
+            .spawn((
+                UpperTextMetrics {
+                    owner: button,
+                    point,
+                    font: Handle::default(),
+                    error: None,
+                },
+                crate::hud_render::SourceTextBox {
+                    point,
+                    viewport: Vec2::ONE,
+                    width: None,
+                    height: 0.03,
+                    font_height: 0.02,
+                    anchor_h: menu_text::JustifyH::Center,
+                    justify_h: menu_text::JustifyH::Center,
+                    justify_v: menu_text::JustifyV::Middle,
+                },
+            ))
+            .id();
         world.run_system_once(show_button_states).unwrap();
+        assert_eq!(
+            world
+                .get::<crate::hud_render::SourceTextBox>(text_root)
+                .unwrap()
+                .point,
+            point + art.source_text_offset
+        );
         assert_eq!(
             world.get::<ImageNode>(button).unwrap().rect,
             Some(art.pushed)
@@ -2099,6 +2302,13 @@ mod tests {
             Some(art.disabled)
         );
         assert_eq!(world.get::<Node>(label).unwrap().left, Val::Percent(0.));
+        assert_eq!(
+            world
+                .get::<crate::hud_render::SourceTextBox>(text_root)
+                .unwrap()
+                .point,
+            point
+        );
         world
             .entity_mut(button)
             .remove::<(InteractionDisabled, bevy::ui::Pressed)>();
@@ -2307,6 +2517,25 @@ mod tests {
             assert_eq!(sampler.address_mode_v, address);
         }
     }
+
+    #[test]
+    fn source_image_filters_preserve_addressing_and_refuse_unknown_modes() {
+        use bevy::image::{ImageAddressMode, ImageFilterMode};
+        let sampler = source_image_sampler(true, [2, 1, 0]).unwrap();
+        assert_eq!(sampler.min_filter, ImageFilterMode::Linear);
+        assert_eq!(sampler.mag_filter, ImageFilterMode::Nearest);
+        assert_eq!(sampler.address_mode_u, ImageAddressMode::Repeat);
+        assert_eq!(sampler.address_mode_v, ImageAddressMode::Repeat);
+        assert_eq!(sampler.lod_max_clamp, 0.);
+        assert_eq!(
+            source_image_sampler(false, [1, 2, 0])
+                .unwrap()
+                .address_mode_u,
+            ImageAddressMode::ClampToEdge
+        );
+        assert!(source_image_sampler(false, [1, 2, 1]).is_err());
+        assert!(source_image_sampler(false, [3, 2, 0]).is_err());
+    }
     #[test]
     fn simple_templates_keep_font_inheritance_and_authored_offsets() {
         let text = "String \"Label\" {\nFont \"Face\",0.027,\nFontColor 0.1 0.2 0.3,\n}\nFrame \"SIMPLEFRAME\" \"Bar\" {\nWidth 0.3,\nHeight 0.04,\nFrame \"SIMPLEBUTTON\" \"Button\" {\nWidth 0.09,\nHeight 0.03,\nSetPoint TOPLEFT,\"Bar\",TOPLEFT,0.007,-0.002,\n}\n}\n";
@@ -2376,6 +2605,34 @@ mod tests {
         )
         .unwrap();
         queue.apply(&mut world);
+        let mut roots = world.query::<(
+            &crate::hud_render::SourceFont,
+            &UpperTextMetrics,
+            &TextLayout,
+            &crate::hud_render::SourceTextBox,
+            &bevy::ui::widget::TextAtlasFilter,
+            &bevy::ui::widget::TextAlphaTest,
+        )>();
+        let roots = roots.iter(&world).collect::<Vec<_>>();
+        assert_eq!(roots.len(), UpperButton::ALL.len() * 3);
+        let style = menu_text::render_style(&source.fdf, "Text").unwrap();
+        for (font, metrics, layout, frame, filter, alpha) in roots {
+            assert_eq!(frame.height, style.height);
+            assert_eq!(frame.font_height, style.height);
+            assert_eq!(frame.width, None);
+            assert_eq!(frame.justify_h, menu_text::JustifyH::Center);
+            assert_eq!(frame.justify_v, menu_text::JustifyV::Middle);
+            assert_eq!(layout.linebreak, bevy::text::LineBreak::NoWrap);
+            assert_eq!(metrics.font, source.fonts[&style.font]);
+            assert!(metrics.error.is_none());
+            assert!(Arc::ptr_eq(&font.policy, &source.font_policy));
+            assert_eq!(
+                font.normalized_height,
+                style.height / crate::mainmenu::FRAME_H
+            );
+            assert!(matches!(filter, bevy::ui::widget::TextAtlasFilter::Nearest));
+            assert_eq!(alpha.0, source.font_policy.font_alpha_reference());
+        }
         let mut shown = HashMap::new();
         let mut buttons =
             world.query::<(Entity, &Name, Has<InteractionDisabled>, Option<&Action>)>();
@@ -2518,6 +2775,27 @@ pub(crate) fn image_sampler(tiled: bool) -> bevy::image::ImageSamplerDescriptor 
         address_mode_v: address,
         ..default()
     }
+}
+
+pub(crate) fn source_image_sampler(
+    tiled: bool,
+    filters: [u32; 3],
+) -> Result<bevy::image::ImageSamplerDescriptor, String> {
+    let [min, mag, mip] = filters;
+    if mip != 0 {
+        return Err("UI image requires an unsupported mip-filter mode".into());
+    }
+    let mode = |value| match value {
+        1 => Ok(bevy::image::ImageFilterMode::Nearest),
+        2 => Ok(bevy::image::ImageFilterMode::Linear),
+        _ => Err("unsupported UI image filter".to_string()),
+    };
+    Ok(bevy::image::ImageSamplerDescriptor {
+        min_filter: mode(min)?,
+        mag_filter: mode(mag)?,
+        lod_max_clamp: 0.,
+        ..image_sampler(tiled)
+    })
 }
 fn paint_backdrop(
     commands: &mut Commands,

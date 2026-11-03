@@ -90,6 +90,7 @@ pub mod editor_object_globals;
 pub mod editor_triggers;
 pub mod error_line_rules;
 pub mod file_sounds;
+pub mod font_pair_policy;
 pub mod game_cache;
 pub mod generator;
 pub mod group_order_rules;

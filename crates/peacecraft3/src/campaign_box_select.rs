@@ -551,7 +551,7 @@ pub(crate) fn draw_outline(
         return;
     };
     let [a, r, g, b] = circles.friend;
-    let colour = Color::srgba_u8(r, g, b, a);
+    let colour = crate::menu_composition::colour_u8(r, g, b, a);
     let (w, h) = (window.width(), window.height());
     // One device pixel at every resolution (exe, see `OUTLINE_PX`).
     let px = OUTLINE_PX;

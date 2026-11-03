@@ -470,6 +470,17 @@ fn channels(colour: [f32; 3]) -> Vec3 {
     Vec3::from_array(colour.map(|n| f32::from((n * f32::from(u8::MAX)) as u8)))
 }
 
+/// Shared packed-channel sun conversion, preserving authored intensity.
+pub(crate) fn sun_channels(
+    sun: &pcx_play::day_night::Sun,
+    parameters: &Parameters,
+) -> (Vec3, Vec3) {
+    (
+        channels(sun.colour) * (sun.intensity * parameters.channel_scale),
+        channels(sun.ambient_colour) * (sun.ambient_intensity * parameters.channel_scale),
+    )
+}
+
 /// The geosets [`apply_sun`] lights, parallel to the model's meshes.
 pub(crate) struct SunGeosets<'a> {
     pub(crate) handles: &'a [Handle<Mesh>],
@@ -511,8 +522,7 @@ pub(crate) fn apply_sun(
         return Err(format!("{source}: sun lighting binding count mismatch"));
     }
     let towards = -direction.try_normalize().ok_or("zero sun direction")?;
-    let diffuse = channels(sun.colour) * (sun.intensity * parameters.channel_scale);
-    let ambient = channels(sun.ambient_colour) * (sun.ambient_intensity * parameters.channel_scale);
+    let (diffuse, ambient) = sun_channels(sun, parameters);
     for (index, ((rest, handle), (_, _, material))) in
         model.meshes.iter().zip(handles).zip(bound).enumerate()
     {

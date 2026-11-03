@@ -78,7 +78,7 @@ pub(super) fn update(
     cameras: Query<(&Camera, &GlobalTransform), With<CampaignSceneCamera>>,
     mut outlines: Query<(&mut Node, &mut BorderColor), With<Outline>>,
 ) {
-    let Some(parent) = state.image_node else {
+    let Some(parent) = state.surface else {
         return;
     };
     let Some(rgb) = state.outline_rgb else {
@@ -90,7 +90,7 @@ pub(super) fn update(
         }
         let fog = state.fog.as_ref()?;
         let objects = session.host()?.objects();
-        let bounds = objects.vision_world_bounds()?;
+        let bounds = fog.bounds(objects).ok()?;
         let target = objects.camera_target().or_else(|| {
             objects
                 .applied_camera_setup()
@@ -123,7 +123,12 @@ pub(super) fn update(
             [fog.width, fog.height],
         )
     })();
-    let color = BorderColor::all(Color::srgb_u8(rgb[0], rgb[1], rgb[2]));
+    let color = BorderColor::all(crate::menu_composition::colour_u8(
+        rgb[0],
+        rgb[1],
+        rgb[2],
+        u8::MAX,
+    ));
     let Some(entity) = state.outline else {
         let entity = commands
             .spawn((

@@ -104,7 +104,10 @@ fn a_post_draws_one_line_in_the_frame_with_the_client_colour() {
         panic!("one line expected, found {}", shown.len());
     };
     assert_eq!(text, "Not enough gold.");
-    assert_eq!(*colour, Color::srgba_u8(0x10, 0x20, 0x30, 0xff));
+    assert_eq!(
+        *colour,
+        crate::menu_composition::colour_u8(0x10, 0x20, 0x30, 0xff)
+    );
     for (actual, expected) in [
         (node.left, 25.0),
         (node.bottom, 25.0),

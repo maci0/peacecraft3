@@ -94,9 +94,7 @@ impl Markers {
         pixels: &mut [u8],
     ) -> Result<(), String> {
         let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
-        let bounds = host
-            .vision_world_bounds()
-            .ok_or("minimap marker world extent absent")?;
+        let bounds = fog.bounds(host)?;
         let mut plan = Vec::new();
         let mut live: std::collections::BTreeSet<pcx_script::HandleId> =
             std::collections::BTreeSet::new();
@@ -228,9 +226,7 @@ impl Markers {
             return Err("nonfinite minimap pointer".into());
         }
         let settings = host.startup_settings().ok_or(SETTINGS_ERROR)?;
-        let bounds = host
-            .vision_world_bounds()
-            .ok_or("minimap marker world extent absent")?;
+        let bounds = fog.bounds(host)?;
         let sides = self.draw.marker_sides.map(|side| {
             ((f64::from(side) * f64::from(fog.width) / f64::from(self.draw.edge)).round() as u32)
                 .max(1)

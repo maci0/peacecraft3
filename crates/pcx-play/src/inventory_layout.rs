@@ -550,10 +550,17 @@ impl Rules {
             height,
         })
     }
+    pub fn label_top_left(&self) -> [f32; 2] {
+        [
+            self.info.x + self.info.width + self.label.x,
+            self.info.y + self.info.height + self.label.y,
+        ]
+    }
     pub fn label(&self) -> Rect {
+        let [x, top] = self.label_top_left();
         Rect {
-            x: self.info.x + self.info.width + self.label.x,
-            y: self.info.y + self.info.height + self.label.y - self.label.height,
+            x,
+            y: top - self.label.height,
             ..self.label
         }
     }
@@ -586,7 +593,7 @@ pub mod fixtures {
             label_colour: 0xff123456,
             shadow_colour: 0x80112233,
             shadow_offset: [0.002, -0.003],
-            label_flags: 2,
+            label_flags: 2 | 16,
             count: 4,
             viewport: [1., 1.],
             icon_repeat: false,

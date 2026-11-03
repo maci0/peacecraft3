@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use crate::{TerrainMesh, TileCatalog, corner_world_scaled};
+use crate::{TerrainMesh, TileCatalog, corner_normal, corner_world_scaled};
 
 use pcx_map::{Map, Terrain, shipped_maps};
 
@@ -479,6 +479,15 @@ fn fixture_mesh_positions_and_flags_are_exact() {
 fn fixture_normals_point_up() {
     let t = fixture_terrain();
     let m = TerrainMesh::build(&t);
+    for cy in 0..=t.height() {
+        for cx in 0..=t.width() {
+            assert_eq!(
+                corner_normal(&t, cx, cy).unwrap(),
+                m.normals[(cy * (t.width() + 1) + cx) as usize]
+            );
+        }
+    }
+    assert!(corner_normal(&t, t.width() + 1, 0).is_none());
     // Every vertex normal has a positive z component on this gentle bump.
     for n in &m.normals {
         assert!(n[2] > 0.0, "normal {n:?} not up");

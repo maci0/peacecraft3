@@ -1,6 +1,6 @@
 # Simulation clock: exact Legacy target (RE-Q5, partial)
 
-Bounded static investigation. It identifies the native turn scheduler and the
+Bounded static investigation with a later Wine runtime observation below. It identifies the native turn scheduler and the
 game-time sub-step that drives the agent timer queues. It does not close RE-Q5:
 render-frame invocation, several runtime-initialized scale fields and the full set
 of sub-step consumers remain open (see *Unknowns*). `pcx_sim::TICK_MS` is a
@@ -64,7 +64,11 @@ Each step was read from disassembly of the pinned file.
    `[0x113d7f8]+0x3fc` (`0x60ad10`); event `0x40090094` -> `0x5ea690`, which forwards
    `event+0x14` to `0x60acb0` on the same object and calls `0x7f4820(&event+0x14)`
    unless `[0x113d7f8]+0x298 != 0`.
-8. **Turn scheduler `0x5aefd0(now)`.** It is reached from `0x5ab7f0`, which calls
+8. **Turn scheduler `0x5aefd0(now)`.** Its receiver is **not** the global event-handler
+   object `[0x113d7f8]`. In `0x5ab7f0`, `0x45df90(13)` obtains a thread-local slot;
+   the callback loads `slot+0x0c`, then that object's `+0x08` into ESI, and passes
+   ESI as the scheduler receiver. The field offsets below refer to that receiver.
+   It is reached from `0x5ab7f0`, which calls
    it with the clock `0x796ca0`. That clock returns
    `QueryPerformanceCounter * [0x1140630]` when `[0x114062c]` is set, otherwise
    `GetTickCount`. `0x5ac1e0` registers `0x5ab7f0` as callback id 5 via `0x8405d0`.
@@ -131,10 +135,12 @@ Each step was read from disassembly of the pinned file.
 3. Subscribers of event `0x40090092` other than `0x5ea6e0`, and whether unit
    movement, orders and RNG draws run off the agile timer queues, the sub-step event
    or the `0x60ad10` consumer.
-4. The bit-exact `[0x113cb40]` after soft reciprocal, and the rounding mode of the
-   float-to-int conversion `0xa56bf0` used for `N`.
+4. The bit-exact `[0x113cb40]` after soft reciprocal is now observed in the Wine
+   run below. The rounding mode of float-to-int conversion `0xa56bf0` used for
+   `N` remains open.
 5. Runtime confirmation (traced `[+0x2618]`, `[+0x3c4]`, `N` and `[0x113cb40]` in a
-   live single-player game) remains uncollected.
+   live single-player game) remains incomplete: the sub-step bits were read,
+   but the scheduler receiver and its live fields were not captured.
 6. The producer of QPC scale `[0x1140630]`, including its relationship to the
    performance-counter frequency. No calibration/default value is inferred.
 
@@ -178,3 +184,55 @@ Local search inventories and range identities are in
 required evidence is an actual producer or write observation for the enable and
 scale fields. No such producer was positively located by this search, and no
 simulation constant was changed.
+
+## Live queue and portrait observation (2026-11-03)
+
+The same pinned executable ran RoC `Maps\Campaign\Prologue02.w3m` in the
+reference harness's private Docker/Wine/Xvfb display, 1280×960 at 96 DPI, with
+a verified PulseAudio null sink and no host display or audio connection.
+A separate PE32 helper used `OpenProcess(PROCESS_VM_READ |
+PROCESS_QUERY_INFORMATION)` and `ReadProcessMemory`; it did not write game
+memory, inject code, suspend threads or alter the map script. Addresses were
+relocated from the main module's observed base (`0x400000`).
+
+Runtime observations:
+
+- `[0x113cb40]` was `0x3ba3d70a`, IEEE binary32
+  `0.004999999888241291` seconds. This qualifies the initialized sub-step bits
+  for this run, not every simulation consumer or the frame-to-step relationship.
+- Both queue clocks began at zero on the completed loading screen and advanced
+  after its continue input. Reads of `AGILE_DATA+0x44/+0x48`, followed by each
+  queue's `+0x40`, returned plausible advancing game/real seconds.
+- With the in-game menu open, a 200-sample trace spanning 2253 host milliseconds
+  held game bits `0x427f832f` and real bits `0x42800b68`. All samples' second
+  game-clock reads agreed with their first. The game's menu had already been
+  open before the trace and remained open throughout it.
+- Two full 1280×960 captures taken during that trace differed at **12,650 of
+  1,228,800 pixels**, with no crop, registration, tolerance or exclusions.
+  Changed 160×160 tiles were `(0,640):128`, `(320,640):557`, and
+  `(320,800):11965`. The retained difference mask places the changes in the
+  minimap ping and portrait. The rest of the frame matched byte for byte.
+
+Thus equal sampled game and real **timer-queue** values do not establish equal
+portrait presentation state. A separate advancing presentation path is required
+to explain the observed portrait motion; its clock producer, phase, random
+selection and exact native update semantics remain unqualified. Do not replace
+the portrait clock with simulation ticks merely to make screenshots agree.
+ReadProcessMemory samples are not an atomic snapshot and do not prove values
+between samples. Wine rendering is not native Windows ground truth.
+
+Local evidence stays in `.scratch/pixel-native-clocks-20261103/`:
+`read-clocks-v2.c`, its warning-free PE32 executable, `clocks-bracket.ndjson`,
+the two `menu-*-time.txt` timestamps, `captures/menu-c.png`/`menu-d.png`, full
+side-by-side/overlay/difference/mask images and `clock-comparison.json` with
+file digests. The trace SHA-256 is
+`8e1dc4b0e5c210834d1aa964af06bb46b0c5159779614cfb0ec6a57a82591a90`.
+The isolated container was stopped after collection.
+
+The first helper incorrectly applied scheduler offsets to the event-handler
+object and returned nonsensical scheduler values. Those fields in the earlier
+local `clocks-loading/cinematic/control/pause/menu.ndjson` files are rejected.
+The corrected helper omits scheduler fields. Bounded disassembly of
+`0x5ab7f0..0x5ab840` and `0x45df90..0x45dfb1` established the receiver correction
+above. Live scheduler fields and a paired original/recreation animation
+checkpoint remain open.

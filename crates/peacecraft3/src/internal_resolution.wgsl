@@ -1,6 +1,11 @@
 @group(1) @binding(0) var source: texture_2d<f32>;
 @group(1) @binding(1) var<uniform> factor: u32;
 
+// Render targets store display-encoded RGB; sampling them returns linear channels.
+fn to_working(value: vec3<f32>) -> vec3<f32> {
+    return select(value * 12.92, 1.055 * pow(max(value, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), value > vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fragment(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let size = textureDimensions(source);
@@ -12,5 +17,6 @@ fn fragment(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
             sum += textureLoad(source, vec2<i32>(pixel * factor + vec2<u32>(x,y)), 0);
         }
     }
-    return sum / f32(factor * factor);
+    let averaged = sum / f32(factor * factor);
+    return vec4<f32>(to_working(averaged.rgb), averaged.a);
 }

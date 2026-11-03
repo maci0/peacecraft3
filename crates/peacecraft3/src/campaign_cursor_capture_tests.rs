@@ -165,6 +165,7 @@ fn draw_every_pointer_state_offscreen() {
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     app.world_mut().spawn((
         Camera3d::default(),
+        crate::menu_composition::MenuColourCamera,
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
                 viewport_height: FRAME_H,
@@ -276,4 +277,110 @@ fn draw_every_pointer_state_offscreen() {
         }
     }
     std::fs::write(out, ppm).unwrap();
+}
+
+#[test]
+#[ignore = "requires an isolated Vulkan adapter; synthetic cursor/HUD composition"]
+fn cursor_overlay_preserves_the_hud_and_draws_its_model() {
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: ExitCondition::DontExit,
+                ..default()
+            })
+            .set(RenderPlugin {
+                synchronous_pipeline_compilation: true,
+                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                    backends: Some(Backends::VULKAN),
+                    ..default()
+                })),
+                ..default()
+            })
+            .disable::<WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>()
+            .disable::<bevy::audio::AudioPlugin>(),
+    )
+    .add_plugins(crate::menu_composition::MenuCompositionPlugin)
+    .init_resource::<Shot>();
+    app.finish();
+    app.cleanup();
+    let mut image = Image::new_target_texture(32, 32, TextureFormat::Rgba8UnormSrgb, None);
+    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let target = RenderTarget::Image(image.clone().into());
+    app.world_mut().spawn((
+        Camera2d,
+        crate::menu_composition::MenuColourCamera,
+        Camera {
+            clear_color: ClearColorConfig::Custom(Color::srgb(1., 0., 0.)),
+            ..default()
+        },
+        RenderLayers::none(),
+        target.clone(),
+    ));
+    app.world_mut().spawn((
+        Camera3d::default(),
+        crate::menu_composition::MenuColourCamera,
+        overlay_camera(),
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical {
+                viewport_height: 4.,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_xyz(0., 0., 5.),
+        Tonemapping::None,
+        DebandDither::Disabled,
+        RenderLayers::layer(CURSOR_LAYER),
+        target,
+    ));
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Cuboid::new(1., 1., 1.));
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: Color::WHITE,
+            unlit: true,
+            ..default()
+        });
+    app.world_mut().spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        RenderLayers::layer(CURSOR_LAYER),
+    ));
+    for frame in 0..FRAMES {
+        if frame == READ_AT {
+            app.world_mut()
+                .spawn(Readback::texture(image.clone()))
+                .observe(|event: On<ReadbackComplete>, mut shot: ResMut<Shot>| {
+                    shot.0.clone_from(&event.data);
+                });
+        }
+        app.update();
+        app.world()
+            .resource::<RenderDevice>()
+            .wgpu_device()
+            .poll(PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .unwrap();
+    }
+    let pixels = &app.world().resource::<Shot>().0;
+    // Readback rows are padded to the GPU's 256-byte alignment.
+    assert_eq!(
+        &pixels[..4],
+        &[255, 0, 0, 255],
+        "cursor must preserve the HUD outside its model"
+    );
+    assert_eq!(
+        &pixels[16 * 256 + 16 * 4..16 * 256 + 17 * 4],
+        &[255, 255, 255, 255],
+        "cursor model must remain visible"
+    );
 }

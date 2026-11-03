@@ -1912,6 +1912,7 @@ pub(crate) mod tests {
             ))
             .init_resource::<crate::campaign_input::CampaignInput>()
             .init_resource::<crate::menu_screens::Navigation>()
+            .init_resource::<peacecraft3::campaign_loading::LastRules>()
             .init_resource::<Assets<Font>>()
             // The normal map-ground plugin declares this renderer capability too.
             .insert_resource(peacecraft3::map_ground::NoOcclusionPass);

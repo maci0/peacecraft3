@@ -28,6 +28,220 @@ use std::{path::Path, time::Duration};
 
 mod bench;
 
+#[test]
+#[ignore = "requires PCX_NATIVE_CHAPTER_* and a new PCX_CAMPAIGN_CAPTURE_DIR; CPU-only minimap mapping receipt"]
+fn selected_minimap_mapping_receipt() {
+    let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
+    assert!(!output.exists(), "mapping receipt directory must be new");
+    let mut app = crate::native_campaign::tests::started_app();
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = session.context().unwrap().clone();
+    let objects = session.host().unwrap().objects();
+    let camera = objects.camera_state().unwrap();
+    let bounds = camera.bounds.unwrap();
+    let margins = camera.margins.values();
+    let corners = bounds.as_chunks::<2>().0;
+    let left = corners.iter().map(|p| p[0]).reduce(f32::min).unwrap() - margins[0];
+    let right = corners.iter().map(|p| p[0]).reduce(f32::max).unwrap() + margins[1];
+    let top = corners.iter().map(|p| p[1]).reduce(f32::max).unwrap() + margins[2];
+    let bottom = corners.iter().map(|p| p[1]).reduce(f32::min).unwrap() - margins[3];
+    let path = std::path::PathBuf::from(std::env::var("PCX_NATIVE_CHAPTER_INSTALL").unwrap())
+        .join("Warcraft III.exe");
+    let rules = pcx_play::minimap_layout::Rules::reviewed_legacy(
+        &std::fs::read(&path).unwrap(),
+        pcx_play::scripts::AssetIdentity {
+            source: path.display().to_string(),
+            edition: "selected campaign client".into(),
+            version: "reviewed minimap".into(),
+        },
+    )
+    .unwrap();
+    let derived = rules.world_bounds(camera).unwrap();
+    assert_eq!(derived, [[left, bottom], [right, top]]);
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("minimap-mapping.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "scope": "Executed camera inputs versus old minimap mapping; native field join is separately static evidence",
+        "map": context.sources.map.source, "edition": context.sources.map.edition,
+        "camera_bounds": bounds, "margins": margins,
+        "old_world_bounds": objects.vision_world_bounds(),
+        "expanded_camera_bounds": [[left,bottom],[right,top]], "derived_bounds": derived, "texture_filters": rules.texture_filters, "texture_address": rules.texture_address,
+        "margin_image": format!("{:?}",camera.margins.binding()),
+    })).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "requires PCX_NATIVE_CHAPTER_* and a new PCX_CAMPAIGN_CAPTURE_DIR; CPU-only original terrain mip check"]
+fn selected_terrain_authored_mips_reach_renderer() {
+    let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
+    assert!(!output.exists(), "mip receipt directory must be new");
+    let app = crate::native_campaign::tests::started_app();
+    let requests = app
+        .world()
+        .resource::<peacecraft3::map_requests::MapRequests>();
+    let bindings = requests.bindings.as_ref().unwrap();
+    let context = requests.admission.shared_context().unwrap();
+    let reader = app
+        .world()
+        .resource::<peacecraft3::browser_configuration::SelectedMapSources>()
+        .for_receipts(&bindings.receipts)
+        .unwrap();
+    let table = reader
+        .resolve_bounded("TerrainArt\\Terrain.slk", 16 << 20)
+        .unwrap();
+    let catalog = pcx_tera::TileCatalog::from_terrain_slk(&table.bytes).unwrap();
+    let mut sources = Vec::new();
+    let slots = peacecraft3::map_ground::load_slot_blps(&context.terrain, &catalog, |path| {
+        let asset = reader
+            .resolve_bounded(path, 16 << 20)
+            .map_err(|error| error.to_string())?;
+        sources.push(format!("{:?}", peacecraft3::map_binding::receipt(&asset)));
+        Ok(asset.bytes)
+    })
+    .unwrap();
+    let borrowed = slots
+        .iter()
+        .map(|slot| pcx_gfx::SelectedGroundBlp {
+            fourcc: slot.fourcc,
+            source: &slot.source,
+            bytes: &slot.bytes,
+        })
+        .collect::<Vec<_>>();
+    let decoded = pcx_gfx::decode_ground_slots(
+        &borrowed,
+        pcx_gfx::GroundMemory {
+            retained_bytes: 128 << 20,
+            transient_bytes: 64 << 20,
+        },
+    )
+    .unwrap();
+    let levels = decoded.image.texture_descriptor.mip_level_count;
+    let lengths = (0..levels)
+        .map(|level| ((decoded.tile >> level).max(1) as usize).pow(2) * 4)
+        .collect::<Vec<_>>();
+    let layer_bytes: usize = lengths.iter().sum();
+    let data = decoded.image.data.as_ref().unwrap();
+    let mut layer_base = 0usize;
+    let mut different = 0usize;
+    let mut rows = Vec::new();
+    for slot in &slots {
+        let header = pcx_blp::Header::parse(&slot.bytes).unwrap();
+        let loaded =
+            pcx_gfx::load_mipmapped_image_bounded(&slot.bytes, &slot.source, 64 << 20).unwrap();
+        let columns = header.width / decoded.tile;
+        let grid_rows = header.height / decoded.tile;
+        let mut prefix = 0usize;
+        for level in 0..levels {
+            let (width, height) = header.mip_size(level as usize);
+            let tile = height / grid_rows;
+            let pixels = if level == 0 {
+                &loaded.rgba
+            } else {
+                &loaded.mipmaps[level as usize - 1]
+            };
+            for row in 0..grid_rows {
+                for col in 0..columns {
+                    let layer = layer_base
+                        + ((col / grid_rows) * grid_rows * grid_rows
+                            + row * grid_rows
+                            + col % grid_rows) as usize;
+                    for y in 0..tile {
+                        let source = (((row * tile + y) * width + col * tile) * 4) as usize;
+                        let target = layer * layer_bytes + prefix + (y * tile * 4) as usize;
+                        let count = (tile * 4) as usize;
+                        different += pixels[source..source + count]
+                            .iter()
+                            .zip(&data[target..target + count])
+                            .filter(|(a, b)| a != b)
+                            .count();
+                    }
+                }
+            }
+            prefix += lengths[level as usize];
+        }
+        rows.push(serde_json::json!({"path": slot.source, "mips": header.mip_count(), "width": header.width, "height": header.height}));
+        layer_base += (columns * grid_rows) as usize;
+    }
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("terrain-mips.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "scope": "Source mip pixels versus ground upload; not native sampling or pixel-parity proof",
+        "map": context.sources.map.source, "edition": context.sources.map.edition,
+        "source_receipts": sources, "sheets": rows, "upload_levels": levels, "different_channels": different,
+    })).unwrap()).unwrap();
+    assert_eq!(
+        different, 0,
+        "ground upload must preserve supplied mip pixels"
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_NATIVE_CHAPTER_* and a new PCX_CAMPAIGN_CAPTURE_DIR; CPU-only source inspection"]
+fn selected_terrain_lighting_source_receipt() {
+    let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
+    assert!(!output.exists(), "source receipt directory must be new");
+    let mut app = crate::native_campaign::tests::started_app();
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = session.context().unwrap().clone();
+    let objects = session.host().unwrap().objects();
+    let fraction = objects
+        .day_fraction()
+        .expect("selected chapter day fraction");
+    let selected = objects.day_night_state().unwrap().selected().unwrap();
+    let models = selected.into_iter().zip(["terrain", "units"]).map(|(model, role)| {
+        let sample = match model.sun(fraction) {
+            Ok(sun) => serde_json::json!({
+                "direction": sun.direction, "colour": sun.colour,
+                "intensity": sun.intensity, "ambient_colour": sun.ambient_colour,
+                "ambient_intensity": sun.ambient_intensity,
+            }),
+            Err(error) => serde_json::json!({"unsupported": error}),
+        };
+        let lights = model.lights().iter().map(|light| serde_json::json!({
+            "name": light.name, "kind": format!("{:?}", light.kind),
+            "parent": light.parent_id, "intensity": light.intensity,
+            "ambient_intensity": light.ambient_intensity,
+            "node_tracks": light.node_tracks.iter().map(|track| String::from_utf8_lossy(&track.magic).into_owned()).collect::<Vec<_>>(),
+            "tracks": light.tracks.iter().map(|track| String::from_utf8_lossy(&track.magic).into_owned()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>();
+        serde_json::json!({
+            "role": role, "script_path": model.script_path(),
+            "source": model.source_label(), "edition": model.origin().edition,
+            "version": model.origin().version,
+            "sha256": model.sha256().iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            "lights": lights, "sample": sample,
+        })
+    }).collect::<Vec<_>>();
+    let mesh = pcx_tera::TerrainMesh::build(&context.terrain);
+    assert_eq!(mesh.normals.len(), mesh.positions.len());
+    assert!(mesh.normals.iter().flatten().all(|value| value.is_finite()));
+    for cy in 0..=context.terrain.height() {
+        for cx in 0..=context.terrain.width() {
+            assert_eq!(
+                pcx_tera::corner_normal(&context.terrain, cx, cy),
+                Some(mesh.normals[(cy * (context.terrain.width() + 1) + cx) as usize]),
+                "source terrain normal at {cx},{cy}"
+            );
+        }
+    }
+    let receipt = serde_json::json!({
+        "scope": "Supplied MDX records and recreation host sampling; not native rendering or tick identity proof",
+        "map": context.sources.map.source, "edition": context.sources.map.edition,
+        "version": context.sources.map.version, "day_fraction": fraction,
+        "models": models, "terrain_corners": mesh.positions.len(),
+        "nonflat_normals": mesh.normals.iter().filter(|normal| normal[0] != 0. || normal[1] != 0.).count(),
+        "corner_normal_matches_mesh": true,
+    });
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(
+        output.join("terrain-light-source.json"),
+        serde_json::to_vec_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+}
+
 /// Controlled original-capture comparison harness for sky illumination,
 /// terrain/tree sight occlusion and doodad-particle ownership.
 ///
@@ -258,6 +472,8 @@ mod sky_sight_parity {
         let ground_state = serde_json::json!({
             "last_error": ground.last_error.as_ref().map(|error| format!("{error:?}")),
             "shadow_error": ground.shadow_error,
+            "lighting_error": app.world().resource::<crate::campaign_ground_lighting::TerrainLighting>().last_error,
+            "lighting_submitted": app.world().resource::<crate::campaign_ground_lighting::TerrainLighting>().last.is_some(),
         });
         let actors = app.world().resource::<crate::campaign_actors::UnitActors>();
         let actor_error = actors.last_error.clone();
@@ -1035,28 +1251,95 @@ fn frame_button(app: &mut App, frame: &str) -> Entity {
         .0
 }
 
+fn capture_clocks(app: &mut App) -> serde_json::Value {
+    let game_time = app
+        .world_mut()
+        .get_resource_mut::<MapScriptSession<MapStartupHost>>()
+        .and_then(|mut session| {
+            session
+                .host()
+                .and_then(|host| host.objects().timer_game_time())
+        });
+    serde_json::json!({
+        "real": app.world().resource::<Time<Real>>().elapsed(),
+        "virtual": app.world().resource::<Time<Virtual>>().elapsed(),
+        "fixed": app.world().resource::<Time<Fixed>>().elapsed(),
+        "game_seconds": game_time,
+    })
+}
+
+fn with_frozen_capture_clocks<T>(app: &mut App, operation: impl FnOnce(&mut App) -> T) -> T {
+    let before = capture_clocks(app);
+    let strategy = std::mem::replace(
+        &mut *app
+            .world_mut()
+            .resource_mut::<bevy::time::TimeUpdateStrategy>(),
+        bevy::time::TimeUpdateStrategy::ManualDuration(Duration::ZERO),
+    );
+    let result = operation(app);
+    let after = capture_clocks(app);
+    *app.world_mut()
+        .resource_mut::<bevy::time::TimeUpdateStrategy>() = strategy;
+    assert_eq!(before, after, "screenshot acquisition advanced a clock");
+    result
+}
+
+#[test]
+fn capture_clock_hold_preserves_all_clocks_and_restores_the_update_strategy() {
+    let mut app = App::new();
+    let delta = Duration::from_secs_f64(STEP_SECONDS);
+    app.add_plugins(bevy::time::TimePlugin)
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(delta));
+    app.update();
+    app.update();
+    let before = capture_clocks(&mut app);
+    with_frozen_capture_clocks(&mut app, |app| {
+        for _ in 0..20 {
+            app.update();
+        }
+    });
+    assert_eq!(capture_clocks(&mut app), before);
+    assert!(matches!(
+        app.world().resource::<bevy::time::TimeUpdateStrategy>(),
+        bevy::time::TimeUpdateStrategy::ManualDuration(value) if *value == delta
+    ));
+    app.update();
+    assert_ne!(capture_clocks(&mut app), before);
+}
+
 fn capture(app: &mut App, output: &Path) -> Image {
     assert!(!output.exists(), "capture must be new");
-    for _ in 0..12 {
-        step(app);
-    }
-    let target = app.world().resource::<Target>().0.clone();
-    app.world_mut().resource_mut::<Capture>().0 = None;
-    app.world_mut().spawn(Screenshot::image(target)).observe(
-        |event: On<ScreenshotCaptured>, mut capture: ResMut<Capture>| {
-            capture.0 = Some(event.image.clone());
-        },
-    );
-    until(app, "GPU screenshot", |w| {
-        w.resource::<Capture>().0.is_some()
+    let clocks = capture_clocks(app);
+    let image = with_frozen_capture_clocks(app, |app| {
+        for _ in 0..12 {
+            step(app);
+        }
+        let target = app.world().resource::<Target>().0.clone();
+        app.world_mut().resource_mut::<Capture>().0 = None;
+        app.world_mut().spawn(Screenshot::image(target)).observe(
+            |event: On<ScreenshotCaptured>, mut capture: ResMut<Capture>| {
+                capture.0 = Some(event.image.clone());
+            },
+        );
+        until(app, "GPU screenshot", |w| {
+            w.resource::<Capture>().0.is_some()
+        });
+        app.world_mut().resource_mut::<Capture>().0.take().unwrap()
     });
-    let image = app.world_mut().resource_mut::<Capture>().0.take().unwrap();
     image
         .clone()
         .try_into_dynamic()
         .unwrap()
         .save(output)
         .unwrap();
+    std::fs::write(
+        output.with_extension("clock.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "before": clocks,
+            "after": capture_clocks(app),
+            "scope": "Real, virtual, fixed and map clocks held during GPU acquisition. Original-client tick identity is not established by this receipt.",
+        })).unwrap(),
+    ).unwrap();
     image
 }
 
@@ -1530,6 +1813,68 @@ fn mounted_campaign_render_cpu_workload() {
     check_mounted_campaign(false, false, true);
 }
 
+// Keep layout evidence at the exact screenshot checkpoint, before later HUD interactions.
+fn retain_text_layouts(app: &mut App, output: &Path) {
+    use bevy::text::TextLayoutInfo;
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &Text, &TextFont, &TextLayoutInfo, Option<&Children>)>();
+    let records = query
+        .iter(world)
+        .map(|(entity, text, font, layout, children)| {
+            let spans = children
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .filter_map(|child| world.get::<TextSpan>(child).map(|span| span.0.clone()))
+                .collect::<Vec<_>>();
+            let glyphs = layout
+                .glyphs
+                .iter()
+                .map(|glyph| {
+                    serde_json::json!({
+                        "position": glyph.position.to_array(),
+                        "atlas_min": glyph.atlas_info.rect.min.to_array(),
+                        "atlas_max": glyph.atlas_info.rect.max.to_array(),
+                        "atlas_offset": glyph.atlas_info.offset.to_array(),
+                        "alpha_mask": glyph.atlas_info.is_alpha_mask,
+                        "section": glyph.section_index, "line": glyph.line_index,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut ancestry = Vec::new();
+            let mut current = Some(entity);
+            while let Some(node_entity) = current {
+                assert!(
+                    ancestry.len() < 256,
+                    "text ancestry exceeded diagnostic bound"
+                );
+                ancestry.push(serde_json::json!({
+                    "entity": format!("{node_entity:?}"),
+                    "center": world.get::<UiGlobalTransform>(node_entity)
+                        .map(|transform| transform.translation.to_array()),
+                    "size": world.get::<ComputedNode>(node_entity)
+                        .map(|node| node.size().to_array()),
+                    "unrounded_size": world.get::<ComputedNode>(node_entity)
+                        .map(|node| node.unrounded_size().to_array()),
+                }));
+                current = world.get::<ChildOf>(node_entity).map(ChildOf::parent);
+            }
+            serde_json::json!({
+                "entity": format!("{entity:?}"), "text": text.0, "spans": spans,
+                "font_size": format!("{:?}", font.font_size),
+                "scale_factor": layout.scale_factor, "size": layout.size.to_array(),
+                "glyphs": glyphs,
+                "source_text_frame": world.get::<crate::hud_render::SourceTextBox>(entity).map(|frame| format!("{frame:?}")),
+                "ancestry": ancestry,
+            })
+        })
+        .collect::<Vec<_>>();
+    std::fs::write(output.join("selected-text-layouts.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "scope": "Bevy text layout at selected-unit capture; local diagnostic, not native placement proof",
+            "records": records,
+        })).unwrap()).unwrap();
+}
+
 fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool) {
     let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
     let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
@@ -1765,6 +2110,74 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         unit
     };
     let selected_image = capture(&mut app, &output.join("selected-unit.png"));
+    let minimap = app
+        .world()
+        .resource::<crate::campaign_minimap::CampaignMinimap>()
+        .diagnostic_image()
+        .unwrap();
+    let quads = app
+        .world_mut()
+        .query::<(
+            &ImageNode,
+            &crate::hud_render::SourceImageRect,
+            Option<&Children>,
+        )>()
+        .iter(app.world())
+        .filter(|(image, _, _)| image.image == minimap)
+        .inspect(|(_, _, children)| {
+            assert!(
+                children.is_none(),
+                "fractional minimap image must remain a leaf"
+            );
+        })
+        .count();
+    assert_eq!(
+        quads, 1,
+        "production minimap must use the source image quad"
+    );
+    let mut raster_roots = 0;
+    let mut plain_raster_roots = 0;
+    for (_, font, children) in app
+        .world_mut()
+        .query::<(&crate::hud_render::SourceFont, &TextFont, Option<&Children>)>()
+        .iter(app.world())
+    {
+        assert!(
+            matches!(font.font_size, bevy::text::FontSize::Px(_)),
+            "source font must reach pixel size before capture"
+        );
+        plain_raster_roots += usize::from(children.is_none());
+        for child in children.into_iter().flat_map(Children::iter) {
+            if let Some(span) = app.world().get::<TextFont>(child) {
+                assert_eq!(
+                    span.font_size, font.font_size,
+                    "rich span raster height differs from its root"
+                );
+            }
+        }
+        raster_roots += 1;
+    }
+    assert!(raster_roots > 0, "source font roots are absent");
+    assert!(plain_raster_roots > 0, "plain source font roots are absent");
+    retain_text_layouts(&mut app, &output);
+    if hud_only {
+        let repeat = capture(&mut app, &output.join("selected-unit-repeat.png"));
+        assert_eq!(
+            selected_image.data, repeat.data,
+            "same-tick gameplay captures differ"
+        );
+    }
+    assert!(
+        selected_image
+            .data
+            .as_ref()
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[..3] != [0, 0, 0]),
+        "selected-unit capture must contain rendered world/HUD pixels"
+    );
     // Controlled portrait parity probe at the unchanged checkpoint: the
     // selection above is the live canonical unit the probe snapshots.
     portrait_parity::retain_control(&mut app, &output, &install, &map, expansion);
@@ -1886,6 +2299,19 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         return;
     }
     if hud_only {
+        until(&mut app, "authored quest publication", |world| {
+            world
+                .resource_mut::<MapScriptSession<MapStartupHost>>()
+                .host()
+                .and_then(|host| host.objects().quest_session())
+                .is_some_and(|quests| {
+                    pcx_play::quest_view::project(quests)
+                        .unwrap()
+                        .quests
+                        .iter()
+                        .any(|quest| quest.enabled && quest.discovered && !quest.items.is_empty())
+                })
+        });
         let button = app
             .world_mut()
             .query::<(Entity, &Name)>()
@@ -2059,7 +2485,7 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
             .query::<(&crate::campaign_command_card::ButtonOrder, &Children)>()
             .iter(app.world())
             .filter(|(_, children)| {
-                children.first().is_some_and(|&child| {
+                children.iter().any(|child| {
                     app.world()
                         .get::<MaterialNode<crate::glue_menu::AdditiveImage>>(child)
                         .is_some()
@@ -2074,6 +2500,20 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
             )]
         );
     }
+    assert!(
+        app.world()
+            .resource::<crate::campaign_ground_lighting::TerrainLighting>()
+            .last_error
+            .is_none(),
+        "terrain source lighting must be bound at the mounted capture"
+    );
+    assert!(
+        app.world()
+            .resource::<crate::campaign_ground_lighting::TerrainLighting>()
+            .last
+            .is_some(),
+        "terrain source light submission must occur"
+    );
     let skill_menu = app
         .world_mut()
         .query::<(Entity, &crate::campaign_command_card::ButtonOrder)>()

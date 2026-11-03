@@ -99,6 +99,7 @@ fn world_scales_but_display_ui_coordinates_and_lifecycle_do_not() {
         .world_mut()
         .spawn((
             Camera2d,
+            crate::menu_composition::MenuColourCamera,
             Camera {
                 order: 1,
                 clear_color: ClearColorConfig::None,
@@ -277,6 +278,7 @@ fn every_subpixel_contributes_to_the_downsample() {
             .world_mut()
             .spawn((
                 Camera2d,
+                crate::menu_composition::MenuColourCamera,
                 RenderTarget::Image(output.clone().into()),
                 RenderLayers::none(),
             ))

@@ -465,11 +465,8 @@ fn load(
                 far: DEPTH_RANGE,
                 ..OrthographicProjection::default_3d()
             }),
-            Camera {
-                order: CAMERA_ORDER,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
+            overlay_camera(),
+            crate::menu_composition::MenuColourCamera,
             Tonemapping::None,
             DebandDither::Disabled,
             RenderLayers::layer(CURSOR_LAYER),
@@ -483,6 +480,24 @@ fn load(
         sequences,
         handles,
     });
+}
+
+// A separate transparent buffer keeps the cursor pass from replacing the HUD's MSAA image.
+fn overlay_camera() -> (Camera, Msaa) {
+    (
+        Camera {
+            order: CAMERA_ORDER,
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            output_mode: bevy::camera::CameraOutputMode::Write {
+                blend_state: Some(
+                    bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                ),
+                clear_color: ClearColorConfig::None,
+            },
+            ..default()
+        },
+        Msaa::Off,
+    )
 }
 
 /// An entity the interface draws: a transparent container does not count.
@@ -642,7 +657,8 @@ fn apply(
         let Some(material) = materials.get(handle) else {
             continue;
         };
-        let tint = Color::srgb_u8(r, g, b).with_alpha(material.base.base_color.alpha());
+        let tint = crate::menu_composition::colour_u8(r, g, b, u8::MAX)
+            .with_alpha(material.base.base_color.alpha());
         if material.base.base_color != tint
             && let Some(mut material) = materials.get_mut(handle)
         {

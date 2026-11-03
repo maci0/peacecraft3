@@ -212,7 +212,7 @@ fn paint(commands: &mut Commands, loaded: &Loaded, text: &str, opacity: f32) -> 
 /// same alpha as the text.
 fn tinted(colour: [u8; 4], opacity: f32) -> Color {
     let [r, g, b, a] = colour;
-    Color::srgba_u8(r, g, b, (f32::from(a) * opacity).round() as u8)
+    crate::menu_composition::colour_u8(r, g, b, (f32::from(a) * opacity).round() as u8)
 }
 
 fn show(

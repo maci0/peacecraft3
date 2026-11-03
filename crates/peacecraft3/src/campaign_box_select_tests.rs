@@ -406,7 +406,10 @@ fn the_rectangle_follows_the_cursor_in_relative_layout_and_vanishes_on_release()
             assert!((percent - expected).abs() < 0.01, "{size:?} {percent}");
         }
         // The colour is the profile's ColorFriend (ARGB), not a constant of the module.
-        assert_eq!(*border, BorderColor::all(Color::srgba_u8(0, 255, 0, 255)));
+        assert_eq!(
+            *border,
+            BorderColor::all(crate::menu_composition::colour_u8(0, 255, 0, 255))
+        );
         // Dragging back through the press point flips the rectangle, never inverts it.
         rig.drag([from[0] - 20.0, from[1] - 20.0]);
         let (node, _) = &rig.outlines()[0];

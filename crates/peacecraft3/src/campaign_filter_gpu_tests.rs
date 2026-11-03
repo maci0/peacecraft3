@@ -86,7 +86,8 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
         let scene = app
             .world_mut()
             .spawn((
-                Camera3d::default(),
+                Camera2d,
+                bevy::camera::CompositingSpace::Srgb,
                 Camera {
                     clear_color: ClearColorConfig::Custom(Color::srgb(0.2, 0.4, 0.6)),
                     ..default()
@@ -102,6 +103,7 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
             .world_mut()
             .spawn((
                 Camera2d,
+                bevy::camera::CompositingSpace::Srgb,
                 Camera {
                     order: 1,
                     clear_color: ClearColorConfig::None,
@@ -152,7 +154,7 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
             (width - 2, height - 2),
         ] {
             let at = y as usize * stride + x as usize * 4;
-            let alpha = (128. / 255.) * 0.5;
+            let alpha: f32 = (128. / 255.) * 0.5;
             for (channel, (foreground, background)) in [
                 (128. / 255. * 0.5, 0.2),
                 (64. / 255., 0.4),
@@ -161,18 +163,8 @@ fn synthetic_filter_alpha_reaches_the_gpu_and_scales_with_the_view() {
             .into_iter()
             .enumerate()
             {
-                let foreground = Color::srgba(foreground, foreground, foreground, 1.)
-                    .to_linear()
-                    .red;
-                let background = Color::srgba(background, background, background, 1.)
-                    .to_linear()
-                    .red;
-                let blended = foreground * alpha + background * (1. - alpha);
-                let encoded = bevy::color::Srgba::from(bevy::color::LinearRgba::new(
-                    blended, blended, blended, 1.,
-                ))
-                .red;
-                let expected = (encoded * 255.0).round() as u8;
+                let expected =
+                    ((foreground * alpha + background * (1. - alpha)) * 255.).round() as u8;
                 assert!(
                     data[at + channel].abs_diff(expected) <= 2,
                     "{width}x{height}: channel {channel}: {} vs {expected}",
@@ -199,6 +191,7 @@ fn interface_hides_explicitly_visible_children_and_restores_the_source_layout() 
             .world_mut()
             .spawn((
                 Camera2d,
+                bevy::camera::CompositingSpace::Srgb,
                 Camera {
                     clear_color: ClearColorConfig::Custom(Color::BLACK),
                     ..default()

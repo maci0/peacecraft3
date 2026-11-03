@@ -147,8 +147,8 @@ pub use water::{
     WaterProfile, WaterProvenance, WaterSelection,
 };
 pub use world::{
-    TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX, corner_world, corner_world_scaled, height_index,
-    world_z,
+    TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX, corner_normal, corner_world, corner_world_scaled,
+    height_index, world_z,
 };
 
 /// Errors this crate can return.

@@ -218,14 +218,19 @@ fn root_node(display: Display) -> Node {
 fn load_image(
     reader: &pcx_assets::Resolver,
     path: &str,
+    filters: Option<[u32; 3]>,
     images: &mut Assets<Image>,
     receipts: &mut Vec<AssetReceipt>,
 ) -> Result<Handle<Image>, String> {
     let bytes = read(reader, path, IMAGE_BYTES, receipts)?;
     let texture = pcx_gfx::load_image_bounded(&bytes, path, DECODED_BYTES)
         .map_err(|error| format!("{path}: {error}"))?;
-    let mut decoded = pcx_gfx::viewer::rgba_image(&texture);
-    decoded.sampler = bevy::image::ImageSampler::Descriptor(image_sampler(false));
+    let mut decoded = crate::menu_composition::image(&texture);
+    let sampler = match filters {
+        Some(filters) => crate::campaign_hud::upper_buttons::source_image_sampler(false, filters)?,
+        None => image_sampler(false),
+    };
+    decoded.sampler = bevy::image::ImageSampler::Descriptor(sampler);
     Ok(images.add(decoded))
 }
 
@@ -261,16 +266,21 @@ fn load(
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let globals = text(reader, GLOBALS, &mut receipts)?;
     let console = skin_file(&skin, &sections, &command.console_key)?;
-    let mut load_key = |key: &str| -> Result<Handle<Image>, String> {
+    let mut load_key = |key: &str, filters| -> Result<Handle<Image>, String> {
         let path = skin_file(&skin, &sections, key)?;
-        load_image(reader, &path, images, &mut receipts)
+        load_image(reader, &path, filters, images, &mut receipts)
     };
     let mut art = Vec::new();
     for button in &rules.buttons {
         let states = button
             .art
             .iter()
-            .map(|state| Ok([load_key(&state.enabled)?, load_key(&state.pushed)?]))
+            .map(|state| {
+                Ok([
+                    load_key(&state.enabled, Some(rules.texture_filters))?,
+                    load_key(&state.pushed, Some(rules.texture_filters))?,
+                ])
+            })
             .collect::<Result<Vec<_>, String>>()?;
         art.push(ButtonArt {
             states,
@@ -278,8 +288,8 @@ fn load(
             rect: button.rect,
         });
     }
-    let idle_icon = load_key(&rules.idle.art_key)?;
-    let badge_art = load_key(&command.badge.art_key)?;
+    let idle_icon = load_key(&rules.idle.art_key, None)?;
+    let badge_art = load_key(&command.badge.art_key, None)?;
     let idle_tip = tip(&globals, &rules.idle.tip_key, &rules.idle.desc_key);
     let font_path = skin_file(&skin, &sections, &command.badge.font_key)?;
     let font_bytes = read(reader, &font_path, FONT_BYTES, &mut receipts)?;
@@ -494,6 +504,19 @@ fn mount(
         let initial = source.rules.buttons[index].initial;
         let mut button = commands.spawn((
             viewport_node(art.rect, viewport),
+            crate::hud_render::SourceImageRect {
+                rect: bevy::math::Rect::from_corners(
+                    Vec2::new(
+                        art.rect.x / viewport[0],
+                        (viewport[1] - art.rect.y - art.rect.height) / viewport[1],
+                    ),
+                    Vec2::new(
+                        (art.rect.x + art.rect.width) / viewport[0],
+                        (viewport[1] - art.rect.y) / viewport[1],
+                    ),
+                ),
+                root: Some(root),
+            },
             ImageNode::new(art.states[usize::from(initial)][0].clone())
                 .with_mode(bevy::ui::widget::NodeImageMode::Stretch),
             Button,
@@ -594,7 +617,7 @@ fn spawn_count(commands: &mut Commands, button: Entity, source: &Source) -> Enti
                 ),
                 ..default()
             },
-            TextColor(Color::srgba_u8(r, g, b, a)),
+            TextColor(crate::menu_composition::colour_u8(r, g, b, a)),
             TextLayout::new(bevy::text::Justify::Center, bevy::text::LineBreak::NoWrap),
             bevy::text::LineHeight::RelativeToFont(1.0),
             Pickable::IGNORE,
@@ -719,6 +742,7 @@ mod tests {
             },
             image_sha256: [0; 32],
             viewport: [0.8, 0.6],
+            texture_filters: [1, 2, 0],
             buttons: vec![
                 button(Control::Signal, 1, 0),
                 button(Control::Terrain, 2, 1),
@@ -773,6 +797,7 @@ mod tests {
             .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>()
             .init_resource::<crate::campaign_minimap::CampaignMinimap>()
             .init_resource::<crate::campaign_messages::MessageHistory>()
+            .init_resource::<crate::campaign_audio::CampaignAudio>()
             .init_resource::<ButtonInput<KeyCode>>();
         crate::campaign_hud::install(&mut app);
         crate::hud_render::install(&mut app);
@@ -789,6 +814,23 @@ mod tests {
             assert_eq!(app.world().get::<ChildOf>(root).unwrap().parent(), parent);
             assert_eq!(state.buttons.len(), 5);
             for (entity, art) in state.buttons.iter().zip(&source.art) {
+                let placement = app
+                    .world()
+                    .get::<crate::hud_render::SourceImageRect>(*entity)
+                    .expect("source image placement");
+                assert_eq!(placement.root, Some(root));
+                let extent = Vec2::from_array(source.rules.viewport);
+                let bounds = placement.rect;
+                assert!(
+                    (bounds.min * extent
+                        - Vec2::new(art.rect.x, extent.y - art.rect.y - art.rect.height,))
+                    .length()
+                        < f32::EPSILON
+                );
+                assert!(
+                    (bounds.size() * extent - Vec2::new(art.rect.width, art.rect.height)).length()
+                        < f32::EPSILON
+                );
                 let tooltip = app
                     .world()
                     .get::<crate::campaign_inventory::ControlTooltip>(*entity)

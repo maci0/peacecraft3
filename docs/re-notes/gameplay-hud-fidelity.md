@@ -613,3 +613,403 @@ suite, strict native/WASM checks and both production builds. Eighty core tests
 remain explicitly ignored. The UI task is still open: hero
 experience-bar pixel matching, time-of-day and minimap controls, buff-effect icons, other command visual
 states and a matched original-client pixel comparison remain incomplete.
+
+## Numeric HUD inputs and exact capture checkpoints (2026-11-03)
+
+The gameplay API trace above supplies the evidence for this correction: the
+reviewed interval has no sRGB sampling/write setter or pixel-shader binding.
+The numeric-channel interpretation remains an inference from that trace and
+D3D9 defaults, not new native Windows hardware evidence.
+
+The remaining gameplay HUD now uses that working-channel path consistently.
+Console art, command/inventory/training images, resource icons, minimap images,
+backdrops and highlights upload source RGB numerically. Text, shadows, tooltips,
+source tints and selection-box colours retain their supplied numbers through
+blending. The cinematic filter no longer decodes its source RGB before blending.
+The display-sized HUD camera and its clear pass use the same numeric buffer.
+No authored colour, opacity, sampler, font size or anchor operand was tuned.
+
+Rendered world, portrait and clock textures need a different transfer from
+source images. Their sRGB attachments already contain display-encoded output;
+sampling them yields linear RGB. The existing downsample material is now shared
+as `RenderedImage`: it converts the sampled RGB back to working channels before
+HUD blending and preserves alpha. At higher internal scales it retains the
+existing complete N×N linear average before that conversion. Portrait and clock
+resizes refresh the material binding to the replacement GPU texture. Their
+materials retire with the owned scene, verified by the selected Human01 portrait
+lifecycle test. The cursor's own model/tint inputs also use numeric channels;
+its final overlay edge/antialiasing parity remains unqualified.
+
+Two rejected integration states are retained locally: an incomplete transfer
+made the world/portraits too dark, and a stale resized clock-texture binding left
+the indicator blank. Both were caught by visual inspection and corrected before
+refreshing the README. Neither image is accepted as fidelity evidence.
+
+The screenshot helper previously advanced twelve updates before requesting GPU
+readback and more updates until delivery. It now holds real, virtual, fixed and
+map clocks throughout acquisition, restores the prior update strategy, asserts
+clock equality, and writes a `.clock.json` sidecar for each image. A synthetic
+TimePlugin regression verifies the hold and resumed advancement. The mounted
+HUD test captures the selected gameplay frame twice at the same held checkpoint
+and requires byte-identical RGBA output. It waits for actual authored quest
+publication before testing the populated dialog; screenshot warm-up no longer
+serves as an implicit timer advance.
+
+The two 1280×960 gameplay captures match in all 1,228,800 pixels, with thirteen
+unchanged clock receipts across the run. This establishes acquisition stability
+inside the recreation. Tick-identical cross-client playback must also align the
+initial state, inputs, animation state and generator history. The retained
+original Wine screenshot has no observed simulation tick, so it is not a
+cross-client lockstep acceptance run. The earlier images must not be described
+as tick-identical. The native scheduler evidence and remaining consumers are
+recorded in `legacy-simulation-clock.md`; the fixture's 1/64-second update is an
+experiment condition, not proof of the native tick interval.
+
+Every RGB pixel is still compared against that original reference, without
+registration, tolerance, normalization or exclusions. The current diagnostic
+finds 1,099,015 differing pixels. In the upkeep green-glyph diagnostic mask,
+coverage falls from 507 to 371 pixels; the original has 366. The visible glyph
+bounds remain one pixel high and one pixel wider. Font metrics, world/minimap
+rendering, source/runtime phase matching and complete pixel parity remain open.
+Local full-screen side-by-side/overlay/diff/grid, source hashes, clock receipts,
+repeated-frame hashes and before/after measurements are in
+`.scratch/pixel-fidelity-working-20261103/` and
+`.scratch/pixel-hud-working-final-2/`. Original content stays local.
+
+Validation: the application suite passes 1,438 tests with 117 explicit ignores;
+source-channel, filter, texture, repeated-HUD, tooltip, supersampling, downsample,
+cursor and message GPU checks pass. The message check derives its bounds from
+its supplied placement rather than an unrelated input coordinate. The selected
+Human01 portrait preflight/retirement test passes after its shared startup
+fixture initializes the loading rules resource required by the current startup
+systems. Strict native/WASM Clippy, both builds and formatting pass. Parser,
+synthetic and preflight checks do not establish cross-client pixel equality.
+
+### Native portrait motion while timer queues hold (2026-11-03)
+
+A read-only Wine runtime experiment now distinguishes animation presentation
+from the simulation tick. With the native game menu open, 200 samples retained
+identical game and real timer-queue float bits, yet two screenshots taken during
+the sampling interval differ at 12,650 pixels across the full 1280×960 frame.
+The difference mask shows portrait and minimap-ping motion; all other pixels
+match. No crop, registration, tolerance or exclusions were used. See
+[live queue and portrait evidence](legacy-simulation-clock.md#live-queue-and-portrait-observation-2026-11-03)
+for addresses, source identity, isolation, trace hashes and sampling limits.
+
+This does not establish the portrait's native clock producer or RNG policy.
+It establishes that equal game/real timer-queue values alone are insufficient
+for a full-frame animation checkpoint. Preserve independent portrait timing
+until its presentation path is qualified; do not force it onto the game clock
+to suppress differences. The recreation's frozen screenshot acquisition remains
+a self-repeatability gate, not original-client phase identity.
+
+### Upper-button mip experiment rejected (2026-11-03)
+
+The current accepted full-frame result is the source-derived resource-text
+placement capture in `.scratch/pixel-font-placement-20261103/`: 1,097,868
+unregistered differing RGB pixels, MAE 14.71206787109375. Upkeep's 528 glyph ink
+pixels match at actual coordinates; the surrounding box retains one brown
+border pixel difference. This supersedes the older font diagnostic counts above.
+
+A regional diagnostic of that same complete frame finds the upper controls have
+MAE 23.5605303 over [0,0,550,40], while the world region [0,75,1280,700] has
+798,937 differing pixels of 800,000 and MAE 15.7764617. These selected regions
+are investigation aids; no pixels are excluded from the full-frame gate.
+
+The supplied upper-button BLP contains nine authored mip levels, while this
+HUD loader currently retains only the base. The existing mip-preserving helper
+was tried for that atlas alone, without changing UVs, geometry or the sampler.
+The isolated headless/muted capture passes and changes only the upper-button
+area: 8,976 RGBA pixels within [6,3,544,28]. Both helper tests and sixteen upper
+control tests pass; strict native/WASM Clippy and application builds pass for
+the experiment. All thirteen clock receipts hold and selected repeats match.
+
+However, the experiment increases the full-frame differing count by 417 to
+1,098,285, while reducing MAE to 14.703801540798612. In the upper-control region,
+MAE falls to 23.0988182 but differing pixels increase from 19,670 to 20,087.
+That mixed result does not qualify native UI mip selection. The production
+change was reverted, and source/screenshot hashes were checked against the
+last accepted README manifest. No README images were replaced by this experiment.
+Its source snapshot, source-asset hash, captures, diff, overlay, comparison and
+provenance remain local in `.scratch/pixel-upper-mips-20261103/`.
+
+A separate registration diagnostic on the first button shows that translating
+its recreation pixels down by one lowers MAE from 32.1794872 to 19.2268630 for
+the base-only image, and from 31.4671474 to 18.6332131 with mips. That identifies
+a broader coordinate-conversion frontier, not a production offset. The resource
+font's qualified backend correction must not be copied to generic UI images
+without tracing their own emitted coordinates. The RoC and TFT archive copies
+of UpperButtonBar.fdf were also compared and are byte-identical. Native generic
+UI image coordinates and sampler selection are the next evidence needed.
+
+### Console image coordinates preserved (2026-11-03)
+
+The HUD asset plan now retains each texture/backdrop image's placement in the
+source viewport, in addition to its parent-relative layout. Both placements are
+derived from the same FDF rectangle. The renderer shares the qualified D3D9
+pixel-center conversion with the upper-button images. Image vertices therefore
+preserve fractional authored edges instead of inheriting rounded frame edges.
+Caller-supplied HUD roots retain their own size and transform; zero-sized hidden
+layouts remain hidden. Other widget/material paths have not been opted in.
+No authored dimensions, colors, UVs, texels or sampler settings were fitted.
+
+All thirteen ConsoleUI texture records match the retained native CSimpleTexture
+quad/UV snapshots. Their sampler records select linear minification/magnification
+with mip filtering disabled, consistent with the existing base-only uploads.
+The source FDF/native trace hashes and matches are retained locally in
+`.scratch/console-quads-20261103/native-matches.json`. The float-coordinate
+comparison uses a 1e-6 frame-unit diagnostic tolerance; it is not a rendered
+pixel acceptance gate and does not exclude pixels from the full-screen check.
+
+The headless/muted mounted capture in `.scratch/pixel-console-quads-20261103/`
+passes. Every RGB pixel of the unregistered 1280×960 frame is compared without
+resizing, tolerance or exclusions: differing pixels fall by 73,607, from
+1,091,515 to 1,017,908. Mean absolute channel error falls from
+14.553592664930555 to 13.41690456814236. The fixed upkeep box [1160,5,1270,29]
+now matches in all 2,640 pixels, including its previously differing brown border
+pixel. That scoped equality does not establish complete HUD or frame parity.
+
+The affected HUD planning/mount checks pass (25 tests, five explicit ignores),
+as do six final asset-planning tests, sixteen upper-control tests and all 48
+synthetic GPU texture checks. Synthetic coverage includes viewport versus owner
+placement, fractional edges, translated roots and two viewport scales. Strict
+native/WASM Clippy and both application builds pass. Selected-frame repeats
+match byte for byte and all thirteen acquisition clock receipts hold. Five
+README screenshots were visually reviewed and refreshed with current provenance.
+World rendering, remaining widget/font/blending differences and original-client
+animation/RNG synchronization remain open; browser rendering was not tested.
+
+### Minimap filter-image coordinates preserved (2026-11-03)
+
+The five minimap filter images now use the shared source-image renderer instead
+of rounding their bounds through parent UI layout. Their normalized rectangles
+are derived from `minimap_buttons_layout::Rules`, preserving the constructor's
+Y-up relationships and the supplied console root. No screenshot-fitted offset,
+art/state selection or sampler change is included. Idle-worker and badge images
+are outside this change.
+
+The admitted Legacy 1.29.2.9231 executable (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+provides each rectangle's size and anchor operands. Each of the five decoded
+rectangles matches three retained native CSimpleTexture records in the earlier
+isolated native trace. The local receipt is
+`.scratch/minimap-quads-20261103/native-matches.json`; its float-coordinate
+comparison tolerance is diagnostic, not a rendered-pixel tolerance. No native
+client was launched for this follow-up. The older HUD-panel notes' `0.1537`
+X-coordinate transcription is superseded by these checked operands; production
+already reads the operand rather than that transcription.
+
+The isolated headless/muted mounted capture passes in
+`.scratch/pixel-minimap-quads-20261103/`. An exact unregistered full-screen RGB
+comparison finds 1,017,836 differing pixels of 1,228,800, down by 72; channel MAE
+falls from 13.41690456814236 to 13.388307834201388. The production change affects
+1,777 RGBA pixels, all inside [247,735,284,905]. This region is a diagnostic;
+no pixels are excluded from the full-screen comparison. The complete upkeep box
+still matches in all 2,640 pixels. Repeated recreation frames are byte-identical,
+and all thirteen acquisition clock receipts retain identical before/after clocks.
+
+The selected-chapter minimap mounting/press test passes with source-placement
+assertions. Its minimal fixture now initializes the existing portrait audio-state
+resource; the initial run failed because that resource was absent. This does not
+install audio playback. Strict native/WASM Clippy and both application builds
+pass. All five README screenshots were reviewed and refreshed with provenance.
+
+Review exposes an additional sampler gap: `image_sampler` inherits Bevy's
+nearest minification/magnification defaults, while the retained native texture
+flags select linear filtering through the previously qualified source table.
+That gap and differing button states remain open, along with world/text and
+native tick/animation/RNG synchronization. Browser rendering was not tested.
+
+### Minimap filter-image sampling derived (2026-11-03)
+
+The five minimap filter controls now derive their image sampler from admitted
+Legacy 1.29.2.9231 executable operands, rather than inheriting Bevy's nearest
+filters. `CSimpleTexture`'s file loader shifts its tiling argument at `0x887cfa`,
+preserves flag bits with the operand at `0x887cfd`, and forces bits at `0x887d02`.
+The backend masks the flags at `0x7def4a`, multiplies the selector by three at
+`0x7def4d`, then indexes the minification/magnification/mip table operands at
+`0x7def50`, `0x7def61` and `0x7def74`. The preserved/forced bits fully determine
+the low selector for this path. The parser checks that relationship, instruction
+shapes and table bounds; unsupported combinations refuse instead of falling back.
+
+For the admitted executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`,
+the selector resolves to 1 and the D3DTEXF tuple to linear/linear/NONE. This
+agrees with the previously retained native texture records. The caller at
+`0x8750b0` uses this file loader for button state art. Static disassembly and a
+source-bound operand receipt remain local in `.scratch/ui-samplers-20261103/`;
+no new original-client runtime was launched. Production reads the operands and
+table values, not these documented results. Idle-worker/badge images, other UI
+loaders, font filtering and button state selection are unchanged.
+
+Five layout-parser checks pass, including the explicit original-asset check and
+synthetic alternate selectors/table values plus refusal cases. Both minimap
+mounting/press tests pass. Strict native/WASM Clippy for the affected crates and
+both application builds pass. The isolated headless/muted mounted GPU capture
+passes in `.scratch/pixel-minimap-samplers-20261103/`; repeated selected frames
+are byte-identical and all thirteen acquisition clock receipts hold.
+
+The exact full-screen RGB comparison excludes no pixels and performs no
+registration, resizing or tolerance: differing pixels fall by 1,254 from
+1,017,836 to 1,016,582 of 1,228,800; channel MAE falls from 13.388307834201388 to
+13.364941948784722. The source correction changes 2,788 RGB pixels, all within
+[247,735,284,906]. The fixed upkeep box still matches in all 2,640 pixels.
+A diagnostic signal-button box [247,730,285,764] retains 156 differing pixels,
+with channel errors at most two; that scoped residual is not full-button parity.
+Full diff, mask, overlay, side-by-side and visual review artifacts remain local.
+All five README screenshots were reviewed and refreshed with current provenance.
+Other widget filtering, remaining low-byte/blending errors, button states,
+world/text and original-client tick/animation/RNG synchronization remain open.
+Browser rendering was not tested.
+
+### Command image-cache sampler correction (2026-11-03)
+
+The command image cache now uses the same source-derived min/mag/mip policy as
+minimap filter controls. The existing command-layout parser already checks the
+call chain through `0x5d3e60` to `CSimpleButton`'s state-art setter `0x8750b0`,
+and the setter's file-loader arguments. That loader selects the sampler table
+qualified above. The shared operand reader now resides in `command_layout`;
+minimap rules reuse it. `Rules::icon_filters` retains the result alongside the
+already-derived addressing flag. The renderer preserves that addressing and
+rejects unsupported filter/mip modes. No sampler result is copied into product
+constants. This applies to images retained in the command cache, including hero
+bar art; unit-panel, inventory and quest-backdrop loaders remain unchanged.
+
+The main upper-button atlas was inspected first: it has no descriptor override
+and already uses the application's linear default. The explicit nearest
+`image_sampler` descriptor affects other loaders. No main upper-atlas filtering
+change was needed.
+
+Static source relationships use the same admitted Legacy executable identified
+above. Seventeen retained 64x64 texture records in the command-card coordinate
+region all have sampler selector 1. This coordinate/size classification alone
+is not semantic object identity or an atomic draw capture. Separately, deriving
+the complete grid from source operands matches all seventeen retained rectangles
+within floating-point precision (maximum frame-unit error below 2e-8). Local
+receipts are `.scratch/command-samplers-20261103/native-records.json` and
+`quad-matches.json`; the 1e-6 coordinate comparison threshold is diagnostic,
+not pixel acceptance. No native client was launched for this follow-up.
+
+Thirteen command-layout checks, five minimap-layout checks (both including their
+explicit supplied-executable gates), and seventeen upper-control/sampler checks
+pass. The shared renderer test covers distinct min/mag filters, addressing and
+unsupported mode refusal. Strict native/WASM Clippy for the affected crates and
+both application builds pass. The isolated headless/muted mounted capture passes
+in `.scratch/pixel-command-samplers-20261103/`; all thirteen acquisition clocks
+hold and selected-frame repeats are byte-identical.
+
+The full-screen result is mixed and is retained explicitly: exact differing RGB
+pixels increase by 369, from 1,016,582 to 1,016,951 of 1,228,800, while channel MAE
+falls from 13.364941948784722 to 13.342416178385417. There is no registration,
+resizing, tolerance or excluded pixel. Source evidence establishes linear
+filtering for this path; reverting to nearest solely to reduce this count would
+restore a qualified sampler mismatch. Remaining rounded command-image geometry
+is the next correction. Its source bounds now have retained native corroboration.
+The sampler change affects 30,889 RGB pixels; the complete upkeep diagnostic box
+still matches in all 2,640 pixels. Full diff, overlay, side-by-side and comparison
+receipts remain local. Five README images were reviewed and refreshed, with the
+increased exact difference count recorded in their provenance.
+
+Complete frame parity is not achieved. Other image loaders, command quad
+placement and related overlays, button states, low-byte image residuals,
+world/text and original-client tick/animation/RNG synchronization remain open.
+Browser rendering was not tested.
+
+### Command image quads preserved (2026-11-03)
+
+Command-card art and its active highlight now retain the source grid's fractional
+bounds through `hud_render::SourceImageRect`. Those grid rectangles were derived
+from the admitted executable and corroborated against seventeen retained native
+texture records in the preceding follow-up. No screenshot-fitted coordinate or
+new native-client observation is used here. The renderer applies the existing
+qualified D3D9 pixel-center conversion relative to the supplied command root.
+
+The icon is a non-picking leaf under its existing button. The active highlight
+uses the same source rectangle, while the button retains its layout/input and
+rank-label hierarchy. This avoids changing other children's transforms after UI
+layout. Rank badges/text and the button's hit geometry are not newly qualified
+by this image correction. Hero-bar geometry and other image loaders are outside
+this change.
+
+Six ordinary command/input tests, the explicit source-backed replacement/cleanup
+check and the Human01 mounting/retirement/re-entry check pass. The latter fixture
+now initializes required message/audio-state and input/box-selection resources;
+no playback plugin is installed. Its former expectation that a melee hero owns
+every standard command was replaced with checks against source-derived unit
+command availability. The full GPU capture's active-highlight check now finds
+its material among the button's children instead of assuming the first child.
+Both changes retain the semantic assertions. Initial runs exposed these stale
+fixture assumptions; the final runs pass. Strict native/WASM Clippy and both
+application builds pass.
+
+The completed headless/muted capture is
+`.scratch/pixel-command-quads-final-20261103/`. Repeated selected frames match
+byte for byte, including the initial geometry result, and all thirteen clock
+receipts hold. Every RGB pixel of the original and recreation 1280x960 frames
+is compared without registration, resizing, tolerance or exclusion: differences
+fall by 24,889, from 1,016,951 to 992,062 of 1,228,800. Channel MAE falls from
+13.342416178385417 to 12.947105577256945. The change affects 29,185 RGB pixels
+inside [989,750,1260,949]. The fixed upkeep diagnostic box still matches in all
+2,640 pixels.
+
+The command-region diagnostic [985,745,1270,960] improves from 34,318 differing
+pixels to 9,429 of 61,275, with MAE falling from 8.133654290765675 to
+0.20615259077927375. This region is an investigation aid; all pixels remain in
+the full-screen comparison. Full diff, mask, overlay, side-by-side and regional
+receipts stay local. Five README screenshots were reviewed and refreshed with
+current provenance. Remaining low-byte image errors, rank/text and hit geometry,
+other UI/world differences and original-client animation/RNG synchronization
+remain open. Browser rendering was not tested.
+
+### Unit-panel image sampling and quads (2026-11-03)
+
+The unit-panel image loader now uses the shared source-derived min/mag/mip
+policy rather than an inherited nearest descriptor. The checked layout rules
+retain this policy with their executable provenance. Combat/primary-attribute
+icons and experience-bar textures retain their FDF/constructor-derived fractional
+bounds through the existing source-image renderer; the experience fill's width
+and UV range still derive from its live fraction. The images are leaves, so
+this does not move text descendants after UI layout. Text metrics, content and
+background-color geometry are outside this image correction.
+
+Touching this loader also exposed hard-coded hero-icon skin keys. The admitted
+Legacy executable's lookup operand at `0x655ad1` references the key table; the
+call at `0x655ae7` is checked against the qualified texture file loader
+`0x887c20`. The parser now reads the existing table strings. It binds those
+existing keys by their supported `Primary` token suffixes, refusing a missing or
+ambiguous binding. This suffix binding is a recreation implementation choice,
+not a decoded native primary-enum mapping; no key or texture path is generated.
+All three derived keys equal the previous bindings for the admitted source.
+A synthetic fixture deliberately permutes table order and changes key prefixes.
+The fixed key list was deleted from the application.
+
+Source identity remains Legacy 1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Bounded static disassembly and the key-equivalence receipt remain local under
+`.scratch/panel-images-20261103/`. No original client was launched this turn.
+The sampler path reuses the previously qualified source flag/table mechanism;
+parser/geometry tests are not evidence of complete native rendering behavior.
+
+Nine layout-parser checks pass, including the supplied executable, changed
+sampler values, permuted keys and missing/ambiguous-key refusal. Eight panel
+checks pass, including synthetic viewport/Y conversion and the Human01 live
+selection/owned-image retirement fixture. That fixture now also requires source
+placement on its mounted combat images. Strict native/WASM Clippy for both
+affected crates and both application builds pass.
+
+The completed headless/muted capture is
+`.scratch/pixel-panel-images-final-20261103/`. Its selected frame is byte-identical
+to the initial corrected capture before key-list removal. Same-checkpoint repeats
+match, and all thirteen acquisition clock receipts hold. Exact unregistered
+full-screen RGB differences fall by 3,819, from 992,062 to 988,243 of 1,228,800;
+channel MAE falls from 12.947105577256945 to 12.803221571180556. No resizing,
+tolerance, registration or excluded pixels are used. The change affects 6,056
+RGB pixels within [502,801,790,924]. The complete upkeep diagnostic box still
+matches in all 2,640 pixels. Full diff, mask, overlay, side-by-side and image
+review artifacts remain local. All five README screenshots were reviewed and
+refreshed with current provenance.
+
+Other UI/image/text paths, background geometry, low-byte image residuals,
+world rendering and native tick/animation/RNG identity remain open. Browser
+rendering and live AGI/INT-primary unit variants were not exercised here; their
+key equivalence is static source evidence.

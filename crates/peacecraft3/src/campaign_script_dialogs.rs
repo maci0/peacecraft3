@@ -672,7 +672,7 @@ pub(crate) fn label(
     if !parsed.unsupported.is_empty() {
         return Err("script dialog contains unsupported substitutions".into());
     }
-    let color = |c: [f32; 4]| Color::srgba(c[0], c[1], c[2], c[3]);
+    let color = |c: [f32; 4]| Color::linear_rgba(c[0], c[1], c[2], c[3]);
     let font = TextFont {
         font: bevy::text::FontSource::Handle(font.clone()),
         font_size: bevy::text::FontSize::Vh(style.height / VIEW.1 * 100.),

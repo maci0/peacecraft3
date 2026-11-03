@@ -20,6 +20,11 @@ use std::sync::{Arc, Weak};
 #[derive(Component)]
 pub struct CampaignHud;
 
+/// The display-sized camera that composes numeric original-game HUD inputs.
+#[derive(Component)]
+#[require(bevy::camera::CompositingSpace = bevy::camera::CompositingSpace::Srgb)]
+pub struct CampaignUiCamera;
+
 /// Application composition order: gameplay suppression stays below modal controls
 /// and the existing cinematic filter. This is not a source asset operand.
 pub const CAMPAIGN_CONTROL_BARRIER_LAYER: i32 = i32::MAX - 3;
@@ -210,6 +215,7 @@ fn project(
         commands
             .spawn((
                 Camera2d,
+                CampaignUiCamera,
                 Camera {
                     order: 1,
                     clear_color: ClearColorConfig::None,

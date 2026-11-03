@@ -243,6 +243,8 @@ pub struct PlannedArt {
     pub path: String,
     /// Placement inside the owning frame.
     pub relative: RelativeBox,
+    /// Placement in the authored viewport before parent layout rounding.
+    pub viewport_relative: RelativeBox,
     /// Crop of the decoded image. The range is absolute; reflection is `flip_x` / `flip_y`.
     pub uv: UvRect,
     /// Authored `TexCoord` runs right-to-left.
@@ -469,6 +471,18 @@ pub fn texture_members(
         }
     }
     Ok(members)
+}
+
+fn viewport_box(inner: Rect, viewport: (f32, f32)) -> Result<RelativeBox, HudError> {
+    relative_box(
+        inner,
+        Rect {
+            left: 0.,
+            bottom: 0.,
+            width: viewport.0,
+            height: viewport.1,
+        },
+    )
 }
 
 /// Percentages of `inner` inside `outer`. Y-up rectangles become a Y-down top.
@@ -762,6 +776,7 @@ fn plan_textures(
         art.push(PlannedArt {
             path,
             relative: relative_box(placed, frame.rect)?,
+            viewport_relative: viewport_box(placed, input.viewport)?,
             uv,
             flip_x,
             flip_y,
@@ -820,6 +835,7 @@ fn plan_backdrop(
     Ok(vec![PlannedArt {
         path,
         relative: relative_box(inner, frame.rect)?,
+        viewport_relative: viewport_box(inner, input.viewport)?,
         uv: full_uv(width, height),
         flip_x: false,
         flip_y: false,
@@ -1779,6 +1795,16 @@ MasterFont=fonts/body.ttf
             .find(|frame| frame.name == "Plate")
             .unwrap();
         assert_eq!(plate.art[0].path, "plates/a.blp");
+        assert_eq!(plate.art[0].viewport_relative, plate.relative);
+        assert_eq!(
+            plate.art[0].relative,
+            RelativeBox {
+                left: 0.,
+                top: 0.,
+                width: 100.,
+                height: 100.,
+            }
+        );
         assert_eq!(
             plate.relative,
             RelativeBox {

@@ -1,5 +1,5 @@
 //! Learned command icons under the receipt-bound, authored console parent.
-use crate::campaign_hud::upper_buttons::{image_sampler, read, skin_file, text};
+use crate::campaign_hud::upper_buttons::{read, skin_file, source_image_sampler, text};
 use bevy::{
     ecs::system::SystemParam, picking::events::PointerPress, prelude::*, ui_widgets::Button,
 };
@@ -1086,9 +1086,11 @@ fn image(
             .checked_add(texture.rgba_bytes().ok_or("command image size")?)
             .filter(|bytes| *bytes <= MAX_RETAINED)
             .ok_or("command image aggregate budget")?;
-        let mut decoded = pcx_gfx::viewer::rgba_image(&texture);
-        decoded.sampler =
-            bevy::image::ImageSampler::Descriptor(image_sampler(source.rules.icon_repeat));
+        let mut decoded = crate::menu_composition::image(&texture);
+        decoded.sampler = bevy::image::ImageSampler::Descriptor(source_image_sampler(
+            source.rules.icon_repeat,
+            source.rules.icon_filters,
+        )?);
         let handle = images.add(decoded);
         source.images.insert(path.into(), handle.clone());
         source.retained = retained;
@@ -1220,7 +1222,6 @@ fn paint(
         commands.entity(root).with_children(|parent| {
             let mut button = parent.spawn((
                 node,
-                ImageNode::new(image).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
                 Button,
                 bevy::picking::hover::Hovered::default(),
                 crate::campaign_inventory::TooltipAnchor {
@@ -1234,6 +1235,34 @@ fn paint(
                     order,
                 },
             ));
+            let placement = crate::hud_render::SourceImageRect {
+                rect: Rect::from_corners(
+                    Vec2::new(
+                        rect.x / source.rules.viewport[0],
+                        (source.rules.viewport[1] - rect.y - rect.height)
+                            / source.rules.viewport[1],
+                    ),
+                    Vec2::new(
+                        (rect.x + rect.width) / source.rules.viewport[0],
+                        (source.rules.viewport[1] - rect.y) / source.rules.viewport[1],
+                    ),
+                ),
+                root: Some(root),
+            };
+            // Leaf art preserves source quads without moving the button's overlay children.
+            button.with_children(|button| {
+                button.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: Val::Percent(100.),
+                        height: Val::Percent(100.),
+                        ..default()
+                    },
+                    ImageNode::new(image).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
+                    placement,
+                    Pickable::IGNORE,
+                ));
+            });
             if disabled {
                 button.insert(bevy::ui::InteractionDisabled);
             }
@@ -1246,6 +1275,7 @@ fn paint(
                             height: Val::Percent(100.),
                             ..default()
                         },
+                        placement,
                         MaterialNode(
                             source
                                 .active_material
@@ -1310,7 +1340,7 @@ fn paint(
                                             ),
                                             ..default()
                                         },
-                                        TextColor(Color::srgba_u8(r, g, b, a)),
+                                        TextColor(crate::menu_composition::colour_u8(r, g, b, a)),
                                         TextLayout::new(
                                             bevy::text::Justify::Center,
                                             bevy::text::LineBreak::NoWrap,
@@ -1734,7 +1764,7 @@ fn hero_source(source: &Source) -> Result<&HeroBarSource, String> {
 
 fn colour(argb: u32) -> Color {
     let [a, r, g, b] = argb.to_be_bytes();
-    Color::srgba_u8(r, g, b, a)
+    crate::menu_composition::colour_u8(r, g, b, a)
 }
 
 fn viewport_node(rect: pcx_play::inventory_layout::Rect, viewport: [f32; 2]) -> Node {
@@ -2306,6 +2336,11 @@ mod tests {
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<Font>>()
             .init_resource::<Assets<crate::glue_menu::BackdropImage>>()
+            .init_resource::<Assets<crate::glue_menu::AdditiveImage>>()
+            .init_resource::<crate::campaign_messages::MessageHistory>()
+            .init_resource::<crate::campaign_audio::CampaignAudio>()
+            .init_resource::<peacecraft3::game_input::GameInput>()
+            .init_resource::<crate::campaign_box_select::BoxSelect>()
             .init_resource::<crate::campaign_script_dialogs::CampaignScriptDialogs>()
             .init_resource::<ButtonInput<KeyCode>>();
         crate::campaign_hud::install(&mut app);
@@ -2345,6 +2380,21 @@ mod tests {
         for _ in 0..6 {
             app.update();
         }
+        let expected_standard = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects();
+            pcx_play::standard_command::Kind::ALL
+                .into_iter()
+                .filter(|&kind| {
+                    objects
+                        .standard_command_order(unit, kind)
+                        .unwrap()
+                        .is_some()
+                })
+                .collect::<Vec<_>>()
+        };
         let (root, parent, owned, buttons) = {
             let card = app.world().resource::<CommandCard>();
             let hud = app.world().resource::<crate::hud_render::HudMount>();
@@ -2376,20 +2426,29 @@ mod tests {
             let buttons = app.world().get::<Children>(root).unwrap();
             assert!(!buttons.is_empty());
             for kind in pcx_play::standard_command::Kind::ALL {
-                assert!(
+                assert_eq!(
                     buttons.iter().any(|child| app
                         .world()
                         .get::<ButtonOrder>(child)
                         .is_some_and(|button| button.kind == Kind::Standard(kind))),
-                    "missing standard {kind:?}"
+                    expected_standard.contains(&kind),
+                    "source availability for standard {kind:?}"
                 );
             }
             for child in buttons {
                 assert_eq!(app.world().get::<ButtonOrder>(*child).unwrap().unit, unit);
+                let art = app.world().get::<Children>(*child).unwrap()[0];
                 assert_eq!(
-                    app.world().get::<ImageNode>(*child).unwrap().image_mode,
+                    app.world().get::<ImageNode>(art).unwrap().image_mode,
                     bevy::ui::widget::NodeImageMode::Stretch,
                     "command art must fill the authored frame independently of image aspect"
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<crate::hud_render::SourceImageRect>(art)
+                        .unwrap()
+                        .root,
+                    Some(root)
                 );
                 let tooltip = app
                     .world()
@@ -2719,7 +2778,20 @@ mod tests {
         queue.apply(&mut world);
         let child = world.get::<Children>(root).unwrap()[0];
         assert_eq!(world.get::<ButtonOrder>(child).unwrap().unit, view.unit);
-        let overlay = world.get::<Children>(child).unwrap()[0];
+        let image = world.get::<Children>(child).unwrap()[0];
+        let overlay = world.get::<Children>(child).unwrap()[1];
+        let placement = world
+            .get::<crate::hud_render::SourceImageRect>(image)
+            .unwrap();
+        assert!(world.get::<ImageNode>(child).is_none());
+        assert_eq!(placement.root, Some(root));
+        assert_eq!(
+            placement.rect,
+            world
+                .get::<crate::hud_render::SourceImageRect>(overlay)
+                .unwrap()
+                .rect
+        );
         assert_eq!(
             world
                 .get::<MaterialNode<crate::glue_menu::AdditiveImage>>(overlay)
@@ -2729,6 +2801,16 @@ mod tests {
             owned_material.id()
         );
         let rect = source.rules.slot(0, 0).unwrap();
+        let viewport = Vec2::from_array(source.rules.viewport);
+        assert!(
+            (placement.rect.size() * viewport - Vec2::new(rect.width, rect.height)).length()
+                < f32::EPSILON
+        );
+        assert!(
+            (placement.rect.min * viewport - Vec2::new(rect.x, viewport.y - rect.y - rect.height))
+                .length()
+                < f32::EPSILON
+        );
         assert_eq!(
             world.get::<Node>(child).unwrap().width,
             Val::Percent(rect.width / source.rules.viewport[0] * 100.)

@@ -1763,8 +1763,6 @@ dependencies = [
 [[package]]
 name = "bevy_ui_render"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "620b51b51eb8e7d8b2362ba96263142829560d9aa254e2f28032570667c6b0fb"
 dependencies = [
  "bevy_a11y",
  "bevy_app",
@@ -4331,7 +4329,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-assets"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "flate2",
  "md5",
@@ -4345,7 +4343,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-blp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "jpeg-decoder",
  "pcx-mdl",
@@ -4358,7 +4356,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-casc"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "flate2",
  "md5",
@@ -4367,7 +4365,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-gfx"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bevy",
  "image",
@@ -4385,7 +4383,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -4396,7 +4394,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mdl"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-casc",
  "pcx-mpq",
@@ -4406,7 +4404,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "flate2",
  "implode",
@@ -4416,7 +4414,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-net"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -4435,7 +4433,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -4445,7 +4443,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-play"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-assets",
  "pcx-map",
@@ -4462,12 +4460,13 @@ dependencies = [
  "symphonia 0.6.1",
  "thiserror 2.0.21",
  "tracing",
+ "ttf-parser",
  "wasm-bindgen",
 ]
 
 [[package]]
 name = "pcx-script"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4476,7 +4475,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sim"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4486,7 +4485,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4494,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tera"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4504,7 +4503,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tga"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-mpq",
  "thiserror 2.0.21",
@@ -4512,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-trig"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pcx-map",
  "pcx-mpq",
@@ -4522,7 +4521,7 @@ dependencies = [
 
 [[package]]
 name = "peacecraft3"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bevy",
  "flate2",
@@ -5159,8 +5158,6 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 [[package]]
 name = "skrifa"
 version = "0.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
 dependencies = [
  "bytemuck",
  "read-fonts",

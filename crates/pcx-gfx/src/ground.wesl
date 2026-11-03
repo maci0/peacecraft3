@@ -7,6 +7,9 @@ struct GroundUniform {
     boundary_bounds: vec4<f32>,
     shadow_color: vec4<f32>,
     shadow_bounds: vec4<f32>,
+    light_direction: vec4<f32>,
+    light_diffuse: vec4<f32>,
+    light_ambient: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var ground_texture: texture_2d_array<f32>;
@@ -21,6 +24,7 @@ struct GroundUniform {
 struct VertexIn {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(7) selectors: vec4<u32>,
 }
@@ -30,6 +34,7 @@ struct VertexOut {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) selectors: vec4<u32>,
     @location(2) world_xy: vec2<f32>,
+    @location(3) light: vec3<f32>,
 }
 
 @vertex
@@ -42,6 +47,11 @@ fn vertex(vertex: VertexIn) -> VertexOut {
     );
     out.position = position_world_to_clip(world_position.xyz);
     out.world_xy = vec2<f32>(world_position.x, -world_position.z);
+    out.light = vec3<f32>(1.0);
+    if ground.light_direction.w != 0.0 {
+        let normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+        out.light = clamp(ground.light_ambient.rgb + ground.light_diffuse.rgb * max(0.0, dot(normal, ground.light_direction.xyz)), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
     out.uv = vertex.uv;
     out.selectors = vertex.selectors;
     return out;
@@ -80,6 +90,7 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     color = over(color, sample_selector(in.selectors.z, uv));
     color = over(color, sample_selector(in.selectors.y, uv));
     color = over(color, sample_selector(in.selectors.x, uv));
+    color = vec4<f32>(color.rgb * in.light, color.a);
     if ground.shadow_color.a > 0.0 {
         let uv = (in.world_xy - ground.shadow_bounds.xy) / ground.shadow_bounds.zw;
         let coverage = textureSample(shadow_texture, shadow_sampler, uv).r;

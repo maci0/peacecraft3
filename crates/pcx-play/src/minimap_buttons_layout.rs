@@ -61,6 +61,8 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     /// Logical frame coordinates, positive Y upwards.
     pub viewport: [f32; 2],
+    /// D3DTEXF minification, magnification and mip selection for filter-button art.
+    pub texture_filters: [u32; 3],
     /// Top to bottom.
     pub buttons: Vec<Button>,
     pub idle: Idle,
@@ -186,6 +188,7 @@ impl Rules {
         read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         let mut r = Reader(read);
+        let texture_filters = crate::command_layout::texture_filters(&mut r)?;
         let viewport = [
             r.referenced(0x640ea8, &[0xf3, 0x0f, 0x10, 5])?,
             r.referenced(0x640e96, &[0xf3, 0x0f, 0x10, 0x1d])?,
@@ -213,6 +216,7 @@ impl Rules {
             origin,
             image_sha256,
             viewport,
+            texture_filters,
             buttons,
             idle,
         })
@@ -445,6 +449,19 @@ mod tests {
     /// Synthetic client memory with geometry, keys and defaults unlike the reviewed image.
     fn fixture() -> BTreeMap<u32, u8> {
         let mut map = BTreeMap::new();
+        put(&mut map, 0x887cfd, &[0x83, 0xe0, 0xf0]);
+        put(&mut map, 0x887cfa, &[0xc1, 0xe6, 2]);
+        put(&mut map, 0x887d02, &[0x83, 0xce, 2]);
+        put(&mut map, 0x7def4a, &[0x83, 0xe0, 3]);
+        put(&mut map, 0x7def4d, &[0x8d, 0x34, 0x40]);
+        for (i, site) in [0x7def50, 0x7def61, 0x7def74].into_iter().enumerate() {
+            op(&mut map, site, &[0xff, 0x34, 0xb5], 0x8000 + i as u32 * 4);
+            put(
+                &mut map,
+                0x8018 + i as u32 * 4,
+                &[1u32, 2, 0][i].to_le_bytes(),
+            );
+        }
         let mut next = 0x2000;
         op(&mut map, 0x640ea8, &[0xf3, 0x0f, 0x10, 5], 0x7000);
         op(&mut map, 0x640e96, &[0xf3, 0x0f, 0x10, 0x1d], 0x7004);
@@ -608,6 +625,22 @@ mod tests {
         );
         assert_eq!(rules.idle.art_key, "IdleArt");
         assert_eq!(rules.idle.desc_key, "IDLE_DESC");
+    }
+
+    #[test]
+    fn texture_filters_follow_selector_and_table_and_refuse_unknown_modes() {
+        let mut map = fixture();
+        assert_eq!(rules(&map).unwrap().texture_filters, [1, 2, 0]);
+        put(&mut map, 0x887d02, &[0x83, 0xce, 1]);
+        for (i, value) in [2u32, 1, 0].into_iter().enumerate() {
+            put(&mut map, 0x800c + i as u32 * 4, &value.to_le_bytes());
+        }
+        assert_eq!(rules(&map).unwrap().texture_filters, [2, 1, 0]);
+        put(&mut map, 0x8014, &2u32.to_le_bytes());
+        assert!(rules(&map).unwrap_err().contains("min/mag/mip"));
+        let mut map = fixture();
+        put(&mut map, 0x887cfd, &[0x83, 0xe0, 0xff]);
+        assert!(rules(&map).unwrap_err().contains("selector"));
     }
 
     #[test]

@@ -34,6 +34,7 @@ mod markers;
 mod outline;
 
 struct FogImage {
+    mapping: Option<Rules>,
     raster: crate::campaign_visibility::Raster,
     alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha,
     original_alpha: Vec<u8>,
@@ -45,6 +46,21 @@ struct FogImage {
     projected: Option<ProjectionInputs>,
     width: u32,
     height: u32,
+}
+
+impl FogImage {
+    fn bounds(
+        &self,
+        host: &pcx_play::playercolor_host::ObjectHost,
+    ) -> Result<[[f32; 2]; 2], String> {
+        self.mapping
+            .as_ref()
+            .ok_or("minimap mapping source is absent")?
+            .world_bounds(
+                host.camera_state()
+                    .ok_or("minimap camera inputs are absent")?,
+            )
+    }
 }
 
 /// Everything a fog projection reads: the shared vision field (by its revision, which counts
@@ -254,8 +270,8 @@ fn consume_pointer(
             // never refuse the press.
             if let Some(fraction) = request.fraction
                 && let Some(host) = session.host()
-                && let Some(bounds) = host.objects().vision_world_bounds()
                 && let Some(fog) = state.fog.as_ref()
+                && let Ok(bounds) = fog.bounds(host.objects())
                 && let Ok(target) = fog.raster.world_at(bounds, fraction.to_array())
             {
                 state.last_signal = Some(target);
@@ -318,15 +334,9 @@ fn consume_pointer(
             let fraction = request
                 .fraction
                 .ok_or("minimap pointer position is unavailable")?;
-            let bounds = objects
-                .vision_world_bounds()
-                .ok_or("minimap world extent is absent")?;
-            let target = state
-                .fog
-                .as_ref()
-                .ok_or("minimap image is absent")?
-                .raster
-                .world_at(bounds, fraction.to_array())?;
+            let fog = state.fog.as_ref().ok_or("minimap image is absent")?;
+            let bounds = fog.bounds(objects)?;
+            let target = fog.raster.world_at(bounds, fraction.to_array())?;
             match action {
                 MinimapAction::Camera => {
                     peacecraft3::campaign_camera::scroll_to(objects, target)?;
@@ -390,9 +400,45 @@ fn node(r: pcx_play::inventory_layout::Rect, viewport: [f32; 2]) -> Node {
         ..default()
     }
 }
+fn image_sampler(
+    filters: [u32; 3],
+    addresses: [u32; 2],
+) -> Result<bevy::image::ImageSamplerDescriptor, String> {
+    let mut sampler = crate::campaign_hud::upper_buttons::source_image_sampler(false, filters)?;
+    let address = |value| match value {
+        1 => Ok(bevy::image::ImageAddressMode::Repeat),
+        3 => Ok(bevy::image::ImageAddressMode::ClampToEdge),
+        _ => Err("unsupported minimap texture address mode".to_string()),
+    };
+    sampler.address_mode_u = address(addresses[0])?;
+    sampler.address_mode_v = address(addresses[1])?;
+    Ok(sampler)
+}
+
+fn image_rect(
+    frame: pcx_play::inventory_layout::Rect,
+    viewport: [f32; 2],
+    root: Entity,
+) -> crate::hud_render::SourceImageRect {
+    crate::hud_render::SourceImageRect {
+        rect: Rect::from_corners(
+            Vec2::new(
+                frame.x / viewport[0],
+                (viewport[1] - frame.y - frame.height) / viewport[1],
+            ),
+            Vec2::new(
+                (frame.x + frame.width) / viewport[0],
+                (viewport[1] - frame.y) / viewport[1],
+            ),
+        ),
+        root: Some(root),
+    }
+}
+
 fn load_image(
     names: &[String],
     max_dimension: u32,
+    sampler: bevy::image::ImageSamplerDescriptor,
     mut extract: impl FnMut(&'static str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<(String, Image), String> {
     for name in names {
@@ -420,12 +466,7 @@ fn load_image(
         }
         let decoded =
             pcx_gfx::load_image_bounded(&bytes, member, PIXEL_BYTES).map_err(|e| e.to_string())?;
-        // House clamp/linear sampling (recreation choice); qualify native sampling with a paired render.
-        let mut image = pcx_gfx::viewer::rgba_image(&decoded);
-        let mut sampler = bevy::image::ImageSamplerDescriptor::linear();
-        sampler.address_mode_u = bevy::image::ImageAddressMode::ClampToEdge;
-        sampler.address_mode_v = bevy::image::ImageAddressMode::ClampToEdge;
-        sampler.address_mode_w = bevy::image::ImageAddressMode::ClampToEdge;
+        let mut image = crate::menu_composition::image(&decoded);
         image.sampler = bevy::image::ImageSampler::Descriptor(sampler);
         return Ok((member.into(), image));
     }
@@ -494,9 +535,7 @@ fn update_fog(
         .local_player_settings()
         .ok_or("minimap viewer is not admitted")?
         .identity;
-    let bounds = host
-        .vision_world_bounds()
-        .ok_or("minimap needs the admitted world extent")?;
+    let bounds = fog.bounds(host)?;
     let fog_enabled = settings.fog_enabled;
     let mask_enabled = settings.fog_mask_enabled;
     let inputs = host.vision_revision().map(|revision| {
@@ -740,12 +779,6 @@ fn project(
     let surface = commands
         .spawn((
             surface_node,
-            BackgroundColor(Color::srgba_u8(
-                rules.clear_color[0],
-                rules.clear_color[1],
-                rules.clear_color[2],
-                rules.clear_color[3],
-            )),
             MinimapPart::Surface,
             RelativeCursorPosition::default(),
         ))
@@ -767,10 +800,15 @@ fn project(
             .ok_or("minimap render device unavailable")?
             .limits()
             .max_texture_dimension_2d;
-        load_image(&rules.image_members, max_dimension, |name| {
-            map.extract_checked(&bindings.map_label, name, budget)
-                .map_err(|e| e.to_string())
-        })
+        load_image(
+            &rules.image_members,
+            max_dimension,
+            image_sampler(rules.texture_filters, rules.texture_address)?,
+            |name| {
+                map.extract_checked(&bindings.map_label, name, budget)
+                    .map_err(|e| e.to_string())
+            },
+        )
     })();
     match result {
         Ok((member, image)) => {
@@ -801,6 +839,7 @@ fn project(
                     .map_err(|_| "minimap alpha allocation")?;
                 original_alpha.extend(pixels.as_chunks::<4>().0.iter().map(|p| p[3]));
                 Ok(FogImage {
+                    mapping: Some(rules.clone()),
                     raster,
                     alpha,
                     original_pixels: pixels.clone(),
@@ -834,6 +873,13 @@ fn project(
                         ..default()
                     },
                     ImageNode::new(image.clone()),
+                    image_rect(rules.frame, rules.viewport, root),
+                    BackgroundColor(crate::menu_composition::colour_u8(
+                        rules.clear_color[0],
+                        rules.clear_color[1],
+                        rules.clear_color[2],
+                        rules.clear_color[3],
+                    )),
                     MinimapPart::Image,
                     Pickable::IGNORE,
                 ))
@@ -901,14 +947,33 @@ mod tests {
     fn image_selection_decodes_the_source_order_without_substituting_missing_art() {
         let tga_name = pcx_map::minimap::MINIMAP_IMAGE_TGA_NAME;
         let blp_name = pcx_map::minimap::MINIMAP_IMAGE_NAME;
+        let sampler = image_sampler([1, 2, 0], [3, 1]).unwrap();
         let mut reads = Vec::new();
-        let (member, image) = load_image(&[blp_name.into(), tga_name.into()], 2, |name| {
-            reads.push(name);
-            Ok((name == tga_name).then(tga))
-        })
+        let (member, image) = load_image(
+            &[blp_name.into(), tga_name.into()],
+            2,
+            sampler.clone(),
+            |name| {
+                reads.push(name);
+                Ok((name == tga_name).then(tga))
+            },
+        )
         .unwrap();
         assert_eq!(reads, [blp_name, tga_name]);
         assert_eq!(member, tga_name);
+        let bevy::image::ImageSampler::Descriptor(actual) = &image.sampler else {
+            panic!("source sampler")
+        };
+        assert_eq!(actual.min_filter, bevy::image::ImageFilterMode::Nearest);
+        assert_eq!(actual.mag_filter, bevy::image::ImageFilterMode::Linear);
+        assert_eq!(
+            actual.address_mode_u,
+            bevy::image::ImageAddressMode::ClampToEdge
+        );
+        assert_eq!(actual.address_mode_v, bevy::image::ImageAddressMode::Repeat);
+        assert_eq!(actual.lod_max_clamp, 0.);
+        assert!(image_sampler([1, 1, 1], [3, 3]).is_err());
+        assert!(image_sampler([1, 1, 0], [2, 3]).is_err());
         assert_eq!(image.texture_descriptor.size.width, 2);
         assert_eq!(image.texture_descriptor.size.height, 1);
         assert_eq!(
@@ -916,16 +981,21 @@ mod tests {
             Some(&[1, 2, 3, 255, 7, 8, 9, 255][..])
         );
         assert!(
-            load_image(&[tga_name.into()], 2, |_| Ok(None))
+            load_image(&[tga_name.into()], 2, sampler.clone(), |_| Ok(None))
                 .unwrap_err()
                 .contains("no minimap image")
         );
         let mut reads = 0;
         assert!(
-            load_image(&[tga_name.into(), blp_name.into()], 2, |_| {
-                reads += 1;
-                Ok(Some(vec![0; 2]))
-            })
+            load_image(
+                &[tga_name.into(), blp_name.into()],
+                2,
+                sampler.clone(),
+                |_| {
+                    reads += 1;
+                    Ok(Some(vec![0; 2]))
+                }
+            )
             .is_err()
         );
         assert_eq!(
@@ -933,12 +1003,14 @@ mod tests {
             "malformed present art must not hide behind another member"
         );
         assert!(
-            load_image(&[tga_name.into()], 2, |_| Err("source failed".into()))
-                .unwrap_err()
-                .contains("source failed")
+            load_image(&[tga_name.into()], 2, sampler.clone(), |_| Err(
+                "source failed".into()
+            ))
+            .unwrap_err()
+            .contains("source failed")
         );
         assert!(
-            load_image(&[tga_name.into()], 1, |_| Ok(Some(tga())))
+            load_image(&[tga_name.into()], 1, sampler.clone(), |_| Ok(Some(tga())))
                 .unwrap_err()
                 .contains("texture dimensions")
         );
@@ -1059,6 +1131,7 @@ endglobals
         let mut state = CampaignMinimap {
             image: Some(image),
             fog: Some(FogImage {
+                mapping: None,
                 raster: crate::campaign_visibility::Raster::new(1, 1, 16).unwrap(),
                 alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
                     masked: 3,
@@ -1313,6 +1386,18 @@ endglobals
             },
             [1., 2.],
         );
+        let rect = image_rect(
+            pcx_play::inventory_layout::Rect {
+                x: 0.1,
+                y: 0.2,
+                width: 0.4,
+                height: 0.3,
+            },
+            [1., 2.],
+            Entity::PLACEHOLDER,
+        );
+        assert!((rect.rect.min - Vec2::new(0.1, 0.75)).abs().max_element() < 0.00001);
+        assert!((rect.rect.max - Vec2::new(0.5, 0.9)).abs().max_element() < 0.00001);
         assert_eq!(node.left, Val::Percent(10.));
         assert_eq!(node.bottom, Val::Percent(10.));
         assert_eq!(node.width, Val::Percent(40.));
@@ -1343,6 +1428,18 @@ endglobals
             .init_resource::<crate::campaign_hud::CampaignHud>()
             .init_resource::<ButtonInput<MouseButton>>()
             .add_observer(capture_press);
+        let client_path =
+            std::path::PathBuf::from(std::env::var("PCX_NATIVE_CHAPTER_INSTALL").unwrap())
+                .join("Warcraft III.exe");
+        let rules = Rules::reviewed_legacy(
+            &std::fs::read(&client_path).unwrap(),
+            pcx_play::scripts::AssetIdentity {
+                source: client_path.display().to_string(),
+                edition: "explicit selected client".into(),
+                version: "reviewed minimap".into(),
+            },
+        )
+        .unwrap();
         let (witness, bounds, camera_bounds) = {
             let mut session = app
                 .world_mut()
@@ -1360,11 +1457,12 @@ endglobals
                 .unwrap();
             (
                 witness,
-                objects.vision_world_bounds().unwrap(),
+                rules.world_bounds(objects.camera_state().unwrap()).unwrap(),
                 objects.camera_state().unwrap().bounds.unwrap(),
             )
         };
         let fog = FogImage {
+            mapping: Some(rules),
             raster: crate::campaign_visibility::Raster::new(80, 40, 3200).unwrap(),
             alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
                 masked: 7,

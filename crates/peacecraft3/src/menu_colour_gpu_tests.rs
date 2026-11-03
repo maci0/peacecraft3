@@ -698,6 +698,9 @@ fn build_hud_texture_scene() -> (App, Handle<Image>) {
         .query_filtered::<Entity, With<Camera3d>>()
         .single(app.world())
         .unwrap();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(crate::menu_composition::MenuColourCamera);
     let parent = app
         .world_mut()
         .spawn((
@@ -822,7 +825,12 @@ fn authored_hud_texture_ranges_and_alpha_reach_the_ui_render_graph() {
         for (pixel, (dx, dy)) in [(8, 8), (24, 8), (8, 24), (24, 24)].into_iter().enumerate() {
             let reflected = pixel ^ column;
             for (channel, expected) in colours[reflected].iter().enumerate() {
-                let actual = channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
+                let linear = channel_at(&readback.bytes, readback.stride, column, dx, dy, channel);
+                // The HDR readback contains the final display-linear transfer of numeric HUD channels.
+                let actual = bevy::color::Srgba::from(bevy::color::LinearRgba::new(
+                    linear, linear, linear, 1.,
+                ))
+                .red;
                 assert!(
                     (actual - expected).abs() < 0.08,
                     "column={column} pixel={pixel} channel={channel}: {actual}"
@@ -888,6 +896,9 @@ Frame "SIMPLEFRAME" "Console" {
         .query_filtered::<Entity, With<Camera3d>>()
         .single(app.world())
         .unwrap();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(crate::menu_composition::MenuColourCamera);
     let parent = app
         .world_mut()
         .spawn((
@@ -1053,7 +1064,7 @@ fn composition_readback(raw: bool) -> GpuReadback {
             Msaa::Off,
         ));
         if raw {
-            entity.insert(menu_composition::MenuColourCamera);
+            entity.insert(crate::menu_composition::MenuColourCamera);
         }
         entity.id()
     };
@@ -1714,12 +1725,22 @@ fn campaign_message_spans_render_and_clear_through_4k() {
             .query_filtered::<Entity, With<Camera3d>>()
             .single(app.world())
             .unwrap();
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(crate::menu_composition::MenuColourCamera);
         let font = app
             .world_mut()
             .resource_mut::<Assets<Font>>()
             .add(Font::from_bytes(
                 include_bytes!("../art/DejaVuSans.ttf").to_vec(),
             ));
+        let placement = pcx_play::message_layout::Placement {
+            left: 0.051875,
+            bottom: 0.2305,
+            width: 0.5,
+            height: 0.25,
+            viewport: [0.8, 0.6],
+        };
         let root = app
             .world_mut()
             .run_system_once(move |mut commands: Commands| {
@@ -1737,13 +1758,7 @@ fn campaign_message_spans_render_and_clear_through_4k() {
                         height: 0.06,
                     },
                     &font,
-                    pcx_play::message_layout::Placement {
-                        left: 0.051875,
-                        bottom: 0.2305,
-                        width: 0.5,
-                        height: 0.25,
-                        viewport: [0.8, 0.6],
-                    },
+                    placement,
                 )
                 .unwrap()
             })
@@ -1765,7 +1780,12 @@ fn campaign_message_spans_render_and_clear_through_4k() {
                     if painted {
                         colours[channel] += 1;
                         assert!(
-                            x + 1 >= width as usize / 8 && y <= height as usize * 3 / 4 + 1,
+                            (x as f32 + 1.)
+                                >= placement.left / placement.viewport[0] * width as f32
+                                && y as f32
+                                    <= (1. - placement.bottom / placement.viewport[1])
+                                        * height as f32
+                                        + 1.,
                             "message outside relative placement at {width}x{height}: {x},{y}"
                         );
                     }
@@ -1792,4 +1812,148 @@ fn campaign_message_spans_render_and_clear_through_4k() {
             "campaign messages extent={width}x{height} coloured_pixels={colours:?}; clear verified"
         );
     }
+}
+
+#[test]
+#[ignore = "requires isolated offscreen Vulkan and muted environment"]
+fn text_alpha_test_uses_combined_alpha_preserves_coverage_and_tracks_removal() {
+    use bevy::ui::widget::TextAlphaTest;
+    let mut app = vulkan_menu_app("Text alpha test");
+    let target = spawn_readback_camera(&mut app);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera3d>>()
+        .single(app.world())
+        .unwrap();
+    let font = app
+        .world_mut()
+        .resource_mut::<Assets<Font>>()
+        .add(Font::from_bytes(
+            include_bytes!("../art/DejaVuSans.ttf").to_vec(),
+        ));
+    let text = app
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.),
+                top: Val::Px(0.),
+                ..default()
+            },
+            Text::new("MM"),
+            TextFont {
+                font: font.into(),
+                font_size: bevy::text::FontSize::Px(24.),
+                ..default()
+            },
+            TextColor(Color::linear_rgba(1., 1., 1., 1.)),
+            UiTargetCamera(camera),
+        ))
+        .id();
+    let red = |capture: &GpuReadback| {
+        (0..READBACK_HEIGHT as usize)
+            .flat_map(|y| {
+                (0..READBACK_WIDTH as usize).map(move |x| {
+                    let at = y * capture.stride + x * 8;
+                    half(&capture.bytes[at..at + 2])
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let baseline = red(&drive_readback(&mut app, target.clone()));
+    assert!(baseline.iter().any(|&x| x > 0. && x < 0.5));
+    app.world_mut().entity_mut(text).insert(TextAlphaTest(128));
+    let clipped = red(&drive_readback(&mut app, target.clone()));
+    assert!(clipped.iter().any(|&x| x > 0.5 && x < 0.99));
+    assert!(clipped.iter().all(|&x| x == 0. || x >= 128. / 255. - 0.001));
+    app.world_mut()
+        .entity_mut(text)
+        .insert(TextColor(Color::linear_rgba(1., 1., 1., 0.5)));
+    let faded = red(&drive_readback(&mut app, target.clone()));
+    assert!(
+        faded.iter().all(|&x| x == 0.),
+        "cutoff must follow text alpha multiplication"
+    );
+    app.world_mut().entity_mut(text).insert(TextAlphaTest(127));
+    let admitted = red(&drive_readback(&mut app, target.clone()));
+    assert!(admitted.iter().any(|&x| x > 0.49));
+    assert!(
+        admitted.iter().all(|&x| x <= 0.501),
+        "surviving alpha must not become opaque"
+    );
+    app.world_mut().entity_mut(text).remove::<TextAlphaTest>();
+    app.world_mut()
+        .entity_mut(text)
+        .insert(TextColor(Color::linear_rgba(1., 1., 1., 1.)));
+    let restored = red(&drive_readback(&mut app, target));
+    assert_eq!(
+        baseline, restored,
+        "removed cutoff must invalidate cached glyph draws"
+    );
+}
+
+#[test]
+#[ignore = "requires isolated offscreen Vulkan and muted environment"]
+fn text_atlas_sampling_updates_and_removal_restore_the_filtered_draw() {
+    use bevy::ui::widget::TextAtlasFilter;
+    let mut app = vulkan_menu_app("Text atlas sampling");
+    let target = spawn_readback_camera(&mut app);
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<Camera3d>>()
+        .single(app.world())
+        .unwrap();
+    let font = app
+        .world_mut()
+        .resource_mut::<Assets<Font>>()
+        .add(Font::from_bytes(
+            include_bytes!("../art/DejaVuSans.ttf").to_vec(),
+        ));
+    let text = app
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.25),
+                top: Val::Px(0.25),
+                ..default()
+            },
+            bevy::ui::LayoutConfig {
+                use_rounding: false,
+            },
+            Text::new("MM"),
+            TextFont {
+                font: font.into(),
+                font_size: bevy::text::FontSize::Px(24.),
+                ..default()
+            },
+            TextColor(Color::linear_rgba(1., 1., 1., 1.)),
+            UiTargetCamera(camera),
+        ))
+        .id();
+    let baseline = drive_readback(&mut app, target.clone());
+    app.world_mut()
+        .entity_mut(text)
+        .insert(TextAtlasFilter::Nearest);
+    let point = drive_readback(&mut app, target.clone());
+    assert_ne!(
+        baseline.bytes, point.bytes,
+        "subpixel filtered and point draws must differ"
+    );
+    app.world_mut()
+        .entity_mut(text)
+        .insert(TextAtlasFilter::Linear);
+    let linear = drive_readback(&mut app, target.clone());
+    assert_eq!(baseline.bytes, linear.bytes);
+    app.world_mut()
+        .entity_mut(text)
+        .insert(TextAtlasFilter::Nearest);
+    let point_again = drive_readback(&mut app, target.clone());
+    assert_eq!(point.bytes, point_again.bytes);
+    app.world_mut().entity_mut(text).remove::<TextAtlasFilter>();
+    let restored = drive_readback(&mut app, target);
+    assert_eq!(
+        baseline.bytes, restored.bytes,
+        "removal must invalidate cached glyph sampling"
+    );
 }

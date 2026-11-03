@@ -87,6 +87,7 @@ struct Scene {
     image_node: Entity,
     camera_entity: Entity,
     target: Handle<Image>,
+    overlay: Handle<crate::menu_composition::RenderedImage>,
     size: UVec2,
     elapsed: std::time::Duration,
     geosets: model_scene::Geosets,
@@ -101,6 +102,7 @@ struct Scene {
 }
 #[derive(SystemParam)]
 struct DrawAssets<'w> {
+    overlays: ResMut<'w, Assets<crate::menu_composition::RenderedImage>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<MenuMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -198,6 +200,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<MenuMaterial>>()
         .init_resource::<Assets<Image>>()
+        .init_resource::<Assets<crate::menu_composition::RenderedImage>>()
         .add_systems(
             Update,
             project
@@ -711,6 +714,10 @@ fn spawn(
             ChildOf(parent),
         ))
         .id();
+    let overlay = assets.overlays.add(crate::menu_composition::RenderedImage {
+        image: target.clone(),
+        factor: 1,
+    });
     let image_node = commands
         .spawn((
             Node {
@@ -718,7 +725,7 @@ fn spawn(
                 height: percent(100),
                 ..default()
             },
-            ImageNode::new(target.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
+            MaterialNode(overlay.clone()),
             PortraitImage,
             CampaignInterface,
             Pickable::IGNORE,
@@ -742,6 +749,7 @@ fn spawn(
         image_node,
         camera_entity,
         target,
+        overlay,
         size: UVec2::ONE,
         elapsed: std::time::Duration::ZERO,
         geosets,
@@ -944,12 +952,14 @@ fn retire(commands: &mut Commands, scene: Scene, assets: &mut DrawAssets) {
         assets.images.remove(handle.id());
     }
     assets.images.remove(scene.target.id());
+    assets.overlays.remove(scene.overlay.id());
 }
 fn resize(
     mut state: ResMut<CampaignPortrait>,
     panel: Res<crate::campaign_unit_panel::UnitPanel>,
     nodes: Query<&ComputedNode>,
     mut targets: ResMut<Assets<Image>>,
+    mut overlays: ResMut<Assets<crate::menu_composition::RenderedImage>>,
     mut cameras: Query<(&mut Camera, &mut Projection)>,
     mut masks: Query<&mut Node, With<PortraitMask>>,
 ) {
@@ -993,6 +1003,11 @@ fn resize(
                 .get_mut(&scene.target)
                 .ok_or("portrait: render target removed")? =
                 Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+            // The material must bind the replacement GPU texture after a resize.
+            overlays
+                .get_mut(&scene.overlay)
+                .ok_or("portrait: display material removed")?
+                .image = scene.target.clone();
             *projection = Projection::custom(
                 model_scene::MenuCameraProjection::checked(
                     scene.plan.camera.field_of_view,
@@ -1209,6 +1224,7 @@ mod tests {
         let mut app = crate::native_campaign::tests::started_app();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<crate::menu_composition::RenderedImage>>()
             .init_resource::<Assets<MenuMaterial>>();
         let reader = {
             let requests = app.world().resource::<MapRequests>();
@@ -1353,6 +1369,11 @@ mod tests {
         }
         assert!(app.world().resource::<Assets<Mesh>>().is_empty());
         assert!(app.world().resource::<Assets<MenuMaterial>>().is_empty());
+        assert!(
+            app.world()
+                .resource::<Assets<crate::menu_composition::RenderedImage>>()
+                .is_empty()
+        );
         assert!(app.world().resource::<Assets<Image>>().get(&keep).is_some());
         assert_eq!(app.world().resource::<Assets<Image>>().len(), 1);
     }

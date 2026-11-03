@@ -6461,3 +6461,398 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   refuses. `gold_mine_exit_without_a_usable_depot_preserves_hidden_worker_and_mine`
   passes. Human06 has no authored victory yet.
   Tick-identical `.w3g` playback in both clients is still open.
+
+- [x] Cursor overlay black-screen repair (2026-11-02): the mounted campaign
+  state test passed while producing black gameplay captures. Isolating the
+  cursor camera restored the world/HUD; its transparent intermediate now
+  composites over the display with premultiplied alpha. Synthetic offscreen
+  GPU composition and mounted Prologue02 HUD captures pass, alongside 16 cursor
+  unit tests, strict native/WASM Clippy, both builds and formatting. All five
+  README images were recaptured and visually inspected. An exact-size original
+  Wine/Xvfb comparison retains local side-by-side/overlay/diff artifacts and
+  measures upkeep glyphs 18 px left and 4 px high, with different weight; no
+  measured offset was copied into layout code. Upkeep alignment and cursor edge
+  antialiasing parity remain open. See `docs/re-notes/input-cursor.md`.
+
+- [~] Resource-bar alignment and full-screen comparison (2026-11-03): source
+  FDF boxes now position intrinsic no-wrap text instead of relying on unbounded
+  text justification. Parsed alignment is preserved; simple strings use the
+  observed middle-alignment convention and existing HUD line boxes. Four
+  synthetic tests, the mounted offscreen HUD capture, strict native/WASM Clippy
+  and both builds pass. All five README images are refreshed and inspected.
+  Every RGB pixel in the 1280×960 original/recreation pair is compared with no
+  exclusions: 1,099,199 of 1,228,800 differ; all 48 diagnostic tile counts sum to
+  that result. Upkeep's left edge now matches, but glyphs remain one pixel high,
+  wider and heavier. World/minimap/portrait/text differences and unsynchronized
+  clocks/poses remain open. See `docs/re-notes/campaign-hud-top-bar.md`; original
+  captures, full-screen diff/overlay/grid and source hashes stay local.
+
+- [~] Gameplay working RGB and stable capture ticks (2026-11-03): the remaining
+  HUD textures/text/colours/filter use the existing numeric-channel path, based
+  on the retained gameplay API trace. Rendered world/portrait/clock textures
+  share an explicit transfer back into HUD working channels, with resize rebinding
+  and owned material retirement. The screenshot helper holds all clocks during
+  warm-up/readback and restores its update strategy; the mounted gameplay frame
+  repeats with zero differing pixels at the same held checkpoint. Thirteen
+  clock receipts agree before/after acquisition. The earlier reference pair was
+  not tick-identical; original-client tick/animation/RNG identity still needs
+  qualification. The unmasked full-screen diagnostic has 1,099,015 differing RGB
+  pixels; upkeep glyph coverage improves from 507 to 371 versus the original's
+  366, with metric differences still open. The application suite passes 1,438
+  tests (117 explicit ignores), nine GPU checks and the selected portrait
+  lifecycle gate pass, alongside strict native/WASM checks and both builds.
+  See `docs/re-notes/gameplay-hud-fidelity.md` for evidence classes and local
+  full-screen comparison/clock receipts. Pixel-perfect parity remains open.
+
+- [~] Native animation checkpoint evidence (2026-11-03): a fresh isolated,
+  muted Legacy/Wine run now provides live timer-queue bits and the initialized
+  5 ms sub-step bits. Two captures bracketed by a 200-sample trace with unchanged
+  game/real queue values still differ at 12,650 full-screen pixels, localized
+  to portrait and minimap-ping motion. Simulation tick equality alone cannot
+  establish presentation-phase equality. Corrected the static scheduler
+  receiver binding; rejected the first probe's fields read from the wrong
+  event-handler object. No product timing was altered. Source identity,
+  headless/null-sink isolation, full-screen overlay/diff and limitations are
+  recorded in `docs/re-notes/legacy-simulation-clock.md`. Native presentation
+  clock/RNG alignment and original/recreation pixel equality remain open.
+
+- [~] Exact Legacy font evidence (2026-11-03): bounded native reads now identify
+  nearest-pixel height rounding, the font-height cap, face-derived baseline and
+  the glyph-load flag branch. A fresh isolated read-only runtime probe confirms
+  all 13 observed font records against those derivations, including height 16
+  and baseline 13 for the source resource-font size. Default font flags select
+  the unhinted glyph branch; enabling Bevy hinting or shrinking upkeep text is
+  unsupported. The system FreeType raster diagnostic does not prove bundled
+  renderer parity. Native glyph bytes, kerning and downstream placement are the
+  remaining shared font-renderer questions. See `docs/re-notes/menu-font-binding.md`.
+
+- [~] Native glyph raster frontier (2026-11-03): read-only cache extraction
+  verifies all 749 alpha bytes of the six distinct visible upkeep glyphs against
+  both system and bundled unhinted FreeType, with zero differing bytes. The
+  native spacing-mode word is observed as zero; pair measurement uses clipped
+  nonpositive unscaled kerning and ceiling, with three explicit overrides still
+  to port. The previously labelled draw offsets are vertical clipping operands, as
+  established by their producer at 0x7f1bf0; they do not justify pen-position
+  shifts. These are glyph
+  and measurement results, not full-screen parity. An isolated dependency probe
+  exposes the existing Rust wrapper's WASM headers/libc failures. The product
+  keeps the existing Bevy renderer and adds no FreeType dependency. Raster
+  integration, placement
+  and whole-screen acceptance remain open; task 315 stays in progress.
+
+- [~] Native text placement (2026-11-03): the pair-spacing policy now traces
+  directly into four-vertex glyph-quad emission at 0x7ec0f0. The emitter also
+  scales and rounds pair deltas, handles optional bearing and device-coordinate
+  corrections, and applies cached clipping to Y. Pair exceptions are additive
+  after ceiling; their table is decoded locally, not copied into source.
+  This qualifies static flow, not the live upkeep string flags/final vertices.
+  Keep the Bevy renderer; port the admitted source policy and font metrics,
+  then verify placement and full-frame output. See `menu-font-binding.md`.
+
+- [~] Font pair-policy derivation (2026-11-03): `font_pair_policy` reads the
+  admitted executable's instruction operands and table records, retaining
+  provenance and additive-after-ceiling semantics. Synthetic and explicit
+  local-original parser tests, strict native Clippy and native/WASM library
+  builds pass. No added dependency. Ordinary source-font metrics and Bevy
+  layout/placement integration remain open; parser tests do not prove pixels.
+
+- [~] Source font metrics (2026-11-03): pair policy now consumes source cmap,
+  hmtx and qualified horizontal kern records plus actual raster bitmap width.
+  All six retained native advances match; five focused synthetic/local tests,
+  strict native Clippy and native/WASM library builds pass. Reuses the existing
+  ttf-parser package; no new package or rasterizer. Bevy layout integration,
+  live string flags and rendered placement remain open.
+
+- [~] Resource text spacing integrated (2026-11-03): source-derived font sizing,
+  empty-glyph widths and integer pair steps now drive the mounted resource
+  labels through Bevy's existing glyph atlas. Upkeep layout is 84×16; two final
+  selected captures are byte-identical. Full-screen diagnostic drops from
+  1,099,223 to 1,099,095 differing pixels (original phases unmatched). Six policy
+  tests, four layout tests, strict native/WASM Clippy and both application builds
+  pass. README images refreshed. One-pixel text placement, small raster/blend
+  differences, native string flags and alternate modes remain open; no fitted
+  screenshot offset or FreeType backend was introduced.
+
+- [~] Font alpha-test cause qualified (2026-11-03): font packet selector and
+  backend reference lookup derive a GreaterEqual cutoff from the client image.
+  The 19 inner-glyph residual pixels vanish under that source-derived alpha test
+  in the separately registered diagnostic; three other residuals are border
+  pixels. PairPolicy now parses the cutoff; seven tests, strict native Clippy
+  and native/WASM library builds pass. Runtime shader integration and live
+  final-position operands remain open. No fitted offset, atlas alpha erasure
+  or full-screen equality claim.
+
+- [~] Font alpha test integrated (2026-11-03): opt-in Bevy text/shadow alpha
+  testing now consumes the admitted source reference. Threshold changes/removal
+  invalidate glyph draws; surviving alpha and atlas bytes are preserved. New
+  fade/removal GPU gate and ordinary HUD-texture gate pass, as do strict
+  native/WASM Clippy and both app builds. Full capture repeats exactly; README
+  refreshed. Full-screen differences are 1,099,069 (phases unmatched), with two
+  registered inner-glyph cutoff-boundary differences and a one-pixel placement
+  offset still open. Other text roots still need source-policy binding.
+
+- 2026-11-03: Default resource-font atlas filtering now follows admitted Legacy
+  executable sampler operands through the existing Bevy renderer. Registered
+  upkeep inner-glyph bytes match exactly without FreeType or alpha adjustments;
+  the one-pixel placement offset remains. Full unregistered 1280×960 comparison:
+  1,099,071 differing pixels, MAE 14.77136257595486; no native tick/animation/RNG
+  parity claim. Refreshed all five README captures/provenance. Eight policy,
+  five resource and two isolated GPU tests pass, along with strict native/WASM
+  Clippy and application builds. Capture repeats match and all 13 clock receipts
+  hold their clocks. See menu-font-binding notes for evidence and remaining scope.
+
+- 2026-11-03: Final-origin trace qualifies native signed-nearest viewport
+  conversions and identifies Bevy's frame-before-child centering discrepancy.
+  Extended selected-checkpoint receipts with ancestor rounded/unrounded extents
+  and centers. Mounted capture and strict feature-enabled native Clippy pass;
+  five images are byte-identical to the point-sampled run and 13 clocks hold.
+  Production placement is unchanged pending native frame/baseline qualification;
+  this is diagnostic progress, not a full-screen fidelity fix.
+
+- 2026-11-03: Resource text placement now preserves authored frame justification
+  before pixel rounding and derives the native D3D9-to-Bevy raster conversion
+  and font baseline. Read-only isolated native string/quad observations confirm
+  the upkeep frame, flags and emitted vertices. Upkeep's 528 glyph ink pixels
+  match at actual screen coordinates without registration; its surrounding box
+  retains one brown border pixel difference. Full-screen differences fall by
+  1,203 to 1,097,868, MAE 14.71206787109375. Ten policy and seven resource tests,
+  mounted capture, strict native/WASM Clippy and application builds pass. All 13
+  clocks hold and repeat captures match. README images refreshed; other text,
+  world/HUD gaps and native animation/RNG synchronization remain unfinished.
+
+- 2026-11-03: Completed whole-frame regional diagnostics and a controlled
+  upper-button authored-mip experiment. The experiment lowers MAE but adds 417
+  differing pixels; reverted it and verified the source matches the last
+  accepted screenshot manifest. Current accepted full-frame count remains
+  1,097,868. First-button diagnostic Y registration improves both variants,
+  identifying generic UI coordinate conversion as the next frontier; no fitted
+  offset was applied. Source FDF copies are identical across RoC/TFT archives.
+  Experiment artifacts and full-frame diff/overlay stay local; see gameplay HUD
+  fidelity notes. No native mip/sampler or generic image-position parity claim.
+
+- 2026-11-03: Qualified CSimpleTexture's live upper-button quads/UVs and its
+  linear/no-mip sampler branch. Preserved source fractional image bounds and
+  converted D3D9 integer pixel centers to Bevy centers for all four upper images
+  and hover layers. Full-frame differing pixels fall by 6,353 to 1,091,515,
+  MAE 14.553592664930555; no registration/exclusions. Seventeen control tests,
+  mounted capture, strict native/WASM Clippy and app builds pass; repeat frames
+  match and thirteen clocks hold. README captures/provenance refreshed. Generic
+  console/backdrop geometry, other text and native animation/RNG parity remain
+  open. Source evidence is scoped in campaign-hud-top-bar notes.
+
+- 2026-11-03: Shared source image geometry now preserves viewport-derived
+  fractional console/backdrop bounds through layout, including supplied HUD root
+  transforms. All thirteen ConsoleUI image records match retained native quads
+  and linear/no-mip sampler records. Full-frame differences fall by 73,607 to
+  1,017,908, MAE 13.41690456814236; the entire 2,640-pixel upkeep box matches.
+  HUD planning/mount, upper controls, synthetic GPU texture checks, mounted
+  capture, strict native/WASM Clippy and app builds pass. Thirteen clocks hold
+  and repeat frames match. README images/provenance refreshed. Other widgets,
+  text/world/blending and native animation/RNG parity remain open.
+
+- 2026-11-03: Five minimap filter images now preserve constructor-derived
+  fractional geometry through the shared source-image renderer. All five
+  rectangles match retained native texture records. Full-screen differences
+  fall by 72 to 1,017,836, MAE 13.388307834201388; 2,640-pixel upkeep box still
+  matches. Mount/press assertions, isolated capture, strict native/WASM Clippy
+  and builds pass; thirteen clocks hold and repeat frames match. README captures
+  refreshed. Review identifies an inherited nearest-sampler gap versus native
+  linear filtering as the next source-derived correction; states, world/text
+  and original-client animation/RNG identity remain open.
+
+- 2026-11-03: Minimap filter-control images now derive min/mag/mip sampling
+  from the admitted native file-loader flags and sampler table. The qualified
+  path resolves to linear/linear/NONE; unsupported combinations refuse. Five
+  parser checks, two button checks, isolated GPU capture, strict native/WASM
+  Clippy and app builds pass. Full-screen differences fall by 1,254 to
+  1,016,582, MAE 13.364941948784722. Repeat bytes and thirteen clock receipts
+  hold; the 2,640-pixel upkeep box remains exact. README captures refreshed.
+  Other UI samplers, button states, low-byte errors, world/text and native
+  animation/RNG synchronization remain open.
+
+- 2026-11-03: Command-cache images now use source-derived min/mag/mip filters
+  alongside their derived addressing flag; minimap rules reuse the same operand
+  reader. Main upper atlas already used linear filtering. Thirteen command,
+  five minimap and seventeen upper/sampler checks, isolated capture, strict
+  native/WASM Clippy and builds pass. Whole-frame MAE falls to
+  13.342416178385417, but exact differing pixels increase by 369 to 1,016,951;
+  both results are recorded without exclusions. Retained native records qualify
+  the linear sampler and corroborate source command-grid rectangles, identifying
+  rounded command image/overlay geometry as the next correction. Repeat frames
+  and thirteen clocks hold; upkeep box remains exact. README captures refreshed.
+
+- 2026-11-03: Command art and active highlights now retain source-derived
+  fractional quads as non-picking leaves under existing buttons. Full-screen
+  differences fall by 24,889 to 992,062, MAE 12.947105577256945; the command
+  region's MAE falls to 0.20615. Six ordinary command checks, source-backed
+  replacement/cleanup, Human01 mount/retire/re-entry, final offscreen capture,
+  strict native/WASM Clippy and app builds pass. Stale fixture resources and
+  first-child/all-command assumptions were corrected. Thirteen clocks hold,
+  repeated frames match, and the 2,640-pixel upkeep box stays exact. README
+  captures refreshed. Rank/text and hit geometry, other UI/world differences
+  and original-client animation/RNG synchronization remain open.
+
+- 2026-11-03: Unit-panel images now use source-derived sampling and fractional
+  bounds, including the experience fill's live clipped width/UVs. Removed the
+  touched loader's hard-coded hero-icon key list: existing native table keys are
+  bound by supported Primary-token suffix, with missing/ambiguous keys refused.
+  All three admitted-source bindings remain equivalent. Nine parser checks,
+  eight panel checks, final offscreen capture, strict native/WASM Clippy and
+  both builds pass. Full-screen differences fall by 3,819 to 988,243, MAE
+  12.803221571180556. Thirteen clocks hold and repeat frames match; upkeep box
+  remains exact. README captures refreshed. Other UI/text/background/world
+  differences and native animation/RNG identity remain open.
+
+- 2026-11-03: World audit identifies a missing terrain-light path: numeric
+  texture/camera composition already exists, but ground shaders have neither
+  normals nor day/night lighting. A new CPU-only selected-source receipt passes
+  for Prologue02; terrain and unit models are distinct, supported directional
+  suns with different ambient settings. Source terrain already derives finite
+  normals (11,241 non-flat of 12,513), currently discarded by the ground draw.
+  Strict native all-target Clippy passes. Production rendering is unchanged;
+  README images remain at 988,243 full-frame differences. Connecting the selected
+  terrain sun, qualifying normal/packing behavior and rendering the correction
+  are the next frontier; source receipt details are in admitted-ground notes.
+
+- 2026-11-03: The campaign ground draw now consumes the selected terrain sun,
+  canonical day fraction and source-derived corner normals through numeric
+  vertex lighting. It reuses packed-channel policy, validates context/material
+  ownership, caches source parameter reads and reports unsupported inputs.
+  Synthetic and actual-source normal equivalence, ground/unit/integration and
+  GPU readbacks, existing lighting regressions, strict native/WASM Clippy,
+  builds and final offscreen capture pass. Full-frame exact differences fall
+  by 36 to 988,207, while MAE falls to 12.529151746961805. Thirteen clocks and
+  repeated bytes hold; upkeep box remains exact. README images/provenance
+  refreshed. Native terrain-normal/packing/pass-order qualification, other
+  world/UI differences and animation/RNG identity remain open.
+
+- 2026-11-03: Ground uploads now preserve supplied BLP mip pixels over the common
+  separable cell range rather than generating replacements. The explicit
+  selected-map check improves from 777,076 differing channels to zero; synthetic
+  authored/base-only/mixed/malformed and bounded-memory checks pass, as does the
+  isolated GPU sampling test. Strict native/WASM Clippy, both app builds and the
+  full production capture pass. Whole-frame differences fall by four to 988,203,
+  MAE to 12.52657958984375; all 13 clocks hold and repeated bytes match. README
+  captures/provenance refreshed. Native terrain LOD/filter and far-LOD atlas
+  behavior, other rendering gaps and animation/RNG identity remain open.
+
+- 2026-11-03: Minimap projection now derives its rectangle from the selected
+  native camera getter, profile margin references and scale initializer, joined
+  to executed camera state. Fog, markers/hits, outline, navigation and signals
+  share it. Three rule and nineteen app checks pass with explicit input ignores;
+  selected-map source and camera/order/control replays pass separately. Strict
+  native/WASM Clippy, both app builds and isolated production capture pass.
+  Whole-frame differences fall by 1,456 to 986,747, MAE to 12.392502983940972.
+  Thirteen clocks and repeated bytes hold; upkeep remains exact. README images
+  and provenance refreshed. Fog-grid sampling/rounding, occlusion, minimap
+  sampling/quads/icons/outline rasterization and animation/RNG identity remain open.
+
+- 2026-11-03: Minimap dynamic texture sampling now derives min/mag/mip and U/V
+  address modes from native constructor/backend operands, reusing the shared
+  texture-record reader. The image/backing preserve fractional source geometry;
+  the outline remains a sibling. Four minimap rule, 68 layout and nineteen app
+  checks pass with explicit original-input ignores. The actual-source receipt,
+  strict native/WASM Clippy, both app builds and isolated production capture pass.
+  Whole-frame differences fall by 1,843 to 984,904, MAE to 12.3603662109375.
+  All 13 clocks and repeat bytes hold; upkeep stays exact. README/provenance
+  refreshed. Fog sampling/occlusion, special icons, remembered markers, native
+  outline rasterization and original animation/RNG identity remain open.
+
+- 2026-11-03: Unit-panel default font roots now share source-derived integer
+  raster height, atlas filtering and alpha cutoff with resource labels. Rich
+  spans keep the same raster height; nondefault font records refuse. Eight
+  synthetic panel checks, the selected-Human01 policy/selection/retirement gate,
+  six resource checks, final isolated Prologue02 capture, strict native/WASM
+  Clippy and both app builds pass. Whole-frame differences fall by 2,422 to
+  982,482; MAE to 12.249673936631945. All 13 clocks and repeat bytes hold, and
+  upkeep remains exact after extraction. README/provenance refreshed. Panel
+  pair branches, baselines, shadows/origins and native animation/RNG identity
+  remain open; no FreeType dependency was added.
+
+- 2026-11-03: Default unit-panel simple strings now share resource-label integer
+  pair advances, font-byte baselines and independently rounded source origins.
+  Constructor/translator/emitter operands qualify the supported branch; native
+  justification defaults and health/mana overrides are derived, with authored
+  FDF records taking precedence. Automatic stat/status widths retain their
+  source left/right anchors. Nine synthetic panel checks plus the selected-client
+  replay, nine rule checks, nine policy checks and six resource checks pass,
+  with explicit local-input ignores. Strict native/WASM Clippy, both builds and
+  the corrected isolated capture pass. Full-frame differences fall by 1,830 to
+  980,652; MAE to 12.104810112847222. All 13 clocks/repeat bytes hold and upkeep
+  remains exact. README images/provenance refreshed. Exact glyph/shadow parity,
+  live panel flag observations and native animation/RNG identity remain open;
+  no FreeType dependency was added.
+
+- 2026-11-03: Unit-panel automatic strings now resolve source region edges and
+  retain midpoint precision before Gx conversion, justification and pixel
+  rounding. Stat chains use resolved bottoms; title-linked experience geometry
+  retains the same relationship. A private read-only original-client probe
+  qualifies eight string inputs and is stopped. Twelve panel checks, the final
+  isolated capture, strict native/WASM Clippy and both app builds pass. Exact
+  full-frame differences fall by 1,764 to 978,888, MAE to 11.98810763888889.
+  All 13 clocks and repeat bytes hold; upkeep stays exact. README/provenance
+  refreshed. Lowercase-g coverage, portrait backgrounds, other UI/world/text
+  residuals and native animation/RNG identity remain open. No FreeType added.
+
+- 2026-11-03: Native cache acquisition qualifies the 108-byte default 14-pixel
+  `g` bitmap. Bitmap-space implied midpoint rounding in the existing Skrifa
+  dependency now reproduces every byte without FreeType. Six path checks,
+  a 570-case raster matrix (100→31 differing reference alpha bytes, no
+  regressions), two isolated text GPU checks, strict native/WASM Clippy, both
+  app builds and production capture pass. Exact full-frame differences fall
+  by 28 to 978,860; MAE to 11.988053656684027. All 13 clocks/repeat bytes hold;
+  upkeep stays exact. Thirteen panel text diagnostic rectangles are exact.
+  README/provenance refreshed. Other glyph cases, portrait backgrounds,
+  remaining UI/world/text and native animation/RNG identity remain open.
+
+- 2026-11-03: Inventory heading now shares source-derived integer font sizing,
+  pair spacing, baseline, sampling and region placement with panel text. The
+  fixed heading frame and constructor justification groups remain asset-derived.
+  Synthetic inventory checks, supplied-client layout admission, 12 panel tests,
+  strict native/WASM Clippy, both builds and production capture pass. Only the
+  heading region changes (1,189 pixels); exact full-frame differences fall by
+  160 to 978,700, MAE to 11.961337348090277. Upkeep and the 13 exact panel text
+  rectangles stay exact. Heading raster/background residuals, other UI/world
+  differences and native animation/RNG phase remain open. No FreeType added.
+
+- 2026-11-03: Fresh isolated original-client cache acquisition qualifies all
+  eight unique Inventory glyphs at 18 pixels/default flags: 845 alpha bytes,
+  zero differences from the corrected Rust raster path. Native font size,
+  baseline and widget/Gx inputs corroborate the source binding. Remaining
+  heading differences now point to string extent/advances/composition, not
+  these glyph bitmaps. Full-frame result remains 978,700 differing pixels;
+  no renderer adjustment or parity claim from this acquisition.
+
+- 2026-11-03: Fixed the shared source-font sizing query skipping plain text
+  roots without Children. Production Inventory now uses Px(18), not Vh(1.8333);
+  the capture regression check includes plain roots. All 92 opaque heading
+  pixels match the original coordinates. Only 811 recreation pixels change,
+  within the heading; full-frame differences fall by 293 to 978,407, MAE to
+  11.939232313368056. Inventory tests, strict native/WASM Clippy and both builds
+  pass. Upkeep and 13 panel text diagnostic regions remain exact. Blended edges,
+  backing images, remaining world/UI differences and native animation/RNG
+  identity remain open; no FreeType added.
+
+- 2026-11-03: Upper-button text states now bind the admitted executable's
+  default raster sizing, alpha cutoff and sampling through the shared source
+  font path. Default font-record validation is shared with panel text; the
+  synthetic four-button check covers twelve state roots. Upper/message-log
+  tests (22), panel checks (11), strict native/WASM Clippy, both builds and
+  production capture pass; explicit original-input tests remain separate.
+  Only upper labels change (1,804 pixels). Exact full-frame differences fall
+  by 200 to 978,207, while MAE rises slightly to 11.940990125868055. Spacing,
+  baseline/placement and wider world/UI fidelity remain open. Upkeep and 13
+  panel text regions stay exact. No FreeType added.
+
+- 2026-11-03: Read-only native observations qualify twelve upper string states'
+  default Gx branch, source frame centers and automatic widths. Upper labels
+  now share integer pair advances/baselines and source frame/pixel origins;
+  explicit no-wrap layout fixes an initial capture failure. Constructor flags
+  remain source-derived; pressed offsets stay in source units. All twelve
+  widths match native observations. Tests (22 upper, 23 Inventory, nine policy
+  fixtures, one supplied executable), strict native/WASM Clippy, both builds
+  and two production captures pass. All 26 clocks and repeats hold; five
+  published states independently match. Full-frame differences fall by 2,024
+  to 976,183, MAE to 11.755233289930555. Upkeep and 13 panel text regions stay
+  exact. Blended/backing, remaining world/UI and native animation/RNG identity
+  remain open. README/provenance refreshed; no FreeType added.

@@ -56,6 +56,24 @@ pub fn corner_world(terrain: &Terrain, cx: u32, cy: u32) -> Option<[f32; 3]> {
     corner_world_scaled(terrain, cx, cy, TILE_XY, Z_PER_INDEX, Z_REFERENCE_INDEX)
 }
 
+/// Finite-difference corner normal in game space, using the mesh's clamped neighbours.
+pub fn corner_normal(terrain: &Terrain, cx: u32, cy: u32) -> Option<[f32; 3]> {
+    corner_world(terrain, cx, cy)?;
+    let west = corner_world(terrain, cx.saturating_sub(1), cy)?;
+    let east = corner_world(terrain, cx.saturating_add(1).min(terrain.width()), cy)?;
+    let south = corner_world(terrain, cx, cy.saturating_sub(1))?;
+    let north = corner_world(terrain, cx, cy.saturating_add(1).min(terrain.height()))?;
+    let dx = std::array::from_fn::<_, 3, _>(|i| east[i] - west[i]);
+    let dy = std::array::from_fn::<_, 3, _>(|i| north[i] - south[i]);
+    let n = [
+        dx[1] * dy[2] - dx[2] * dy[1],
+        dx[2] * dy[0] - dx[0] * dy[2],
+        dx[0] * dy[1] - dx[1] * dy[0],
+    ];
+    let length = n.iter().map(|v| v * v).sum::<f32>().sqrt();
+    (length.is_finite() && length > 0.).then(|| n.map(|v| v / length))
+}
+
 /// [`corner_world`] with a caller-supplied scale.
 ///
 /// This exists so a viewer can override the convention without forking the

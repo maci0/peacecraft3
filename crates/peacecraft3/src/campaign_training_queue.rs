@@ -249,7 +249,7 @@ fn image(
             .checked_add(texture.rgba_bytes().ok_or("training queue image size")?)
             .filter(|bytes| *bytes <= MAX_RETAINED)
             .ok_or("training queue image aggregate budget")?;
-        let mut decoded = pcx_gfx::viewer::rgba_image(&texture);
+        let mut decoded = crate::menu_composition::image(&texture);
         decoded.sampler = bevy::image::ImageSampler::Descriptor(
             crate::campaign_hud::upper_buttons::image_sampler(repeat),
         );

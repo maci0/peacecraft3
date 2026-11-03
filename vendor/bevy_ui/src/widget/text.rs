@@ -17,13 +17,13 @@ use bevy_ecs::{
 use bevy_image::prelude::*;
 use bevy_log::warn_once;
 use bevy_math::Vec2;
-use bevy_reflect::{std_traits::ReflectDefault, Reflect};
+use bevy_reflect::{Reflect, std_traits::ReflectDefault};
 use bevy_text::{
     ComputedTextBlock, Font, FontAtlasSet, FontCx, FontHinting, LayoutCx, LetterSpacing, LineBreak,
     LineHeight, RemSize, ScaleCx, TextBounds, TextColor, TextError, TextFont, TextLayout,
     TextLayoutInfo, TextMeasureInfo, TextPipeline, TextReader, TextSection, TextWriter,
 };
-use taffy::{style::AvailableSpace, MaybeMath, ResolveOrZero};
+use taffy::{MaybeMath, ResolveOrZero, style::AvailableSpace};
 use tracing::error;
 
 /// UI text system flags.
@@ -122,10 +122,27 @@ impl TextNodeFlags {
     LetterSpacing,
     TextNodeFlags,
     ContentSize,
-    // Hinting is enabled by default as UI text is normally pixel.
-    FontHinting::Enabled
+    // Legacy UI's default font flags select unhinted rasterization.
+    FontHinting::Disabled
 )]
 pub struct Text(pub String);
+
+/// Optional eight-bit GreaterEqual alpha test for UI text and its shadow.
+/// Compares combined atlas and text alpha; surviving alpha is preserved.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Default)]
+pub struct TextAlphaTest(pub u8);
+
+/// Atlas sampling for a UI text root and its shadow.
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Default)]
+pub enum TextAtlasFilter {
+    /// Preserve the ordinary filtered atlas path.
+    #[default]
+    Linear,
+    /// Sample the nearest atlas texel at mip zero.
+    Nearest,
+}
 
 impl Text {
     /// Makes a new text component.

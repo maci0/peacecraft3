@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -71,9 +71,11 @@ implode = "0.1"
 sha2 = { version = "0.11.1", default-features = false }
 
 [patch.crates-io]
+skrifa = { path = "vendor/skrifa" }
 bevy_render = { path = "vendor/bevy_render" }
 bevy_picking = { path = "vendor/bevy_picking" }
 bevy_ui = { path = "vendor/bevy_ui" }
+bevy_ui_render = { path = "vendor/bevy_ui_render" }
 bevy_sprite = { path = "vendor/bevy_sprite" }
 
 [profile.release]

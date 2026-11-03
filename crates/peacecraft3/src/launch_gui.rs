@@ -416,6 +416,7 @@ pub(crate) fn app_with_plugins(
     // Default zoom-list selection and config-read cap are explicit application policies.
     peacecraft3::campaign_camera::install(&mut app, 0, 64 * 1024);
     crate::campaign_actors::install(&mut app);
+    crate::campaign_ground_lighting::install(&mut app);
     crate::internal_resolution::install(&mut app);
     crate::campaign_input::install(&mut app);
     crate::campaign_box_select::install(&mut app);

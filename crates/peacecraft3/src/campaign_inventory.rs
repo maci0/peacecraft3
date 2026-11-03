@@ -1,4 +1,5 @@
 //! Receipt-bound held item projection. Item actions are separate consumers.
+use crate::hud_render::simple_justification as title_justification;
 use crate::{
     campaign_hud::upper_buttons::{image_sampler, read, skin_file, text},
     menu_skin::SkinTable,
@@ -155,6 +156,7 @@ struct Source {
     label: String,
     font: Handle<Font>,
     font_height: f32,
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     disabled: String,
     cover: String,
     images: HashMap<(String, bool), Handle<Image>>,
@@ -172,6 +174,55 @@ struct Source {
     retained: usize,
     receipts: Vec<AssetReceipt>,
 }
+#[derive(Component)]
+struct InventoryTitle {
+    font: Handle<Font>,
+    error: Option<String>,
+}
+
+fn space_inventory_title(
+    mut titles: Query<(
+        &mut InventoryTitle,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &Text,
+        &mut bevy::text::TextLayoutInfo,
+        &mut Node,
+    )>,
+    fonts: Res<bevy::prelude::Assets<Font>>,
+    mut state: ResMut<CampaignInventory>,
+) {
+    for (mut binding, raster, target, text, mut layout, mut node) in &mut titles {
+        if !layout.is_changed() {
+            continue;
+        }
+        let Some(font) = fonts.get(&binding.font) else {
+            continue;
+        };
+        match crate::hud_render::space_source_line(
+            raster,
+            target,
+            font,
+            &text.0,
+            layout.bypass_change_detection(),
+        ) {
+            Ok(width) => {
+                binding.error = None;
+                if let Some(width) = width {
+                    let width = Val::Px(width / target.scale_factor());
+                    if node.width != width {
+                        node.width = width;
+                    }
+                }
+            }
+            Err(error) => {
+                binding.error = Some(error.clone());
+                state.last_error = Some(error);
+            }
+        }
+    }
+}
+
 #[derive(SystemParam)]
 struct Inputs<'w, 's> {
     requests: Res<'w, MapRequests>,
@@ -204,7 +255,12 @@ pub(crate) fn install(app: &mut App) {
         )
         .add_systems(
             PostUpdate,
-            measure_tooltip.after(bevy::ui::UiSystems::PostLayout),
+            (
+                measure_tooltip.after(bevy::ui::UiSystems::PostLayout),
+                space_inventory_title
+                    .after(bevy::ui::widget::text_system)
+                    .in_set(crate::hud_render::SourceTextMetricsSet),
+            ),
         );
 }
 fn capture(mut state: ResMut<CampaignInventory>) {
@@ -341,7 +397,7 @@ fn decode_image(
         )
         .filter(|n| *n <= MAX_PAYLOAD)
         .ok_or("inventory image aggregate budget")?;
-    let mut image = pcx_gfx::viewer::rgba_image(&texture);
+    let mut image = crate::menu_composition::image(&texture);
     image.sampler = bevy::image::ImageSampler::Descriptor(image_sampler(repeat));
     // Receipts describe only assets that became part of the projection.
     source.receipts.extend(receipts);
@@ -358,6 +414,7 @@ fn load(
     reader: &pcx_assets::Resolver,
     rules: Rules,
     tooltip_seed: Result<bool, String>,
+    font_policy: Arc<pcx_play::font_pair_policy::PairPolicy>,
     race: Result<Option<String>, String>,
     fonts: &mut bevy::prelude::Assets<Font>,
 ) -> Result<Source, String> {
@@ -417,10 +474,7 @@ fn load(
     let tooltip_edge = skin_file(&skin, &sections, &rules.tooltip.edge_key)?;
     let disabled = skin_file(&skin, &sections, &rules.disabled_key)?;
     let cover = skin_file(&skin, &sections, &rules.cover_key)?;
-    // Low bits are the native font format's left/center/right justification mask.
-    if !matches!(rules.label_flags & 7, 1 | 2 | 4) {
-        return Err("unsupported inventory font justification".into());
-    }
+    title_justification(rules.label_flags)?;
     let font = fonts.add(Font::from_bytes(font_bytes));
     let tooltip_font = match tip_font_bytes {
         Some(bytes) => fonts.add(Font::from_bytes(bytes)),
@@ -432,6 +486,7 @@ fn load(
         label,
         font,
         font_height,
+        font_policy,
         disabled,
         cover,
         images: HashMap::new(),
@@ -561,7 +616,61 @@ fn cover_source_rect(uv: [f32; 4], size: Vec2) -> bevy::math::Rect {
 }
 fn colour(argb: u32) -> Color {
     let [a, r, g, b] = argb.to_be_bytes();
-    Color::srgba_u8(r, g, b, a)
+    crate::menu_composition::colour_u8(r, g, b, a)
+}
+
+fn paint_title(commands: &mut Commands, root: Entity, source: &Source) -> Result<(), String> {
+    let (justify_h, justify_v) = title_justification(source.rules.label_flags)?;
+    let rect = source.rules.label();
+    let label = commands
+        .spawn((
+            node(rect, source.rules.viewport),
+            InventoryTitle {
+                font: source.font.clone(),
+                error: None,
+            },
+            crate::hud_render::source_font(
+                &source.font_policy,
+                source.font_height / source.rules.viewport[1],
+            ),
+            crate::hud_render::SourceTextBox {
+                point: Vec2::from_array(source.rules.label_top_left()),
+                viewport: Vec2::from_array(source.rules.viewport),
+                width: Some(rect.width),
+                height: rect.height,
+                font_height: source.font_height,
+                anchor_h: crate::menu_text::JustifyH::Left,
+                justify_h,
+                justify_v,
+            },
+            bevy::text::LineHeight::RelativeToFont(1.),
+            Text::new(source.label.clone()),
+            TextFont {
+                font: source.font.clone().into(),
+                font_size: bevy::text::FontSize::Vh(
+                    source.font_height / source.rules.viewport[1] * 100.,
+                ),
+                ..default()
+            },
+            TextColor(colour(source.rules.label_colour)),
+            TextLayout::new(
+                match justify_h {
+                    crate::menu_text::JustifyH::Left => bevy::text::Justify::Left,
+                    crate::menu_text::JustifyH::Center => bevy::text::Justify::Center,
+                    crate::menu_text::JustifyH::Right => bevy::text::Justify::Right,
+                },
+                bevy::text::LineBreak::NoWrap,
+            ),
+            TextShadow {
+                offset: Vec2::ZERO,
+                color: colour(source.rules.shadow_colour),
+            },
+            crate::glue_menu::FrameShadow(Vec2::from(source.rules.shadow_offset)),
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(root).add_child(label);
+    Ok(())
 }
 fn paint(
     commands: &mut Commands,
@@ -592,35 +701,7 @@ fn paint(
         commands.entity(root).add_child(child);
         return Ok(());
     }
-    let label = commands
-        .spawn((
-            node(source.rules.label(), source.rules.viewport),
-            Text::new(source.label.clone()),
-            TextFont {
-                font: source.font.clone().into(),
-                font_size: bevy::text::FontSize::Vh(
-                    source.font_height / source.rules.viewport[1] * 100.,
-                ),
-                ..default()
-            },
-            TextColor(colour(source.rules.label_colour)),
-            TextLayout::new(
-                match source.rules.label_flags & 7 {
-                    1 => bevy::text::Justify::Left,
-                    2 => bevy::text::Justify::Center,
-                    _ => bevy::text::Justify::Right,
-                },
-                bevy::text::LineBreak::NoWrap,
-            ),
-            TextShadow {
-                offset: Vec2::ZERO,
-                color: colour(source.rules.shadow_colour),
-            },
-            crate::glue_menu::FrameShadow(Vec2::from(source.rules.shadow_offset)),
-            Pickable::IGNORE,
-        ))
-        .id();
-    commands.entity(root).add_child(label);
+    paint_title(commands, root, source)?;
     for (index, item) in view.items.iter().enumerate() {
         let rect = source.rules.slot(index)?;
         let slot = commands
@@ -727,14 +808,19 @@ fn project(
                     version: "reviewed Legacy 1.29.2.9231 inventory layout image".into(),
                 };
                 let rules = Rules::reviewed_legacy(image, origin.clone())?;
+                let font_policy = Arc::new(pcx_play::font_pair_policy::PairPolicy::read(
+                    image,
+                    origin.clone(),
+                )?);
                 let seed = tooltip_seed(image, origin, rules.tooltip.preference_index);
-                Ok((rules, seed))
+                Ok((rules, seed, font_policy))
             })
-            .and_then(|(rules, seed)| {
+            .and_then(|(rules, seed, font_policy)| {
                 load(
                     &reader,
                     rules,
                     seed,
+                    font_policy,
                     host.objects()
                         .local_race_preference_constant()
                         .map_err(|e| e.to_string()),
@@ -913,7 +999,7 @@ fn text_block(
     for run in parsed.spans {
         let c = run
             .colour
-            .map_or(base, |c| Color::srgba(c[0], c[1], c[2], c[3]));
+            .map_or(base, |c| Color::linear_rgba(c[0], c[1], c[2], c[3]));
         let span = commands
             .spawn((TextSpan::new(run.text), style.clone(), TextColor(c)))
             .id();
@@ -1281,11 +1367,14 @@ pub(crate) fn tooltip_component_fixture(
     camera: Entity,
 ) {
     let rules = Rules::reviewed_legacy(client, origin.clone()).unwrap();
+    let font_policy =
+        Arc::new(pcx_play::font_pair_policy::PairPolicy::read(client, origin.clone()).unwrap());
     let seed = tooltip_seed(client, origin, rules.tooltip.preference_index);
     let mut source = load(
         reader,
         rules,
         seed,
+        font_policy,
         Ok(race),
         &mut app
             .world_mut()
@@ -1390,6 +1479,21 @@ pub(crate) fn tooltip_component_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_justification_uses_both_widget_flag_groups() {
+        use crate::menu_text::{JustifyH, JustifyV};
+        for (flags, expected) in [
+            (1 | 8, (JustifyH::Left, JustifyV::Top)),
+            (2 | 16, (JustifyH::Center, JustifyV::Middle)),
+            (4 | 32, (JustifyH::Right, JustifyV::Bottom)),
+        ] {
+            assert_eq!(title_justification(flags).unwrap(), expected);
+        }
+        assert!(title_justification(3 | 16).is_err());
+        assert!(title_justification(2 | 8 | 16).is_err());
+        assert!(title_justification(2).is_err());
+    }
 
     #[test]
     fn checkbox_fallback_admits_only_exact_zero_or_one() {
@@ -1604,6 +1708,7 @@ mod tests {
                 label: "Items".into(),
                 font: Handle::default(),
                 font_height: 0.02,
+                font_policy: Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
                 disabled: "disabled".into(),
                 cover: "cover".into(),
                 images: HashMap::new(),
@@ -1622,6 +1727,45 @@ mod tests {
         }
 
         #[test]
+        fn heading_binds_source_font_and_fixed_frame_before_layout() {
+            let mut app = App::new();
+            let root = app.world_mut().spawn_empty().id();
+            let source = source(Ok(true));
+            let policy = source.font_policy.clone();
+            let point = source.rules.label_top_left();
+            let rect = source.rules.label();
+            let height = source.font_height;
+            let viewport = source.rules.viewport;
+            app.world_mut()
+                .run_system_once(move |mut commands: Commands| {
+                    paint_title(&mut commands, root, &source)
+                })
+                .unwrap()
+                .unwrap();
+            let world = app.world_mut();
+            let (title, raster, frame, filter, alpha) = world
+                .query::<(
+                    &Text,
+                    &crate::hud_render::SourceFont,
+                    &crate::hud_render::SourceTextBox,
+                    &bevy::ui::widget::TextAtlasFilter,
+                    &bevy::ui::widget::TextAlphaTest,
+                )>()
+                .single(world)
+                .unwrap();
+            assert_eq!(title.0, "Items");
+            assert!(Arc::ptr_eq(&raster.policy, &policy));
+            assert_eq!(raster.normalized_height, height / viewport[1]);
+            assert_eq!(frame.point, Vec2::from_array(point));
+            assert_eq!(frame.width, Some(rect.width));
+            assert_eq!(frame.height, rect.height);
+            assert_eq!(frame.justify_h, crate::menu_text::JustifyH::Center);
+            assert_eq!(frame.justify_v, crate::menu_text::JustifyV::Middle);
+            assert!(matches!(filter, bevy::ui::widget::TextAtlasFilter::Nearest));
+            assert_eq!(alpha.0, policy.font_alpha_reference());
+        }
+
+        #[test]
         fn refused_font_admission_adds_no_font_asset() {
             let (reader, _) = memory_reader(load_files(SKIN_TEXT, FONT, b"not a font"));
             let mut fonts = bevy::prelude::Assets::<Font>::default();
@@ -1629,6 +1773,7 @@ mod tests {
                 &reader,
                 fixtures::synthetic(),
                 Ok(true),
+                Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
                 Ok(Some(RACE.into())),
                 &mut fonts,
             )
@@ -1645,6 +1790,7 @@ mod tests {
                 &reader,
                 fixtures::synthetic(),
                 Ok(true),
+                Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
                 Ok(Some(RACE.into())),
                 &mut fonts,
             )
@@ -1662,6 +1808,7 @@ mod tests {
                 &reader,
                 fixtures::synthetic(),
                 Ok(true),
+                Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
                 Ok(Some(RACE.into())),
                 &mut fonts,
             )
@@ -2024,6 +2171,7 @@ pub(crate) mod slot_input_tests {
                 label: String::new(),
                 font: Handle::default(),
                 font_height: 0.02,
+                font_policy: Arc::new(pcx_play::font_pair_policy::fixtures::synthetic()),
                 disabled: String::new(),
                 cover: String::new(),
                 images: HashMap::new(),

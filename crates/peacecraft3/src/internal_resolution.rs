@@ -1,14 +1,13 @@
 //! Isolated world composition and launcher supersampling; UI keeps its display target.
-use crate::campaign_actors::sky::SkyCamera;
+use crate::{campaign_actors::sky::SkyCamera, menu_composition::RenderedImage as Downsample};
 use bevy::{
     camera::{CameraUpdateSystems, ImageRenderTarget, RenderTarget, visibility::RenderLayers},
     ecs::system::SystemParam,
     prelude::*,
     render::{
-        render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat, TextureUsages},
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
         renderer::RenderDevice,
     },
-    shader::ShaderRef,
     window::{PrimaryWindow, WindowRef},
 };
 use peacecraft3::campaign_camera::CampaignSceneCamera;
@@ -43,23 +42,8 @@ struct Pass {
     scale: f32,
     factor: u32,
 }
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-struct Downsample {
-    #[texture(0)]
-    image: Handle<Image>,
-    #[uniform(1)]
-    factor: u32,
-}
-impl UiMaterial for Downsample {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://peacecraft3/internal_resolution.wgsl".into()
-    }
-}
-
 pub(crate) fn install(app: &mut App) {
-    bevy::asset::embedded_asset!(app, "internal_resolution.wgsl");
     app.init_resource::<InternalResolution>()
-        .add_plugins(UiMaterialPlugin::<Downsample>::default())
         .add_systems(PostUpdate, sync.before(CameraUpdateSystems));
 }
 
@@ -215,6 +199,7 @@ fn sync(
                     commands
                         .spawn((
                             Camera2d,
+                            crate::menu_composition::MenuColourCamera,
                             RenderLayers::none(),
                             Camera {
                                 order: -3,
@@ -349,11 +334,7 @@ fn sync(
                     Pickable::IGNORE,
                 ))
                 .id();
-            if state.factor == 1 {
-                commands.entity(root).insert(ImageNode::new(image.clone()));
-            } else {
-                commands.entity(root).insert(MaterialNode(material.clone()));
-            }
+            commands.entity(root).insert(MaterialNode(material.clone()));
             state.pass = Some(Pass {
                 scene: entity,
                 camera: compositor,

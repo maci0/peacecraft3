@@ -12,7 +12,10 @@ use peacecraft3::{
     map_requests::MapRequests,
     map_script_session::MapScriptSession,
 };
-use std::{collections::HashMap, sync::Weak};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 const MEMBER: &str = "UI\\FrameDef\\UI\\ResourceBar.fdf";
 const ROOT: &str = "ResourceBarFrame";
@@ -29,6 +32,8 @@ struct ResourceBar {
     last_error: Option<String>,
 }
 struct Source {
+    pair_policy: Option<Arc<pcx_play::font_pair_policy::PairPolicy>>,
+    spacing_error: Option<String>,
     receipts: Vec<AssetReceipt>,
     globals: String,
     width: f32,
@@ -54,12 +59,93 @@ struct Label {
     entity: Option<Entity>,
     rendered: String,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Anchor {
-    right: bool,
-    x: f32,
-    y: f32,
+use crate::hud_render::{SourceTextAnchor as Anchor, SourceTextFrame as ResourceTextFrame};
+#[derive(Component)]
+struct ResourceText {
+    frame: ResourceTextFrame,
+    font: Handle<Font>,
+    error: Option<String>,
 }
+
+fn position_resource_text(
+    mut roots: Query<(
+        &ResourceText,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &ComputedNode,
+        &bevy::text::TextLayoutInfo,
+        &mut UiGlobalTransform,
+    )>,
+) {
+    // These leaf quads use source justification after Bevy has laid out their frames.
+    for (binding, raster, target, node, layout, mut transform) in &mut roots {
+        let origin = binding
+            .frame
+            .text_origin(target.physical_size().as_vec2(), layout.size)
+            + Vec2::from_array(raster.policy.d3d9_glyph_offset());
+        let placed = UiGlobalTransform::from_translation(origin + node.size() * 0.5);
+        if *transform != placed {
+            *transform = placed;
+        }
+    }
+}
+
+fn space_resource_text(
+    mut roots: Query<(
+        &mut ResourceText,
+        &crate::hud_render::SourceFont,
+        &ComputedUiRenderTargetInfo,
+        &Children,
+        &mut bevy::text::TextLayoutInfo,
+        &mut Node,
+    )>,
+    spans: Query<&TextSpan>,
+    fonts: Res<Assets<Font>>,
+    mut state: ResMut<ResourceBar>,
+) {
+    for (mut binding, raster, target, children, mut layout, mut node) in &mut roots {
+        if !layout.is_changed() {
+            continue;
+        }
+        let layout = layout.bypass_change_detection();
+        let result = (|| -> Result<(), String> {
+            let Some(font) = fonts.get(&binding.font) else {
+                return Ok(());
+            };
+            let text = children
+                .iter()
+                .filter_map(|child| spans.get(child).ok())
+                .map(|span| span.0.as_str())
+                .collect::<String>();
+            if let Some(width) =
+                crate::hud_render::space_source_line(raster, target, font, &text, layout)?
+            {
+                let width = Val::Px(width / target.scale_factor());
+                if node.width != width {
+                    node.width = width;
+                }
+            }
+            Ok(())
+        })();
+        binding.error = result.err();
+    }
+    let errors = roots
+        .iter()
+        .filter_map(|(binding, ..)| binding.error.as_deref())
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        state.last_error = Some(errors.join("; "));
+    }
+}
+
+#[derive(SystemParam)]
+struct ResourceInputs<'w> {
+    sources: Res<'w, SelectedMapSources>,
+    requests: Res<'w, MapRequests>,
+    camera: Res<'w, CampaignCamera>,
+    launcher: Option<Res<'w, crate::launch_gui::Launcher>>,
+}
+
 #[derive(SystemParam)]
 struct RenderAssets<'w> {
     fonts: ResMut<'w, Assets<Font>>,
@@ -67,23 +153,38 @@ struct RenderAssets<'w> {
 }
 
 pub(super) fn install(app: &mut App) {
-    app.init_resource::<ResourceBar>().add_systems(
-        Update,
-        (project, publish, show_root)
-            .chain()
-            .after(CampaignCameraSet)
-            .before(CampaignPresentationSet),
-    );
+    app.init_resource::<ResourceBar>()
+        .add_systems(
+            Update,
+            (project, show_root)
+                .chain()
+                .after(CampaignCameraSet)
+                .before(CampaignPresentationSet),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                space_resource_text.after(bevy::ui::widget::text_system),
+                position_resource_text
+                    .after(space_resource_text)
+                    .after(bevy::ui::UiSystems::PostLayout),
+                publish.after(space_resource_text),
+            ),
+        );
 }
 fn project(
     mut commands: Commands,
     mut state: ResMut<ResourceBar>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
-    sources: Res<SelectedMapSources>,
-    requests: Res<MapRequests>,
-    camera: Res<CampaignCamera>,
+    inputs: ResourceInputs,
     assets: RenderAssets,
 ) {
+    let ResourceInputs {
+        sources,
+        requests,
+        camera,
+        launcher,
+    } = inputs;
     let RenderAssets {
         mut fonts,
         mut images,
@@ -148,6 +249,18 @@ fn project(
         );
         match result {
             Ok(mut source) => {
+                let install = launcher
+                    .as_deref()
+                    .and_then(crate::launch_gui::selected_install);
+                match crate::menu_lighting::with_client_image(install.as_deref(), |label, image| {
+                    pcx_play::font_pair_policy::PairPolicy::read(
+                        image,
+                        pcx_play::campaign_inputs::client_identity(image, label),
+                    )
+                }) {
+                    Ok(policy) => source.pair_policy = Some(Arc::new(policy)),
+                    Err(error) => source.spacing_error = Some(error),
+                }
                 let root = paint(&mut commands, &mut source);
                 state.root = Some(root);
                 state.source = Some(source);
@@ -162,6 +275,9 @@ fn project(
         return;
     };
     let (values, mut errors) = balances(host.objects(), &source.globals);
+    if let Some(error) = &source.spacing_error {
+        errors.push(error.clone());
+    }
     for label in &mut source.labels {
         let mut value = values.get(label.name.as_str()).cloned().unwrap_or_default();
         let parsed = match resource_runs(&value, label.length) {
@@ -183,6 +299,7 @@ fn project(
                     let child = commands
                         .spawn((
                             TextSpan::new(span.text),
+                            bevy::text::LineHeight::RelativeToFont(1.0),
                             TextFont {
                                 font: source.fonts[&label.style.font].clone().into(),
                                 font_size: bevy::text::FontSize::Vh(
@@ -190,7 +307,9 @@ fn project(
                                 ),
                                 ..default()
                             },
-                            TextColor(Color::srgba(colour[0], colour[1], colour[2], colour[3])),
+                            TextColor(Color::linear_rgba(
+                                colour[0], colour[1], colour[2], colour[3],
+                            )),
                         ))
                         .id();
                     commands.entity(entity).add_child(child);
@@ -339,7 +458,7 @@ fn load(
                     retained += texture
                         .rgba_bytes()
                         .ok_or_else(|| format!("{path}: invalid decoded payload size"))?;
-                    let mut image = pcx_gfx::viewer::rgba_image(&texture);
+                    let mut image = crate::menu_composition::image(&texture);
                     image.sampler = bevy::image::ImageSampler::Descriptor(
                         super::upper_buttons::image_sampler(false),
                     );
@@ -365,7 +484,7 @@ fn load(
                         frame.name
                     ));
                 }
-                let style = menu_text::render_style(&fdf, &frame.name)?;
+                let style = string_style(&fdf, &frame.name)?;
                 if !decoded_fonts.contains_key(&style.font) {
                     let path = skin_file(&skin, &sections, &style.font)?;
                     let bytes = read(reader, &path, 16 << 20, &mut receipts)?;
@@ -413,6 +532,8 @@ fn load(
         }
     }
     Ok(Source {
+        pair_policy: None,
+        spacing_error: None,
         globals,
         receipts,
         width,
@@ -428,6 +549,21 @@ fn load(
             .map(|(key, image)| (key, images.add(image)))
             .collect(),
     })
+}
+fn string_style(fdf: &Fdf, frame: &str) -> Result<menu_text::TextStyle, String> {
+    if let Some(flags) = fdf.record(frame, "FontFlags")
+        && !flags.trim().trim_matches('"').is_empty()
+    {
+        return Err(format!(
+            "{frame}: only default font flags have a qualified raster/sampler path"
+        ));
+    }
+    let mut style = menu_text::render_style(fdf, frame)?;
+    // Simple strings center within their authored Height, as observed in the original HUD.
+    if fdf.record(frame, "FontJustificationV").is_none() {
+        style.justify_v = menu_text::JustifyV::Middle;
+    }
+    Ok(style)
 }
 fn anchored(anchor: Anchor, parent: (f32, f32)) -> Node {
     let mut node = Node {
@@ -479,11 +615,27 @@ fn paint(commands: &mut Commands, source: &mut Source) -> Entity {
         node.width = label
             .width
             .map_or(Val::Auto, |width| Val::Percent(width / source.width * 100.));
+        node.justify_content = match label.style.justify_h {
+            menu_text::JustifyH::Left => JustifyContent::FlexStart,
+            menu_text::JustifyH::Center => JustifyContent::Center,
+            menu_text::JustifyH::Right => JustifyContent::FlexEnd,
+        };
+        node.align_items = match label.style.justify_v {
+            menu_text::JustifyV::Top => AlignItems::FlexStart,
+            menu_text::JustifyV::Middle => AlignItems::Center,
+            menu_text::JustifyV::Bottom => AlignItems::FlexEnd,
+        };
+        let frame = commands.spawn((node, Pickable::IGNORE)).id();
+        commands.entity(root).add_child(frame);
         let colour = label.style.colour;
         let child = commands
             .spawn((
-                node,
+                Node {
+                    flex_shrink: 0.,
+                    ..default()
+                },
                 Text::default(),
+                bevy::text::LineHeight::RelativeToFont(1.0),
                 TextFont {
                     font: source.fonts[&label.style.font].clone().into(),
                     font_size: bevy::text::FontSize::Vh(
@@ -491,7 +643,9 @@ fn paint(commands: &mut Commands, source: &mut Source) -> Entity {
                     ),
                     ..default()
                 },
-                TextColor(Color::srgba(colour[0], colour[1], colour[2], colour[3])),
+                TextColor(Color::linear_rgba(
+                    colour[0], colour[1], colour[2], colour[3],
+                )),
                 TextLayout::new(
                     match label.style.justify_h {
                         menu_text::JustifyH::Left => bevy::text::Justify::Left,
@@ -503,7 +657,35 @@ fn paint(commands: &mut Commands, source: &mut Source) -> Entity {
                 Pickable::IGNORE,
             ))
             .id();
-        commands.entity(root).add_child(child);
+        if let Some(policy) = &source.pair_policy {
+            commands
+                .entity(child)
+                .insert(crate::hud_render::source_font(
+                    policy,
+                    label.style.height / crate::mainmenu::FRAME_H,
+                ));
+            commands.entity(child).insert(ResourceText {
+                frame: ResourceTextFrame {
+                    anchor: Anchor {
+                        right: label.anchor.right,
+                        x: (if label.anchor.right {
+                            crate::mainmenu::FRAME_W
+                        } else {
+                            crate::mainmenu::FRAME_W - source.width
+                        } + label.anchor.x)
+                            / crate::mainmenu::FRAME_W,
+                        y: -label.anchor.y / crate::mainmenu::FRAME_H,
+                    },
+                    width: label.width.map(|width| width / crate::mainmenu::FRAME_W),
+                    height: label.height / crate::mainmenu::FRAME_H,
+                    justify_h: label.style.justify_h,
+                    justify_v: label.style.justify_v,
+                },
+                font: source.fonts[&label.style.font].clone(),
+                error: None,
+            });
+        }
+        commands.entity(frame).add_child(child);
         label.entity = Some(child);
     }
     root
@@ -602,6 +784,52 @@ fn upkeep_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn justification_rounds_source_origin_before_text_extent() {
+        let mut frame = ResourceTextFrame {
+            anchor: Anchor {
+                right: true,
+                x: 0.937,
+                y: 0.027,
+            },
+            width: Some(0.163),
+            height: 0.079,
+            justify_h: menu_text::JustifyH::Center,
+            justify_v: menu_text::JustifyV::Middle,
+        };
+        let viewport = Vec2::new(200., 100.);
+        let text = Vec2::new(31., 12.);
+        assert_eq!(frame.text_origin(viewport, text), Vec2::new(155., 1.));
+        assert_eq!(
+            frame.text_origin(viewport * 2., text * 2.),
+            Vec2::new(311., 1.)
+        );
+        frame.justify_h = menu_text::JustifyH::Right;
+        frame.justify_v = menu_text::JustifyV::Top;
+        assert_eq!(frame.text_origin(viewport, text), Vec2::new(156., 3.));
+        frame.justify_h = menu_text::JustifyH::Left;
+        frame.justify_v = menu_text::JustifyV::Bottom;
+        assert_eq!(frame.text_origin(viewport, text), Vec2::new(155., -1.));
+        frame.width = None;
+        frame.justify_h = menu_text::JustifyH::Right;
+        assert_eq!(frame.text_origin(viewport, text).x, 156.);
+    }
+    #[test]
+    fn nondefault_font_flags_do_not_select_the_default_sampler() {
+        let source = r#"String "Value" {
+Font "Face",0.013,
+FontFlags "UNKNOWN",
+}
+"#;
+        let fdf = Fdf::parse(&normalize(source).unwrap()).unwrap();
+        assert!(
+            string_style(&fdf, "Value")
+                .unwrap_err()
+                .contains("only default font flags")
+        );
+    }
+
     #[test]
     fn upkeep_localization_uses_primary_then_source_fallback_and_preserves_colour() {
         let globals =
@@ -646,6 +874,65 @@ mod tests {
         let node = anchored(anchor(&fdf, "Value").unwrap(), (0.4, 0.1));
         assert!(matches!(node.right,Val::Percent(value) if (value-10.).abs()<0.00001));
         assert_eq!(node.top, Val::Percent(3.));
+    }
+    #[test]
+    fn simple_string_justification_positions_text_inside_the_source_frame() {
+        for (horizontal, expected_h) in [
+            ("JUSTIFYLEFT", JustifyContent::FlexStart),
+            ("JUSTIFYCENTER", JustifyContent::Center),
+            ("JUSTIFYRIGHT", JustifyContent::FlexEnd),
+        ] {
+            for (vertical, expected_v) in [
+                ("", AlignItems::Center),
+                ("FontJustificationV JUSTIFYTOP,", AlignItems::FlexStart),
+                ("FontJustificationV JUSTIFYBOTTOM,", AlignItems::FlexEnd),
+            ] {
+                let fdf = Fdf::parse(&normalize(&format!(
+                    "String \"Value\" {{\nFont \"Face\",0.013,\nWidth 0.09,\nHeight 0.03,\nAnchor TOPRIGHT,-0.02,-0.004,\nFontJustificationH {horizontal},\n{vertical}\n}}\n"
+                )).unwrap()).unwrap();
+                let mut source = Source {
+                    pair_policy: None,
+                    spacing_error: None,
+                    receipts: Vec::new(),
+                    globals: String::new(),
+                    width: 0.4,
+                    height: 0.08,
+                    labels: vec![Label {
+                        name: "Value".into(),
+                        anchor: anchor(&fdf, "Value").unwrap(),
+                        width: Some(fdf.width("Value").unwrap()),
+                        height: fdf.height("Value").unwrap(),
+                        length: None,
+                        style: string_style(&fdf, "Value").unwrap(),
+                        entity: None,
+                        rendered: String::new(),
+                    }],
+                    icons: Vec::new(),
+                    fonts: HashMap::from([("Face".into(), Handle::default())]),
+                    images: HashMap::new(),
+                };
+                let mut world = World::new();
+                let root = paint(&mut world.commands(), &mut source);
+                world.flush();
+                let text = source.labels[0].entity.unwrap();
+                let frame = world.get::<ChildOf>(text).unwrap().parent();
+                assert_eq!(world.get::<ChildOf>(frame).unwrap().parent(), root);
+                let node = world.get::<Node>(frame).unwrap();
+                assert_eq!(node.justify_content, expected_h);
+                assert_eq!(node.align_items, expected_v);
+                assert!(matches!(node.width, Val::Percent(width) if (width - 22.5).abs() < 0.0001));
+                assert!(
+                    matches!(node.height, Val::Percent(height) if (height - 37.5).abs() < 0.0001)
+                );
+                assert_eq!(world.get::<Node>(text).unwrap().width, Val::Auto);
+                assert_eq!(world.get::<Node>(text).unwrap().flex_shrink, 0.);
+                assert!(world.get::<Text>(text).is_some());
+                assert_eq!(
+                    world.get::<bevy::text::LineHeight>(text),
+                    Some(&bevy::text::LineHeight::RelativeToFont(1.0))
+                );
+            }
+        }
     }
     #[test]
     fn malformed_or_unsupported_source_anchors_refuse() {

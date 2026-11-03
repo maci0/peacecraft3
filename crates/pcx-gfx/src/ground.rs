@@ -8,8 +8,9 @@
 //!
 //! The layer numbering and the clamp/linear/mip filter follow the public
 //! Warsmash `GroundTexture` loader (commit `f9e0aeed4be372d6016519d0e97b384aa873f374`).
-//! That file is a labelled reconstruction, not a native trace. Lighting, cliffs,
-//! water and gameplay fog are outside this draw. The optional authored shadow mask
+//! That file is a labelled reconstruction, not a native trace. Explicit directional
+//! lighting uses source-derived corner normals; cliffs, water and gameplay fog
+//! are outside this draw. The optional authored shadow mask
 //! and executed boundary overlay are composed in terrain world coordinates.
 
 use bevy::asset::RenderAssetUsages;
@@ -39,7 +40,7 @@ const SELECTOR_LOCATION: u32 = 7;
 ///
 /// `retained_bytes` is the published image, every layer and mip included.
 /// `transient_bytes` bounds decoded RGBA and cell/mip scratch space, separately
-/// from the retained image. Cells are copied and mipmapped one at a time.
+/// from the retained image. Authored mip cells are copied one at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GroundMemory {
     pub retained_bytes: usize,
@@ -93,6 +94,9 @@ struct GroundUniform {
     boundary_bounds: Vec4,
     shadow_color: Vec4,
     shadow_bounds: Vec4,
+    light_direction: Vec4,
+    light_diffuse: Vec4,
+    light_ambient: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -120,10 +124,38 @@ impl GroundMaterial {
                 boundary_bounds: Vec4::ZERO,
                 shadow_color: Vec4::ZERO,
                 shadow_bounds: Vec4::ZERO,
+                light_direction: Vec4::ZERO,
+                light_diffuse: Vec4::ZERO,
+                light_ambient: Vec4::ZERO,
             },
             boundary_texture: None,
             shadow_texture: None,
         }
+    }
+
+    /// Numeric directional lighting in Bevy world space; absent until explicitly bound.
+    pub fn set_directional_light(
+        &mut self,
+        towards: Vec3,
+        diffuse: Vec3,
+        ambient: Vec3,
+    ) -> Result<(), &'static str> {
+        let towards = towards
+            .try_normalize()
+            .filter(|v| v.is_finite())
+            .ok_or("invalid terrain light direction")?;
+        if !diffuse.is_finite() || !ambient.is_finite() {
+            return Err("nonfinite terrain light channels");
+        }
+        self.params.light_direction = towards.extend(1.);
+        self.params.light_diffuse = diffuse.extend(0.);
+        self.params.light_ambient = ambient.extend(0.);
+        Ok(())
+    }
+
+    /// Remove an explicitly bound light; retained channel values are inactive.
+    pub fn clear_directional_light(&mut self) {
+        self.params.light_direction = Vec4::ZERO;
     }
 
     /// Baked map shadow cells, in map X/Y order; no camera-dependent projection.
@@ -198,6 +230,7 @@ impl Material for GroundMaterial {
     ) -> Result<(), SpecializedMeshPipelineError> {
         let buffer = layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
             Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
             GROUND_SELECTORS.at_shader_location(SELECTOR_LOCATION),
         ])?;
@@ -285,6 +318,8 @@ pub enum GroundError {
     Corner { x: u32, y: u32 },
     #[error("ground corner {x},{y} has a non-finite world position")]
     Position { x: u32, y: u32 },
+    #[error("ground corner ({x}, {y}) has an invalid finite-difference normal")]
+    Normal { x: u32, y: u32 },
     #[error(
         "ground tile extent {tile} or {layers} array layers exceed device limits {dimension} / {layer_limit}"
     )]
@@ -309,7 +344,8 @@ struct SheetHeader {
     sheet_bytes: usize,
     /// Mip chains of this sheet's layers.
     retained_bytes: usize,
-    /// Two sheets bound decoded RGBA plus one cell and its two live mip levels.
+    mip_levels: u32,
+    /// Two base sheets bound the decoded authored chain plus one cell.
     transient_bytes: usize,
 }
 
@@ -318,6 +354,7 @@ struct Inspected {
     layer_base: [u32; 16],
     extended: Vec<bool>,
     tile: u32,
+    mip_levels: u32,
     retained_bytes: usize,
 }
 
@@ -413,13 +450,24 @@ fn inspect_slots(
     sheets
         .try_reserve_exact(slots.len())
         .map_err(|_| GroundError::Allocation)?;
+    for slot in slots {
+        sheets.push(sheet_header(slot)?);
+    }
+    let mip_levels = sheets
+        .iter()
+        .map(|sheet| sheet.mip_levels)
+        .min()
+        .ok_or(GroundError::EmptySlots)?;
     let mut retained_left = memory.retained_bytes;
     let mut expected_tile: Option<u32> = None;
     let mut layer_base = [0u32; MAX_GROUND_SLOTS];
     let mut cursor = 0u32;
     let mut retained_bytes = 0usize;
-    for (index, slot) in slots.iter().enumerate() {
-        let header = sheet_header(slot)?;
+    for (index, (slot, header)) in slots.iter().zip(sheets.iter_mut()).enumerate() {
+        let layers = if header.extended { 32 } else { 16 };
+        header.retained_bytes = mip_chain_bytes(header.tile, header.tile, mip_levels)?
+            .checked_mul(layers as usize)
+            .ok_or(GroundError::Allocation)?;
         if let Some(expected) = expected_tile {
             if header.tile != expected {
                 return Err(GroundError::MixedTileExtent {
@@ -452,7 +500,6 @@ fn inspect_slots(
         retained_bytes = retained_bytes
             .checked_add(header.retained_bytes)
             .ok_or(GroundError::Allocation)?;
-        let layers = if header.extended { 32 } else { 16 };
         layer_base[index] = cursor;
         cursor = cursor.checked_add(layers).ok_or(GroundError::Allocation)?;
         if let Some(limits) = texture_limits
@@ -466,7 +513,6 @@ fn inspect_slots(
                 layer_limit: limits.max_texture_array_layers,
             });
         }
-        sheets.push(header);
     }
     let tile = expected_tile.ok_or(GroundError::EmptySlots)?;
     let extended = sheets.iter().map(|sheet| sheet.extended).collect();
@@ -475,6 +521,7 @@ fn inspect_slots(
         layer_base,
         extended,
         tile,
+        mip_levels,
         retained_bytes,
     })
 }
@@ -510,11 +557,29 @@ fn sheet_header(slot: &SelectedGroundBlp<'_>) -> Result<SheetHeader, GroundError
         });
     }
     let sheet_bytes = rgba_bytes(width, height)?;
-    let layers: u32 = if columns == WIDE_COLUMNS { 32 } else { 16 };
-    let layer_chain = mip_chain_bytes(tile, tile)?;
-    let retained_bytes = layer_chain
-        .checked_mul(usize::try_from(layers).map_err(|_| GroundError::Allocation)?)
-        .ok_or(GroundError::Allocation)?;
+    let count = parsed.mip_count();
+    if count == 0
+        || parsed.mip_sizes[..count].contains(&0)
+        || count > mip_level_count(width, height) as usize
+    {
+        return Err(GroundError::Parse {
+            fourcc: slot.fourcc,
+            path: slot.source.to_owned(),
+            detail: "missing, noncontiguous or excessive BLP mip levels".into(),
+        });
+    }
+    let mip_levels = (count as u32).min(mip_level_count(tile, tile));
+    for level in 0..mip_levels {
+        let (w, h) = parsed.mip_size(level as usize);
+        let cell = tile >> level;
+        if w != cell * columns || h != cell * SHEET_ROWS {
+            return Err(GroundError::Parse {
+                fourcc: slot.fourcc,
+                path: slot.source.to_owned(),
+                detail: format!("mip {level} cannot preserve the authored cell grid"),
+            });
+        }
+    }
     let transient_bytes = sheet_bytes
         .checked_add(sheet_bytes)
         .ok_or(GroundError::Allocation)?;
@@ -524,7 +589,8 @@ fn sheet_header(slot: &SelectedGroundBlp<'_>) -> Result<SheetHeader, GroundError
         width,
         height,
         sheet_bytes,
-        retained_bytes,
+        retained_bytes: 0,
+        mip_levels,
         transient_bytes,
     })
 }
@@ -545,12 +611,13 @@ fn decode_image(
     data.try_reserve_exact(inspected.retained_bytes)
         .map_err(|_| GroundError::Allocation)?;
     for (slot, sheet) in slots.iter().zip(inspected.sheets.iter()) {
-        let loaded = crate::load_image_bounded(slot.bytes, slot.source, sheet.sheet_bytes)
-            .map_err(|error| GroundError::Decode {
-                fourcc: slot.fourcc,
-                path: slot.source.to_owned(),
-                detail: error.to_string(),
-            })?;
+        let loaded =
+            crate::load_mipmapped_image_bounded(slot.bytes, slot.source, sheet.transient_bytes)
+                .map_err(|error| GroundError::Decode {
+                    fourcc: slot.fourcc,
+                    path: slot.source.to_owned(),
+                    detail: error.to_string(),
+                })?;
         if loaded.width != sheet.width
             || loaded.height != sheet.height
             || loaded.rgba.len() != sheet.sheet_bytes
@@ -572,14 +639,21 @@ fn decode_image(
         for half in 0..if sheet.extended { 2 } else { 1 } {
             for y in 0..SHEET_ROWS {
                 for x in 0..NARROW_COLUMNS {
-                    let cell = copy_cell(
-                        &loaded.rgba,
-                        sheet.width,
-                        sheet.tile,
-                        x + half * NARROW_COLUMNS,
-                        y,
-                    )?;
-                    append_mips(&mut data, &cell, sheet.tile, sheet.tile)?;
+                    for level in 0..inspected.mip_levels {
+                        let rgba = if level == 0 {
+                            &loaded.rgba
+                        } else {
+                            &loaded.mipmaps[level as usize - 1]
+                        };
+                        let cell = copy_cell(
+                            rgba,
+                            sheet.width >> level,
+                            sheet.tile >> level,
+                            x + half * NARROW_COLUMNS,
+                            y,
+                        )?;
+                        data.extend_from_slice(&cell);
+                    }
                 }
             }
         }
@@ -603,7 +677,7 @@ fn decode_image(
     );
     image.data = Some(data);
     image.data_order = TextureDataOrder::LayerMajor;
-    image.texture_descriptor.mip_level_count = mip_level_count(inspected.tile, inspected.tile);
+    image.texture_descriptor.mip_level_count = inspected.mip_levels;
     image.sampler = ImageSampler::linear();
     image.texture_view_descriptor = Some(TextureViewDescriptor {
         dimension: Some(TextureViewDimension::D2Array),
@@ -673,79 +747,17 @@ fn mip_level_count(mut width: u32, mut height: u32) -> u32 {
     count
 }
 
-/// Bytes of one layer from its base through the 1x1 mip, before any pixel decode.
-fn mip_chain_bytes(width: u32, height: u32) -> Result<usize, GroundError> {
+/// Bytes of the common supplied mip prefix, before any pixel decode.
+fn mip_chain_bytes(mut width: u32, mut height: u32, levels: u32) -> Result<usize, GroundError> {
     let mut total = 0usize;
-    let mut w = width;
-    let mut h = height;
-    loop {
+    for _ in 0..levels {
         total = total
-            .checked_add(rgba_bytes(w, h)?)
+            .checked_add(rgba_bytes(width, height)?)
             .ok_or(GroundError::Allocation)?;
-        if w <= 1 && h <= 1 {
-            return Ok(total);
-        }
-        w = next_extent(w);
-        h = next_extent(h);
+        width = next_extent(width);
+        height = next_extent(height);
     }
-}
-
-fn append_mips(out: &mut Vec<u8>, base: &[u8], width: u32, height: u32) -> Result<(), GroundError> {
-    let mut level = base.to_vec();
-    let mut w = width;
-    let mut h = height;
-    loop {
-        out.try_reserve(level.len())
-            .map_err(|_| GroundError::Allocation)?;
-        out.extend_from_slice(&level);
-        if w <= 1 && h <= 1 {
-            break;
-        }
-        let nw = next_extent(w);
-        let nh = next_extent(h);
-        let mut next = Vec::new();
-        next.try_reserve_exact(rgba_bytes(nw, nh)?)
-            .map_err(|_| GroundError::Allocation)?;
-        for y in 0..nh {
-            for x in 0..nw {
-                let (x0, x1) = parent_span(x, w, nw);
-                let (y0, y1) = parent_span(y, h, nh);
-                next.extend_from_slice(&average_rect(&level, w, x0, x1, y0, y1));
-            }
-        }
-        level = next;
-        w = nw;
-        h = nh;
-    }
-    Ok(())
-}
-
-fn parent_span(index: u32, parent: u32, child: u32) -> (u32, u32) {
-    let start = (u64::from(index) * u64::from(parent) / u64::from(child)) as u32;
-    let end = (u64::from(index + 1) * u64::from(parent) / u64::from(child)) as u32;
-    (start, end.max(start + 1).min(parent))
-}
-
-fn average_rect(src: &[u8], width: u32, x0: u32, x1: u32, y0: u32, y1: u32) -> [u8; 4] {
-    let mut sum = [0u32; 4];
-    let mut count = 0u32;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let index = ((y * width + x) * 4) as usize;
-            for channel in 0..4 {
-                sum[channel] += u32::from(src[index + channel]);
-            }
-            count += 1;
-        }
-    }
-    let mut out = [0u8; 4];
-    if count == 0 {
-        return out;
-    }
-    for channel in 0..4 {
-        out[channel] = ((sum[channel] + count / 2) / count) as u8;
-    }
-    out
+    Ok(total)
 }
 
 fn tile_selectors(terrain: &Terrain, extended: &[bool]) -> Result<Vec<[u16; 4]>, GroundError> {
@@ -769,10 +781,14 @@ fn ground_mesh(terrain: &Terrain, selectors: &[[u16; 4]]) -> Result<Mesh, Ground
     let tiles = selectors.len();
     let vertices = tiles.checked_mul(4).ok_or(GroundError::Allocation)?;
     let mut positions = Vec::new();
+    let mut normals = Vec::new();
     let mut uvs = Vec::new();
     let mut packed = Vec::new();
     let mut indices = Vec::new();
     positions
+        .try_reserve_exact(vertices)
+        .map_err(|_| GroundError::Allocation)?;
+    normals
         .try_reserve_exact(vertices)
         .map_err(|_| GroundError::Allocation)?;
     uvs.try_reserve_exact(vertices)
@@ -802,6 +818,10 @@ fn ground_mesh(terrain: &Terrain, selectors: &[[u16; 4]]) -> Result<Mesh, Ground
                 return Err(GroundError::Position { x: cx, y: cy });
             }
             positions.push(bevy_position(world));
+            normals.push(bevy_position(
+                pcx_tera::corner_normal(terrain, cx, cy)
+                    .ok_or(GroundError::Normal { x: cx, y: cy })?,
+            ));
             uvs.push(local_uv[corner_index]);
             packed.push(words);
         }
@@ -813,6 +833,7 @@ fn ground_mesh(terrain: &Terrain, selectors: &[[u16; 4]]) -> Result<Mesh, Ground
         RenderAssetUsages::RENDER_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_attribute(GROUND_SELECTORS, packed)
     .with_inserted_indices(Indices::U32(indices)))
@@ -843,6 +864,29 @@ fn unpack_layer_base(packed: [UVec4; 4]) -> [u32; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directional_light_validates_before_replacing_the_previous_binding() {
+        let mut material = GroundMaterial::new(Handle::default(), [0; 16]);
+        material
+            .set_directional_light(Vec3::Y * 2., Vec3::splat(0.6), Vec3::splat(0.2))
+            .unwrap();
+        assert_eq!(material.params.light_direction, Vec3::Y.extend(1.));
+        assert!(
+            material
+                .set_directional_light(Vec3::ZERO, Vec3::ONE, Vec3::ZERO)
+                .is_err()
+        );
+        assert!(
+            material
+                .set_directional_light(Vec3::Z, Vec3::splat(f32::NAN), Vec3::ZERO)
+                .is_err()
+        );
+        assert_eq!(material.params.light_direction, Vec3::Y.extend(1.));
+        assert_eq!(material.params.light_diffuse, Vec4::new(0.6, 0.6, 0.6, 0.));
+        material.clear_directional_light();
+        assert_eq!(material.params.light_direction, Vec4::ZERO);
+    }
 
     fn blp(width: u32, height: u32, indices: &[u8]) -> Vec<u8> {
         assert_eq!(indices.len(), (width * height) as usize);
@@ -893,14 +937,18 @@ mod tests {
     }
 
     #[test]
-    fn one_mip_of_the_variation_cell_is_the_rounded_mean() {
+    fn supplied_mip_pixels_are_preserved() {
         let mut indices = vec![0u8; 32 * 32];
         for y in 3..5 {
             for x in 3..5 {
                 indices[y * 32 + x] = 1;
             }
         }
-        let bytes = blp(32, 32, &indices);
+        let mut bytes = blp(32, 32, &indices);
+        let offset = bytes.len() as u32;
+        bytes[0x20..0x24].copy_from_slice(&offset.to_le_bytes());
+        bytes[0x60..0x64].copy_from_slice(&256u32.to_le_bytes());
+        bytes.extend_from_slice(&[2; 256]);
         let decoded = decode_ground_slots(
             &[SelectedGroundBlp {
                 fourcc: *b"Ldrt",
@@ -913,19 +961,18 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(decoded.image.texture_descriptor.mip_level_count, 4);
+        assert_eq!(decoded.image.texture_descriptor.mip_level_count, 2);
         assert_eq!(
             decoded.image.texture_descriptor.format,
             TextureFormat::Rgba8Unorm
         );
         let data = decoded.image.data.unwrap();
-        let level3 = 8 * 8 * 4 + 4 * 4 * 4 + 2 * 2 * 4;
-        assert_eq!(&data[level3..level3 + 4], &[16, 239, 0, 255]);
-        assert_eq!(data.len(), 16 * (8 * 8 + 4 * 4 + 2 * 2 + 1) * 4);
+        assert_eq!(&data[256..260], &[0, 0, 255, 255]);
+        assert_eq!(data.len(), 16 * (8 * 8 + 4 * 4) * 4);
     }
 
     #[test]
-    fn an_odd_cell_mip_covers_the_last_row_and_column() {
+    fn base_only_odd_cells_do_not_invent_mips() {
         let mut indices = vec![0u8; 12 * 12];
         indices[2 * 12 + 2] = 1;
         let bytes = blp(12, 12, &indices);
@@ -942,8 +989,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded.tile, 3);
+        assert_eq!(decoded.image.texture_descriptor.mip_level_count, 1);
         let data = decoded.image.data.unwrap();
         assert_eq!(&data[32..36], &[255, 0, 0, 255]);
-        assert_eq!(&data[36..40], &[28, 227, 0, 255]);
+        assert_eq!(&data[36..40], &[0, 255, 0, 255]);
     }
 }

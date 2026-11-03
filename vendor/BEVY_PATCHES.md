@@ -51,3 +51,50 @@ The patch adds one call to each of 15 existing functions (`render_phase/draw_sta
 `renderer/render_device.rs`) and changes no rendering behaviour. Only the render CPU workload
 (`docs/performance/render-cpu.md`) reads them. Bind groups made through `wgpu` handles directly
 and buffer writes through `RenderQueue` are not counted.
+
+## UI text alpha test
+
+`bevy_ui_render` also starts from published 0.20.0, with its MIT/Apache notices
+retained. `TextAlphaTest` on a UI text root selects an eight-bit GreaterEqual
+reference for combined atlas/text alpha; surviving alpha is preserved. Text
+and shadow extraction pack the reference into unused high vertex-flag bits,
+so vertex stride and draw batching stay unchanged. Component changes/removal
+invalidate cached draws. Without the component the reference is zero and
+rendering follows the ordinary path. The resource-bar labels opt in with the
+selected executable's derived reference; no source cutoff is baked into Bevy.
+
+The isolated synthetic GPU regression in `menu_colour_gpu_tests.rs` exercises
+threshold updates, faded text, surviving coverage and removal. Original
+rendered acceptance remains a separate full-screen comparison.
+
+`TextAtlasFilter` optionally selects nearest atlas texels at mip zero for a text
+root and its shadows. Extraction carries the selection in unused flag bit 8192;
+the shader uses a bounded texel load. Shared atlas images, sampler objects,
+vertex stride and batch keys are unchanged. Component changes/removal invalidate
+cached draws; absent components preserve ordinary linear sampling. Resource
+labels derive the default selection from the admitted executable's sampler
+operands. An isolated GPU test verifies changes and removal restore the baseline.
+
+## Bitmap-space implied curve points
+
+`skrifa` remains published version 0.44.0, already used by Swash/Bevy. Its Rust
+sources, generated tables and MIT/Apache notices are retained here. No additional
+font backend or runtime dependency is added.
+
+The observed game bitmap agrees with the FreeType bitmap convention: translate
+a glyph to its bitmap bounds before outline decomposition. For fixed 26.6 coordinates, that whole-pixel translation
+makes implied quadratic midpoints round down, including points below the source
+baseline or left of its origin. Skrifa's ordinary outline conversion instead
+truncates those negative midpoints toward zero before bitmap translation. The
+patch gives fixed 26.6 path coordinates the bitmap-compatible midpoint operation;
+unscaled integer and HarfBuzz floating coordinates retain their existing rules.
+The widened sum also avoids overflow across the complete fixed-coordinate range.
+This is an application bitmap compatibility choice, not a claim that all vector
+outline consumers need the same rounding rule.
+
+Two synthetic path tests cover whole-pixel translation and coordinate bounds;
+the four existing path-order tests remain. `tests/bitmap_path.rs` is a focused
+`rustc --test` harness for those source modules, avoiding the published crate's
+unavailable upstream font-test-data fixtures. The application native/WASM checks
+and full-frame capture validate the integration. Source-font raster probes stay
+local; no game font or generated glyph bitmap is included in this patch.

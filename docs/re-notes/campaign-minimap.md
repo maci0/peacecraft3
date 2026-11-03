@@ -57,8 +57,9 @@ width/height, and the draw method submits those vertices from `+1e8` at
 the overlay clamp at `62f887..62f8c6`. The mapped-window receipt is
 `.scratch/campaign-minimap-source/quad-windows.json`, SHA-256
 `29baa0a5fcb739c048dce31c2596e90bc4397f743e0bafa3d98b42910f1e3aaf`.
-The recreation uses relative UI placement for that outer quad. House clamp /
-linear sampling remains an implementation choice awaiting a paired native render.
+The recreation preserves the outer quad through the shared fractional-image
+renderer and reads dynamic sampler modes from the native flag and backend
+tables. See the raster correction below for scope and remaining gaps.
 
 The hit surface is independent of the terrain image. It remains present when
 fog hides the image or image decoding refuses. Presses consume the existing HUD
@@ -74,7 +75,7 @@ unit store or guessed sight radius is introduced.
 
 A bounded presentation raster retains explored cells for the current viewer.
 Movement leaves explored terrain fogged; current sight reveals it. Fog and mask
-switches are independent. The raster fits the admitted placement extent into the
+switches are independent. The raster fits the source-derived expanded camera rectangle into the
 actual map image, preserving aspect ratio and north-up orientation. It begins
 updating while the cinematic camera hides the control and retires with the
 session; changing viewers resets its history. With both switches false, the
@@ -82,7 +83,7 @@ authored image alpha is restored even when sight admission is unavailable.
 
 This is a house visibility implementation, not a copy of native grid internals.
 It still lacks terrain/tree sight occlusion and sight-changing upgrades/effects.
-Presentation-frame exploration sampling, exact camera-margin projection,
+Presentation-frame exploration sampling, native grid/rounding behavior,
 modifier masking behavior and blend/filter parity need original-client
 comparison. World terrain/actor fog and public visibility queries do not yet
 consume this raster. Hero, resource and neutral icons and unit-icon targeting
@@ -115,8 +116,8 @@ in one frame instead of replacing them with the last event. This queue is input
 collection, not Shift waypoint queuing; movement/formation semantics remain
 those of the existing unit router.
 
-This uses the current house map-image projection; exact native camera-margin
-mapping and padding behavior still need comparison. It does not implement
+This uses the source-derived camera rectangle with a floating image fit; native
+grid sampling, image-fit rounding and padding behavior still need comparison. It does not implement
 unit-icon targets.
 
 ### Fog alpha source join
@@ -386,3 +387,101 @@ minimap area x 0..300, y 720..960. The captures are not proven to be the same ga
 - Marker colour mode: `FogColorPlayer`, `FogColorAlly`, `FogColorEnemy` land in
   `+0x9a8`, `+0x9ac`, `+0x9b0`; `ally_color` selects among them, starting on player colours
   (see "Initial flag" above).
+
+## Camera rectangle correction (2026-11-03)
+
+Static shipped-code evidence on the same SHA-256-qualified Legacy image shows
+that the minimap rectangle is not the full terrain extent. The camera getter
+at `5e0700..5e0758` returns the four stored corner pairs. The minimap reads those
+at `636f9c`, takes its native corner-pair minima/maxima at `63705f..6370b7`, then
+expands them using profile values read at `6370d4`, `637105`, `637132` and
+`637163`. Arithmetic destinations join the keys to left, right, bottom and top.
+The scale global read at `63706c` joins the initializer at `40a860..40a872`.
+The ensuing fit at `63724c..6372b8` divides each extent by their maximum and
+centers the remaining slack. These are static observations, not runtime probes.
+Bounded disassemblies and their hashes remain local in
+`.scratch/minimap-mapping-20261103/native-evidence.json`.
+
+`minimap_layout::Rules` now decodes the profile references, native getter field
+ordering and scale initializer. `world_bounds` joins them to the admitted
+`CameraState`/`CameraMargins` source identity, section, keys and scale digest.
+It preserves the native corner-pair arithmetic and rejects unsupported source
+relationships, missing bounds and invalid rectangles. No margin value, map
+extent or screenshot offset is copied into code. The fog raster, marker drawing
+and hit-testing, camera outline, camera navigation and Alt-signal conversion use
+the same source-bound rectangle. The existing shared visibility ledger retains
+its full world extent; its classifications are sampled through this minimap fit.
+
+The explicit CPU-only selected-map receipt confirms the old full-world rectangle
+and expanded camera rectangle differ for RoC Prologue02. Those values and source
+identity remain local in `.scratch/minimap-mapping-derived-20261103`. Synthetic
+checks vary geometry, profile references and scale, preserve native corner-pair
+behavior and reject malformed relationships/invalid inputs. Three rule tests
+pass (one explicit local-image ignore); nineteen app checks pass (two explicit
+local-input ignores), and the selected-chapter camera/order/control replay passes
+separately. Strict native/WASM Clippy and both application builds pass.
+
+The isolated, muted production capture in
+`.scratch/pixel-minimap-mapping-20261103` passes. Against the unchanged whole-frame
+original reference, differences fall from 988,203 to 986,747 / 1,228,800, and MAE
+from 12.52657958984375 to 12.392502983940972. Exactly 7,209 renderer pixels change,
+within [16,754,237,923]. All thirteen clocks hold, repeated selected frames match
+byte-for-byte and all 2,640 upkeep diagnostic pixels remain exact. The full-frame
+overlay, diff, side-by-side and five README captures were visually reviewed.
+
+This corrects the mapping rectangle; it does not establish native fog-grid
+interpolation/rounding, occlusion, minimap texture filters or fractional quad
+placement, special icons, remembered-marker behavior or line rasterization.
+Original tick, animation phase and RNG identity remain unqualified.
+
+## Dynamic sampler and image quad correction (2026-11-03)
+
+Static evidence on the same admitted image joins dynamic texture creation at
+`63786e..6378a8` to `61dfb0`. The five source arguments clear the constructor's
+low flag fields; the first argument, its mask at `61dfe4`, and the backend mask
+at `7def4a` determine the sampler record. This is a different path from the
+`CSimpleTexture` file-loader flags used by adjacent filter buttons. Creation
+uses the already-qualified `7d11f0`/`7df940`/`7d4590`/`7d2bf0` chain that retains
+flags at texture+20. The backend's `7def50`, `7def61` and `7def74` operands supply
+the min/mag/mip table addresses. U/V addressing comes from the flag shifts,
+masks and table operands at `7def8f..7defbd`. The selected record is point/point,
+no mip filtering, and clamp U/V. Values are read locally, not copied into code.
+Bounded disassembly hashes are retained in
+`.scratch/minimap-raster-20261103/native-evidence.json`; this is static evidence,
+not an original-client sampler probe.
+
+`minimap_layout::Rules` now retains these modes. The shared texture-record
+reader is reused by file-image and dynamic-image rules. Unsupported flag paths,
+filter/mip combinations or address modes refuse. The application uses the
+existing source-image sampler conversion and retains explicit U/V addressing.
+Synthetic source fixtures vary the selector and table records independently;
+app checks verify distinct min/mag and U/V values reach the decoded image and
+reject unsupported modes.
+
+The native outer quad at `6378d0..637970`, submitted at `640277..64028c`, is
+already bound to the source control's dimensions. Its image and clear backing
+now use `SourceImageRect`, retaining those fractional bounds through layout and
+the shared D3D9 pixel-center conversion. Picking stays on the logical surface.
+The outline is a sibling under that surface, keeping the image a leaf; native
+outline rasterization is still unqualified.
+
+Four minimap rule tests pass (one explicit original-input ignore); all 68
+layout checks pass (11 explicit input ignores), including shared-table callers.
+Nineteen minimap app checks pass (two explicit original-input ignores). The
+CPU-only selected-source receipt in `.scratch/minimap-raster-source-20261103`
+records the actual sampler operands. Strict native/WASM Clippy and both app
+builds pass. No dependency was added.
+
+The isolated muted production capture in `.scratch/pixel-minimap-raster-20261103`
+passes, including an assertion that the actual minimap uses one fractional image
+leaf. The unchanged original whole-frame reference now differs at 984,904 /
+1,228,800 pixels, down from 986,747. MAE falls from 12.392502983940972 to
+12.3603662109375. Exactly 4,887 recreation pixels change in [15,728,238,949]. All
+13 capture clocks hold; repeated selected frames are byte-identical and all
+2,640 upkeep diagnostic pixels remain exact. Full-frame overlay, diff,
+side-by-side and all five README captures were reviewed and provenance refreshed.
+
+Native fog-grid interpolation/rounding, terrain/tree occlusion, special icons,
+remembered-marker behavior and outline rasterization remain open. The original
+reference still has no qualified tick/animation/RNG identity. These measurements
+are diagnostic evidence, not pixel-parity acceptance or screenshot-fit inputs.

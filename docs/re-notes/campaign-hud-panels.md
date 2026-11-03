@@ -197,3 +197,18 @@ tooltips and initial art. At chapter start the only Orc peon (`opeo`) is hidden,
 press selects it, and two terrain presses hide then restore the minimap terrain flag. No renderer
 capture was taken; the stock capture's count of 1 agrees with the shown peon, not proven for the
 same game time.
+
+### Filter-image raster follow-up (2026-11-03)
+
+The five filter images now retain constructor-derived fractional bounds through
+`hud_render::SourceImageRect`. Retained native texture vertices match those
+bounds. The first four constructor X operands decode to 0.15437500178813934;
+the earlier table's `0.1537` transcription is inaccurate. Production reads the
+executable operands. State selection remains unchanged. See the
+[minimap filter-image evidence](gameplay-hud-fidelity.md#minimap-filter-image-coordinates-preserved-2026-11-03)
+for full-screen results, validation and the remaining sampler gap.
+
+The subsequent [filter-image sampler correction](gameplay-hud-fidelity.md#minimap-filter-image-sampling-derived-2026-11-03)
+reads source loader flags and backend table operands for the five filter controls.
+It replaces the inherited nearest min/mag filters with source-selected filtering;
+button-state selection, idle-worker and badge images remain unchanged.

@@ -1,5 +1,6 @@
 //! In-game minimap anchors and image lookup order from the reviewed client.
-//! This does not qualify world-to-map projection, fog, markers or input.
+//! The mapping rectangle expands executed camera bounds by the selected profile margins.
+//! Visibility-grid sampling, fog filtering and marker drawing remain separate.
 use crate::{
     inventory_layout::Rect,
     menu_lighting::REVIEWED_IMAGE,
@@ -19,6 +20,13 @@ pub struct Rules {
     pub image_members: Vec<String>,
     /// RGBA from the minimap texture updater's packed clear pixel.
     pub clear_color: [u8; 4],
+    /// D3DTEXF min/mag/mip and D3DTADDRESS U/V from dynamic texture creation.
+    pub texture_filters: [u32; 3],
+    pub texture_address: [u32; 2],
+    mapping_section: u32,
+    mapping_keys: [u32; 4],
+    mapping_scale: f32,
+    mapping_corners: [usize; 4],
 }
 
 impl Rules {
@@ -51,6 +59,34 @@ impl Rules {
                 .ok_or_else(|| format!("truncated operand at {va:#x}"))
         })
         .map_err(fail)
+    }
+
+    /// The native map rectangle uses camera bounds plus margins, not the entire terrain.
+    pub fn world_bounds(
+        &self,
+        camera: &crate::playercolor_host::CameraState,
+    ) -> Result<[[f32; 2]; 2], String> {
+        let binding = camera.margins.binding();
+        if binding.image_sha256 != self.image_sha256
+            || binding.section.va != self.mapping_section
+            || binding.scale.digest != sha256(&self.mapping_scale.to_le_bytes())
+        {
+            return Err("minimap camera-margin source differs from the selected client".into());
+        }
+        let mut margins = [0.; 4];
+        for (out, key) in margins.iter_mut().zip(self.mapping_keys) {
+            let index = binding
+                .keys
+                .iter()
+                .position(|window| window.va == key)
+                .ok_or("minimap camera-margin key is not admitted")?;
+            *out = camera.margins.values()[index];
+        }
+        expanded_bounds(
+            camera.bounds.ok_or("minimap camera bounds are unset")?,
+            margins,
+            self.mapping_corners,
+        )
     }
 
     fn decode(
@@ -209,6 +245,140 @@ impl Rules {
             }
             image_members.push(member);
         }
+        // Join profile references to their arithmetic destinations in the map rectangle.
+        let mut mapping_keys = [0; 4];
+        let mut mapping_section = None;
+        for (index, key_va, section_va, call_va, arithmetic_va, arithmetic, store_va, store) in [
+            (
+                0,
+                0x6370c7,
+                0x6370cc,
+                0x6370d4,
+                0x6370f9,
+                &[0xf3, 0x0f, 0x5c, 0xc1][..],
+                0x6370fd,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x78, 1, 0, 0][..],
+            ),
+            (
+                1,
+                0x6370e3,
+                0x6370ef,
+                0x637105,
+                0x637122,
+                &[0xf3, 0x0f, 0x58, 0x87, 0x80, 1, 0, 0][..],
+                0x63712a,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x80, 1, 0, 0][..],
+            ),
+            (
+                2,
+                0x637141,
+                0x63714d,
+                0x637163,
+                0x637189,
+                &[0xf3, 0x0f, 0x58, 0x87, 0x7c, 1, 0, 0][..],
+                0x637191,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x7c, 1, 0, 0][..],
+            ),
+            (
+                3,
+                0x63710c,
+                0x637111,
+                0x637132,
+                0x637157,
+                &[0xf3, 0x0f, 0x5c, 0xc1][..],
+                0x63715b,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x74, 1, 0, 0][..],
+            ),
+        ] {
+            mapping_keys[index] = word(operand(&mut read, key_va, &[0x68], 4)?)?;
+            let section = word(operand(&mut read, section_va, &[0x68], 4)?)?;
+            if mapping_section
+                .replace(section)
+                .is_some_and(|old| old != section)
+            {
+                return Err("minimap camera-margin sections differ".into());
+            }
+            if word(operand(&mut read, call_va, &[0xe8], 4)?)?
+                != 0x4304c0u32.wrapping_sub(call_va + 5)
+            {
+                return Err("minimap camera-margin reader differs".into());
+            }
+            operand(&mut read, arithmetic_va, arithmetic, 0)?;
+            operand(&mut read, store_va, store, 0)?;
+        }
+        // Getter outputs a,b,c,d are stored camera pairs 0,2,3,1 in this image.
+        let mut fields = [0u32; 4];
+        for (field, va) in fields
+            .iter_mut()
+            .zip([0x5e070c, 0x5e0731, 0x5e0745, 0x5e071d])
+        {
+            *field = word(operand(&mut read, va, &[0x8b, 0x86], 4)?)?;
+        }
+        let base = *fields.iter().min().ok_or("missing minimap camera fields")?;
+        let mut mapping_corners = [0; 4];
+        for (corner, field) in mapping_corners.iter_mut().zip(fields) {
+            let offset = field - base;
+            if offset % 8 != 0 || offset / 8 >= 4 {
+                return Err("unsupported minimap camera fields".into());
+            }
+            *corner = offset as usize / 8;
+        }
+        for (index, corner) in mapping_corners.iter().enumerate() {
+            if mapping_corners[..index].contains(corner) {
+                return Err("duplicate minimap camera fields".into());
+            }
+        }
+        let scale_global = word(operand(&mut read, 0x63706c, &[0x68], 4)?)?;
+        if word(operand(&mut read, 0x40a865, &[0x68], 4)?)? != scale_global {
+            return Err("minimap camera-margin scale initializer differs".into());
+        }
+        for (va, target) in [
+            (0x40a86au32, 0x9a1620u32),
+            (0x6370c0, 0x65d3d0),
+            (0x636f9c, 0x5e0700),
+        ] {
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != target.wrapping_sub(va + 5) {
+                return Err("minimap camera input call differs".into());
+            }
+        }
+        let mapping_scale = word(operand(&mut read, 0x40a860, &[0x68], 4)?)? as i32 as f32;
+        if mapping_scale <= 0. {
+            return Err("invalid minimap camera-margin scale".into());
+        }
+        // Dynamic minimap textures use their own flag constructor, not the file-image loader.
+        for (va, target) in [(0x637881u32, 0x61dfb0u32), (0x6378a8, 0x7d11f0)] {
+            if word(operand(&mut read, va, &[0xe8], 4)?)? != target.wrapping_sub(va + 5) {
+                return Err("minimap dynamic texture call differs".into());
+            }
+        }
+        operand(&mut read, 0x63788d, &[0xff, 0x30], 0)?;
+        for va in [0x63786e, 0x637870, 0x637872, 0x637874] {
+            operand(&mut read, va, &[0x6a, 0], 0)?;
+        }
+        let flags = operand(&mut read, 0x637876, &[0x6a], 1)?[0];
+        let low_mask = operand(&mut read, 0x61dfe4, &[0x83, 0xe0], 1)?[0];
+        let selector = operand(&mut read, 0x7def4a, &[0x83, 0xe0], 1)?[0];
+        operand(&mut read, 0x7def4d, &[0x8d, 0x34, 0x40], 0)?;
+        if flags & 0x80 != 0 || low_mask >> 2 != 0 || selector >> 2 != 0 {
+            return Err("unsupported minimap sampler selector".into());
+        }
+        let texture_filters = crate::command_layout::texture_filter_record(
+            &mut crate::unit_panel_layout::Reader(&mut read),
+            u32::from(flags & low_mask & selector),
+        )?;
+        let mut texture_address = [0; 2];
+        for (out, (shift_va, shift, mask_va, table_va)) in texture_address.iter_mut().zip([
+            (0x7def8f, 2, 0x7def92, 0x7def95),
+            (0x7defab, 3, 0x7defae, 0x7defb1),
+        ]) {
+            operand(&mut read, shift_va, &[0xc1, 0xe8, shift], 0)?;
+            operand(&mut read, mask_va, &[0x83, 0xe0, 1], 0)?;
+            let table = word(operand(&mut read, table_va, &[0xff, 0x34, 0x85], 4)?)?;
+            *out = word(read(table, 4, false)?)?;
+        }
+        if texture_address.iter().any(|value| !matches!(value, 1 | 3)) {
+            return Err("unsupported minimap texture address mode".into());
+        }
         let clear = operand(&mut read, 0x658bae, &[0xc7, 0x45, 0xe8], 4)?;
         if operand(&mut read, 0x658bb5, &[0xc7, 0x45, 0xec], 4)? != clear {
             return Err("minimap paired clear pixels differ".into());
@@ -227,8 +397,39 @@ impl Rules {
             },
             image_members,
             clear_color: [red, green, blue, alpha],
+            texture_filters,
+            texture_address,
+            mapping_section: mapping_section.ok_or("missing minimap camera-margin section")?,
+            mapping_keys,
+            mapping_scale,
+            mapping_corners,
         })
     }
+}
+
+fn expanded_bounds(
+    bounds: [f32; 8],
+    [left, right, top, bottom]: [f32; 4],
+    indices: [usize; 4],
+) -> Result<[[f32; 2]; 2], String> {
+    let corners = bounds.as_chunks::<2>().0;
+    let [a, b, c, d] = indices.map(|index| corners[index]);
+    let low_x = a[0].min(b[0]) - left;
+    let high_x = c[0].max(d[0]) + right;
+    let low_y = a[1].min(c[1]) - bottom;
+    let high_y = b[1].max(d[1]) + top;
+    let expanded = [[low_x, low_y], [high_x, high_y]];
+    if bounds
+        .iter()
+        .chain([left, right, top, bottom].iter())
+        .any(|v| !v.is_finite())
+        || expanded.iter().flatten().any(|v| !v.is_finite())
+        || low_x >= high_x
+        || low_y >= high_y
+    {
+        return Err("invalid minimap camera rectangle".into());
+    }
+    Ok(expanded)
 }
 
 #[cfg(test)]
@@ -309,6 +510,102 @@ mod tests {
         put(&mut d, 0x4000, b".blp\0.tga\0");
         op(&mut d, 0x658bae, &[0xc7, 0x45, 0xe8], 0x6d53412b);
         op(&mut d, 0x658bb5, &[0xc7, 0x45, 0xec], 0x6d53412b);
+        for (index, key_va, section_va, call_va, arithmetic_va, arithmetic, store_va, store) in [
+            (
+                0,
+                0x6370c7,
+                0x6370cc,
+                0x6370d4,
+                0x6370f9,
+                &[0xf3, 0x0f, 0x5c, 0xc1][..],
+                0x6370fd,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x78, 1, 0, 0][..],
+            ),
+            (
+                1,
+                0x6370e3,
+                0x6370ef,
+                0x637105,
+                0x637122,
+                &[0xf3, 0x0f, 0x58, 0x87, 0x80, 1, 0, 0][..],
+                0x63712a,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x80, 1, 0, 0][..],
+            ),
+            (
+                2,
+                0x637141,
+                0x63714d,
+                0x637163,
+                0x637189,
+                &[0xf3, 0x0f, 0x58, 0x87, 0x7c, 1, 0, 0][..],
+                0x637191,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x7c, 1, 0, 0][..],
+            ),
+            (
+                3,
+                0x63710c,
+                0x637111,
+                0x637132,
+                0x637157,
+                &[0xf3, 0x0f, 0x5c, 0xc1][..],
+                0x63715b,
+                &[0xf3, 0x0f, 0x11, 0x87, 0x74, 1, 0, 0][..],
+            ),
+        ] {
+            op(&mut d, key_va, &[0x68], 0x5000 + index as u32 * 16);
+            op(&mut d, section_va, &[0x68], 0x5100);
+            op(
+                &mut d,
+                call_va,
+                &[0xe8],
+                0x4304c0u32.wrapping_sub(call_va + 5),
+            );
+            put(&mut d, arithmetic_va, arithmetic);
+            put(&mut d, store_va, store);
+        }
+        for (va, field) in [
+            (0x5e070c, 0x100),
+            (0x5e0731, 0x110),
+            (0x5e0745, 0x118),
+            (0x5e071d, 0x108),
+        ] {
+            op(&mut d, va, &[0x8b, 0x86], field);
+        }
+        op(&mut d, 0x63706c, &[0x68], 0x5200);
+        op(&mut d, 0x40a865, &[0x68], 0x5200);
+        op(&mut d, 0x40a860, &[0x68], 64);
+        for (va, target) in [
+            (0x40a86au32, 0x9a1620u32),
+            (0x6370c0, 0x65d3d0),
+            (0x636f9c, 0x5e0700),
+        ] {
+            op(&mut d, va, &[0xe8], target.wrapping_sub(va + 5));
+        }
+        for (va, target) in [(0x637881u32, 0x61dfb0u32), (0x6378a8, 0x7d11f0)] {
+            op(&mut d, va, &[0xe8], target.wrapping_sub(va + 5));
+        }
+        put(&mut d, 0x63788d, &[0xff, 0x30]);
+        for va in [0x63786e, 0x637870, 0x637872, 0x637874, 0x637876] {
+            put(&mut d, va, &[0x6a, 0]);
+        }
+        put(&mut d, 0x61dfe4, &[0x83, 0xe0, 3]);
+        put(&mut d, 0x7def4a, &[0x83, 0xe0, 3]);
+        put(&mut d, 0x7def4d, &[0x8d, 0x34, 0x40]);
+        for (site, table) in [(0x7def50, 0x6000), (0x7def61, 0x6004), (0x7def74, 0x6008)] {
+            op(&mut d, site, &[0xff, 0x34, 0xb5], table);
+        }
+        put(&mut d, 0x6000, &1u32.to_le_bytes());
+        put(&mut d, 0x6004, &2u32.to_le_bytes());
+        put(&mut d, 0x6008, &0u32.to_le_bytes());
+        for (shift_va, shift, mask_va, table_va) in [
+            (0x7def8f, 2, 0x7def92, 0x7def95),
+            (0x7defab, 3, 0x7defae, 0x7defb1),
+        ] {
+            put(&mut d, shift_va, &[0xc1, 0xe8, shift]);
+            put(&mut d, mask_va, &[0x83, 0xe0, 1]);
+            op(&mut d, table_va, &[0xff, 0x34, 0x85], 0x6100);
+        }
+        put(&mut d, 0x6100, &3u32.to_le_bytes());
         d
     }
     fn decode(d: &BTreeMap<u32, u8>) -> Result<Rules, String> {
@@ -327,6 +624,10 @@ mod tests {
         let mut d = fixture();
         let r = decode(&d).unwrap();
         assert_eq!(r.viewport, [1.2, 0.9]);
+        assert_eq!(r.mapping_keys, [0x5000, 0x5010, 0x5020, 0x5030]);
+        assert_eq!(r.mapping_section, 0x5100);
+        assert_eq!(r.mapping_scale, 64.);
+        assert_eq!(r.mapping_corners, [0, 2, 3, 1]);
         assert_eq!(r.frame.x, 0.1);
         assert_eq!(r.frame.y, 0.2);
         assert!((r.frame.width - 0.3).abs() < 0.000001);
@@ -340,9 +641,40 @@ mod tests {
         assert_eq!(other.image_members, ["fixtureMap.tga", "fixtureMap.blp"]);
     }
     #[test]
+    fn dynamic_sampler_follows_its_selector_tables_and_refuses_unsupported_modes() {
+        let mut d = fixture();
+        assert_eq!(decode(&d).unwrap().texture_filters, [1, 2, 0]);
+        assert_eq!(decode(&d).unwrap().texture_address, [3, 3]);
+        put(&mut d, 0x637877, &[1]);
+        for (va, value) in [(0x600c, 2u32), (0x6010, 1), (0x6014, 0)] {
+            put(&mut d, va, &value.to_le_bytes());
+        }
+        put(&mut d, 0x6100, &1u32.to_le_bytes());
+        assert_eq!(decode(&d).unwrap().texture_filters, [2, 1, 0]);
+        assert_eq!(decode(&d).unwrap().texture_address, [1, 1]);
+        put(&mut d, 0x6014, &1u32.to_le_bytes());
+        assert!(decode(&d).is_err());
+        put(&mut d, 0x6014, &0u32.to_le_bytes());
+        put(&mut d, 0x6100, &2u32.to_le_bytes());
+        assert!(decode(&d).is_err());
+    }
+    #[test]
     fn malformed_geometry_relationships_and_loader_paths_refuse() {
         let base = fixture();
         for (va, bytes) in [
+            (0x637881, vec![0x90]),
+            (0x63786e, vec![0x90]),
+            (0x637877, vec![0xff]),
+            (0x7def4c, vec![0xff]),
+            (0x7def4d, vec![0x90]),
+            (0x7def8f, vec![0x90]),
+            (0x6370f9, vec![0x90]),
+            (0x6370fd, vec![0x90]),
+            (0x6370d4, vec![0x90]),
+            (0x6370ce, vec![0]),
+            (0x40a866, vec![1]),
+            (0x40a861, vec![0, 0, 0, 0]),
+            (0x636f9c, vec![0x90]),
             (0x5e7ec4, vec![0xe9]),
             (0x5e7dbe, vec![0]),
             (0x5e7ef4, vec![0]),
@@ -370,6 +702,28 @@ mod tests {
             assert!(decode(&d).is_err(), "truncation {va:#x}");
         }
         assert!(Rules::reviewed_legacy(b"not a client", origin()).is_err());
+    }
+    #[test]
+    fn camera_rectangle_uses_native_corner_pairs_and_refuses_invalid_inputs() {
+        let bounds = [-10., -20., 30., 40., -10., 40., 30., -20.];
+        assert_eq!(
+            expanded_bounds(bounds, [1., 2., 3., 4.], [0, 2, 3, 1]).unwrap(),
+            [[-11., -24.], [32., 43.]]
+        );
+        assert!(expanded_bounds(bounds, [f32::NAN, 2., 3., 4.], [0, 2, 3, 1]).is_err());
+        assert!(expanded_bounds(bounds, [-100., 2., 3., 4.], [0, 2, 3, 1]).is_err());
+        let mut invalid = bounds;
+        invalid[0] = f32::INFINITY;
+        assert!(expanded_bounds(invalid, [1., 2., 3., 4.], [0, 2, 3, 1]).is_err());
+        assert_eq!(
+            expanded_bounds(
+                [100., 0., 10., 10., 0., 10., 10., 0.],
+                [0.; 4],
+                [0, 2, 3, 1]
+            )
+            .unwrap(),
+            [[0., 0.], [10., 10.]]
+        );
     }
     #[test]
     #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE selecting the reviewed local client"]

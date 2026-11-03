@@ -295,7 +295,7 @@ fn refresh_tooltips(
     {
         commands.entity(child).insert(TextShadow {
             offset: Vec2::from_array(text.shadow_fraction) * surface.pixels,
-            color: Color::srgba(
+            color: Color::linear_rgba(
                 text.shadow[0],
                 text.shadow[1],
                 text.shadow[2],
@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(app.world().get::<TextSpan>(span).unwrap().0, "Gold");
         assert_eq!(
             app.world().get::<TextColor>(span).unwrap().0,
-            Color::srgba(1.0, 0.0, 0.0, 1.0)
+            Color::linear_rgba(1.0, 0.0, 0.0, 1.0)
         );
         let handle = match &app.world().get::<TextFont>(text).unwrap().font {
             FontSource::Handle(handle) => handle.clone(),
@@ -614,14 +614,14 @@ mod tests {
 
         app.world_mut().entity_mut(gold).insert(Hovered(true));
         app.update();
-        let inherited = Color::srgba(0.25, 0.5, 0.75, 1.0);
+        let inherited = Color::linear_rgba(0.25, 0.5, 0.75, 1.0);
         let pointer = spans(app.world(), view);
         assert_eq!(
             pointer,
             vec![
-                ("赤".to_string(), Color::srgba(1.0, 0.0, 0.0, 1.0)),
+                ("赤".to_string(), Color::linear_rgba(1.0, 0.0, 0.0, 1.0)),
                 ("\n".to_string(), inherited),
-                ("AB".to_string(), Color::srgba(0.0, 1.0, 0.0, 1.0)),
+                ("AB".to_string(), Color::linear_rgba(0.0, 1.0, 0.0, 1.0)),
             ]
         );
         assert!(pointer.iter().all(|span| span.0 != "Gold"));
@@ -865,7 +865,7 @@ mod tests {
         assert_eq!(layout.linebreak, bevy::text::LineBreak::WordBoundary);
         assert_eq!(
             app.world().get::<TextShadow>(text).unwrap().color,
-            Color::srgba(0.1, 0.2, 0.3, 0.4)
+            Color::linear_rgba(0.1, 0.2, 0.3, 0.4)
         );
         assert_eq!(
             app.world().get::<TextShadow>(text).unwrap().offset,

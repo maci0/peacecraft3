@@ -23,10 +23,17 @@ pub struct Rules {
     pub shadow_offset: [f32; 2],
     pub mana_colour: u32,
     pub justification: u8,
+    /// GxFont horizontal/vertical enum values from the simple-string constructor.
+    pub default_justification: [u32; 2],
+    pub vertical_justification: u32,
     pub portrait: Portrait,
     pub experience: ExperienceBar,
     pub armor_icons: CombatIcons,
     pub damage_icons: CombatIcons,
+    /// D3DTEXF minification, magnification and mip selection for panel textures.
+    pub texture_filters: [u32; 3],
+    /// Source skin keys in the supported Primary-token order STR, AGI, INT.
+    pub hero_icon_keys: [String; 3],
     pub status: StatusLabel,
     format: [String; 3],
     health_colour: u32,
@@ -353,6 +360,52 @@ impl<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>> Reader<F> {
         Ok(rect)
     }
 }
+fn simple_justification<F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>>(
+    r: &mut Reader<F>,
+    flags: u32,
+) -> Result<[u32; 2], String> {
+    let mut test = |va| -> Result<u32, String> {
+        let code = r.bytes(va, 2, true)?;
+        if code[0] != 0xa8 {
+            return Err("unit panel: simple-string justification test".into());
+        }
+        Ok(u32::from(code[1]))
+    };
+    let h_right = test(0x95fff4)?;
+    let h_middle = test(0x95ffff)?;
+    let h_left = test(0x960003)?;
+    let v_top = test(0x960012)?;
+    let v_bottom = test(0x96001a)?;
+    let h_default = r.word(0x95ffef, &[0xbb])?;
+    let h_right_value = r.word(0x95fff8, &[0xbb])?;
+    let h_left_value = r.word(0x960005, &[0xb9])?;
+    let v_bottom_value = r.word(0x96001e, &[0xbf])?;
+    let v_default = r.word(0x96000d, &[0xbf])?;
+    if r.bytes(0x960016, 2, true)? != [0x33, 0xff] {
+        return Err("unit panel: simple-string top justification".into());
+    }
+    let horizontal = if flags & h_right != 0 {
+        h_right_value
+    } else if flags & h_middle != 0 {
+        h_default
+    } else if flags & h_left != 0 {
+        h_left_value
+    } else {
+        h_default
+    };
+    let vertical = if flags & v_top != 0 {
+        0
+    } else if flags & v_bottom != 0 {
+        v_bottom_value
+    } else {
+        v_default
+    };
+    if horizontal >= 3 || vertical >= 3 {
+        return Err("unit panel: unsupported font justification enum".into());
+    }
+    Ok([horizontal, vertical])
+}
+
 impl Rules {
     pub fn reviewed_legacy(image: &[u8], origin: AssetIdentity) -> Result<Self, String> {
         let digest = sha256(image);
@@ -387,6 +440,33 @@ impl Rules {
         read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         let mut r = Reader(read);
+        let texture_filters = crate::command_layout::texture_filters(&mut r)?;
+        if r.call_target(0x655ae7)? != 0x887c20 {
+            return Err("unit panel: hero icon texture loader".into());
+        }
+        let hero_table = r.word(0x655ad1, &[0xff, 0x34, 0x85])?;
+        let primary_tokens = ["STR", "AGI", "INT"];
+        let mut hero_keys = Vec::new();
+        for index in 0..=primary_tokens.len() {
+            let address = hero_table
+                .checked_add(index as u32 * 4)
+                .ok_or("unit panel: hero icon table overflow")?;
+            let pointer = u32::from_le_bytes(r.bytes(address, 4, false)?.try_into().unwrap());
+            hero_keys.push(r.string_at(pointer)?);
+        }
+        // Bind existing authored keys by their Primary-token suffix; never construct a key.
+        let hero_icon_keys = primary_tokens
+            .map(|token| {
+                let mut matches = hero_keys.iter().filter(|key| key.ends_with(token));
+                match (matches.next(), matches.next()) {
+                    (Some(key), None) => Ok(key.clone()),
+                    _ => Err(format!("unit panel: missing or ambiguous {token} icon key")),
+                }
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| "unit panel: hero icon key count")?;
         if r.call_target(0x632cfa)? != 0x61b9b0
             || r.bytes(0x632cf5, 5, true)? != [0x6a, 1, 0x57, 0x8b, 0xc8]
             || r.bytes(0x632d11, 6, true)? != [0x89, 0x87, 0x70, 1, 0, 0]
@@ -652,6 +732,13 @@ impl Rules {
         {
             return Err("unit panel: unsupported portrait justification".into());
         }
+        let defaults = r.word(0x8864ac, &[0xc7, 0x86, 0xc4, 0, 0, 0])?;
+        let default_justification = simple_justification(&mut r, defaults)?;
+        let vertical = r.bytes(0x659d7d, 2, true)?;
+        if vertical[0] != 0x6a || vertical != r.bytes(0x659ec0, 2, true)? {
+            return Err("unit panel: differing portrait vertical justification".into());
+        }
+        let vertical_justification = simple_justification(&mut r, u32::from(vertical[1]))?[1];
         let font = r.string(0x659e04)?;
         let height = r.string(0x659dd9)?;
         let pointer = r.word(0x659dde, &[0xff, 0x35])?;
@@ -759,6 +846,8 @@ impl Rules {
         Ok(Self {
             armor_icons,
             damage_icons,
+            texture_filters,
+            hero_icon_keys,
             status,
             experience,
             portrait,
@@ -775,6 +864,8 @@ impl Rules {
             shadow_offset,
             mana_colour: r.word(0x659ed4, &[0xc7, 0x85, 0xe4, 0xfe, 0xff, 0xff])?,
             justification: alignment[1],
+            default_justification,
+            vertical_justification,
             health_colour: r.word(0x65a0e2, &[0xc7, 0x85, 0xe4, 0xfe, 0xff, 0xff])?,
             format: parts.try_into().unwrap(),
             high,
@@ -1091,6 +1182,57 @@ mod tests {
     }
     fn fixture() -> BTreeMap<u32, u8> {
         let mut map = BTreeMap::new();
+
+        op(&mut map, 0x8864ac, &[0xc7, 0x86, 0xc4, 0, 0, 0], 2);
+        for (va, value) in [
+            (0x95fff4, 4),
+            (0x95ffff, 2),
+            (0x960003, 1),
+            (0x960012, 8),
+            (0x96001a, 32),
+        ] {
+            put(&mut map, va, &[0xa8, value]);
+        }
+        for (va, prefix, value) in [
+            (0x95ffef, &[0xbb][..], 1),
+            (0x95fff8, &[0xbb][..], 2),
+            (0x960005, &[0xb9][..], 0),
+            (0x96000d, &[0xbf][..], 1),
+            (0x96001e, &[0xbf][..], 2),
+        ] {
+            op(&mut map, va, prefix, value);
+        }
+        put(&mut map, 0x960016, &[0x33, 0xff]);
+        put(&mut map, 0x659d7d, &[0x6a, 8]);
+        put(&mut map, 0x659ec0, &[0x6a, 8]);
+        op(
+            &mut map,
+            0x655ae7,
+            &[0xe8],
+            0x887c20u32.wrapping_sub(0x655aec),
+        );
+        op(&mut map, 0x655ad1, &[0xff, 0x34, 0x85], 0x9000);
+        for (i, key) in ["Other", "FixtureAGI", "FixtureSTR", "FixtureINT"]
+            .into_iter()
+            .enumerate()
+        {
+            let pointer = 0x9100 + i as u32 * 0x40;
+            put(&mut map, 0x9000 + i as u32 * 4, &pointer.to_le_bytes());
+            put(&mut map, pointer, format!("{key}\0").as_bytes());
+        }
+        put(&mut map, 0x887cfa, &[0xc1, 0xe6, 2]);
+        put(&mut map, 0x887cfd, &[0x83, 0xe0, 0xf0]);
+        put(&mut map, 0x887d02, &[0x83, 0xce, 2]);
+        put(&mut map, 0x7def4a, &[0x83, 0xe0, 3]);
+        put(&mut map, 0x7def4d, &[0x8d, 0x34, 0x40]);
+        for (i, site) in [0x7def50, 0x7def61, 0x7def74].into_iter().enumerate() {
+            op(&mut map, site, &[0xff, 0x34, 0xb5], 0x8000 + i as u32 * 4);
+            put(
+                &mut map,
+                0x8018 + i as u32 * 4,
+                &[1u32, 2, 0][i].to_le_bytes(),
+            );
+        }
         let mut pointer = 0x1000;
         for (site, target) in [
             (0x632cfau32, 0x61b9b0u32),
@@ -1458,6 +1600,8 @@ mod tests {
     #[test]
     fn source_geometry_format_rounding_and_channels_drive_readouts() {
         let r = decode(&fixture()).unwrap();
+        assert_eq!(r.texture_filters, [1, 2, 0]);
+        assert_eq!(r.hero_icon_keys, ["FixtureSTR", "FixtureAGI", "FixtureINT"]);
         assert_eq!(r.frame, "UnitFrame");
         assert_eq!(r.health.x, 0.19);
         assert_eq!(r.font, "TextFont");
@@ -1509,6 +1653,34 @@ mod tests {
             assert!(r.readout(value, 10., true).is_err());
         }
         assert!(r.health_colour(1.1).is_err());
+    }
+
+    #[test]
+    fn simple_string_alignment_comes_from_constructor_and_portrait_setters() {
+        let mut map = fixture();
+        let rules = decode(&map).unwrap();
+        assert_eq!(rules.default_justification, [1, 1]);
+        assert_eq!(rules.vertical_justification, 0);
+        op(&mut map, 0x8864ac, &[0xc7, 0x86, 0xc4, 0, 0, 0], 4 | 32);
+        put(&mut map, 0x659d7d, &[0x6a, 32]);
+        put(&mut map, 0x659ec0, &[0x6a, 32]);
+        let rules = decode(&map).unwrap();
+        assert_eq!(rules.default_justification, [2, 2]);
+        assert_eq!(rules.vertical_justification, 2);
+        put(&mut map, 0x659ec0, &[0x6a, 8]);
+        assert!(decode(&map).is_err());
+        op(&mut map, 0x95fff8, &[0xbb], 3);
+        assert!(decode(&map).is_err());
+    }
+
+    #[test]
+    fn hero_icon_keys_refuse_missing_or_ambiguous_primary_bindings() {
+        let mut missing = fixture();
+        put(&mut missing, 0x9140, b"Unmapped\0");
+        assert!(decode(&missing).unwrap_err().contains("AGI icon key"));
+        let mut duplicate = fixture();
+        put(&mut duplicate, 0x9100, b"OtherSTR\0");
+        assert!(decode(&duplicate).unwrap_err().contains("STR icon key"));
     }
     #[test]
     fn malformed_operands_anchors_fonts_and_truncated_windows_refuse() {

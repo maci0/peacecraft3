@@ -440,7 +440,7 @@ pub(crate) fn paint(
         for span in text.spans {
             let color = span
                 .colour
-                .map(|c| Color::srgba(c[0], c[1], c[2], c[3]))
+                .map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]))
                 .unwrap_or(Color::WHITE);
             let child = commands
                 .spawn((
@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(spans[1].0.0, "b");
         assert_eq!(
             spans[1].1.0,
-            Color::srgba(18. / 255., 52. / 255., 86. / 255., 127. / 255.)
+            Color::linear_rgba(18. / 255., 52. / 255., 86. / 255., 127. / 255.)
         );
         let bevy::text::FontSize::Vh(size) = spans[0].2.font_size else {
             panic!("relative font size");

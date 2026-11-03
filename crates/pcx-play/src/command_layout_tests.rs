@@ -11,6 +11,25 @@ fn origin() -> AssetIdentity {
 
 fn fixture() -> BTreeMap<u32, Vec<u8>> {
     let mut records = BTreeMap::new();
+    records.insert(0x887cfa, vec![0xc1, 0xe6, 2]);
+    records.insert(0x887cfd, vec![0x83, 0xe0, 0xf0]);
+    records.insert(0x887d02, vec![0x83, 0xce, 2]);
+    records.insert(0x7def4a, vec![0x83, 0xe0, 3]);
+    records.insert(0x7def4d, vec![0x8d, 0x34, 0x40]);
+    for (i, site) in [0x7def50, 0x7def61, 0x7def74].into_iter().enumerate() {
+        records.insert(
+            site,
+            [
+                vec![0xff, 0x34, 0xb5],
+                (0x8000 + i as u32 * 4).to_le_bytes().to_vec(),
+            ]
+            .concat(),
+        );
+        records.insert(
+            0x8018 + i as u32 * 4,
+            [2u32, 1, 0][i].to_le_bytes().to_vec(),
+        );
+    }
     for (va, target) in [
         (0x5e805d_u32, 0x61d130_u32),
         (0x61d24d, 0x874900),
@@ -230,6 +249,7 @@ fn source_dimensions_drive_the_grid_and_rows_start_at_the_top() {
     assert_eq!(rules.origin, origin());
     assert_eq!(rules.console_key, "FixtureConsole");
     assert!(rules.icon_repeat);
+    assert_eq!(rules.icon_filters, [2, 1, 0]);
     let first = rules.slot(0, 0).unwrap();
     near(first.x, 0.99);
     near(first.y, 0.11);

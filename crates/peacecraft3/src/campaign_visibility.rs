@@ -53,7 +53,7 @@ impl Raster {
         if !fraction.iter().all(|v| v.is_finite()) {
             return Err("minimap pointer is not finite".into());
         }
-        // shortcut: share the terrain-image fit; qualify native camera margins/padding with a paired replay.
+        // shortcut: floating image fit remains; qualify native fog-grid sampling and rounding with a paired replay.
         let m = Mapping::new(self.width, self.height, bounds)?;
         Ok([
             (m.left + (f64::from(fraction[0]) * self.width as f64 - m.pad[0]) / m.scale)

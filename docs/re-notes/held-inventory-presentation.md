@@ -339,3 +339,80 @@ hero abilities. The complete offscreen gate remains red for sky illumination and
 terrain/tree sight occlusion. It uses an image target with Winit/Audio plugins
 disabled, no DISPLAY/WAYLAND and null/private audio configuration. The launcher
 is setup; the tested game main menu is the screen reached after the intro skip.
+
+## Inventory heading source font and region placement (2026-11-03)
+
+The selected 1.29.2.9231 RoC executable (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+constructs the heading at `61e923` through `886400`, binds its profile font
+through `887470` at `61e977`, and attaches its TOPLEFT to the information
+panel's TOPRIGHT through `873a10` at `61e9b7`. Height and width setters follow
+at `61e9ca` and `61e9dd`. No justification override appears before text binding
+at `61ea3f`; the existing reader retains the constructor's horizontal and
+vertical flag groups. These are shipped-code observations, not live heading
+raster measurements.
+
+The heading now uses the admitted default-font policy for integer raster size,
+pair advances, baseline, alpha cutoff and sampling. Its fixed source frame and
+unroundtripped top anchor use the same region-edge and pixel-origin calculation
+as panel text. That calculation is shared without changing panel behavior.
+Unsupported justification groups refuse explicitly. Synthetic fixtures exercise
+both flag groups and component binding; the supplied-client layout check and
+12 panel tests pass. Strict native/WASM Clippy and app builds pass.
+
+The fresh production frame changes 1,189 pixels, all inside heading bounds
+`[822,753,923,773]`, relative to the prior accepted recreation. The exact full
+1280×960 comparison falls from 978,860 to 978,700 differing RGB pixels; mean
+absolute channel error falls from 11.988053656684027 to 11.961337348090277.
+All 2,640 upkeep diagnostic pixels and the 13 previously exact panel text
+rectangles remain exact. The heading still has raster/background residuals;
+its 1,848-pixel diagnostic rectangle differs at 1,243 pixels. This is not a
+heading or full-frame parity claim. No screenshot-fitted values or FreeType
+dependency were introduced. Native animation/RNG phase remains unqualified.
+
+### Direct heading cache qualification (2026-11-03)
+
+A fresh private Wine/Xvfb run of the same SHA-qualified executable observes the
+heading's font at 18 pixels, baseline 14, default font flags zero and source
+font `Fonts\FRIZQT__.TTF`. A bounded, read-only process-memory probe obtains all
+eight unique glyph bitmaps in `Inventory`. Their 845 alpha bytes match the
+existing corrected Rust raster path exactly (zero differing bytes). The repeated
+`n` has the same cache entry. This is runtime cache evidence, not a claim that
+the composed heading matches or that other glyph sizes are qualified.
+
+The observed simple-string region bounds, dimensions, authored font height,
+shadow offsets and colour corroborate the existing asset reader. Its Gx string
+has source-derived horizontal/vertical center modes and the supported integer
+placement branch. The retained heading still differs after composition; the
+next investigation is string extent, pair advances and emission placement rather
+than another glyph-raster patch. No measured screenshot values are layout inputs.
+The read-only probe, native cache bytes, raw widget/Gx observations and hashes
+remain local under `.scratch/inventory-font-evidence-20261103/` and its isolated
+run directory. The container uses a private 1280×960 Xvfb, software graphics,
+null audio sink and no network; it was stopped after acquisition. Native Windows
+behavior and cross-client tick/animation identity remain unqualified.
+
+### Plain text roots skipped raster sizing (2026-11-03)
+
+The retained production layout exposes the cause of the remaining glyph-shape
+mismatch: `Inventory` still had `Vh(1.8333333)` rather than a physical `Px(18)`
+font. The shared sizing query required `Children`, so a plain text root without
+spans never entered it. The standalone 18-pixel native-cache comparison was
+correct, but did not prove that the production glyph atlas used that size.
+
+`size_source_fonts` now accepts optional children, sizes every admitted root and
+propagates the size to spans when present. The production capture assertion uses
+the same optional-child coverage and requires at least one plain source root;
+it previously shared the query omission. The retained layout now reports
+`Px(18.0)` and width 82. All 92 opaque heading pixels match the original at their
+actual screen coordinates. Blended-edge and backing-image differences remain.
+No font-size or placement value was copied from a screenshot or native dump.
+
+The exact full-screen comparison falls by 293 pixels to 978,407 / 1,228,800,
+MAE 11.939232313368056. Exactly 811 recreation pixels change, confined to
+`[843,753,924,771]`. The 13 exact panel text diagnostic regions and all 2,640
+upkeep pixels stay exact. The fixed earlier heading box `[841,751,925,773]`
+retains 950 differences; this diagnostic box does not replace the full-frame
+comparison. Inventory tests (23 pass, two explicit source-input ignores), strict
+native/WASM Clippy and both app builds pass. Full-screen parity and native
+animation/RNG identity remain open. No FreeType dependency was added.

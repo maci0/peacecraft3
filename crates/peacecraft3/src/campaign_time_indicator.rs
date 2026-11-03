@@ -76,6 +76,7 @@ struct Scene {
     image_node: Entity,
     camera: Entity,
     target: Handle<Image>,
+    overlay: Handle<crate::menu_composition::RenderedImage>,
     size: UVec2,
     elapsed: std::time::Duration,
     geosets: model_scene::Geosets,
@@ -89,6 +90,7 @@ struct Inputs<'w> {
 }
 #[derive(SystemParam)]
 struct DrawAssets<'w> {
+    overlays: ResMut<'w, Assets<crate::menu_composition::RenderedImage>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<MenuMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -99,6 +101,7 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<MenuMaterial>>()
         .init_resource::<Assets<Image>>()
+        .init_resource::<Assets<crate::menu_composition::RenderedImage>>()
         .add_systems(
             Update,
             project
@@ -403,10 +406,14 @@ fn spawn(
             ChildOf(root),
         ))
         .id();
+    let overlay = assets.overlays.add(crate::menu_composition::RenderedImage {
+        image: target.clone(),
+        factor: 1,
+    });
     let image_node = commands
         .spawn((
             frame_node(extent),
-            ImageNode::new(target.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch),
+            MaterialNode(overlay.clone()),
             IndicatorImage,
             GlobalZIndex(HUD_Z),
             CampaignHud,
@@ -419,6 +426,7 @@ fn spawn(
         image_node,
         camera,
         target,
+        overlay,
         size: UVec2::ONE,
         elapsed: std::time::Duration::ZERO,
         geosets,
@@ -500,6 +508,7 @@ fn retire(commands: &mut Commands, scene: Scene, assets: &mut DrawAssets) {
         assets.images.remove(handle.id());
     }
     assets.images.remove(scene.target.id());
+    assets.overlays.remove(scene.overlay.id());
 }
 
 /// Sizes the render target to the node's pixels and runs the camera only while
@@ -508,6 +517,7 @@ fn resize(
     mut state: ResMut<CampaignTimeIndicator>,
     nodes: Query<&ComputedNode, With<IndicatorImage>>,
     mut targets: ResMut<Assets<Image>>,
+    mut overlays: ResMut<Assets<crate::menu_composition::RenderedImage>>,
     mut cameras: Query<&mut Camera>,
 ) {
     let shown = state.shown;
@@ -536,6 +546,12 @@ fn resize(
             return;
         };
         *image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+        let Some(mut overlay) = overlays.get_mut(&scene.overlay) else {
+            state.last_error = Some("time indicator: display material removed".into());
+            return;
+        };
+        // The material must bind the replacement GPU texture after a resize.
+        overlay.image = scene.target.clone();
         scene.size = size;
     }
     camera.is_active = true;

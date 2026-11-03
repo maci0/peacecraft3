@@ -179,3 +179,33 @@ Rules for the pointer state, highest first (`campaign_cursor::pointer`):
   compared frame by frame.
 - Hover, interface and viewport gating were exercised by unit tests only, not in a running
   campaign window.
+
+## Transparent overlay composition (2026-11-02)
+
+Recreation runtime evidence: the mounted Prologue02 capture passed its state
+assertions while its gameplay images were entirely black. Disabling only the
+cursor camera restored the world and HUD. The cursor's final camera write was
+replacing the display output instead of preserving it.
+
+The cursor now renders into a transparent, non-MSAA intermediate buffer and
+writes it over the display with premultiplied-alpha blending and no output
+clear. This is a Bevy composition choice, not evidence of the original client's
+rendering internals. Race model, sequences, tint and pointer placement retain
+their asset-derived paths. Cursor edge antialiasing parity remains unqualified.
+
+`campaign_cursor::capture_tests::cursor_overlay_preserves_the_hud_and_draws_its_model`
+is an explicit headless/muted Vulkan test with synthetic geometry: it checks
+that the background survives outside the model and the model remains visible.
+The mounted HUD diagnostic also rejects an entirely black selected-unit image.
+The fresh Prologue02 world, research and quest captures were visually inspected;
+state assertions alone do not establish rendered fidelity.
+
+A separate 1280×960 original Wine/Xvfb Prologue02 capture was compared without
+rescaling, registration, tolerance or pixel exclusions. The recreation upkeep
+green-glyph bounds begin 18 pixels left and 4 pixels above the original, with
+different glyph weight. Those measurements are observations, not layout inputs;
+any alignment correction must follow the source frame/font/anchor derivation.
+Full-frame differences also contain unsynchronized world and animation state.
+Local side-by-side, 50% overlay, absolute RGB difference and binary difference
+mask: `.scratch/readme-hud-comparison-20261102/`, with source hashes, bounds and
+pixel counts in `comparison.json`. Original captures remain local.

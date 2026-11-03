@@ -468,7 +468,7 @@ impl DialogueAssets {
                 font_size: bevy::text::FontSize::Vh(style.height / VIEW.1 * 100.),
                 ..default()
             };
-            let color = Color::srgba(
+            let color = Color::linear_rgba(
                 style.colour[0],
                 style.colour[1],
                 style.colour[2],
@@ -498,7 +498,7 @@ impl DialogueAssets {
                     ),
                     TextShadow {
                         offset: Vec2::ZERO,
-                        color: Color::srgba(
+                        color: Color::linear_rgba(
                             style.shadow_colour[0],
                             style.shadow_colour[1],
                             style.shadow_colour[2],
@@ -513,7 +513,7 @@ impl DialogueAssets {
                 for span in &parsed.spans {
                     let c = span
                         .colour
-                        .map(|c| Color::srgba(c[0], c[1], c[2], c[3]))
+                        .map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]))
                         .unwrap_or(color);
                     let child = commands
                         .spawn((TextSpan::new(span.text.clone()), font.clone(), TextColor(c)))

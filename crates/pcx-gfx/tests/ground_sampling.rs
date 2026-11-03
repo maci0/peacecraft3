@@ -85,7 +85,16 @@ fn variation_sheet() -> Vec<u8> {
             indices[y * 32 + x] = 1;
         }
     }
-    direct_blp(32, 32, Some(&indices))
+    let mut bytes = direct_blp(32, 32, Some(&indices));
+    bytes[0x9C + 3 * 4..0x9C + 4 * 4].copy_from_slice(&[0, 239, 16, 255]);
+    for (level, side) in [(1usize, 16usize), (2, 8), (3, 4)] {
+        let offset = bytes.len() as u32;
+        let len = (side * side) as u32;
+        bytes[0x1C + level * 4..0x20 + level * 4].copy_from_slice(&offset.to_le_bytes());
+        bytes[0x5C + level * 4..0x60 + level * 4].copy_from_slice(&len.to_le_bytes());
+        bytes.resize(bytes.len() + len as usize, 3);
+    }
+    bytes
 }
 
 fn slot<'a>(fourcc: [u8; 4], source: &'a str, bytes: &'a [u8]) -> SelectedGroundBlp<'a> {
@@ -123,15 +132,15 @@ fn ground_texture_budget_rejects_before_decode() {
     assert!(pcx_blp::Header::parse(&bytes).is_ok());
     let error = decode_ground_slots(
         &[slot(*b"Ldrt", "synthetic/truncated.blp", &bytes)],
-        memory(5439, 8192),
+        memory(4095, 8192),
     )
     .unwrap_err();
     assert!(
         matches!(
             error,
             GroundError::RetainedBytes {
-                needed: 5440,
-                limit: 5439,
+                needed: 4096,
+                limit: 4095,
                 ..
             }
         ),
@@ -159,7 +168,7 @@ fn ground_texture_budget_rejects_before_decode() {
     let spawned = spawn_admitted_ground(
         &terrain,
         &[slot(*b"Ldrt", "synthetic/truncated.blp", &bytes)],
-        memory(5439, 8192),
+        memory(4095, 8192),
         None,
         &mut meshes,
         &mut images,
@@ -168,7 +177,7 @@ fn ground_texture_budget_rejects_before_decode() {
     .unwrap_err();
     assert!(matches!(
         spawned,
-        GroundError::RetainedBytes { needed: 5440, .. }
+        GroundError::RetainedBytes { needed: 4096, .. }
     ));
     assert_unpublished(&images, &meshes, &materials);
 
@@ -304,6 +313,42 @@ fn admitted_ground_keeps_selector_order_and_publishes_atomically() {
         "{error:?}"
     );
     assert_unpublished(&images, &meshes, &materials);
+}
+
+#[test]
+fn mixed_source_chains_use_only_the_common_authored_prefix() {
+    let mipped = variation_sheet();
+    let base = direct_blp(32, 32, Some(&[0; 1024]));
+    let decoded = decode_ground_slots(
+        &[
+            slot(*b"Ldrt", "synthetic/mipped.blp", &mipped),
+            slot(*b"Lgrs", "synthetic/base.blp", &base),
+        ],
+        memory(8192, 8192),
+    )
+    .unwrap();
+    assert_eq!(decoded.image.texture_descriptor.mip_level_count, 1);
+    assert_eq!(decoded.image.data.unwrap().len(), 8192);
+
+    let mut hole = mipped.clone();
+    hole[0x60..0x64].fill(0);
+    assert!(matches!(
+        decode_ground_slots(
+            &[slot(*b"Ldrt", "synthetic/hole.blp", &hole)],
+            memory(5440, 8192)
+        ),
+        Err(GroundError::Parse { .. })
+    ));
+
+    let mut truncated = mipped;
+    truncated.pop();
+    assert!(matches!(
+        decode_ground_slots(
+            &[slot(*b"Ldrt", "synthetic/truncated.blp", &truncated)],
+            memory(5440, 8192)
+        ),
+        Err(GroundError::Decode { .. })
+    ));
 }
 
 #[test]
@@ -572,6 +617,42 @@ fn ground_edge_and_minification_stay_inside_the_variation_cell() {
     );
     assert!((edge[1] - minified[1]).abs() > 0.04);
     let _ = capture;
+    // Opposing source directions distinguish diffuse lighting from ambient alone.
+    for (towards, factor) in [(Vec3::Z, [0.5, 0.6, 0.7]), (-Vec3::Z, [0.1, 0.2, 0.3])] {
+        app.world_mut()
+            .resource_mut::<Assets<pcx_gfx::GroundMaterial>>()
+            .get_mut(&material)
+            .unwrap()
+            .set_directional_light(towards, Vec3::splat(0.4), Vec3::new(0.1, 0.2, 0.3))
+            .unwrap();
+        let before = app.world().resource::<Capture>().completed;
+        for _ in 0..24 {
+            app.update();
+            app.world()
+                .resource::<RenderDevice>()
+                .wgpu_device()
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(10)),
+                })
+                .unwrap();
+        }
+        let capture = app.world().resource::<Capture>();
+        assert!(capture.completed > before);
+        let stride = capture.last.len() / READBACK_HEIGHT as usize;
+        let shaded = sample(&capture.last, stride, 96, 32);
+        for channel in 0..3 {
+            assert!(
+                (shaded[channel] - minified[channel] * factor[channel]).abs() < tolerance,
+                "light={towards:?} shaded={shaded:?}"
+            );
+        }
+    }
+    app.world_mut()
+        .resource_mut::<Assets<pcx_gfx::GroundMaterial>>()
+        .get_mut(&material)
+        .unwrap()
+        .clear_directional_light();
     // A uniform source mask isolates the material's blend and toggle at each extent.
     let mut mask = Image::new(
         bevy::render::render_resource::Extent3d {
@@ -746,6 +827,7 @@ fn full_uv_quad(center: [f32; 3], half: [f32; 2], selectors: [u32; 4]) -> Mesh {
         Mesh::ATTRIBUTE_UV_0,
         vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
     )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 0., 1.]; 4])
     .with_inserted_attribute(GROUND_SELECTORS, vec![selectors; 4])
     .with_inserted_indices(bevy::mesh::Indices::U32(vec![0, 1, 3, 0, 3, 2]))
 }
