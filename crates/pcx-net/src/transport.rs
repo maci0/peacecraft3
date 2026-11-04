@@ -413,19 +413,28 @@ impl LanHost {
             .ok_or_else(|| TransportError::Io(std::io::Error::other("not bound")))?;
         let mut buf = [0u8; 1024];
         let mut answered = Vec::new();
+        // Bound work per call: an unbounded `recv_from` loop on a non-blocking
+        // socket can be fed indefinitely by a flood, never reaching WouldBlock.
+        const MAX_DATAGRAMS: usize = 4096;
+        let mut datagrams = 0usize;
         loop {
+            if datagrams >= MAX_DATAGRAMS {
+                break;
+            }
             match socket.recv_from(&mut buf) {
-                Ok((n, from)) if &buf[..n] == DISCOVERY_REQUEST => {
-                    let host = Host {
-                        name: self.name.clone(),
-                        addr: from,
-                        map: self.map.clone(),
-                        players: (1, self.max_players),
-                    };
-                    socket.send_to(&host.encode(), from)?;
-                    answered.push(from);
+                Ok((n, from)) => {
+                    datagrams += 1;
+                    if &buf[..n] == DISCOVERY_REQUEST {
+                        let host = Host {
+                            name: self.name.clone(),
+                            addr: from,
+                            map: self.map.clone(),
+                            players: (1, self.max_players),
+                        };
+                        socket.send_to(&host.encode(), from)?;
+                        answered.push(from);
+                    }
                 }
-                Ok(_) => continue,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
                 Err(e) => return Err(e.into()),
@@ -1162,9 +1171,16 @@ pub mod classic {
             self.socket.set_nonblocking(true)?;
             let mut answered = Vec::new();
             let mut buf = vec![0u8; limits.max_datagram_bytes];
+            // Mirrors collect_broadcast: both read and answer counts are
+            // bounded, so a datagram flood cannot keep this loop alive.
+            let mut datagrams = 0usize;
             loop {
+                if datagrams >= limits.max_datagrams || answered.len() >= limits.max_hosts {
+                    break;
+                }
                 match self.socket.recv_from(&mut buf) {
                     Ok((n, from)) => {
+                        datagrams += 1;
                         if n == buf.len() {
                             continue;
                         }

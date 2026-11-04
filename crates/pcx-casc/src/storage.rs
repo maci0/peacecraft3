@@ -125,18 +125,19 @@ impl Storage {
         verify_md5(&config_bytes, build_key, &config_member, 0)?;
         let config_values = parse_config(&config_bytes, &config_member)?;
         let config = Evidence::of(source(config_member), &config_bytes);
-        let mut paths = std::fs::read_dir(install.join("Data/data"))
+        // One DirEntry per member: `entry.metadata()` reuses the type/size
+        // the directory already reported instead of a fresh `stat` per path.
+        let mut entries = std::fs::read_dir(install.join("Data/data"))
             .map_err(|err| io_error(&install.join("Data/data"), err))?
             .map(|entry| {
-                entry
-                    .map(|entry| entry.path())
-                    .map_err(|err| io_error(&install.join("Data/data"), err))
+                entry.map_err(|err| io_error(&install.join("Data/data"), err))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        paths.sort();
+        entries.sort_by_key(|a| a.path());
         let mut selected: BTreeMap<u8, (u32, PathBuf)> = BTreeMap::new();
         let mut data_part_sizes = BTreeMap::new();
-        for path in &paths {
+        for entry in &entries {
+            let path = entry.path();
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
@@ -149,7 +150,10 @@ impl Storage {
                     .map_err(|_| error(name, 0, Failure::Malformed("data part number".into())))?;
                 data_part_sizes.insert(
                     number,
-                    path.metadata().map_err(|err| io_error(path, err))?.len(),
+                    entry
+                        .metadata()
+                        .map_err(|err| io_error(&path, err))?
+                        .len(),
                 );
             }
             if !name.ends_with(".idx") {
