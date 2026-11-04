@@ -178,7 +178,7 @@ mod tests {
         let state = stream.0.borrow();
         assert!(
             state.calls <= CALLS_PER_POLL,
-            "unbounded handshake syscalls: {}",
+            "unbounded handshake I/O calls: {}",
             state.calls
         );
         assert!(

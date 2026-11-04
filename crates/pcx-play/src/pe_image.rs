@@ -55,7 +55,7 @@ pub(crate) fn windows_with_byte(
     byte: u8,
     len: usize,
 ) -> impl Iterator<Item = (usize, &[u8])> {
-    debug_assert!(index < len);
+    assert!(index < len);
     let mut from = 0;
     std::iter::from_fn(move || {
         loop {

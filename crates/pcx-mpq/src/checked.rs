@@ -104,10 +104,7 @@ fn member_error(map: &str, member: &'static str, source: Error) -> ReadError {
 }
 
 pub(crate) fn sector_size(header: Header) -> Option<u32> {
-    0x200u64
-        .checked_shl(u32::from(header.sector_size_shift))
-        .and_then(|n| u32::try_from(n).ok())
-        .filter(|n| *n != 0)
+    (header.sector_size() != 0).then_some(header.sector_size())
 }
 
 /// The decrypted hash and block tables of one archive, parsed under a budget.

@@ -314,10 +314,12 @@ impl Header {
         usize::from(self.width).saturating_mul(usize::from(self.height))
     }
 
-    /// Bytes one stored pixel occupies. Zero for depths that are not decoded.
+    /// Bytes one stored pixel occupies. `None` for depths that are not decoded.
     pub fn pixel_stride(&self) -> Option<usize> {
         match self.pixel_depth {
-            15 | 16 | 24 | 32 => Some(self.pixel_depth as usize / 8),
+            15 | 16 => Some(2),
+            24 => Some(3),
+            32 => Some(4),
             _ => None,
         }
     }
