@@ -787,18 +787,19 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         argv: Vec<Value>,
         span: Span,
     ) -> Result<(), crate::Error> {
-        let (params, source, ret, func_span) = {
+        let (param_count, source, ret, func_span, body) = {
             let found = self.program.function(name).ok_or_else(|| {
                 crate::Error::run(span, format!("`{name}` is not a function in this program"))
             })?;
             (
-                found.params.clone(),
+                found.params.len(),
                 found.source.clone(),
                 found.ret.clone(),
                 found.span,
+                found.body.clone().unwrap_or_default(),
             )
         };
-        if params.len() != argv.len() {
+        if param_count != argv.len() {
             let span = if span == Span::EMPTY {
                 self.error_source = Some(source);
                 func_span
@@ -809,8 +810,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 span,
                 format!(
                     "`{name}` takes {} argument{}, {} given",
-                    params.len(),
-                    plural(params.len()),
+                    param_count,
+                    plural(param_count),
                     argv.len()
                 ),
             ));
@@ -821,15 +822,19 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 format!("`{name}` recursed past {MAX_CALL_DEPTH} frames"),
             ));
         }
-        let body: Arc<[Stmt]> = self
-            .program
-            .function(name)
-            .and_then(|f| f.body.clone())
-            .unwrap_or_default();
         let mut frame = Frame::new();
         let report = if span == Span::EMPTY { func_span } else { span };
-        for (p, v) in params.iter().zip(&argv) {
-            let value = match self.coerce_declared(p.ty.array, &p.ty.kind, v.clone(), report) {
+        // Borrow params from the program while coercing; argv is consumed
+        // without cloning each Value (coerce only transforms Int->Real).
+        for (p, v) in self
+            .program
+            .function(name)
+            .expect("checked above")
+            .params
+            .iter()
+            .zip(argv)
+        {
+            let value = match self.coerce_declared(p.ty.array, &p.ty.kind, v, report) {
                 Ok(value) => value,
                 Err(error) => {
                     if span == Span::EMPTY {
@@ -1916,10 +1921,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         match self.program.natives().call(callee) {
             Some(NativeCall::Implemented(native, which)) => {
                 let arity = native.params.len();
-                let params = native.params.clone();
                 let ret = native.ret.clone();
                 self.check_native_arity(callee, arity, argv.len(), span)?;
-                let argv = self.coerce_params(&params, argv, span)?;
+                let argv = self.coerce_params(&native.params, argv, span)?;
                 let value = self.run_native(which, &argv, span)?;
                 let value = self.coerce_type(&ret, value, span)?;
                 self.finish_zip(outer, value, frame)
@@ -1937,7 +1941,6 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             }
             Some(NativeCall::Unimplemented(native)) => {
                 let arity = native.params.len();
-                let params = native.params.clone();
                 let ret = native.ret.clone();
                 let declared = native.name.clone();
                 let signature =
@@ -1945,7 +1948,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 let source = native.source.clone();
                 let declared_at = native.span;
                 self.check_native_arity(callee, arity, argv.len(), span)?;
-                let argv = self.coerce_params(&params, argv, span)?;
+                let argv = self.coerce_params(&native.params, argv, span)?;
                 if self.host.suspend(callee, &argv) {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));

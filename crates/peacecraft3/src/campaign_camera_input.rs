@@ -200,8 +200,6 @@ fn camera_keys(
     mut input: ResMut<CampaignInput>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
-    let keys: Vec<KeyboardInput> = keyboard.read().cloned().collect();
-    let wheels: Vec<MouseWheel> = wheel.read().cloned().collect();
     let Some(host) = session.host() else {
         return;
     };
@@ -214,7 +212,7 @@ fn camera_keys(
     let now = time.elapsed_secs_f64();
     let view = &mut state.view;
     let error = &mut state.last_error;
-    for event in wheels {
+    for event in wheel.read() {
         let delta = match event.unit {
             MouseScrollUnit::Line => event.y * WHEEL_NOTCH as f32,
             MouseScrollUnit::Pixel => event.y,
@@ -230,7 +228,7 @@ fn camera_keys(
             state.wheel = 0;
         }
     }
-    for event in keys {
+    for event in keyboard.read() {
         let down = event.state == ButtonState::Pressed;
         match (event.key_code, down) {
             (KeyCode::PageUp, true) if open => apply(objects, rules.zoom_in(view), error),
