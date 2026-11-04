@@ -177,7 +177,7 @@ pub fn model_path(definition: &Definition) -> Result<Option<String>, String> {
     let name = path.rsplit(['\\', '/']).next().expect("nonempty path");
     if !name.contains('.') {
         Ok(Some(format!("{path}.mdx")))
-    } else if name.to_ascii_lowercase().ends_with(".mdx") {
+    } else if name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(".mdx") {
         Ok(Some(path))
     } else {
         Err("unsupported unit model extension".into())

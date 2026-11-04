@@ -113,7 +113,7 @@ pub(super) fn model_member(path: &str) -> Result<String, String> {
     let name = path.rsplit(['/', '\\']).next().expect("nonempty path");
     if !name.contains('.') {
         Ok(format!("{path}.mdx"))
-    } else if name.to_ascii_lowercase().ends_with(".mdx") {
+    } else if name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(".mdx") {
         Ok(path)
     } else {
         Err("unsupported model extension".into())

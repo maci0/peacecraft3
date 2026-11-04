@@ -346,9 +346,8 @@ impl DestructableCatalog {
             if no_path {
                 return Err(format!("{name}: missing replacement texture"));
             }
-            let path = if path.to_ascii_lowercase().ends_with(".blp")
-                || path.to_ascii_lowercase().ends_with(".tga")
-            {
+            let lower = path.to_ascii_lowercase();
+            let path = if lower.ends_with(".blp") || lower.ends_with(".tga") {
                 path
             } else {
                 format!("{path}.blp")
