@@ -1127,15 +1127,10 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
     }
 
-    fn finish_child(
-        &mut self,
-        body: &[Stmt],
-        frame: &mut Frame,
-        cont: Cont,
-        kind: Nest,
-        incoming: Option<Value>,
-    ) -> Result<Flow, crate::Error> {
-        match self.exec_cont(body, frame, cont, incoming)? {
+    /// Shared tail for branch/else entry and resume: re-parks or invokes a
+    /// nested continuation produced by running or resuming an `if` body.
+    fn wrap_child(flow: Result<Flow, crate::Error>, kind: Nest) -> Result<Flow, crate::Error> {
+        match flow? {
             Flow::Suspend(cont) => Ok(Flow::Park(Box::new(Nested { kind, cont: *cont }))),
             Flow::Switch { cont, after } => Ok(Flow::Invoke {
                 after,
@@ -1149,6 +1144,17 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 "internal continuation left a statement yield in a branch",
             )),
         }
+    }
+
+    fn finish_child(
+        &mut self,
+        body: &[Stmt],
+        frame: &mut Frame,
+        cont: Cont,
+        kind: Nest,
+        incoming: Option<Value>,
+    ) -> Result<Flow, crate::Error> {
+        Self::wrap_child(self.exec_cont(body, frame, cont, incoming), kind)
     }
 
     fn run_range(
@@ -1417,20 +1423,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         frame: &mut Frame,
         kind: Nest,
     ) -> Result<Flow, crate::Error> {
-        match self.run_range(body, frame, 0)? {
-            Flow::Suspend(cont) => Ok(Flow::Park(Box::new(Nested { kind, cont: *cont }))),
-            Flow::Switch { cont, after } => Ok(Flow::Invoke {
-                after,
-                nested: Some(Box::new(Nested { kind, cont: *cont })),
-            }),
-            Flow::Normal => Ok(Flow::Normal),
-            Flow::Return(value) => Ok(Flow::Return(value)),
-            Flow::Exit => Ok(Flow::Exit),
-            _ => Err(broken(
-                Span::EMPTY,
-                "internal continuation left a statement yield in a branch",
-            )),
-        }
+        Self::wrap_child(self.run_range(body, frame, 0), kind)
     }
 
     fn wrap_debug(flow: Flow) -> Result<Flow, crate::Error> {

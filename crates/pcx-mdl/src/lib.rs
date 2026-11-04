@@ -1093,7 +1093,8 @@ impl Vec3Array {
         }
     }
     pub fn get(&self, i: usize) -> Option<[f32; 3]> {
-        let b = self.raw.get(i * 12..i * 12 + 12)?;
+        let base = i.checked_mul(12)?;
+        let b = self.raw.get(base..base.checked_add(12)?)?;
         Some([
             f32::from_le_bytes(b[0..4].try_into().ok()?),
             f32::from_le_bytes(b[4..8].try_into().ok()?),
@@ -1130,7 +1131,8 @@ impl Triangles {
         self.count as usize / 3
     }
     pub fn triangle(&self, t: usize) -> Option<[u16; 3]> {
-        let b = self.raw.get(t * 6..t * 6 + 6)?;
+        let base = t.checked_mul(6)?;
+        let b = self.raw.get(base..base.checked_add(6)?)?;
         Some([
             u16::from_le_bytes(b[0..2].try_into().ok()?),
             u16::from_le_bytes(b[2..4].try_into().ok()?),
@@ -1160,7 +1162,8 @@ impl UvArray {
         }
     }
     pub fn get(&self, i: usize) -> Option<[f32; 2]> {
-        let b = self.raw.get(i * 8..i * 8 + 8)?;
+        let base = i.checked_mul(8)?;
+        let b = self.raw.get(base..base.checked_add(8)?)?;
         Some([
             f32::from_le_bytes(b[0..4].try_into().ok()?),
             f32::from_le_bytes(b[4..8].try_into().ok()?),
