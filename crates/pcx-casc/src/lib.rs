@@ -135,7 +135,14 @@ pub(crate) fn verify_md5(
 }
 
 pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    // 2 chars per byte, exact allocation; avoids per-byte format! overhead.
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0xF) as usize] as char);
+    }
+    out
 }
 
 pub fn parse_key(text: &str, source: &str) -> Result<Key, Error> {

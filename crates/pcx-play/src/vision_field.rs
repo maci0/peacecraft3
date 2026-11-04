@@ -1393,7 +1393,7 @@ impl ObjectHost {
         if vision.shape != shape {
             return Err(fail("shared vision grid changed after admission".into()));
         }
-        let units = self.executed_units().count();
+        let units = self.inner.unit_slots.len();
         let started_modifiers = self
             .fog_modifiers()
             .filter(|modifier| modifier.started)

@@ -304,7 +304,8 @@ impl ObjectHost {
         let after = sources.partition_point(|circle| !circle.after_units);
         let mut units = Vec::new();
         // Whether each unit owner shares vision with `viewer`; the answer depends on the owner only.
-        let mut shares: Vec<(HandleId, bool)> = Vec::new();
+        // Player count is bounded (MAX_PLAYERS=16), so linear scan is O(1) amortized.
+        let mut shares: Vec<(HandleId, bool)> = Vec::with_capacity(16);
         let night = table.night;
         for listed in &mut table.units {
             scanned = scanned.saturating_add(1);

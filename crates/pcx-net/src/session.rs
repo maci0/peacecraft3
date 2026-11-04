@@ -20,7 +20,13 @@ pub struct SessionIdentity(pub [u8; 32]);
 
 impl SessionIdentity {
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(64);
+        for byte in &self.0 {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0xF) as usize] as char);
+        }
+        out
     }
 
     /// Accepts exactly 64 lowercase hex digits, the form `to_hex` writes.
