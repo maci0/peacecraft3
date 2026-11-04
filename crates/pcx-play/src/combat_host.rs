@@ -88,14 +88,24 @@ impl SplashTargets {
     fn parse(tokens: &str) -> Self {
         let mut parsed = Self::default();
         for token in tokens.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-            match token.to_ascii_lowercase().as_str() {
-                "ground" => parsed.ground = true,
-                "air" => parsed.air = true,
-                "structure" => parsed.structure = true,
-                "enemy" => parsed.enemy = true,
-                "notself" => parsed.not_self = true,
-                "debris" | "tree" | "wall" | "ward" | "item" => {}
-                _ => parsed.unsupported = true,
+            if token.eq_ignore_ascii_case("ground") {
+                parsed.ground = true;
+            } else if token.eq_ignore_ascii_case("air") {
+                parsed.air = true;
+            } else if token.eq_ignore_ascii_case("structure") {
+                parsed.structure = true;
+            } else if token.eq_ignore_ascii_case("enemy") {
+                parsed.enemy = true;
+            } else if token.eq_ignore_ascii_case("notself") {
+                parsed.not_self = true;
+            } else if token.eq_ignore_ascii_case("debris")
+                || token.eq_ignore_ascii_case("tree")
+                || token.eq_ignore_ascii_case("wall")
+                || token.eq_ignore_ascii_case("ward")
+                || token.eq_ignore_ascii_case("item")
+            {
+            } else {
+                parsed.unsupported = true;
             }
         }
         parsed

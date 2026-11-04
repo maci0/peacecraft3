@@ -37,8 +37,8 @@ impl ObjectHost {
             .find(|c| c.name == CONVERT && c.kind == "itemtype")
             .map(|c| c.domain.clone())
             .ok_or_else(|| self.inner.error(CONVERT, Failure::Signature))?;
-        let ordinals = classes.ordinals.values().copied().chain([classes.default]);
-        if ordinals.clone().any(|n| !domain.contains(&n)) {
+        let mut ordinals = classes.ordinals.values().copied().chain([classes.default]);
+        if ordinals.any(|n| !domain.contains(&n)) {
             return Err(self.inner.error(
                 TYPE,
                 Failure::ItemState("class ordinal is not a program item type"),

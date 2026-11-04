@@ -362,10 +362,9 @@ fn atom(source: &str, token: &Token) -> Result<Atom, FdfError> {
         TokenKind::Word(word) => {
             let number_like = word.as_bytes()[0].is_ascii_digit()
                 || matches!(word.as_bytes()[0], b'+' | b'-' | b'.')
-                || matches!(
-                    word.to_ascii_lowercase().as_str(),
-                    "nan" | "inf" | "infinity"
-                );
+                || word.eq_ignore_ascii_case("nan")
+                || word.eq_ignore_ascii_case("inf")
+                || word.eq_ignore_ascii_case("infinity");
             if !number_like {
                 return Ok(Atom::Identifier(word.clone()));
             }

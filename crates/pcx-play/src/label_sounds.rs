@@ -133,8 +133,19 @@ pub(crate) fn checked_table(
         return Err(fail(Problem::Ambiguous));
     }
     for (i, name) in required.iter().enumerate() {
-        if required[..i].contains(name) || decoded.headers().filter(|(_, h)| h == name).count() != 1
-        {
+        if required[..i].contains(name) {
+            return Err(fail(Problem::Ambiguous));
+        }
+        let mut matches = 0usize;
+        for (_, h) in decoded.headers() {
+            if h == *name {
+                matches += 1;
+                if matches > 1 {
+                    break;
+                }
+            }
+        }
+        if matches != 1 {
             return Err(fail(Problem::Ambiguous));
         }
     }

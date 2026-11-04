@@ -236,7 +236,7 @@ fn read_research(
         .filter(|f| {
             f.from == SlkId::UpgradeMetaData
                 && matches!(&f.source,
-                FieldSource::Profile { key, .. } if key.to_ascii_lowercase().starts_with("requires"))
+                FieldSource::Profile { key, .. } if key.len() >= 8 && key[..8].eq_ignore_ascii_case("requires"))
         })
         .map(|f| f.fourcc)
         .collect();

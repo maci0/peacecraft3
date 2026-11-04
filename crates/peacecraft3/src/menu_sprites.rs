@@ -305,7 +305,16 @@ fn checked_table(table: &pcx_slq::Table, path: &str, required: &[&str]) -> Resul
         return Err(fail("lossy or erroneous sound table records"));
     }
     for name in required {
-        if table.headers().filter(|(_, h)| h == name).count() != 1 {
+        let mut matches = 0usize;
+        for (_, h) in table.headers() {
+            if h == *name {
+                matches += 1;
+                if matches > 1 {
+                    break;
+                }
+            }
+        }
+        if matches != 1 {
             return Err(fail(&format!(
                 "missing or duplicate required header {name}"
             )));

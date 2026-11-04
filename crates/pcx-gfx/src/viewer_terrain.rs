@@ -62,7 +62,15 @@ fn path_from_slk(
     let fail = |kind| failure(source_name, tile_id, kind);
     let table = pcx_slq::Table::parse(bytes).map_err(|e| fail(TerrainTileErrorKind::Parse(e)))?;
     for column in ["tileID", "dir", "file"] {
-        let count = table.headers().filter(|(_, name)| *name == column).count();
+        let mut count = 0usize;
+        for (_, name) in table.headers() {
+            if name == column {
+                count += 1;
+                if count > 1 {
+                    break;
+                }
+            }
+        }
         match count {
             0 => return Err(fail(TerrainTileErrorKind::MissingColumn(column))),
             1 => (),

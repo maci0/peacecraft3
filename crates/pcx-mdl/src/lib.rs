@@ -4814,7 +4814,7 @@ mod tests {
         // Some records carry no path at all; those are legal, not empty bugs.
         assert!(
             tex.iter()
-                .all(|t| t.path.is_empty() || t.path.to_ascii_lowercase().ends_with(".blp"))
+                .all(|t| t.path.is_empty() || (t.path.len() >= 4 && t.path[t.path.len() - 4..].eq_ignore_ascii_case(".blp")))
         );
     }
 
@@ -5307,7 +5307,7 @@ mod tests {
             .file_list()
             .expect("union listfile")
             .into_iter()
-            .filter(|l| l.to_ascii_lowercase().ends_with(".mdx"))
+            .filter(|l| l.len() >= 4 && l[l.len() - 4..].eq_ignore_ascii_case(".mdx"))
             .collect();
         assert!(models.len() > 3_000, "only {} models", models.len());
 
@@ -6042,7 +6042,7 @@ mod tests {
                         Ok(t) => {
                             for x in &t {
                                 if !x.path.is_empty()
-                                    && !x.path.to_ascii_lowercase().ends_with(".blp")
+                                    && !(x.path.len() >= 4 && x.path[x.path.len() - 4..].eq_ignore_ascii_case(".blp"))
                                 {
                                     anomalies.insert(format!("{rel}: texture path {:?}", x.path));
                                 }
@@ -6369,7 +6369,7 @@ mod clid {
             .file_list()
             .expect("union listfile")
             .into_iter()
-            .filter(|l| l.to_ascii_lowercase().ends_with(".mdx"))
+            .filter(|l| l.len() >= 4 && l[l.len() - 4..].eq_ignore_ascii_case(".mdx"))
             .collect();
 
         let mut failed: Vec<String> = Vec::new();
@@ -7257,7 +7257,7 @@ mod pre2_tests {
             .file_list()
             .expect("union listfile")
             .into_iter()
-            .filter(|l| l.to_ascii_lowercase().ends_with(".mdx"))
+            .filter(|l| l.len() >= 4 && l[l.len() - 4..].eq_ignore_ascii_case(".mdx"))
             .collect();
 
         let mut failed = Vec::new();

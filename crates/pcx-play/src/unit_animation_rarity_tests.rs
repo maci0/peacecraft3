@@ -69,7 +69,7 @@ fn selected_model_rarity_relationships() {
         .iter()
         .filter(|s| {
             s.name.eq_ignore_ascii_case("stand")
-                || s.name.to_ascii_lowercase().starts_with("stand -")
+                || (s.name.len() >= 7 && s.name[..7].eq_ignore_ascii_case("stand -"))
                 || s.name.eq_ignore_ascii_case("stand cinematic")
         })
         .map(pcx_mdl::Sequence::rarity)
