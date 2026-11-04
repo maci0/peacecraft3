@@ -170,9 +170,14 @@ impl ObjectHost {
             };
             matches!(&field.value, Ok(FieldValue::Cell(text)) if text.trim() == "1")
         };
-        // `hero` is not a numeric catalog column on every definition; a live
-        // hero-level request is the executed hero marker instead.
-        if unit.requested_hero_level.is_some() || cell_is_one("hero") {
+        // Hero state can come from admitted abilities or executed level requests.
+        if unit
+            .abilities
+            .as_ref()
+            .is_some_and(|abilities| abilities.hero.is_some())
+            || unit.requested_hero_level.is_some()
+            || cell_is_one("hero")
+        {
             return SpecialMinimapLayer::Hero;
         }
         if unit.resource_amount.is_some() {
@@ -188,6 +193,36 @@ impl ObjectHost {
         }
         SpecialMinimapLayer::Ordinary
     }
+    /// Resolve resource art from the admitted, overlaid ability classes.
+    pub fn minimap_resource_kind(
+        &self,
+        unit: &ExecutedUnit,
+        classes: [[u8; 4]; 3],
+    ) -> Result<usize, String> {
+        let (tables, overlay) = self
+            .unit_ability_source()
+            .ok_or("minimap resource ability source absent")?;
+        let mut result = None;
+        for alias in crate::harvest_rules::definition_abil_codes(&unit.definition)
+            .map_err(|e| e.to_string())?
+        {
+            let Some(code) =
+                crate::harvest_rules::resolve_ability_code(tables, Some(overlay), &alias)
+                    .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+            if let Some(index) = classes
+                .iter()
+                .position(|class| class.as_slice() == code.as_bytes())
+                && result.replace(index).is_some()
+            {
+                return Err("ambiguous minimap resource abilities".into());
+            }
+        }
+        result.ok_or_else(|| "unsupported minimap resource ability class".into())
+    }
+
     pub fn display_team_color(&self, unit: &ExecutedUnit, original: i32) -> Result<i32, String> {
         let role = self.display_role(unit, false)?;
         Ok(self

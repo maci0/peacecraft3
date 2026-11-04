@@ -451,6 +451,19 @@ pub(crate) fn texture_filter_record<F: FnMut(u32, usize, bool) -> Result<Vec<u8>
     r: &mut crate::unit_panel_layout::Reader<F>,
     index: u32,
 ) -> Result<[u32; 3], String> {
+    let filters = texture_filter_record_mipmapped(r, index)?;
+    if filters[2] != 0 {
+        return Err("unsupported texture min/mag/mip combination".into());
+    }
+    Ok(filters)
+}
+
+pub(crate) fn texture_filter_record_mipmapped<
+    F: FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+>(
+    r: &mut crate::unit_panel_layout::Reader<F>,
+    index: u32,
+) -> Result<[u32; 3], String> {
     if index > 3 {
         return Err("unsupported texture sampler index".into());
     }
@@ -463,7 +476,7 @@ pub(crate) fn texture_filter_record<F: FnMut(u32, usize, bool) -> Result<Vec<u8>
         *filter = u32::from_le_bytes(r.bytes(address, 4, false)?.try_into().unwrap());
     }
     // D3DTEXF identifiers; mipmapped paths require a mip-preserving image loader.
-    if !matches!(filters, [1 | 2, 1 | 2, 0]) {
+    if !matches!(filters, [1 | 2, 1 | 2, 0..=2]) {
         return Err("unsupported texture min/mag/mip combination".into());
     }
     Ok(filters)

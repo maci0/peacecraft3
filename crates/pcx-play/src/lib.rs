@@ -116,6 +116,7 @@ pub mod minimize;
 pub mod mp3_frame;
 pub mod native_path_hierarchy;
 pub mod native_path_queue;
+pub mod native_sight;
 pub mod neutral_player;
 mod neutral_rule_discovery;
 mod neutral_rule_input;

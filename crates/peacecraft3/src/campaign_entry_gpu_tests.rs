@@ -443,7 +443,7 @@ mod sky_sight_parity {
                 "world_bounds": bounds,
                 "presented_counts": counts,
                 "destructable_handles": destructables,
-                "note": "terrain/tree occlusion is not applied by the shared-vision sampler; minimap renders circular sight",
+                "note": "selected-client lattice and blocker graph; grounded-flying suppression and support/deck heights remain unqualified",
             });
             (sky_script, day_fraction, game_time, vision)
         };
@@ -2110,11 +2110,79 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         unit
     };
     let selected_image = capture(&mut app, &output.join("selected-unit.png"));
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects();
+        let grid = objects
+            .native_sight_grid_fixture()
+            .expect("selected-client height lattice");
+        let heights = grid.heights();
+        std::fs::write(
+            output.join("sight-height-grid.bin"),
+            heights
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let [width, height] = grid.dimensions();
+        let bounds = objects.vision_world_bounds().unwrap();
+        let viewer = objects.local_player_settings().unwrap().identity;
+        let sources = objects.vision_sources(viewer, false, 65536).unwrap();
+        let sources: Vec<_> = sources.iter().map(|source| {
+            let unit = match source.origin {
+                pcx_play::playercolor_host::VisionOrigin::Unit { unit } => objects.executed_unit(unit).ok(),
+                _ => None,
+            };
+            serde_json::json!({ "shape": format!("{:?}", source.shape),
+                "rawcode": unit.map(|u| String::from_utf8_lossy(&u.definition.rawcode).into_owned()),
+                "owner": unit.map(|u| u.executed_owner),
+            })
+        }).collect();
+        std::fs::write(
+            output.join("sight-sources.json"),
+            serde_json::to_vec_pretty(&sources).unwrap(),
+        )
+        .unwrap();
+        let mut cells = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let point = [x as f32 + 0.5, y as f32 + 0.5];
+                let point = std::array::from_fn(|i| {
+                    bounds[0][i]
+                        + point[i] * (bounds[1][i] - bounds[0][i]) / [width, height][i] as f32
+                });
+                let cell = objects.vision_cell(viewer, point).unwrap().unwrap();
+                cells.extend([
+                    u8::from(cell.raw == pcx_play::playercolor_host::VisionState::Visible),
+                    u8::from(cell.explored),
+                ]);
+            }
+        }
+        std::fs::write(output.join("sight-viewer-grid.bin"), cells).unwrap();
+        std::fs::write(output.join("sight-grid.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "dimensions": [width,height], "world_bounds":bounds,
+            "scope":"Row-major current-visible/explored byte pairs for local viewer; native tick identity unqualified",
+        })).unwrap()).unwrap();
+    }
+
     let minimap = app
         .world()
         .resource::<crate::campaign_minimap::CampaignMinimap>()
         .diagnostic_image()
         .unwrap();
+    let image = app
+        .world()
+        .resource::<Assets<Image>>()
+        .get(&minimap)
+        .unwrap();
+    std::fs::write(
+        output.join("minimap-cpu.rgba"),
+        image.data.as_ref().unwrap(),
+    )
+    .unwrap();
     let quads = app
         .world_mut()
         .query::<(

@@ -484,3 +484,39 @@ fn resource_amount_setter_without_add_or_get_is_admitted() {
     vm.init_globals().unwrap();
     vm.call("main", &[]).unwrap();
 }
+
+#[test]
+fn minimap_resource_art_uses_the_resolved_ability_classes() {
+    let common = resource_common(RESOURCE_NATIVES);
+    let ctx = context(300, &common, RESOURCE_MAP, "unit-catalog");
+    let tables = resource_tables();
+    let overlay = pcx_objects::editor::Overlay::default();
+    let host = object(&ctx, 64)
+        .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(Arc::new(ResourceCatalog), source(), limits(4))
+        .unwrap()
+        .with_resource_amounts(Arc::clone(&tables))
+        .unwrap()
+        .with_militia_ability(&tables, &overlay)
+        .unwrap();
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let classes = [*b"Agld", *b"Aegm", *b"Abgm"];
+    for (name, kind) in [("U", 0), ("E", 1), ("G", 2)] {
+        let Value::Handle(unit) = vm.global(name) else {
+            panic!("missing unit")
+        };
+        let host = &vm.host().inner;
+        assert_eq!(
+            host.minimap_resource_kind(host.executed_unit(unit).unwrap(), classes)
+                .unwrap(),
+            kind
+        );
+        assert!(
+            host.minimap_resource_kind(host.executed_unit(unit).unwrap(), [*b"None"; 3])
+                .is_err()
+        );
+    }
+}

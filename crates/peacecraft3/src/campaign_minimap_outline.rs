@@ -133,6 +133,7 @@ pub(super) fn update(
         let entity = commands
             .spawn((
                 Outline,
+                ZIndex(2),
                 Node {
                     position_type: PositionType::Absolute,
                     display: Display::None,

@@ -371,6 +371,7 @@ pub struct MapStartupInputs {
     pub experience_handicap: Option<crate::player_handicap::Rules>,
     /// Source-qualified health-factor limits and unit-pool rounding.
     pub health_handicap: Option<crate::player_handicap::HealthRules>,
+    pub native_sight: Option<crate::native_sight::Rules>,
     pub hero_skills: Option<HeroSkillsInput>,
     pub catalog: Arc<dyn ObjectCatalog + Send + Sync>,
     pub defend: DefendSelection,
@@ -704,6 +705,7 @@ fn assemble_inner(
         destructable_restore,
         experience_handicap,
         health_handicap,
+        native_sight,
         hero_skills,
         catalog,
         defend,
@@ -951,6 +953,9 @@ fn assemble_inner(
     }
     if let Some(rules) = health_handicap {
         object = object.with_player_health_handicap(rules)?;
+    }
+    if let Some(rules) = native_sight {
+        object = object.with_native_sight(rules)?;
     }
     if let Some(input) = random {
         object = object.with_script_random(input.policy, input.max_secondary)?;

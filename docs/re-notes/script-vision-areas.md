@@ -81,3 +81,21 @@ native behavior or rendered parity. Null and removed handles refuse explicitly.
 The unchanged Human01 observation reached the authored cinematic at partial host
 time 45.015625 before this implementation; it stopped at the unsupported native.
 That observation is not a post-fix replay or a completed mission.
+
+## Blocked source accumulation (2026-11-04)
+
+A blocked sight sample now leaves the current cell and its explored history
+untouched. It cannot erase a clear source stamped earlier in the same sample.
+Removing the clear source restores fog for explored cells; fresh blocked cells
+stay masked. The overlap regression fails before the fix, and all 24 vision
+checks pass afterward. This follows the selected client's blocked-node identity
+stores; the live ray/tree blocker predicate remains a recreation. Native graph,
+height and full rendered qualification are tracked in
+[minimap evidence](campaign-minimap.md#blocked-source-preservation-and-sight-graphs-2026-11-04).
+
+
+Campaign startup now uses the selected-client lattice, authored occlusion heights
+and predecessor graph. The source-path and runtime qualification, including the
+remaining tower-radius and explored-history residuals, are recorded in
+[minimap sight integration](campaign-minimap.md#native-sight-lattice-integration-2026-11-04).
+Callers without a selected sight policy retain the labelled legacy approximation.

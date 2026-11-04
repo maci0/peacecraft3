@@ -382,6 +382,36 @@ impl DestructableCatalog {
     /// Resolve one destructable rawcode; `None` means the rawcode names a
     /// decoration rather than a destructable. A record can be a custom object
     /// whose base chain must already end in a shipped row.
+    pub(crate) fn sight_occlusion(&self, objectid: i32) -> Result<Option<(f32, bool)>, String> {
+        let id = objectid.to_be_bytes();
+        let name = std::str::from_utf8(&id).map_err(|_| "non-UTF8 sight occluder")?;
+        let Some((family, slk, object, mods)) = self.find(name)? else {
+            return Err(format!("{name}: sight occluder record missing"));
+        };
+        if family != Family::Destructable {
+            return Ok(None);
+        }
+        let number = |column| {
+            numeric_field(
+                self.tables.editor(),
+                object,
+                family,
+                slk,
+                column,
+                mods,
+                name,
+            )?
+            .ok_or_else(|| format!("{name}: missing sight {column}"))
+        };
+        let height = number("occH")?;
+        let wide = match number("fatLOS")? {
+            0. => false,
+            1. => true,
+            _ => return Err(format!("{name}: invalid fatLOS")),
+        };
+        Ok(Some((height, wide)))
+    }
+
     pub fn stats_if_destructable(
         &self,
         objectid: i32,
@@ -521,7 +551,7 @@ fn numeric_field(
     let definition = definition(editor, family, slk, column, name)?;
     if !matches!(
         definition.kind,
-        FieldKind::Int | FieldKind::Real | FieldKind::Unreal
+        FieldKind::Int | FieldKind::Bool | FieldKind::Real | FieldKind::Unreal
     ) {
         return Err(format!(
             "{name}: unsupported {column} metadata type {}",
@@ -532,6 +562,9 @@ fn numeric_field(
         .field(definition.fourcc)
         .map_err(|error| format!("{name}: {column}: {error}"))?;
     let base = match (definition.kind, mapped.value) {
+        (FieldKind::Bool, pcx_objects::editor::defaults::Value::Boolean(value)) => {
+            Some(f64::from(u8::from(value)))
+        }
         (FieldKind::Int, pcx_objects::editor::defaults::Value::Integer(value)) => {
             Some(value as f64)
         }
@@ -548,6 +581,7 @@ fn numeric_field(
             None => return Ok(None),
         },
         Some(edit) => match (definition.kind, &edit.value) {
+            (FieldKind::Bool, pcx_objects::Value::Int(value)) if *value <= 1 => f64::from(*value),
             (FieldKind::Int, pcx_objects::Value::Int(value)) => f64::from(*value as i32),
             (
                 FieldKind::Real | FieldKind::Unreal,

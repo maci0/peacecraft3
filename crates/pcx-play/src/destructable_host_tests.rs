@@ -315,7 +315,10 @@ fn catalog_from(
     destructable_edits: pcx_objects::editor::Overlay,
     decoration_edits: pcx_objects::editor::Overlay,
 ) -> DestructableCatalog {
-    let data = slk_table(&["DestructableID", "HP", "targType"], rows);
+    let data = slk_table(
+        &["DestructableID", "HP", "targType", "occH", "fatLOS"],
+        rows,
+    );
     let metadata = slk_table(
         &["ID", "field", "slk", "type", "index", "category"],
         metadata_rows,
@@ -1751,4 +1754,25 @@ fn visual_profile_uses_authored_variation_replacement_and_colour_edits() {
         catalog.visual(id, 2, paths.into_iter()).unwrap().tint,
         [31., 101., 137.]
     );
+}
+
+#[test]
+fn sight_occlusion_uses_authored_height_and_boolean_metadata() {
+    let metadata: Vec<&[&str]> = vec![
+        &["Aocc", "occH", "DestructableData", "real", "0", "stats"],
+        &["Afat", "fatLOS", "DestructableData", "bool", "0", "stats"],
+    ];
+    let make = |wide| {
+        catalog_from(
+            &[&["TREE", "50", "tree,ground", "37.5", wide]],
+            &metadata,
+            None,
+            pcx_objects::editor::Overlay::default(),
+            pcx_objects::editor::Overlay::default(),
+        )
+    };
+    let id = i32::from_be_bytes(*b"TREE");
+    assert_eq!(make("0").sight_occlusion(id).unwrap(), Some((37.5, false)));
+    assert_eq!(make("1").sight_occlusion(id).unwrap(), Some((37.5, true)));
+    assert!(make("2").sight_occlusion(id).is_err());
 }

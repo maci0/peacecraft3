@@ -357,15 +357,17 @@ image, refuses on any changed instruction, and has an explicit local-image gate
   `min(256/(W*2^-7), 256/(H*2^-7)) * 0.00390... * 0.5` built at `6379ab..637a5d` from
   extents read through the profile reader `4304c0` (`6370c0..637200`, the camera margin
   keys); those inputs are not decoded. The clone still draws a class 0 square for heroes.
-- Gold mine, entangled and haunted mine, neutral building, Circle of Power: 16 by 16
-  masked blits in `659220`, textures `MinimapResourceTexture`, `...EntangledResource...`,
-  `...HauntedResource...`, `MinimapNeutralTexture`, `MinimapCopTexture` (`6376ae..63777e`).
-  Selection: bit `0x20000` from `6d6570(0x41676d62)` ('Agmb', absent from `ngol`'s
-  `Agld,Avul`, so the mine path is not the one the stock capture shows), bit `0x40000` for
-  structures owned by slot 27 with a `+0x454 & 0x100` type flag, or 'ncop'/'ncp2'/'ncp3'.
-  Mine variants come from `+0x168` bits 7 and 8. The yellow ball in the stock capture is
-  more likely the `MinimapResource` model quad (`UI\Minimap\MiniMap-Goldmine.mdl`) than
-  this blit; unresolved.
+- Neutral buildings and Circle of Power still need their special-icon path.
+  Resource icons now use the source-derived CPU blit described below. The native
+  special pass at `659220` loads `MinimapResourceTexture`,
+  `...EntangledResource...`, `...HauntedResource...`, `MinimapNeutralTexture`
+  and `MinimapCopTexture` (`6376ae..63777e`).
+  Selection includes resource bit `0x20000`, neutral-structure bit `0x40000`,
+  and 'ncop'/'ncp2'/'ncp3'. Mine variants come from `+0x168` bits 7 and 8.
+  The earlier claim that `ngol`'s `Agld,Avul` excludes the resource blit was
+  incorrect: the lookup accepts registered base types, including `Agld` under
+  `Agmb`. The visible mine icon's complete runtime path remains to be qualified;
+  the earlier preference for a model quad is withdrawn. See the audit below.
 - Creep camps: models `MinimapCreepCamp`/`MinimapCreepCampTough`, thresholds
   `MinimapMiddleCampThreshold=10`, `MinimapToughCampThreshold=20`, scale and colours
   (`620473..620545`, stored `+0x9e4..+0x9fc`), gated by the creep button flag `+0x81c`.
@@ -485,3 +487,257 @@ Native fog-grid interpolation/rounding, terrain/tree occlusion, special icons,
 remembered-marker behavior and outline rasterization remain open. The original
 reference still has no qualified tick/animation/RNG identity. These measurements
 are diagnostic evidence, not pixel-parity acceptance or screenshot-fit inputs.
+
+## Minimap native audit in progress (2026-11-03)
+
+The same SHA-qualified Legacy image has now been decompiled through the image
+initializer (`636db0`), draw method (`63fd30`), CPU texture updater (`658ac0`),
+special-icon pass (`659220`), unit-marker pass (`65ba90`) and fog passes
+(`6568a0`, `657340`). The constructor entry is `61f930`; `620000` is an interior
+address, not a valid standalone function entry. Independent pseudocode is a
+cross-check, not proof of function boundaries, inferred types or rendered parity.
+Local outputs and input copies remain ignored under
+`.scratch/minimap-native-audit-20261103/`.
+
+Shipped-byte evidence corrects the resource classification inference above:
+
+- `670635` calls the type-id getter at `b626a0`, returning `Agmb`. The call to
+  `6d6570` at `67063d` enables base-type matching. A successful lookup sets unit
+  `+164` bit `0x20000` at `670646`.
+- The registration at `b62bf0..b62c07` passes `Agld`, `Agmb` and its type record
+  to `7f6360`. The lookup at `6d6570` compares the concrete id and, when enabled,
+  calls `7f55f0` for the registered type relationship. Comparing the literal
+  ability list against `Agmb` alone therefore misses gold-mine inheritance.
+- The special-icon CPU loop combines each channel with the texture alpha as a
+  bit mask, rather than using ordinary alpha interpolation. Resource variants
+  also run the native colour transform before that mask. The generic square
+  approximation does not implement this behavior.
+
+The local resource receipt retains exact bytes and disassembly, with input
+SHA-256, in `resource-classification.json`. These are static observations;
+resource visibility, remembered icons, complete fog behavior, hero/camp drawing
+and exact full-frame parity remain unqualified. No renderer change or new
+screenshot result is claimed by this audit.
+
+## Visible resource icons and solid marker writes (2026-11-03)
+
+The draw reader now consumes the three resource texture keys from the initializer,
+ability-class getter operands (`b62690`, `b941a0`, `b263d0`), blit loop counters,
+row stride, centre offsets and clamp operands. Synthetic fixtures vary the keys,
+classes and dimensions. Luminance coefficients are read from the multiply operands
+and SIB scales in `62d0c0`; tint rounding and shifts come from `63a850`. The
+selected source yields RGB weights 77/151/28 and the native multiply/add/shift
+transform. These values are not application defaults.
+
+The renderer resolves those keys from the selected skin and uses the shared
+native image-loader extension order. Decoded dimensions must match the blit;
+missing, ambiguous or unsupported input refuses with context. Resource class
+selection reads the same admitted ability tables and map overlay as the host's
+ability behavior. Visible normal, entangled and haunted resources draw their
+textures before ordinary markers; variants use the owner/role colour transform.
+The alpha byte masks destination/source bits, including the visible alpha plane.
+Synthetic tests distinguish that operation from interpolated alpha blending.
+
+Ordinary CPU marker blocks now write solid pixels. The old fractional-area
+coverage was an unqualified reconstruction layered ahead of the actual UI sampler
+and has been removed. Their projected coordinates now truncate from the lower
+map origin before row inversion, with whole-pixel padding; the same projection
+and source resource dimensions reach hit testing. Native fixed-point conversion
+edge cases, resource visibility/remembering outside the currently visible pass,
+hero/neutral/camp icons, fog sampling, occlusion and outline rasterization remain
+open. This is not complete minimap or full-screen parity.
+
+## Native fog-grid scan qualification (2026-11-03)
+
+Two private Wine/Xvfb/null-sink sessions supplied read-only CMinimap observations.
+The second was paused through its Game Menu; its CPU buffer repeated byte-for-byte
+before retention. Both containers were stopped and verified exited. Input hashes,
+source executable identity, object/grid records and acquisition receipts stay
+local in `.scratch/minimap-native-audit-20261103/` and the two private run folders.
+This is Wine runtime evidence, not native Windows evidence or a tick match to the
+published reference frame.
+
+The marker transform uses an edge-minus-one span after padding and operates on
+terrain-cell coordinates. It is distinct from the continuous hero-quad transform.
+The source helpers `6540e0`/`7ffbe0` derive a pathing-rectangle centre and shift it
+to the terrain-cell grid. Ordinary/resource markers now use the source float-bit
+conversion, bias, shift and edge-minus-one scales. The retained snapshot gate
+checks both scale values bit-for-bit. The world-position adapter agrees with 38
+paired original map placements in a third read-only session; nine wildlife
+positions differ after live movement, so that comparison does not qualify moving
+unit bounds or synchronized ticks.
+
+For fog, `657340` scans the map region with a fixed-point accumulator, takes
+nearest source rows and averages each changing horizontal alpha with its previous
+source-cell alpha. The previous value starts at zero on every row. It preserves
+base-image alpha outside the written rectangle. The shift width, unit, subtraction
+operands, row/column edge operands, initial zero and averaging instruction are
+validated/read from the supplied executable. The synthetic executable fixture
+uses another shift width.
+
+A separate reconstruction using the observed visibility/exploration grids and
+base image matches **all 65,536 CPU alpha bytes**, with no excluded pixels. The
+Rust renderer's explicit ignored original-input gate independently reproduces
+that full plane, including source-derived border stores. Synthetic fixtures cover
+horizontal transitions, untouched base pixels, failed samples and deterministic
+work-budget refusal without replacing accepted alpha. These establish the scan
+for the retained inputs. The live adapter samples the shared ledger at source
+cell centres; its sight/occlusion data, alternate dark-mask mode, partial frame
+alpha and other map/input cases remain unqualified. Parser checks alone do not
+establish those behaviors.
+
+The ordinary marker pass no longer forces creep-owned units into the building
+size class. Their authored structure class is preserved; the separate native
+creep-camp model overlay remains open.
+
+## Hero image pass and remaining sight trace (2026-11-03)
+
+Heroes now draw through a separate textured UI pass after the CPU map and before
+its camera outline. Skin lookup and extension order, texture filter/address
+records, UV coordinates, quad size, projection operands and triangle-wave alpha
+come from the selected executable/assets. Authored mip levels remain available;
+other non-mipmapped UI callers preserve their existing restriction. Hit testing
+uses the same hero quad. Synthetic fixtures use alternate geometry and phase
+operands. The explicit original-input test checks the retained native quad half
+and all four matrix values bit-for-bit; parser/geometry checks do not prove the
+complete rendered pass, enemy repass or native animation phase.
+
+The current screenshot has 976,058 differing full-frame RGB pixels out of
+1,228,800, with mean absolute channel error 11.714644911024305. No pixels are
+excluded, aligned or resized. The selected recreation repeat is byte-identical.
+This is improvement over the previous 976,183 / 11.755233289930555 baseline, not
+minimap or screen parity. Fog contours, special neutral/camp overlays, remembered
+visibility, native unit flags and outline rasterization remain open.
+
+Further native-code tracing separates grid production from image sampling:
+`4c61c0` admits unit sight, `4c62b0` stamps it, `4c3fc0` caches radius-specific
+`FogNode` graphs, and `4c26d0` constructs their dependencies. The span path
+`4c3e70` expands octant samples generated by the integer recurrence at `4c4e40`;
+`4c51f0` clips/stamps a row into current/explored planes. The main stamp propagates
+blocker state through paired predecessor nodes and compares encoded heights.
+These are static-code findings, not a qualified replacement for the shared
+ledger's current circle/ray sampling. The native grid constructor, height/blocker
+inputs, source radius quantization and graph ordering still need independent
+runtime checks before changing that shared gameplay state.
+
+All three original-client sessions used private Docker/Wine/Xvfb and a null audio
+sink, with no network, host display/audio sockets or GPU devices. They were
+stopped and verified exited. Original bytes, decompilation and read-only records
+remain in ignored local evidence folders.
+
+A third-session resource diagnostic reconstructs the original mine's source-grid
+origin and BLP mask blit. Of its 256 CPU patch pixels, 228 match; the remaining
+28 are white pixels from later marker overlays. This supports the existing
+resource placement without a screenshot-fitted offset, but does not qualify the
+complete overlay ordering or final UI filtering. Pillow's BLP reader supplied
+an all-zero alpha plane for this input; the diagnostic uses the project's BLP
+decoder instead. This diagnostic does not exclude any pixels from the reported
+full-screen comparison.
+
+## Blocked-source preservation and sight graphs (2026-11-04)
+
+The shared vision stamp no longer writes `Fogged` when a sight ray is blocked.
+The native unit routine `4c62b0` selects identity mask stores for a blocked graph
+node, preserving earlier sources and exploration. The former recreation write
+could erase another unit's clear sight; it also presented a newly blocked,
+unexplored cell as fogged rather than masked. A regression test fails before
+the fix and passes afterward. It covers both source orders, removal of the clear
+source with retained exploration, and fresh unexplored cells. All 24 vision
+checks pass. The existing height/ray blocker calculation remains a recreation;
+this change qualifies the blocked-write behavior, not the blocker decision.
+
+A fourth paused original-client session retains eleven radius-specific span
+and `FogNode` tables plus the height plane. It used the same isolated private
+display/null-audio setup and was stopped and verified exited. A source-operand
+reconstruction matches all 209 span rows. A geometric reconstruction matches
+all 3,315 node coordinates and their predecessor-coordinate pairs, including
+asymmetric boundary omissions. Node order is not asserted identical. Radius
+conversion follows `4c3bf0`: multiply by the map scale, then use the shared
+`9a1d70` add-bias/floor rounder. These are selected-client findings, not a
+hard-coded radius list.
+
+The initial offline comparison mislabeled the two retained fog planes and reported
+26 missing cells. The corrected interpretation is: FogMap `+0x2c` stores the
+complement of explored history; `+0x30` stores current visibility. The acquisition
+filenames `minimap-current-grid.bin` and `minimap-explored-grid.bin` retain their
+legacy labels, respectively, and must not be interpreted by their names. The
+corrected graph propagation matches all 1,209 currently visible cells with zero
+missing or extra cells in three retained snapshots. This uses native positions,
+radii and heights; it does not establish tick identity with the published frame.
+
+An independent asset reconstruction matches all 12,288 retained height cells.
+It uses W3E corner layers, live automatic/script-created destructables and units,
+and their catalog `occH` fields. Automatically created doodad flags are honored;
+script-only tree records are not counted twice. No native height plane or cached
+graph is imported into the game. Optional support/deck heights, flying sight and
+wide-footprint occlusion remain unqualified.
+
+Two production captures match all five published states and hold all 26 clock
+receipts. Exactly 387 recreation pixels change, within the minimap. Full-screen
+RGB differences fall by 61 to 975,997 of 1,228,800; mean absolute channel error
+falls to 11.714486762152777. The selected repeat is byte-identical. Upkeep and
+13 panel text rectangles remain exact. Strict native/WASM Clippy, both builds,
+formatting and whitespace checks pass. Full minimap/screen parity, native tick
+identity, special overlays, outlines and building shadows remain open.
+
+## Native sight lattice integration (2026-11-04)
+
+Campaign startup now supplies a selected-image sight policy to the canonical
+vision ledger. Lattice pitch, nearest-vertex bias, height shift, radius rounding,
+integer span recurrence and ownership gates are decoded from the reviewed image.
+Live heights are derived from W3E and catalog/map overrides; native dumps are
+comparison inputs only. Ground sight follows the graph's predecessor OR rule and
+asymmetric boundary omissions. Circle/rectangle modifiers keep their separate
+radius rounding and row/end-point rules. Rebuilds stage changes before committing,
+retain exploration and skip unchanged source/height plans.
+
+The movement table at `691a80` feeds the type's `+1a8` field at `67ce77`.
+Construction compares that value at `66f055` and sets the `+164` sight flag;
+`4c62df..4c6302` selects full spans while the `+40c` suppression count is clear.
+The matching authored movement token is read from that table, rather than copied
+as an enum value. On this branch the previously calculated eye height does not
+participate in visibility. The recreation therefore uses inclusive full spans
+for ordinary flying sources. Grounded-flying suppression, optional support/deck
+height and wide occluders are still unqualified; positive wide occluders refuse
+instead of receiving an invented footprint.
+
+The explicit local-input Rust test compares every retained span and propagation
+through each retained native graph against synthetic blockers. This qualifies
+geometry and blocker accumulation, not live source state, rendered parity or
+native node ordering. Production capture validation is recorded separately below.
+
+
+Production validation: two isolated muted offscreen runs pass and match all five
+published states byte-for-byte; all 26 acquisition clocks hold and selected
+repeats match. Each production height lattice equals all 12,288 retained native
+height cells. The exact whole-frame comparison improves from 975,997 to 974,859
+of 1,228,800 differing pixels, with mean channel error falling from
+11.714486762152777 to 11.652511393229167. Only 2,511 recreation pixels change,
+inside minimap bounds `[108,760]..[236,884]`. Upkeep and 13 panel text diagnostic
+regions remain exact. Full difference, mask, overlay and side-by-side images are
+retained locally. Remaining fog edges/history, overlays and camera-outline pixels
+are still counted; this is not a pixel-perfect or native-tick acceptance.
+
+Strict native all-target/WASM Clippy, native/WASM builds, formatting and whitespace
+checks pass. No dependency was added.
+
+
+A third/fourth capture also retains the production viewer ledger and its source
+list locally. It has 1,242 visible cells against the separately paused native
+observation's 1,209: no missing cells and 33 extras. Production tower sources
+read authored sight 1,600 and select graph radius 13; all four retained native
+towers have cached radius 12. Substituting radius 13 only for those four towers
+in the offline reconstruction reproduces the production ledger exactly, including
+all 33 extras. This isolates the residual to live sight-value/radius selection,
+not the retained height plane or graph propagation. `67c490` obtains the active
+value through `69e130` before calling `4c3bf0` and storing `+214`; the recreation's
+base day/night reader does not yet model that live value path. No tower-specific
+radius or screenshot correction is installed.
+
+Exploration is a separate residual: production has 1,268 explored cells against
+1,241 in that retained native snapshot, with six missing and the same 33 extras.
+Native sample tick identity is unqualified. The local CPU-image comparison has
+304 differing alpha bytes; it is a separate-time diagnostic, not a replacement
+for the complete rendered-frame comparison. Four production runs match all five
+published states and hold their 52 acquisition clocks. Both later source/ledger
+diagnostics leave published screenshot bytes unchanged.

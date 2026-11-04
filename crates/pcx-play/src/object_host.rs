@@ -9,6 +9,7 @@ pub struct ObjectHost {
     cheat_queries: Option<crate::cheat_rules::Rules>,
     fog_modifiers: bool,
     shared_vision: Option<vision::VisionSlot>,
+    native_sight: Option<Arc<crate::native_sight::Rules>>,
     selection: Option<Vec<HandleId>>,
     /// A unit of the subgroup the player last chose; see `subgroups` in `selection_subgroup_host.rs`.
     active_subgroup: Option<HandleId>,
@@ -337,6 +338,7 @@ impl ObjectHost {
             unit_selectable: std::collections::BTreeMap::new(),
             fog_modifiers: false,
             shared_vision: None,
+            native_sight: None,
             effects: false,
             timer_dialogs: false,
             items: None,

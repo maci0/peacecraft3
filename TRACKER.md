@@ -6856,3 +6856,57 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   to 976,183, MAE to 11.755233289930555. Upkeep and 13 panel text regions stay
   exact. Blended/backing, remaining world/UI and native animation/RNG identity
   remain open. README/provenance refreshed; no FreeType added.
+
+- 2026-11-03: Minimap resource art now follows source skin/ability classes and
+  native mask/tint blits; ordinary CPU markers are solid. The source grid/float-bit
+  transform replaces the continuous marker fit. Fog uses the native fixed-point
+  scan and horizontal transition average; the retained native-grid gate matches
+  all 65,536 alpha bytes. Heroes use separate textured UI quads, source UV/filter/
+  mip/phase policy and shared quad hit testing. Native quad half, four matrix
+  values and CPU marker scales match bit-for-bit. Nineteen source/class, 21 app
+  minimap, six visibility/native-record, 12 command-layout and shared sampler
+  checks pass, alongside strict native/WASM Clippy, both builds and formatting.
+  Two independent captures match five published states with all 26 clocks held.
+  Full-frame differences fall by 125 to 976,058, MAE to 11.714644911024305;
+  upkeep and 13 panel text regions remain exact. Screenshots/provenance refreshed.
+  Static sight tracing identifies radius spans and FogNode blocker propagation;
+  their live ledger replacement, special overlays, moving-unit bounds, remembered
+  visibility, outline rasterization, shadows and native tick/RNG identity remain
+  open. Original runtime evidence stays local; no dependency added.
+
+- 2026-11-04: Blocked shared-vision stamps preserve earlier clear sources and
+  exploration instead of overwriting visibility with fog. A failing overlap
+  regression now passes in both source orders and for explored/unexplored
+  cells; all 24 vision checks pass. Strict native/WASM Clippy, both builds and
+  formatting pass. Two captures match five published states with all 26 clocks
+  held. Only 387 minimap pixels change; full-screen differences fall by 61 to
+  975,997, MAE to 11.714486762152777. Upkeep and 13 panel regions remain exact.
+  Read-only native tracing qualifies 209 span rows and 3,315 node coordinate/
+  predecessor pairs across eleven radii. Offline propagation matches 1,209
+  visible cells exactly after correcting the acquisition plane labels: `+2c`
+  is complemented explored history and `+30` current visibility. The earlier
+  26-cell residual was explored history. Support heights, flying sources and
+  the live graph port remain open. Original evidence stays local.
+  Screenshots/provenance refreshed; shadows and full-screen/tick parity pending.
+
+- 2026-11-04: Campaign vision now uses the selected-client fog lattice and
+  integer predecessor graph, with source-derived radius conversion and authored
+  occluder heights. Modifiers retain separate span/rectangle rules; ordinary
+  flying sources use the source-selected unblocked span branch. All 12,288
+  production height cells match the retained native plane. The explicit Rust
+  gate matches 209 span rows and propagation through eleven native graphs;
+  2,493 core tests pass (97 original-input tests ignored). Failed rebuilds
+  preserve accepted grids; unchanged plans stamp no cells. Two independent
+  captures match five published states with all 26 clocks held. Only 2,511
+  minimap pixels change; full-frame differences fall by 1,138 to 974,859, MAE
+  to 11.652511393229167. Upkeep and 13 panel regions remain exact. README
+  screenshots/provenance refreshed. Explored history, grounded-flight suppression,
+  support heights, wide occluders, special overlays, outlines, shadows and native
+  tick/RNG identity remain open. No dependency or original asset added.
+
+  Follow-up ledger comparison isolates all 33 extra visible cells to the four
+  towers: production selects graph radius 13 from authored sight 1600, whereas
+  native retains radius 12. Substituting those radii reproduces the production
+  ledger exactly. Trace `67c490 -> 69e130` active sight before changing the rule;
+  no tower-specific correction was added. Exploration also has six missing cells
+  against the separately paused native snapshot; native tick identity is open.

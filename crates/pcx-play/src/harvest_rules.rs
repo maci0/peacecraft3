@@ -847,7 +847,7 @@ pub(crate) fn worker_race_from_definition(definition: &Definition) -> Result<Str
     Ok(trimmed.to_owned())
 }
 
-fn definition_abil_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
+pub(crate) fn definition_abil_codes(definition: &Definition) -> Result<Vec<String>, HarvestError> {
     let list = definition_text(definition, SlkId::UnitAbilities, "abilList")?;
     Ok(split_csv(&list).map(str::to_owned).collect())
 }
@@ -918,7 +918,7 @@ fn definition_work_weapon(definition: &Definition) -> Result<Option<WorkWeapon>,
     Ok(found)
 }
 
-fn resolve_ability_code(
+pub(crate) fn resolve_ability_code(
     tables: &DefaultTables,
     abilities: Option<&Overlay>,
     alias: &str,

@@ -2533,7 +2533,16 @@ mod tests {
                 .address_mode_u,
             ImageAddressMode::ClampToEdge
         );
-        assert!(source_image_sampler(false, [1, 2, 1]).is_err());
+        let mipmapped = source_image_sampler(false, [1, 2, 1]).unwrap();
+        assert_eq!(mipmapped.mipmap_filter, ImageFilterMode::Nearest);
+        assert!(mipmapped.lod_max_clamp > 0.);
+        assert_eq!(
+            source_image_sampler(false, [1, 2, 2])
+                .unwrap()
+                .mipmap_filter,
+            ImageFilterMode::Linear
+        );
+        assert!(source_image_sampler(false, [1, 2, 3]).is_err());
         assert!(source_image_sampler(false, [3, 2, 0]).is_err());
     }
     #[test]
@@ -2782,7 +2791,7 @@ pub(crate) fn source_image_sampler(
     filters: [u32; 3],
 ) -> Result<bevy::image::ImageSamplerDescriptor, String> {
     let [min, mag, mip] = filters;
-    if mip != 0 {
+    if mip > 2 {
         return Err("UI image requires an unsupported mip-filter mode".into());
     }
     let mode = |value| match value {
@@ -2793,7 +2802,16 @@ pub(crate) fn source_image_sampler(
     Ok(bevy::image::ImageSamplerDescriptor {
         min_filter: mode(min)?,
         mag_filter: mode(mag)?,
-        lod_max_clamp: 0.,
+        mipmap_filter: if mip == 0 {
+            bevy::image::ImageFilterMode::Nearest
+        } else {
+            mode(mip)?
+        },
+        lod_max_clamp: if mip == 0 {
+            0.
+        } else {
+            bevy::image::ImageSamplerDescriptor::default().lod_max_clamp
+        },
         ..image_sampler(tiled)
     })
 }

@@ -316,8 +316,7 @@ impl ViewerGrid {
     }
 
     /// Stamps `sources` in order. Each row of a source writes its contiguous covered run.
-    /// Occluded cells of `Visible` circles stamp `Fogged` without recording
-    /// exploration; explored retention is unchanged.
+    /// Occluded cells leave earlier sources and exploration unchanged.
     fn stamp(
         &mut self,
         sources: &[VisionSource],
@@ -340,12 +339,10 @@ impl ViewerGrid {
                         for x in x0..x1 {
                             *visits += OcclusionInput::charge_for(stamp.trees.len());
                             let point = [vision.columns[x], vision.rows[y]];
-                            if stamp
+                            if !stamp
                                 .input
                                 .blocked(eye, point, vision.shape.pitch, stamp.trees)
                             {
-                                self.current[row + x] = VisionState::Fogged;
-                            } else {
                                 self.current[row + x] = source.state;
                                 self.explored[row + x] = explored;
                             }
@@ -451,9 +448,9 @@ struct Planned {
 // updater `658ac0` calls `657340`, which samples two visibility grids through
 // a shared mask, and the per-unit mask-word gate at `65bf63..65bf20` varies
 // with the size class (`docs/re-notes/campaign-minimap.md:122-144,322-329`).
-// Mask bit meanings, grid resolutions and the exact blocker test are unread,
-// so every choice in this section is a labelled recreation choice, never an
-// inferred native behavior.
+// shortcut: callers without selected native sight rules retain this approximate
+// height/ray sampler; migrate them when their client sight policy is qualified.
+// Campaign startup supplies the native lattice and blocker graph instead.
 //
 // What is admitted and therefore not a choice: the corner heightfield
 // (`height_index`, `layer_height`) from the admitted map context, the
@@ -820,6 +817,8 @@ pub(crate) struct SharedVision {
     /// signature forces a full restamp of otherwise unchanged sources so a
     /// chopped or grown tree cannot leave a stale shadow.
     occlusion_sig: Option<u64>,
+    native_height: Option<crate::native_sight::HeightGrid>,
+    native_unblocked: std::collections::BTreeSet<HandleId>,
     last: VisionSampleStats,
 }
 
@@ -836,6 +835,8 @@ impl SharedVision {
             revision: 0,
             occlusion_applied: false,
             occlusion_sig: None,
+            native_height: None,
+            native_unblocked: Default::default(),
             last: VisionSampleStats {
                 cell_visits: 0,
                 emitted_sources: 0,
@@ -1233,6 +1234,9 @@ pub(crate) enum VisionSlot {
 
 /// Admitted heightfield, placement encoding and live tree discs backing one
 /// occlusion pass.
+#[path = "vision_native.rs"]
+mod native;
+
 type OcclusionStore = (
     Arc<crate::map_admission::ParsedMapContext>,
     [f32; 3],
@@ -1261,7 +1265,7 @@ impl ObjectHost {
             self.shared_vision = Some(VisionSlot::Blocked(VisionBlock::ExtentMismatch));
             return Ok(false);
         }
-        let shape = match GridShape::from_bounds(bounds, placement.rules().cell_size()) {
+        let shape = match GridShape::from_bounds(bounds, self.vision_pitch()?) {
             Ok(shape) => shape,
             Err(_) => {
                 self.shared_vision = Some(VisionSlot::Blocked(VisionBlock::GridTooLarge));
@@ -1306,6 +1310,14 @@ impl ObjectHost {
                 },
                 None => VisionCapability::Unavailable("shared vision needs admitted fog settings"),
             },
+        }
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn native_sight_grid_fixture(&self) -> Option<&crate::native_sight::HeightGrid> {
+        match &self.shared_vision {
+            Some(VisionSlot::Live(vision)) if vision.ready => vision.native_height.as_ref(),
+            _ => None,
         }
     }
 
@@ -1378,7 +1390,7 @@ impl ObjectHost {
                 "shared vision extent differs from the admitted placement grid".into(),
             ));
         }
-        let shape = GridShape::from_bounds(bounds, placement.rules().cell_size()).map_err(fail)?;
+        let shape = GridShape::from_bounds(bounds, self.vision_pitch()?).map_err(fail)?;
         let VisionSlot::Live(vision) = self.shared_vision.as_ref().expect("admitted") else {
             return Err(fail("shared vision is not admitted".into()));
         };
@@ -1418,6 +1430,44 @@ impl ObjectHost {
                 units.saturating_add(started_modifiers)
             );
             plans.push((viewer, listed.sources));
+        }
+        if let Some(rules) = self.native_sight.clone() {
+            let mut work = crate::native_sight::Work::new(work_limit);
+            let heights = self.native_height_grid(&rules, &mut work).map_err(fail)?;
+            let mut unblocked = std::collections::BTreeSet::new();
+            for (viewer, sources) in &mut plans {
+                let number = self.player_settings(*viewer)?.number;
+                let mut filtered = Vec::new();
+                for source in sources.drain(..) {
+                    if let super::VisionOrigin::Unit { unit } = source.origin {
+                        let unit_id = unit;
+                        let unit = self.executed_unit(unit)?;
+                        if !rules.eligible(unit.executed_owner, number) {
+                            continue;
+                        }
+                        if self.native_sight_movement(unit).map_err(fail)? {
+                            unblocked.insert(unit_id);
+                        }
+                    }
+                    filtered.push(source);
+                }
+                *sources = filtered;
+            }
+            let VisionSlot::Live(vision) = self.shared_vision.as_mut().expect("admitted") else {
+                unreachable!("checked live vision")
+            };
+            let stats = vision
+                .apply_native(
+                    plans,
+                    heights,
+                    &rules,
+                    &mut work,
+                    candidates_scanned,
+                    &unblocked,
+                )
+                .map_err(fail)?;
+            *vision.radii = radii.retained();
+            return Ok(stats);
         }
         let occlusion_store = self.occlusion_store()?;
         let VisionSlot::Live(vision) = self.shared_vision.as_mut().expect("admitted") else {
@@ -1549,6 +1599,79 @@ mod tests {
             origin: VisionOrigin::Unit { unit: id(1) },
             source_height: None,
         }
+    }
+
+    #[test]
+    fn native_lattice_reuses_unchanged_sources_and_refuses_atomically() {
+        use crate::native_sight::{
+            HeightGrid, Work,
+            tests::{rules, terrain},
+        };
+        let rules = rules();
+        let t = terrain(16, 16, &vec![0; 17 * 17]);
+        let heights = HeightGrid::new(&t, 1., &rules, &mut Work::new(10000)).unwrap();
+        let mut vision = grid([[0., 0.], [32., 32.]], 2.);
+        let viewer = id(5);
+        let source = circle([16., 16.], 8., VisionState::Visible);
+        let plans = vec![(viewer, vec![source])];
+        vision
+            .apply_native(
+                plans.clone(),
+                heights.clone(),
+                &rules,
+                &mut Work::new(10000),
+                1,
+                &Default::default(),
+            )
+            .unwrap();
+        let current = vision.viewers[&viewer].current.clone();
+        let explored = vision.viewers[&viewer].explored.clone();
+        let revision = vision.revision;
+        let reused = vision
+            .apply_native(
+                plans,
+                heights.clone(),
+                &rules,
+                &mut Work::new(0),
+                1,
+                &Default::default(),
+            )
+            .unwrap();
+        assert_eq!(reused.cell_visits, 0);
+        assert_eq!(vision.revision, revision);
+        let removed = vec![(viewer, vec![])];
+        assert!(
+            vision
+                .apply_native(
+                    removed.clone(),
+                    heights.clone(),
+                    &rules,
+                    &mut Work::new(1),
+                    0,
+                    &Default::default(),
+                )
+                .is_err()
+        );
+        assert_eq!(vision.viewers[&viewer].current, current);
+        assert_eq!(vision.viewers[&viewer].explored, explored);
+        assert_eq!(vision.revision, revision);
+        vision
+            .apply_native(
+                removed,
+                heights,
+                &rules,
+                &mut Work::new(10000),
+                0,
+                &Default::default(),
+            )
+            .unwrap();
+        assert_eq!(vision.viewers[&viewer].explored, explored);
+        assert!(
+            vision.viewers[&viewer]
+                .current
+                .iter()
+                .all(|s| *s != VisionState::Visible)
+        );
     }
 
     #[test]
@@ -2190,6 +2313,57 @@ mod tests {
             VisionCell {
                 raw: VisionState::Visible,
                 explored: true
+            }
+        );
+    }
+
+    #[test]
+    fn blocked_sight_preserves_other_sources_and_unexplored_cells() {
+        let terrain = flat_terrain();
+        let trees = [TreeOccluder {
+            x: 3.0,
+            y: 3.5,
+            radius: 1.0,
+            base: 0.0,
+            top: 200.0,
+        }];
+        let input = occlusion(&terrain, &trees);
+        let viewer = id(26);
+        let blocked = circle([0.5, 3.5], 6.0, VisionState::Visible);
+        let clear = circle([5.5, 3.5], 1.0, VisionState::Visible);
+        let target = [5.5, 3.5];
+        for sources in [vec![clear, blocked], vec![blocked, clear]] {
+            let mut vision = grid([[0., 0.], [8., 8.]], 1.);
+            vision
+                .apply(vec![(viewer, sources)], usize::MAX, 0, Some(&input))
+                .unwrap();
+            assert_eq!(
+                cell(&vision, viewer, target),
+                VisionCell {
+                    raw: VisionState::Visible,
+                    explored: true
+                }
+            );
+            vision
+                .apply(vec![(viewer, vec![blocked])], usize::MAX, 0, Some(&input))
+                .unwrap();
+            assert_eq!(
+                cell(&vision, viewer, target),
+                VisionCell {
+                    raw: VisionState::Fogged,
+                    explored: true
+                }
+            );
+        }
+        let mut fresh = grid([[0., 0.], [8., 8.]], 1.);
+        fresh
+            .apply(vec![(viewer, vec![blocked])], usize::MAX, 0, Some(&input))
+            .unwrap();
+        assert_eq!(
+            cell(&fresh, viewer, target),
+            VisionCell {
+                raw: VisionState::Masked,
+                explored: false
             }
         );
     }

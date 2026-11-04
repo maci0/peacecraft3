@@ -281,23 +281,31 @@ fn clamp_move_speed(speed: f32, (minimum, maximum): (f32, f32)) -> f32 {
 
 /// One `UnitBalance` numeric column of a resolved unit definition, with map edits.
 pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32, String> {
+    column_real(definition, SlkId::UnitBalance, wanted)
+}
+
+pub(crate) fn column_real(
+    definition: &Definition,
+    table: SlkId,
+    wanted: &str,
+) -> Result<f32, String> {
     let mut matches = definition.fields.iter().filter(|(id, f)| {
         f.metadata.as_ref().is_some_and(|m|
         m.fourcc==**id && m.from==SlkId::UnitMetaData && matches!(m.index,-1|0)
         && matches!(m.kind,FieldKind::Int|FieldKind::Real|FieldKind::Unreal)
-        && matches!(&m.source,FieldSource::Column{slk:SlkId::UnitBalance,column}if column==wanted))
+        && matches!(&m.source,FieldSource::Column{slk,column}if *slk==table && column==wanted))
     });
     let (_, field) = matches
         .next()
-        .ok_or_else(|| format!("missing unit balance {wanted}"))?;
+        .ok_or_else(|| format!("missing unit {table:?} {wanted}"))?;
     if matches.next().is_some() {
-        return Err(format!("ambiguous unit balance {wanted}"));
+        return Err(format!("ambiguous unit {table:?} {wanted}"));
     }
     let metadata = field.metadata.as_ref().expect("selected metadata");
     let value = match field
         .value
         .as_ref()
-        .map_err(|e| format!("unit balance {wanted}: {e:?}"))?
+        .map_err(|e| format!("unit {table:?} {wanted}: {e:?}"))?
     {
         FieldValue::Cell(s) => s.trim().parse::<f32>().map_err(|e| e.to_string())?,
         FieldValue::Override(pcx_objects::Value::Int(n)) if metadata.kind == FieldKind::Int => {
@@ -311,10 +319,12 @@ pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32,
         {
             *n
         }
-        _ => return Err(format!("unsupported unit balance {wanted} field")),
+        _ => return Err(format!("unsupported unit {table:?} {wanted} field")),
     };
     if !value.is_finite() || value < 0. {
-        return Err(format!("finite nonnegative unit balance {wanted} required"));
+        return Err(format!(
+            "finite nonnegative unit {table:?} {wanted} required"
+        ));
     }
     Ok(value)
 }

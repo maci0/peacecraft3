@@ -2,8 +2,9 @@
 //! the unit marker block sizes and the camera outline colour.
 //!
 //! Sites are in the texture updater (`0x658ac0`), the marker pass (`0x65ba90`), the draw
-//! method (`0x63fd30`) and the constructor (`0x620000`). Marker choice, hero/resource/
-//! neutral icons, creep camps and pings are not decoded here.
+//! method (`0x63fd30`) and the constructor (`0x61f930`). Resource blit geometry,
+//! textures, classes and tint operands are read too. Hero/neutral icons, creep camps
+//! and pings are not decoded here.
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
@@ -46,12 +47,194 @@ pub struct Border {
     pub rows: Vec<Edge>,
 }
 
+/// Terrain-cell to CPU-texel conversion shared by ordinary and resource markers.
+#[derive(Clone, Debug)]
+pub struct PointProjection {
+    pub grid_shift: u8,
+    pub bias: f32,
+    pub bit_shift: u8,
+}
+impl PointProjection {
+    pub fn scales(
+        &self,
+        bounds: [[i32; 2]; 2],
+        edge: u32,
+        pads: [u32; 2],
+    ) -> Result<[f32; 2], String> {
+        if edge == 0 || edge > u32::from(u8::MAX) + 1 {
+            return Err("unsupported minimap marker image edge".into());
+        }
+        let mut result = [0.; 2];
+        for axis in 0..2 {
+            let extent = i64::from(bounds[1][axis]) - i64::from(bounds[0][axis]);
+            let span = edge
+                .checked_sub(1)
+                .and_then(|v| v.checked_sub(pads[axis].checked_mul(2)?))
+                .ok_or("minimap marker image span")?;
+            if extent <= 0 || extent > i64::from(u32::MAX) || span == 0 {
+                return Err("invalid minimap marker grid bounds".into());
+            }
+            result[axis] = span as f32 / extent as f32;
+        }
+        Ok(result)
+    }
+    pub fn project(
+        &self,
+        bounds: [[i32; 2]; 2],
+        edge: u32,
+        pads: [u32; 2],
+        point: [i32; 2],
+    ) -> Result<Option<[f64; 2]>, String> {
+        let scales = self.scales(bounds, edge, pads)?;
+        if (0..2).any(|i| point[i] < bounds[0][i] || point[i] > bounds[1][i]) {
+            return Ok(None);
+        }
+        let pixel: [u32; 2] = std::array::from_fn(|i| {
+            let delta = (i64::from(point[i]) - i64::from(bounds[0][i])) as u32;
+            ((delta as f32 * scales[i] + self.bias).to_bits() >> self.bit_shift)
+                & u32::from(u8::MAX)
+        });
+        Ok(Some([
+            f64::from(pixel[0]) + f64::from(pads[0]),
+            f64::from(edge) - f64::from(pixel[1]) - f64::from(pads[1]),
+        ]))
+    }
+}
+
+/// The textured hero pass, separate from CPU marker blocks.
+#[derive(Clone, Debug)]
+pub struct Hero {
+    pub key: String,
+    pub filters: [u32; 3],
+    pub addresses: [u32; 2],
+    pub uv: [f32; 4],
+    pub initial_phase: f32,
+    pub reset_phase: f32,
+    pub midpoint: f32,
+    pub period: f32,
+    pub alpha_scale: f32,
+    pub alpha_floor: f32,
+    pub geometry_edge: f32,
+    pub world_scale: f32,
+    pub size_scale: f32,
+    pub half: f32,
+}
+impl Hero {
+    pub fn half_size(&self, world: [[f32; 2]; 2]) -> Result<f32, String> {
+        let extent = [world[1][0] - world[0][0], world[1][1] - world[0][1]];
+        if !world.into_iter().flatten().all(f32::is_finite) || extent.iter().any(|v| *v <= 0.) {
+            return Err("invalid minimap hero world bounds".into());
+        }
+        let scale = extent.map(|v| self.geometry_edge / (v * self.world_scale));
+        let result = scale[0].min(scale[1]) * self.size_scale * self.half;
+        if !result.is_finite() || result <= 0. {
+            return Err("invalid minimap hero quad size".into());
+        }
+        Ok(result)
+    }
+    /// Local frame scale and translation, preserving the native float operation order.
+    pub fn projection(
+        &self,
+        frame: crate::inventory_layout::Rect,
+        world: [[f32; 2]; 2],
+    ) -> Result<[[f32; 2]; 2], String> {
+        let extent = [world[1][0] - world[0][0], world[1][1] - world[0][1]];
+        if !world.into_iter().flatten().all(f32::is_finite) || extent.iter().any(|v| *v <= 0.) {
+            return Err("invalid minimap hero projection bounds".into());
+        }
+        let maximum = extent[0].max(extent[1]);
+        let dimensions = [frame.width, frame.height];
+        let scale = std::array::from_fn(|i| (dimensions[i] * (extent[i] / maximum)) / extent[i]);
+        let bias = std::array::from_fn(|i| {
+            dimensions[i] * self.half - (world[0][i] + extent[i] * self.half) * scale[i]
+        });
+        if !scale.into_iter().chain(bias).all(f32::is_finite) {
+            return Err("invalid minimap hero projection".into());
+        }
+        Ok([scale, bias])
+    }
+    pub fn quad(
+        &self,
+        frame: crate::inventory_layout::Rect,
+        bounds: [[f32; 2]; 2],
+        full_world: [[f32; 2]; 2],
+        point: [f32; 2],
+    ) -> Result<crate::inventory_layout::Rect, String> {
+        if !point.into_iter().all(f32::is_finite) {
+            return Err("invalid minimap hero point".into());
+        }
+        let [scale, bias] = self.projection(frame, bounds)?;
+        let half = self.half_size(full_world)?;
+        Ok(crate::inventory_layout::Rect {
+            x: frame.x + scale[0] * point[0] + bias[0] - half,
+            y: frame.y + scale[1] * point[1] + bias[1] - half,
+            width: half * 2.,
+            height: half * 2.,
+        })
+    }
+
+    /// The native UI update clamps at the period; drawing then resets that phase.
+    pub fn advance(&self, phase: &mut f32, delta: f32, drawn: bool) -> Result<u8, String> {
+        if !phase.is_finite() || *phase < 0. || !delta.is_finite() || delta < 0. {
+            return Err("invalid minimap hero UI clock".into());
+        }
+        *phase = (*phase + delta).min(self.period);
+        let triangle = if *phase > self.midpoint {
+            self.period - *phase
+        } else {
+            *phase
+        };
+        let value = triangle * self.alpha_scale + self.alpha_floor;
+        if !value.is_finite() || !(0. ..=f32::from(u8::MAX)).contains(&value) {
+            return Err("invalid minimap hero alpha".into());
+        }
+        if drawn && *phase >= self.period {
+            *phase = self.reset_phase;
+        }
+        Ok(value as u8)
+    }
+}
+
+/// Resource textures and CPU blit operands, in normal/entangled/haunted order.
+#[derive(Clone, Debug)]
+pub struct ResourceIcons {
+    pub keys: [String; 3],
+    pub classes: [[u8; 4]; 3],
+    pub side: u32,
+    pub half: u32,
+    pub clamp_inset: u32,
+    pub luminance: [u32; 3],
+    pub color_shift: u8,
+    pub tint_bias: u32,
+}
+
+impl ResourceIcons {
+    pub fn tint(&self, rgba: [u8; 4], owner: [u8; 4]) -> [u8; 4] {
+        let gray = rgba[..3]
+            .iter()
+            .zip(self.luminance)
+            .map(|(c, w)| u32::from(*c) * w)
+            .sum::<u32>()
+            >> self.color_shift;
+        let mut result = rgba;
+        for channel in 0..3 {
+            result[channel] =
+                ((gray * u32::from(owner[channel]) + self.tint_bias) >> self.color_shift) as u8;
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Draw {
     pub origin: AssetIdentity,
     pub image_sha256: Sha256Digest,
     /// Edge of the square CPU image the client allocates.
     pub edge: u32,
+    pub resources: ResourceIcons,
+    pub fog_fraction_bits: u8,
+    pub hero: Hero,
+    pub points: PointProjection,
     pub border: Border,
     /// Side in image pixels of the unit marker block for class 0 and class 1.
     pub marker_sides: [u32; 2],
@@ -113,6 +296,14 @@ impl Draw {
         }
         fn imm(read: Read, va: u32, prefix: &[u8]) -> Result<u32, String> {
             word(operand(read, va, prefix, 4)?)
+        }
+        fn referenced(read: Read, va: u32, prefix: &[u8]) -> Result<f32, String> {
+            let address = imm(read, va, prefix)?;
+            let value = f32::from_bits(word(read(address, 4, false)?)?);
+            if !value.is_finite() {
+                return Err(format!("nonfinite minimap float at {va:#x}"));
+            }
+            Ok(value)
         }
         fn string(read: Read, start: u32) -> Result<String, String> {
             let mut bytes = Vec::new();
@@ -261,6 +452,215 @@ impl Draw {
         operand(read, 0x696b7b, &[0x33, 0xc0], 0)?;
         let marker_sides = [0, 1].map(|class: u32| 2 * (1u32 << (class + 1)));
 
+        let fog_fraction_bits = operand(read, 0x657496, &[0xc1, 0xe0], 1)?[0];
+        if fog_fraction_bits == 0 || fog_fraction_bits >= 31 {
+            return Err("minimap fog fixed-point width".into());
+        }
+        let unit = 1u32 << fog_fraction_bits;
+        if operand(read, 0x6574d0, &[0xc1, 0xe0], 1)?[0] != fog_fraction_bits
+            || operand(read, 0x65751a, &[0xc1, 0xe9], 1)?[0] != fog_fraction_bits
+            || operand(read, 0x65758a, &[0xc1, 0xee], 1)?[0] != fog_fraction_bits
+            || imm(read, 0x657551, &[0xba])? != unit
+            || imm(read, 0x657510, &[0x81, 0xfb])? != unit
+            || imm(read, 0x657580, &[0x81, 0xfa])? != unit
+            || imm(read, 0x65751d, &[0x69, 0xc1])? != unit.wrapping_neg()
+            || imm(read, 0x65758d, &[0x69, 0xc6])? != unit.wrapping_neg()
+            || imm(read, 0x657459, &[0xbe])? != edge - 1
+            || imm(read, 0x6574a3, &[0xbe])? != edge - 1
+            || imm(read, 0x6574da, &[0xb9])? != edge - 1
+        {
+            return Err("minimap fog fixed-point relationships".into());
+        }
+        operand(read, 0x657530, &[0x32, 0xdb], 0)?;
+        operand(read, 0x6575d9, &[0xd1, 0xe9], 0)?;
+
+        let keys = [0x6376ae, 0x6376e2, 0x637716]
+            .map(|va| imm(read, va, &[0x68]).and_then(|address| string(read, address)));
+        let [normal, entangled, haunted] = keys;
+        let keys = [normal?, entangled?, haunted?];
+        let mut classes = [[0; 4]; 3];
+        for (class, va) in classes.iter_mut().zip([0xb62690, 0xb941a0, 0xb263d0]) {
+            *class = imm(read, va, &[0xb8])?.to_be_bytes();
+            operand(read, va + 5, &[0xc3], 0)?;
+        }
+        let side = imm(read, 0x659720, &[0xbb])?;
+        if side == 0
+            || side > edge
+            || imm(read, 0x659711, &[0xc7, 0x45, 0xe8])? != side
+            || imm(read, 0x659776, &[0x81, 0xc6])? != (edge - side) * 4
+        {
+            return Err("minimap resource blit dimensions".into());
+        }
+        let offset = operand(read, 0x659584, &[0x83, 0xc0], 1)?[0] as i8;
+        let half = u32::try_from(-i32::from(offset)).map_err(|_| "resource centre offset")?;
+        if half * 2 != side || imm(read, 0x659519, &[0xba])? != edge - half {
+            return Err("minimap resource centre relation".into());
+        }
+        let clamp = imm(read, 0x659378, &[0xb8])?;
+        let clamp_inset = edge.checked_sub(clamp).ok_or("resource clamp")?;
+        if clamp_inset <= side || clamp_inset > edge {
+            return Err("minimap resource clamp relation".into());
+        }
+        let green = imm(read, 0x62d0ce, &[0x69, 0xd0])?;
+        let red = u32::from(operand(read, 0x62d0df, &[0x6b, 0xc0], 1)?[0]);
+        let first_scale = operand(read, 0x62d0ea, &[0x8d, 0x04], 5)?;
+        operand(read, 0x62d0f1, &[0x2b, 0xc1], 0)?;
+        let second_scale = operand(read, 0x62d0f3, &[0x8d, 0x04], 1)?[0];
+        if first_scale[0] & 0x3f != 0x0d || first_scale[1..] != [0; 4] || second_scale & 0x3f != 2 {
+            return Err("minimap resource luminance registers".into());
+        }
+        let blue = ((1u32 << (first_scale[0] >> 6)) - 1) * (1u32 << (second_scale >> 6));
+        let color_shift = operand(read, 0x62d0f6, &[0xc1, 0xe8], 1)?[0];
+        if color_shift >= 16
+            || red.checked_add(green).and_then(|sum| sum.checked_add(blue))
+                != Some(1u32 << color_shift)
+        {
+            return Err("minimap resource luminance relation".into());
+        }
+        let tint_bias = imm(read, 0x63a873, &[0x81, 0xc2])?;
+        for (add, prefix, shift, reg) in [
+            (0x63a873, &[0x81, 0xc2][..], 0x63a879, 0xea),
+            (0x63a87c, &[0x81, 0xc1][..], 0x63a885, 0xe9),
+            (0x63a8a2, &[0x81, 0xc1][..], 0x63a8a8, 0xe9),
+        ] {
+            if imm(read, add, prefix)? != tint_bias
+                || operand(read, shift, &[0xc1, reg], 1)?[0] != color_shift
+            {
+                return Err("minimap resource tint relation".into());
+            }
+        }
+        if tint_bias != (1u32 << color_shift) - 1 {
+            return Err("minimap resource tint rounding".into());
+        }
+        let resources = ResourceIcons {
+            keys,
+            classes,
+            side,
+            half,
+            clamp_inset,
+            luminance: [red, green, blue],
+            color_shift,
+            tint_bias,
+        };
+
+        let points = PointProjection {
+            grid_shift: operand(read, 0x654104, &[0xc1, 0x3e], 1)?[0],
+            bias: referenced(read, 0x659550, &[0xf3, 0x0f, 0x58, 5])?,
+            bit_shift: operand(read, 0x659574, &[0xc1, 0xe8], 1)?[0],
+        };
+        if points.grid_shift >= 31
+            || points.bit_shift >= 31
+            || points.bias <= 0.
+            || operand(read, 0x654109, &[0xc1, 0x7e, 4], 1)?[0] != points.grid_shift
+            || operand(read, 0x6595a1, &[0xc1, 0xe8], 1)?[0] != points.bit_shift
+            || operand(read, 0x65c163, &[0xc1, 0xe8], 1)?[0] != points.bit_shift
+            || referenced(read, 0x659591, &[0xf3, 0x0f, 0x58, 5])? != points.bias
+            || referenced(read, 0x65c13a, &[0xf3, 0x0f, 0x58, 5])? != points.bias
+        {
+            return Err("minimap marker grid/float encoding relationships".into());
+        }
+        operand(read, 0x659577, &[0x0f, 0xb6, 0xc8], 0)?;
+        if (points.bias.to_bits() >> points.bit_shift) & u32::from(u8::MAX) != 0
+            || ((points.bias + (edge - 1) as f32).to_bits() >> points.bit_shift)
+                & u32::from(u8::MAX)
+                != edge - 1
+        {
+            return Err("unsupported minimap marker float encoding".into());
+        }
+
+        let hero_key_address = imm(read, 0x637651, &[0x68])?;
+        let hero_key = string(read, hero_key_address)?;
+        operand(read, 0x63764d, &[0x6a, 0], 0)?;
+        let preserved = u32::from(operand(read, 0x71b7fa, &[0x83, 0xe6], 1)?[0]);
+        let forced = u32::from(operand(read, 0x71b7fd, &[0x83, 0xce], 1)?[0]);
+        let selector = u32::from(operand(read, 0x7def4a, &[0x83, 0xe0], 1)?[0]);
+        if selector > 3 || preserved & selector & !forced != 0 {
+            return Err("minimap hero texture filter selector".into());
+        }
+        let filters = crate::command_layout::texture_filter_record_mipmapped(
+            &mut crate::unit_panel_layout::Reader(&mut *read),
+            forced & selector,
+        )?;
+        let mut addresses = [0; 2];
+        for (address, (shift, mask, table)) in addresses.iter_mut().zip([
+            (0x7def8f, 0x7def92, 0x7def95),
+            (0x7defab, 0x7defae, 0x7defb1),
+        ]) {
+            let shift = operand(read, shift, &[0xc1, 0xe8], 1)?[0];
+            let mask = u32::from(operand(read, mask, &[0x83, 0xe0], 1)?[0]);
+            if shift >= 8 || mask > 1 || ((preserved >> shift) & mask & !(forced >> shift)) != 0 {
+                return Err("minimap hero texture address selector".into());
+            }
+            let index = (forced >> shift) & mask;
+            let table = imm(read, table, &[0xff, 0x34, 0x85])?;
+            *address = word(read(
+                table
+                    .checked_add(index * 4)
+                    .ok_or("hero address table overflow")?,
+                4,
+                false,
+            )?)?;
+            if !matches!(*address, 1 | 3) {
+                return Err("unsupported minimap hero address mode".into());
+            }
+        }
+        let uv_address = imm(read, 0x640341, &[0x68])?;
+        let bytes = read(uv_address, 32, false)?;
+        if bytes.len() != 32 {
+            return Err("truncated minimap hero UVs".into());
+        }
+        let uv: Vec<f32> = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        if uv.iter().any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
+            || uv[0] == uv[6]
+            || uv[1] == uv[7]
+            || uv[2] != uv[0]
+            || uv[3] != uv[7]
+            || uv[4] != uv[6]
+            || uv[5] != uv[1]
+        {
+            return Err("unsupported minimap hero UV rectangle".into());
+        }
+        let hero = Hero {
+            key: hero_key,
+            filters,
+            addresses,
+            uv: [uv[0], uv[1], uv[6], uv[7]],
+            initial_phase: f32::from_bits(imm(read, 0x61fc3d, &[0xc7, 0x87, 0, 5, 0, 0])?),
+            reset_phase: f32::from_bits(imm(read, 0x640659, &[0xc7, 0x87, 0, 5, 0, 0])?),
+            midpoint: referenced(read, 0x64038c, &[0x0f, 0x2f, 0x0d])?,
+            period: referenced(read, 0x64039b, &[0xf3, 0x0f, 0x10, 5])?,
+            alpha_scale: referenced(read, 0x6403ac, &[0xf3, 0x0f, 0x59, 5])?,
+            alpha_floor: referenced(read, 0x6403b9, &[0xf3, 0x0f, 0x58, 5])?,
+            geometry_edge: referenced(read, 0x637986, &[0xf3, 0x0f, 0x10, 0x1d])?,
+            world_scale: referenced(read, 0x63797b, &[0xf3, 0x0f, 0x59, 5])?,
+            size_scale: referenced(read, 0x6379b2, &[0xf3, 0x0f, 0x59, 0x15])?,
+            half: referenced(read, 0x6379ba, &[0xf3, 0x0f, 0x59, 0x15])?,
+        };
+        if hero.geometry_edge != edge as f32
+            || hero.world_scale <= 0.
+            || hero.size_scale <= 0.
+            || hero.half <= 0.
+            || hero.midpoint <= 0.
+            || hero.period != hero.midpoint * 2.
+            || hero.alpha_scale < 0.
+            || hero.alpha_floor < 0.
+            || hero.alpha_floor + hero.alpha_scale * hero.midpoint > f32::from(u8::MAX)
+            || !hero.initial_phase.is_finite()
+            || !(0. ..=hero.period).contains(&hero.initial_phase)
+            || !hero.reset_phase.is_finite()
+            || !(0. ..=hero.period).contains(&hero.reset_phase)
+        {
+            return Err("minimap hero geometry or pulse relationships".into());
+        }
+        if referenced(read, 0x641311, &[0xf3, 0x0f, 0x5d, 5])? != hero.period {
+            return Err("minimap hero UI clock clamp".into());
+        }
+
         // Outline colour: the control's alpha shifted up, or'd with a constant RGB.
         operand(
             read,
@@ -278,6 +678,10 @@ impl Draw {
             origin,
             image_sha256,
             edge,
+            resources,
+            fog_fraction_bits,
+            hero,
+            points,
             border: Border {
                 section,
                 key,
@@ -390,6 +794,124 @@ mod tests {
             &[0x0f, 0xb6, 0x87, 0xb4, 0, 0, 0, 0xc1, 0xe0, 0x18],
         );
         op(&mut d, 0x640680, &[0x0d], 0x0012_3456);
+        for (site, reg) in [
+            (0x657496, 0xe0),
+            (0x6574d0, 0xe0),
+            (0x65751a, 0xe9),
+            (0x65758a, 0xee),
+        ] {
+            put(&mut d, site, &[0xc1, reg, 12]);
+        }
+        op(&mut d, 0x657551, &[0xba], 1 << 12);
+        for (site, reg) in [(0x657510, 0xfb), (0x657580, 0xfa)] {
+            op(&mut d, site, &[0x81, reg], 1 << 12);
+        }
+        for (site, reg) in [(0x65751d, 0xc1), (0x65758d, 0xc6)] {
+            op(&mut d, site, &[0x69, reg], (1u32 << 12).wrapping_neg());
+        }
+        op(&mut d, 0x657459, &[0xbe], EDGE - 1);
+        op(&mut d, 0x6574a3, &[0xbe], EDGE - 1);
+        op(&mut d, 0x6574da, &[0xb9], EDGE - 1);
+        put(&mut d, 0x657530, &[0x32, 0xdb]);
+        put(&mut d, 0x6575d9, &[0xd1, 0xe9]);
+        for (site, ptr, value) in [
+            (0x6376ae, 0x1100, "Mine"),
+            (0x6376e2, 0x1120, "Roots"),
+            (0x637716, 0x1140, "Ghost"),
+        ] {
+            op(&mut d, site, &[0x68], ptr);
+            put(&mut d, ptr, value.as_bytes());
+            put(&mut d, ptr + value.len() as u32, &[0]);
+        }
+        for (site, value) in [
+            (0xb62690, *b"Mine"),
+            (0xb941a0, *b"Root"),
+            (0xb263d0, *b"Ghst"),
+        ] {
+            op(&mut d, site, &[0xb8], u32::from_be_bytes(value));
+            put(&mut d, site + 5, &[0xc3]);
+        }
+        op(&mut d, 0x659720, &[0xbb], 8);
+        op(&mut d, 0x659711, &[0xc7, 0x45, 0xe8], 8);
+        op(&mut d, 0x659776, &[0x81, 0xc6], (EDGE - 8) * 4);
+        put(&mut d, 0x659584, &[0x83, 0xc0, 0xfc]);
+        op(&mut d, 0x659519, &[0xba], EDGE - 4);
+        op(&mut d, 0x659378, &[0xb8], EDGE - 9);
+        op(&mut d, 0x62d0ce, &[0x69, 0xd0], 160);
+        put(&mut d, 0x62d0df, &[0x6b, 0xc0, 68]);
+        put(
+            &mut d,
+            0x62d0ea,
+            &[0x8d, 0x04, 0xcd, 0, 0, 0, 0, 0x2b, 0xc1, 0x8d, 0x04, 0x82],
+        );
+        put(&mut d, 0x62d0f6, &[0xc1, 0xe8, 8]);
+        for (site, reg) in [(0x63a873, 0xc2), (0x63a87c, 0xc1), (0x63a8a2, 0xc1)] {
+            op(&mut d, site, &[0x81, reg], 255);
+        }
+        for (site, reg) in [(0x63a879, 0xea), (0x63a885, 0xe9), (0x63a8a8, 0xe9)] {
+            put(&mut d, site, &[0xc1, reg, 8]);
+        }
+        put(&mut d, 0x654104, &[0xc1, 0x3e, 1]);
+        put(&mut d, 0x654109, &[0xc1, 0x7e, 4, 1]);
+        for site in [0x659550, 0x659591, 0x65c13a] {
+            op(&mut d, site, &[0xf3, 0x0f, 0x58, 5], 0x2120);
+        }
+        put(&mut d, 0x2120, &1024f32.to_le_bytes());
+        for site in [0x659574, 0x6595a1, 0x65c163] {
+            put(&mut d, site, &[0xc1, 0xe8, 13]);
+        }
+        put(&mut d, 0x659577, &[0x0f, 0xb6, 0xc8]);
+        op(&mut d, 0x637651, &[0x68], 0x1160);
+        put(&mut d, 0x1160, b"Champion\0");
+        put(&mut d, 0x63764d, &[0x6a, 0]);
+        put(&mut d, 0x71b7fa, &[0x83, 0xe6, 0xce]);
+        put(&mut d, 0x71b7fd, &[0x83, 0xce, 0x0e]);
+        put(&mut d, 0x7def4a, &[0x83, 0xe0, 3]);
+        for (site, table, value) in [
+            (0x7def50, 0x2000, 2u32),
+            (0x7def61, 0x2020, 1),
+            (0x7def74, 0x2040, 2),
+        ] {
+            op(&mut d, site, &[0xff, 0x34, 0xb5], table);
+            put(&mut d, table + 24, &value.to_le_bytes());
+        }
+        for (shift, mask, site, amount) in [
+            (0x7def8f, 0x7def92, 0x7def95, 2),
+            (0x7defab, 0x7defae, 0x7defb1, 3),
+        ] {
+            put(&mut d, shift, &[0xc1, 0xe8, amount]);
+            put(&mut d, mask, &[0x83, 0xe0, 1]);
+            op(&mut d, site, &[0xff, 0x34, 0x85], 0x2060);
+        }
+        put(&mut d, 0x2064, &3u32.to_le_bytes());
+        op(&mut d, 0x640341, &[0x68], 0x2080);
+        for (i, value) in [0.1f32, 0.2, 0.1, 0.8, 0.9, 0.2, 0.9, 0.8]
+            .into_iter()
+            .enumerate()
+        {
+            put(&mut d, 0x2080 + i as u32 * 4, &value.to_le_bytes());
+        }
+        op(
+            &mut d,
+            0x61fc3d,
+            &[0xc7, 0x87, 0, 5, 0, 0],
+            0.25f32.to_bits(),
+        );
+        op(&mut d, 0x640659, &[0xc7, 0x87, 0, 5, 0, 0], 0f32.to_bits());
+        for (site, prefix, ptr, value) in [
+            (0x64038c, &[0x0f, 0x2f, 0x0d][..], 0x2100, 0.5f32),
+            (0x64039b, &[0xf3, 0x0f, 0x10, 5][..], 0x2104, 1.),
+            (0x6403ac, &[0xf3, 0x0f, 0x59, 5][..], 0x2108, 100.),
+            (0x6403b9, &[0xf3, 0x0f, 0x58, 5][..], 0x210c, 80.),
+            (0x637986, &[0xf3, 0x0f, 0x10, 0x1d][..], 0x2110, EDGE as f32),
+            (0x63797b, &[0xf3, 0x0f, 0x59, 5][..], 0x2114, 0.25),
+            (0x6379b2, &[0xf3, 0x0f, 0x59, 0x15][..], 0x2118, 0.02),
+            (0x6379ba, &[0xf3, 0x0f, 0x59, 0x15][..], 0x211c, 0.5),
+            (0x641311, &[0xf3, 0x0f, 0x5d, 5][..], 0x2104, 1.),
+        ] {
+            op(&mut d, site, prefix, ptr);
+            put(&mut d, ptr, &value.to_le_bytes());
+        }
         d
     }
     fn decode(d: &BTreeMap<u32, u8>) -> Result<Draw, String> {
@@ -408,6 +930,23 @@ mod tests {
     fn border_markers_and_outline_come_from_the_operands() {
         let draw = decode(&fixture()).unwrap();
         assert_eq!(draw.edge, EDGE);
+        assert_eq!(draw.fog_fraction_bits, 12);
+        assert_eq!(draw.resources.keys, ["Mine", "Roots", "Ghost"]);
+        assert_eq!(draw.resources.classes, [*b"Mine", *b"Root", *b"Ghst"]);
+        assert_eq!(
+            (
+                draw.resources.side,
+                draw.resources.half,
+                draw.resources.clamp_inset
+            ),
+            (8, 4, 9)
+        );
+        assert_eq!(draw.resources.luminance, [68, 160, 28]);
+        assert_eq!(
+            draw.resources
+                .tint([255, 255, 255, 128], [100, 200, 50, 255]),
+            [100, 200, 50, 128]
+        );
         assert_eq!(draw.border.section, "Frame");
         assert_eq!(draw.border.key, "RimColor");
         assert_eq!(draw.border.minimum_pad_difference, 3);
@@ -433,6 +972,55 @@ mod tests {
         );
         assert_eq!(draw.marker_sides, [4, 8]);
         assert_eq!(draw.outline_rgb, [0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn marker_projection_uses_source_grid_scale_and_float_bit_encoding() {
+        let points = decode(&fixture()).unwrap().points;
+        assert_eq!(points.grid_shift, 1);
+        assert_eq!(
+            points
+                .project([[2, 4], [10, 8]], 64, [0, 16], [6, 6])
+                .unwrap(),
+            Some([31., 33.])
+        );
+        assert_eq!(
+            points
+                .project([[2, 4], [10, 8]], 64, [0, 16], [1, 6])
+                .unwrap(),
+            None
+        );
+        assert!(
+            points
+                .project([[2, 4], [2, 8]], 64, [0, 16], [2, 6])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn hero_geometry_uv_sampler_and_clock_are_source_driven() {
+        let hero = decode(&fixture()).unwrap().hero;
+        assert_eq!(hero.key, "Champion");
+        assert_eq!(hero.filters, [2, 1, 2]);
+        assert_eq!(hero.addresses, [3, 3]);
+        assert_eq!(hero.uv, [0.1, 0.2, 0.9, 0.8]);
+        assert_eq!(hero.half_size([[0., 0.], [256., 128.]]).unwrap(), 0.01);
+        let mut phase = hero.initial_phase;
+        assert_eq!(hero.advance(&mut phase, 0.25, true).unwrap(), 130);
+        assert_eq!(hero.advance(&mut phase, 0.75, false).unwrap(), 80);
+        assert_eq!(phase, 1.);
+        assert_eq!(hero.advance(&mut phase, 0., true).unwrap(), 80);
+        assert_eq!(phase, 0.);
+        assert!(hero.advance(&mut phase, -1., true).is_err());
+        assert!(hero.half_size([[0.; 2]; 2]).is_err());
+    }
+
+    #[test]
+    fn resource_luminance_scales_are_read_from_instruction_operands() {
+        let mut data = fixture();
+        put(&mut data, 0x62d0ec, &[0x8d]);
+        op(&mut data, 0x62d0ce, &[0x69, 0xd0], 176);
+        assert_eq!(decode(&data).unwrap().resources.luminance, [68, 176, 12]);
     }
 
     #[test]
@@ -463,6 +1051,25 @@ mod tests {
             (0x65c109, vec![0xba]),
             (0x696b73, vec![2]),
             (0x640684, vec![1]),
+            (0x654106, vec![31]),
+            (0x659576, vec![14]),
+            (0x2120, f32::NAN.to_le_bytes().to_vec()),
+            (0x63764e, vec![1]),
+            (0x71b7fc, vec![0xff]),
+            (0x2110, 0f32.to_le_bytes().to_vec()),
+            (0x2104, f32::NAN.to_le_bytes().to_vec()),
+            (0x2080, (-1f32).to_le_bytes().to_vec()),
+            (0x657498, vec![31]),
+            (0x6574d2, vec![16]),
+            (0x657552, vec![1]),
+            (0x657531, vec![0xc9]),
+            (0x6575da, vec![0xea]),
+            (0x659721, vec![7]),
+            (0x659585, vec![0xc1]),
+            (0xb941a5, vec![0xc2]),
+            (0x62d0d0, vec![159]),
+            (0x62d0d0, u32::MAX.to_le_bytes().to_vec()),
+            (0x63a875, vec![0]),
         ] {
             let mut d = base.clone();
             put(&mut d, va, &bytes);

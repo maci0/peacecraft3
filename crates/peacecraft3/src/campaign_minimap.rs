@@ -35,6 +35,7 @@ mod outline;
 
 struct FogImage {
     mapping: Option<Rules>,
+    fog_fraction_bits: u8,
     raster: crate::campaign_visibility::Raster,
     alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha,
     original_alpha: Vec<u8>,
@@ -557,17 +558,34 @@ fn update_fog(
         // A refused projection must not leave the previous inputs standing.
         fog.projected = None;
         let raster = staged_raster.as_mut().unwrap_or(&mut fog.raster);
-        let alpha = raster.project(bounds, fog.alpha, VISION_WORK, |point| {
-            Ok(host
-                .vision_presented(
-                    viewer,
-                    [point[0] as f32, point[1] as f32],
-                    fog_enabled,
-                    mask_enabled,
-                )
-                .map_err(|error| error.to_string())?
-                .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
-        })?;
+        let grid = crate::campaign_visibility::FogGrid {
+            world_bounds: host
+                .vision_world_bounds()
+                .ok_or("minimap source fog-grid bounds absent")?,
+            cell_world: host
+                .unit_placement_rules()
+                .ok_or("minimap source terrain encoding absent")?
+                .terrain_encoding()[0],
+            fraction_bits: fog.fog_fraction_bits,
+        };
+        let alpha = raster.project(
+            bounds,
+            grid,
+            &fog.original_alpha,
+            fog.alpha,
+            VISION_WORK,
+            |point| {
+                Ok(host
+                    .vision_presented(
+                        viewer,
+                        [point[0] as f32, point[1] as f32],
+                        fog_enabled,
+                        mask_enabled,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .unwrap_or(pcx_play::playercolor_host::VisionState::Masked))
+            },
+        )?;
         fog.projected = inputs;
         alpha
     };
@@ -591,6 +609,7 @@ fn project(
     input: Inputs,
     mut images: ResMut<Assets<Image>>,
     mut parts: Query<(&MinimapPart, &mut Node)>,
+    time: Res<Time<Real>>,
 ) {
     let witness = session.session_witness();
     let same = match (&state.witness, &witness) {
@@ -604,6 +623,9 @@ fn project(
         }
         if let Some(image) = state.image.take() {
             images.remove(image.id());
+        }
+        if let Some(Ok(markers)) = &mut state.markers {
+            markers.retire(&mut images);
         }
         *state = CampaignMinimap {
             witness,
@@ -671,7 +693,26 @@ fn project(
                 .presentation()
                 .is_none_or(|p| p.interface_visible != Some(false))
         });
-    let mode_error = marker_error.or_else(|| match fog_result {
+    let hero_error = {
+        let state = &mut *state;
+        match (&mut state.markers, &state.fog, state.root, state.surface) {
+            (Some(Ok(markers)), Some(fog), Some(root), Some(surface)) => {
+                session.host().and_then(|host| {
+                    markers
+                        .sync_heroes(
+                            &mut commands,
+                            &mut images,
+                            fog,
+                            host.objects(),
+                            (root, surface, state.shown, time.delta_secs()),
+                        )
+                        .err()
+                })
+            }
+            _ => None,
+        }
+    };
+    let mode_error = marker_error.or(hero_error).or_else(|| match fog_result {
         Some(Err(error)) => Some(error),
         Some(Ok(())) if matches!(visibility, Some(Err(_))) => {
             // Circular sight projects; the arm clears only when the ledger
@@ -750,11 +791,12 @@ fn project(
         }
     };
     state.outline_rgb = Some(draw.outline_rgb);
+    let fog_fraction_bits = draw.fog_fraction_bits;
     state.markers = input
         .sources
         .as_deref()
         .and_then(|sources| sources.for_receipts(&bindings.receipts))
-        .map(|reader| markers::Markers::read(reader, draw));
+        .map(|reader| markers::Markers::read(reader, draw, &rules.image_members));
     if let Some(Err(error)) = &state.markers {
         state.last_error = Some(error.clone());
     }
@@ -840,6 +882,7 @@ fn project(
                 original_alpha.extend(pixels.as_chunks::<4>().0.iter().map(|p| p[3]));
                 Ok(FogImage {
                     mapping: Some(rules.clone()),
+                    fog_fraction_bits,
                     raster,
                     alpha,
                     original_pixels: pixels.clone(),
@@ -972,7 +1015,7 @@ mod tests {
         );
         assert_eq!(actual.address_mode_v, bevy::image::ImageAddressMode::Repeat);
         assert_eq!(actual.lod_max_clamp, 0.);
-        assert!(image_sampler([1, 1, 1], [3, 3]).is_err());
+        assert!(image_sampler([1, 1, 3], [3, 3]).is_err());
         assert!(image_sampler([1, 1, 0], [2, 3]).is_err());
         assert_eq!(image.texture_descriptor.size.width, 2);
         assert_eq!(image.texture_descriptor.size.height, 1);
@@ -1132,6 +1175,7 @@ endglobals
             image: Some(image),
             fog: Some(FogImage {
                 mapping: None,
+                fog_fraction_bits: 8,
                 raster: crate::campaign_visibility::Raster::new(1, 1, 16).unwrap(),
                 alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
                     masked: 3,
@@ -1337,6 +1381,7 @@ endglobals
     #[test]
     fn retiring_the_session_removes_the_tree_and_owned_image() {
         let mut app = App::new();
+        app.init_resource::<Time<Real>>();
         peacecraft3::campaign_camera::install(&mut app, 0, 0);
         let world = app.world_mut();
         world.init_resource::<MapRequests>();
@@ -1463,6 +1508,7 @@ endglobals
         };
         let fog = FogImage {
             mapping: Some(rules),
+            fog_fraction_bits: 8,
             raster: crate::campaign_visibility::Raster::new(80, 40, 3200).unwrap(),
             alpha: pcx_objects::editor::minimap_fog::MinimapFogAlpha {
                 masked: 7,

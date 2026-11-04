@@ -1,6 +1,6 @@
 # Renderer screenshots
 
-Fresh 0.12.0 captures from PeaceCraft III on 3 November 2026, using the locally supplied Legacy 1.29.2.9231 install in Reign of Chaos mode. The production renderer ran headless at 1280×960 with offscreen Vulkan software rendering and audio disabled. These are rendered demonstrations, not original-client captures or pixel-parity evidence.
+Fresh 0.13.0 captures from PeaceCraft III on 4 November 2026, using the locally supplied Legacy 1.29.2.9231 install in Reign of Chaos mode. The production renderer ran headless at 1280×960 with offscreen Vulkan software rendering and audio disabled. These are rendered demonstrations, not original-client captures or pixel-parity evidence.
 
 - `main-menu.png`: Reign of Chaos main menu.
 - `chapter-selection.png`: campaign and chapter selection; difficulty selection is unavailable.
@@ -53,3 +53,34 @@ Plain source text roots now receive integer raster sizing even without child spa
 Upper-button labels now use source-derived raster sizing, alpha cutoff and atlas sampling. Full-frame differing pixels fall by 200 to 978,207, while mean channel error rises slightly to 11.940990; both metrics remain reported. Only 1,804 upper-label pixels change. Two fresh runs hold 26 clocks and independently match five published states. Native upper-label pair spacing, baseline and frame placement remain open; this raster change does not establish complete text parity. See [upper label evidence](../re-notes/campaign-hud-top-bar.md#upper-label-raster-policy-2026-11-03).
 
 Upper labels now use source integer advances, baselines and frame origins with no wrapping. Twelve resulting string widths agree with read-only native observations. Full-frame differences fall by 2,024 to 976,183 and mean channel error to 11.755233. Only 2,381 upper-label pixels change. The upper strip MAE falls from 11.648788 to 1.273424; blended/backing-image residuals remain counted. Source pressed offsets and explicit FDF justification remain preserved. Two final captures hold all 26 clocks and independently match five published states. Native Windows, full-screen and animation/RNG parity remain unqualified. See [upper string evidence](../re-notes/campaign-hud-top-bar.md#upper-string-widths-baselines-and-frame-origins-2026-11-03).
+
+The minimap now uses source resource art and mask/tint blits, solid CPU markers,
+native grid/float-bit projection, a fixed-point fog scan and a separate textured
+hero pass. The retained native-grid test reproduces all 65,536 CPU alpha bytes;
+quad size, four projection matrix values and marker scales match the native
+records bit-for-bit. Full-frame differing pixels fall from 976,183 to 976,058,
+and mean channel error from 11.755233 to 11.714645. Two independent production
+runs match all five published states; all 26 acquisition clocks hold. Upkeep
+and 13 panel text regions remain exact. Fog-grid production/blockers, special
+neutral/camp overlays, remembered visibility, shadows and full-screen/tick parity
+remain open. See [minimap evidence](../re-notes/campaign-minimap.md#hero-image-pass-and-remaining-sight-trace-2026-11-03).
+
+Blocked sight no longer erases another source's clear visibility or exposes a
+fresh unexplored cell as fogged. The overlap regression fails before the fix;
+all 24 vision checks, strict native/WASM checks and both builds pass. Only 387
+minimap pixels change. Full-screen differences fall by 61 to 975,997, with mean
+channel error 11.714487. Two independent captures match five published states
+with all 26 clocks held. Native span/graph reconstruction progresses separately;
+the corrected plane labels supersede the earlier 26-cell residual. See
+[blocked-source evidence](../re-notes/campaign-minimap.md#blocked-source-preservation-and-sight-graphs-2026-11-04).
+
+
+The campaign ledger now uses the native sight lattice and predecessor graph,
+asset-derived occluder heights, and separate flying/modifier spans. Production
+heights match all 12,288 retained native cells; the explicit Rust gate matches
+209 span rows and propagation through eleven native graphs. Two fresh captures
+match five published states with all 26 clocks held. Only 2,511 minimap pixels
+change; full-screen differences fall by 1,138 to 974,859, with mean channel error
+11.652511. Upkeep and 13 panel text regions remain exact. Remembered visibility,
+special overlays, outline rasterization and native tick identity remain open.
+See [sight integration](../re-notes/campaign-minimap.md#native-sight-lattice-integration-2026-11-04).

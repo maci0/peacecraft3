@@ -25,6 +25,7 @@ pub struct Inputs {
     pub clock: startup_clock::StartupClock,
     pub experience: player_handicap::Rules,
     pub health: player_handicap::HealthRules,
+    pub sight: crate::native_sight::Rules,
     pub hero: hero_skills::Rules,
 }
 
@@ -378,6 +379,7 @@ pub fn read(
         progression,
         BUDGET,
     )?;
+    let sight = crate::native_sight::Rules::reviewed_legacy(image, origin)?;
     Ok(Inputs {
         camera,
         numeric,
@@ -386,6 +388,7 @@ pub fn read(
         clock,
         experience,
         health,
+        sight,
         hero,
     })
 }
