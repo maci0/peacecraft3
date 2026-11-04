@@ -1299,7 +1299,10 @@ mod tests {
             let px = decode_any(&d, &h, 0).unwrap_or_else(|e| panic!("{rel}: {e}"));
             assert_eq!(
                 px.len(),
-                (h.width * h.height * 4) as usize,
+                usize::try_from(h.width)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(usize::try_from(h.height).unwrap_or(usize::MAX))
+                    .saturating_mul(4),
                 "{rel}: expected w*h RGBA8"
             );
             assert!(px.chunks(4).any(|p| p[3] != 0), "{rel}: fully transparent");
@@ -1320,7 +1323,14 @@ mod tests {
         for i in 0..h.mip_count() {
             let (w, hh) = h.mip_size(i);
             let px = decode_mip(&d, &h, i).unwrap_or_else(|e| panic!("mip {i}: {e}"));
-            assert_eq!(px.len(), (w * hh * 4) as usize, "mip {i} is {w}x{hh}");
+            assert_eq!(
+                px.len(),
+                usize::try_from(w)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(usize::try_from(hh).unwrap_or(usize::MAX))
+                    .saturating_mul(4),
+                "mip {i} is {w}x{hh}"
+            );
         }
     }
 
@@ -1335,7 +1345,9 @@ mod tests {
         let h = Header::parse(&d).unwrap();
         assert_eq!(h.content, 1, "sample must be direct content");
         let raw = mip_bytes(&d, &h, 0).unwrap();
-        let px = (h.width * h.height) as usize;
+        let px = usize::try_from(h.width)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(usize::try_from(h.height).unwrap_or(usize::MAX));
         assert_eq!(raw.len(), px * 2, "sample must carry an alpha plane");
 
         let distinct = |s: &[u8]| -> std::collections::BTreeSet<u8> { s.iter().copied().collect() };

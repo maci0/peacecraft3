@@ -175,13 +175,13 @@ pub const START_POINT_NONE: u32 = 0;
 /// One player slot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
-    /// Legacy field name for the player-number word. Use [`Self::number`].
+    /// Player-number word, retained under its original legacy name.
     pub controller: u32,
-    /// Legacy field name for the controller word. Use [`Self::control`].
+    /// Controller-kind word, retained under its original legacy name.
     pub race: u32,
-    /// Legacy field name for the race word. Use [`Self::race_id`].
+    /// Race word, retained under its original legacy name.
     pub start_point: u32,
-    /// Legacy field name for the fixed-start word. Use [`Self::fixed_start`].
+    /// Fixed-start word, retained under its original legacy name.
     pub colour: u32,
     /// Slot name, usually a `TRIGSTR_` reference.
     pub name: String,
@@ -456,6 +456,12 @@ pub enum FramingViolation {
     UnterminatedString { at: usize },
     #[error("{have} bytes left over after the last declared field at +{at:#x}")]
     TrailingBytes { at: usize, have: usize },
+    #[error("declared {what} count exceeds the bytes remaining at +{at:#x}: {have} left")]
+    CountExceedsBytes {
+        what: &'static str,
+        at: usize,
+        have: usize,
+    },
 }
 
 /// A cursor over the `.w3i` bytes.
@@ -473,6 +479,34 @@ struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     fn new(data: &'a [u8]) -> Self {
         Self { data, at: 0 }
+    }
+
+    /// Minimum byte width of one record, used to bound a declared count
+    /// before allocating. Returns the count as `usize`, or a framing error
+    /// when the count cannot fit in the bytes left.
+    fn checked_count(
+        &mut self,
+        what: &'static str,
+        min_record_bytes: usize,
+    ) -> Result<usize, Error> {
+        let count_word = self.u32()?;
+        let count = usize::try_from(count_word).map_err(|_| {
+            Error::InfoFraming(FramingViolation::CountExceedsBytes {
+                what,
+                at: self.at,
+                have: self.data.len().saturating_sub(self.at),
+            })
+        })?;
+        let remaining = self.data.len().saturating_sub(self.at);
+        if count <= remaining / min_record_bytes.max(1) {
+            Ok(count)
+        } else {
+            Err(Error::InfoFraming(FramingViolation::CountExceedsBytes {
+                what,
+                at: self.at,
+                have: remaining,
+            }))
+        }
     }
 
     fn u32(&mut self) -> Result<u32, Error> {
@@ -650,9 +684,9 @@ impl MapInfo {
         let extra_byte_18 = (version >= VERSION_18).then(|| c.u8()).transpose()?;
         let extra_u32_19 = (version >= VERSION_19).then(|| c.u32()).transpose()?;
 
-        let player_count = c.u32()? as usize;
+        let player_count = c.checked_count("player", 4 + 1 + 4 + 4 + 4 + 4)?;
         let player_records_at = c.at;
-        let mut players = Vec::new();
+        let mut players = Vec::with_capacity(player_count);
         for _i in 0..player_count {
             players.push(Player {
                 controller: c.u32()?,
@@ -679,9 +713,10 @@ impl MapInfo {
 
         let mut forces = Vec::new();
         let force_record_bytes = if version >= VERSION_FORCES {
-            let n = c.u32()? as usize;
+            let force_count = c.checked_count("force", 8 + 1)?;
             let records_at = c.at;
-            for _ in 0..n {
+            forces.reserve(force_count);
+            for _ in 0..force_count {
                 forces.push(Force {
                     flags: c.u32()?,
                     mask: c.u32()?,
@@ -695,40 +730,43 @@ impl MapInfo {
 
         let mut start_locations = Vec::new();
         if version >= VERSION_TABLE_LIST {
-            let n = c.u32()? as usize;
-            for _ in 0..n {
+            let start_location_count = c.checked_count("start location", 16)?;
+            start_locations.reserve(start_location_count);
+            for _ in 0..start_location_count {
                 start_locations.push([c.u32()?, c.u32()?, c.u32()?, c.u32()?]);
             }
         }
 
         let mut pairs = Vec::new();
         if version >= VERSION_TABLE_LIST_7 {
-            let n = c.u32()? as usize;
-            for _ in 0..n {
+            let pair_count = c.checked_count("pair", 8)?;
+            pairs.reserve(pair_count);
+            for _ in 0..pair_count {
                 pairs.push([c.u32()?, c.u32()?]);
             }
         }
 
         let mut table_lists = Vec::new();
         let table_list_record_bytes = if version >= VERSION_TABLE_LIST_12 {
-            let n = c.u32()? as usize;
+            let table_list_count = c.checked_count("table list", 4 + 1 + 4 + 4)?;
             let records_at = c.at;
-            for _ in 0..n {
+            table_lists.reserve(table_list_count);
+            for _ in 0..table_list_count {
                 let id = c.u32()?;
                 let name = c.string()?;
-                let m = c.u32()? as usize;
-                let mut first = Vec::new();
-                for _ in 0..m {
+                let sublist_count = c.checked_count("table list sub-list", 4)?;
+                let mut first = Vec::with_capacity(sublist_count);
+                for _ in 0..sublist_count {
                     first.push(c.u32()?);
                 }
-                let k = c.u32()? as usize;
-                let mut second = Vec::new();
-                for _ in 0..k {
+                let entry_count = c.checked_count("table list entry", 4)?;
+                let mut second = Vec::with_capacity(entry_count);
+                for _ in 0..entry_count {
                     second.push(TableEntry {
                         id: c.u32()?,
                         tables: {
-                            let mut v = Vec::new();
-                            for _ in 0..m {
+                            let mut v = Vec::with_capacity(sublist_count);
+                            for _ in 0..sublist_count {
                                 v.push(c.u32()?);
                             }
                             v
@@ -749,15 +787,16 @@ impl MapInfo {
 
         let mut item_tables = Vec::new();
         if version >= 0x18 {
-            let count = c.u32()?;
-            for _ in 0..count {
+            let item_table_count = c.checked_count("item table", 4 + 1 + 4)?;
+            item_tables.reserve(item_table_count);
+            for _ in 0..item_table_count {
                 let id = c.u32()?;
                 let name = c.string()?;
-                let set_count = c.u32()?;
-                let mut sets = Vec::new();
+                let set_count = c.checked_count("item table set", 4)?;
+                let mut sets = Vec::with_capacity(set_count);
                 for _ in 0..set_count {
-                    let item_count = c.u32()?;
-                    let mut items = Vec::new();
+                    let item_count = c.checked_count("item table item", 8)?;
+                    let mut items = Vec::with_capacity(item_count);
                     for _ in 0..item_count {
                         items.push([c.u32()?, c.u32()?]);
                     }
