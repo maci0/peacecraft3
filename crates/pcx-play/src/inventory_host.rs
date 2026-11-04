@@ -744,56 +744,10 @@ impl ObjectHost {
         }
         // Passive refusals and pool changes are staged before any slot, event or state write.
         let passive = self.held_attributes(item)?;
-        let held = self.unit_hero_bonus(unit)?;
-        for (current, incoming) in [
-            (held.strength, passive.strength),
-            (held.agility, passive.agility),
-            (held.intelligence, passive.intelligence),
-            (held.armor, passive.armor),
-            (held.damage, passive.damage),
-            (held.max_life, passive.max_life),
-            (held.life_regen, passive.life_regen),
-        ] {
-            current.checked_add(incoming).ok_or_else(|| {
-                self.inner.error(
-                    "inventory",
-                    Failure::UnitActivity("held passive bonus overflows".into()),
-                )
-            })?;
-        }
-        if !(held.mana_regen_fraction + passive.mana_regen_fraction).is_finite() {
-            return Err(self.inner.error(
-                "inventory",
-                Failure::UnitActivity("held passive bonus overflows".into()),
-            ));
-        }
-        // Strength and agility are hero attributes. A non-hero holder has no modeled effect, so a
-        // stat item is refused rather than accepted as a silent no-op.
-        if (passive.strength != 0 || passive.agility != 0)
-            && !self.executed_unit(unit)?.definition.rawcode[0].is_ascii_uppercase()
-        {
-            return Err(self.inner.error(
-                "inventory",
-                Failure::UnitActivity(
-                    "passive strength or agility on a non-hero is unsupported".into(),
-                ),
-            ));
-        }
+        let pools = self.stage_held_passive(unit, passive)?;
         let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(unit, s).is_none()) else {
             return Ok(false);
         };
-        let pools = self.held_pools(
-            unit,
-            passive.strength,
-            passive.max_life,
-            passive.intelligence,
-        )?;
-        self.require_passive_regen_projection(
-            unit,
-            passive.life_regen,
-            passive.mana_regen_fraction,
-            passive.intelligence,
-        )?;
         let holder = record.held_by;
         if let Some((owner, _)) = holder {
             self.require_passive_regen_projection(

@@ -301,27 +301,28 @@ type GroundAssets<'w> = (
     ResMut<'w, Assets<GroundMaterial>>,
 );
 
-pub(crate) fn publish_admitted_ground(
-    mut commands: Commands,
-    requests: Res<MapRequests>,
-    sources: Res<SelectedMapSources>,
-    supply: Res<GroundSupply>,
-    mut publication: ResMut<GroundPublication>,
-    device: Option<Res<RenderDevice>>,
-    mut assets: GroundAssets<'_>,
-) {
-    let Some(outcome) = requests.last_outcome.as_ref() else {
-        return;
-    };
+struct AdmittedAttempt {
+    context: Arc<ParsedMapContext>,
+    key: AttemptKey,
+    read_limit: u64,
+    memory: GroundMemory,
+    reader: Arc<pcx_assets::Resolver>,
+    receipts: Arc<BindingReceipts>,
+}
+
+fn admitted_attempt(
+    requests: &MapRequests,
+    sources: &SelectedMapSources,
+    supply: &GroundSupply,
+    attempted: &mut Option<AttemptKey>,
+    last_error: &mut Option<MapGroundError>,
+) -> Option<AdmittedAttempt> {
+    let outcome = requests.last_outcome.as_ref()?;
     if outcome.result.is_err() {
-        return;
+        return None;
     }
-    let Some(bindings) = requests.bindings.as_ref() else {
-        return;
-    };
-    let Some(context) = requests.admission.shared_context() else {
-        return;
-    };
+    let bindings = requests.bindings.as_ref()?;
+    let context = requests.admission.shared_context()?;
     if outcome.binding_revision != Some(bindings.revision)
         || outcome.identity.as_ref() != Some(&context.sources.map)
         || context.sources.map.edition != bindings.map_identity.edition
@@ -331,7 +332,7 @@ pub(crate) fn publish_admitted_ground(
             .as_ref()
             .is_some_and(|receipts| Arc::ptr_eq(receipts, &bindings.receipts))
     {
-        return;
+        return None;
     }
     let key = AttemptKey {
         context: Arc::downgrade(&context),
@@ -339,34 +340,71 @@ pub(crate) fn publish_admitted_ground(
         read_limit: supply.read_limit,
         memory: supply.memory,
     };
-    if publication.attempted.as_ref().is_some_and(|previous| {
+    if attempted.as_ref().is_some_and(|previous| {
         previous.revision == key.revision
             && Weak::ptr_eq(&previous.context, &key.context)
             && previous.read_limit == key.read_limit
             && previous.memory == key.memory
     }) {
-        return;
+        return None;
     }
-    let (read_limit, memory) = match require_budget(&supply, bindings.revision) {
+    let (read_limit, memory) = match require_budget(supply, bindings.revision) {
         Ok(budget) => budget,
         Err(error) => {
-            publication.attempted = None;
-            publication.last_error = Some(error);
-            return;
+            *attempted = None;
+            *last_error = Some(error);
+            return None;
         }
     };
-    let reader = match require_reader(&sources, &bindings.receipts) {
+    let reader = match require_reader(sources, &bindings.receipts) {
         Ok(reader) => reader,
         Err(error) => {
-            publication.last_error = Some(error);
-            return;
+            *last_error = Some(error);
+            return None;
         }
     };
+    Some(AdmittedAttempt {
+        context,
+        key,
+        read_limit,
+        memory,
+        reader,
+        receipts: Arc::clone(&bindings.receipts),
+    })
+}
+
+pub(crate) fn publish_admitted_ground(
+    mut commands: Commands,
+    requests: Res<MapRequests>,
+    sources: Res<SelectedMapSources>,
+    supply: Res<GroundSupply>,
+    mut publication: ResMut<GroundPublication>,
+    device: Option<Res<RenderDevice>>,
+    mut assets: GroundAssets<'_>,
+) {
+    let publication = &mut *publication;
+    let Some(attempt) = admitted_attempt(
+        &requests,
+        &sources,
+        &supply,
+        &mut publication.attempted,
+        &mut publication.last_error,
+    ) else {
+        return;
+    };
+    let AdmittedAttempt {
+        context,
+        key,
+        read_limit,
+        memory,
+        reader,
+        receipts,
+    } = attempt;
     let texture_limits = device.as_ref().map(|device| device.limits());
     let shadow = prepare_shadow(
         &context.terrain,
         reader.as_ref(),
-        &bindings.receipts,
+        &receipts,
         read_limit,
         texture_limits.as_ref(),
     );
@@ -382,7 +420,7 @@ pub(crate) fn publish_admitted_ground(
     match result {
         Ok((draw, receipts)) => {
             let entity = entity_from_draw(&mut commands, &draw);
-            replace_entity(&mut commands, &mut publication, entity);
+            replace_entity(&mut commands, publication, entity);
             publication.context = Some(context);
             publication.receipts = receipts;
             publication.last_error = None;
@@ -427,58 +465,23 @@ fn publish_admitted_water(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(outcome) = requests.last_outcome.as_ref() else {
+    let publication = &mut *publication;
+    let Some(attempt) = admitted_attempt(
+        &requests,
+        &sources,
+        &supply,
+        &mut publication.attempted,
+        &mut publication.last_error,
+    ) else {
         return;
     };
-    if outcome.result.is_err() {
-        return;
-    }
-    let Some(bindings) = requests.bindings.as_ref() else {
-        return;
-    };
-    let Some(context) = requests.admission.shared_context() else {
-        return;
-    };
-    if outcome.binding_revision != Some(bindings.revision)
-        || outcome.identity.as_ref() != Some(&context.sources.map)
-        || context.sources.map.edition != bindings.map_identity.edition
-        || context.sources.map.version != bindings.map_identity.version
-        || !requests
-            .published_receipts
-            .as_ref()
-            .is_some_and(|receipts| Arc::ptr_eq(receipts, &bindings.receipts))
-    {
-        return;
-    }
-    let key = AttemptKey {
-        context: Arc::downgrade(&context),
-        revision: bindings.revision,
-        read_limit: supply.read_limit,
-        memory: supply.memory,
-    };
-    if publication.attempted.as_ref().is_some_and(|previous| {
-        previous.revision == key.revision
-            && Weak::ptr_eq(&previous.context, &key.context)
-            && previous.read_limit == key.read_limit
-            && previous.memory == key.memory
-    }) {
-        return;
-    }
-    let (read_limit, _) = match require_budget(&supply, bindings.revision) {
-        Ok(budget) => budget,
-        Err(error) => {
-            publication.attempted = None;
-            publication.last_error = Some(error);
-            return;
-        }
-    };
-    let reader = match require_reader(&sources, &bindings.receipts) {
-        Ok(reader) => reader,
-        Err(error) => {
-            publication.last_error = Some(error);
-            return;
-        }
-    };
+    let AdmittedAttempt {
+        context,
+        key,
+        read_limit,
+        reader,
+        ..
+    } = attempt;
     let texture_limits = device.as_ref().map(|device| device.limits());
     publication.attempted = Some(key);
     let draw = prepare_water(
