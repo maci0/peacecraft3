@@ -149,7 +149,7 @@ impl UdpTransport {
                     Err(e) => return Err(e.into()),
                 }
             }
-            out.sort_by_key(|h| h.name.clone());
+            out.sort_by(|a, b| a.name.cmp(&b.name));
             out.dedup_by(|a, b| a.addr == b.addr);
             Ok(out)
         })();

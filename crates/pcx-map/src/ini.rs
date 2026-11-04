@@ -124,8 +124,14 @@ pub fn preferred_script(ini: Option<&Ini>, present: &[&str]) -> Option<&'static 
                         });
                     }
                     // Substring match for values like `war3map.j` with a path prefix.
-                    let lower = value.to_ascii_lowercase().replace('\\', "/");
-                    if lower.contains(&candidate.to_ascii_lowercase()) && has(candidate) {
+                    let lower = value.replace('\\', "/");
+                    if lower.len() >= candidate.len()
+                        && lower
+                            .as_bytes()
+                            .windows(candidate.len())
+                            .any(|w| w.eq_ignore_ascii_case(candidate.as_bytes()))
+                        && has(candidate)
+                    {
                         return Some(match candidate {
                             "war3map.j" => "war3map.j",
                             _ => "war3map.wtg",

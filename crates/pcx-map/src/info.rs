@@ -1428,8 +1428,9 @@ mod tests {
                 Ok(m) => m
                     .into_iter()
                     .filter(|p| {
-                        let l = p.to_ascii_lowercase();
-                        l.ends_with(".w3m") || l.ends_with(".w3n")
+                        p.len() >= 4
+                            && (p[p.len() - 4..].eq_ignore_ascii_case(".w3m")
+                                || p[p.len() - 4..].eq_ignore_ascii_case(".w3n"))
                     })
                     .collect(),
                 Err(e) => {
