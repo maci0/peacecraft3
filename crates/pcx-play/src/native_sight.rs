@@ -5,6 +5,13 @@ use crate::{
     scripts::AssetIdentity,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SightState {
+    pub night: bool,
+    pub revision: u64,
+    pub radius: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Rules {
     pub origin: AssetIdentity,
@@ -13,6 +20,7 @@ pub struct Rules {
     height_shift: u8,
     vertex_bias: i32,
     rounding_bias: f32,
+    transition_seconds: f32,
     recurrence: [i32; 8],
     excluded_owner: i32,
     player_mask: u32,
@@ -77,6 +85,14 @@ impl Rules {
                 .try_into()
                 .map_err(|_| "native sight rounding bias")?,
         );
+        let transition_seconds = f32::from(operand(0x4015c0, &[0x6a], 1)?[0] as i8);
+        let transition_global = word(0x4015c2, &[0x68])?;
+        if word(0x680557, &[0x68])? != transition_global
+            || word(0x68055c, &[0x68])? != transition_global
+            || transition_seconds <= 0.
+        {
+            return Err("native sight transition duration operands differ".into());
+        }
         let double_sib = operand(0x4c4e63, &[0x8d, 0x04], 1)?[0];
         let quad = operand(0x4c4e7d, &[0x8d, 0x04], 5)?;
         if double_sib & 0x3f != 0x1b || quad[0] & 0x3f != 0x1d || quad[1..] != [0; 4] {
@@ -158,11 +174,37 @@ impl Rules {
             height_shift,
             vertex_bias,
             rounding_bias,
+            transition_seconds,
             recurrence,
             excluded_owner,
             player_mask,
             unblocked_movement,
         })
+    }
+
+    /// Completed day/night rate integration; intermediate timing remains unqualified.
+    pub(crate) fn completed_change(
+        &self,
+        previous: f32,
+        authored_previous: f32,
+        target: f32,
+        numeric: &crate::script_numeric::NumericPolicy,
+    ) -> Result<f32, String> {
+        use crate::script_random::real;
+        if !previous.is_finite()
+            || [authored_previous, target]
+                .iter()
+                .any(|v| !v.is_finite() || *v < 0.)
+        {
+            return Err("native sight invalid transition endpoint".into());
+        }
+        let integrate = || {
+            let difference = real::sub(target.to_bits(), authored_previous.to_bits())?;
+            let rate = numeric.division(difference, self.transition_seconds.to_bits())?;
+            let delta = real::mul(rate, self.transition_seconds.to_bits())?;
+            real::add(previous.to_bits(), delta).map(f32::from_bits)
+        };
+        integrate().map_err(|e| format!("native sight transition: {e}"))
     }
 
     pub fn cell_world(&self, pathing_cell: f32) -> Result<f32, String> {
@@ -651,6 +693,9 @@ pub(crate) mod tests {
         put(0x4c6448, &[0xc1, 0xe0, 3]);
         put(0x7411cc, &[0x83, 0xc0, 1]);
         put(0x7411e3, &[0x8d, 0x41, 1]);
+        put(0x4015c0, &[0x6a, 3, 0x68, 0, 0x40, 0, 0]);
+        put(0x680557, &[0x68, 0, 0x40, 0, 0]);
+        put(0x68055c, &[0x68, 0, 0x40, 0, 0]);
         put(0x9a1d74, &[0x68, 0, 0x10, 0, 0]);
         put(0x1000, &0.25f32.to_le_bytes());
         put(0x4c4e63, &[0x8d, 0x04, 0x1b]);
@@ -714,6 +759,7 @@ pub(crate) mod tests {
         assert!(r.ignores_occlusion("synthetic-air"));
         assert!(!r.ignores_occlusion("fly"));
         assert_eq!(r.rounding_bias, 0.25);
+        assert_eq!(r.transition_seconds, 3.);
         assert!(r.eligible(4, 7));
         assert!(!r.eligible(5, 7));
         assert!(r.eligible(5, 1));
@@ -724,6 +770,105 @@ pub(crate) mod tests {
         assert!(decode(&bytes).is_err());
         assert!(Rules::reviewed_legacy(b"not a client", identity()).is_err());
     }
+    #[test]
+    fn completed_transition_uses_source_duration_and_numeric_policy() {
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric =
+            crate::script_numeric::NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        let mut bytes = fixture();
+        let r = decode(&bytes).unwrap();
+        // The synthetic reciprocal table maps three's reciprocal to one half.
+        assert_eq!(
+            r.completed_change(600., 600., 900., &numeric).unwrap(),
+            1050.
+        );
+        assert_eq!(r.completed_change(0., 1., 0., &numeric).unwrap(), -1.5);
+        bytes.insert(0x4015c1, 2);
+        let r = decode(&bytes).unwrap();
+        assert_eq!(
+            r.completed_change(600., 600., 900., &numeric).unwrap(),
+            900.
+        );
+        assert!(r.completed_change(f32::NAN, 600., 900., &numeric).is_err());
+        bytes.insert(0x4015c1, u8::MAX);
+        assert!(decode(&bytes).is_err());
+        bytes.insert(0x4015c1, 2);
+        bytes.insert(0x680558, 1);
+        assert!(decode(&bytes).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE and PCX_NATIVE_SIGHT_PROPERTIES local paused daytime property read"]
+    fn supplied_native_completed_sight_properties_match() {
+        use crate::camera_margins::SourceWindow;
+        use crate::script_numeric::{Binding, NumericPolicy};
+        let source = std::env::var("PCX_PLAYER_RESOURCE_IMAGE").unwrap();
+        let image = std::fs::read(&source).unwrap();
+        let rules = Rules::reviewed_legacy(&image, identity()).unwrap();
+        let budget = RuleInputBudget {
+            image_bytes: 32 << 20,
+            profile_bytes: 64 << 10,
+            sections: 96,
+        };
+        let pe = Pe::parse(&image, budget).unwrap();
+        let window = |va, len: u32, code| {
+            let bytes = &pe.read_from(va, code).unwrap()[..len as usize];
+            SourceWindow {
+                va,
+                len,
+                digest: sha256(bytes),
+            }
+        };
+        let numeric = NumericPolicy::read(
+            &image,
+            Binding {
+                origin: identity(),
+                image_sha256: sha256(&image),
+                literal: window(0x8df660, 238, true),
+                division: window(0x9a02d0, 57, true),
+                reciprocal: window(0x9a1d00, 103, true),
+                reciprocal_table: window(0xed6cf0, 4100, false),
+                equality: window(0x8d8d10, 53, true),
+                equality_constant: window(0x10db054, 4, false),
+                inequality: window(0x8d7e32, 162, true),
+                math_sub: window(0x9a00b0, 264, true),
+                math_add: window(0x9a01c0, 262, true),
+                math_mul: window(0x99ffe0, 195, true),
+                math_lzcnt: window(0x9a0330, 29, true),
+                math_i32_to_real: window(0x9a1620, 92, true),
+            },
+            budget,
+            4096,
+        )
+        .unwrap();
+        let path = std::env::var("PCX_NATIVE_SIGHT_PROPERTIES").unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() < 1 << 20);
+        let records = std::fs::read_to_string(path).unwrap();
+        let mut checked = 0;
+        for record in records.lines() {
+            let bits = |name: &str| {
+                let value = record
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix(name))
+                    .unwrap();
+                u32::from_str_radix(value.split(':').next().unwrap(), 16).unwrap()
+            };
+            let day = f32::from_bits(bits("day="));
+            let night = f32::from_bits(bits("night="));
+            assert_eq!(bits("node7c="), 0, "completed transition required");
+            assert_eq!(
+                rules
+                    .completed_change(night, night, day, &numeric)
+                    .unwrap()
+                    .to_bits(),
+                bits("node78="),
+                "{record}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
+
     #[test]
     fn heights_use_four_corners_and_authored_single_cell_occluders() {
         let r = rules();

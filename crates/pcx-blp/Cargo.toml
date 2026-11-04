@@ -18,7 +18,7 @@ required-features = ["local-fixtures"]
 tracing = { workspace = true, optional = true }
 pcx-mpq.workspace = true
 thiserror.workspace = true
-jpeg-decoder = "0.3"
+jpeg-decoder = { version = "0.3", features = ["platform_independent"] }
 
 [dev-dependencies]
 pcx-mdl.workspace = true

@@ -709,3 +709,39 @@ fn a_new_session_returns_to_the_configured_zoom_level() {
         "the client rules outlive the session"
     );
 }
+
+#[test]
+fn applied_menu_preferences_control_camera_speed_and_edge_disable_without_draft_leaks() {
+    let mut source = rules();
+    source.fallback.key = 0;
+    source.fallback.mouse = 0;
+    let mut rig = Rig::new("", Some(source));
+    let mut nav = crate::menu_screens::Navigation::default();
+    nav.applied.values.insert("KeyScrollSlider".into(), 100.);
+    nav.applied.values.insert("MouseScrollSlider".into(), 100.);
+    nav.applied
+        .toggles
+        .insert("MouseScrollDisableCheckBox".into(), true);
+    nav.draft.values.insert("KeyScrollSlider".into(), 0.);
+    nav.draft.values.insert("MouseScrollSlider".into(), 0.);
+    nav.draft
+        .toggles
+        .insert("MouseScrollDisableCheckBox".into(), false);
+    rig.app.insert_resource(nav);
+    rig.hold(KeyCode::ArrowUp, true);
+    rig.frame();
+    near(rig.target(), [64., 289.]);
+    rig.hold(KeyCode::ArrowUp, false);
+    rig.set_target(CENTRE);
+    rig.cursor(Some([0., SCREEN[1] * 0.5]));
+    rig.frame();
+    near(rig.target(), CENTRE);
+    rig.app
+        .world_mut()
+        .resource_mut::<crate::menu_screens::Navigation>()
+        .applied
+        .toggles
+        .insert("MouseScrollDisableCheckBox".into(), false);
+    rig.frame();
+    near(rig.target(), [64. - 225., 64.]);
+}

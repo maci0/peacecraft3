@@ -5,8 +5,9 @@ returned the first component as red. That exchanged red and blue throughout
 JPEG-backed art: the TFT logo had cyan letters and a warm frame.
 
 `pcx_blp::decode_jpeg` now reorders color components into its RGBA output.
-Four-component alpha textures keep their independent fourth-component alpha;
-non-alpha textures retain the existing black-ink conversion before reordering.
+Four-component streams decode as inverted BGRA, retaining the independent fourth
+component even when the header declares zero alpha bits. The selected client
+uses that component for affected art; the header alone does not discard it.
 Three-component color JPEGs reorder likewise; grayscale and paletted BLPs are
 unchanged. No image names, selected pixels, replacement colors or measured
 artwork values control this conversion.
@@ -32,3 +33,7 @@ measured dimensions, pixel coordinates or the former incorrect blue-color
 expectation. Texture decoding evidence alone does not certify whole-menu
 rendering, lighting or animation fidelity. SKY2 is paletted, so this JPEG fix
 does not address its separate projection and scene-state discrepancies.
+
+The later 13-bit integer transform correction and exact native minimap base-image
+comparison supersede the one-level JPEG rounding residual described above. See
+[current minimap evidence](campaign-minimap.md#live-sight-endpoints-and-jpeg-precision-2026-11-04).

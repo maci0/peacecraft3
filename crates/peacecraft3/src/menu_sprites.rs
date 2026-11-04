@@ -1334,13 +1334,10 @@ pub fn spawn(
             Err(e) => Some(e),
         };
         // Missing/malformed images are admission failures, never silently omitted.
-        let textures = scene::texture_paths(&bytes)?
-            .into_iter()
-            .map(|p| {
-                pcx_gfx::load_image(&read(install, &p, scene::MENU_IMAGE_BYTES)?, &p)
-                    .map_err(|e| fail(e.to_string()))
-            })
-            .collect::<Result<Vec<_>, PanelError>>()?;
+        let textures = scene::load_textures_from_paths(&scene::texture_paths(&bytes)?, |path| {
+            read(install, path, scene::MENU_IMAGE_BYTES).map_err(|error| error.to_string())
+        })
+        .map_err(|error| fail(error.to_string()))?;
         preflight_plans(&path, &bytes, &m, &model, &runtime, &textures, &plans[..2])?;
         let mut navigation_error = navigation_error;
         if plans.len() > 2
@@ -2666,8 +2663,10 @@ mod tests {
         let sources = load(Some(&install), 1).unwrap();
         let expected = sources.len();
         assert!(expected > 0);
+        let mut authored_images = Vec::new();
         for panel in &sources {
             let textures = scene::load_textures(Some(&install), &panel.bytes);
+            authored_images.extend(textures.iter().map(crate::menu_composition::image));
             for scope in [
                 SoundScope::Startup,
                 SoundScope::MainSingle,
@@ -2713,6 +2712,23 @@ mod tests {
         .unwrap();
         world.flush();
         assert_eq!(count, expected);
+        assert!(
+            authored_images
+                .iter()
+                .any(|image| image.texture_descriptor.mip_level_count > 1),
+            "selected original panel inputs must exercise authored mip chains"
+        );
+        for (_, actual) in images.iter() {
+            assert!(
+                authored_images.iter().any(|expected| {
+                    actual.texture_descriptor.size == expected.texture_descriptor.size
+                        && actual.texture_descriptor.mip_level_count
+                            == expected.texture_descriptor.mip_level_count
+                        && actual.data == expected.data
+                }),
+                "panel GPU image must retain every authored mip byte"
+            );
+        }
         let panels = world.resource::<MenuPanels>();
         assert_eq!(panels.panels.len(), expected);
         assert!(panels.panels.iter().all(|p| !p.geosets.handles.is_empty()));

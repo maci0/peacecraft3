@@ -171,9 +171,9 @@ fn checkbox_and_slider_restricted_profiles_preserve_raw_units() {
         (b"", None),
         (b"\xff", None),
     ] {
-        let s = snapshot("TooltipsCheckBox", "tooltips", raw, "CHECKBOX", "A");
+        let s = snapshot("HealthBarsCheckBox", "healthbars", raw, "CHECKBOX", "A");
         assert_eq!(
-            s.value("TooltipsCheckBox").and_then(|v| v.checkbox),
+            s.value("HealthBarsCheckBox").and_then(|v| v.checkbox),
             expected
         );
     }
@@ -247,9 +247,9 @@ fn source_replacement_and_unavailable_reset_art_without_behavior() {
     attach(
         &mut world.commands(),
         owner,
-        "TooltipsCheckBox",
+        "HealthBarsCheckBox",
         &w,
-        &snapshot("TooltipsCheckBox", "tooltips", b"1", "CHECKBOX", "A"),
+        &snapshot("HealthBarsCheckBox", "healthbars", b"1", "CHECKBOX", "A"),
     );
     world.flush();
     assert!(world.get::<Checked>(owner).is_some());
@@ -262,9 +262,9 @@ fn source_replacement_and_unavailable_reset_art_without_behavior() {
     attach(
         &mut world.commands(),
         owner,
-        "TooltipsCheckBox",
+        "HealthBarsCheckBox",
         &w,
-        &snapshot("TooltipsCheckBox", "tooltips", b"0", "CHECKBOX", "B"),
+        &snapshot("HealthBarsCheckBox", "healthbars", b"0", "CHECKBOX", "B"),
     );
     world.flush();
     assert!(world.get::<Checked>(owner).is_none());
@@ -346,7 +346,7 @@ fn genuine_event_handlers_cannot_mutate_disabled_preview_settings() {
         .spawn((
             Button,
             crate::menu_screens::SettingControl {
-                name: "TooltipsCheckBox".into(),
+                name: "HealthBarsCheckBox".into(),
                 widget: Widget::Checkbox,
             },
         ))
@@ -354,9 +354,9 @@ fn genuine_event_handlers_cannot_mutate_disabled_preview_settings() {
     attach(
         &mut app.world_mut().commands(),
         checkbox,
-        "TooltipsCheckBox",
+        "HealthBarsCheckBox",
         &Widget::Checkbox,
-        &snapshot("TooltipsCheckBox", "tooltips", b"1", "CHECKBOX", "A"),
+        &snapshot("HealthBarsCheckBox", "healthbars", b"1", "CHECKBOX", "A"),
     );
     app.world_mut().flush();
     let sw = widget("GammaSlider", "SLIDER");
@@ -535,7 +535,7 @@ fn actual_label_consumer_shows_parsed_preview_without_draft_selection() {
 
 #[test]
 fn notice_error_priority_and_idle_restore_are_explicit() {
-    let s = snapshot("TooltipsCheckBox", "tooltips", b"1", "CHECKBOX", "A");
+    let s = snapshot("HealthBarsCheckBox", "healthbars", b"1", "CHECKBOX", "A");
     let c = Control {
         popup: None,
         available: true,
@@ -576,15 +576,7 @@ fn all_retained_disabled_joins_are_source_derived() {
         ("OcclusionMenu", "occlusion", "POPUPMENU"),
         ("ChatSupportMenu", "chatsupport", "POPUPMENU"),
         ("ProviderMenu", "provider", "POPUPMENU"),
-        ("MouseScrollSlider", "mousescroll", "SLIDER"),
-        ("KeyScrollSlider", "keyscroll", "SLIDER"),
         ("GammaSlider", "gamma", "SLIDER"),
-        (
-            "MouseScrollDisableCheckBox",
-            "mousescrolldisable",
-            "CHECKBOX",
-        ),
-        ("TooltipsCheckBox", "tooltips", "CHECKBOX"),
         ("HealthBarsCheckBox", "healthbars", "CHECKBOX"),
         ("SubgroupCheckBox", "subgrouporder", "CHECKBOX"),
         ("FormationToggleCheckBox", "formationtoggle", "CHECKBOX"),
@@ -644,22 +636,22 @@ fn optional_discovery_failure_and_exact_synthetic_client_callback_are_separate()
     let absent = super::super::source_preview(
         Some(&temp.0),
         true,
-        [("TooltipsCheckBox", &w)],
+        [("HealthBarsCheckBox", &w)],
         Some(""),
         "A".into(),
     );
     assert!(absent.identity.is_none());
-    let (image, _, _) = named_fixture(0x300000, 7, "tooltips", "unused", b"1", b"0");
+    let (image, _, _) = named_fixture(0x300000, 7, "healthbars", "unused", b"1", b"0");
     std::fs::write(temp.0.join("Warcraft III.exe"), &image).unwrap();
     let ready = super::super::source_preview(
         Some(&temp.0),
         true,
-        [("TooltipsCheckBox", &w)],
+        [("HealthBarsCheckBox", &w)],
         Some(""),
         "B".into(),
     );
     assert_eq!(
-        ready.value("TooltipsCheckBox").unwrap().checkbox,
+        ready.value("HealthBarsCheckBox").unwrap().checkbox,
         Some(true)
     );
     assert!(ready.matches("B"));
@@ -671,14 +663,14 @@ fn optional_discovery_failure_and_exact_synthetic_client_callback_are_separate()
     let malformed = super::super::source_preview(
         Some(&temp.0),
         true,
-        [("TooltipsCheckBox", &w)],
+        [("HealthBarsCheckBox", &w)],
         Some(""),
         "C".into(),
     );
     assert!(malformed.identity.is_none());
     assert!(
         malformed
-            .description("TooltipsCheckBox")
+            .description("HealthBarsCheckBox")
             .contains("could not be admitted")
     );
     // The optional API returns a display status, not an audio/preference error.

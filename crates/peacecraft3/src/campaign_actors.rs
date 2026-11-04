@@ -2474,6 +2474,7 @@ mod tests {
             executed_owner: 0,
             owner: id,
             vision_viewers: Vec::new(),
+            sight: None,
             team_color: None,
             vertex_color: None,
             definition_revision: 0,

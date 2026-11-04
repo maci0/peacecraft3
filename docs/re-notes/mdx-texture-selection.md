@@ -103,3 +103,40 @@ are hosted. The browser evidence is for this local repack, not retail installer
 or native rendering parity. Sky projection, the uncovered black region,
 TXAN translation, particles, broader material fidelity and panel screen
 transition timelines remain open.
+
+
+## Panel mip retention (2026-11-04)
+
+The original-menu panel spawn path still called the base-only image decoder,
+while background/model and particle upload paths already retained authored mips.
+That discarded supplied lower levels before the renderer could sample them.
+Panel preparation now reuses `load_textures_from_paths`, preserving each BLP
+level and its alpha through the existing GPU uploader. The shared loader
+validates every mip and bounds aggregate decoded bytes before admission; no
+levels are regenerated and no sampler policy is guessed.
+
+The explicit original TFT panel test derives expected images from the supplied
+BLPs and checks uploaded dimensions, level count and every byte against them. It
+fails on the old panel path. Synthetic shared-loader checks separately cover
+authored distinct mip pixels, alpha, malformed lower levels and total budgets.
+Retaining the authored levels is not proof of original-client LOD selection or
+GPU filtering equivalence. No original data is committed.
+
+The retained before/after runs are under `.scratch/render-precision-20261104`: the
+original panel regression fails before and passes after the shared-loader change.
+All 70 graphics-library tests and 681 application tests pass (one and 74 explicit
+input/GPU tests ignored respectively). Two isolated GPU text alpha/sampler tests
+and the geometry/particle/UI working-channel test pass. Strict native all-target
+Clippy and the full WASM application build pass with warnings denied. These
+checks revalidate existing behavior; they do not establish complete native
+filtering, blending or font-raster parity.
+
+Final native and full WASM application builds, strict WASM Clippy and formatting
+also pass. The explicit original JPEG fourth-component-alpha test passes. Two
+headless muted production captures match all five published states and hold all
+26 acquisition clocks. The main-menu mip change affects 13,909 pixels; chapter
+selection and the campaign states retain their previous hashes. The full-screen
+campaign comparison remains 972,999 differing pixels, with no masks, resizing or
+tolerance. Screenshot/source provenance is refreshed. Native LOD selection,
+compressed-texture interpolation and general GPU filtering equivalence have not
+been newly established by these checks.

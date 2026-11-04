@@ -415,11 +415,12 @@ pub fn supported(name: &str) -> bool {
     matches!(
         name,
         "ResolutionMenu"
+            | "TooltipsCheckBox"
             | "SoundVolumeSlider"
             | "MusicVolumeSlider"
             | "SoundCheckBox"
             | "MusicCheckBox"
-    )
+    ) || crate::menu_settings::camera::supports(name)
 }
 
 #[derive(Component)]

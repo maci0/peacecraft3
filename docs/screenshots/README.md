@@ -84,3 +84,32 @@ change; full-screen differences fall by 1,138 to 974,859, with mean channel erro
 11.652511. Upkeep and 13 panel text regions remain exact. Remembered visibility,
 special overlays, outline rasterization and native tick identity remain open.
 See [sight integration](../re-notes/campaign-minimap.md#native-sight-lattice-integration-2026-11-04).
+
+
+The latest captures include live day/night sight endpoints and a corrected
+13-bit JPEG transform in the existing Rust decoder. The minimap base matches all
+65,536 native RGBA pixels; current visibility matches all 1,209 native cells and
+heights match all 12,288 cells. Against a newly acquired native reference, the
+fresh baseline has 974,765 differing full-screen pixels and these changes reduce
+that to 972,999 (MAE 11.609237). Earlier comparisons used a different reference.
+The full frame still includes every differing pixel. Both fresh runs match five
+published states and hold all 26 acquisition clocks. Explored history has 23
+missing cells; marker memory, outline geometry/rasterization and cross-client
+clock identity remain open. The base-image result does not establish final
+minimap parity. See [current evidence](../re-notes/campaign-minimap.md#live-sight-endpoints-and-jpeg-precision-2026-11-04).
+
+Menu panel models now retain their authored BLP mip chains through GPU upload,
+using the same bounded loader as other model textures. The original-panel byte
+regression fails before and passes after. Two fresh captures match five states
+with all 26 clocks held. This changes 13,909 main-menu pixels; chapter/gameplay
+frames retain their previous hashes. Native LOD/filter parity remains unqualified.
+See [panel mip evidence](../re-notes/mdx-texture-selection.md#panel-mip-retention-2026-11-04).
+
+The latest minimap outline uses the finite source frustum after camera projection
+refresh and aliased pixel spans instead of a UI border. All 97 outline pixels
+match the retained native frame. Only 141 recreation pixels change; full-screen
+differences fall by 116 to 972,883, with mean channel error 11.583758409288194.
+The full frame still counts every differing pixel. Two fresh captures match all
+five states and hold all 26 clocks; fog grids and CPU minimap bytes are unchanged.
+Other camera states/resolutions, explored history and native tick identity remain
+open. See [outline evidence](../re-notes/campaign-minimap.md#finite-outline-frustum-and-aliased-line-coverage-2026-11-04).

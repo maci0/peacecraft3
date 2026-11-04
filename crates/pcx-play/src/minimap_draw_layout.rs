@@ -240,6 +240,8 @@ pub struct Draw {
     pub marker_sides: [u32; 2],
     /// Camera outline RGB; its alpha is the control's alpha.
     pub outline_rgb: [u8; 3],
+    /// Minimum near/far height separation accepted by the camera outline clipper.
+    pub outline_minimum_separation: f64,
 }
 
 impl Draw {
@@ -673,6 +675,15 @@ impl Draw {
             return Err("minimap outline alpha operand".into());
         }
         let [_, red, green, blue] = rgb.to_be_bytes();
+        let address = imm(read, 0x63ffab, &[0xf2, 0x0f, 0x10, 0x0d])?;
+        let outline_minimum_separation = f64::from_le_bytes(
+            read(address, 8, false)?
+                .try_into()
+                .map_err(|_| "minimap outline separation size")?,
+        );
+        if !outline_minimum_separation.is_finite() || outline_minimum_separation <= 0. {
+            return Err("invalid minimap outline separation".into());
+        }
 
         Ok(Self {
             origin,
@@ -691,6 +702,7 @@ impl Draw {
             },
             marker_sides,
             outline_rgb: [red, green, blue],
+            outline_minimum_separation,
         })
     }
 }
@@ -794,6 +806,8 @@ mod tests {
             &[0x0f, 0xb6, 0x87, 0xb4, 0, 0, 0, 0xc1, 0xe0, 0x18],
         );
         op(&mut d, 0x640680, &[0x0d], 0x0012_3456);
+        op(&mut d, 0x63ffab, &[0xf2, 0x0f, 0x10, 0x0d], 0x2400);
+        put(&mut d, 0x2400, &0.125f64.to_le_bytes());
         for (site, reg) in [
             (0x657496, 0xe0),
             (0x6574d0, 0xe0),
@@ -972,6 +986,12 @@ mod tests {
         );
         assert_eq!(draw.marker_sides, [4, 8]);
         assert_eq!(draw.outline_rgb, [0x12, 0x34, 0x56]);
+        assert_eq!(draw.outline_minimum_separation, 0.125);
+        let mut changed = fixture();
+        put(&mut changed, 0x2400, &0.375f64.to_le_bytes());
+        assert_eq!(decode(&changed).unwrap().outline_minimum_separation, 0.375);
+        put(&mut changed, 0x2400, &f64::NAN.to_le_bytes());
+        assert!(decode(&changed).is_err());
     }
 
     #[test]

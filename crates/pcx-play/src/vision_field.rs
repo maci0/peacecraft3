@@ -2,14 +2,10 @@
 //! cells. Fog and mask switches are applied by [`present_vision`] and do not
 //! write exploration.
 //!
-//! Pitch and extent come from the admitted placement grid, including a final
-//! partial cell so the source extent is not truncated. This is a recreation
-//! sample, not a traced native fog lattice. Terrain and tree occlusion are
-//! applied by the [`OcclusionInput`] pass below (height-lerp ray-march over the
-//! admitted heightfield plus analytic tree discs); every unqualified choice in
-//! that pass is labelled a recreation choice. Script queries, world actor fog,
-//! picking, and combat acquisition are not wired here; they should call
-//! [`ObjectHost::vision_cell`] instead of rebuilding sight circles.
+//! Campaigns with selected client rules use its lattice, height plane and
+//! predecessor graph. Other callers retain the labelled height/ray approximation.
+//! Exploration and the public cell queries share this ledger; presentation
+//! switches do not write explored history.
 use super::{Error, Failure, ObjectHost, VisionShape, VisionSource, VisionState};
 use pcx_script::HandleId;
 use std::{
@@ -1433,6 +1429,7 @@ impl ObjectHost {
         }
         if let Some(rules) = self.native_sight.clone() {
             let mut work = crate::native_sight::Work::new(work_limit);
+            let sight_updates = self.native_sight_updates(night, &mut work).map_err(fail)?;
             let heights = self.native_height_grid(&rules, &mut work).map_err(fail)?;
             let mut unblocked = std::collections::BTreeSet::new();
             for (viewer, sources) in &mut plans {
@@ -1467,6 +1464,7 @@ impl ObjectHost {
                 )
                 .map_err(fail)?;
             *vision.radii = radii.retained();
+            self.commit_native_sight_updates(sight_updates)?;
             return Ok(stats);
         }
         let occlusion_store = self.occlusion_store()?;

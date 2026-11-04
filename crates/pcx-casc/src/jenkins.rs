@@ -7,6 +7,7 @@ pub(crate) fn hash(data: &[u8], primary: u32, secondary: u32) -> (u32, u32) {
     let (mut a, mut b, mut c) = (seed, seed, seed.wrapping_add(secondary));
     let mut remaining = data;
     while remaining.len() > 12 {
+        // `remaining.len() > 12` proves each 4-byte slice below is in bounds.
         a = a.wrapping_add(u32::from_le_bytes(remaining[..4].try_into().unwrap()));
         b = b.wrapping_add(u32::from_le_bytes(remaining[4..8].try_into().unwrap()));
         c = c.wrapping_add(u32::from_le_bytes(remaining[8..12].try_into().unwrap()));

@@ -1,25 +1,47 @@
 //! Camera view outline over the minimap image.
 //!
-//! The client intersects the view frustum's four near-to-far edges with the horizontal plane
-//! through the camera target, takes the bounding box of the intersection points and draws
-//! its size around the target as a one-pixel line loop in the control's alpha and an RGB
-//! operand of the draw method (`0x63fd30`, `0x640676`), clipped to the control.
+//! The client clips finite frustum edges with its signed near-minus-far operation,
+//! measures their bounds and draws those extents around the mapped camera target
+//! (`0x63fd30`). Preserve that operation rather than substituting ray intersection.
 use super::*;
-use bevy::ui::UiRect;
 use peacecraft3::campaign_camera::CampaignSceneCamera;
 
 #[derive(Component)]
 pub(super) struct Outline;
 
-/// A pixel-wide outline: its width belongs to the screen, not to the minimap's scale.
-const LINE_WIDTH: Val = Val::Px(1.);
+#[derive(Component)]
+pub(super) struct OutlineLine(usize);
 
-/// Where a ray meets the plane at `plane_y`, if it runs down through it.
-fn meets_plane(origin: Vec3, direction: Vec3, plane_y: f32) -> Option<Vec3> {
-    if direction.y >= 0. || origin.y <= plane_y {
+// Aliased line coverage uses integer pixel centers and the diamond-exit rule.
+fn line_span(start: f64, end: f64, fixed: f64, horizontal: bool) -> Option<[f32; 4]> {
+    let row = (fixed + 0.5).floor();
+    let radius = 0.5 - (fixed - row).abs();
+    let (first, last) = if end > start {
+        ((start - radius).floor() + 1., (end - radius).ceil() - 1.)
+    } else if start > end {
+        ((end + radius).floor() + 1., (start + radius).floor())
+    } else {
+        return None;
+    };
+    if last < first || ![first, last, row].into_iter().all(f64::is_finite) {
         return None;
     }
-    Some(origin + direction * ((plane_y - origin.y) / direction.y))
+    Some(if horizontal {
+        [first as f32, row as f32, (last - first + 1.) as f32, 1.]
+    } else {
+        [row as f32, first as f32, 1., (last - first + 1.) as f32]
+    })
+}
+
+fn line_rects([x, y, width, height]: [f32; 4]) -> [Option<[f32; 4]>; 4] {
+    let [x, y, width, height] = [x, y, width, height].map(f64::from);
+    let (right, bottom) = (x + width, y + height);
+    [
+        line_span(y, bottom, x, false),
+        line_span(x, right, bottom, true),
+        line_span(bottom, y, right, false),
+        line_span(right, x, y, true),
+    ]
 }
 
 /// Height of the plane through the camera's target, which lies on the optical axis.
@@ -34,19 +56,36 @@ fn target_plane(eye: Vec3, forward: Vec3, target: [f32; 2]) -> Option<f32> {
     (forward.x.hypot(forward.z) > f32::EPSILON && y.is_finite()).then_some(y)
 }
 
-/// World-space `[min, max]` of the corner rays' plane hits. World Y is Bevy's negated Z.
-fn ground_box(rays: [(Vec3, Vec3); 4], plane_y: f32) -> Option<[[f32; 2]; 2]> {
+/// Source-clipped world-space bounds; source world Y is Bevy's negated Z.
+fn ground_box(corners: [Vec3; 8], plane_y: f32, minimum_separation: f64) -> Option<[[f32; 2]; 2]> {
+    if !plane_y.is_finite() || corners.iter().any(|point| !point.is_finite()) {
+        return None;
+    }
     let mut low = [f32::INFINITY; 2];
     let mut high = [f32::NEG_INFINITY; 2];
-    for (origin, direction) in rays {
-        let hit = meets_plane(origin, direction, plane_y)?;
-        let point = [hit.x, -hit.z];
+    for (near, mut far) in corners[..4].iter().zip(corners[4..].iter().copied()) {
+        let delta = near.y - far.y;
+        if near.y > plane_y && far.y < plane_y && f64::from(delta).abs() >= minimum_separation {
+            let phase = (near.y - plane_y) / delta;
+            // The source adds near-minus-far; ordinary ray intersection reverses this sign.
+            far = *near + (*near - far) * phase;
+        }
+        let point = [far.x, -far.z];
         for axis in 0..2 {
             low[axis] = low[axis].min(point[axis]);
             high[axis] = high[axis].max(point[axis]);
         }
     }
     (low.iter().chain(&high).all(|v| v.is_finite())).then_some([low, high])
+}
+
+fn edge_visibility(centre: [f64; 2], half: [f64; 2], dimensions: [u32; 2]) -> [bool; 4] {
+    [
+        centre[0] - half[0] > 0.,
+        centre[1] + half[1] < f64::from(dimensions[1]),
+        centre[0] + half[0] < f64::from(dimensions[0]),
+        centre[1] - half[1] > 0.,
+    ]
 }
 
 /// Left, top, width and height as fractions of the image, clipped to it.
@@ -75,16 +114,17 @@ pub(super) fn update(
     mut state: ResMut<CampaignMinimap>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     camera: Res<CampaignCamera>,
-    cameras: Query<(&Camera, &GlobalTransform), With<CampaignSceneCamera>>,
-    mut outlines: Query<(&mut Node, &mut BorderColor), With<Outline>>,
+    cameras: Query<(&GlobalTransform, &Projection), With<CampaignSceneCamera>>,
+    ui_camera: Query<&Camera, With<peacecraft3::campaign_presentation::CampaignUiCamera>>,
+    mut lines: Query<(&OutlineLine, &mut Node, &mut BackgroundColor)>,
 ) {
-    let Some(parent) = state.surface else {
+    let Some(parent) = state.root else {
         return;
     };
     let Some(rgb) = state.outline_rgb else {
         return;
     };
-    let rect = (|| -> Option<[f32; 4]> {
+    let plan = (|| {
         if !state.shown || !camera.active() {
             return None;
         }
@@ -96,87 +136,102 @@ pub(super) fn update(
                 .applied_camera_setup()
                 .map(|view| [view.destination.x, view.destination.y])
         })?;
-        let (view, transform) = cameras.get(camera.entity?).ok()?;
-        let size = view.logical_viewport_size()?;
-        let mut rays = [(Vec3::ZERO, Vec3::ZERO); 4];
-        for (ray, corner) in rays.iter_mut().zip([
-            Vec2::ZERO,
-            Vec2::new(size.x, 0.),
-            size,
-            Vec2::new(0., size.y),
-        ]) {
-            let cast = view.viewport_to_world(transform, corner).ok()?;
-            *ray = (cast.origin, cast.direction.as_vec3());
-        }
+        let (transform, projection) = cameras.get(camera.entity?).ok()?;
+        let near = match projection {
+            Projection::Perspective(p) => p.near,
+            Projection::Custom(p) => p
+                .get::<peacecraft3::campaign_camera::SourceProjection>()?
+                .near(),
+            Projection::Orthographic(_) => return None,
+        };
+        let corners = projection
+            .get_frustum_corners(-near, -projection.far())
+            .map(|point| transform.transform_point(Vec3::from(point)));
         let plane = target_plane(
             transform.translation(),
             transform.forward().as_vec3(),
             [target[0], -target[1]],
         )?;
-        let [low, high] = ground_box(rays, plane)?;
+        let [low, high] = ground_box(corners, plane, state.outline_minimum_separation?)?;
         let [x0, y0] = fog.raster.pixel_of(bounds, low).ok()?;
         let [x1, y1] = fog.raster.pixel_of(bounds, high).ok()?;
         let centre = fog.raster.pixel_of(bounds, target).ok()?;
-        clip(
-            centre,
-            [(x1 - x0).abs() * 0.5, (y1 - y0).abs() * 0.5],
-            [fog.width, fog.height],
-        )
+        let half = [(x1 - x0).abs() * 0.5, (y1 - y0).abs() * 0.5];
+        let edges = edge_visibility(centre, half, [fog.width, fog.height]);
+        let [left, top, width, height] = clip(centre, half, [fog.width, fog.height])?;
+        let mapping = fog.mapping.as_ref()?;
+        // Stroke width follows the HUD target, independently of internal world resolution.
+        let extent = ui_camera.single().ok()?.physical_target_size()?.as_vec2();
+        if extent.min_element() <= 0. {
+            return None;
+        }
+        let scale = extent / Vec2::from(mapping.viewport);
+        let frame = mapping.frame;
+        let rect = [
+            (frame.x + left * frame.width) * scale.x,
+            (mapping.viewport[1] - frame.y - frame.height + top * frame.height) * scale.y,
+            width * frame.width * scale.x,
+            height * frame.height * scale.y,
+        ];
+        let mut lines = line_rects(rect);
+        for (line, visible) in lines.iter_mut().zip(edges) {
+            if !visible {
+                *line = None;
+            }
+        }
+        Some((lines, extent))
     })();
-    let color = BorderColor::all(crate::menu_composition::colour_u8(
-        rgb[0],
-        rgb[1],
-        rgb[2],
-        u8::MAX,
-    ));
-    let Some(entity) = state.outline else {
-        let entity = commands
+    let color = crate::menu_composition::colour_u8(rgb[0], rgb[1], rgb[2], u8::MAX);
+    if state.outline.is_none() {
+        let root = commands
             .spawn((
                 Outline,
                 ZIndex(2),
                 Node {
                     position_type: PositionType::Absolute,
-                    display: Display::None,
-                    border: UiRect::all(LINE_WIDTH),
+                    width: Val::Percent(100.),
+                    height: Val::Percent(100.),
                     ..default()
                 },
-                color,
                 Pickable::IGNORE,
                 ChildOf(parent),
             ))
             .id();
-        state.outline = Some(entity);
-        return;
-    };
-    let Ok((mut node, mut border)) = outlines.get_mut(entity) else {
-        return;
-    };
-    *border = color;
-    match rect {
-        Some([left, top, width, height]) => {
-            node.display = Display::Flex;
-            node.left = Val::Percent(left * 100.);
-            node.top = Val::Percent(top * 100.);
-            node.width = Val::Percent(width * 100.);
-            node.height = Val::Percent(height * 100.);
+        for index in 0..4 {
+            commands.spawn((
+                OutlineLine(index),
+                Node {
+                    position_type: PositionType::Absolute,
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(color),
+                Pickable::IGNORE,
+                ChildOf(root),
+            ));
         }
-        None => node.display = Display::None,
+        state.outline = Some(root);
+        return;
+    }
+    for (line, mut node, mut background) in &mut lines {
+        background.0 = color;
+        if let Some((rects, extent)) = &plan
+            && let Some([left, top, width, height]) = rects[line.0]
+        {
+            node.display = Display::Flex;
+            node.left = Val::Percent(left / extent.x * 100.);
+            node.top = Val::Percent(top / extent.y * 100.);
+            node.width = Val::Percent(width / extent.x * 100.);
+            node.height = Val::Percent(height / extent.y * 100.);
+        } else {
+            node.display = Display::None;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rays_meet_the_plane_only_when_they_run_down_through_it() {
-        let down = Vec3::new(0.5, -1., 0.);
-        let hit = meets_plane(Vec3::new(1., 9., 2.), down, 3.).unwrap();
-        assert_eq!(hit, Vec3::new(4., 3., 2.));
-        assert!(meets_plane(Vec3::new(0., 2., 0.), down, 3.).is_none());
-        assert!(meets_plane(Vec3::new(0., 9., 0.), Vec3::X, 3.).is_none());
-        assert!(meets_plane(Vec3::new(0., 9., 0.), Vec3::Y, 3.).is_none());
-    }
 
     #[test]
     fn the_plane_passes_through_the_target_on_the_optical_axis() {
@@ -193,20 +248,43 @@ mod tests {
     }
 
     #[test]
-    fn the_ground_box_is_the_corner_hits_in_world_axes_and_needs_all_four() {
-        let eye = Vec3::new(0., 10., 0.);
-        let rays = [
-            (eye, Vec3::new(-1., -1., -2.)),
-            (eye, Vec3::new(3., -1., -2.)),
-            (eye, Vec3::new(3., -1., -1.)),
-            (eye, Vec3::new(-1., -1., -1.)),
-        ];
-        // Hits at plane height 4 (t = 6): x from -6 to 18, Bevy z from -12 to -6.
-        assert_eq!(ground_box(rays, 4.), Some([[-6., 6.], [18., 12.]]));
-        let mut up = rays;
-        up[2].1 = Vec3::new(3., 1., -1.);
-        assert_eq!(ground_box(up, 4.), None);
-        assert_eq!(ground_box(rays, 11.), None);
+    fn aliased_lines_keep_directional_endpoint_coverage() {
+        assert_eq!(line_span(1.6, 7.2, 2.3, true), Some([2., 2., 5., 1.]));
+        assert_eq!(line_span(7.2, 1.6, 2.3, true), Some([2., 2., 6., 1.]));
+        assert_eq!(line_span(7.2, 1.6, 2.3, false), Some([2., 2., 1., 6.]));
+        assert_eq!(line_span(2., 2., 2., true), None);
+        assert_eq!(line_span(f64::NAN, 3., 2., true), None);
+        assert!(
+            line_rects([1.6, 2.3, 5.6, 4.5])
+                .into_iter()
+                .all(|line| line.is_some())
+        );
+    }
+
+    #[test]
+    fn source_signed_clip_preserves_finite_far_corners_and_height_gate() {
+        let near = Vec3::new(2., 10., -3.);
+        let far = Vec3::new(8., -2., -9.);
+        let corners = [near, near, near, near, far, far, far, far];
+        assert_eq!(ground_box(corners, 4., 0.125), Some([[-1., 0.], [-1., 0.]]));
+        assert_eq!(ground_box(corners, 4., 13.), Some([[8., 9.], [8., 9.]]));
+        assert_eq!(ground_box(corners, 11., 0.125), Some([[8., 9.], [8., 9.]]));
+        assert_eq!(ground_box(corners, -3., 0.125), Some([[8., 9.], [8., 9.]]));
+        assert_eq!(ground_box([Vec3::NAN; 8], 4., 0.125), None);
+    }
+
+    #[test]
+    fn clipped_sides_do_not_create_edges_on_the_map_boundary() {
+        assert_eq!(edge_visibility([8., 4.], [2., 1.], [16, 8]), [true; 4]);
+        assert_eq!(
+            edge_visibility([1., 1.], [3., 2.], [16, 8]),
+            [false, true, true, false]
+        );
+        assert_eq!(
+            edge_visibility([15., 7.], [3., 2.], [16, 8]),
+            [true, false, false, true]
+        );
+        assert_eq!(edge_visibility([8., 4.], [8., 4.], [16, 8]), [false; 4]);
     }
 
     #[test]

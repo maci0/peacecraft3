@@ -104,6 +104,7 @@ pub(crate) struct CampaignMinimap {
     markers: Option<Result<markers::Markers, String>>,
     outline: Option<Entity>,
     outline_rgb: Option<[u8; 3]>,
+    outline_minimum_separation: Option<f64>,
     pending_pointer: VecDeque<MinimapPress>,
     drag: Option<Entity>,
     load_error: Option<String>,
@@ -126,6 +127,9 @@ impl CampaignMinimap {
 }
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 impl CampaignMinimap {
+    pub(crate) fn diagnostic_outline(&self) -> Option<(Entity, [f32; 2])> {
+        Some((self.outline?, self.fog.as_ref()?.mapping.as_ref()?.viewport))
+    }
     pub(crate) fn diagnostic_image(&self) -> Option<Handle<Image>> {
         self.image.clone()
     }
@@ -156,11 +160,10 @@ pub(crate) fn install(app: &mut App) {
                 .before(CampaignPresentationSet),
         )
         .add_systems(
-            Update,
+            PostUpdate,
             outline::update
-                .after(project)
-                .before(crate::campaign_hud::CampaignHudSet)
-                .before(CampaignPresentationSet),
+                .after(bevy::camera::CameraUpdateSystems)
+                .before(bevy::ui::UiSystems::Prepare),
         )
         .add_systems(
             Update,
@@ -791,6 +794,7 @@ fn project(
         }
     };
     state.outline_rgb = Some(draw.outline_rgb);
+    state.outline_minimum_separation = Some(draw.outline_minimum_separation);
     let fog_fraction_bits = draw.fog_fraction_bits;
     state.markers = input
         .sources

@@ -1,5 +1,24 @@
 # PeaceCraft3 — Tracker
 
+All-menu completion requires every control wired and every source-supported state
+verified against synchronized original full frames. The current gaps are listed in
+[menu acceptance](docs/menu-acceptance.md). Campaign progression follows that work.
+
+- [~] Enhanced Tooltips now has a source-derived interactive Gameplay checkbox,
+  Apply/Cancel and persisted reload. The shared HUD tooltip owner consumes only
+  applied state, including updates while already hovered. Full menu functionality
+  and pixel parity remain open; see [tooltip connection](docs/re-notes/held-inventory-presentation.md#gameplay-checkbox-connection-2026-11-05).
+
+- [~] Menu functionality: Gameplay mouse/keyboard scroll sliders and Disable Mouse
+  Scroll now use the selected executable's defaults and authored FDF domains.
+  Apply updates campaign camera behavior and persists; Cancel leaves the camera
+  unchanged. Reinitializing source audio retains these preferences. Non-display
+  Apply no longer requires native window-size confirmation. Synthetic tests cover
+  draft isolation, persistence and keyboard/edge movement; the isolated rendered
+  menu gate covers Cancel/Apply/reload. Remaining Gameplay/video/sound controls,
+  Credits/Battle.net and disabled in-game menu routes are still open. See
+  [camera preferences](docs/re-notes/input-camera.md#gameplay-preferences-connection-2026-11-04).
+
 - [~] Campaign loading screen parity. Colour is qualified: the screen's cameras
   carry the menu working channels and the offscreen capture targets `Rgba8Unorm`,
   the same space as the menu captures. An original capture can be compared with
@@ -6910,3 +6929,49 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   ledger exactly. Trace `67c490 -> 69e130` active sight before changing the rule;
   no tower-specific correction was added. Exploration also has six missing cells
   against the separately paused native snapshot; native tick identity is open.
+
+
+- 2026-11-04: Follow-up minimap fixes retain native numeric residue in completed
+  day/night sight transitions, derived from selected-client duration operands and
+  authored profiles. All 1,209 current visibility cells now match native exactly;
+  heights still match all 12,288 cells. Corrected full-size JPEG IDCT precision in
+  the existing Rust decoder: all 65,536 minimap base RGBA pixels match native.
+  No native imaging dependency added. Two independent captures match five states
+  with all 26 acquisition clocks held. A new native reference is used because
+  earlier local evidence was cleaned: fresh baseline 974,765 differing full-frame
+  pixels, now 972,999, MAE 11.609236924913194. Full diff/mask/overlay/side-by-side
+  remain local. Explored history still lacks 23 cells; intermediate sight timing,
+  marker memory, outline geometry/rasterization and native tick/RNG identity stay
+  open. Task 1c8480fb-c63d-4aec-a970-9eecd2a26915 remains active.
+  Validation: 2,499 gameplay tests pass (98 explicit original-input ignores),
+  six sight tests including native properties pass, and decoder/BLP/native-base
+  checks pass. Strict native/WASM Clippy and native/full-WASM application builds
+  pass with warnings denied; formatting and provenance hashes verified.
+
+- 2026-11-04: Rendering precision follow-up finds menu panels bypassing the
+  shared mipmapped texture loader. Panels now retain authored levels and alpha
+  through GPU upload, using the existing aggregate decode budget and malformed-
+  mip validation. The explicit original TFT regression fails before and passes
+  after, comparing every uploaded mip byte against supplied assets. Seventy
+  graphics and 681 app tests pass; two GPU alpha/sampler tests and one GPU
+  geometry/particle/UI working-color test pass. Existing JPEG alpha, font, sight
+  and particle quantization fixes remain in place. No dependency added. Native
+  LOD/filter equivalence and broader minimap/clock parity remain open.
+  Final native/full-WASM builds, strict native/WASM Clippy and formatting pass.
+  Two fresh offscreen muted captures match five states with 26 held clocks.
+  Main-menu changes 13,909 pixels; chapter and campaign hashes remain unchanged.
+  Screenshot/source provenance refreshed; native LOD/filter parity stays open.
+
+- 2026-11-04: Minimap camera outline now uses finite source clipping and runs
+  after camera projection refresh, before UI preparation. Source-derived minimum
+  height separation and clipped-side suppression replace the ray/border path.
+  Four bounded aliased spans reproduce all 97 outline pixels in the retained
+  native frame. Only 141 recreation pixels change; full-screen differences fall
+  by 116 to 972,883, MAE 11.583758409288194. Fog/height grids and CPU minimap bytes
+  are unchanged. Two fresh captures match five states with all 26 clocks held.
+  The failed initial projection candidate is retained locally. Read-only native
+  camera acquisition was isolated/muted and its container is stopped. All 2,499
+  gameplay and 939 app tests, seven source draw-policy checks, strict native/WASM
+  Clippy, native/full-WASM builds and formatting pass. Screenshots/provenance
+  refreshed. Task 1c8480fb-c63d-4aec-a970-9eecd2a26915 remains open for explored
+  history, marker memory, other native camera/line cases and broader fidelity.

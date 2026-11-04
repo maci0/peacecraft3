@@ -82,6 +82,11 @@ pub(super) fn apply(
     if backend.resize.is_some() {
         return Ok(ApplyOutcome::Pending);
     }
+    if nav.draft.resolution.is_none() {
+        commit(nav, window, backend, save_preferences)?;
+        backend.pending_resolution = None;
+        return Ok(ApplyOutcome::Complete);
+    }
     let current = host(entity)
         .filter(|h| h.size.0 > 0 && h.size.1 > 0)
         .ok_or("The window's client size is unavailable; settings were not saved")?;

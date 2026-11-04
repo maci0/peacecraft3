@@ -147,6 +147,8 @@ pub struct ExecutedUnit {
     pub owner: HandleId,
     /// Explicit UnitShareVision grants, independent of owner alliances.
     pub vision_viewers: Vec<HandleId>,
+    /// Canonical source sight endpoint, retained while hidden or outside viewer plans.
+    pub sight: Option<crate::native_sight::SightState>,
     /// Known team-color identity assigned by a color-changing transfer. Initial
     /// unit color stays unknown until its class/creation color rules are supplied.
     pub team_color: Option<HandleId>,
@@ -2484,6 +2486,23 @@ impl ObjectHost {
             } else {
                 None
             };
+            let sight = if self.native_sight.is_some() {
+                let night = self.vision_is_night().ok_or_else(|| {
+                    fail(Failure::UnitState("native sight creation phase absent"))
+                })?;
+                let radius = super::unit_activity::balance_real(
+                    &definition,
+                    if night { "nsight" } else { "sight" },
+                )
+                .map_err(|e| fail(Failure::UnitActivity(e)))?;
+                Some(crate::native_sight::SightState {
+                    night,
+                    revision: 0,
+                    radius,
+                })
+            } else {
+                None
+            };
             ExecutedUnit {
                 illusion: None,
                 construction: None,
@@ -2495,6 +2514,7 @@ impl ObjectHost {
                 executed_owner: owner_number,
                 owner,
                 vision_viewers: Vec::new(),
+                sight,
                 team_color: None,
                 creation_color: None,
                 vertex_color: None,

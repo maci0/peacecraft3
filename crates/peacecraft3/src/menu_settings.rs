@@ -20,6 +20,9 @@ use std::collections::BTreeMap;
 #[path = "menu_resolution.rs"]
 mod resolution;
 
+#[path = "menu_camera_settings.rs"]
+pub(crate) mod camera;
+
 #[path = "menu_slider.rs"]
 mod slider;
 
@@ -192,16 +195,20 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
         return Err("Saved display dimensions must be positive".into());
     }
     for (name, value) in &settings.values {
-        if !matches!(name.as_str(), "MusicVolumeSlider" | "SoundVolumeSlider") || !value.is_finite()
+        if (!matches!(name.as_str(), "MusicVolumeSlider" | "SoundVolumeSlider")
+            && !camera::scalar(name))
+            || !value.is_finite()
+            || (camera::scalar(name) && camera::units(*value).is_none())
         {
             return Err(format!("Unsupported or invalid saved setting {name}"));
         }
     }
-    if settings
-        .toggles
-        .keys()
-        .any(|name| !matches!(name.as_str(), "MusicCheckBox" | "SoundCheckBox"))
-    {
+    if settings.toggles.keys().any(|name| {
+        !matches!(
+            name.as_str(),
+            "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
+        )
+    }) {
         return Err("Saved settings contain an unsupported toggle".into());
     }
     Ok(())
@@ -331,8 +338,14 @@ fn admit_source_audio(
         toggles.insert("SoundCheckBox".into(), audio.effects_enabled);
     }
     let mut applied = nav.applied.clone();
-    applied.values = values;
-    applied.toggles = toggles;
+    applied
+        .values
+        .retain(|name, _| !matches!(name.as_str(), "MusicVolumeSlider" | "SoundVolumeSlider"));
+    applied.values.extend(values);
+    applied
+        .toggles
+        .retain(|name, _| !matches!(name.as_str(), "MusicCheckBox" | "SoundCheckBox"));
+    applied.toggles.extend(toggles);
     backend.audio = audio;
     backend.ranges = ranges;
     nav.applied = applied;
@@ -531,8 +544,8 @@ pub fn select_offer(nav: &mut Navigation, offer: &OfferedResolution) -> Result<(
     nav.draft.resolution = Some(offer.size);
     Ok(())
 }
-/// Save only after Winit reports the requested client size. This is not a
-/// compositor presentation or physical display-mode acknowledgement.
+/// Resolution requests save only after Winit reports the requested client size.
+/// Other settings need no resize; this is not physical display-mode acknowledgement.
 pub(crate) fn apply(
     entity: Entity,
     nav: &mut Navigation,
@@ -553,6 +566,19 @@ fn prepare(nav: &Navigation, backend: &Backend) -> Result<Prepared, String> {
             && !nav.resolutions.iter().any(|row| row.same_mode(selected))
         {
             return Err("Selected resolution is unavailable on this display".into());
+        }
+    }
+    for (name, value) in &nav.draft.values {
+        if camera::scalar(name)
+            && nav.applied.values.get(name) != Some(value)
+            && backend
+                .ranges
+                .get(name)
+                .is_none_or(|range| !range.valid(*value))
+        {
+            return Err(format!(
+                "{name}: authored camera slider range is not loaded or invalid"
+            ));
         }
     }
     let audio = backend.candidate_audio(&nav.draft, &nav.applied)?;
@@ -586,9 +612,7 @@ fn publish(
     backend.preference_unreadable = None;
     #[cfg(target_arch = "wasm32")]
     if let Err(error) = push_browser_audio(backend.audio) {
-        return Ok(Some(format!(
-            "Settings saved; render size confirmed, but {error}"
-        )));
+        return Ok(Some(format!("Settings saved, but {error}")));
     }
     Ok(None)
 }
@@ -1383,13 +1407,99 @@ fn environment(
     assign_browser_notice(&mut nav, browser_notice);
     choose_offer(&mut nav, policy.as_deref());
 }
+fn attach_tooltip(
+    commands: &mut Commands,
+    entity: Entity,
+    control: &SettingControl,
+    nav: &mut Navigation,
+    seed: bool,
+) -> Result<(), String> {
+    if !matches!(control.widget, Widget::Checkbox) {
+        return Err("incompatible tooltip control".into());
+    }
+    let applied = *nav
+        .applied
+        .toggles
+        .entry(control.name.clone())
+        .or_insert(seed);
+    let draft = *nav
+        .draft
+        .toggles
+        .entry(control.name.clone())
+        .or_insert(applied);
+    commands.entity(entity).insert(Checkbox);
+    if draft {
+        commands.entity(entity).insert(Checked);
+    } else {
+        commands.entity(entity).remove::<Checked>();
+    }
+    Ok(())
+}
 fn attach_controls(
     mut commands: Commands,
     controls: Query<(Entity, &SettingControl), Added<SettingControl>>,
     mut nav: ResMut<Navigation>,
     mut backend: ResMut<Backend>,
+    launcher: Option<Res<crate::launch_gui::Launcher>>,
 ) {
+    let fallback = controls
+        .iter()
+        .any(|(_, c)| camera::supports(&c.name))
+        .then(|| camera::defaults(launcher.as_deref()));
+    let tooltip = controls
+        .iter()
+        .any(|(_, c)| c.name == "TooltipsCheckBox")
+        .then(|| {
+            let install = launcher
+                .as_deref()
+                .and_then(crate::launch_gui::selected_install);
+            crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                crate::campaign_inventory::tooltip_default(
+                    image,
+                    pcx_play::scripts::AssetIdentity {
+                        source: source.into(),
+                        edition: "selected menu client".into(),
+                        version: "reviewed Legacy 1.29.2.9231 inventory tooltip profile".into(),
+                    },
+                )
+            })
+        });
     for (entity, control) in &controls {
+        if control.name == "TooltipsCheckBox" {
+            let result = tooltip
+                .as_ref()
+                .expect("tooltip batch")
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|seed| attach_tooltip(&mut commands, entity, control, &mut nav, *seed));
+            if let Err(error) = result {
+                commands.entity(entity).insert(InteractionDisabled);
+                nav.notice = format!("{}: {error}", control.name);
+            }
+            continue;
+        }
+        if camera::supports(&control.name) {
+            let result = fallback
+                .as_ref()
+                .expect("camera batch")
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|fallback| {
+                    camera::attach(
+                        &mut commands,
+                        entity,
+                        control,
+                        &mut nav,
+                        &mut backend,
+                        fallback,
+                    )
+                });
+            if let Err(error) = result {
+                commands.entity(entity).insert(InteractionDisabled);
+                nav.notice = format!("{}: {error}", control.name);
+            }
+            continue;
+        }
         match &control.widget {
             Widget::Slider {
                 min,
@@ -1498,7 +1608,8 @@ fn slider_changed(
         if !matches!(
             control.name.as_str(),
             "MusicVolumeSlider" | "SoundVolumeSlider"
-        ) || !event.value.is_finite()
+        ) && !camera::scalar(&control.name)
+            || !event.value.is_finite()
         {
             return;
         }
@@ -1521,7 +1632,10 @@ fn checkbox_changed(
     let Ok(control) = controls.get(event.source) else {
         return;
     };
-    if !matches!(control.name.as_str(), "MusicCheckBox" | "SoundCheckBox") {
+    if !matches!(
+        control.name.as_str(),
+        "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
+    ) {
         return;
     }
     nav.draft.toggles.insert(control.name.clone(), event.value);
@@ -1700,6 +1814,54 @@ fn push_browser_audio(audio: AudioSettings) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tooltip_checkbox_draft_cancel_save_and_reload() {
+        let mut world = World::new();
+        let control = SettingControl {
+            name: "TooltipsCheckBox".into(),
+            widget: Widget::Checkbox,
+        };
+        let entity = world.spawn_empty().id();
+        let mut nav = Navigation::default();
+        attach_tooltip(&mut world.commands(), entity, &control, &mut nav, true).unwrap();
+        world.flush();
+        assert!(world.get::<Checked>(entity).is_some());
+        world.entity_mut(entity).insert(control);
+        world.insert_resource(nav);
+        world.insert_resource(Backend::default());
+        world.add_observer(checkbox_changed);
+        world.trigger(ValueChange {
+            source: entity,
+            value: false,
+            is_final: true,
+        });
+        world.flush();
+        let mut nav = world.remove_resource::<Navigation>().unwrap();
+        assert!(nav.applied.toggles["TooltipsCheckBox"]);
+        assert!(!nav.draft.toggles["TooltipsCheckBox"]);
+        nav.action("CancelButton");
+        assert!(nav.draft.toggles["TooltipsCheckBox"]);
+        nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
+        let mut backend = world.remove_resource::<Backend>().unwrap();
+        let mut saved = String::new();
+        commit(&mut nav, &mut Window::default(), &mut backend, |text| {
+            saved = text.into();
+            Ok(())
+        })
+        .unwrap();
+        assert!(!decode_preferences(&saved).unwrap().settings.toggles["TooltipsCheckBox"]);
+        let control = SettingControl {
+            name: "TooltipsCheckBox".into(),
+            widget: Widget::Checkbox,
+        };
+        attach_tooltip(&mut world.commands(), entity, &control, &mut nav, true).unwrap();
+        world.flush();
+        assert!(
+            world.get::<Checked>(entity).is_none(),
+            "saved false overrides source true"
+        );
+    }
+
     use super::*;
     #[test]
     fn unobserved_render_size_is_not_saved_as_applied() {
@@ -2547,5 +2709,21 @@ mod tests {
         );
         assert_eq!(range.value(0.0), range.min);
         assert_eq!(range.value(1.0), range.max);
+    }
+    #[test]
+    fn reactivating_audio_source_preserves_applied_camera_preferences() {
+        let mut nav = Navigation::default();
+        nav.applied.values.insert("KeyScrollSlider".into(), 73.);
+        nav.applied
+            .toggles
+            .insert("MouseScrollDisableCheckBox".into(), true);
+        let mut backend = Backend {
+            loaded: true,
+            ..default()
+        };
+        admit_source_audio(&mut nav, &mut backend, Some(seed(0.25))).unwrap();
+        assert_eq!(nav.applied.values["KeyScrollSlider"], 73.);
+        assert!(nav.applied.toggles["MouseScrollDisableCheckBox"]);
+        assert_eq!(nav.draft, nav.applied);
     }
 }

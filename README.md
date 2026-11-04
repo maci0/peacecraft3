@@ -23,7 +23,7 @@ No Blizzard assets are committed. The game reads them from your own install at r
 
 Captured from PeaceCraft III 0.13.0's Bevy renderer on 4 November 2026 using
 locally supplied Legacy 1.29.2.9231 game assets. Rendering and gameplay remain
-in progress. The minimap now uses source-derived sight spans and occlusion heights;
+in progress. The minimap now uses source-derived live sight, occlusion heights, corrected JPEG precision and native outline coverage;
 [full-screen comparison results](docs/screenshots/README.md) track remaining differences.
 
 **Main menu**

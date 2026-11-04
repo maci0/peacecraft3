@@ -741,3 +741,160 @@ Native sample tick identity is unqualified. The local CPU-image comparison has
 for the complete rendered-frame comparison. Four production runs match all five
 published states and hold their 52 acquisition clocks. Both later source/ledger
 diagnostics leave published screenshot bytes unchanged.
+
+
+## Live sight endpoints and JPEG precision (2026-11-04)
+
+The four tower-radius differences above were not authored overrides. Read-only
+acquisition finds profile sight 1600 (`44c80000`), but the completed live property
+is 1599.9998779296875 (`44c7ffff`). The active getter chain is
+`67c490 -> 69e130 -> 800d80`; `4c3bf0` converts that property to the cached radius.
+The profile reader/setter retains the authored value exactly. Day/night changes
+at `6985e0`/`6987b0` pass their difference through `680530` and numeric division
+`9a02d0`. The duration is initialized at `4015c0`; both division operands at
+`680557`/`68055c` reference that same global. The decoder reads and validates these
+instructions instead of embedding a duration or tower-specific correction.
+
+Native numeric division, multiplication and addition leave a rounding residue
+when the rate is integrated over the completed transition. The recreation now
+retains that property on each unit, including hidden units, and stages updates
+with the vision rebuild. Synthetic tests vary the duration and reciprocal data,
+exercise signed residuals and reject malformed operands. The explicit supplied-
+input test compares completed live properties to profile-derived results.
+Intermediate transition timing is still a recreation shortcut, not qualified
+native behavior; completed endpoints do not establish tick identity.
+
+A separate read-only CMinimap acquisition retains the original base and CPU
+images from the same local Prologue02 map. The base repeats byte-for-byte while
+paused. Its BLP1 JPEG stream supplies its own dimensions, quantization tables and
+coefficients. Existing JPEG conversion/channel order was correct, but upstream
+jpeg-decoder's full-size 12-bit transform changed 2,172 RGB pixels by one shade;
+its portable path still changed 568. Native code around `9d5c19..9d5d18` contains
+the standard 13-bit integer transform constants. These are JPEG algorithm
+invariants, not copied game content or measured asset values. The corresponding
+standard algorithm is documented in
+[libjpeg-turbo jidctint.c](https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/src/jidctint.c).
+
+The existing Rust jpeg-decoder 0.3.2 is now vendored with a 13-bit full-size
+transform and signed rounding. BLP enables its portable path so architecture
+specific 12-bit dispatch cannot change results. Reduced-size transforms retain
+upstream behavior. This adds no native imaging dependency. Synthetic transform,
+saturation and bounded/malformed BLP checks remain in place. The explicit local
+`native_minimap` test compares every RGBA pixel of the supplied BLP with a supplied
+native BGRA buffer: all 65,536 pixels now match exactly. This proves that base
+image for this selected client/map, not every JPEG or final rendered minimap.
+Portable decoding replaces SIMD dispatch; startup decoding cost has not been
+benchmarked, and no elapsed-time performance acceptance is claimed.
+
+Local evidence is under `.scratch/minimap-sight-live-20261104`,
+`.scratch/minimap-sight-native-map-20261104` and
+`.scratch/minimap-texture-native-20261104`. Both reference clients were isolated
+on private Wine/Xvfb/null audio, with no host display/audio/GPU or network; stopped
+status is retained. Source executable SHA-256 is
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`;
+map SHA-256 is
+`ffa1ac3550b708a802b50ae02de54e52ef62c3dc17114e258998d5f93fe98f20`.
+Local decompilation of `680530` and `63fd30`, instruction windows and runtime
+receipts support the findings above. Original bytes/dumps remain ignored locally.
+
+Production rendering in `.scratch/minimap-jpeg-after-20261104` and
+`.scratch/minimap-jpeg-verified-20261104` matches five published states in two
+independent runs, with all 26 acquisition clocks held. All 1,209 current visibility
+cells and 12,288 height cells match the separately paused native observation.
+Exploration has 1,235 cells against native 1,258: 23 missing, no extras. History
+and intermediate transition timing must be qualified before interpreting that
+residual as a spatial calculation error. The native CPU texture from the separate
+texture acquisition differs in 16 RGB pixels (one marker area) and 162 alpha
+bytes; its tick/camera state differs and this is diagnostic only.
+
+The old retained reference was cleaned before this work. Against the newly
+acquired 1280×960 reference (SHA-256
+`2a0bffe246848512d274a01270991f2d77517b73e7dded92e39d69859f72bd92`),
+the fresh baseline has 974,765 differing pixels; sight endpoints reduce that to
+974,655, and JPEG precision to 972,999. Mean channel error changes from
+11.614192979600695 to 11.609236924913194. The entire frame is compared with no
+resizing, registration, tolerance or excluded pixels; full diff, mask, overlay
+and side-by-side are retained. JPEG loading also changes other textures, so this
+iteration changes 72,554 recreation pixels across the frame. Native tick/RNG/
+animation identity, explored history, marker memory and camera-outline geometry/
+rasterization remain open. This is not pixel-perfect minimap acceptance.
+
+Final checks for this iteration: 2,499 gameplay library tests pass (98 explicit
+original-input tests ignored); all six sight tests, including the supplied native
+property gate, pass. Decoder/BLP tests and the supplied base-image gate pass, as
+do both decoder documentation examples. Strict native all-target and WASM Clippy,
+native application build, WASM gameplay/BLP builds and the full WASM application
+build pass with warnings denied. Formatting, whitespace and screenshot/source
+provenance hashes pass. Live decoder timing and native Windows rendering were not
+measured; historical span/graph fixtures cleaned before this iteration were not
+reacquired or rerun.
+
+
+## Finite outline frustum and aliased line coverage (2026-11-04)
+
+The previous outline's infinite ray/plane intersections did not reproduce the
+selected client's finite frustum operation. `63ff50..640003` retains far corners
+unless the near/far heights bracket the target plane with sufficient separation.
+On that branch the source adds `near + (near - far) * phase`; substituting the
+usual intersection sign changes its extents. The minimum separation is now read
+as a finite positive double through the operand at `63ffab`, rather than copied
+into a constant. Synthetic operands vary it and reject nonfinite values.
+
+The first finite-frustum candidate narrowed the outline but increased its height;
+its full-frame difference count regressed to 973,009 and it was rejected. Native
+read-only acquisition and the source setup path `617ea0 -> 973ea0 -> 973f70`
+qualified the camera inputs. A separate rendering issue was then isolated:
+outline Update ran before Bevy's camera projection refresh. The campaign camera
+recreates its projection component with an initial aspect, which the camera
+systems later normalize to the actual viewport. Outline generation now runs in
+PostUpdate after `CameraUpdateSystems` and before UI preparation. It therefore
+uses the finite frustum at the aspect rendered in that frame. The resulting
+extents agree with the retained native quad to within 0.00005 display pixels in
+the selected observation. Native terrain target smoothing remains unqualified.
+
+The UI border also differed from the client's aliased line coverage. The outline
+now draws four bounded pixel spans using integer pixel centers and directional
+diamond exits. The source clipped-edge flags at `640763..640a96` suppress sides
+outside the control, rather than inventing a border along the clipping boundary.
+Source-authored frame/viewport relationships determine positions; pixel spans
+are expressed relative to the HUD target so world internal-resolution changes
+do not change the screen stroke width. No screenshot dimensions or offsets are
+installed as asset values. Synthetic tests cover direction, degenerate input,
+source clipping, and suppression at each map boundary.
+
+[Microsoft's D3D9 rasterization rules](https://learn.microsoft.com/en-us/windows/win32/direct3d9/rasterization-rules)
+corroborate integer pixel centers and the GDI-style aliased line contract;
+[the documented diamond-exit model](https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-rasterizer-stage-rules)
+provides algorithm context. These API references do not establish native Windows
+hardware output. Qualification here uses the retained selected-client Wine
+frame, not an assumption that every GPU has identical tie behavior.
+
+Local evidence and the failed candidates remain under
+`.scratch/minimap-outline-trace-20261104` and the adjacent outline capture folders.
+The new original-client run used private Xvfb/null audio, no host display/audio/
+GPU mounts and no network. Its reader only used process-memory queries/reads;
+source image and map identities are unchanged. Both isolation and stopped-state
+receipts are retained; original bytes and dump contents remain local.
+
+The selected production capture now reproduces all 97 outline pixels in the
+retained native frame; its white-pixel mask has no differences in the diagnostic
+outline box. This is a selected-frame result, not full minimap or every-camera
+acceptance. Only 141 recreation pixels change, all inside the outline's screen
+bounds. The exact whole-frame RGB comparison improves from 972,999 to 972,883
+of 1,228,800 differing pixels, with mean channel error decreasing from
+11.609236924913194 to 11.583758409288194. It uses the unchanged native reference
+SHA-256 `2a0bffe246848512d274a01270991f2d77517b73e7dded92e39d69859f72bd92`;
+there is no alignment, resizing, tolerance or excluded pixel. Full diff, mask,
+overlay and side-by-side are retained. Exploration history, marker memory,
+source-height smoothing, other resolutions/line ties, shadows and native tick/
+RNG/animation identity still require qualification.
+
+Final validation: 2,499 gameplay library tests and 939 application tests pass
+(98 and 115 explicit original-input/GPU tests ignored respectively). Seven draw-
+policy checks including the selected-client operand gate pass. Strict native
+all-target/WASM Clippy, native/full-WASM application builds, formatting and
+whitespace checks pass. Two isolated production captures match all five published
+states and hold all 26 acquisition clocks. Viewer grids, height grids and the
+CPU minimap bytes retain their previous hashes. The four fixed-size line spans
+bound per-frame work; no elapsed-time/FPS performance gate is claimed.
+Screenshot/source provenance is refreshed.

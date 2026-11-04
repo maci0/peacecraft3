@@ -364,6 +364,7 @@ fn directions(keys: &ButtonInput<KeyCode>, edges: u8, key: f32, mouse: f32) -> [
 /// executed camera bounds. Real time paces it.
 fn scroll(
     buttons: Buttons,
+    preferences: Option<Res<crate::menu_screens::Navigation>>,
     picking: Picking,
     hud: Res<crate::campaign_hud::CampaignHud>,
     time: Res<Time<Real>>,
@@ -387,11 +388,15 @@ fn scroll(
         .filter(|w| w.focused)
         .and_then(|w| Some((w.cursor_position()?, w.size())));
     let (key, mouse_speed, edges_on) = match &state.rules {
-        Some(Ok(rules)) => (
-            rules.scroll.multiplier(rules.fallback.key),
-            rules.scroll.multiplier(rules.fallback.mouse),
-            rules.fallback.mouse_disable == 0,
-        ),
+        Some(Ok(rules)) => {
+            let applied = preferences.as_deref().map(|nav| &nav.applied);
+            let options = crate::menu_settings::camera::effective(applied, rules.fallback);
+            (
+                rules.scroll.multiplier(options.key),
+                rules.scroll.multiplier(options.mouse),
+                options.mouse_disable == 0,
+            )
+        }
         _ => (1.0, 1.0, false),
     };
     let edges = match cursor {

@@ -824,6 +824,7 @@ mod tests {
             },
             marker_sides: [2, 4],
             outline_rgb: [1, 2, 3],
+            outline_minimum_separation: 0.125,
         }
     }
     fn marked(pixels: &[u8], width: usize, color: [u8; 4]) -> Vec<[usize; 2]> {

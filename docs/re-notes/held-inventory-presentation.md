@@ -20,9 +20,9 @@ Implementation: `crates/peacecraft3/src/campaign_inventory.rs` and
   never the entry name.
 - Saved preference: `Navigation.applied.toggles["TooltipsCheckBox"]` wins when
   present. The seed applies otherwise. The seed is a source-derived runtime value,
-  not an invented default. Nothing writes that toggle today: the options control
-  is a read-only preview, and the apply path in `menu_settings.rs` writes only
-  Music and Sound toggles and controls with an input owner.
+  not an invented default. The Gameplay checkbox now writes this toggle through
+  the shared Apply/Cancel transaction and versioned preference store. The menu
+  derives the seed through the same checked inventory operand and descriptor join.
 - Refusal: an unavailable seed (missing index, malformed fallback, failed
   discovery) shows the name only and records the reason in `last_error`.
 
@@ -64,7 +64,6 @@ These checks cover parsing and ECS state. They do not establish rendered parity.
   original client.
 - Item use, drag, drop and give refuse with a logged message. Their behavior is
   not implemented.
-- A saved tooltip toggle needs a menu owner before it can be written.
 
 ## Native GUI verification (not yet run)
 
@@ -416,3 +415,28 @@ retains 950 differences; this diagnostic box does not replace the full-frame
 comparison. Inventory tests (23 pass, two explicit source-input ignores), strict
 native/WASM Clippy and both app builds pass. Full-screen parity and native
 animation/RNG identity remain open. No FreeType dependency was added.
+
+## Gameplay checkbox connection (2026-11-05)
+
+`TooltipsCheckBox` is now interactive. Its source default comes from the same
+`Rules::reviewed_legacy` tooltip preference operand and `Defaults::discover`
+join as the HUD. The source profile must admit before the menu enables the
+control; missing or malformed source data produces a disabled control and
+contextual notice. Saved values take precedence over the parsed seed.
+
+Changes remain draft until Apply; Cancel restores applied state. Preference
+validation and reload admit the boolean, and audio source reactivation preserves
+it. The existing shared tooltip owner reads only applied state and rebuilds an
+already hovered tooltip when that preference changes. Disabled-preview tests
+now use the still-disabled health-bar control instead of this active checkbox.
+
+This connection does not establish original-client raster or animation parity,
+or completeness of all tooltip producers. Remaining menus and settings stay open.
+
+Validation so far for the checkbox connection: 944 non-ignored application tests
+pass, including draft isolation and updates to an already hovered tooltip. Strict
+native Clippy, native build and WASM build pass. The explicit RoC and TFT rendered
+Cancel/Apply/fresh-app-reload gates pass and retain screenshots plus
+`options-checks.json` under `.scratch/menu-tooltips-20261105/{roc,tft}/`.
+Strict WASM Clippy also passes. The explicit source-index gate is still pending
+in that local run; this is not full menu acceptance or pixel parity.

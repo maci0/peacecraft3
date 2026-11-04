@@ -74,7 +74,12 @@ or draft settings, enable controls, or change renderer quality, and has not been
 installed in the app. Showing an unconsumed fallback as a current setting would
 misrepresent runtime state.
 
-Native music/effects already have real consumers. Remaining settings require
+Native music/effects already have real consumers. The mouse/keyboard scroll
+sliders and Disable Mouse Scroll now also have applied/persisted camera consumers
+(see [camera preferences](input-camera.md#gameplay-preferences-connection-2026-11-04)).
+Enhanced Tooltips also has an applied/persisted HUD consumer (see
+[tooltip connection](held-inventory-presentation.md#gameplay-checkbox-connection-2026-11-05)).
+Remaining settings require
 their input, renderer, audio, network or gameplay owner before activation. These
 observed joins remove uncertainty about their source keys; they do not supply
 those missing behaviors. Internal recreation implementations may differ from
@@ -128,10 +133,11 @@ The complete writer at `0x42ca10..0x42ca59` stores the incoming preference
 word in its selected record. No call follows that store; lookup/insertion
 side effects and the actual renderer consumer remain unread. This does not
 prove that miplevel is an authored BLP index, how the depth word packs alpha
-or color, which texture classes are affected, or when a reload occurs. The
-current menu decoder retains only the top image level. A sampler-only change
-would therefore be inert, and a quality Apply needs a prepared texture
-replacement before preferences are saved.
+or color, which texture classes are affected, or when a reload occurs. Base-only UI image consumers still retain only the top image level; MDX
+background and panel paths now preserve authored mip chains (see
+[panel mip retention](mdx-texture-selection.md#panel-mip-retention-2026-11-04)).
+That does not establish the quality preference consumer. A quality Apply still
+needs its renderer effect qualified and prepared before preferences are saved.
 
 Independent decoder comparisons match 330 reached instructions across those
 two bodies. Four checked data-flow tests pass, including changed source

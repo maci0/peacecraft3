@@ -9,17 +9,17 @@
   "map": "Maps\\Campaign\\Prologue02.w3m",
   "scope": "Locally supplied classic game assets; rendered screenshots only. No pixel-parity claim.",
   "images": {
-    "main-menu.png": "df39a90cdb6207eacbca4d601fdfa7b373b153db7ca1c1964d302c8c7b5dcf95",
-    "chapter-selection.png": "4b82b3e18cf89a295cd5c5487f9bc113c198090ec0e4346f7eccbb5524812653",
-    "campaign.png": "d6ee2d0e78d11fc69cc09a0b79cb4157e86c9d0f38b79e2acbf3c1b25ae6b1aa",
-    "research-menu.png": "d4ea167bfdb0e25dfa64dd8e3d8b90042c66a4afd0fb1f5e2425832f3a8f4c4e",
-    "quest-log.png": "2ca806a8a712dd2da06b0e302cb77b53d3b3fa4484b456a03c0ab15706d44e82"
+    "main-menu.png": "8d9cbebc51837e6371fbe4b634fe60fa62bce1ada512a14746f9361975bbbeaa",
+    "chapter-selection.png": "d53c03db80badd5876ad312d5448ff1d9cf2d62976f9a26021bb20465266be6c",
+    "campaign.png": "91c55c58d6cf584bd83b08e8391f757d7a10b34555c34acd82bce93b28c160a2",
+    "research-menu.png": "dfe4ae2d3b133c8fa740b8ab65d58124a846ead4c056962d57b99f1d0b1305d9",
+    "quest-log.png": "0b27a6349d8f1a6d8b29a9dd158fca3b042eb31449a690e881350ec2befa7e68"
   },
-  "validation": "All 2493 core library tests pass (97 explicit original-input tests ignored). The local-input sight gate matches all 209 retained span rows and propagation through eleven native graphs. The production-generated height lattice matches all 12288 retained native height cells. The retained full-alpha scan gate passes. Two independent production captures match five published states byte-for-byte; all 26 acquisition clocks hold and selected repeats match. Full-frame diff, mask, overlay and side-by-side are retained locally. All 2640 upkeep pixels and 13 panel text diagnostic regions remain exact. Only 2511 recreation pixels change, within the minimap. Strict native all-target and WASM Clippy, native/WASM builds, formatting and whitespace checks pass.",
-  "diagnostic_limit": "Pixel-perfect minimap and full-screen parity remain open. Original-client tick, animation and RNG identity are unqualified. Explored history, grounded-flying suppression, support/deck heights, wide occluders, moving-unit pathing bounds, special overlays, enemy hero repass and outline rasterization require further qualification. Building shadows and broader world/UI differences remain. No original assets or extracted native data are published. The production ledger has 33 extra visible cells versus a separately paused native observation; these are exactly reproduced by the four tower radius differences (13 versus native 12). No per-type fit is applied.",
-  "source_revision": "8ae478f79f97e5c9a62b8be674533fe5b4b22240",
-  "source_changes": "Relative to source_revision: source-derived resource textures, ability classes, mask/tint blits and solid CPU markers; native grid/float-bit marker projection and fixed-point fog scan; separate textured hero quads with source geometry, UV, sampler/mips and phase policy. No dependency added. Blocked shared-vision samples preserve earlier clear sources and exploration. Campaign sight now uses the selected-client lattice, source-derived integer spans and predecessor blocker graph, authored occlusion heights and separate modifier/flying span rules. Acquisition plane labels corrected; no dependency added.",
-  "source_patch_sha256": "5444ab9d96ddadc997174a11fe981db64b98e1c81127431b9b340c8a20a94e9e",
+  "validation": "2499 gameplay and 939 application tests pass (98 and 115 explicit original-input/GPU tests ignored). Seven minimap draw-policy checks including the explicit selected-client operand gate pass. Two isolated production runs match five published states byte-for-byte with all 26 clocks held; selected repeats match. All 97 outline pixels match the retained native reference and its diagnostic white mask has zero differences. Fog viewer/height grids and CPU minimap bytes are unchanged. Only 141 recreation pixels change in this iteration, around the outline. Full diff, mask, overlay and side-by-side inspected. Strict native all-target/WASM Clippy, native/full-WASM application builds, formatting and whitespace checks pass. Screenshot/source hashes are recorded below.",
+  "diagnostic_limit": "No full minimap or full-screen parity claim. Native simulation tick, animation and RNG identity remain unqualified. Exploration has 23 missing cells versus the separately paused reference; intermediate sight timing, marker memory, camera-height smoothing, other resolutions and line ties/clipped rendering need further native qualification. Building shadows and broader world/UI differences remain. Portable JPEG startup decoding cost is unbenchmarked. No original bytes/dumps are published.",
+  "source_revision": "af07e03a1ede5b116a0d7b1d6eee5d91b8e2cf54",
+  "source_changes": "Source-derived completed day/night sight endpoints; 13-bit JPEG transform in the existing Rust decoder; authored menu-panel mip retention; finite minimap outline frustum after camera projection update, source-decoded separation and bounded aliased pixel spans with clipped-side suppression. Stroke sizing follows the HUD target independently of world internal resolution. No new native imaging dependency.",
+  "source_patch_sha256": "31873dfb7da32ea4f7075126b2f3a2f459ca5ed90b7d1736ec59217e6e26efa4",
   "source": "Legacy 1.29.2.9231; Reign of Chaos edition",
   "executable_sha256": "3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed",
   "capture_files": {
@@ -30,12 +30,29 @@
     "quest-log.png": "quest-done-hover.png"
   },
   "comparison": {
-    "scope": "Entire 1280x960 RGB frame, no registration, resizing, tolerance or excluded pixels. Original-client tick identity is not observed; this pair is diagnostic evidence.",
-    "different_pixels": 974859,
+    "scope": "Entire 1280x960 RGB frame, no registration/resizing/tolerance/excluded pixels. Fresh native reference; tick/animation identity unqualified.",
+    "reference_sha256": "2a0bffe246848512d274a01270991f2d77517b73e7dded92e39d69859f72bd92",
+    "sha256": "91c55c58d6cf584bd83b08e8391f757d7a10b34555c34acd82bce93b28c160a2",
+    "different_pixels": 972883,
     "total_pixels": 1228800,
+    "mean_absolute_channel_error": 11.583758409288194,
     "same_tick_recreation_repeat_different_pixels": 0,
-    "same_tick_recreation_repeat_sha256": "d6ee2d0e78d11fc69cc09a0b79cb4157e86c9d0f38b79e2acbf3c1b25ae6b1aa",
-    "mean_absolute_channel_error": 11.652511393229167
+    "same_tick_recreation_repeat_sha256": "91c55c58d6cf584bd83b08e8391f757d7a10b34555c34acd82bce93b28c160a2",
+    "fresh_baseline_different_pixels": 974765,
+    "outline_iteration": {
+      "before_different_pixels": 972999,
+      "after_different_pixels": 972883,
+      "recreation_changed_pixels": 141,
+      "bounds": [
+        117,
+        774,
+        152,
+        793
+      ],
+      "outline_pixels": 97,
+      "outline_native_rgb_different_pixels": 0,
+      "diagnostic_white_mask_different_pixels": 0
+    }
   },
   "capture_clock_receipt_hashes": {
     "main-menu.png": "04bdf63dd83762a6684299303e477bddcccf177674a822ab5ad13a9797498e4e",
@@ -47,17 +64,34 @@
   "source_patch_scope": [
     "Cargo.toml",
     "Cargo.lock",
-    "crates/peacecraft3/src",
+    "crates/pcx-blp",
     "crates/pcx-play/src",
-    "crates/pcx-play/Cargo.toml",
-    "vendor/bevy_ui/src/widget/text.rs",
-    "crates/pcx-gfx/src",
-    "crates/pcx-gfx/tests/ground_sampling.rs",
-    "crates/pcx-tera/src",
-    "vendor/skrifa"
+    "crates/peacecraft3/src",
+    "vendor/jpeg-decoder"
   ],
   "untracked_source_hashes": {
-    "crates/pcx-play/src/native_sight.rs": "49f02de5bcd002958c9b1b407ab66abd01726153683f98f16579085c1d33617f",
-    "crates/pcx-play/src/vision_native.rs": "570110a7f87f4b958cb219141cdb388e955e20e229af7669ec3372eb93cd5396"
+    "crates/pcx-blp/tests/native_minimap.rs": "8beec2552f34d07c47a201538ba4d0baffd819d28673712566a6cbdcbce0c78b",
+    "vendor/jpeg-decoder/Cargo.toml": "c5f4af7aff82e4365cda4b659b869edaa6cb38763573c827d6d55aa8b7290500",
+    "vendor/jpeg-decoder/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "vendor/jpeg-decoder/LICENSE-MIT": "22b83fb92a50418c7df9564b9c179fa2a0e74f293bc58b72dd7e218fc0902143",
+    "vendor/jpeg-decoder/PATCHES.md": "e3a2c2c7a30edeb119d42ff88b4088383764462d1acf4e29b3f945b5b9a0f8c1",
+    "vendor/jpeg-decoder/README.md": "cb72ab0179d2c2578d2840bc2bdf96935833178d34466fb5c1982f9f6be9547f",
+    "vendor/jpeg-decoder/src/arch/mod.rs": "d7484cefbc186c887e926fa5ea2950c412f95326152e6bc7a19484d3eb3e63b9",
+    "vendor/jpeg-decoder/src/arch/neon.rs": "9ee5fbebb8621b69e2031162a61269cd0784883fbe574974250ac2a23b66dd74",
+    "vendor/jpeg-decoder/src/arch/ssse3.rs": "c470868f692ecad6428c5dc113c6fa3261cd3c23ce5158c5a8c7174e12298c65",
+    "vendor/jpeg-decoder/src/arch/wasm.rs": "c3aea9d15b722fa2a57ae9c3b09bf5b3bd4b86d48efa6440e00a9f8688190489",
+    "vendor/jpeg-decoder/src/decoder.rs": "07680c94bf754329c00a3ca9f1c3a38c964296cd528ff8954597365e02a864da",
+    "vendor/jpeg-decoder/src/decoder/lossless.rs": "e1249764347a2b1fc3de955e3e822c7dddd29418e3049990fe036259d10df488",
+    "vendor/jpeg-decoder/src/error.rs": "7c0deaa7c58b4f1c00a42616ce0b8b37c1040ac85fcdade36ca20aa0c2435a61",
+    "vendor/jpeg-decoder/src/huffman.rs": "80df6386478375e99614c4639af004aede2927763645b0a49df6b6d083eef5f0",
+    "vendor/jpeg-decoder/src/idct.rs": "c2f21b0266d729a5c0d261a9fd571c1333949f954020ee12c4844276b3644a92",
+    "vendor/jpeg-decoder/src/lib.rs": "7e3a11a30e07d11f5237375437c92de0a852f7abdf29df4ba08048871bd69b75",
+    "vendor/jpeg-decoder/src/marker.rs": "e68c3ffc47bfb16b2f08ed169abde7d95369e1a887ba3a6edd3d453ba0e1e2af",
+    "vendor/jpeg-decoder/src/parser.rs": "22beb0cbfb24f9246452441abfa45d908ae099ef39c8728d17579160e2892e1e",
+    "vendor/jpeg-decoder/src/upsampler.rs": "234e6f479cd90166b1db19884ef9ec21c50bf7c838c2bd646e6ee563eafd3f0f",
+    "vendor/jpeg-decoder/src/worker/immediate.rs": "51a135516701c689900511f5fec3f03141fd067bc9a5a31a3b95527463419af8",
+    "vendor/jpeg-decoder/src/worker/mod.rs": "056871bf04e61031f922dcf692764303f44f57ff7273d85886a7f32eeed728e8",
+    "vendor/jpeg-decoder/src/worker/multithreaded.rs": "6d5bb0d3ed09bf179bee4a0b3c625d497b3b35535545cf780b2497d333c8fdd9",
+    "vendor/jpeg-decoder/src/worker/rayon.rs": "7ae36b76d8de63c009f3990e085c46691438a081aeb564fe277cfec68e5bbfe1"
   }
 }

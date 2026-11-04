@@ -1730,6 +1730,7 @@ mod portrait_parity {
             "source_member": scene.source_member,
             "color": scene.color,
             "viewport": viewport,
+
             "authored_rect": authored_rect_json,
             "parent_size": parent_size,
             "mask_size": mask_size,
@@ -1875,19 +1876,7 @@ fn retain_text_layouts(app: &mut App, output: &Path) {
         })).unwrap()).unwrap();
 }
 
-fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool) {
-    let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
-    let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
-    let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
-        Ok("roc") => false,
-        Ok("tft") => true,
-        _ => panic!("select roc or tft explicitly"),
-    };
-    let output = std::path::PathBuf::from(
-        std::env::var_os("PCX_CAMPAIGN_CAPTURE_DIR").expect("PCX_CAMPAIGN_CAPTURE_DIR"),
-    );
-    assert!(!output.exists(), "output directory must be new");
-    std::fs::create_dir_all(&output).unwrap();
+fn mounted_main_menu(install: &str, expansion: bool, output: &Path, cpu_workload: bool) -> App {
     // Diagnostic viewport and work bounds, not source layout or timing values.
     let [width, height] = [1280, 960];
     let plugins = DefaultPlugins
@@ -1929,7 +1918,7 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         .resource_mut::<peacecraft3::campaign_startup::CampaignSeed>()
         .requested = Some(1);
     app.insert_resource(crate::launch_gui::Launcher::test_source(
-        install.clone(),
+        install.to_owned(),
         expansion,
     ))
     .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
@@ -1970,9 +1959,26 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
     // The game main menu follows the intro; the launcher is only setup.
     screen(&mut app, crate::menu_screens::Screen::Main);
     if let Some(window) = menu_entry {
-        window.finish(&output);
+        window.finish(output);
     }
     capture(&mut app, &output.join("main-menu.png"));
+    app
+}
+
+fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool) {
+    let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").expect("PCX_NATIVE_CHAPTER_INSTALL");
+    let map = std::env::var("PCX_NATIVE_CHAPTER_MAP").expect("PCX_NATIVE_CHAPTER_MAP");
+    let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
+        Ok("roc") => false,
+        Ok("tft") => true,
+        _ => panic!("select roc or tft explicitly"),
+    };
+    let output = std::path::PathBuf::from(
+        std::env::var_os("PCX_CAMPAIGN_CAPTURE_DIR").expect("PCX_CAMPAIGN_CAPTURE_DIR"),
+    );
+    assert!(!output.exists(), "output directory must be new");
+    std::fs::create_dir_all(&output).unwrap();
+    let mut app = mounted_main_menu(&install, expansion, &output, cpu_workload);
     let mut workload = cpu_workload.then(bench::Harness::new);
     if let Some(workload) = workload.as_mut() {
         workload.menu(&mut app, &output);
@@ -2181,6 +2187,45 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
     std::fs::write(
         output.join("minimap-cpu.rgba"),
         image.data.as_ref().unwrap(),
+    )
+    .unwrap();
+    let (outline, viewport) = app
+        .world()
+        .resource::<crate::campaign_minimap::CampaignMinimap>()
+        .diagnostic_outline()
+        .unwrap();
+    let geometry = app.world().get::<ComputedNode>(outline).unwrap();
+    let line_geometry: Vec<_> = app.world().get::<Children>(outline).unwrap().iter().map(|entity| {
+        let node = app.world().get::<ComputedNode>(entity).unwrap();
+        let transform = app.world().get::<UiGlobalTransform>(entity).unwrap();
+        serde_json::json!({"center": transform.translation.to_array(), "size": node.size().to_array()})
+    }).collect();
+
+    let camera_entity = app
+        .world()
+        .resource::<peacecraft3::campaign_camera::CampaignCamera>()
+        .entity
+        .unwrap();
+    let camera_transform = app.world().get::<GlobalTransform>(camera_entity).unwrap();
+    let camera_projection = app.world().get::<Projection>(camera_entity).unwrap();
+    let camera_view = app.world().get::<Camera>(camera_entity).unwrap();
+
+    std::fs::write(
+        output.join("minimap-outline.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "viewport": viewport,
+        "camera_transform": camera_transform.to_matrix().to_cols_array(),
+        "camera_projection": format!("{camera_projection:?}"),
+        "camera_viewport": camera_view.logical_viewport_size().unwrap().to_array(),
+        "computed_projection": camera_view.clip_from_view().to_cols_array(),
+
+            "layer_size": geometry.size().to_array(),
+            "lines": line_geometry,
+            "unrounded_size": geometry.unrounded_size().to_array(),
+            "center": app.world().get::<UiGlobalTransform>(outline).unwrap().translation.to_array(),
+            "scope": "Production outline geometry; native camera/tick identity remains unqualified"
+        }))
+        .unwrap(),
     )
     .unwrap();
     let quads = app
@@ -3136,4 +3181,152 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         errors.iter().all(|(_, error)| error.is_none()),
         "campaign rendering: {errors:?}"
     );
+}
+
+#[test]
+#[ignore = "requires explicit original install/edition, Vulkan, a new capture directory and XDG_CONFIG_HOME within its config subdirectory"]
+fn gameplay_camera_options_render_cancel_apply_and_reload() {
+    use crate::menu_screens::{Navigation, Page, Screen};
+    use bevy::ui::{Checked, InteractionDisabled};
+    use bevy::ui_widgets::{SliderValue, ValueChange};
+    let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL").unwrap();
+    let expansion = match std::env::var("PCX_NATIVE_CHAPTER_ADDON").as_deref() {
+        Ok("roc") => false,
+        Ok("tft") => true,
+        _ => panic!("explicit edition required"),
+    };
+    let output = std::path::PathBuf::from(std::env::var_os("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
+    assert!(!output.exists(), "new isolated capture directory required");
+    assert_eq!(
+        std::path::PathBuf::from(
+            std::env::var_os("XDG_CONFIG_HOME").expect("isolated preferences required")
+        ),
+        output.join("config")
+    );
+    std::fs::create_dir_all(output.join("config")).unwrap();
+    let mut app = mounted_main_menu(&install, expansion, &output, false);
+    // The offscreen fixture has no native display-mode witness and requests no resize.
+    {
+        let mut nav = app.world_mut().resource_mut::<Navigation>();
+        nav.applied.resolution = None;
+        nav.draft.resolution = None;
+    }
+
+    let open = |app: &mut App| {
+        let button = frame_button(app, "OptionsButton");
+        activate(app, button);
+        screen(app, Screen::Options(Page::Unselected));
+        let button = frame_button(app, "GameplayButton");
+        activate(app, button);
+        screen(app, Screen::Options(Page::Gameplay));
+    };
+    open(&mut app);
+    let key = frame_button(&mut app, "KeyScrollSlider");
+    let mouse = frame_button(&mut app, "MouseScrollSlider");
+    let disable = frame_button(&mut app, "MouseScrollDisableCheckBox");
+    let tooltip = frame_button(&mut app, "TooltipsCheckBox");
+    for entity in [key, mouse, disable, tooltip] {
+        assert!(!app.world().entity(entity).contains::<InteractionDisabled>());
+    }
+    let before = app.world().resource::<Navigation>().applied.clone();
+    let changed = |app: &mut App, entity: Entity| {
+        let control = app
+            .world()
+            .get::<crate::menu_screens::SettingControl>(entity)
+            .unwrap();
+        let crate::menu_screens::Widget::Slider { min, max, .. } = control.widget else {
+            panic!("slider required")
+        };
+        let value = app.world().get::<SliderValue>(entity).unwrap().0;
+        if value == max { min } else { max }
+    };
+    let key_value = changed(&mut app, key);
+    let mouse_value = changed(&mut app, mouse);
+    let disabled = !before.toggles["MouseScrollDisableCheckBox"];
+    let verbose = !before.toggles["TooltipsCheckBox"];
+    app.world_mut().trigger(ValueChange {
+        source: key,
+        value: key_value,
+        is_final: true,
+    });
+    app.world_mut().trigger(ValueChange {
+        source: mouse,
+        value: mouse_value,
+        is_final: true,
+    });
+    app.world_mut()
+        .trigger(bevy::ui_widgets::ToggleChecked { entity: disable });
+    app.world_mut()
+        .trigger(bevy::ui_widgets::ToggleChecked { entity: tooltip });
+    step(&mut app);
+    assert_eq!(app.world().resource::<Navigation>().applied, before);
+    capture(&mut app, &output.join("gameplay-draft.png"));
+    let button = frame_button(&mut app, "CancelButton");
+    activate(&mut app, button);
+    screen(&mut app, Screen::Main);
+    assert_eq!(app.world().resource::<Navigation>().applied, before);
+    open(&mut app);
+    for (name, value) in [
+        ("KeyScrollSlider", key_value),
+        ("MouseScrollSlider", mouse_value),
+    ] {
+        let entity = frame_button(&mut app, name);
+        assert_eq!(
+            app.world().get::<SliderValue>(entity).unwrap().0,
+            before.values[name]
+        );
+        app.world_mut().trigger(ValueChange {
+            source: entity,
+            value,
+            is_final: true,
+        });
+    }
+    let disable = frame_button(&mut app, "MouseScrollDisableCheckBox");
+    app.world_mut()
+        .trigger(bevy::ui_widgets::ToggleChecked { entity: disable });
+    step(&mut app);
+    let tooltip = frame_button(&mut app, "TooltipsCheckBox");
+    assert_eq!(app.world().get::<Checked>(tooltip).is_some(), !verbose);
+    app.world_mut()
+        .trigger(bevy::ui_widgets::ToggleChecked { entity: tooltip });
+    step(&mut app);
+    let button = frame_button(&mut app, "OKButton");
+    activate(&mut app, button);
+    screen(&mut app, Screen::Main);
+    let applied = app.world().resource::<Navigation>().applied.clone();
+    assert_eq!(applied.toggles["TooltipsCheckBox"], verbose);
+    assert_eq!(applied.values["KeyScrollSlider"], key_value);
+    assert_eq!(applied.values["MouseScrollSlider"], mouse_value);
+    assert_eq!(applied.toggles["MouseScrollDisableCheckBox"], disabled);
+    assert!(output.join("config/peacecraft3/settings.json").exists());
+    drop(app);
+    std::fs::create_dir_all(output.join("reload")).unwrap();
+    let mut app = mounted_main_menu(&install, expansion, &output.join("reload"), false);
+    assert_eq!(
+        app.world().resource::<Navigation>().applied.values["KeyScrollSlider"],
+        key_value
+    );
+    assert_eq!(
+        app.world().resource::<Navigation>().applied.values["MouseScrollSlider"],
+        mouse_value
+    );
+    assert_eq!(
+        app.world().resource::<Navigation>().applied.toggles["MouseScrollDisableCheckBox"],
+        disabled
+    );
+    assert_eq!(
+        app.world().resource::<Navigation>().applied.toggles["TooltipsCheckBox"],
+        verbose
+    );
+    open(&mut app);
+    let tooltip = frame_button(&mut app, "TooltipsCheckBox");
+    assert_eq!(app.world().get::<Checked>(tooltip).is_some(), verbose);
+    let disable = frame_button(&mut app, "MouseScrollDisableCheckBox");
+    assert_eq!(app.world().get::<Checked>(disable).is_some(), disabled);
+    capture(&mut app, &output.join("gameplay-reloaded.png"));
+    std::fs::write(output.join("options-checks.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "draft_did_not_apply": true, "cancel_restored": true, "apply_saved": true, "new_app_reloaded": true,
+        "controls": ["KeyScrollSlider", "MouseScrollSlider", "MouseScrollDisableCheckBox", "TooltipsCheckBox"],
+        "scope": "Production widgets and isolated preferences, headless/muted; no native timing or pixel-parity claim"
+    })).unwrap()).unwrap();
 }

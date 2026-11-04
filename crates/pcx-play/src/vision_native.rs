@@ -9,12 +9,13 @@ impl ObjectHost {
             self.inner.error(
                 "vision",
                 Failure::UnitActivity(
-                    "matching, previously unadmitted native sight source required".into(),
+                    "matching, unadmitted native sight source and empty unit arena required".into(),
                 ),
             )
         };
         if self.native_sight.is_some()
             || self.shared_vision.is_some()
+            || self.executed_units().next().is_some()
             || self
                 .numeric
                 .as_ref()
@@ -25,6 +26,46 @@ impl ObjectHost {
         self.native_sight = Some(Arc::new(rules));
         Ok(self)
     }
+    pub(super) fn native_sight_updates(
+        &self,
+        night: bool,
+        work: &mut Work,
+    ) -> Result<Vec<(pcx_script::HandleId, crate::native_sight::SightState)>, String> {
+        let rules = self
+            .native_sight
+            .as_ref()
+            .ok_or("native sight rules absent")?;
+        let numeric = self
+            .numeric
+            .as_ref()
+            .ok_or("native sight numeric policy absent")?;
+        let mut updates = Vec::new();
+        for (id, unit) in self.executed_units() {
+            work.charge(1)?;
+            let state = super::super::SightRadii::next_sight(unit, night, rules, numeric)?;
+            if unit.sight != Some(state) {
+                updates
+                    .try_reserve(1)
+                    .map_err(|_| "native sight state allocation")?;
+                updates.push((id, state));
+            }
+        }
+        Ok(updates)
+    }
+
+    pub(super) fn commit_native_sight_updates(
+        &mut self,
+        updates: Vec<(pcx_script::HandleId, crate::native_sight::SightState)>,
+    ) -> Result<(), Error> {
+        for (id, state) in updates {
+            let crate::playercolor_host::Entry::Unit { record } = self.inner.entry_mut(id)? else {
+                unreachable!("staged live unit")
+            };
+            record.sight = Some(state);
+        }
+        Ok(())
+    }
+
     pub(super) fn vision_pitch(&self) -> Result<f32, Error> {
         let fail = |s: String| self.inner.error("vision", Failure::UnitActivity(s));
         let cell = self

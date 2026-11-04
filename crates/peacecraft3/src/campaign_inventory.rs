@@ -517,6 +517,11 @@ fn source_label(lists: &[&str], key: &str) -> Result<String, String> {
     }
     Ok(label)
 }
+/// Menu and HUD share the selected client's tooltip preference operand.
+pub(crate) fn tooltip_default(image: &[u8], origin: AssetIdentity) -> Result<bool, String> {
+    let rules = Rules::reviewed_legacy(image, origin.clone()).map_err(|e| e.to_string())?;
+    tooltip_seed(image, origin, rules.tooltip.preference_index)
+}
 /// Source fallback for the descriptor at `index`, the operand the native tooltip
 /// checkbox read selects. Only the exact zero/one profile is admitted.
 fn tooltip_seed(image: &[u8], origin: AssetIdentity, index: u32) -> Result<bool, String> {
@@ -2003,6 +2008,38 @@ mod tests {
                 .as_ref()
                 .map(|tip| (tip.verbose, tip.description.is_some()));
             assert_eq!(tip, Some((Some(false), false)));
+            app.world_mut()
+                .resource_mut::<crate::menu_screens::Navigation>()
+                .draft
+                .toggles
+                .insert(TOOLTIP_TOGGLE.into(), true);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<CampaignInventory>()
+                    .tooltip
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .is_none(),
+                "draft changes must not reach the HUD"
+            );
+            app.world_mut()
+                .resource_mut::<crate::menu_screens::Navigation>()
+                .applied
+                .toggles
+                .insert(TOOLTIP_TOGGLE.into(), true);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<CampaignInventory>()
+                    .tooltip
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .is_some(),
+                "applying updates an already hovered tooltip"
+            );
         }
 
         #[test]

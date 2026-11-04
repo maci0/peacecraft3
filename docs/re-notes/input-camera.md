@@ -87,7 +87,7 @@ Delete, which always end their state.
 | 6 | A held arrow wins over the pointer in the same direction. The client shares one slot per direction and the last writer wins. | EX slot; INF for the order |
 | 7 | Edge scroll needs a focused window with the pointer inside it; HUD panels do not block it (the arrow cursor shows over the HUD and is drawn from `CameraInput::edges`, see [input cursor](input-cursor.md)). The 0.004 margin is the named constant `EDGE_MARGIN_UI`. | RO fit |
 | 8 | Scroll speed is the `[CameraRates]` value times the option multiplier. The executable multiplies a literal `3000.0`, which equals the file value. | SB and EX agree |
-| 9 | The scroll options are the descriptor fallbacks (50, 50, 0). No saved-preference store exists in the recreation yet, so nothing overrides them. | See [original options initialization](original-options-initialization.md) |
+| 9 | Applied Gameplay preferences override the descriptor fallbacks for keyboard scroll, mouse scroll and disabling mouse scroll. Draft changes have no camera effect; Cancel restores the applied values. Missing preferences retain the selected executable's parsed fallbacks. | See [original options initialization](original-options-initialization.md) |
 | 10 | Middle drag keeps the grabbed ground point under the pointer: each frame the camera target moves by the grabbed point minus the ground point now under the cursor. | INF from the stored target and screen point |
 | 11 | Backspace list: own, shown, living `UNIT_TYPE_TOWNHALL` units in creation order. | RO for the one-hall case; order INF |
 | 12 | The idle-worker list is `ObjectHost::idle_workers` (also behind the idle button). The F8 and backtick repeat window reuses the Space and Backspace value. | RO bounds the window between 984.7 and 1014.3 ms |
@@ -125,3 +125,33 @@ Delete, which always end their state.
 - `peacecraft3` binary tests in `campaign_camera_input_tests.rs` drive the real systems
   on a synthetic session with `KeyboardInput`, `MouseWheel`, mouse-button messages and
   window cursor state: no host window, pointer or audio.
+
+## Gameplay preferences connection (2026-11-04)
+
+`menu_camera_settings.rs` connects `MouseScrollSlider`, `KeyScrollSlider` and
+`MouseScrollDisableCheckBox` to the shared preferences transaction. The selected
+client image supplies the fallback option words through `CameraInputRules::read`;
+the selected Gameplay FDF supplies each slider's domain and step. Widget initial
+values do not replace executable defaults. Unsupported images or invalid domains
+leave the controls disabled with a diagnostic.
+
+Saved values retain unsigned option units. The campaign camera uses only applied
+preferences and the existing executable-derived multiplier, including its
+out-of-range fallback. Audio source admission preserves these camera entries.
+Non-display Apply requests can commit without a native window-size witness;
+resolution requests still require observed host-size confirmation.
+
+Synthetic tests cover unsigned conversion, authored domains, draft isolation,
+Cancel, persistence and actual keyboard/edge displacement. The ignored mounted
+menu test `gameplay_camera_options_render_cancel_apply_and_reload` exercises the
+selected original controls, Cancel, Apply and a fresh application reload with an
+isolated preferences directory. These are recreation tests, not native runtime
+measurements of non-default scroll speed. Other Gameplay controls remain disabled.
+
+Validation for this connection: 943 non-ignored application tests passed (117
+explicit local-fixture tests ignored). The explicit original-control domain gate
+and rendered Cancel/Apply/reload gates passed for RoC and TFT. Strict native and
+WASM Clippy and builds passed. The unchanged RoC campaign capture gate passed;
+all 13 PNG checkpoints matched the prior local capture byte for byte. Evidence
+is local under `.scratch/menu-functionality-20261104/`. No native-client
+non-default-speed comparison or browser runtime interaction is claimed.

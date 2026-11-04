@@ -102,6 +102,7 @@ pub struct MinimapMarkers {
 }
 
 fn u32_at(data: &[u8], at: usize) -> Result<u32, Error> {
+    // The `get` above proves the 4-byte slice is in bounds.
     data.get(at..at + 4)
         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
         .ok_or(Error::MinimapTruncated {
@@ -139,6 +140,7 @@ impl MinimapMarkers {
         let mut markers = Vec::with_capacity(n);
         for i in 0..n {
             let at = 8 + i * MARKER_RECORD;
+            // `need == bytes.len()` above proves each 16-byte record is in bounds.
             let r = &bytes[at..at + MARKER_RECORD];
             markers.push(Marker {
                 kind: u32::from_le_bytes(r[0..4].try_into().unwrap()),

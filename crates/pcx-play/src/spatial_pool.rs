@@ -1146,6 +1146,9 @@ impl PoolOwner {
             return;
         }
         let now = now as f32;
+        // cleanup_due returns true once per due deadline, not once per expired
+        // deadline, so this loop is bounded by the number of deadlines whose
+        // tick is <= now. No additional bound is derived here.
         loop {
             match self.live.cleanup_due(now) {
                 Ok(true) => {}

@@ -334,11 +334,16 @@ impl ObjectHost {
             let center = unit
                 .position
                 .ok_or_else(|| fail("unit has no accepted vision position".into()))?;
-            // shortcut: base day/night sight only; apply sight-changing upgrades and effects when their live consumers are modeled.
+            // shortcut: selected day/night endpoints only; apply sight-changing upgrades and effects when their live consumers are modeled.
             let radius = listed
                 .radius
                 .get_or_insert_with(|| {
-                    radii.of(listed.id, unit.definition_revision, &unit.definition, night)
+                    radii.of(
+                        listed.id,
+                        unit,
+                        night,
+                        self.native_sight.as_deref().zip(self.numeric.as_ref()),
+                    )
                 })
                 .clone()
                 .map_err(fail)?;
@@ -398,19 +403,58 @@ pub(super) struct SightRadii {
 type SightKey = (HandleId, u64, bool);
 
 impl SightRadii {
+    fn next_sight(
+        record: &super::ExecutedUnit,
+        night: bool,
+        rules: &crate::native_sight::Rules,
+        numeric: &crate::script_numeric::NumericPolicy,
+    ) -> Result<crate::native_sight::SightState, String> {
+        let previous = record.sight.ok_or("native sight state absent")?;
+        if previous.night == night && previous.revision == record.definition_revision {
+            return Ok(previous);
+        }
+        let read = |night| {
+            super::unit_activity::balance_real(
+                &record.definition,
+                if night { "nsight" } else { "sight" },
+            )
+        };
+        let target = read(night)?;
+        let radius = if previous.night == night {
+            target
+        } else {
+            // shortcut: integrate completed transitions; qualify the intermediate clock before adding live fades.
+            rules.completed_change(previous.radius, read(previous.night)?, target, numeric)?
+        };
+        Ok(crate::native_sight::SightState {
+            night,
+            revision: record.definition_revision,
+            radius,
+        })
+    }
+
     fn of(
         &mut self,
         unit: HandleId,
-        revision: u64,
-        definition: &pcx_sim::world::Definition,
+        record: &super::ExecutedUnit,
         night: bool,
+        native: Option<(
+            &crate::native_sight::Rules,
+            &crate::script_numeric::NumericPolicy,
+        )>,
     ) -> Result<f32, String> {
-        let key = (unit, revision, night);
+        let key = (unit, record.definition_revision, night);
         if let Some(known) = self.read.get(&key) {
             return known.clone();
         }
-        let radius = self.kept.remove(&key).unwrap_or_else(|| {
-            super::unit_activity::balance_real(definition, if night { "nsight" } else { "sight" })
+        let radius = self.kept.remove(&key).unwrap_or_else(|| match native {
+            Some((rules, numeric)) => {
+                Self::next_sight(record, night, rules, numeric).map(|state| state.radius.max(0.))
+            }
+            None => super::unit_activity::balance_real(
+                &record.definition,
+                if night { "nsight" } else { "sight" },
+            ),
         });
         self.read.insert(key, radius.clone());
         radius
