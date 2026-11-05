@@ -590,6 +590,11 @@ fn all_retained_disabled_joins_are_source_derived() {
         ("PositionalCheckBox", "positional", "CHECKBOX"),
     ] {
         assert!(eligible(frame));
+        if supported(frame) {
+            // Interactive controls (e.g. CustomKeys) skip the read-only
+            // preview snapshot; their join is covered by eligibility above.
+            continue;
+        }
         let s = snapshot(frame, key, b"1", kind, "A");
         let value = s.value(frame).unwrap();
         match kind {

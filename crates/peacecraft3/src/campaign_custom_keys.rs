@@ -17,6 +17,27 @@ const FILE: &str = "CustomKeys.txt";
 /// client's `CustomKeyBindings` folder name.
 const USER_FOLDERS: [&str; 3] = ["Documents", "Warcraft III", "CustomKeyBindings"];
 
+/// Test bridge to the consumer gate: same saved-wins rule as `enabled`.
+#[cfg(test)]
+pub(crate) fn enabled_for_test(saved: bool, fallback: Option<&[u8]>) -> Result<bool, String> {
+    enabled(fallback, Some(saved))
+}
+
+/// Test-only split of `load`'s admission check: `enabled(... true)` loads the
+/// first existing file, `false` yields `Ok(None)` without touching the file.
+#[cfg(test)]
+pub(crate) fn applied_load_for_test(
+    saved: Option<bool>,
+    fallback: Option<&[u8]>,
+    candidates: &[PathBuf],
+    read: impl Fn(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<Option<CustomKeys>, String> {
+    if !enabled(fallback, saved)? {
+        return Ok(None);
+    }
+    load_from(candidates, read)
+}
+
 /// The option: the saved checkbox when the options panel has one, else the client's fallback
 /// row (`0` or `1`).
 fn enabled(fallback: Option<&[u8]>, saved: Option<bool>) -> Result<bool, String> {

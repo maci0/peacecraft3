@@ -239,6 +239,10 @@ enum Kind {
 pub(crate) fn eligible(frame: &str) -> bool {
     join(frame).is_some()
 }
+#[cfg(test)]
+pub(crate) fn join_for_test(frame: &str) -> Option<&'static str> {
+    join(frame).map(|(key, _)| key)
+}
 fn join(frame: &str) -> Option<(&'static str, Kind)> {
     use Kind::{Checkbox as C, Popup as P, Slider as S};
     Some(match frame {
