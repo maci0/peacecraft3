@@ -149,7 +149,8 @@ class JevProvider(Provider):
     """Provider callable matching the harness Provider interface.
 
     api_key: explicit key (tests) — otherwise loaded in-process from the
-      authorized .secrets path via secrets.load_key_in_process().
+      authorized .secrets path via secrets.load_key_in_process(), with
+      key_path/environ forwarded to it (explicit path > env > KEY_PATH).
     candidates: finite map id -> action dict (subset of criteria keys).
     transport: injectable HTTP transport (mock tests); default stdlib
       urllib POST with redirects refused, timeout + size limits.
@@ -167,10 +168,11 @@ class JevProvider(Provider):
                  max_request_bytes: int = MAX_REQUEST_BYTES,
                  max_response_bytes: int = MAX_RESPONSE_BYTES,
                  include_image: bool = False,
-                 image_ref: str = "FRAME_REF"):
+                 image_ref: str = "FRAME_REF",
+                 key_path=None, environ=None):
         if api_key is None:
             from .secrets import load_key_in_process
-            api_key = load_key_in_process()  # SecretsError propagates
+            api_key = load_key_in_process(key_path, environ=environ)  # SecretsError propagates
         if not isinstance(api_key, str) or not api_key.strip():
             raise ProviderError("api key must be a non-empty string (not logged)")
         self._api_key = api_key.strip()
