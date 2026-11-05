@@ -12,7 +12,7 @@ from .jev_provider import (
     JevProvider, parse_box_answer, box_to_pixels, default_candidates,
     API_URL, MODEL,
 )
-from .backend import GameBackend, SyntheticBackend, OriginalReferenceBackend, BackendError
+from .backend import GameBackend, SyntheticBackend, OriginalReferenceBackend, BackendError, PeaceCraftBrowserBackend
 from .dynamic_candidates import DynamicJevProvider, build_candidates
 from .secrets import load_key_in_process, SecretsError, KEY_PATH, ENV_NAME
 from .redact import redact, redact_text
@@ -23,7 +23,7 @@ __all__ = [
     "Provider", "FakeProvider", "Observation", "ProviderError",
     "JevProvider", "DynamicJevProvider", "build_candidates", "parse_box_answer", "box_to_pixels", "default_candidates",
     "API_URL", "MODEL",
-    "GameBackend", "SyntheticBackend", "OriginalReferenceBackend", "BackendError",
+    "GameBackend", "SyntheticBackend", "OriginalReferenceBackend", "BackendError", "PeaceCraftBrowserBackend",
     "load_key_in_process", "SecretsError", "KEY_PATH", "ENV_NAME",
     "redact", "redact_text",
 ]
