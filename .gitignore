@@ -3,6 +3,8 @@
 /target-menu-visual
 **/*.rs.bk
 Cargo.lock.orig
+.secrets
+*.secrets
 
 # Reverse-engineering caches and vendored assets
 /.rea
