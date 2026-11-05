@@ -145,3 +145,25 @@ text and disabled-control differences remain visible; world state and ticks are
 still unsynchronized. The five synthetic app tests, explicit selected-asset
 admission gate, native/WASM builds and native/WASM Clippy pass with warnings
 as errors. These results do not close full-menu functional or pixel acceptance.
+
+## Quit and configuration completion (2026-11-05)
+
+The failed capture exposes duplicate application admission, independently of
+native-menu semantics. `browser_configuration::consume` already binds, parses
+and publishes the selected map before returning its completed outcome. The
+chapter completion handler nevertheless generated another `MapRequest`. That
+handler was inside the frontend input/hidden-campaign gate, so a completed launch
+could stay pending throughout gameplay and be redelivered when Quit revealed the
+frontend. The new session observed during frozen capture had unchanged Bevy
+clocks and game time zero.
+
+Completion acknowledgement now runs outside the input gate and consumes only
+the configuration outcome; it does not submit the already-admitted map again.
+The explicit selected-chapter fixture also asserts no completion remains pending
+after publication. Nineteen synthetic campaign-menu tests, the explicit selected-chapter session
+gate, native/WASM builds and strict native/WASM Clippy pass. The isolated rendered
+run completes Quit, retired session/camera/HUD checks, a frozen exit capture and
+an explicit subsequent chapter launch; its restart receipt is emitted. The full
+test still exits with an unrelated actor-render assertion for an unsupported
+CityBuildingSmall PRE2 emitter mode. No complete rendered or pixel acceptance is
+claimed. Local scratch receipts are subject to release cleanup.

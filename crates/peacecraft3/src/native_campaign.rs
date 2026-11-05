@@ -32,7 +32,7 @@ use peacecraft3::campaign_loading::{
 };
 use peacecraft3::map_binding::{BindingLimits, OverlayLimits};
 use peacecraft3::map_requests::MapBindings;
-use peacecraft3::map_requests::{MapRequest, MapRequestSet, MapRequests};
+use peacecraft3::map_requests::{MapRequestSet, MapRequests};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -158,7 +158,6 @@ pub(crate) fn install(app: &mut App) {
                 refresh,
                 populate,
                 launch,
-                request,
                 render_campaign_panel,
                 mission_scroll,
                 select_campaign,
@@ -171,6 +170,7 @@ pub(crate) fn install(app: &mut App) {
                 .before(MapRequestSet::Deliver)
                 .before(crate::button_actions::clear),
         )
+        .add_systems(Update, acknowledge_launch.before(MapRequestSet::Deliver))
         .add_systems(
             Update,
             ensure_loading
@@ -893,13 +893,8 @@ fn launch_mission(
     }
 }
 
-/// Once the configuration is admitted, request its map like the load button does.
-fn request(
-    inbox: Res<ConfigurationInbox>,
-    state: Res<MapRequests>,
-    mut chapters: ResMut<Chapters>,
-    mut requests: MessageWriter<MapRequest>,
-) {
+// Configuration admission already publishes the map; completion must not depend on UI input.
+fn acknowledge_launch(inbox: Res<ConfigurationInbox>, mut chapters: ResMut<Chapters>) {
     let Some((id, _)) = chapters.pending else {
         return;
     };
@@ -907,14 +902,8 @@ fn request(
         Ok(Poll::Pending) => {}
         Ok(Poll::Completed(outcome)) => {
             chapters.pending = None;
-            match outcome.result {
-                Ok(()) => match state.selected_map_request() {
-                    Ok(request) => {
-                        requests.write(request);
-                    }
-                    Err(error) => chapters.error = Some(error.to_string()),
-                },
-                Err(error) => chapters.error = Some(error.to_string()),
+            if let Err(error) = outcome.result {
+                chapters.error = Some(error.to_string());
             }
         }
         Err(error) => {
@@ -2003,6 +1992,10 @@ pub(crate) mod tests {
             )
             .expect("activated chapter publishes its recipe");
         assert!(Arc::ptr_eq(&recipe, &indexed_recipe,));
+        assert!(
+            app.world().resource::<Chapters>().pending.is_none(),
+            "published launch must acknowledge its configuration"
+        );
         let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
         assert!(
             session
