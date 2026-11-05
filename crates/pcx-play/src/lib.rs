@@ -203,6 +203,7 @@ pub mod selection_subgroups;
 
 pub mod harvest_rules;
 
+pub mod escape_help_tips;
 pub mod escape_layout;
 pub mod inventory_layout;
 pub mod inventory_powerup;
