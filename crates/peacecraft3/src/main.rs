@@ -178,6 +178,9 @@ mod view_format_guard_tests {
     include!("../../../vendor/bevy_render/src/view/texture_view_formats.rs");
 }
 
+#[cfg(all(test,not(target_arch="wasm32"),feature="test-fixtures"))]
+#[allow(dead_code, reason = "test-only fixture; binary links only its tests")]
+mod gameplay_fixture;
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "test-fixtures"))]
 mod campaign_entry_gpu_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
