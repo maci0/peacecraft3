@@ -2182,6 +2182,131 @@ fn canonical_persistent_session_order_step_cancel_stop() {
     println!("canonical persistent: step1={step1_state:?} step2={step2_state:?} moved_sq={moved_total:.1} time {t0}->{t1}->{t2}");
 }
 
+/// Real cross-process canonical interaction: builds the canonical started
+/// app (same prologue as the fixtures above) and hands it to the EXISTING
+/// `gameplay_fixture::run_fixture` file loop, driven by caller-owned
+/// `PCX_GAMEPLAY_FIXTURE_DIR`. The Python `CanonicalFixtureClient`
+/// (tools/jev-harness) sends typed move/step/cancel/stop; this entry only
+/// proves the Rust side honors them in one session. Observed units are
+/// ownership/visibility-filtered in `gameplay_observation::observe`; no
+/// pixel/vision claim. Ignored: needs local original assets (KnownLegacy,
+/// Prologue01/02 via PCX_NATIVE_CHAPTER_* selecting roc).
+#[test]
+#[ignore = "requires PCX_NATIVE_CHAPTER_* (KnownLegacy Prologue01/02, roc) and caller-owned PCX_GAMEPLAY_FIXTURE_DIR; real cross-process canonical fixture"]
+fn canonical_fixture_real_interaction() {
+    use pcx_script::Host as _;
+    let dir = std::path::PathBuf::from(std::env::var("PCX_GAMEPLAY_FIXTURE_DIR").unwrap());
+    assert!(
+        !dir.join(crate::gameplay_fixture::RESPONSE_FILE).exists(),
+        "fixture response must be new"
+    );
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = crate::native_campaign::tests::started_app();
+    for _ in 0..300 {
+        let controlled = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .is_some_and(|h| {
+                let o = h.objects();
+                o.presentation().is_some_and(|st| {
+                    st.control_enabled == Some(true) && st.interface_visible == Some(true)
+                })
+            });
+        if controlled {
+            break;
+        }
+        let in_cine = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .is_some_and(|h| {
+                h.objects()
+                    .presentation()
+                    .is_some_and(|st| st.control_enabled == Some(false))
+            });
+        if in_cine {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let _ = session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .fire_local_player_event("EVENT_PLAYER_END_CINEMATIC");
+            let _ = session.advance_queued_events(4096);
+        }
+        app.update();
+    }
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects_mut();
+        objects
+            .native("EnableUserControl", &[pcx_script::Value::Bool(true)])
+            .unwrap();
+        objects
+            .native(
+                "ShowInterface",
+                &[pcx_script::Value::Bool(true), pcx_script::Value::Real(0.)],
+            )
+            .unwrap();
+        objects
+            .native("PauseGame", &[pcx_script::Value::Bool(false)])
+            .unwrap();
+    }
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let local = session
+            .host()
+            .unwrap()
+            .objects()
+            .local_player_number()
+            .unwrap();
+        let unit = {
+            let objects = session.host().unwrap().objects();
+            objects
+                .executed_units()
+                .filter(|(_, r)| {
+                    r.shown
+                        && r.activity.as_ref().is_some_and(|a| a.movable())
+                        && r.combat.as_ref().is_some_and(|c| !c.dead)
+                        && objects
+                            .player_settings(r.owner)
+                            .is_ok_and(|p| p.number == local)
+                })
+                .max_by(|a, b| {
+                    let la = a.1.vitals.as_ref().map(|v| v.life).unwrap_or(0.0);
+                    let lb = b.1.vitals.as_ref().map(|v| v.life).unwrap_or(0.0);
+                    la.partial_cmp(&lb).unwrap()
+                })
+                .map(|(id, _)| id)
+                .expect("a real owned movable unit")
+        };
+        let _ = session.host().unwrap().objects_mut().native(
+            "PauseUnit",
+            &[
+                pcx_script::Value::Handle(unit),
+                pcx_script::Value::Bool(false),
+            ],
+        );
+    }
+    let mut started = crate::gameplay_fixture::Started::new(app);
+    let processed = crate::gameplay_fixture::run_fixture(&mut started, &dir, 200_000)
+        .expect("fixture loop must end via Stop");
+    eprintln!(
+        "canonical fixture real interaction: processed={processed} dir={}",
+        dir.display()
+    );
+    assert!(
+        processed >= 3,
+        "move+step+cancel+stop must be processed: {processed}"
+    );
+}
+
 
 // Keep layout evidence at the exact screenshot checkpoint, before later HUD interactions.
 fn retain_text_layouts(app: &mut App, output: &Path) {
