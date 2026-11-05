@@ -253,7 +253,7 @@ mod tests {
         nav.applied.toggles.insert(CHECKBOX.into(), false);
         nav.draft.toggles.insert(CHECKBOX.into(), true);
         nav.action("CancelButton");
-        assert_eq!(nav.draft.toggles[CHECKBOX], false, "cancel restores applied false");
+        assert!(!nav.draft.toggles[CHECKBOX], "cancel restores applied false");
         assert!(!enabled(Some(b"0"), Some(nav.applied.toggles[CHECKBOX])).unwrap());
         // Previous binding preserved: card still shows T (file not re-read on cancel
         // until new session); new session with applied false reads no file.

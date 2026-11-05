@@ -65,6 +65,7 @@ pub(crate) struct EscapeMenu {
     attempted: bool,
     pending: Option<(String, Page, Weak<()>)>,
     pub last_error: Option<String>,
+    tips: pcx_play::escape_help_tips::TipSelection,
 }
 impl EscapeMenu {
     pub(crate) fn receipt_count(&self) -> usize {
@@ -82,6 +83,10 @@ struct Source {
     fonts: HashMap<String, Handle<Font>>,
     reader: Arc<pcx_assets::Resolver>,
     receipts: Vec<AssetReceipt>,
+    tips: pcx_play::escape_help_tips::TipStrings,
+    tips_style: crate::menu_text::TextStyle,
+    tips_rect: Rect,
+    tips_inset: f32,
 }
 #[derive(Component)]
 pub(crate) struct EscapeRoot;
@@ -199,6 +204,9 @@ fn enabled(frame: &str) -> bool {
             | "ConfirmQuitQuitButton"
             | "ConfirmQuitCancelButton"
             | "TipsButton"
+            | "TipsBackButton"
+            | "TipsNextButton"
+            | "TipsOKButton"
     )
 }
 fn act(
@@ -228,6 +236,21 @@ fn act(
         "ExitButton" => state.page = Page::ConfirmExit,
         "ConfirmQuitCancelButton" => state.page = Page::End,
         "TipsButton" => state.page = Page::Tips,
+        "TipsBackButton" => {
+            let tips = state.source.as_ref().map(|s| s.tips.clone());
+            if let Some(tips) = tips {
+                state.tips.previous(&tips);
+            }
+            state.painted = None;
+        }
+        "TipsNextButton" => {
+            let tips = state.source.as_ref().map(|s| s.tips.clone());
+            if let Some(tips) = tips {
+                state.tips.next(&tips);
+            }
+            state.painted = None;
+        }
+        "TipsOKButton" => state.page = Page::Main,
         "ConfirmQuitQuitButton" => {
             if cfg!(target_arch = "wasm32") {
                 inputs.session.clear();
@@ -308,10 +331,8 @@ fn items(
     }
     let (mut items, unsupported) =
         glue_menu::control_items(fdf, page.frame(), size).map_err(|e| e.to_string())?;
-    // TEXTAREA rendering is pending (see docs/re-notes/escape-help-tips.md);
-    // first slice admits the Tips panel chrome without its text area.
-    // The actual Tips OK button name is pending FDF confirmation; closing
-    // the page uses the generic page.back()/Escape path for now.
+    // TEXTAREA child is rendered as the Tips label in project(); the
+    // control whitelist only admits the panel chrome here.
     let unsupported: Vec<_> = unsupported
         .into_iter()
         .filter(|name| name != "TEXTAREA TipsTextArea")
@@ -391,6 +412,7 @@ fn load(
     race: Option<String>,
     fonts: &mut Assets<Font>,
     layout: pcx_play::escape_layout::Rules,
+    install: Option<&std::path::Path>,
 ) -> Result<Source, String> {
     let mut receipts = Vec::new();
     let mut fdf =
@@ -402,6 +424,49 @@ fn load(
         .map_err(|e| e.to_string())?;
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let strings = text(&reader, r"UI\FrameDef\GlobalStrings.fdf", &mut receipts)?;
+    // Tips body + qualified default font (bounded via text(); no scrollbar first slice).
+    let tips_text = text(&reader, r"UI\TipStrings.txt", &mut receipts)?;
+    let tips = pcx_play::escape_help_tips::TipStrings::parse(&tips_text)?;
+    let misc = text(&reader, r"UI\MiscUI.txt", &mut receipts)?;
+    let default_font = crate::menu_lighting::with_client_image(install, |src, image| {
+        pcx_play::escape_help_tips::DefaultFont::read(
+            image,
+            pcx_play::scripts::AssetIdentity {
+                source: src.into(),
+                edition: "selected menu client".into(),
+                version: "reviewed Legacy 1.29.2.9231 escape default font".into(),
+            },
+            &misc,
+        )
+    })?;
+    let tips_rect = fdf
+        .rect("TipsTextArea", (layout.viewport[0], layout.viewport[1]))
+        .map_err(|e| e.to_string())?;
+    let inset_numbers = fdf
+        .numbers("EscMenuTextAreaTemplate", "TextAreaInset")
+        .map_err(|e| e.to_string())?
+        .ok_or("EscMenuTextAreaTemplate: missing TextAreaInset")?;
+    let [inset] = inset_numbers.as_slice() else {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    };
+    if !inset.is_finite() || *inset < 0. {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    }
+    let tips_style = crate::menu_text::render_style_with_font(
+        &fdf,
+        "TipsTextArea",
+        "TipsPanel",
+        Some((default_font.font_path.clone(), default_font.wrapping_height())),
+    )?;
+    // Ensure decoded default-font bytes resolve through the same reader.
+    {
+        let asset = reader
+            .resolve_bounded(&default_font.font_path, 16 << 20)
+            .map_err(|e| format!("{}: {e}", default_font.font_path))?;
+        if !crate::hud_render::font_registers(&asset.bytes) {
+            return Err(format!("{}: unreadable font", default_font.font_path));
+        }
+    }
     if fdf.frame(&layout.root_frame).is_none() {
         return Err(format!(
             "escape menu: missing native root {}",
@@ -417,6 +482,10 @@ fn load(
         fonts: HashMap::new(),
         reader,
         receipts,
+        tips,
+        tips_style,
+        tips_rect,
+        tips_inset: *inset,
     };
     let mut decoded = HashMap::new();
     let mut seen = HashSet::new();
@@ -558,7 +627,7 @@ fn project(
                     .as_deref()
                     .and_then(crate::launch_gui::selected_install);
                 let layout = read_layout(install.as_deref())?;
-                load(reader, race, &mut fonts, layout)
+                load(reader, race, &mut fonts, layout, install.as_deref())
             }) {
             Ok(source) => state.source = Some(source),
             Err(error) => {
@@ -617,6 +686,49 @@ fn project(
         ))
         .id();
     glue_menu::spawn_in(&mut commands, root, &items, source.layout.viewport);
+    if state.page == Page::Tips {
+        let view = source.layout.viewport;
+        let mut rect = source.tips_rect;
+        let panel = (
+            source.fdf.width("TipsPanel").unwrap_or(0.),
+            source.fdf.height("TipsPanel").unwrap_or(0.),
+        );
+        let origin = source.layout.position([panel.0, panel.1]).unwrap_or([0., 0.]);
+        rect.left += origin[0];
+        rect.bottom += origin[1];
+        let container = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(rect.left / view[0] * 100.),
+                    top: percent((view[1] - rect.top()) / view[1] * 100.),
+                    width: percent(rect.width / view[0] * 100.),
+                    height: percent(rect.height / view[1] * 100.),
+                    padding: UiRect::all(Val::Vh(source.tips_inset / view[1] * 100.)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(root).add_child(container);
+        let font_handle = source.fonts.get(&source.tips_style.font).cloned();
+        if let Some(font) = font_handle {
+            let body = state.tips.current(&source.tips).unwrap_or_default();
+            let _ = crate::campaign_script_dialogs::label(
+                &mut commands,
+                container,
+                body,
+                &source.tips_style,
+                &font,
+            );
+        } else {
+            state.last_error = Some(format!(
+                "TipsTextArea: missing decoded font {}",
+                source.tips_style.font
+            ));
+        }
+    }
     if let Some(old) = state.root.replace(root) {
         commands.entity(old).try_despawn();
     }
@@ -883,9 +995,11 @@ mod tests {
         assert_eq!(Page::Tips.frame(), "TipsPanel");
         assert_eq!(Page::Tips.back(), Some(Page::Main));
         assert!(enabled("TipsButton"));
-        // No Help transition imported in this Tips-only slice.
+        assert!(enabled("TipsBackButton"));
+        assert!(enabled("TipsNextButton"));
+        assert!(enabled("TipsOKButton"));
+        // Scoped scoping: Help stays out of this Tips-only slice.
         assert!(!enabled("HelpButton"));
-        // Tips OK button name pending FDF confirmation; closing uses back()/Escape.
         let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
         let fdf_tips = Fdf::parse(
             r#"
@@ -909,6 +1023,38 @@ Frame "BACKDROP" "EscMenuBackdrop" {
         .unwrap();
         let plan = items(&fdf_tips, &skin, &["Default".into()], Page::Tips, &layout()).unwrap();
         assert!(plan.iter().all(|i| i.frame != "TipsTextArea"));
+    }
+    #[test]
+    fn tips_next_back_wrap_and_retain_selection_across_hide() {
+        use pcx_play::escape_help_tips::TipStrings;
+        let tips = TipStrings::parse(
+            "[General]\nTipCount=3\nTip1=\"a\"\nTip2=\"b\"\nTip3=\"c\"\n",
+        )
+        .unwrap();
+        let mut sel = pcx_play::escape_help_tips::TipSelection::default();
+        assert_eq!(sel.current(&tips), Some("a"));
+        sel.previous(&tips);
+        assert_eq!(sel.current(&tips), Some("c"), "Back from first wraps to last");
+        sel.next(&tips);
+        assert_eq!(sel.current(&tips), Some("a"), "Next from last wraps to first");
+        sel.next(&tips);
+        assert_eq!(sel.current(&tips), Some("b"));
+        // Hide/show simulation: selection lives in EscapeMenu.tips, untouched
+        // by page hide (project resets page/painted only).
+        let retained = sel;
+        assert_eq!(retained.current(&tips), Some("b"));
+        let mut state = EscapeMenu {
+            tips: retained,
+            page: Page::Main,
+            painted: None,
+            ..Default::default()
+        };
+        assert_eq!(state.tips.current(&tips), Some("b"), "selection retained across hide");
+        // Dirty-on-navigate: act sets painted=None, so project repaints.
+        state.painted = Some(Page::Tips);
+        state.tips.next(&tips);
+        state.painted = None;
+        assert!(state.painted.is_none(), "Next/Back marks page dirty");
     }
     #[test]
     fn single_player_pause_is_hidden_without_reflowing_anchored_controls() {
@@ -1071,10 +1217,14 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             race,
             &mut fonts,
             read_layout(Some(&install)).unwrap(),
+            Some(&install),
         )
         .unwrap();
         assert!(!source.receipts.is_empty() && !fonts.is_empty());
-        for page in [Page::Main, Page::End, Page::ConfirmExit] {
+        assert!(!source.tips.tips.is_empty());
+        assert!(source.tips_style.height > 0.);
+        assert!(!source.tips_style.font.is_empty());
+        for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Tips] {
             let plan = items(
                 &source.fdf,
                 &source.skin,

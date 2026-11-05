@@ -455,10 +455,10 @@ fn misc_font_texture(misc_text: &str, section: &str, key: &str) -> Result<String
         if !in_section {
             continue;
         }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim().eq_ignore_ascii_case(key) {
-                found.push(v.trim().trim_matches('"').to_string());
-            }
+        if let Some((k, v)) = line.split_once('=')
+            && k.trim().eq_ignore_ascii_case(key)
+        {
+            found.push(v.trim().trim_matches('"').to_string());
         }
     }
     match found.len() {

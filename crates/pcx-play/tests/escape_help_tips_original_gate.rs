@@ -67,7 +67,7 @@ fn selected_original_help_tips_default_font_gate() -> Result<(), Box<dyn std::er
     assert!(set.contains(&font.font_path) || set.contains(&font_member), "decoded font path must resolve in selected archives: {}", font.font_path);
     let font_bytes = set.extract(&font.font_path).or_else(|_| set.extract(&font_member))?;
     println!("font bytes: {}", font_bytes.len());
-    assert!(font_bytes.len() > 0, "decoded font is empty");
+    assert!(!font_bytes.is_empty(), "decoded font is empty");
 
     // FDF row height is a separate input from wrapping height.
     let templates = set.extract(r"UI\FrameDef\UI\EscMenuTemplates.fdf")?;
