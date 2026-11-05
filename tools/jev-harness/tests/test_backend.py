@@ -361,3 +361,42 @@ def test_original_apply_refused_before_verify():
             raise AssertionError("expected unverified BackendError")
         except BackendError as e:
             assert "not verified" in str(e)
+
+def test_original_failed_capture_resets_verified_flag():
+    """Regression: failed capture after prior success must not permit apply."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        run = Path(d) / "run"
+        (run / "captures").mkdir(parents=True)
+        runner = Path(d) / "fake-reference.py"
+        cnt = Path(d) / "cnt"
+        cnt.write_text("0")
+        lines = [
+            "import json, sys, pathlib",
+            "run = pathlib.Path(sys.argv[sys.argv.index('--run-dir')+1])",
+            "label = sys.argv[sys.argv.index('--label')+1] if '--label' in sys.argv else 'jev-1'",
+            f"meta = {_good_meta()!r}",
+            f"good = {_png_bytes(1024, 768)!r}",
+            f"bad = {_png_bytes(800, 600)!r}",
+            f"c = int(open({str(cnt)!r}).read()) + 1",
+            f"open({str(cnt)!r}, 'w').write(str(c))",
+            "png = bad if c >= 2 else good",
+            "(run/'captures'/(label+'.png')).write_bytes(png)",
+            "(run/'captures'/(label+'.json')).write_text(json.dumps(meta))",
+            "print(json.dumps({'capture': str(run/'captures'/(label+'.png'))}))",
+        ]
+        runner.write_text("\n".join(lines) + "\n")
+        b = OriginalReferenceBackend(run, width=1024, height=768, runner=runner)
+        b.capture()
+        assert b._verified_geometry is not None
+        try:
+            b.capture()
+            raise AssertionError("expected PNG extent BackendError on second capture")
+        except BackendError:
+            pass
+        assert b._verified_geometry is None, "failed capture must reset verified flag"
+        try:
+            b.apply(Action.from_dict({"kind": "click", "x": 1, "y": 1}))
+            raise AssertionError("expected apply refused after failed capture")
+        except BackendError as e:
+            assert "not verified" in str(e)

@@ -129,8 +129,10 @@ def _png_dimensions(data: bytes) -> tuple[int, int]:
 def _verify_original_geometry(metadata: dict, width: int, height: int) -> dict:
     """Fail-closed verify full-root capture actually IS viewport.
 
-    Reuses replay.native_window-equivalent metadata already emitted by
-    reference.py capture: xdpyinfo display + xwininfo -root -tree windows.
+    Reuses metadata types reference.py capture already emits: xdpyinfo
+    display + xwininfo -root -tree windows (sidecar JSON). Does NOT call
+    replay.native_window (needs live docker-exec + scenario title/DPI,
+    unavailable here).
     Requires: single screen dims == declared, exactly one game window at
     origin with WIDTH/HEIGHT == declared, no other window covering root.
     Never assume matching total dimensions == viewport.
@@ -234,20 +236,34 @@ class OriginalReferenceBackend:
     def capture(self) -> tuple[bytes, dict]:
         self._n += 1
         label = f"jev-{self._n}"
+        # Any failed/stale capture must clear verified flag so apply cannot
+        # run on unverified geometry (TOCTOU: live geometry may change
+        # after this capture; see apply() TOCTOU note).
+        self._verified_geometry = None
         receipt = self._run("capture", "--label", label)
         p = self.run_dir / "captures" / f"{label}.png"
         data = p.read_bytes()
         # PNG IHDR must match declared viewport BEFORE return/actions
-        w, h = _png_dimensions(data)
+        try:
+            w, h = _png_dimensions(data)
+        except BackendError:
+            self._verified_geometry = None
+            raise
         if (w, h) != (self.width, self.height):
+            self._verified_geometry = None
             raise BackendError(f"capture PNG extent {w}x{h} differs from declared viewport {self.width}x{self.height}; no rescaling; refusing")
         # Sidecar JSON carries display/windows from reference.py capture; reuse it.
         meta_path = p.with_suffix(".json")
         try:
             metadata = json.loads(meta_path.read_text())
         except (OSError, json.JSONDecodeError) as e:
+            self._verified_geometry = None
             raise BackendError(f"reference capture metadata unreadable ({e}); verification unsupported, refusing live use") from e
-        geom = _verify_original_geometry(metadata, self.width, self.height)
+        try:
+            geom = _verify_original_geometry(metadata, self.width, self.height)
+        except BackendError:
+            self._verified_geometry = None
+            raise
         self._verified_geometry = geom
         return data, {"receipt": receipt, "label": label,
                       "sha256": hashlib.sha256(data).hexdigest(),
@@ -255,6 +271,12 @@ class OriginalReferenceBackend:
                       "verified_viewport": True}
 
     def apply(self, action: Action) -> dict:
+        # TOCTOU: geometry verified at last successful capture may change in
+        # live client before apply runs; no API to re-verify atomically with
+        # input exists in reference.py (capture is sidecar side-effect, not
+        # a lock). Minimum mitigation: require a fresh successful capture
+        # immediately before each apply path in the harness loop; backend
+        # cannot close the window itself.
         if self._verified_geometry is None:
             raise BackendError("original backend not verified: capture must succeed with geometry verification before any action; refusing")
         if action.kind == "click":
