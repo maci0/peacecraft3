@@ -251,12 +251,27 @@ def test_default_candidates_fail_closed_noop_only():
 def test_hidden_unit_state_fails_closed():
     t = MockTransport(body=_good_response(choice="stop_noop", ids=("stop_noop",)))
     p = _provider(t)
-    for state in [{"units": [{"id": "1", "visible": False}]}, {"units": [{"id": "1", "hidden": True}]}, {"hidden_units": []}]:
+    # Explicit per-unit hidden flags fail closed. Field-name presence
+    # alone (lane03 units carry no visible/hidden flags upstream;
+    # observe() already filters to own-or-visible) is not proof of
+    # hidden enemies and must not be banned.
+    for state in [{"units": [{"id": "1", "visible": False}]}, {"units": [{"id": "1", "hidden": True}]}]:
         try:
             p(Observation(step=0, png_bytes=b"x", width=640, height=480, state=state))
             raise AssertionError("expected hidden rejection")
         except ProviderError:
             pass
+    # Legitimate owned lane03 shape: no visible/hidden flags, upstream
+    # already own/visible-filtered. Must be accepted.
+    lane03 = {"scope": "structured-state sensors (not a vision benchmark)",
+              "game_time": 1.0, "local_player": 1, "selection": ["2a"],
+              "camera_bounds": None,
+              "units": [{"id": "2a", "rawcode": "hfoo", "position": [100.0, 100.0],
+                         "position_source": "live", "life": 500.0, "max_life": 500.0,
+                         "current_order": 0, "screen": [50.0, 50.0], "in_viewport": True}]}
+    assert p(Observation(step=0, png_bytes=b"x", width=640, height=480, state=lane03)) == {"kind": "wait", "wait_ms": 100}
+    # A mere field name does not prove hidden units.
+    assert p(Observation(step=0, png_bytes=b"x", width=640, height=480, state={"hidden_units": [], "units": []})) == {"kind": "wait", "wait_ms": 100}
 
 def test_invalid_candidate_rejected_at_construction():
     t = MockTransport(body=_good_response())
@@ -266,3 +281,16 @@ def test_invalid_candidate_rejected_at_construction():
             raise AssertionError("expected construction rejection")
         except ProviderError:
             pass
+
+def test_far_candidate_rejected_at_call_not_construction():
+    # Construction is schema-only: a click beyond any real viewport is
+    # NOT "validated" here (no fake huge viewport). It must be rejected
+    # at call time against the actual frame bounds.
+    t = MockTransport(body=_good_response(choice="far", ids=("far",)))
+    far = _provider(t, candidates={"far": {"kind": "click", "x": 50000, "y": 50000}},
+                    criteria={"far": "x"})
+    try:
+        far(Observation(step=0, png_bytes=b"x", width=640, height=480, state={}))
+        raise AssertionError("expected frame-bounds rejection at call")
+    except ProviderError:
+        pass

@@ -146,7 +146,8 @@ class JevProvider(Provider):
     """Provider callable matching the harness Provider interface.
 
     api_key: explicit key (tests) — otherwise loaded in-process from the
-      authorized .secrets path via secrets.load_key_in_process().
+      authorized .secrets path via secrets.load_key_in_process(), with
+      key_path/environ forwarded to it (explicit path > env > KEY_PATH).
     candidates: finite map id -> action dict (subset of criteria keys).
     transport: injectable HTTP transport (mock tests); default stdlib
       urllib POST with redirects refused, timeout + size limits.
@@ -164,10 +165,11 @@ class JevProvider(Provider):
                  max_request_bytes: int = MAX_REQUEST_BYTES,
                  max_response_bytes: int = MAX_RESPONSE_BYTES,
                  include_image: bool = False,
-                 image_ref: str = "FRAME_REF"):
+                 image_ref: str = "FRAME_REF",
+                 key_path=None, environ=None):
         if api_key is None:
             from .secrets import load_key_in_process
-            api_key = load_key_in_process()  # SecretsError propagates
+            api_key = load_key_in_process(key_path, environ=environ)  # SecretsError propagates
         if not isinstance(api_key, str) or not api_key.strip():
             raise ProviderError("api key must be a non-empty string (not logged)")
         self._api_key = api_key.strip()
@@ -176,9 +178,28 @@ class JevProvider(Provider):
         self.candidates = dict(candidates) if candidates is not None else default_candidates()
         if not self.candidates:
             raise ProviderError("candidate map must be non-empty")
+        # Schema-only check at construction: viewport bounds are NOT
+        # known here and must not be faked with a huge sentinel viewport.
+        # Actual frame bounds are enforced per call in __call__ (and
+        # again by run_loop) against obs.width/obs.height.
         for _cid, _act in self.candidates.items():
             try:
-                validate_action(Action.from_dict(_act), 100000, 100000)
+                _a = Action.from_dict(_act)
+                if _a.kind == "click":
+                    if _a.button not in ("left", "middle", "right"):
+                        raise ValidationError("invalid button")
+                    if type(_a.x) is not int or type(_a.y) is not int:
+                        raise ValidationError("click coordinates must be integers")
+                    if not (0 <= _a.x and 0 <= _a.y):
+                        raise ValidationError("click coordinates must be non-negative")
+                elif _a.kind == "key":
+                    from .actions import ALLOWED_KEYS
+                    if _a.key not in ALLOWED_KEYS:
+                        raise ValidationError("key not in allowlist")
+                elif _a.kind == "wait":
+                    from .actions import MAX_WAIT_MS
+                    if type(_a.wait_ms) is not int or not (0 < _a.wait_ms <= MAX_WAIT_MS):
+                        raise ValidationError(f"wait_ms must be 1..{MAX_WAIT_MS}")
             except ValidationError as e:
                 raise ProviderError(f"candidate {_cid!r} invalid: {redact_text(str(e))}") from None
         self.criteria = dict(criteria) if criteria is not None else {
@@ -203,8 +224,15 @@ class JevProvider(Provider):
         exposed here — headers contain only non-secret entries; auth is
         added at send time. (Auth header itself is set in __call__.)"""
         state = dict(obs.state) if isinstance(obs.state, dict) else {"note": str(obs.state)}
-        if "hidden_units" in state or "unfiltered_units" in state:
-            raise ProviderError("state must not contain hidden/unfiltered units")
+        # Lane03 observation shape is authoritative for what "hidden"
+        # means: upstream observe() already filters to own-or-visible
+        # units (vision_cell Visible) and emits units WITHOUT any
+        # visible/hidden flags. JSON field-name presence alone does not
+        # prove enemies hidden, so this guard does NOT ban arbitrary
+        # field names (e.g. a state key literally named "hidden_units")
+        # and does NOT replace upstream own/visible filtering. It only
+        # fails closed on an explicit per-unit hidden flag that would
+        # affirmatively mark a listed unit as not visible.
         _units = state.get("units")
         if isinstance(_units, list):
             for _u in _units:

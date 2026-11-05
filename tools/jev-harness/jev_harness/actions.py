@@ -33,12 +33,15 @@ class Action:
             raise ValidationError("missing kind")
         kind = d["kind"]
         if kind not in ("click", "key", "wait"):
-            raise ValidationError(f"unsupported kind: {kind!r}")
-        # Reject unknown fields strictly
+            # No raw value embedded: callers redact, but bare values must
+            # never reach logs/traces even before redaction.
+            raise ValidationError("unsupported kind")
+        # Reject unknown fields strictly (count only, never names/values:
+        # an unknown field name or value may carry credential material)
         allowed = {"kind", "x", "y", "key", "wait_ms", "button"}
         extra = set(d) - allowed
         if extra:
-            raise ValidationError(f"unknown fields: {sorted(extra)}")
+            raise ValidationError(f"unknown fields present: {len(extra)}")
         return cls(
             kind=kind,
             x=d.get("x", 0), y=d.get("y", 0),
@@ -60,7 +63,7 @@ def validate_action(action: Action, width: int, height: int) -> Action:
         raise ValidationError("viewport extent must be positive ints")
     if action.kind == "click":
         if action.button not in ("left", "middle", "right"):
-            raise ValidationError(f"invalid button: {action.button!r}")
+            raise ValidationError("invalid button")
         if type(action.x) is not int or type(action.y) is not int:
             raise ValidationError("click coordinates must be integers")
         if not (0 <= action.x < width and 0 <= action.y < height):
@@ -69,10 +72,10 @@ def validate_action(action: Action, width: int, height: int) -> Action:
             )
     elif action.kind == "key":
         if action.key not in ALLOWED_KEYS:
-            raise ValidationError(f"key not in allowlist: {action.key!r}")
+            raise ValidationError("key not in allowlist")
     elif action.kind == "wait":
         if type(action.wait_ms) is not int or not (0 < action.wait_ms <= MAX_WAIT_MS):
             raise ValidationError(f"wait_ms must be 1..{MAX_WAIT_MS}")
     else:
-        raise ValidationError(f"unsupported kind: {action.kind!r}")
+        raise ValidationError("unsupported kind")
     return action

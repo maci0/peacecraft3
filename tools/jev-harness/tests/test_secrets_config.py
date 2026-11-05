@@ -74,9 +74,22 @@ def test_provider_uses_env_via_injected_environ():
     orig = jp.__dict__.get("load_key_in_process")
     # JevProvider imports inside __init__, so patch secrets module attr.
     orig2 = sec.load_key_in_process
-    sec.load_key_in_process = lambda path=None: "FAKE_INJECTED"
+    sec.load_key_in_process = lambda path=None, environ=None: "FAKE_INJECTED"
     try:
         p = JevProvider(transport=lambda u, h, b, t: (_ for _ in ()).throw(Exception("stop")))
     finally:
         sec.load_key_in_process = orig2
     assert p._api_key == "FAKE_INJECTED"
+
+
+def test_provider_forwards_key_path_and_environ_precedence():
+    """Env used with no explicit path; explicit path wins. Fake only."""
+    import tempfile
+    from jev_harness import JevProvider
+    with tempfile.TemporaryDirectory() as d:
+        kp = Path(d) / "key"
+        kp.write_text("FAKE_PATH_KEY\n")
+        env_only = JevProvider(environ={"TYPESAFE_API_KEY": "FAKE_ENV_KEY"}, transport=lambda u,h,b,t: (_ for _ in ()).throw(Exception("stop")))
+        assert env_only._api_key == "FAKE_ENV_KEY"
+        with_path = JevProvider(key_path=kp, environ={"TYPESAFE_API_KEY": "FAKE_ENV_KEY"}, transport=lambda u,h,b,t: (_ for _ in ()).throw(Exception("stop")))
+        assert with_path._api_key == "FAKE_PATH_KEY"
