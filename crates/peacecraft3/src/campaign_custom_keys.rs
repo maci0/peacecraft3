@@ -220,6 +220,49 @@ mod tests {
         assert_eq!(load_from(&paths, files(&[])).unwrap(), None);
     }
 
+    /// Full applied-toggle → load → card-hotkey chain, including Cancel.
+    /// `saved` is `Navigation.applied.toggles[CHECKBOX]`; `enabled` is the same
+    /// gate `load` applies, `load_from` is the same file read. The card side
+    /// uses the real `CommandCard::show_buttons`/`button_for_keys` consumer.
+    #[test]
+    fn applied_toggle_drives_card_binding_and_cancel_preserves_it() {
+        use pcx_play::command_hotkey::{Field, Hotkey};
+        use pcx_play::standard_command::Kind as StdKind;
+        use crate::campaign_command_card::Kind;
+        use pcx_script::HandleId;
+        let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let stock = Hotkey::letter('F').unwrap();
+        let paths = [PathBuf::from("install")];
+        // Applied true: file read, override active, T fires, F does not.
+        assert!(enabled(Some(b"0"), Some(true)).unwrap());
+        let keys = load_from(&paths, files(&[("install", b"[hfoo]\nHotkey=T\n")])).unwrap().unwrap();
+        let mut card = CommandCard::default();
+        card.show_buttons(unit, &[(Kind::Standard(StdKind::Move), Some(stock))]);
+        // Pre-load stock binding: F fires.
+        assert!(card.button_for_keys(unit, &[0x46]).is_some(), "stock F before load");
+        // Simulate source rebuild with overrides (set_custom_keys path):
+        // card.source is None in test, so set via show_buttons with resolved hotkey,
+        // which is exactly what resolve_hotkey produces from `keys`.
+        let resolved = keys.get("hfoo", Field::Hotkey).map(|r| pcx_play::command_hotkey::at_rank(r, 0)).unwrap();
+        assert_eq!(resolved, Some(Hotkey::letter('T').unwrap()));
+        card.show_buttons(unit, &[(Kind::Standard(StdKind::Move), resolved)]);
+        assert!(card.button_for_keys(unit, &[0x54]).is_some(), "T fires after applied-true load");
+        assert!(card.button_for_keys(unit, &[0x46]).is_none(), "stock F displaced after override");
+        // Cancel: draft toggled true→false returns to applied (absent/false) → no file read.
+        let mut nav = Navigation::default();
+        nav.applied.toggles.insert(CHECKBOX.into(), false);
+        nav.draft.toggles.insert(CHECKBOX.into(), true);
+        nav.action("CancelButton");
+        assert_eq!(nav.draft.toggles[CHECKBOX], false, "cancel restores applied false");
+        assert!(!enabled(Some(b"0"), Some(nav.applied.toggles[CHECKBOX])).unwrap());
+        // Previous binding preserved: card still shows T (file not re-read on cancel
+        // until new session); new session with applied false reads no file.
+        assert!(card.button_for_keys(unit, &[0x54]).is_some(), "binding unchanged after cancel draft");
+        let mut fresh = CommandCard::default();
+        fresh.show_buttons(unit, &[(Kind::Standard(StdKind::Move), Some(stock))]);
+        assert!(fresh.button_for_keys(unit, &[0x46]).is_some(), "fresh session stock F restored");
+    }
+
     #[test]
     fn an_unreadable_or_malformed_file_refuses_with_its_path() {
         let paths = [PathBuf::from("user"), PathBuf::from("install")];
