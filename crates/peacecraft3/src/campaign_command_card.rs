@@ -3115,6 +3115,95 @@ mod tests {
         let none = CustomKeys::default();
         assert_eq!(resolve(&none, "hfoo", Field::Hotkey, 0, key('F')), key('F'));
     }
+
+    #[test]
+    fn set_custom_keys_stores_source_keys_resolves_hotkey_settles_and_invalidates_signature() {
+        let path = std::env::var("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
+        let bytes = std::fs::read(&path).unwrap();
+        let identity = AssetIdentity {
+            source: path,
+            edition: "selected local client".into(),
+            version: "reviewed image".into(),
+        };
+        let rules = Rules::reviewed_legacy(&bytes, identity).unwrap();
+        let source = Source {
+            active_art: String::new(),
+            active_material: None,
+            badge_art: String::new(),
+            badge_font: None,
+            badge_height: 0.,
+            disabled_path: "fixture-disabled/".into(),
+            rules,
+            console: "synthetic parent".into(),
+            standard: Vec::new(),
+            skill: fixture_menu(),
+            cancel: fixture_menu(),
+            cancel_build: fixture_menu(),
+            custom_keys: CustomKeys::default(),
+            hero_bar: Err("fixture".into()),
+            group_panel: Err("fixture".into()),
+            images: HashMap::new(),
+            failed: HashMap::new(),
+            retained: 0,
+            receipts: Vec::new(),
+        };
+        let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let owner = HandleId::new(std::num::NonZeroU64::new(9).unwrap());
+        let populated = Signature {
+            header: Header {
+                current: None,
+                held: false,
+                hero: None,
+                unit,
+                owner,
+                local: 1,
+                shown: true,
+                dead: None,
+                movable: true,
+                can_attack: false,
+                constructing: false,
+            },
+            abilities: Vec::new(),
+            builds: Vec::new(),
+            trains: Vec::new(),
+        };
+        let mut card = CommandCard {
+            source: Some(source),
+            signature: Some(populated),
+            ..default()
+        };
+        assert!(
+            card.signature.is_some(),
+            "signature must be populated before invalidation"
+        );
+        assert!(!card.custom_keys_settled);
+        card.set_custom_keys(CustomKeys::parse("[CmdMove]\nHotkey=T\n").unwrap());
+        let stored = card
+            .source
+            .as_ref()
+            .expect("source present")
+            .custom_keys
+            .get("CmdMove", Field::Hotkey)
+            .expect("CmdMove Hotkey stored");
+        assert_eq!(
+            pcx_play::command_hotkey::at_rank(stored, 0),
+            Some(Hotkey::letter('T').unwrap())
+        );
+        let profile = Some(Hotkey::letter('F').unwrap());
+        assert_eq!(
+            card.source
+                .as_ref()
+                .unwrap()
+                .hotkey("CmdMove", Field::Hotkey, 0, profile),
+            Some(Hotkey::letter('T').unwrap()),
+            "Source::hotkey must resolve T over synthetic profile F"
+        );
+        assert!(card.custom_keys_settled, "set_custom_keys must settle");
+        assert!(
+            card.signature.is_none(),
+            "populated signature must be invalidated"
+        );
+    }
 }
 
 #[cfg(test)]
