@@ -23,6 +23,9 @@ mod resolution;
 #[path = "menu_camera_settings.rs"]
 pub(crate) mod camera;
 
+#[path = "menu_gameplay_settings.rs"]
+pub(crate) mod gameplay;
+
 #[path = "menu_slider.rs"]
 mod slider;
 
@@ -207,7 +210,7 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
         !matches!(
             name.as_str(),
             "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
-        )
+        ) && !gameplay::supports(name)
     }) {
         return Err("Saved settings contain an unsupported toggle".into());
     }
@@ -1464,7 +1467,29 @@ fn attach_controls(
                 )
             })
         });
+    let gameplay_defaults = controls
+        .iter()
+        .any(|(_, c)| gameplay::supports(&c.name))
+        .then(|| gameplay::defaults(launcher.as_deref()));
     for (entity, control) in &controls {
+        if gameplay::supports(&control.name) {
+            let result = gameplay_defaults
+                .as_ref()
+                .expect("gameplay batch")
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|seeds| {
+                    let seed = *seeds
+                        .get(&control.name)
+                        .ok_or_else(|| format!("{}: source default missing", control.name))?;
+                    gameplay::attach(&mut commands, entity, control, &mut nav, seed)
+                });
+            if let Err(error) = result {
+                commands.entity(entity).insert(InteractionDisabled);
+                nav.notice = format!("{}: {error}", control.name);
+            }
+            continue;
+        }
         if control.name == "TooltipsCheckBox" {
             let result = tooltip
                 .as_ref()
@@ -1635,7 +1660,8 @@ fn checkbox_changed(
     if !matches!(
         control.name.as_str(),
         "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
-    ) {
+    ) && !gameplay::supports(&control.name)
+    {
         return;
     }
     nav.draft.toggles.insert(control.name.clone(), event.value);
