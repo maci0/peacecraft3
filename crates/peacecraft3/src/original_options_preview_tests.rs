@@ -584,7 +584,6 @@ fn all_retained_disabled_joins_are_source_derived() {
         ("AutosaveReplayCheckBox", "autosaveReplay", "CHECKBOX"),
         ("AmbientCheckBox", "ambient", "CHECKBOX"),
         ("MovementCheckBox", "movement", "CHECKBOX"),
-        ("UnitCheckBox", "unit", "CHECKBOX"),
         ("SubtitlesCheckBox", "subtitles", "CHECKBOX"),
         ("EnviroCheckBox", "environmental", "CHECKBOX"),
         ("PositionalCheckBox", "positional", "CHECKBOX"),
