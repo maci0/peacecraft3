@@ -152,3 +152,13 @@ A subsequent narrowly qualified call-site search found no literal selector
 setup in its assumed 16-byte lookback window. That is a bounded negative,
 not absence of a texture consumer: dynamic arguments, earlier setup and other
 accessors remain possible. No unsupported quality control was enabled.
+
+## Implementation note (pcx-gfx texture quality consumer)
+
+The policy/consumer lands in `crates/pcx-gfx/src/texture_quality.rs` and
+`one_mip` in `crates/pcx-gfx/src/lib.rs`. The mapping is the branch
+derivation above: `q=0 -> mip 1, 0x10`; `q=1,2 -> mip 0, 0x10`;
+`q=3 -> mip 0, 0x20`. `one_mip` decodes only the selected authored BLP
+mip level (direct or JPEG content via the existing `pcx-blp` decoders)
+and refuses absent/invalid levels. No shared menu/settings/glue files
+were touched; UI wiring is a handoff for the integrator.

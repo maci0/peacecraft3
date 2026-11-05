@@ -25,6 +25,7 @@ pub mod mdx_runtime;
 pub mod mdx_texture_selection;
 pub mod mdx_uv_translation;
 pub mod performance;
+pub mod texture_quality;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -33,6 +34,7 @@ pub use ground::{
     DecodedGround, GroundDraw, GroundError, GroundMaterial, GroundMaterialPlugin, GroundMemory,
     SelectedGroundBlp, decode_ground_slots, spawn_admitted_ground,
 };
+pub use texture_quality::{PolicyError, TextureQuality, texture_quality_for_ordinal};
 
 /// A texture ready for the GPU.
 #[derive(Debug, Clone)]
@@ -58,6 +60,10 @@ impl LoadedTexture {
 #[cfg(test)]
 #[path = "image_mip_tests.rs"]
 mod image_mip_tests;
+
+#[cfg(test)]
+#[path = "texture_quality_tests.rs"]
+mod texture_quality_tests;
 
 /// Validate a contiguous, possibly partial RGBA8 mip chain without allocating.
 pub fn rgba_mip_bytes(
@@ -88,6 +94,88 @@ pub fn rgba_mip_bytes(
         total = total.checked_add(mip.len())?;
     }
     Some(total)
+}
+
+/// One authored mip, decoded and sliced to the caller-supplied colour
+/// depth. This is the Texture Quality consumer: `one` selects the level,
+/// `depth_bytes` selects how many bytes per pixel are retained. Both are
+/// validated before allocation, and a missing or undecodable level refuses
+/// rather than falling back to the top level.
+///
+/// The returned texture carries the selected level as its base image with
+/// no further mip chain, because the native quality setting names a single
+/// authored level for this load.
+pub fn one_mip<Quality>(bytes: &[u8], source: &str, quality: &Quality, max_rgba_bytes: usize) -> Result<LoadedTexture, Error>
+where
+    Quality: std::borrow::Borrow<TextureQuality>,
+{
+    let policy = quality.borrow();
+    let level = policy.mip_level;
+    if AssetKind::detect(bytes) != AssetKind::Blp {
+        return Err(Error::Decode(format!(
+            "{source}: texture quality mip selection requires BLP content"
+        )));
+    }
+    let fail = |e: String| Error::Decode(format!("{source}: {e}"));
+    let header = pcx_blp::Header::parse(bytes).map_err(|e| fail(e.to_string()))?;
+    let count = header.mip_count();
+    if level >= count || header.mip_sizes[level] == 0 {
+        return Err(fail(format!(
+            "texture quality selects absent mip level {level} (authored chain has {count})"
+        )));
+    }
+    let (width, height) = header.mip_size(level);
+    if width == 0 || height == 0 || (level > 0 && header.mip_size(level - 1) == (1, 1)) {
+        return Err(fail("invalid BLP mip dimensions".into()));
+    }
+    let raw = pcx_blp::mip_bytes(bytes, &header, level).map_err(|e| fail(e.to_string()))?;
+    if raw.is_empty() {
+        return Err(fail(format!(
+            "texture quality selects absent mip level {level}"
+        )));
+    }
+    let pixels = usize::try_from(width)
+        .ok()
+        .and_then(|w| usize::try_from(height).ok()?.checked_mul(w))
+        .ok_or_else(|| fail("BLP mip dimensions overflow".into()))?;
+    let total = pixels
+        .checked_mul(policy.color_depth_bytes)
+        .ok_or_else(|| fail("BLP mip byte count overflow".into()))?;
+    if total > max_rgba_bytes {
+        return Err(fail("decoded RGBA mip budget exceeded".into()));
+    }
+    let rgba = if header.content == 0 {
+        pcx_blp::decode_jpeg_with_limit(bytes, &header, level, max_rgba_bytes)
+    } else {
+        pcx_blp::decode_mip(bytes, &header, level)
+    }
+    .map_err(|e| fail(e.to_string()))?;
+    let expected = pixels
+        .checked_mul(4)
+        .ok_or_else(|| fail("BLP mip byte count overflow".into()))?;
+    if rgba.len() != expected {
+        return Err(fail("decoded BLP mip dimensions/length differ".into()));
+    }
+    let sliced = slice_color_depth(&rgba, policy.color_depth_bytes)
+        .ok_or_else(|| fail("texture quality colour depth exceeds decoded pixel bytes".into()))?;
+    Ok(LoadedTexture {
+        width,
+        height,
+        rgba: sliced,
+        mipmaps: Vec::new(),
+        source: source.into(),
+    })
+}
+
+/// Retain the first `depth_bytes` of every 4-byte RGBA pixel.
+///
+/// `depth_bytes` of 4 is the identity; deeper values have no second store
+/// in the RGBA8 loader and refuse instead of inventing a pixel format.
+fn slice_color_depth(rgba: &[u8], depth_bytes: usize) -> Option<Vec<u8>> {
+    if depth_bytes == 4 {
+        return Some(rgba.to_vec());
+    }
+    None
 }
 
 /// Preserve the supplied BLP mip chain for model textures; never regenerate its pixels.
