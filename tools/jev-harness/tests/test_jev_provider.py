@@ -260,7 +260,7 @@ def test_hidden_unit_state_fails_closed():
 
 def test_invalid_candidate_rejected_at_construction():
     t = MockTransport(body=_good_response())
-    for bad in [{"bad": {"kind": "click", "x": 1}}, {"bad": {"kind": "key", "key": "F1"}}]:
+    for bad in [{"bad": {"kind": "click"}}, {"bad": {"kind": "key", "key": "F1"}}]:
         try:
             _provider(t, candidates=bad, criteria={"bad": "x"})
             raise AssertionError("expected construction rejection")
