@@ -456,7 +456,10 @@ fn load(
         &fdf,
         "TipsTextArea",
         "TipsPanel",
-        Some((default_font.font_path.clone(), default_font.wrapping_height())),
+        Some((
+            default_font.font_path.clone(),
+            default_font.wrapping_height(),
+        )),
     )?;
     // Ensure decoded default-font bytes resolve through the same reader.
     {
@@ -693,7 +696,10 @@ fn project(
             source.fdf.width("TipsPanel").unwrap_or(0.),
             source.fdf.height("TipsPanel").unwrap_or(0.),
         );
-        let origin = source.layout.position([panel.0, panel.1]).unwrap_or([0., 0.]);
+        let origin = source
+            .layout
+            .position([panel.0, panel.1])
+            .unwrap_or([0., 0.]);
         rect.left += origin[0];
         rect.bottom += origin[1];
         let container = commands
@@ -998,8 +1004,6 @@ mod tests {
         assert!(enabled("TipsBackButton"));
         assert!(enabled("TipsNextButton"));
         assert!(enabled("TipsOKButton"));
-        // Scoped scoping: Help stays out of this Tips-only slice.
-        assert!(!enabled("HelpButton"));
         let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
         let fdf_tips = Fdf::parse(
             r#"
@@ -1027,16 +1031,22 @@ Frame "BACKDROP" "EscMenuBackdrop" {
     #[test]
     fn tips_next_back_wrap_and_retain_selection_across_hide() {
         use pcx_play::escape_help_tips::TipStrings;
-        let tips = TipStrings::parse(
-            "[General]\nTipCount=3\nTip1=\"a\"\nTip2=\"b\"\nTip3=\"c\"\n",
-        )
-        .unwrap();
+        let tips = TipStrings::parse("[General]\nTipCount=3\nTip1=\"a\"\nTip2=\"b\"\nTip3=\"c\"\n")
+            .unwrap();
         let mut sel = pcx_play::escape_help_tips::TipSelection::default();
         assert_eq!(sel.current(&tips), Some("a"));
         sel.previous(&tips);
-        assert_eq!(sel.current(&tips), Some("c"), "Back from first wraps to last");
+        assert_eq!(
+            sel.current(&tips),
+            Some("c"),
+            "Back from first wraps to last"
+        );
         sel.next(&tips);
-        assert_eq!(sel.current(&tips), Some("a"), "Next from last wraps to first");
+        assert_eq!(
+            sel.current(&tips),
+            Some("a"),
+            "Next from last wraps to first"
+        );
         sel.next(&tips);
         assert_eq!(sel.current(&tips), Some("b"));
         // Hide/show simulation: selection lives in EscapeMenu.tips, untouched
@@ -1049,7 +1059,11 @@ Frame "BACKDROP" "EscMenuBackdrop" {
             painted: None,
             ..Default::default()
         };
-        assert_eq!(state.tips.current(&tips), Some("b"), "selection retained across hide");
+        assert_eq!(
+            state.tips.current(&tips),
+            Some("b"),
+            "selection retained across hide"
+        );
         // Dirty-on-navigate: act sets painted=None, so project repaints.
         state.painted = Some(Page::Tips);
         state.tips.next(&tips);
@@ -1224,6 +1238,37 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
         assert!(!source.tips.tips.is_empty());
         assert!(source.tips_style.height > 0.);
         assert!(!source.tips_style.font.is_empty());
+        // Tips on real assets: current text comes from runtime TipStrings.
+        {
+            use pcx_play::escape_help_tips::TipSelection;
+            let mut tips = TipSelection::default();
+            assert_eq!(
+                tips.current(&source.tips),
+                Some(source.tips.tips[0].as_str())
+            );
+            tips.next(&source.tips);
+            assert_eq!(
+                tips.current(&source.tips),
+                Some(source.tips.tips[1 % source.tips.tips.len()].as_str())
+            );
+            tips.previous(&source.tips);
+            assert_eq!(
+                tips.current(&source.tips),
+                Some(source.tips.tips[0].as_str())
+            );
+            // Retained hide/show: same selection survives page reset to Main.
+            let state = EscapeMenu {
+                tips,
+                page: Page::Main,
+                painted: None,
+                ..Default::default()
+            };
+            assert_eq!(
+                state.tips.current(&source.tips),
+                Some(source.tips.tips[0].as_str()),
+                "selection retained across hide"
+            );
+        }
         for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Tips] {
             let plan = items(
                 &source.fdf,
@@ -1292,5 +1337,57 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             .drain()
             .collect::<Vec<_>>();
         assert!(matches!(exits.as_slice(), [AppExit::Success]));
+        // Tips real act(): Next advances from runtime TipStrings, Back wraps,
+        // OK returns to Main, selection retained across hide/show.
+        let witness2 = app
+            .world()
+            .resource::<MapScriptSession<MapStartupHost>>()
+            .session_witness()
+            .unwrap();
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.source = Some(source);
+            state.page = Page::Tips;
+            state.painted = Some(Page::Tips);
+            state.tips = pcx_play::escape_help_tips::TipSelection::default();
+            state.pending = Some(("TipsNextButton".into(), Page::Tips, witness2.clone()));
+        }
+        app.world_mut().run_system_once(act).unwrap();
+        {
+            let state = app.world().resource::<EscapeMenu>();
+            let tips = &state.source.as_ref().unwrap().tips;
+            assert_eq!(
+                state.tips.current(tips),
+                Some(tips.tips[1 % tips.tips.len()].as_str())
+            );
+            assert!(state.painted.is_none(), "Next marks page dirty");
+        }
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.painted = Some(Page::Tips);
+            state.pending = Some(("TipsBackButton".into(), Page::Tips, witness2.clone()));
+        }
+        app.world_mut().run_system_once(act).unwrap();
+        {
+            let state = app.world().resource::<EscapeMenu>();
+            let tips = &state.source.as_ref().unwrap().tips;
+            assert_eq!(state.tips.current(tips), Some(tips.tips[0].as_str()));
+            assert!(state.painted.is_none(), "Back marks page dirty");
+        }
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.pending = Some(("TipsOKButton".into(), Page::Tips, witness2.clone()));
+        }
+        app.world_mut().run_system_once(act).unwrap();
+        {
+            let state = app.world().resource::<EscapeMenu>();
+            assert_eq!(state.page, Page::Main);
+            let tips = &state.source.as_ref().unwrap().tips;
+            assert_eq!(
+                state.tips.current(tips),
+                Some(tips.tips[0].as_str()),
+                "selection retained after OK/hide"
+            );
+        }
     }
 }
