@@ -273,6 +273,19 @@ pub fn render_style_with_parent(
     frame: &str,
     parent: &str,
 ) -> Result<TextStyle, String> {
+    render_style_with_font(fdf, frame, parent, None)
+}
+
+/// Same authored chain as [`render_style_with_parent`], with an explicit
+/// qualified default font (path, height) used when no ancestor supplies
+/// `FrameFont`. Colour/justify/shadow still derive from the authored chain or
+/// that qualified policy; no style is guessed.
+pub fn render_style_with_font(
+    fdf: &crate::fdf::Fdf,
+    frame: &str,
+    parent: &str,
+    default_font: Option<(String, f32)>,
+) -> Result<TextStyle, String> {
     let record_frame = |key: &str| {
         for name in [frame, parent] {
             if fdf.record(name, key).is_some() {
@@ -293,10 +306,14 @@ pub fn render_style_with_parent(
         None
     };
     let record = |key: &str| record_frame(key).and_then(|name| fdf.record(&name, key));
-    let font_record = record("FrameFont").ok_or_else(|| format!("{frame}: missing FrameFont"))?;
-    let (font, height) = parse_frame_font(&font_record)
-        .filter(|(_, h)| h.is_finite() && *h > 0.0)
-        .ok_or_else(|| format!("{frame}: invalid FrameFont"))?;
+    let (font, height) = match record("FrameFont") {
+        Some(font_record) => parse_frame_font(&font_record)
+            .filter(|(_, h)| h.is_finite() && *h > 0.0)
+            .ok_or_else(|| format!("{frame}: invalid FrameFont"))?,
+        None => default_font
+            .filter(|(_, h)| h.is_finite() && *h > 0.0)
+            .ok_or_else(|| format!("{frame}: missing FrameFont"))?,
+    };
     let colour = |key: &'static str, fallback: Option<[f32; 4]>| -> Result<[f32; 4], String> {
         let shadow_parent = (key == "FontShadowColor")
             .then(|| record_frame(key))

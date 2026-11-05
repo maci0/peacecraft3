@@ -427,6 +427,7 @@ pub(crate) fn app_with_plugins(
     crate::campaign_diagnostics::install(&mut app);
     crate::campaign_hud::install(&mut app);
     crate::campaign_escape_menu::install(&mut app);
+    crate::campaign_in_game_options::install(&mut app);
     crate::campaign_inventory::install(&mut app);
     crate::campaign_minimap::install(&mut app);
     crate::campaign_minimap_buttons::install(&mut app);
