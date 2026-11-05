@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from jev_harness.canonical_fixture import FixtureClient
 from jev_harness.decision_adapter import (
