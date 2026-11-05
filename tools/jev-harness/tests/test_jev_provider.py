@@ -234,9 +234,35 @@ def test_nonargmax_choice_uses_codeowned_argmax():
     OpenAPI documents choice as max-prob but does not define a
     non-argmax response as a protocol violation (and a second Doom demo
     samples from probabilities). Adapter explicitly picks argmax."""
-    body = _good_response()  # argmax is select_unit (0.7)
+    body = _good_response()  # argmax is select_unit (0.7) - updated
     body["answers"]["action"]["choice"] = "stop_noop"
     t = MockTransport(body=body); p = _provider4(t)
     action = p(_obs())
     assert action == {"kind": "click", "x": 100, "y": 100}  # select_unit
     assert p.last_summary["choice"] == "select_unit"
+
+def test_default_candidates_fail_closed_noop_only():
+    from jev_harness import default_candidates
+    assert default_candidates() == {"stop_noop": {"kind": "wait", "wait_ms": 100}}
+    t = MockTransport(body=_good_response(choice="stop_noop", ids=("stop_noop",)))
+    p = _provider(t)
+    assert p(_obs()) == {"kind": "wait", "wait_ms": 100}
+
+def test_hidden_unit_state_fails_closed():
+    t = MockTransport(body=_good_response(choice="stop_noop", ids=("stop_noop",)))
+    p = _provider(t)
+    for state in [{"units": [{"id": "1", "visible": False}]}, {"units": [{"id": "1", "hidden": True}]}, {"hidden_units": []}]:
+        try:
+            p(Observation(step=0, png_bytes=b"x", width=640, height=480, state=state))
+            raise AssertionError("expected hidden rejection")
+        except ProviderError:
+            pass
+
+def test_invalid_candidate_rejected_at_construction():
+    t = MockTransport(body=_good_response())
+    for bad in [{"bad": {"kind": "click", "x": 1}}, {"bad": {"kind": "key", "key": "F1"}}]:
+        try:
+            _provider(t, candidates=bad, criteria={"bad": "x"})
+            raise AssertionError("expected construction rejection")
+        except ProviderError:
+            pass
