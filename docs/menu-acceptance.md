@@ -25,7 +25,7 @@ screen authored by the original. Missing screen discovery remains open.
 | Gameplay options | Scroll controls and Enhanced Tooltips have applied/persisted consumers; other controls remain incomplete | Open |
 | Video options | Client-size request/confirmation exists; remaining quality and display behavior remains incomplete | Open |
 | Sound options | Music/effects enable and volume have consumers; remaining category/provider behavior remains incomplete | Open |
-| In-game Main menu | Return and End Game work; Save, Load, Options, Help, Tips and Pause paths remain incomplete | Open |
+| In-game Main menu | Return and End Game work; Save, Load, Options, Help and Tips paths remain incomplete; Pause is hidden in the single-player modal | Open |
 | In-game End Game | Back, restart, quit mission and exit route have consumers | Open |
 | In-game exit confirmation | Confirm/cancel have consumers; native/browser exit behaviors are distinct | Open |
 | Other original dialogs, popups and screens | Enumerate from selected original inputs and runtime observations; absence from current types is unfinished scope | Open |
@@ -57,4 +57,5 @@ Run all automated captures offscreen and muted. Existing evidence and unresolved
 transition questions are linked from [menu navigation](re-notes/menu-panel-navigation.md),
 [camera options](re-notes/input-camera.md),
 [tooltip options](re-notes/held-inventory-presentation.md) and
-[in-game menus](re-notes/campaign-escape-menu.md).
+[in-game menus](re-notes/campaign-escape-menu.md) and
+[Help/Tips bindings](re-notes/escape-help-tips.md).

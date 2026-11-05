@@ -4,6 +4,11 @@ All-menu completion requires every control wired and every source-supported stat
 verified against synchronized original full frames. The current gaps are listed in
 [menu acceptance](docs/menu-acceptance.md). Campaign progression follows that work.
 
+- [~] Single-player escape-menu Pause is omitted, matching the isolated original
+  capture, while its source frame remains available to dependent anchors. The
+  geometry regression passes; rendered/build acceptance is pending. See
+  [Pause visibility](docs/re-notes/campaign-escape-menu.md#single-player-pause-visibility-2026-11-05).
+
 - [~] Enhanced Tooltips now has a source-derived interactive Gameplay checkbox,
   Apply/Cancel and persisted reload. The shared HUD tooltip owner consumes only
   applied state, including updates while already hovered. Full menu functionality

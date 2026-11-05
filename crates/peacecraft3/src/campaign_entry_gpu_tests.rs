@@ -3042,6 +3042,13 @@ fn check_mounted_campaign(hud_only: bool, render_only: bool, cpu_workload: bool)
         .objects()
         .timer_game_time()
         .unwrap();
+    let mut buttons = app.world_mut().query::<&crate::glue_menu::GlueButton>();
+    assert!(
+        buttons
+            .iter(app.world())
+            .all(|button| button.frame != "PauseButton"),
+        "single-player Pause must not be mounted"
+    );
     capture(&mut app, &output.join("escape-main.png"));
     assert!(
         app.world()

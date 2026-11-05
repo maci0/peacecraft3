@@ -46,11 +46,13 @@ browser it clears the session and frontend layer to return to setup. Cancellatio
 emits no exit. Buttons carry the originating session witness and panel identity,
 so stale widget actions cannot act on a replacement session or another panel.
 
-Save, Load, Options, Help and Tips are still unavailable. The separate Pause
-button is disabled; opening this single-player menu already pauses its clock.
-Their source disabled art/text are shown, and they do not report placeholder
-success. This does not qualify the original client's dynamic visibility rules,
-multiplayer menu behavior, quit/score choices or exact transition timing.
+Save, Load, Options, Help and Tips are still unavailable. Their source disabled
+art/text are shown, and they do not report placeholder success. The separate
+Pause control is omitted in this single-player modal, matching the isolated RoC
+reference capture; its FDF frame remains available to resolve other controls'
+anchors. Opening the menu already pauses the single-player clock. Multiplayer
+visibility/pause behavior, quit/score choices and exact transition timing remain
+unqualified. See [the live menu evidence](escape-help-tips.md#isolated-live-font-and-navigation-check-2026-11-05).
 
 ## Verification
 
@@ -77,3 +79,20 @@ The overall rendered gate still fails for sky illumination and terrain/tree sigh
 occlusion. No original-client paired pixels, audible mixing comparison, browser
 menu device run or full mission-objective completion is claimed. The unavailable
 controls and broader scripting/game-mechanics plan remain acceptance work.
+
+## Single-player Pause visibility (2026-11-05)
+
+The fresh isolated RoC reference's Game Menu omits Pause while retaining the
+space/anchor relationships used by the remaining controls. The recreation now
+omits that painted control in its single-player escape-menu plan. Its FDF node
+remains intact, so controls anchored to it continue resolving through the source
+graph. No source dimensions or offsets are replaced or fitted to the capture.
+
+The synthetic regression uses nonstock geometry and anchors Save below Pause,
+then checks that Save retains its source-derived position after Pause is omitted.
+The targeted escape-menu suite passes five tests; its explicit original-input
+gate is ignored in that run. The headless mounted-menu capture also checks that
+Pause has no live button entity. That rendered run and strict native/WASM checks
+are still pending under `.scratch/menu-pause-visibility-20261105/`.
+The original reference is verified stopped. Full-frame and multiplayer parity
+remain unqualified.

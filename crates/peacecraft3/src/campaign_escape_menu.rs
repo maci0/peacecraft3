@@ -304,6 +304,8 @@ fn items(
     if !unsupported.is_empty() {
         return Err(format!("escape menu: unsupported controls {unsupported:?}"));
     }
+    // The observed single-player menu hides Pause; its frame still anchors later controls.
+    items.retain(|item| item.frame != "PauseButton");
     let backdrop = glue_menu::backdrop(fdf, "EscMenuBackdrop")
         .map_err(|e| e.to_string())?
         .ok_or("escape menu: missing backdrop")?;
@@ -785,6 +787,49 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn single_player_pause_is_hidden_without_reflowing_anchored_controls() {
+        let fdf = Fdf::parse(
+            r#"
+Frame "FRAME" "EscMenuMainPanel" {
+ SetAllPoints,
+}
+Frame "FRAME" "MainPanel" {
+ Width 0.41,
+ Height 0.37,
+ Frame "GLUETEXTBUTTON" "PauseButton" {
+  Width 0.19,
+  Height 0.031,
+  SetPoint TOP, "EscMenuMainPanel", TOP, 0.0, -0.041,
+ }
+ Frame "GLUETEXTBUTTON" "SaveGameButton" {
+  Width 0.19,
+  Height 0.031,
+  SetPoint TOP, "PauseButton", BOTTOM, 0.0, -0.017,
+ }
+}
+Frame "BACKDROP" "EscMenuBackdrop" {
+ BackdropBackground "PanelArt",
+}
+"#,
+        )
+        .unwrap();
+        let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
+        let source = fdf.rect("SaveGameButton", (0.41, 0.37)).unwrap();
+        let plan = items(&fdf, &skin, &["Default".into()], Page::Main).unwrap();
+        assert!(plan.iter().all(|item| item.frame != "PauseButton"));
+        assert!(
+            fdf.frame("PauseButton").is_some(),
+            "anchor remains in the source graph"
+        );
+        let save = plan
+            .iter()
+            .find(|item| item.frame == "SaveGameButton")
+            .unwrap();
+        assert!((save.rect.left - source.left - (VIEW.0 - 0.41) * 0.5).abs() < 1e-6);
+        assert!((save.rect.bottom - source.bottom - (VIEW.1 - 0.37) * 0.5).abs() < 1e-6);
+    }
+
     #[test]
     fn nonstock_panel_geometry_and_skin_are_preserved() {
         let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/other.blp\n").unwrap();

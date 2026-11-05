@@ -438,5 +438,5 @@ pass, including draft isolation and updates to an already hovered tooltip. Stric
 native Clippy, native build and WASM build pass. The explicit RoC and TFT rendered
 Cancel/Apply/fresh-app-reload gates pass and retain screenshots plus
 `options-checks.json` under `.scratch/menu-tooltips-20261105/{roc,tft}/`.
-Strict WASM Clippy also passes. The explicit source-index gate is still pending
-in that local run; this is not full menu acceptance or pixel parity.
+Strict WASM Clippy and the explicit source-index/descriptor gate also pass.
+This is not full menu acceptance or pixel parity.
