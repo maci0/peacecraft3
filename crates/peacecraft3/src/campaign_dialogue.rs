@@ -376,6 +376,7 @@ impl DialogueAssets {
         scene: &pcx_play::playercolor_host::CinematicScene,
         images: &Assets<Image>,
         materials: &mut Assets<BackdropImage>,
+        show_text: bool,
     ) -> Result<Entity, String> {
         let parsed = crate::rich_text::parse(&scene.text).map_err(|e| e.to_string())?;
         if !parsed.unsupported.is_empty() {
@@ -454,74 +455,76 @@ impl DialogueAssets {
                 commands.entity(root).add_child(id);
             }
         }
-        for (i, name) in [SPEAKER, DIALOGUE].into_iter().enumerate() {
-            let style = &self.styles[i];
-            let rect = checked_rect(&self.fdf, name)?;
-            let mut position = node(rect);
-            position.height = Val::Auto;
-            // Intrinsic speaker width remains content-sized. Dialogue width is authored.
-            if self.fdf.record(name, "Width").is_none() {
-                position.width = Val::Auto;
-            }
-            let font = TextFont {
-                font: bevy::text::FontSource::Handle(self.fonts[&style.font].clone()),
-                font_size: bevy::text::FontSize::Vh(style.height / VIEW.1 * 100.),
-                ..default()
-            };
-            let color = Color::linear_rgba(
-                style.colour[0],
-                style.colour[1],
-                style.colour[2],
-                style.colour[3],
-            );
-            let text = commands
-                .spawn((
-                    position,
-                    Text::new(if i == 0 {
-                        scene.speaker.clone()
-                    } else {
-                        String::new()
-                    }),
-                    font.clone(),
-                    TextColor(color),
-                    TextLayout::new(
-                        match style.justify_h {
-                            crate::menu_text::JustifyH::Left => bevy::text::Justify::Left,
-                            crate::menu_text::JustifyH::Center => bevy::text::Justify::Center,
-                            crate::menu_text::JustifyH::Right => bevy::text::Justify::Right,
-                        },
-                        if self.fdf.record(name, "Width").is_some() {
-                            bevy::text::LineBreak::WordBoundary
-                        } else {
-                            bevy::text::LineBreak::NoWrap
-                        },
-                    ),
-                    TextShadow {
-                        offset: Vec2::ZERO,
-                        color: Color::linear_rgba(
-                            style.shadow_colour[0],
-                            style.shadow_colour[1],
-                            style.shadow_colour[2],
-                            style.shadow_colour[3],
-                        ),
-                    },
-                    glue_menu::FrameShadow(Vec2::from(style.shadow_offset)),
-                    Pickable::IGNORE,
-                ))
-                .id();
-            if i == 1 {
-                for span in &parsed.spans {
-                    let c = span
-                        .colour
-                        .map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]))
-                        .unwrap_or(color);
-                    let child = commands
-                        .spawn((TextSpan::new(span.text.clone()), font.clone(), TextColor(c)))
-                        .id();
-                    commands.entity(text).add_child(child);
+        if show_text {
+            for (i, name) in [SPEAKER, DIALOGUE].into_iter().enumerate() {
+                let style = &self.styles[i];
+                let rect = checked_rect(&self.fdf, name)?;
+                let mut position = node(rect);
+                position.height = Val::Auto;
+                // Intrinsic speaker width remains content-sized. Dialogue width is authored.
+                if self.fdf.record(name, "Width").is_none() {
+                    position.width = Val::Auto;
                 }
+                let font = TextFont {
+                    font: bevy::text::FontSource::Handle(self.fonts[&style.font].clone()),
+                    font_size: bevy::text::FontSize::Vh(style.height / VIEW.1 * 100.),
+                    ..default()
+                };
+                let color = Color::linear_rgba(
+                    style.colour[0],
+                    style.colour[1],
+                    style.colour[2],
+                    style.colour[3],
+                );
+                let text = commands
+                    .spawn((
+                        position,
+                        Text::new(if i == 0 {
+                            scene.speaker.clone()
+                        } else {
+                            String::new()
+                        }),
+                        font.clone(),
+                        TextColor(color),
+                        TextLayout::new(
+                            match style.justify_h {
+                                crate::menu_text::JustifyH::Left => bevy::text::Justify::Left,
+                                crate::menu_text::JustifyH::Center => bevy::text::Justify::Center,
+                                crate::menu_text::JustifyH::Right => bevy::text::Justify::Right,
+                            },
+                            if self.fdf.record(name, "Width").is_some() {
+                                bevy::text::LineBreak::WordBoundary
+                            } else {
+                                bevy::text::LineBreak::NoWrap
+                            },
+                        ),
+                        TextShadow {
+                            offset: Vec2::ZERO,
+                            color: Color::linear_rgba(
+                                style.shadow_colour[0],
+                                style.shadow_colour[1],
+                                style.shadow_colour[2],
+                                style.shadow_colour[3],
+                            ),
+                        },
+                        glue_menu::FrameShadow(Vec2::from(style.shadow_offset)),
+                        Pickable::IGNORE,
+                    ))
+                    .id();
+                if i == 1 {
+                    for span in &parsed.spans {
+                        let c = span
+                            .colour
+                            .map(|c| Color::linear_rgba(c[0], c[1], c[2], c[3]))
+                            .unwrap_or(color);
+                        let child = commands
+                            .spawn((TextSpan::new(span.text.clone()), font.clone(), TextColor(c)))
+                            .id();
+                        commands.entity(text).add_child(child);
+                    }
+                }
+                commands.entity(root).add_child(text);
             }
-            commands.entity(root).add_child(text);
         }
         Ok(root)
     }
@@ -530,6 +533,7 @@ impl DialogueAssets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     const SYNTHETIC: &str = r#"
 Frame "FRAME" "CinematicPanel" {
     SetAllPoints,
@@ -649,6 +653,122 @@ Frame "TEXT" "TestText" {
             let rect = fdf.rect(name, VIEW).unwrap();
             assert!(rect.left.is_finite() && rect.top().is_finite());
             assert!(style.height > 0.);
+        }
+    }
+
+    #[test]
+    fn paint_show_text_gates_only_speaker_and_dialogue_spawns() {
+        let (fdf, styles) = prepare_fdf(SYNTHETIC, TEMPLATE).unwrap();
+        let mut app = bevy::prelude::App::new();
+        app.add_plugins(bevy::prelude::MinimalPlugins);
+        let mut images = Assets::<Image>::default();
+        let image = Image::new_fill(
+            bevy::render::render_resource::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            &[255, 255, 255, 255],
+            bevy::render::render_resource::TextureFormat::Rgba8Unorm,
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        let handle = images.add(image);
+        let mut font_assets = Assets::<Font>::default();
+        let font_handle = font_assets.add(Font::from_bytes(vec![0]));
+        let scene = pcx_play::playercolor_host::CinematicScene {
+            portrait: 0,
+            color: pcx_script::HandleId::new(std::num::NonZeroU64::new(1).unwrap()),
+            speaker: "Synthetic Speaker".into(),
+            text: "Synthetic dialogue".into(),
+            scene_duration: 1.,
+            voiceover_duration: 1.,
+            started: 0.,
+        };
+        app.world_mut().insert_resource(images);
+        app.world_mut()
+            .insert_resource(Assets::<BackdropImage>::default());
+        app.world_mut().insert_resource(font_assets);
+        for show_text in [false, true] {
+            let fdf_iter = fdf.clone();
+            let styles_iter = styles.clone();
+            let scene_iter = scene.clone();
+            let font_handle_iter = font_handle.clone();
+            let handle_iter = handle.clone();
+            let root = app
+                .world_mut()
+                .run_system_once(
+                    move |mut commands: Commands,
+                          images: Res<Assets<Image>>,
+                          mut materials: ResMut<Assets<BackdropImage>>| {
+                        let mut fonts = HashMap::new();
+                        fonts.insert("SyntheticFace".to_owned(), font_handle_iter.clone());
+                        let mut image_map = HashMap::new();
+                        image_map.insert(("synthetic.blp".to_owned(), false), handle_iter.clone());
+                        let mut assets = DialogueAssets {
+                            receipts: Vec::new(),
+                            unsupported: Vec::new(),
+                            fdf: fdf_iter.clone(),
+                            styles: styles_iter.clone(),
+                            fonts,
+                            images: image_map,
+                            backdrops: vec![(
+                                Rect {
+                                    left: 0.,
+                                    bottom: 0.,
+                                    width: 0.1,
+                                    height: 0.1,
+                                },
+                                vec![Layer {
+                                    rect: Rect {
+                                        left: 0.,
+                                        bottom: 0.,
+                                        width: 0.1,
+                                        height: 0.1,
+                                    },
+                                    image: "synthetic.blp".into(),
+                                    piece: None,
+                                    repeats: None,
+                                }],
+                            )],
+                            materials: Vec::new(),
+                        };
+                        assets
+                            .paint(
+                                &mut commands,
+                                &scene_iter,
+                                &images,
+                                &mut materials,
+                                show_text,
+                            )
+                            .unwrap()
+                    },
+                )
+                .unwrap();
+            app.world_mut().flush();
+            let world = app.world();
+            assert!(world.get::<Name>(root).is_some());
+            let children: Vec<Entity> = world
+                .get::<bevy::prelude::Children>(root)
+                .map(|c| c.iter().collect())
+                .unwrap_or_default();
+            let has_text = children.iter().any(|e| world.get::<Text>(*e).is_some());
+            let has_image = children
+                .iter()
+                .any(|e| world.get::<ImageNode>(*e).is_some());
+            assert!(
+                has_image,
+                "backdrop layer must still spawn show_text={show_text}"
+            );
+            assert_eq!(
+                has_text, show_text,
+                "text presence must follow show_text={show_text}"
+            );
+            assert_eq!(
+                children.len(),
+                if show_text { 3 } else { 1 },
+                "show_text={show_text}"
+            );
         }
     }
 
