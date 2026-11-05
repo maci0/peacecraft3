@@ -93,23 +93,20 @@ def _is_finite_number(x) -> bool:
 
 
 def default_candidates() -> dict:
-    """Small finite candidate map with meaningful alternatives,
-    including a safe no-op/stop. IDs are Jev choice criteria keys;
-    values are strict action dicts (validated before apply)."""
+    """Fail-closed default: safe no-op only. Fixed synthetic clicks
+    (100,100)/(200,150) key 'a' were tuned to SyntheticBackend
+    (x<150,y<150); silently usable as real targets vs lane03 live
+    unit `screen` positions. Real candidates must be integrator-
+    supplied per-step (see report). IDs are criteria keys; values
+    are strict action dicts (validated before apply)."""
     return {
         "stop_noop": {"kind": "wait", "wait_ms": 100},
-        "select_unit": {"kind": "click", "x": 100, "y": 100},
-        "move_selected": {"kind": "click", "x": 200, "y": 150},
-        "order_attack": {"kind": "key", "key": "a"},
     }
 
 
 def default_criteria() -> dict:
     return {
         "stop_noop": "Do nothing further this step; safest when state is unclear or done.",
-        "select_unit": "Select the unit near the top-left of the viewport.",
-        "move_selected": "Issue a move order to the point right of the selected unit.",
-        "order_attack": "Issue the attack/order key for the selected unit.",
     }
 
 
@@ -181,6 +178,30 @@ class JevProvider(Provider):
         self.candidates = dict(candidates) if candidates is not None else default_candidates()
         if not self.candidates:
             raise ProviderError("candidate map must be non-empty")
+        # Schema-only check at construction: viewport bounds are NOT
+        # known here and must not be faked with a huge sentinel viewport.
+        # Actual frame bounds are enforced per call in __call__ (and
+        # again by run_loop) against obs.width/obs.height.
+        for _cid, _act in self.candidates.items():
+            try:
+                _a = Action.from_dict(_act)
+                if _a.kind == "click":
+                    if _a.button not in ("left", "middle", "right"):
+                        raise ValidationError("invalid button")
+                    if type(_a.x) is not int or type(_a.y) is not int:
+                        raise ValidationError("click coordinates must be integers")
+                    if not (0 <= _a.x and 0 <= _a.y):
+                        raise ValidationError("click coordinates must be non-negative")
+                elif _a.kind == "key":
+                    from .actions import ALLOWED_KEYS
+                    if _a.key not in ALLOWED_KEYS:
+                        raise ValidationError("key not in allowlist")
+                elif _a.kind == "wait":
+                    from .actions import MAX_WAIT_MS
+                    if type(_a.wait_ms) is not int or not (0 < _a.wait_ms <= MAX_WAIT_MS):
+                        raise ValidationError(f"wait_ms must be 1..{MAX_WAIT_MS}")
+            except ValidationError as e:
+                raise ProviderError(f"candidate {_cid!r} invalid: {redact_text(str(e))}") from None
         self.criteria = dict(criteria) if criteria is not None else {
             k: default_criteria().get(k, f"Take candidate action {k}.")
             for k in self.candidates
@@ -203,6 +224,20 @@ class JevProvider(Provider):
         exposed here — headers contain only non-secret entries; auth is
         added at send time. (Auth header itself is set in __call__.)"""
         state = dict(obs.state) if isinstance(obs.state, dict) else {"note": str(obs.state)}
+        # Lane03 observation shape is authoritative for what "hidden"
+        # means: upstream observe() already filters to own-or-visible
+        # units (vision_cell Visible) and emits units WITHOUT any
+        # visible/hidden flags. JSON field-name presence alone does not
+        # prove enemies hidden, so this guard does NOT ban arbitrary
+        # field names (e.g. a state key literally named "hidden_units")
+        # and does NOT replace upstream own/visible filtering. It only
+        # fails closed on an explicit per-unit hidden flag that would
+        # affirmatively mark a listed unit as not visible.
+        _units = state.get("units")
+        if isinstance(_units, list):
+            for _u in _units:
+                if isinstance(_u, dict) and (_u.get("visible") is False or _u.get("hidden") is True):
+                    raise ProviderError("state contains hidden unit (fail closed)")
         state["step"] = obs.step
         state["viewport"] = {"width": obs.width, "height": obs.height}
         payload = {

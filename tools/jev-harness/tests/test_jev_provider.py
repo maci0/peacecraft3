@@ -19,12 +19,10 @@ def _obs():
                        state={"selected": False, "order_count": 0})
 
 
-def _good_response(choice="select_unit"):
-    probs = {k: 0.05 for k in ("stop_noop", "select_unit", "move_selected", "order_attack")}
-    for k in probs:
-        probs[k] = 0.1
-    probs[choice] = 0.7
-    # sum: 0.7 + 3*0.1 == 1.0
+DEFAULT_IDS = ("stop_noop", "select_unit", "move_selected", "order_attack")
+def _good_response(choice="select_unit", ids=DEFAULT_IDS):
+    probs = {k: 0.1 for k in ids}
+    probs[choice] = 1.0 - 0.1 * (len(ids) - 1)
     return {
         "model": MODEL,
         "answers": {"action": {"type": "choice", "choice": choice,
@@ -50,10 +48,20 @@ class MockTransport:
 def _provider(transport, **kw):
     return JevProvider(api_key="test-key-not-a-secret", transport=transport, **kw)
 
+def _provider4(transport, **kw):
+    return _provider(transport, candidates={
+        "stop_noop": {"kind": "wait", "wait_ms": 100},
+        "select_unit": {"kind": "click", "x": 100, "y": 100},
+        "move_selected": {"kind": "click", "x": 200, "y": 150},
+        "order_attack": {"kind": "key", "key": "a"}}, **kw)
 
 def test_request_exact_official_schema():
     t = MockTransport(body=_good_response())
-    p = _provider(t)
+    p = _provider(t, candidates={
+        "stop_noop": {"kind": "wait", "wait_ms": 100},
+        "select_unit": {"kind": "click", "x": 100, "y": 100},
+        "move_selected": {"kind": "click", "x": 200, "y": 150},
+        "order_attack": {"kind": "key", "key": "a"}})
     action = p(_obs())
     assert action == {"kind": "click", "x": 100, "y": 100}
     assert len(t.calls) == 1
@@ -96,6 +104,8 @@ def test_safe_http_error_no_body_leak():
 
 
 def test_fail_closed_illegal_id():
+    body = _good_response(choice="stop_noop")
+    # default provider now only stop_noop: add others for illegal-id case
     body = _good_response(choice="stop_noop")
     body["answers"]["action"]["choice"] = "nuke_everything"
     body["answers"]["action"]["probabilities"] = {
@@ -158,7 +168,7 @@ def test_candidate_revalidated_against_viewport():
 
 def test_image_mode_opaque_ref_and_header():
     t = MockTransport(body=_good_response())
-    p = _provider(t, include_image=True)
+    p = _provider4(t, include_image=True)
     p(_obs())
     call = t.calls[0]
     assert call["headers"]["TypeSafe-Danger-Zone-Images"] == "true"
@@ -224,9 +234,63 @@ def test_nonargmax_choice_uses_codeowned_argmax():
     OpenAPI documents choice as max-prob but does not define a
     non-argmax response as a protocol violation (and a second Doom demo
     samples from probabilities). Adapter explicitly picks argmax."""
-    body = _good_response()  # argmax is select_unit (0.7)
+    body = _good_response()  # argmax is select_unit (0.7) - updated
     body["answers"]["action"]["choice"] = "stop_noop"
-    t = MockTransport(body=body); p = _provider(t)
+    t = MockTransport(body=body); p = _provider4(t)
     action = p(_obs())
     assert action == {"kind": "click", "x": 100, "y": 100}  # select_unit
     assert p.last_summary["choice"] == "select_unit"
+
+def test_default_candidates_fail_closed_noop_only():
+    from jev_harness import default_candidates
+    assert default_candidates() == {"stop_noop": {"kind": "wait", "wait_ms": 100}}
+    t = MockTransport(body=_good_response(choice="stop_noop", ids=("stop_noop",)))
+    p = _provider(t)
+    assert p(_obs()) == {"kind": "wait", "wait_ms": 100}
+
+def test_hidden_unit_state_fails_closed():
+    t = MockTransport(body=_good_response(choice="stop_noop", ids=("stop_noop",)))
+    p = _provider(t)
+    # Explicit per-unit hidden flags fail closed. Field-name presence
+    # alone (lane03 units carry no visible/hidden flags upstream;
+    # observe() already filters to own-or-visible) is not proof of
+    # hidden enemies and must not be banned.
+    for state in [{"units": [{"id": "1", "visible": False}]}, {"units": [{"id": "1", "hidden": True}]}]:
+        try:
+            p(Observation(step=0, png_bytes=b"x", width=640, height=480, state=state))
+            raise AssertionError("expected hidden rejection")
+        except ProviderError:
+            pass
+    # Legitimate owned lane03 shape: no visible/hidden flags, upstream
+    # already own/visible-filtered. Must be accepted.
+    lane03 = {"scope": "structured-state sensors (not a vision benchmark)",
+              "game_time": 1.0, "local_player": 1, "selection": ["2a"],
+              "camera_bounds": None,
+              "units": [{"id": "2a", "rawcode": "hfoo", "position": [100.0, 100.0],
+                         "position_source": "live", "life": 500.0, "max_life": 500.0,
+                         "current_order": 0, "screen": [50.0, 50.0], "in_viewport": True}]}
+    assert p(Observation(step=0, png_bytes=b"x", width=640, height=480, state=lane03)) == {"kind": "wait", "wait_ms": 100}
+    # A mere field name does not prove hidden units.
+    assert p(Observation(step=0, png_bytes=b"x", width=640, height=480, state={"hidden_units": [], "units": []})) == {"kind": "wait", "wait_ms": 100}
+
+def test_invalid_candidate_rejected_at_construction():
+    t = MockTransport(body=_good_response())
+    for bad in [{"bad": {"kind": "shout"}}, {"bad": {"kind": "key", "key": "F1"}}]:
+        try:
+            _provider(t, candidates=bad, criteria={"bad": "x"})
+            raise AssertionError("expected construction rejection")
+        except ProviderError:
+            pass
+
+def test_far_candidate_rejected_at_call_not_construction():
+    # Construction is schema-only: a click beyond any real viewport is
+    # NOT "validated" here (no fake huge viewport). It must be rejected
+    # at call time against the actual frame bounds.
+    t = MockTransport(body=_good_response(choice="far", ids=("far",)))
+    far = _provider(t, candidates={"far": {"kind": "click", "x": 50000, "y": 50000}},
+                    criteria={"far": "x"})
+    try:
+        far(Observation(step=0, png_bytes=b"x", width=640, height=480, state={}))
+        raise AssertionError("expected frame-bounds rejection at call")
+    except ProviderError:
+        pass

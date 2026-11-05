@@ -77,5 +77,5 @@ def validate_action(action: Action, width: int, height: int) -> Action:
         if type(action.wait_ms) is not int or not (0 < action.wait_ms <= MAX_WAIT_MS):
             raise ValidationError(f"wait_ms must be 1..{MAX_WAIT_MS}")
     else:
-        raise ValidationError(f"unsupported kind: {action.kind!r}")
+        raise ValidationError("unsupported kind")
     return action

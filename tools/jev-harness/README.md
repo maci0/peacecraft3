@@ -17,7 +17,7 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
   instructions, criteria:map<id,text>}}}`. No `messages`/`tools`/
   chat-completions fields exist in this API.
 - **Response:** `{model, answers:{action:{type:"choice", choice, confidence, probabilities}}, usage:{input_tokens, output_tokens}}`. `choice` must be in the candidate set, probabilities must be finite 0..1 covering exactly the candidate IDs and sum to ~1 (tol 0.02), confidence finite 0..1. Any violation → fail closed (`ProviderError`), no action, no retry/replay. **Argmax policy (code-owned, not a contract claim):** OpenAPI documents `choice` as the max-probability option but does not define a non-argmax response with a valid offered-set choice and valid probabilities as a protocol violation; another surveyed Doom demo samples from probabilities. The adapter explicitly selects argmax deterministically rather than rejecting such a response as a contract violation.
-- **Action mapping:** Jev never returns actions directly. Code owns a small finite `candidates` map (id → strict action dict). Default `default_candidates()` (`stop_noop`, `select_unit`, `move_selected`, `order_attack` with fixed synthetic coordinates 100,100 / 200,150) are **synthetic fixtures for harness mechanics only** — they are not real-game targets, not derived from PeaceCraft assets, and must not be treated as live-game targets. Jev selects a candidate ID; the strict `actions.validate_action` re-gates it against the viewport before `run_loop` applies it.
+- **Action mapping:** Jev never returns actions directly. Code owns a small finite `candidates` map (id → strict action dict). Default `default_candidates()` is fail-closed `stop_noop` wait only; fixed synthetic clicks/key from earlier defaults were removed because they were tuned to `SyntheticBackend` and must not be treated as live-game targets. Real candidates must be integrator-supplied per-step. Jev selects a candidate ID; all candidates are schema-checked at construction (kind/button/int/non-negative/key-allowlist/wait bounds, no fake viewport), and the chosen action is re-gated against the actual viewport before `run_loop` applies it.
 - **State mode (default):** structured JSON state only — no images, no raw
   assets sent. Mirrors both surveyed Doom demos (zero pixels by default).
 - **Image mode (opt-in, experimental):** `include_image=True` sends the
@@ -35,7 +35,7 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 
 - **Real-API status 2026-11-05:** no live call was made. Credential location is user-confirmed pending: explicit path > `TYPESAFE_API_KEY` env > legacy default file; until the user confirms the exact location, no live call is made and tests use fake fixtures only (injected `environ` / tmp `path`). No provisioning/payment/account action was taken.
 - **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend` (in-memory fixture) or fully mocked transports. Default candidate coordinates are synthetic fixtures, not PeaceCraft targets. Nothing observed here is PeaceCraft gameplay or the original WC3 client.
-- **Bridge lane note (2ecd48b, not in this branch):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay.
+- **Bridge lane note (2ecd48b, integrated in 1ac7c02):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay. Hidden-unit guard: upstream `observe()` already filters to own-or-visible; the provider only fails closed on an explicit per-unit `visible=False`/`hidden=True`, and does not ban mere field names.
 
 ### Run (stdlib only, headless, no network in tests)
 
@@ -197,5 +197,7 @@ Verification (headless/muted, shared target `/home/maci/Desktop/peacecraft3/targ
 isolated `xvfb-run :99`, `SDL_AUDIODRIVER=dummy`, `ALSA_CARD=null`):
 `cargo test -p peacecraft3 --features test-fixtures` →
 80 + 950 + 2 + 209 + 217 + 7 passed, 0 failed, 127 ignored.
-`pytest tools/jev-harness/tests` → 46 passed (unchanged, incl. CustomKeys path).
-Observation-only; no gameplay claim. Lane05 candidate safety fixes awaited, not imported.
+`pytest tools/jev-harness/tests` → 50 passed after integrating the final
+lane05 harness state (fail-closed noop default, all-candidate schema
+check, chosen-action actual-viewport bound, explicit hidden-flag guard
+only). Observation-only; no gameplay claim.
