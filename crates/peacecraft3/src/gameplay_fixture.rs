@@ -150,7 +150,7 @@ fn validate(req: &FixtureRequest) -> Result<(), String> {
             if units.is_empty() || units.len() > MAX_ORDER_UNITS {
                 return Err(format!("units length {} out of bounds", units.len()));
             }
-            if units.iter().any(|u| *u == 0) {
+            if units.contains(&0) {
                 return Err("unit id 0 is invalid".into());
             }
             if !target
@@ -174,7 +174,7 @@ fn validate(req: &FixtureRequest) -> Result<(), String> {
             if units.is_empty() || units.len() > MAX_ORDER_UNITS {
                 return Err(format!("units length {} out of bounds", units.len()));
             }
-            if units.iter().any(|u| *u == 0) {
+            if units.contains(&0) {
                 return Err("unit id 0 is invalid".into());
             }
             if !seconds.is_finite() || *seconds <= 0.0 || *seconds > MAX_STEP_SECONDS {
