@@ -154,3 +154,100 @@ def test_key_retained_not_reloaded_and_not_in_criteria_or_logs():
     assert "supersecret-xyz" not in json.dumps(p.last_criteria)
     assert "supersecret-xyz" not in json.dumps(p.last_summary)
     # transport header is the only place the key appears (JevProvider contract)
+
+
+def test_run_loop_second_applied_click_uses_fresh_coords():
+    # run_loop integration, owned test only: fake backend changes
+    # projected coords after first apply; SAME provider instance must
+    # rebuild candidates, so SECOND applied click uses fresh coords.
+    from jev_harness import LoopConfig, run_loop
+
+    class _ShiftingBackend:
+        label = "integration fixture (NOT PeaceCraft gameplay)"
+        width = 640
+        height = 480
+
+        def __init__(self):
+            self.applied = []
+
+        def capture(self):
+            coords = [50.0, 60.0] if not self.applied else [300.0, 200.0]
+            return b"x", {"units": [{"id": "2a", "screen": coords,
+                                     "in_viewport": True}]}
+
+        def apply(self, action):
+            self.applied.append(action.to_dict())
+            return {"applied": len(self.applied)}
+
+        def cancelled(self):
+            return False
+
+        def close(self):
+            pass
+
+    transport = MockTransport()
+    provider = DynamicJevProvider(api_key="test-key-not-a-secret",
+                                  transport=transport)
+    backend = _ShiftingBackend()
+    result = run_loop(backend, provider,
+                      # run_loop checks model budget before action budget,
+                      # so with 2/2 both limits reached first would return
+                      # BUDGET_EXHAUSTED. Give model headroom (3) to
+                      # isolate the action-budget stop this test asserts.
+                      LoopConfig(max_model_calls=3, max_actions=2))
+    assert backend.applied == [
+        {"kind": "click", "x": 50, "y": 60, "button": "left"},
+        {"kind": "click", "x": 300, "y": 200, "button": "left"},
+    ], backend.applied
+    assert [e.validated_action for e in result.entries] == backend.applied
+    assert result.model_calls == 2 and result.actions_applied == 2
+    assert provider.calls == 2 and len(transport.calls) == 2
+    # Second transport payload criteria text carries the FRESH coords,
+    # never the stale first-step coords (candidate action dicts are not
+    # sent in the request body; criteria text + applied actions are the
+    # observable evidence, plus provider.last_candidates).
+    assert provider.last_candidates["select_unit_2a"] == {
+        "kind": "click", "x": 300, "y": 200, "button": "left"}
+    blob1 = transport.calls[1]["body"].decode()
+    blob0 = transport.calls[0]["body"].decode()
+    assert "(50, 60)" in blob0 and "(300, 200)" not in blob0
+    assert "(300, 200)" in blob1 and "(50, 60)" not in blob1
+    # Budget honored: 2 model calls / 2 actions, loop stopped on action
+    # budget (model budget 3 not reached; wait never offered so no
+    # COMPLETED_SCRIPT).
+    assert result.stop_reason.value == "action_budget_exhausted"
+
+
+def test_missing_projection_in_run_loop_emits_no_invalid_click():
+    from jev_harness import LoopConfig, run_loop, StopReason
+
+    class _NoProjectionBackend:
+        label = "integration fixture (NOT PeaceCraft gameplay)"
+        width = 640
+        height = 480
+
+        def __init__(self):
+            self.applied = []
+
+        def capture(self):
+            return b"x", {"units": [{"id": "2a"}]}
+
+        def apply(self, action):
+            self.applied.append(action.to_dict())
+            return {"applied": len(self.applied)}
+
+        def cancelled(self):
+            return False
+
+        def close(self):
+            pass
+
+    transport = MockTransport()
+    provider = DynamicJevProvider(api_key="test-key-not-a-secret",
+                                  transport=transport)
+    backend = _NoProjectionBackend()
+    result = run_loop(backend, provider, LoopConfig())
+    assert result.stop_reason == StopReason.COMPLETED_SCRIPT
+    assert backend.applied == [{"kind": "wait", "wait_ms": 100}]
+    assert not any(a.get("kind") == "click" for a in backend.applied)
+    assert result.model_calls == 1 and len(transport.calls) == 1
