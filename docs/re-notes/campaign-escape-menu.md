@@ -21,9 +21,8 @@ Panel dimensions, anchor chains, fonts, strings, justification offsets, button
 states, pressed-label displacement, focus links and texture/sampler settings come
 from those files and the selected skin/global-string tables. The shared glue and
 script-dialog text renderers draw them. Intrinsic title extents come from shaped
-text. The selected panel supplies the root extent; centering that root and sizing
-the common backdrop to it are explicit composition choices, not screenshot fits
-or a claim about native CFrame objects. Input and decoded payload limits precede
+text. The selected panel supplies the backdrop extent. Its placement follows the
+selected executable's modal-root and backdrop anchor chain, as described below. Input and decoded payload limits precede
 asset publication; a refused load registers no partial font set.
 
 ## State and actions
@@ -96,3 +95,53 @@ Pause has no live button entity. That rendered run and strict native/WASM checks
 are still pending under `.scratch/menu-pause-visibility-20261105/`.
 The original reference is verified stopped. Full-frame and multiplayer parity
 remain unqualified.
+
+
+## Native modal anchor chain (2026-11-05)
+
+Static evidence in the reviewed Legacy 1.29.2.9231 image identifies the modal
+container constructor at `0x61d630`. The anchor call at `0x61d706` places its
+root; calls at `0x61d71c` and `0x61d732` supply its extent. The named backdrop
+created at `0x61d750` receives a second anchor at `0x61d788`, then becomes the
+parent of the named escape panel created at `0x61d799`. The backdrop offset is
+therefore part of authored placement; centering each panel directly in the
+window discarded it. Logical viewport factors come independently from the axis
+conversion instructions at `0xab2a9f` and `0xab2ab7`.
+
+`pcx_play::escape_layout` qualifies the selected executable fingerprint, checks
+operand opcodes and call targets, and reads those extents, anchors, offsets and
+frame names at runtime. Original bytes remain local. Both initial projection
+and shaped-text remeasurement compose the same anchor chain. The shared control
+spawner accepts that parsed viewport. Unsupported images or invalid records
+refuse admission rather than substitute guessed placement.
+
+Four synthetic tests cover nonstock anchor composition, operand decoding,
+malformed instructions, invalid anchors and non-finite inputs. The explicit
+selected-original executable gate also passes. These checks establish decoding
+and composition, not rendered pixel parity.
+
+The fresh isolated rendered run reaches and captures the main/end/confirmation
+panels but fails during mission-exit capture. The receipt has no session before
+capture and a newly published session at game time zero afterward, while all
+Bevy clocks remain fixed. This repeats the baseline failure. A redundant check
+for absent host did not resolve it and was removed. The quit/loading publication
+path needs investigation; the capture clock assertion is preserved. No passing
+full rendered run is claimed.
+
+The baseline full-frame comparison against the fresh isolated original capture
+reports 1,015,639 differing pixels out of 1,228,800, with bounds spanning the
+entire frame. Side-by-side, overlay, exact difference, mask and receipt stay in
+`.scratch/menu-pause-visibility-20261105/full-frame-comparison/`. World state,
+camera and animation ticks are not synchronized, so these numbers are diagnostic
+only. The pair exposes the placement error, missing world/HUD dimming and disabled
+controls. No full-menu pixel acceptance is closed by this change.
+
+The new full-frame comparison is retained locally under
+`.scratch/menu-pause-visibility-20261105/full-frame-native-anchors/`. It reports
+1,001,490 differing pixels of 1,228,800 and mean absolute channel error
+22.320694715711806, compared with 25.771567925347224 for the baseline. The
+side-by-side confirms the vertical placement correction. Border tiling, dimming,
+text and disabled-control differences remain visible; world state and ticks are
+still unsynchronized. The five synthetic app tests, explicit selected-asset
+admission gate, native/WASM builds and native/WASM Clippy pass with warnings
+as errors. These results do not close full-menu functional or pixel acceptance.

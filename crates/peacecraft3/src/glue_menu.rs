@@ -1140,11 +1140,16 @@ fn update_setting_art(
 
 /// Spawns `items` under `root`, which covers the authored frame.
 pub fn spawn(commands: &mut Commands, root: Entity, items: &[Item]) {
+    spawn_in(commands, root, items, [VIEWPORT.0, VIEWPORT.1]);
+}
+
+/// Spawns controls in an explicitly sourced logical viewport.
+pub fn spawn_in(commands: &mut Commands, root: Entity, items: &[Item], viewport: [f32; 2]) {
     let frame = Rect {
         left: 0.0,
         bottom: 0.0,
-        width: VIEWPORT.0,
-        height: VIEWPORT.1,
+        width: viewport[0],
+        height: viewport[1],
     };
     for item in items {
         let size = Vec2::new(item.rect.width, item.rect.height);

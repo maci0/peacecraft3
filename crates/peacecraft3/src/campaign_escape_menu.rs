@@ -29,7 +29,6 @@ use std::{
 };
 const PANEL: &str = r"UI\FrameDef\UI\EscMenuMainPanel.fdf";
 const TEMPLATES: &str = r"UI\FrameDef\UI\EscMenuTemplates.fdf";
-const VIEW: (f32, f32) = (crate::mainmenu::FRAME_W, crate::mainmenu::FRAME_H);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Page {
     #[default]
@@ -72,6 +71,7 @@ impl EscapeMenu {
     }
 }
 struct Source {
+    layout: pcx_play::escape_layout::Rules,
     fdf: Fdf,
     skin: SkinTable,
     sections: Vec<String>,
@@ -291,7 +291,9 @@ fn items(
     skin: &SkinTable,
     sections: &[String],
     page: Page,
+    layout: &pcx_play::escape_layout::Rules,
 ) -> Result<Vec<glue_menu::Item>, String> {
+    let view = layout.viewport;
     let size = (
         fdf.width(page.frame()).map_err(|e| e.to_string())?,
         fdf.height(page.frame()).map_err(|e| e.to_string())?,
@@ -306,13 +308,13 @@ fn items(
     }
     // The observed single-player menu hides Pause; its frame still anchors later controls.
     items.retain(|item| item.frame != "PauseButton");
-    let backdrop = glue_menu::backdrop(fdf, "EscMenuBackdrop")
+    let backdrop = glue_menu::backdrop(fdf, &layout.backdrop_frame)
         .map_err(|e| e.to_string())?
         .ok_or("escape menu: missing backdrop")?;
     items.insert(
         0,
         glue_menu::Item {
-            frame: "EscMenuBackdrop".into(),
+            frame: layout.backdrop_frame.clone(),
             rect: Rect {
                 left: 0.,
                 bottom: 0.,
@@ -322,14 +324,15 @@ fn items(
             kind: Kind::Backdrop(backdrop),
         },
     );
+    let origin = layout.position([size.0, size.1])?;
     for item in &mut items {
-        item.rect.left += (VIEW.0 - size.0) * 0.5;
-        item.rect.bottom += (VIEW.1 - size.1) * 0.5;
+        item.rect.left += origin[0];
+        item.rect.bottom += origin[1];
         if ![
-            item.rect.left / VIEW.0,
-            item.rect.bottom / VIEW.1,
-            item.rect.width / VIEW.0,
-            item.rect.height / VIEW.1,
+            item.rect.left / view[0],
+            item.rect.bottom / view[1],
+            item.rect.width / view[0],
+            item.rect.height / view[1],
         ]
         .iter()
         .all(|value| (value * 100.).is_finite())
@@ -356,10 +359,25 @@ fn items(
     }
     Ok(items)
 }
+fn read_layout(
+    install: Option<&std::path::Path>,
+) -> Result<pcx_play::escape_layout::Rules, String> {
+    crate::menu_lighting::with_client_image(install, |source, image| {
+        pcx_play::escape_layout::Rules::read(
+            image,
+            pcx_play::scripts::AssetIdentity {
+                source: source.into(),
+                edition: "selected menu client".into(),
+                version: "reviewed Legacy 1.29.2.9231 escape layout".into(),
+            },
+        )
+    })
+}
 fn load(
     reader: Arc<pcx_assets::Resolver>,
     race: Option<String>,
     fonts: &mut Assets<Font>,
+    layout: pcx_play::escape_layout::Rules,
 ) -> Result<Source, String> {
     let mut receipts = Vec::new();
     let mut fdf =
@@ -371,7 +389,14 @@ fn load(
         .map_err(|e| e.to_string())?;
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let strings = text(&reader, r"UI\FrameDef\GlobalStrings.fdf", &mut receipts)?;
+    if fdf.frame(&layout.root_frame).is_none() {
+        return Err(format!(
+            "escape menu: missing native root {}",
+            layout.root_frame
+        ));
+    }
     let mut source = Source {
+        layout,
         fdf,
         skin,
         sections,
@@ -385,7 +410,13 @@ fn load(
     let mut total = 0usize;
     let mut font_bytes = 0usize;
     for page in [Page::Main, Page::End, Page::ConfirmExit] {
-        for item in items(&source.fdf, &source.skin, &source.sections, page)? {
+        for item in items(
+            &source.fdf,
+            &source.skin,
+            &source.sections,
+            page,
+            &source.layout,
+        )? {
             let label = match &item.kind {
                 Kind::Button(b) => b.text.as_deref(),
                 Kind::Text => Some(item.frame.as_str()),
@@ -458,6 +489,7 @@ fn project(
     mut inputs: Inputs,
     mut fonts: ResMut<Assets<Font>>,
     mut images: ResMut<glue_menu::GlueImages>,
+    launcher: Option<Res<crate::launch_gui::Launcher>>,
 ) {
     let witness = inputs.session.session_witness();
     let same = match (&witness, &state.witness) {
@@ -508,8 +540,13 @@ fn project(
             .objects()
             .local_race_preference_constant()
             .map_err(|e| e.to_string())
-            .and_then(|race| load(reader, race, &mut fonts))
-        {
+            .and_then(|race| {
+                let install = launcher
+                    .as_deref()
+                    .and_then(crate::launch_gui::selected_install);
+                let layout = read_layout(install.as_deref())?;
+                load(reader, race, &mut fonts, layout)
+            }) {
             Ok(source) => state.source = Some(source),
             Err(error) => {
                 state.last_error = Some(error);
@@ -532,7 +569,13 @@ fn project(
     let Some(source) = state.source.as_ref() else {
         return;
     };
-    let items = match items(&source.fdf, &source.skin, &source.sections, state.page) {
+    let items = match items(
+        &source.fdf,
+        &source.skin,
+        &source.sections,
+        state.page,
+        &source.layout,
+    ) {
         Ok(items) => items,
         Err(error) => {
             state.last_error = Some(error);
@@ -560,7 +603,7 @@ fn project(
             glue_menu::ArtSource(source.reader.clone()),
         ))
         .id();
-    glue_menu::spawn(&mut commands, root, &items);
+    glue_menu::spawn_in(&mut commands, root, &items, source.layout.viewport);
     if let Some(old) = state.root.replace(root) {
         commands.entity(old).try_despawn();
     }
@@ -630,6 +673,7 @@ fn fill_labels(
     labels: Query<(Entity, &glue_menu::GlueLabel, &ChildOf), PendingLabels>,
 ) {
     let Some(source) = &state.source else { return };
+    let view = source.layout.viewport;
     for (entity, label, parent) in &labels {
         let result = (|| {
             let mut style = crate::menu_text::render_style(&source.fdf, &label.frame)?;
@@ -674,8 +718,8 @@ fn fill_labels(
             }
             if let Some([x, y]) = label_offset(&source.fdf, &label.frame)? {
                 commands.entity(replacement).insert(Node {
-                    left: Val::Vw(x / VIEW.0 * 100.),
-                    top: Val::Vh(-y / VIEW.1 * 100.),
+                    left: Val::Vw(x / view[0] * 100.),
+                    top: Val::Vh(-y / view[1] * 100.),
                     width: if source.fdf.width(&label.frame).is_ok_and(|w| w == 0.) {
                         Val::Auto
                     } else {
@@ -708,13 +752,14 @@ fn measure(
     let Some(source) = &mut state.source else {
         return;
     };
+    let view = source.layout.viewport;
     for (label, layout) in &labels {
         if layout.size.min_element() > 0. {
             source.fdf.measure_text(
                 &label.0,
                 (
-                    layout.size.x / size.x * VIEW.0,
-                    layout.size.y / size.y * VIEW.1,
+                    layout.size.x / size.x * view[0],
+                    layout.size.y / size.y * view[1],
                 ),
             );
         }
@@ -723,17 +768,24 @@ fn measure(
         source.fdf.width(page.frame()).unwrap(),
         source.fdf.height(page.frame()).unwrap(),
     );
+    let origin = match source.layout.position([panel.0, panel.1]) {
+        Ok(origin) => origin,
+        Err(error) => {
+            state.last_error = Some(error);
+            return;
+        }
+    };
     for (position, mut node) in &mut nodes {
-        if position.0 == "EscMenuBackdrop" {
+        if position.0 == source.layout.backdrop_frame {
             continue;
         }
         if let Ok(mut rect) = source.fdf.rect(&position.0, panel) {
-            rect.left += (VIEW.0 - panel.0) * 0.5;
-            rect.bottom += (VIEW.1 - panel.1) * 0.5;
-            node.left = percent(rect.left / VIEW.0 * 100.);
-            node.top = percent((VIEW.1 - rect.top()) / VIEW.1 * 100.);
-            node.width = percent(rect.width / VIEW.0 * 100.);
-            node.height = percent(rect.height / VIEW.1 * 100.);
+            rect.left += origin[0];
+            rect.bottom += origin[1];
+            node.left = percent(rect.left / view[0] * 100.);
+            node.top = percent((view[1] - rect.top()) / view[1] * 100.);
+            node.width = percent(rect.width / view[0] * 100.);
+            node.height = percent(rect.height / view[1] * 100.);
         }
     }
 }
@@ -741,6 +793,32 @@ fn measure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const VIEW: (f32, f32) = (1.2, 0.9);
+    fn layout() -> pcx_play::escape_layout::Rules {
+        use pcx_play::escape_layout::{Anchor, Rules};
+        Rules {
+            origin: pcx_play::scripts::AssetIdentity {
+                source: "synthetic".into(),
+                edition: "fixture".into(),
+                version: "1".into(),
+            },
+            image_sha256: [0; 32],
+            viewport: [VIEW.0, VIEW.1],
+            root_extent: [VIEW.0, VIEW.1],
+            root: Anchor {
+                point: 4,
+                relative: 4,
+                offset: [0., 0.],
+            },
+            panel: Anchor {
+                point: 4,
+                relative: 4,
+                offset: [0., 0.],
+            },
+            root_frame: "EscMenuMainPanel".into(),
+            backdrop_frame: "EscMenuBackdrop".into(),
+        }
+    }
     #[test]
     fn justification_offsets_refuse_malformed_values() {
         for (value, expected) in [
@@ -816,7 +894,7 @@ Frame "BACKDROP" "EscMenuBackdrop" {
         .unwrap();
         let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
         let source = fdf.rect("SaveGameButton", (0.41, 0.37)).unwrap();
-        let plan = items(&fdf, &skin, &["Default".into()], Page::Main).unwrap();
+        let plan = items(&fdf, &skin, &["Default".into()], Page::Main, &layout()).unwrap();
         assert!(plan.iter().all(|item| item.frame != "PauseButton"));
         assert!(
             fdf.frame("PauseButton").is_some(),
@@ -855,7 +933,10 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
 "#
             ))
             .unwrap();
-            let plan = items(&fdf, &skin, &["Default".into()], Page::Main).unwrap();
+            let mut layout = layout();
+            layout.root.offset = [-0.021, 0.013];
+            layout.panel.offset = [0.037, 0.089];
+            let plan = items(&fdf, &skin, &["Default".into()], Page::Main, &layout).unwrap();
             let backdrop = &plan[0];
             assert_eq!(backdrop.rect.width, width);
             assert_eq!(backdrop.rect.height, height);
@@ -864,8 +945,13 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             };
             assert_eq!(art.background.as_deref(), Some("synthetic/other.blp"));
             let button = plan.iter().find(|i| i.frame == "ReturnButton").unwrap();
-            assert!((button.rect.left - ((VIEW.0 - width) * 0.5 + 0.017)).abs() < 1e-6);
-            assert!((button.rect.bottom - ((VIEW.1 - height) * 0.5 + 0.043)).abs() < 1e-6);
+            assert!(
+                (button.rect.left - ((VIEW.0 - width) * 0.5 - 0.021 + 0.037 + 0.017)).abs() < 1e-6
+            );
+            assert!(
+                (button.rect.bottom - ((VIEW.1 - height) * 0.5 + 0.013 + 0.089 + 0.043)).abs()
+                    < 1e-6
+            );
             let Kind::Button(button) = &button.kind else {
                 panic!("button")
             };
@@ -933,10 +1019,25 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             .local_race_preference_constant()
             .unwrap();
         let mut fonts = Assets::<Font>::default();
-        let source = load(reader, race, &mut fonts).unwrap();
+        let install =
+            std::path::PathBuf::from(std::env::var("PCX_NATIVE_CHAPTER_INSTALL").unwrap());
+        let source = load(
+            reader,
+            race,
+            &mut fonts,
+            read_layout(Some(&install)).unwrap(),
+        )
+        .unwrap();
         assert!(!source.receipts.is_empty() && !fonts.is_empty());
         for page in [Page::Main, Page::End, Page::ConfirmExit] {
-            let plan = items(&source.fdf, &source.skin, &source.sections, page).unwrap();
+            let plan = items(
+                &source.fdf,
+                &source.skin,
+                &source.sections,
+                page,
+                &source.layout,
+            )
+            .unwrap();
             assert!(
                 plan.iter()
                     .any(|i| matches!(i.kind, Kind::Button(_)) && enabled(&i.frame))
