@@ -66,3 +66,12 @@ action = provider(obs)  # candidates rebuilt inside, every call
   derivation from the backend; intentionally absent here.
 - Live API call: still blocked on key location (see README Live status);
   no live call made, no key/network used in tests.
+
+## Integration record (pc3-menu-10, 2026-11-05)
+
+- Cherry-picked 2abf0b0 cleanly (3 new files only, no conflicts) as c795d2a atop 92189c1 (50-test state) + f7eea78 Help/Tips + observer/CustomKeys already in tree. No backend.py edits (09-owned), no dirty-WIP imports.
+- Minimum reconciliation: exported DynamicJevProvider, build_candidates from package init (+ __all__) per recipe. No other file edits.
+- API compatibility checked against 92189c1 JevProvider: constructor forwarding matches; candidate schema (click int/non-neg, wait) matches, per-call viewport re-gate in JevProvider applies to rebuilt candidates; hidden-flag guard in build_request matches builder explicit visible/hidden exclusion (hidden units would fail closed at provider too).
+- Review: adapter filters invalid projection (missing/None/non-numeric/bool/NaN/inf/OOB never 0,0, in_viewport False, hidden flags, dup ids, sanitisation collisions, 255 cap), bounds from actual obs extent (ProviderError on non-positive-int viewport), choice criteria IDs exactly aligned, retained key loaded once, never in criteria/logs/body beyond provider auth header, no move/attack invented (selection left-click + stop_noop only).
+- Tests: pytest tools/jev-harness/tests headless muted, no real key/env/network: 56 passed (50 pre-existing + 6 dynamic_candidates).
+- Remaining blockers: follow-up run_loop 2-frame regression owned by Lane05; driver/backend wiring (PeaceCraft backend not wired, Synthetic not gameplay), live credential location unconfirmed (no live call). No broad Rust retest triggered for Python-only change.

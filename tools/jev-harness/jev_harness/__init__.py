@@ -13,6 +13,7 @@ from .jev_provider import (
     API_URL, MODEL,
 )
 from .backend import GameBackend, SyntheticBackend, OriginalReferenceBackend, BackendError
+from .dynamic_candidates import DynamicJevProvider, build_candidates
 from .secrets import load_key_in_process, SecretsError, KEY_PATH, ENV_NAME
 from .redact import redact, redact_text
 
@@ -20,7 +21,7 @@ __all__ = [
     "Action", "validate_action", "ValidationError", "ALLOWED_KEYS",
     "run_loop", "LoopConfig", "TraceEntry", "StopReason",
     "Provider", "FakeProvider", "Observation", "ProviderError",
-    "JevProvider", "parse_box_answer", "box_to_pixels", "default_candidates",
+    "JevProvider", "DynamicJevProvider", "build_candidates", "parse_box_answer", "box_to_pixels", "default_candidates",
     "API_URL", "MODEL",
     "GameBackend", "SyntheticBackend", "OriginalReferenceBackend", "BackendError",
     "load_key_in_process", "SecretsError", "KEY_PATH", "ENV_NAME",
