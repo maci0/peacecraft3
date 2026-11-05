@@ -132,6 +132,91 @@ pub fn observe(
     }
 }
 
+/// Explicit structured state for one bounded step. `Paused`/`Cinematic`
+/// advance nothing; `NoSession`/`Refused` are returned, never invented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum StepState {
+    Advanced { ticks: u32 },
+    Paused,
+    Cinematic,
+    NoSession,
+    Refused,
+}
+
+/// Bounds for one step: at most 64 ticks of 0.25s, 4096 events per tick.
+/// Mirrors the existing diagnostic loops in `native_campaign` /
+/// `campaign_entry_gpu_tests` (`advance_timers(start + tick*0.25, 4096)`).
+pub const STEP_TICKS: u32 = 64;
+pub const STEP_DT: f64 = 0.25;
+pub const STEP_EVENT_BUDGET: usize = 4096;
+
+/// Advance the canonical game update by a bounded step, respecting pause,
+/// cinematic (control-off) and session ownership. Never teleports, never
+/// touches hidden state: only `advance_timers` + `advance_queued_events`
+/// on the live host, and only for the session the caller witnessed.
+pub fn step_once(
+    session: &mut pcx_play::map_script_session::MapScriptSession<
+        pcx_play::map_startup_host::MapStartupHost,
+    >,
+    witness_before: &std::sync::Weak<()>,
+    ticks: u32,
+) -> StepState {
+    let ticks = ticks.min(STEP_TICKS);
+    let current = session.session_witness();
+    let same_session = match (&current, witness_before.upgrade()) { (Some(cur), Some(before)) => std::sync::Weak::ptr_eq(cur, &std::sync::Arc::downgrade(&before)), _ => false };
+    if current.is_none() {
+        return StepState::NoSession;
+    }
+    if !same_session {
+        return StepState::Refused;
+    }
+    let (paused_now, cinematic_now, start) = {
+        let Some(host) = session.host() else {
+            return StepState::NoSession;
+        };
+        let objects = host.objects();
+        (objects.game_paused() == Some(true), objects.presentation().is_some_and(|p| p.control_enabled == Some(false)), objects.timer_game_time())
+    };
+    if paused_now {
+        return StepState::Paused;
+    }
+    if cinematic_now {
+        return StepState::Cinematic;
+    }
+    let Some(start) = start else {
+        return StepState::Refused;
+    };
+    let mut done = 0u32;
+    for tick in 1..=ticks {
+        if session
+            .advance_timers(start + f64::from(tick) * STEP_DT, STEP_EVENT_BUDGET)
+            .is_err()
+        {
+            return if done > 0 {
+                StepState::Advanced { ticks: done }
+            } else {
+                StepState::Refused
+            };
+        }
+        if session.advance_queued_events(STEP_EVENT_BUDGET).is_err() {
+            return if done > 0 {
+                StepState::Advanced { ticks: done }
+            } else {
+                StepState::Refused
+            };
+        }
+        done = tick;
+        // Re-check pause between ticks: a script may pause mid-step.
+        let paused = session
+            .host()
+            .is_some_and(|h| h.objects().game_paused() == Some(true));
+        if paused {
+            return StepState::Paused;
+        }
+    }
+    StepState::Advanced { ticks: done }
+}
+
 fn handle_hex(id: HandleId) -> String {
     format!("{:x}", id.token())
 }

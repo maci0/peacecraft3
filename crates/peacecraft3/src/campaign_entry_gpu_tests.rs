@@ -1921,6 +1921,120 @@ fn structured_observation_bridge_before_after_one_real_order() {
     println!("observation bridge: before_units={} after_units={} moved_sq={moved:.1}", before.units.len(), after.units.len());
 }
 
+/// Two consecutive bounded steps through the canonical driver: step 1 issues
+/// one legal `standard_target` Move order, step 2 observes the result.
+/// Explicit `StepState` journal; pause/cinematic/session checks inside
+/// `step_once`. No teleport/SetUnitX. Ignored: needs local original assets.
+#[test]
+#[ignore = "requires PCX_NATIVE_CHAPTER_* and a new PCX_CAMPAIGN_CAPTURE_DIR; step driver two-step proof"]
+fn step_driver_two_steps_with_one_real_order() {
+    use pcx_script::Host as _;
+    let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
+    assert!(!output.exists(), "capture must be new");
+    std::fs::create_dir_all(&output).unwrap();
+    let mut app = crate::native_campaign::tests::started_app();
+    for _ in 0..300 {
+        let controlled = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host().is_some_and(|h| { let o = h.objects(); o.presentation().is_some_and(|st| st.control_enabled == Some(true) && st.interface_visible == Some(true)) });
+        if controlled { break; }
+        let in_cine = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host().is_some_and(|h| h.objects().presentation().is_some_and(|st| st.control_enabled == Some(false)));
+        if in_cine {
+            let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+            let _ = session.host().unwrap().objects_mut().fire_local_player_event("EVENT_PLAYER_END_CINEMATIC");
+            let _ = session.advance_queued_events(4096);
+        }
+        app.update();
+    }
+    {
+        let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects_mut();
+        objects.native("EnableUserControl", &[pcx_script::Value::Bool(true)]).unwrap();
+        objects.native("ShowInterface", &[pcx_script::Value::Bool(true), pcx_script::Value::Real(0.)]).unwrap();
+        objects.native("PauseGame", &[pcx_script::Value::Bool(false)]).unwrap();
+    }
+    let camera_entity = app.world_mut().spawn_empty().id();
+    app.insert_resource(CampaignCamera::active_for_test(camera_entity));
+    let observe_now = |app: &mut App| {
+        app.world_mut().resource_scope(|world, mut session: Mut<MapScriptSession<MapStartupHost>>| {
+            let objects = session.host().unwrap().objects();
+            let camera = world.get::<Camera>(camera_entity).map(|c| (c, world.get::<GlobalTransform>(camera_entity).unwrap()));
+            peacecraft3::gameplay_observation::observe(objects, camera, None::<fn([f32; 2]) -> f32>, 64)
+        })
+    };
+    let (witness, before) = {
+        let session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        let w = session.session_witness().expect("live session witness");
+        (w, observe_now(&mut app))
+    };
+    assert!(!before.units.is_empty(), "real campaign must expose own/visible units");
+    let (unit_id, target) = {
+        let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects();
+        let local = objects.local_player_number().unwrap();
+        let unit = objects.executed_units()
+            .filter(|(_, r)| r.shown && r.activity.as_ref().is_some_and(|a| a.movable()) && r.combat.as_ref().is_some_and(|c| !c.dead)
+                && objects.player_settings(r.owner).is_ok_and(|p| p.number == local))
+            .map(|(id, r)| (id, r.position.unwrap_or([r.x, r.y]), r.vitals.as_ref().map(|v| v.life).unwrap_or(0.0)))
+            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+            .map(|(id, pos, _)| (id, pos))
+            .expect("a real owned movable unit");
+        let mut dest = [unit.1[0] + 200.0, unit.1[1]];
+        if let Some(bounds) = objects.vision_world_bounds() {
+            dest = [dest[0].clamp(bounds[0][0] + 1.0, bounds[1][0] - 1.0), dest[1].clamp(bounds[0][1] + 1.0, bounds[1][1] - 1.0)];
+        }
+        (unit.0, dest)
+    };
+    {
+        let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        let objects = session.host().unwrap().objects_mut();
+        objects.select_units(&[unit_id], true);
+        let _ = objects.native("PauseUnit", &[pcx_script::Value::Handle(unit_id), pcx_script::Value::Bool(false)]);
+    }
+    {
+        app.world_mut().resource_scope(|world, mut input: Mut<crate::campaign_input::CampaignInput>| {
+            let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
+            let objects = session.host().unwrap().objects_mut();
+            crate::campaign_input::standard_target(objects, &mut input, pcx_play::standard_command::Kind::Move, target, None).expect("move order must issue");
+        });
+    }
+    let step1_state = {
+        let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        peacecraft3::gameplay_observation::step_once(&mut session, &witness, 20)
+    };
+    assert!(matches!(step1_state, peacecraft3::gameplay_observation::StepState::Advanced { ticks: 20 }), "step1: {step1_state:?}");
+    for _ in 0..8 { app.update(); }
+    let mid = observe_now(&mut app);
+    let step2_state = {
+        let mut session = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        peacecraft3::gameplay_observation::step_once(&mut session, &witness, 20)
+    };
+    assert!(matches!(step2_state, peacecraft3::gameplay_observation::StepState::Advanced { ticks: 20 }), "step2: {step2_state:?}");
+    for _ in 0..8 { app.update(); }
+    let after = observe_now(&mut app);
+    let before_pos = before.units.iter().find(|u| u.id == format!("{:x}", unit_id.token())).and_then(|u| u.position).expect("observed unit position");
+    let after_pos = {
+        let mut s = app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>();
+        let rec = s.host().unwrap().objects().executed_unit(unit_id).expect("unit removed during steps");
+        rec.position.unwrap_or([rec.x, rec.y])
+    };
+    let moved = (after_pos[0] - before_pos[0]).powi(2) + (after_pos[1] - before_pos[1]).powi(2);
+    assert!(moved > 1.0, "unit must move across two steps: before={before_pos:?} after={after_pos:?}");
+    let journal = serde_json::json!({
+        "scope": "structured-state sensors (not a vision benchmark); bounded step driver, fake policy over real canonical campaign state",
+        "before": serde_json::to_value(&before).unwrap(),
+        "order": { "kind": "move", "unit": format!("{:x}", unit_id.token()), "target": target },
+        "step1_state": format!("{:?}", step1_state),
+        "mid": serde_json::to_value(&mid).unwrap(),
+        "step2_state": format!("{:?}", step2_state),
+        "after": serde_json::to_value(&after).unwrap(),
+        "moved_squared": moved,
+        "renderer_limits": "offscreen headless run; no pixel assertions in this bridge",
+    });
+    std::fs::write(output.join("observation-journal.json"), serde_json::to_vec_pretty(&journal).unwrap()).unwrap();
+    println!("step driver: step1={step1_state:?} step2={step2_state:?} moved_sq={moved:.1}");
+}
+
 // Keep layout evidence at the exact screenshot checkpoint, before later HUD interactions.
 fn retain_text_layouts(app: &mut App, output: &Path) {
     use bevy::text::TextLayoutInfo;
