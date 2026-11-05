@@ -6,8 +6,24 @@
 //! stops after `max_maps` candidates. Titles come only from
 //! [`pcx_map::Map::info`] (`war3map.w3i` inside the map); an empty authored
 //! name stays empty, never a filename-derived substitute.
+//!
+//! A selected [`SkirmishMap`] is admitted through
+//! [`crate::browser_configuration::ConfigurationInbox`] with the caller-
+//! pinned [`pcx_play::campaign_data_set::CampaignRecipe`] (the same shape the
+//! native campaign chapter launch uses), never through the `.w3n` custom-
+//! campaign path. No players, difficulty, teams, rules or seeds are invented
+//! here: the map's own `war3map.w3i` players and the pinned recipe's catalog
+//! are the only inputs. A refused admission leaves the inbox's current
+//! session untouched (the consumer preserves every old active field).
 
+use crate::browser_configuration::{Configuration, ConfigurationInbox, Member};
+use crate::map_binding::BindingLimits;
+use pcx_play::campaign_data_set::CampaignRecipe;
+use pcx_play::install_source::{MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS};
+use pcx_play::map_admission::MapAdmissionBudget;
+use pcx_play::scripts::AssetIdentity;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkirmishMap {
@@ -79,6 +95,192 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Bounded identity for one discovered map, derived only from the selected
+/// pinned recipe and the exact selected bytes. The member label is the
+/// authored `war3map.w3i` title when present, otherwise the asset path; the
+/// identity edition is the pinned recipe's edition label, never a guessed
+/// player/difficulty/team set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedMap {
+    pub asset_path: String,
+    pub label: String,
+    pub identity: AssetIdentity,
+}
+
+/// Build the identity for a discovered map from the pinned recipe's own
+/// edition. `map_name` is the authored title, possibly empty.
+pub fn selected_map(
+    recipe: &CampaignRecipe,
+    map: &SkirmishMap,
+) -> SelectedMap {
+    let edition = format!("{:?} custom game map", recipe.mode().addon);
+    SelectedMap {
+        asset_path: map.asset_path.clone(),
+        label: if map.name.is_empty() {
+            map.asset_path.clone()
+        } else {
+            map.name.clone()
+        },
+        identity: AssetIdentity {
+            edition,
+            version: recipe.rules().origin.version.clone(),
+            source: map.asset_path.clone(),
+        },
+    }
+}
+
+/// Limits for a custom-game admission. These are the same bounded ceilings the
+/// native campaign chapter launch uses; they are caller-owned policy, not
+/// values read from the map.
+pub fn admission_limits() -> BindingLimits {
+    let scripts = pcx_play::MapScriptBudget {
+        max_script_bytes: MAX_ASSET_BYTES,
+        max_wts_bytes: MAX_ASSET_BYTES,
+        max_archive_bytes: MAX_ASSET_BYTES,
+        max_archive_table_bytes: MAX_ASSET_BYTES,
+        max_raw_packed_bytes: MAX_ASSET_BYTES,
+        max_decoded_bytes: MAX_ASSET_BYTES,
+        max_prelude_bytes: MAX_ASSET_BYTES,
+        max_aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+    };
+    BindingLimits {
+        reader: pcx_objects::editor::EditorReadLimits {
+            max_listed_paths: MAX_LISTED_PATHS,
+            max_asset_bytes: MAX_ASSET_BYTES,
+            max_aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+        },
+        overlay: crate::map_binding::OverlayLimits {
+            unit_bytes: MAX_ASSET_BYTES,
+            item_bytes: MAX_ASSET_BYTES,
+            aggregate_bytes: MAX_AGGREGATE_BYTES,
+        },
+        admission: MapAdmissionBudget {
+            scripts,
+            terrain_bytes: MAX_ASSET_BYTES,
+            info_bytes: MAX_ASSET_BYTES,
+            pathing_bytes: MAX_ASSET_BYTES,
+            units_bytes: MAX_ASSET_BYTES,
+            aggregate_input_bytes: MAX_AGGREGATE_BYTES,
+            required_fields: 0,
+        },
+        max_map_file_bytes: MAX_ASSET_BYTES,
+        max_resolver_input_bytes: MAX_AGGREGATE_BYTES,
+    }
+}
+
+/// Assemble the canonical [`Configuration`] for one selected discovered map
+/// against the pinned campaign recipe. The resolver, catalog sources and
+/// common/blizzard members all come from the recipe-selected namespace; the
+/// map bytes are re-resolved from that resolver and must match the bytes the
+/// recipe opened, so a namespace change cannot silently swap the map.
+pub fn configuration(
+    recipe: Arc<CampaignRecipe>,
+    map: &SkirmishMap,
+    revision: u64,
+) -> Result<Configuration, String> {
+    let base = recipe.base_resolver().map_err(|error| error.to_string())?;
+    let bytes = base
+        .resolve_bounded(&map.asset_path, MAX_ASSET_BYTES as u64)
+        .map_err(|error| format!("{}: {error}", map.asset_path))?;
+    let reader = recipe
+        .open_map(&bytes.bytes, &map.asset_path, map_read_budget())
+        .map_err(|error| error.to_string())?;
+    let resolver = reader.resolver;
+    let selected = resolver
+        .resolve_bounded(&map.asset_path, MAX_ASSET_BYTES as u64)
+        .map_err(|error| format!("{}: {error}", map.asset_path))?;
+    if selected.bytes != bytes.bytes {
+        return Err(
+            "selected custom-game namespace changes the map used to select its data".into(),
+        );
+    }
+    let selected_map = selected_map(&recipe, map);
+    let edition = selected_map.identity.edition.clone();
+    let member = |path: &str, label: &str| -> Result<Member, String> {
+        Ok(Member {
+            path: path.into(),
+            label: label.into(),
+            identity: AssetIdentity {
+                edition: edition.clone(),
+                version: "selected install".into(),
+                source: path.into(),
+            },
+            source: resolver
+                .source_for(path)
+                .map_err(|error| error.to_string())?
+                .clone(),
+        })
+    };
+    let map_member = Member {
+        path: map.asset_path.clone(),
+        label: selected_map.label.clone(),
+        identity: selected_map.identity.clone(),
+        source: resolver
+            .source_for(&map.asset_path)
+            .map_err(|error| error.to_string())?
+            .clone(),
+    };
+    let common = member("Scripts\\common.j", "Scripts\\common.j")?;
+    let blizzard = member("Scripts\\Blizzard.j", "Scripts\\Blizzard.j")?;
+    let mut catalog_sources = Vec::new();
+    for path in resolver.paths() {
+        let source = resolver
+            .source_for(path.as_str())
+            .map_err(|error| error.to_string())?;
+        if !catalog_sources.contains(source) {
+            catalog_sources.push(source.clone());
+        }
+    }
+    let catalog_identity = AssetIdentity {
+        edition,
+        version: recipe.rules().origin.version.clone(),
+        source: format!(
+            "{}::{}",
+            recipe.dir().display(),
+            reader.selection.prefix
+        ),
+    };
+    Ok(Configuration {
+        resolver,
+        campaign: Some(recipe),
+        map: map_member,
+        common,
+        blizzard,
+        catalog_identity,
+        catalog_label: "selected install object data".into(),
+        catalog_sources,
+        required_catalog_tables: pcx_objects::editor::SlkId::ALL.to_vec(),
+        required_fields: Vec::new(),
+        revision,
+        limits: admission_limits(),
+    })
+}
+
+fn map_read_budget() -> pcx_mpq::checked::ReadBudget {
+    let limits = admission_limits();
+    pcx_mpq::checked::ReadBudget {
+        max_archive_bytes: limits.max_map_file_bytes,
+        max_archive_table_bytes: limits.admission.scripts.max_archive_table_bytes,
+        max_raw_packed_bytes: limits.admission.scripts.max_raw_packed_bytes,
+        max_decoded_bytes: limits.admission.info_bytes,
+    }
+}
+
+/// Enqueue one selected discovered map. A refused enqueue (busy, exhausted or
+/// an unbuildable request) surfaces as the inbox error and leaves the current
+/// session untouched; callers keep the previous selection.
+pub fn enqueue_selected(
+    inbox: &ConfigurationInbox,
+    recipe: Arc<CampaignRecipe>,
+    map: &SkirmishMap,
+    revision: u64,
+) -> Result<u32, String> {
+    let request = configuration(recipe, map, revision)?;
+    inbox
+        .enqueue(request)
+        .map_err(|error| error.to_string())
+}
 
 /// Inventories `.w3m`/`.w3x` paths from `resolver.paths()`, reads each under
 /// `budget.max_bytes_per_map` via `resolve_bounded`, and parses it with
@@ -153,7 +355,7 @@ mod tests {
     /// Synthetic `war3map.w3i` version 18 with empty player/force/table lists,
     /// built from the field order in `pcx-map/src/info.rs`. Str fields carry
     /// `name` / `""`; no title is fabricated when `name` is empty.
-    fn w3i_bytes(name: &str) -> Vec<u8> {
+    pub(super) fn w3i_bytes(name: &str) -> Vec<u8> {
         fn u32(v: &mut Vec<u8>, x: u32) {
             v.extend_from_slice(&x.to_le_bytes());
         }
@@ -220,7 +422,7 @@ mod tests {
     }
 
     /// Minimal synthetic HM3W map wrapping a one-member MPQ holding `war3map.w3i`.
-    fn synthetic_w3m(w3i: &[u8]) -> Vec<u8> {
+    pub(super) fn synthetic_w3m(w3i: &[u8]) -> Vec<u8> {
         const HASH_ENTRIES: usize = 16;
         let files: &[(&str, &[u8])] = &[("war3map.w3i", w3i)];
         let mut payloads = Vec::new();
@@ -394,5 +596,319 @@ mod tests {
         assert_eq!(d.maps.len(), 1);
         assert_eq!(d.skipped.len(), 1);
         assert!(d.skipped[0].error.contains("max_maps"));
+    }
+
+    /// Selected discovered map must enqueue the canonical request from the
+    /// pinned recipe. A second enqueue while one is pending refuses (busy)
+    /// and leaves the pending request — hence the current session — intact.
+    ///
+    /// Real-install only: `CampaignRecipe::pin` requires the reviewed
+    /// `Warcraft III.exe` image and archives — see `pinned_legacy_recipe`.
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL (or PEACECRAFT3_LEGACY_DIR) pointing at the reviewed Legacy install; run with --ignored"]
+    fn selected_discovered_map_enqueues_canonical_request_and_refusal_preserves_session() {
+        use crate::browser_configuration::{ConfigurationInbox, Poll};
+        use crate::map_requests::MapRequests;
+        use bevy::prelude::App;
+
+        // A real shipped map from the pinned recipe's own inventory: the
+        // synthetic fixture path cannot be resolved by the pinned catalog,
+        // so admission of a fixture map would refuse for the wrong reason.
+        // The pinned recipe supplies both the discovery resolver and the
+        // admission catalog — no invented players/difficulty anywhere.
+        let install = std::env::var_os("PEACECRAFT3_INSTALL")
+            .or_else(|| std::env::var_os("PEACECRAFT3_LEGACY_DIR"))
+            .expect("custom-game admission requires an explicit Legacy install (PEACECRAFT3_INSTALL)");
+        let install = PathBuf::from(install);
+        let recipe = pinned_legacy_recipe(&install)
+            .expect("pinned Legacy recipe must pin against the reviewed image");
+        let resolver = recipe.base_resolver().expect("pinned recipe must yield a resolver");
+        let budget = DiscoveryBudget::new(256, 1 << 20).unwrap();
+        let d = discover_custom_maps(&resolver, &budget);
+        assert!(
+            !d.maps.is_empty(),
+            "real Legacy install must yield a non-zero discovered custom-map count; skipped={:?}",
+            d.skipped
+        );
+        let map = d.maps.into_iter().next().unwrap();
+        assert!(
+            map.asset_path.ends_with(".w3m") || map.asset_path.ends_with(".w3x"),
+            "selected map must be a .w3m/.w3x member"
+        );
+
+        // The identity carries no invented players/difficulty: edition is the
+        // recipe's own label, label is the authored title, source is the path.
+        let selected = selected_map(&recipe, &map);
+        assert_eq!(selected.asset_path, map.asset_path);
+        assert_eq!(selected.identity.source, map.asset_path);
+        assert!(selected.identity.edition.contains("custom game map"));
+        assert_eq!(selected.label, map.name);
+
+        // Canonical request: same recipe-selected namespace the chapter launch
+        // builds, revision carried through, catalog from the pinned recipe.
+        let inbox = ConfigurationInbox::default();
+        let id = enqueue_selected(&inbox, Arc::clone(&recipe), &map, 7)
+            .expect("selected discovered map must enqueue the canonical request");
+        assert!(matches!(
+            inbox.poll(id).unwrap(),
+            crate::browser_configuration::Poll::Pending
+        ));
+
+        // Refusal while pending: a second enqueue is busy; the pending request
+        // (and the live session it will configure) is preserved, not replaced.
+        assert!(enqueue_selected(&inbox, Arc::clone(&recipe), &map, 8).is_err());
+        assert!(matches!(
+            inbox.poll(id).unwrap(),
+            crate::browser_configuration::Poll::Pending
+        ));
+
+        // Driving the consumer against the pending request runs the admission:
+        // a shipped map under the pinned catalog either admits (bindings
+        // installed for that exact map) or refuses without touching them.
+        // Either way the pending request completes with a typed outcome.
+        let mut app = App::new();
+        crate::map_requests::install(&mut app);
+        crate::browser_configuration::install(&mut app, inbox.clone());
+        app.update();
+        let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+            panic!("pending request must complete after the consumer runs")
+        };
+        let admitted = outcome.result.is_ok();
+        let requests = app.world().resource::<MapRequests>();
+        assert_eq!(
+            requests.bindings.is_some(),
+            admitted,
+            "bindings are installed exactly when the admission succeeds"
+        );
+    }
+
+    /// Pin the reviewed Legacy recipe against the client image at `install`.
+    /// The image is read directly from `Warcraft III.exe` under the same
+    /// 32 MiB ceiling the native campaign path uses; the recipe's rules,
+    /// catalog and edition all derive from that image and the install's own
+    /// archives. No recipe is fabricated.
+    fn pinned_legacy_recipe(
+        install: &std::path::Path,
+    ) -> Result<Arc<CampaignRecipe>, String> {
+        use std::io::Read;
+        let image_path = install.join("Warcraft III.exe");
+        let mut file = std::fs::File::open(&image_path)
+            .map_err(|e| format!("{}: {e}", image_path.display()))?;
+        let mut image = Vec::new();
+        file.by_ref()
+            .take(32 * 1024 * 1024 + 1)
+            .read_to_end(&mut image)
+            .map_err(|e| format!("{}: {e}", image_path.display()))?;
+        let identity =
+            pcx_play::campaign_inputs::client_identity(&image, &image_path.display().to_string());
+        let rules = pcx_play::campaign_data_set::ImageRules::read(&image, identity)
+            .map_err(|error| error.to_string())?;
+        CampaignRecipe::pin(
+            install,
+            pcx_assets::GameMode::default(),
+            rules,
+            &image,
+            None,
+            "VERSION_FROZEN_THRONE",
+        )
+        .map(Arc::new)
+        .map_err(|error| error.to_string())
+    }
+
+    /// Real-install gate for discovery itself: against the known Legacy
+    /// recipe's resolver inventory, `discover_custom_maps` must find a
+    /// non-zero number of real shipped maps. An unrelated `pcx-mdl` geoset
+    /// check elsewhere in the tree is NOT discovery proof and is not used
+    /// here: this test re-derives the count from the pinned recipe's own
+    /// resolver, so a green run proves the pinned catalog actually lists
+    /// maps at this install.
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL (or PEACECRAFT3_LEGACY_DIR) pointing at the reviewed Legacy install; run with --ignored"]
+    fn discover_custom_maps_real_install_gate() {
+        let install = std::env::var_os("PEACECRAFT3_INSTALL")
+            .or_else(|| std::env::var_os("PEACECRAFT3_LEGACY_DIR"))
+            .expect("explicit original install required");
+        let install = PathBuf::from(install);
+        let recipe = pinned_legacy_recipe(&install)
+            .expect("pinned Legacy recipe must pin against the reviewed image");
+        let resolver = recipe.base_resolver().expect("pinned recipe must yield a resolver");
+        let budget = DiscoveryBudget::new(256, 1 << 20).unwrap();
+        let d = discover_custom_maps(&resolver, &budget);
+        assert!(
+            !d.maps.is_empty(),
+            "real Legacy install must yield a non-zero discovered custom-map count; skipped={:?}",
+            d.skipped
+        );
+        assert!(
+            d.maps.iter().all(|m| m.asset_path.ends_with(".w3m") || m.asset_path.ends_with(".w3x")),
+            "every discovered map must be a .w3m/.w3x member"
+        );
+    }
+}
+
+#[cfg(test)]
+mod custom_game_synthetic_sys_fixture {
+    //! Synthetic sys-fixture refusal test (nonstock, no real install).
+    //! `CampaignRecipe` has no synthetic constructor (`pin` hashes the
+    //! reviewed image), so the synthetic path exercises the shared
+    //! refusal/preservation contract directly, without fabricating a recipe.
+    //! Uses the same opaque `Memory`-backed resolver pattern as
+    //! `campaign_audio`'s synthetic source.
+    use crate::browser_configuration::{ConfigurationInbox, Configuration, Member, Poll};
+    use crate::custom_game::{admission_limits, inspect_asset};
+    use super::tests::{synthetic_w3m, w3i_bytes};
+    use crate::map_requests::MapRequests;
+    use bevy::prelude::App;
+    use pcx_assets::{ArchiveLayer, ContentSource, SourceInfo, SourceContent, SourceError};
+    use pcx_play::scripts::AssetIdentity;
+
+    struct Memory {
+        info: SourceInfo,
+        files: Vec<(String, Vec<u8>)>,
+    }
+    impl ContentSource for Memory {
+        fn info(&self) -> &SourceInfo {
+            &self.info
+        }
+        fn paths(&self) -> Result<Vec<String>, SourceError> {
+            Ok(self.files.iter().map(|(path, _)| path.clone()).collect())
+        }
+        fn read(&self, member: &str) -> Result<Option<SourceContent>, SourceError> {
+            self.read_bounded(member, u64::MAX)
+        }
+        fn read_bounded(
+            &self,
+            member: &str,
+            limit: u64,
+        ) -> Result<Option<SourceContent>, SourceError> {
+            let Some((_, bytes)) = self.files.iter().find(|(path, _)| path == member) else {
+                return Ok(None);
+            };
+            if bytes.len() as u64 > limit {
+                return Err(SourceError::Limit {
+                    requested: bytes.len() as u64,
+                    limit,
+                });
+            }
+            Ok(Some(SourceContent {
+                bytes: bytes.clone(),
+                declared_length: bytes.len() as u64,
+                locator: member.to_owned(),
+            }))
+        }
+    }
+
+    fn synthetic_resolver() -> pcx_assets::Resolver {
+        // Opaque nonstock fixture: the map path resolves, but none of the
+        // members a real admission requires exist.
+        pcx_assets::Resolver::new(
+            pcx_assets::GameMode {
+                build: pcx_assets::Build::V1_29b,
+                addon: pcx_assets::Addon::Tft,
+                assets: pcx_assets::AssetMode::Vanilla,
+                behaviour: pcx_assets::Behaviour::Vanilla,
+            },
+            None,
+            vec![ArchiveLayer {
+                priority: 1,
+                source: Box::new(Memory {
+                    info: SourceInfo {
+                        id: "sys-fixture".into(),
+                        kind: pcx_assets::LayerKind::Mpq,
+                        origin: "sys fixture".into(),
+                        version: Some("synthetic".into()),
+                    },
+                    files: vec![(
+                        "maps/scenario/synthetic.w3m".into(),
+                        synthetic_w3m(&w3i_bytes("Synthetic Sys Fixture")),
+                    )],
+                }),
+            }],
+        )
+        .unwrap()
+    }
+
+    fn synthetic_configuration(resolver: pcx_assets::Resolver) -> Configuration {
+        let identity = AssetIdentity {
+            source: "sys fixture".into(),
+            edition: "explicit synthetic edition".into(),
+            version: "explicit synthetic version".into(),
+        };
+        let source = SourceInfo {
+            id: "sys-fixture".into(),
+            kind: pcx_assets::LayerKind::Mpq,
+            origin: "sys fixture".into(),
+            version: Some("synthetic".into()),
+        };
+        let member = |path: &str| Member {
+            path: path.into(),
+            label: path.into(),
+            identity: identity.clone(),
+            source: source.clone(),
+        };
+        Configuration {
+            resolver,
+            campaign: None,
+            map: member("maps/scenario/synthetic.w3m"),
+            common: member("Scripts\\common.j"),
+            blizzard: member("Scripts\\Blizzard.j"),
+            catalog_identity: identity,
+            catalog_label: "sys fixture catalog".into(),
+            catalog_sources: vec![source],
+            required_catalog_tables: vec![],
+            required_fields: vec![],
+            revision: 1,
+            limits: admission_limits(),
+        }
+    }
+
+    #[test]
+    fn synthetic_sys_fixture_refusal_preserves_session() {
+        // Refusal #1 — recipe leg: with no pinned recipe the member lookups
+        // fail on the synthetic source instead of inventing provenance.
+        let resolver = synthetic_resolver();
+        let map = inspect_asset(&resolver, "maps/scenario/synthetic.w3m", 1 << 20)
+            .expect("synthetic sys-fixture map must be discoverable");
+        assert_eq!(map.name, "Synthetic Sys Fixture");
+        let missing = resolver
+            .source_for("Scripts\\common.j")
+            .map_err(|e| e.to_string());
+        assert!(missing.is_err(), "sys fixture must have no common.j: {missing:?}");
+
+        // Refusal #2 — inbox busy: a pending synthetic request is not
+        // replaced by a second synthetic enqueue.
+        let inbox = ConfigurationInbox::default();
+        let id = inbox
+            .enqueue(synthetic_configuration(synthetic_resolver()))
+            .expect("first synthetic request must enqueue");
+        assert!(matches!(inbox.poll(id).unwrap(), Poll::Pending));
+        assert!(
+            inbox
+                .enqueue(synthetic_configuration(synthetic_resolver()))
+                .is_err(),
+            "second enqueue while pending must refuse (busy)"
+        );
+        assert!(matches!(inbox.poll(id).unwrap(), Poll::Pending));
+
+        // Refusal #3 — consumer outcome: the synthetic request refuses at
+        // binding (no real common.j/catalog), and the live session's
+        // bindings (initially none) are preserved, not installed.
+        let mut app = App::new();
+        crate::map_requests::install(&mut app);
+        crate::browser_configuration::install(&mut app, inbox.clone());
+        app.update();
+        let Poll::Completed(outcome) = inbox.poll(id).unwrap() else {
+            panic!("pending synthetic request must complete after the consumer runs")
+        };
+        assert!(
+            outcome.result.is_err(),
+            "sys-fixture admission must refuse (nonstock, no recipe): label={} result_is_err={}",
+            outcome.label,
+            outcome.result.is_err()
+        );
+        assert!(
+            app.world().resource::<MapRequests>().bindings.is_none(),
+            "refused admission must not install bindings"
+        );
     }
 }
