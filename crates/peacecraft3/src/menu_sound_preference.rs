@@ -102,6 +102,34 @@ mod tests {
         assert!(!unit_voices_enabled(Some(&s)));
     }
 
+    /// Ignored derivation gate against the selected original client image.
+    /// `unit_default` reads the `unit` fallback from the executable's
+    /// descriptor table; the expected value is NOT asserted here (no copied
+    /// default). The gate only proves the 0/1 derivation runs against the
+    /// real image and reports the derived value for review.
+    /// Run: `PEACECRAFT3_LEGACY_DIR=<Legacy install> cargo test -p
+    /// peacecraft3 --bin peacecraft3 -- unit_default_derives`.
+
+    #[test]
+    #[ignore = "explicit original-client gate: requires PEACECRAFT3_LEGACY_DIR with the selected Legacy Warcraft III.exe"]
+    fn unit_default_derives_zero_or_one_from_the_original_client() {
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_LEGACY_DIR")
+                .expect("set PEACECRAFT3_LEGACY_DIR to the selected Legacy install"),
+        );
+        let image = std::fs::read(install.join("Warcraft III.exe")).unwrap();
+        let derived = unit_default(
+            &image,
+            pcx_play::scripts::AssetIdentity {
+                source: install.join("Warcraft III.exe").display().to_string(),
+                edition: "selected menu client".into(),
+                version: "reviewed Legacy 1.29.2.9231 unit-sound profile".into(),
+            },
+        )
+        .expect("unit fallback must derive a 0/1 checkbox value from the client image");
+        println!("derived unit_default from selected client: {derived}");
+    }
+
     #[test]
     fn checkbox_profile_is_exact_zero_or_one() {
         assert_eq!(checkbox(b"0"), Ok(false));
