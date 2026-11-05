@@ -19,12 +19,10 @@ def _obs():
                        state={"selected": False, "order_count": 0})
 
 
-def _good_response(choice="select_unit"):
-    probs = {k: 0.05 for k in ("stop_noop", "select_unit", "move_selected", "order_attack")}
-    for k in probs:
-        probs[k] = 0.1
-    probs[choice] = 0.7
-    # sum: 0.7 + 3*0.1 == 1.0
+DEFAULT_IDS = ("stop_noop", "select_unit", "move_selected", "order_attack")
+def _good_response(choice="select_unit", ids=DEFAULT_IDS):
+    probs = {k: 0.1 for k in ids}
+    probs[choice] = 1.0 - 0.1 * (len(ids) - 1)
     return {
         "model": MODEL,
         "answers": {"action": {"type": "choice", "choice": choice,
@@ -50,10 +48,20 @@ class MockTransport:
 def _provider(transport, **kw):
     return JevProvider(api_key="test-key-not-a-secret", transport=transport, **kw)
 
+def _provider4(transport, **kw):
+    return _provider(transport, candidates={
+        "stop_noop": {"kind": "wait", "wait_ms": 100},
+        "select_unit": {"kind": "click", "x": 100, "y": 100},
+        "move_selected": {"kind": "click", "x": 200, "y": 150},
+        "order_attack": {"kind": "key", "key": "a"}}, **kw)
 
 def test_request_exact_official_schema():
     t = MockTransport(body=_good_response())
-    p = _provider(t)
+    p = _provider(t, candidates={
+        "stop_noop": {"kind": "wait", "wait_ms": 100},
+        "select_unit": {"kind": "click", "x": 100, "y": 100},
+        "move_selected": {"kind": "click", "x": 200, "y": 150},
+        "order_attack": {"kind": "key", "key": "a"}})
     action = p(_obs())
     assert action == {"kind": "click", "x": 100, "y": 100}
     assert len(t.calls) == 1
@@ -96,6 +104,8 @@ def test_safe_http_error_no_body_leak():
 
 
 def test_fail_closed_illegal_id():
+    body = _good_response(choice="stop_noop")
+    # default provider now only stop_noop: add others for illegal-id case
     body = _good_response(choice="stop_noop")
     body["answers"]["action"]["choice"] = "nuke_everything"
     body["answers"]["action"]["probabilities"] = {
@@ -158,7 +168,7 @@ def test_candidate_revalidated_against_viewport():
 
 def test_image_mode_opaque_ref_and_header():
     t = MockTransport(body=_good_response())
-    p = _provider(t, include_image=True)
+    p = _provider4(t, include_image=True)
     p(_obs())
     call = t.calls[0]
     assert call["headers"]["TypeSafe-Danger-Zone-Images"] == "true"
@@ -226,7 +236,7 @@ def test_nonargmax_choice_uses_codeowned_argmax():
     samples from probabilities). Adapter explicitly picks argmax."""
     body = _good_response()  # argmax is select_unit (0.7)
     body["answers"]["action"]["choice"] = "stop_noop"
-    t = MockTransport(body=body); p = _provider(t)
+    t = MockTransport(body=body); p = _provider4(t)
     action = p(_obs())
     assert action == {"kind": "click", "x": 100, "y": 100}  # select_unit
     assert p.last_summary["choice"] == "select_unit"

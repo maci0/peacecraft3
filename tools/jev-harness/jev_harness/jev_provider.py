@@ -93,23 +93,20 @@ def _is_finite_number(x) -> bool:
 
 
 def default_candidates() -> dict:
-    """Small finite candidate map with meaningful alternatives,
-    including a safe no-op/stop. IDs are Jev choice criteria keys;
-    values are strict action dicts (validated before apply)."""
+    """Fail-closed default: safe no-op only. Fixed synthetic clicks
+    (100,100)/(200,150) key 'a' were tuned to SyntheticBackend
+    (x<150,y<150); silently usable as real targets vs lane03 live
+    unit `screen` positions. Real candidates must be integrator-
+    supplied per-step (see report). IDs are criteria keys; values
+    are strict action dicts (validated before apply)."""
     return {
         "stop_noop": {"kind": "wait", "wait_ms": 100},
-        "select_unit": {"kind": "click", "x": 100, "y": 100},
-        "move_selected": {"kind": "click", "x": 200, "y": 150},
-        "order_attack": {"kind": "key", "key": "a"},
     }
 
 
 def default_criteria() -> dict:
     return {
         "stop_noop": "Do nothing further this step; safest when state is unclear or done.",
-        "select_unit": "Select the unit near the top-left of the viewport.",
-        "move_selected": "Issue a move order to the point right of the selected unit.",
-        "order_attack": "Issue the attack/order key for the selected unit.",
     }
 
 
@@ -179,6 +176,11 @@ class JevProvider(Provider):
         self.candidates = dict(candidates) if candidates is not None else default_candidates()
         if not self.candidates:
             raise ProviderError("candidate map must be non-empty")
+        for _cid, _act in self.candidates.items():
+            try:
+                Action.from_dict(_act)
+            except ValidationError as e:
+                raise ProviderError(f"candidate {_cid!r} invalid: {redact_text(str(e))}") from None
         self.criteria = dict(criteria) if criteria is not None else {
             k: default_criteria().get(k, f"Take candidate action {k}.")
             for k in self.candidates
@@ -201,6 +203,13 @@ class JevProvider(Provider):
         exposed here — headers contain only non-secret entries; auth is
         added at send time. (Auth header itself is set in __call__.)"""
         state = dict(obs.state) if isinstance(obs.state, dict) else {"note": str(obs.state)}
+        if "hidden_units" in state or "unfiltered_units" in state:
+            raise ProviderError("state must not contain hidden/unfiltered units")
+        _units = state.get("units")
+        if isinstance(_units, list):
+            for _u in _units:
+                if isinstance(_u, dict) and (_u.get("visible") is False or _u.get("hidden") is True):
+                    raise ProviderError("state contains hidden unit (fail closed)")
         state["step"] = obs.step
         state["viewport"] = {"width": obs.width, "height": obs.height}
         payload = {
