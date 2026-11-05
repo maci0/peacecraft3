@@ -9,28 +9,15 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 ## JevProvider (live adapter)
 
 - **Endpoint:** `POST https://api.typesafe.ai/v1/systemone`
-- **Auth:** `Authorization: Bearer $TYPESAFE_API_KEY`, key loaded in-process
-  only via `load_key_in_process()` from the authorized path
-  `/home/maci/Desktop/peacecraft3/.secrets` (never logged, never sent as
-  model text, never sourced as shell; transport refuses redirects so the
-  header is never forwarded across hosts).
+- **Auth:** `Authorization: Bearer $TYPESAFE_API_KEY`, key loaded in-process only via `load_key_in_process()` with explicit precedence: explicit `path` argument > `TYPESAFE_API_KEY` env (in-process `os.environ` read) > legacy default file `/home/maci/Desktop/peacecraft3/.secrets` (parent checkout). Never logged, never sent as model text, never sourced as shell; transport refuses redirects so the header is never forwarded across hosts. No filesystem search for other credential files; no alternate access after a read refusal.
 - **Pinned model:** `jev-1.14.0` (verified current 2026-10-14; aliases
   `jev-latest`/`jev-preview` resolve to it — code pins the versioned ID and
   fails closed on any other response model).
 - **Request:** `{model, state, questions:{action:{type:"choice",
   instructions, criteria:map<id,text>}}}`. No `messages`/`tools`/
   chat-completions fields exist in this API.
-- **Response:** `{model, answers:{action:{type:"choice", choice,
-  confidence, probabilities}}, usage:{input_tokens, output_tokens}}`.
-  `choice` must be in the candidate set, equal the max-probability option,
-  probabilities must be finite 0..1 covering exactly the candidate IDs and
-  sum to ~1 (tol 0.02), confidence finite 0..1. Any violation → fail closed
-  (`ProviderError`), no action, no retry/replay.
-- **Action mapping:** Jev never returns actions directly. Code owns a small
-  finite `candidates` map (id → strict action dict, default includes
-  `stop_noop` safe no-op, `select_unit`, `move_selected`, `order_attack`);
-  Jev selects a candidate ID; the strict `actions.validate_action` re-gates
-  it against the viewport before `run_loop` applies it.
+- **Response:** `{model, answers:{action:{type:"choice", choice, confidence, probabilities}}, usage:{input_tokens, output_tokens}}`. `choice` must be in the candidate set, probabilities must be finite 0..1 covering exactly the candidate IDs and sum to ~1 (tol 0.02), confidence finite 0..1. Any violation → fail closed (`ProviderError`), no action, no retry/replay. **Argmax policy (code-owned, not a contract claim):** OpenAPI documents `choice` as the max-probability option but does not define a non-argmax response with a valid offered-set choice and valid probabilities as a protocol violation; another surveyed Doom demo samples from probabilities. The adapter explicitly selects argmax deterministically rather than rejecting such a response as a contract violation.
+- **Action mapping:** Jev never returns actions directly. Code owns a small finite `candidates` map (id → strict action dict). Default `default_candidates()` (`stop_noop`, `select_unit`, `move_selected`, `order_attack` with fixed synthetic coordinates 100,100 / 200,150) are **synthetic fixtures for harness mechanics only** — they are not real-game targets, not derived from PeaceCraft assets, and must not be treated as live-game targets. Jev selects a candidate ID; the strict `actions.validate_action` re-gates it against the viewport before `run_loop` applies it.
 - **State mode (default):** structured JSON state only — no images, no raw
   assets sent. Mirrors both surveyed Doom demos (zero pixels by default).
 - **Image mode (opt-in, experimental):** `include_image=True` sends the
@@ -46,16 +33,9 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 
 ### Live status (honest)
 
-- **Real-API status 2026-11-05:** no live call was made. The authorized key
-  file `/home/maci/Desktop/peacecraft3/.secrets` is **not present** on this
-  machine (`load_key_in_process` → `SecretsError: key file not found`);
-  parent checkout listing contains no `.secrets` entry. Blocker: user must
-  place `TYPESAFE_API_KEY` at that path (key from
-  `https://console.typesafe.ai/keys`). No provisioning/payment/account
-  action was taken.
-- **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend`
-  (in-memory fixture) or fully mocked transports. Nothing observed here is
-  PeaceCraft gameplay or the original WC3 client.
+- **Real-API status 2026-11-05:** no live call was made. Credential location is user-confirmed pending: explicit path > `TYPESAFE_API_KEY` env > legacy default file; until the user confirms the exact location, no live call is made and tests use fake fixtures only (injected `environ` / tmp `path`). No provisioning/payment/account action was taken.
+- **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend` (in-memory fixture) or fully mocked transports. Default candidate coordinates are synthetic fixtures, not PeaceCraft targets. Nothing observed here is PeaceCraft gameplay or the original WC3 client.
+- **Bridge lane note (2ecd48b, not in this branch):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay.
 
 ### Run (stdlib only, headless, no network in tests)
 
@@ -96,22 +76,11 @@ Default `LoopConfig`: ≤3 model calls, ≤8 game actions, per-call 30s, total 1
 
 ## Secrets
 
-Authorized key path: `/home/maci/Desktop/peacecraft3/.secrets` (parent
-checkout). `.secrets` is git-ignored (root `.gitignore` entries `.secrets`
-and `*.secrets` — verify before staging; private `.git/info/exclude` checked
-2026-11-05 contains no secrets rule but root `.gitignore` covers it). Key is
-loaded in-process only via `load_key_in_process()` at the auth boundary;
-never printed, never sent as model text, never sourced as shell. Trace logs
-redact `Authorization`/`api-key`/`Bearer`/`sk-…` patterns. Validation
-failures additionally drop unknown-field values and key/button values from
-`raw_action` (shape-only redaction cannot catch bare values) — see
-`test_sentinel_bare_unknown_field_and_key_values_never_in_run_loop_trace`.
+Credential selection is explicit (no search, no shell sourcing): explicit `path` > `TYPESAFE_API_KEY` env > legacy default file `/home/maci/Desktop/peacecraft3/.secrets` (parent checkout). `.secrets` is git-ignored (root `.gitignore` entries `.secrets` and `*.secrets` — verify before staging; private `.git/info/exclude` checked 2026-11-05 contains no secrets rule but root `.gitignore` covers it). Key is loaded in-process only via `load_key_in_process()` at the auth boundary; never printed, never sent as model text, never sourced as shell. Trace logs redact `Authorization`/`api-key`/`Bearer`/`sk-…` patterns. Until the user supplies the exact path/env location, no live call is made; tests use fake fixtures only (injected `environ` mapping / tmp `path`).
 
 ## Live-contract blockers (exact)
 
-1. **Key file absent** (see Live status above) — no live Jev call until
-   `TYPESAFE_API_KEY` exists at the authorized path. Adapter, schema
-   validation, and mock-transport tests are complete without it.
+1. **Key location pending** (see Live status above) — no live Jev call until the user confirms the exact `TYPESAFE_API_KEY` path or env location. Adapter, schema validation, and mock-transport tests are complete without it; credential selection is now configurable by explicit path or documented env (fake fixtures only in tests).
 2. **PeaceCraft browser backend unwired** — needs integrator to drive the
    existing `browser-adapter.mjs` (`createBrowserAdapter`) against a locally
    built WASM launcher; this harness defines the `GameBackend` protocol it

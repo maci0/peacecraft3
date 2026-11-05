@@ -115,7 +115,6 @@ def test_fail_closed_probability_violations():
         lambda a: a.update(probabilities={k: True for k in a["probabilities"]}),
         lambda a: a.update(probabilities={"stop_noop": 1.0}),
         lambda a: a.update(probabilities={k: 0.5 for k in a["probabilities"]}),  # sum 2
-        lambda a: a.update(choice="stop_noop"),  # not argmax (select_unit=0.7)
     ]:
         body = _good_response(); a = body["answers"]["action"]; mutate(a)
         t = MockTransport(body=body); p = _provider(t)
@@ -217,3 +216,17 @@ def test_key_never_in_summary_or_errors():
         assert "supersecret-xyz" not in str(e)
     assert "supersecret-xyz" not in json.dumps(p.last_summary)
     assert "supersecret-xyz" not in redact_text("Authorization: Bearer supersecret-xyz")
+
+
+def test_nonargmax_choice_uses_codeowned_argmax():
+    """Non-argmax offered choice is not a contract violation.
+
+    OpenAPI documents choice as max-prob but does not define a
+    non-argmax response as a protocol violation (and a second Doom demo
+    samples from probabilities). Adapter explicitly picks argmax."""
+    body = _good_response()  # argmax is select_unit (0.7)
+    body["answers"]["action"]["choice"] = "stop_noop"
+    t = MockTransport(body=body); p = _provider(t)
+    action = p(_obs())
+    assert action == {"kind": "click", "x": 100, "y": 100}  # select_unit
+    assert p.last_summary["choice"] == "select_unit"

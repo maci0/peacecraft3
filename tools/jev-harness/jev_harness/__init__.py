@@ -1,7 +1,8 @@
 """Provider-neutral gameplay harness for PeaceCraft III (harness mechanics only).
 
 FakeProvider is the default (no network, no key). JevProvider implements the
-TypeSafe AI System One contract (POST /v1/systemone, pinned jev-1.14.0,
+official TypeSafe AI System One contract verified in
+.scratch/jev-research/report.md (POST /v1/systemone, pinned jev-1.14.0,
 structured state, typed choice -> validated candidate action).
 """
 from .actions import Action, validate_action, ValidationError, ALLOWED_KEYS
@@ -12,7 +13,7 @@ from .jev_provider import (
     API_URL, MODEL,
 )
 from .backend import GameBackend, SyntheticBackend, OriginalReferenceBackend, BackendError
-from .secrets import load_key_in_process, SecretsError, KEY_PATH
+from .secrets import load_key_in_process, SecretsError, KEY_PATH, ENV_NAME
 from .redact import redact, redact_text
 
 __all__ = [
@@ -22,7 +23,7 @@ __all__ = [
     "JevProvider", "parse_box_answer", "box_to_pixels", "default_candidates",
     "API_URL", "MODEL",
     "GameBackend", "SyntheticBackend", "OriginalReferenceBackend", "BackendError",
-    "load_key_in_process", "SecretsError", "KEY_PATH",
+    "load_key_in_process", "SecretsError", "KEY_PATH", "ENV_NAME",
     "redact", "redact_text",
 ]
 __version__ = "0.1.0"
