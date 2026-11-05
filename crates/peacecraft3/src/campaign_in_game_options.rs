@@ -1,8 +1,6 @@
 // In-game Options route: Open / Back / Cancel / OK.
 //
-// Source: EscMenuMainPanel.fdf `OptionsButton`, EscMenuOptionsPanel.fdf /
-// OptionsMenu `OptionsControlLayer` / `OKButton` / `CancelButton`. This
-// module owns the focused route state only; shared page wiring stays in
+// This module owns the focused route state only; shared page wiring stays in
 // campaign_escape_menu / menu_screens / menu_settings / glue_menu.
 //
 // Route contract:
@@ -10,16 +8,15 @@
 //   restores draft := applied, binds session witness.
 // - `route_back_to_escape`: from Options mark, back to escape root.
 // - `route_cancel_options`: restores draft := applied, back to escape root.
-// - `route_ok_options`: commits draft -> applied via Navigation, back to
-//   escape root. Full persistence (menu_settings::apply) stays with the
-//   frontend owner; this only routes draft/applied.
+// - `route_ok_options`: transitions to escape root only AFTER the caller
+//   reports a successful commit (e.g. `menu_settings::apply` returning Ok).
+//   This helper never assigns `applied` and never persists; on a failed
+//   commit the caller must not call it, so Options stays open with
+//   draft/applied intact.
 // - Session-bound: every transition requires the bound witness. `Weak<()>` is
 //   not `Eq`, so events carry only `cancelled`, not the witness.
 // - Caller must keep `CampaignCamera::set_menu_open(true)` while route is
 //   `Options`, preserving pause.
-//
-// `sys_last_sys_opened_ui` / Help01 handling is intentionally absent here:
-// that routing table is owned by Help01, not by Options.
 
 use std::sync::Weak;
 
@@ -84,6 +81,8 @@ pub fn route_open_escape_options(
     if !matches!(nav.screen, Screen::Main | Screen::Options(Page::Unselected)) && route.state != InGameRoute::Escape {
         return false;
     }
+    nav.draft = nav.applied.clone();
+    nav.selected_offer = None;
     route.session = Some(witness.clone());
     route.state = InGameRoute::Options;
     nav.open(Screen::Options(Page::Unselected));
@@ -118,16 +117,20 @@ pub fn route_cancel_options(
     true
 }
 
-/// OK: draft becomes applied (through existing Navigation draft/applied),
-/// then return to escape root. Persistence/save stays with menu_settings.
+/// OK transition: call only AFTER the caller's commit returned Ok.
+/// Never assigns `applied` or persists; the validated commit owned by the
+/// caller (e.g. `menu_settings::apply` / `menu_settings::commit`) has
+/// already done that. A failed commit must bypass this helper so the route
+/// stays Options with draft/applied intact.
 #[allow(dead_code)]
 pub fn route_ok_options(
     route: &mut InGameOptionsRoute,
     nav: &mut Navigation,
     witness: &Weak<()>,
+    committed: Result<(), String>,
 ) -> bool {
+    if committed.is_err() { return false; }
     if !route.bound(witness) { return false; }
-    nav.applied = nav.draft.clone();
     nav.selected_offer = None;
     route.state = InGameRoute::Escape;
     route.session = None;
@@ -148,8 +151,7 @@ mod tests {
     use std::sync::Arc;
 
     fn setup() -> (InGameOptionsRoute, Navigation, Weak<()>) {
-        let mut nav = Navigation::default();
-        nav.screen = Screen::Main;
+        let mut nav = Navigation { screen: Screen::Main, ..Default::default() };
         nav.applied.toggles.insert("TooltipsCheckBox".into(), true);
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
         let arc = Arc::new(());
@@ -163,7 +165,7 @@ mod tests {
         let (mut route, mut nav, w) = setup();
         assert!(route_open_escape_options(&mut route, &mut nav, &w));
         assert_eq!(route.state, InGameRoute::Options);
-        assert_eq!(nav.draft.toggles["TooltipsCheckBox"], true);
+        assert!(nav.draft.toggles["TooltipsCheckBox"]);
         assert!(route.is_open());
     }
 
@@ -173,8 +175,8 @@ mod tests {
         route_open_escape_options(&mut route, &mut nav, &w);
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
         assert!(route_cancel_options(&mut route, &mut nav, &w));
-        assert_eq!(nav.draft.toggles["TooltipsCheckBox"], true);
-        assert_eq!(nav.applied.toggles["TooltipsCheckBox"], true);
+        assert!(nav.draft.toggles["TooltipsCheckBox"]);
+        assert!(nav.applied.toggles["TooltipsCheckBox"]);
         assert_eq!(route.state, InGameRoute::Escape);
     }
 
@@ -196,16 +198,25 @@ mod tests {
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
         assert!(route_back_to_escape(&mut route, &mut nav, &w));
         assert_eq!(route.state, InGameRoute::Escape);
-        assert_eq!(nav.draft.toggles["TooltipsCheckBox"], false);
+        assert!(!nav.draft.toggles["TooltipsCheckBox"]);
     }
 
     #[test]
-    fn ok_commits_draft_to_applied() {
+    fn ok_only_transitions_after_successful_caller_commit() {
         let (mut route, mut nav, w) = setup();
         route_open_escape_options(&mut route, &mut nav, &w);
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
-        assert!(route_ok_options(&mut route, &mut nav, &w));
-        assert_eq!(nav.applied.toggles["TooltipsCheckBox"], false);
+        // Failed commit: helper refuses; Options, draft, applied intact.
+        assert!(!route_ok_options(&mut route, &mut nav, &w, Err("save failed".into())));
+        assert_eq!(route.state, InGameRoute::Options);
+        assert!(route.is_open());
+        assert!(!nav.draft.toggles["TooltipsCheckBox"]);
+        assert!(nav.applied.toggles["TooltipsCheckBox"]);
+        // Successful caller commit (caller already set applied := draft
+        // through the validated commit API); helper only routes back.
+        nav.applied = nav.draft.clone();
+        assert!(route_ok_options(&mut route, &mut nav, &w, Ok(())));
+        assert!(!nav.applied.toggles["TooltipsCheckBox"]);
         assert_eq!(route.state, InGameRoute::Escape);
     }
 }
