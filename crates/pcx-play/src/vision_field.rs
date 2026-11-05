@@ -1393,14 +1393,6 @@ impl ObjectHost {
         if vision.shape != shape {
             return Err(fail("shared vision grid changed after admission".into()));
         }
-        let units = self.inner.unit_slots.len();
-        let started_modifiers = self
-            .fog_modifiers()
-            .filter(|modifier| modifier.started)
-            .count();
-        let source_limit = units
-            .saturating_add(self.fog_modifiers().count())
-            .saturating_add(1);
         let mut plans = Vec::new();
         let mut candidates_scanned = 0usize;
         let viewers = self.materialized_player_ids();
@@ -1414,6 +1406,8 @@ impl ObjectHost {
         let mut table = self
             .source_table(night)
             .map_err(|error| fail(error.to_string()))?;
+        let candidate_count = table.candidate_count();
+        let source_limit = candidate_count.saturating_add(1);
         for viewer in viewers {
             let listed = self
                 .list_vision_sources(viewer, source_limit, &mut radii, &mut table)
@@ -1421,10 +1415,7 @@ impl ObjectHost {
             candidates_scanned = candidates_scanned
                 .checked_add(listed.candidates_scanned)
                 .ok_or_else(|| fail("shared vision scan count overflow".into()))?;
-            debug_assert_eq!(
-                listed.candidates_scanned,
-                units.saturating_add(started_modifiers)
-            );
+            debug_assert_eq!(listed.candidates_scanned, candidate_count);
             plans.push((viewer, listed.sources));
         }
         if let Some(rules) = self.native_sight.clone() {

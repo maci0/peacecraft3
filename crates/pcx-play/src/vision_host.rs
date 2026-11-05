@@ -383,6 +383,12 @@ pub(super) struct SourceTable<'a> {
     fog_states: Option<[(Option<i32>, VisionState); 3]>,
 }
 
+impl SourceTable<'_> {
+    pub(super) fn candidate_count(&self) -> usize {
+        self.units.len().saturating_add(self.modifiers.len())
+    }
+}
+
 struct TableUnit<'a> {
     id: HandleId,
     unit: &'a super::ExecutedUnit,

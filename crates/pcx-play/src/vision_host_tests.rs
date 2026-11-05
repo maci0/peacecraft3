@@ -542,13 +542,27 @@ fn unit_share_vision_stamps_and_revokes_the_canonical_exploration_ledger() {
     assert_eq!(sample(&mut h).raw, VisionState::Visible);
     let shared = h.vision_revision().unwrap();
     assert!(shared > first, "a new viewer grid changes the revision");
-    h.native("UnitShareVision", &[unit, viewer, Value::Bool(false)])
-        .unwrap();
+    h.native(
+        "UnitShareVision",
+        &[unit.clone(), viewer, Value::Bool(false)],
+    )
+    .unwrap();
     let cell = sample(&mut h);
     assert!(
         h.vision_revision().unwrap() > shared,
         "dropping a viewer changes the revision"
     );
+    assert!(cell.explored);
+    assert_eq!(cell.raw, VisionState::Fogged);
+    h.native("RemoveUnit", &[unit]).unwrap();
+    assert_eq!(h.executed_units().count(), 0);
+    let budget = h.shared_vision_work_limit().unwrap();
+    let removed = h.sample_shared_vision(budget).unwrap();
+    assert_eq!(
+        removed.candidates_scanned, 0,
+        "removed arena slots are not candidates"
+    );
+    let cell = h.vision_cell(viewer_id, [16., 16.]).unwrap().unwrap();
     assert!(cell.explored);
     assert_eq!(cell.raw, VisionState::Fogged);
 }
