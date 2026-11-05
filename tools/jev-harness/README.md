@@ -178,3 +178,24 @@ No change was made to `backend.py`, `reference.py`, or `replay.py` in this lane.
 # clipped to #launcher-canvas; apply() -> existing validated input path
 # (browser-adapter.mjs input/capture). No new infrastructure.
 ```
+
+## Observation bridge integration (2ecd48b, pc3-menu-10)
+
+`crates/peacecraft3/src/gameplay_observation.rs` (`#[cfg(feature = "test-fixtures")]`,
+public `observe(ObjectHost, camera, terrain_z, limit) -> Observation`) integrated
+cleanly onto 3603772: +257 lines, `campaign_entry_gpu_tests.rs` harness only.
+Contract available here: read-only structured-state sensors over ObjectHost
+executed VM state — own/visible units only (vision_cell Visible), opaque hex
+HandleId, live/creation-request position, vitals, `GetUnitCurrentOrder`, camera
+`world_to_viewport` screen + in_viewport, selection, game_time, camera bounds.
+Hidden enemies excluded; no raw assets/paths/secrets. Ignored GPU test
+`structured_observation_bridge_before_after_one_real_order` proves before/after
+one real `IssuePointOrder(standard_target)` with fake policy (16 units,
+moved_sq=40000 on Prologue02 per prior run; not re-run, no changed behavior).
+
+Verification (headless/muted, shared target `/home/maci/Desktop/peacecraft3/target`,
+isolated `xvfb-run :99`, `SDL_AUDIODRIVER=dummy`, `ALSA_CARD=null`):
+`cargo test -p peacecraft3 --features test-fixtures` →
+80 + 950 + 2 + 209 + 217 + 7 passed, 0 failed, 127 ignored.
+`pytest tools/jev-harness/tests` → 46 passed (unchanged, incl. CustomKeys path).
+Observation-only; no gameplay claim. Lane05 candidate safety fixes awaited, not imported.

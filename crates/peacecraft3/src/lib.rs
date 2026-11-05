@@ -19,6 +19,8 @@ pub mod campaign_score_layout;
 pub mod campaign_startup;
 pub mod campaign_weather;
 pub mod fdf;
+#[cfg(feature = "test-fixtures")]
+pub mod gameplay_observation;
 pub mod game_input;
 pub mod global_strings;
 pub mod map_admission;
