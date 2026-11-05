@@ -35,6 +35,7 @@ enum Page {
     Main,
     End,
     ConfirmExit,
+    Help,
 }
 impl Page {
     fn frame(self) -> &'static str {
@@ -42,6 +43,7 @@ impl Page {
             Self::Main => "MainPanel",
             Self::End => "EndGamePanel",
             Self::ConfirmExit => "ConfirmQuitPanel",
+            Self::Help => "HelpPanel",
         }
     }
     fn back(self) -> Option<Self> {
@@ -49,6 +51,7 @@ impl Page {
             Self::Main => None,
             Self::End => Some(Self::Main),
             Self::ConfirmExit => Some(Self::End),
+            Self::Help => Some(Self::Main),
         }
     }
 }
@@ -195,6 +198,8 @@ fn enabled(frame: &str) -> bool {
             | "ExitButton"
             | "ConfirmQuitQuitButton"
             | "ConfirmQuitCancelButton"
+            | "HelpButton"
+            | "HelpOKButton"
     )
 }
 fn act(
@@ -223,6 +228,8 @@ fn act(
         "PreviousButton" => state.page = Page::Main,
         "ExitButton" => state.page = Page::ConfirmExit,
         "ConfirmQuitCancelButton" => state.page = Page::End,
+        "HelpButton" => state.page = Page::Help,
+        "HelpOKButton" => state.page = Page::Main,
         "ConfirmQuitQuitButton" => {
             if cfg!(target_arch = "wasm32") {
                 inputs.session.clear();
@@ -303,6 +310,12 @@ fn items(
     }
     let (mut items, unsupported) =
         glue_menu::control_items(fdf, page.frame(), size).map_err(|e| e.to_string())?;
+    // TEXTAREA rendering is pending (see docs/re-notes/escape-help-tips.md);
+    // first slice admits the Help panel chrome without its text area.
+    let unsupported: Vec<_> = unsupported
+        .into_iter()
+        .filter(|name| name != "TEXTAREA HelpTextArea")
+        .collect();
     if !unsupported.is_empty() {
         return Err(format!("escape menu: unsupported controls {unsupported:?}"));
     }
@@ -409,7 +422,7 @@ fn load(
     let mut seen = HashSet::new();
     let mut total = 0usize;
     let mut font_bytes = 0usize;
-    for page in [Page::Main, Page::End, Page::ConfirmExit] {
+    for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Help] {
         for item in items(
             &source.fdf,
             &source.skin,
@@ -851,7 +864,11 @@ mod tests {
         let mut view = CampaignCamera::active_for_test(Entity::PLACEHOLDER);
         view.set_menu_open(true);
         app.insert_resource(view);
-        for (page, open) in [(Page::End, true), (Page::Main, true), (Page::Main, false)] {
+        for (page, open) in [
+            (Page::End, true),
+            (Page::Main, true),
+            (Page::Main, false),
+        ] {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
             keys.press(KeyCode::Escape);
@@ -866,7 +883,44 @@ mod tests {
         }
     }
     #[test]
+    fn help_page_maps_to_help_panel_and_backs_to_main() {
+        assert_eq!(Page::Help.frame(), "HelpPanel");
+        assert_eq!(Page::Help.back(), Some(Page::Main));
+        assert!(enabled("HelpButton"));
+        assert!(enabled("HelpOKButton"));
+        assert!(!enabled("TipsButton"), "Tips remains out of this slice");
+    }
+    #[test]
     fn single_player_pause_is_hidden_without_reflowing_anchored_controls() {
+        let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
+        let fdf_help = Fdf::parse(
+            r#"
+Frame "FRAME" "EscMenuMainPanel" {
+ SetAllPoints,
+}
+Frame "FRAME" "HelpPanel" {
+ Width 0.432,
+ Height 0.384,
+ Frame "TEXTAREA" "HelpTextArea" {
+  Width 0.362,
+  Height 0.264,
+  SetPoint TOP, "HelpPanel", TOP, 0.0, -0.05,
+ }
+ Frame "GLUETEXTBUTTON" "HelpOKButton" {
+  Width 0.16,
+  Height 0.031,
+  SetPoint BOTTOM, "HelpPanel", BOTTOM, 0.0, 0.03,
+ }
+}
+Frame "BACKDROP" "EscMenuBackdrop" {
+ BackdropBackground "PanelArt",
+}
+"#,
+        )
+        .unwrap();
+        let plan = items(&fdf_help, &skin, &["Default".into()], Page::Help, &layout()).unwrap();
+        assert!(plan.iter().any(|i| i.frame == "HelpOKButton"));
+        assert!(plan.iter().all(|i| i.frame != "HelpTextArea"));
         let fdf = Fdf::parse(
             r#"
 Frame "FRAME" "EscMenuMainPanel" {
@@ -1029,7 +1083,7 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
         )
         .unwrap();
         assert!(!source.receipts.is_empty() && !fonts.is_empty());
-        for page in [Page::Main, Page::End, Page::ConfirmExit] {
+        for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Help] {
             let plan = items(
                 &source.fdf,
                 &source.skin,
