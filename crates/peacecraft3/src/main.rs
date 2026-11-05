@@ -22,6 +22,7 @@ mod campaign_diagnostics;
 mod campaign_error_view;
 mod campaign_escape_menu;
 mod campaign_game_input;
+mod campaign_in_game_options;
 mod campaign_ground_lighting;
 mod campaign_hud;
 mod campaign_input;
