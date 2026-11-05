@@ -26,6 +26,7 @@ pub mod mdx_texture_selection;
 pub mod mdx_uv_translation;
 pub mod performance;
 pub mod texture_quality;
+pub mod texture_quality_consumer;
 pub mod viewer;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -64,6 +65,10 @@ mod image_mip_tests;
 #[cfg(test)]
 #[path = "texture_quality_tests.rs"]
 mod texture_quality_tests;
+
+#[cfg(test)]
+#[path = "texture_quality_consumer_tests.rs"]
+mod texture_quality_consumer_tests;
 
 /// Validate a contiguous, possibly partial RGBA8 mip chain without allocating.
 pub fn rgba_mip_bytes(
@@ -1442,3 +1447,5 @@ mod sparse_id_tests {
         );
     }
 }
+
+pub use texture_quality_consumer::{Replacement, load_from_request};
