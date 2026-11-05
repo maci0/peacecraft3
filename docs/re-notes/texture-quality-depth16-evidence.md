@@ -55,3 +55,54 @@ install's Options FDF. The remaining menu-consumer hook is unchanged:
 the UI layer must parse the popup choices, pass their length as
 `domain`, and call `derive_texture_quality` + `one_mip` on selection —
 no menu wiring is added here.
+
+## Bounded terminal-upload trace (2026-11-05)
+
+Scope was a bounded REA trace ONLY of the terminal upload format
+selection following `0x42b590`/`0x42b5f0` readers and `0x9721b0`
+dispatch `0x9704b0`/`0x970280`, without repeating the options-writer
+proof. Result: the terminal format still does not qualify. No
+quantize/expand conversion is added; this section records the new
+precise callsite state instead.
+
+Exact callsite evidence (bytes read locally, no client executed):
+
+- The Legacy 1.29.2.9231 image `3f2ed012…b959d59a` is not present on
+  this machine. The only PE32 images under `peacecraft3` are the
+  1.26.0 set (`game.dll` `6d21bd9a…`, `war3.exe` `28173101…`, etc.).
+  No file hashes to `3f2ed012…`; the Legacy addresses therefore
+  cannot be decompiled here without downloading or inventing an
+  image, both out of scope.
+- Read as RVAs in the local 1.26 `game.dll` (imagebase `0x6f000000`,
+  `.text` `0x1000–0x86c60a`, `.rdata` `0x86d000–0xa4e1c4`), the Legacy
+  addresses are not the claimed functions: `0x42b590` holds
+  `5e5b83c430c20c00…` (`pop esi; pop ebx; add esp,0x30; or al,0xc0`),
+  `0x42b5f0` holds `0000002bc8894c24…`, `0x538440` holds
+  `0000005ec20400…`, and `0x9721b0`/`0x9704b0`/`0x970280` lie in
+  `.rdata` and hold data/strings — e.g. `0x9721b0` holds
+  `000000002e5c426174746c654e657443…` (`.\\BattleNetC…`). They are
+  not a texture-creation dispatch in this image.
+- In the local 1.26 `game.dll` the descriptor table sits at file
+  offset `0x875588` (16-byte rows), with `texquality` at `0x875628`,
+  `miplevel` at `0x875638` and `texcolordepth` at `0x875648`
+  (fallback `"16"`, matching the 1.29 note's depth value but at a
+  different base than `0xe68b80`). No direct code xref to the
+  `texcolordepth` row exists in `.text`; the only immediate
+  reference to the table base is at `0x29b9`
+  (`fld [0x6f875588]`), and the `push 0x0b; call` readers at e.g.
+  `0x1510–0x1526` go through an import thunk at `0x6eb5a0`
+  (`jmp [0x6f86d570]`), identified as `Storm.dll` ordinal `0x12c`
+  (300). `Storm.dll`'s export table has no name for ordinal 300,
+  so the read is ordinal-only and cannot be followed to a D3D
+  upload call within the bounded scope.
+- No `D3DCreateTexture`/`CreateSurface` format argument
+  constant/table and no alpha-dependent branch were isolated in
+  either image. The 16-bit texcolordepth word still establishes
+  only bits-per-pixel (16 = 2 bytes), not a pixel layout.
+
+Implication: the unclosed callsite is now precise — the Legacy
+`3f2ed012` image is required and absent; on the locally available
+1.26 image the `texcolordepth` read is via `Storm.dll` ordinal 300
+with no onward upload trace. Guessing RGB565/1555/4444 remains
+unsupported. `one_mip` and `derive_texture_quality` keep refusing
+2-byte depth fail-closed.
