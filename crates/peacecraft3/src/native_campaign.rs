@@ -162,6 +162,7 @@ pub(crate) fn install(app: &mut App) {
                 mission_scroll,
                 select_campaign,
                 launch_mission,
+                launch_credits,
                 begin_loading,
             )
                 .chain()
@@ -888,6 +889,55 @@ fn launch_mission(
             header: mission.header.clone(),
             name: mission.name.clone(),
             map: mission.map.clone(),
+        };
+        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+    }
+}
+
+/// The authored Credits button: launches the shipped credits map for the
+/// selected edition through the same bounded configuration path as a mission.
+fn launch_credits(
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&crate::glue_menu::GlueButton>,
+    launcher: Res<crate::launch_gui::Launcher>,
+    inbox: Res<ConfigurationInbox>,
+    mut chapters: ResMut<Chapters>,
+    navigation: Option<Res<crate::menu_screens::Navigation>>,
+) {
+    if navigation.is_some_and(|navigation| navigation.transition_active) {
+        return;
+    }
+    for entity in &actions.entities {
+        let Ok(button) = buttons.get(*entity) else {
+            continue;
+        };
+        if button.frame != "CreditsButton" {
+            continue;
+        }
+        if chapters.pending.is_some() {
+            continue;
+        }
+        let Some(recipe) = chapters.recipe.clone() else {
+            chapters.error = Some("campaign index has no admitted source recipe".into());
+            continue;
+        };
+        let Ok(base) = recipe.base_resolver() else {
+            chapters.error = Some("credits: selected resolver unavailable".into());
+            continue;
+        };
+        let edition = u32::from(launcher.mode().addon == Addon::Tft);
+        let map = match crate::menu_credits::credits_map_for_edition(&base, edition) {
+            Ok(map) => map,
+            Err(error) => {
+                chapters.error = Some(format!("credits: {error}"));
+                continue;
+            }
+        };
+        let chapter = Chapter {
+            campaign: "Credits".to_string(),
+            header: "Credits".to_string(),
+            name: "Credits".to_string(),
+            map: map.to_string(),
         };
         enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
     }
