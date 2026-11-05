@@ -3117,6 +3117,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires PCX_WAR3_EXE naming the selected Legacy Warcraft III.exe"]
     fn set_custom_keys_stores_source_keys_resolves_hotkey_settles_and_invalidates_signature() {
         let path = std::env::var("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
         let bytes = std::fs::read(&path).unwrap();
