@@ -121,8 +121,10 @@ def run_loop(backend: GameBackend, provider: Provider,
                                              error=redact(str(err))[:300]))
             break
         if not isinstance(raw, dict):
+            # Never embed the raw provider value: it may carry key material
+            # and redact() only catches known credential shapes.
             result.stop_reason = StopReason.VALIDATION_ERROR
-            result.entries.append(TraceEntry(step, obs.summary(), {"raw": str(raw)[:200]}, None,
+            result.entries.append(TraceEntry(step, obs.summary(), {"raw": "[REDACTED: non-object]"}, None,
                                              error="provider returned non-object"))
             break
 
@@ -131,10 +133,21 @@ def run_loop(backend: GameBackend, provider: Provider,
             action = Action.from_dict(raw)
             validate_action(action, backend.width, backend.height)
         except ValidationError as e:
+            # redact() alone cannot catch a bare unknown-field/key value
+            # (no Bearer/sk- shape). Drop unknown-field values and key/
+            # button/kind values on validation failure; keep only kind
+            # structure plus numeric shape so coordinates stay debuggable
+            # without carrying credential-shaped strings.
+            safe_raw = {"kind": raw.get("kind") if isinstance(raw.get("kind"), str) and raw.get("kind") in ("click", "key", "wait") else "[REDACTED]",
+                        "x": raw.get("x") if type(raw.get("x")) is int else "[REDACTED]",
+                        "y": raw.get("y") if type(raw.get("y")) is int else "[REDACTED]",
+                        "wait_ms": raw.get("wait_ms") if type(raw.get("wait_ms")) is int else "[REDACTED]",
+                        "unknown_fields": len(set(raw) - {"kind", "x", "y", "key", "wait_ms", "button"}),
+                        "key": "[REDACTED]", "button": "[REDACTED]"}
             result.stop_reason = StopReason.VALIDATION_ERROR
-            result.entries.append(TraceEntry(step, obs.summary(), redact(raw), None,
+            result.entries.append(TraceEntry(step, obs.summary(), redact(safe_raw), None,
                                              png_sha256=hashlib.sha256(png).hexdigest(),
-                                             error=redact(str(e))[:300]))
+                                             error="validation failed"))
             break
 
         if _cancelled():

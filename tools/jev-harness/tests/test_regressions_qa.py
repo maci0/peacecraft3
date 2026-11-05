@@ -187,3 +187,28 @@ def test_sentinel_not_in_sk_pattern_trace():
     assert result.stop_reason == StopReason.PROVIDER_ERROR
     assert S not in txt
     assert "sk-" not in txt
+
+
+def test_sentinel_bare_unknown_field_and_key_values_never_in_run_loop_trace():
+    # run_loop-level (not redact()-unit): a bare sentinel with no Bearer/sk-
+    # shape, smuggled as an unknown-field value, a bad key value, or a
+    # non-dict provider return, must not appear in entries or trace file.
+    for script in [[{"kind": "click", "x": 1, "y": 1, "note": S}],
+                   [{"kind": "key", "key": S}]]:
+        result, txt = _run_with_trace(
+            SyntheticBackend(), FakeProvider(script=script))
+        assert result.stop_reason == StopReason.VALIDATION_ERROR
+        assert S not in txt
+        assert S not in " ".join(e.error for e in result.entries)
+        assert S not in " ".join(str(e.raw_action) for e in result.entries)
+
+    class NonDict(Provider):
+        name = "nondict"
+
+        def __call__(self, obs):
+            return S
+
+    result, txt = _run_with_trace(SyntheticBackend(), NonDict())
+    assert result.stop_reason == StopReason.VALIDATION_ERROR
+    assert S not in txt
+    assert S not in " ".join(str(e.raw_action) for e in result.entries)
