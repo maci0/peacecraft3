@@ -106,3 +106,102 @@ Implication: the unclosed callsite is now precise — the Legacy
 with no onward upload trace. Guessing RGB565/1555/4444 remains
 unsupported. `one_mip` and `derive_texture_quality` keep refusing
 2-byte depth fail-closed.
+
+## Provenance correction: qualified image present (2026-11-05)
+
+The preceding section's "not present on this machine" claim is wrong for
+this workspace. The exact qualified ordinary asset path was re-checked
+with normal file tools (no broad search, no alternate-version fallback):
+
+- Path: `/home/maci/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III (Legacy)/Warcraft III.exe`
+- Size: 14858960 bytes; SHA-256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
+- PE32, ImageBase `0x400000`, entry RVA `0x6574bc`, sections
+  `.text` RVA `0x1000` size `0xa64941`, `.rdata` RVA `0xa66000`, etc.
+
+The earlier 1.26 `game.dll` trace above is kept as separate cross-version
+evidence only. The 1.26 addresses do not qualify the 1.29 policy.
+All addresses in this correction are VAs in the qualified image
+(RVA = VA - `0x400000`), verified against rizin functions, e.g.
+`fcn.0042b590`, `fcn.009721b0`.
+
+Descriptor correction: the descriptor table actually starts at VA
+`0xe68bd0` (row 0 = `reswidth`, fallback `800`), not `0xe68b80`. Rows
+16 bytes apart: `reswidth` id 0 at `0xe68bd0`, `resheight` 1, `colordepth`
+2, `adapter` 3, `refreshrate` 4, `gamma` 5, `fixedaspect` 6,
+`modeldetail` 7, `animquality` 8, `texquality` 9, `miplevel` 10
+(`0x0a`), `texcolordepth` 11 (`0x0b`) at `0xe68c80`. Its name pointer is
+VA `0xe69188` (`texcolordepth`), fallback at `0xe68c80+12` = `16`.
+`fixedaspect` string is at `0xe69144`, `miplevel` at `0xe6917c`, matching
+those VAs. The earlier "row at `0xe68b90`" was an off-by-`0x50`
+misalignment; the string/fallback values are unchanged. Fallback `16`
+is decimal (16 bits), not a pixel layout.
+
+## Bounded actual upload format trace from qualified image only
+
+No guessed RGB565/alpha assignment; trace below names only constants
+and calls read from the qualified bytes. No client executed, no original
+bytes committed.
+
+- Writers (qualified image): options writer at VA `0x538681` pushes
+  `0x0b` then calls setter `0x42ca10` with word `16` (32 only when the
+  preceding selector equals 2). Startup writer at VA `0x428682`:
+  `mov ecx,32; cmp edi,2; mov eax,16; cmove eax,ecx; push eax; push 0x0b;
+  call 0x42ca10`. Both write depth only.
+- Live consumer: `0x42aab0` is the apply-reader. It bounds id `< 0x50`,
+  reads `descriptor[id].kind` at `0xe68bd8+id*16`, calls string getter
+  `0x42b590` for kind 1 and word getter `0x42b5f0` for kind 0, then
+  calls dispatcher `0x42ab70`. For id `0x0b`, kind is 0, so
+  `0x42b5f0` returns the stored word (16 or 32).
+- Dispatcher `0x42ab70` maps id via `byte[id-5+0x42b168]`; id `0x0b`
+  maps to jump-table entry 4 at `0x42b0f4`, target VA `0x42abeb`. There:
+  depth must be `16` or `32`, else return 0. It calls Gx getter
+  `0x7d0ad0` (returns device+`0xe8`), then calls
+  Gx setter thunk `0x7d0a70` with 0 when depth is 16 (only if getter
+  nonzero) or with 1 when depth is 32 (only if getter zero). `0x7d0a70`
+  is `GxDevice vtable+0x20` with that 0/1 arg. Base setter
+  `0x7d3280` stores the arg to device+`0xe8`; the OpenGL and D3D
+  overrides (`0x7d5320`, `0x7db5a0`) call the base then the
+  device-specific re-upload walk (`0x7da6e0` / `0x7df200`), which walks
+  the texture list and calls `0x7d47b0`. So `texcolordepth` sets a
+  0/1 device flag at +`0xe8`; it is not itself a GL enum.
+- Texture creation path (`0x9721b0` -> `0x9704b0`/`0x970280`) does not
+  read `texcolordepth`. BLP path at `0x970458` and TGA path at
+  `0x970646` call `GxDevice vtable+0xa8` (`0x7d11f0` thunk). The format
+  argument there comes from the BLP type switch at `0x970412`
+  (`word-2` on the BLP header field at struct+`0x1c`, enum {0,1,2,3})
+  or is constant 0 (TGA), never from id `0x0b`. `0x7d11f0` forwards
+  width/height/format to vtable+`0xa8`, which for both devices calls
+  base creator `0x7d4590` / `0x7d2bf0`; `0x7d2bf0` stores format to
+  texture-descriptor+`0x1c` unchanged.
+- Actual GL upload (imports are OpenGL32 only; no D3D import exists in
+  the qualified image): OpenGL texture upload at VA `0x7da8xx`
+  (virtual_0) decodes via descriptor+`0x28` callback, expands with
+  `0x7dab00`, and calls `glTexImage2D` at `0x7daa24` with
+  target `0xde1`, level from loop, format `0x1908`, type `0x1401`,
+  or `glTexSubImage2D` at `0x7daa80` with the same format/type.
+  The internal-format table at `0xebc5f4` is indexed by the BLP
+  format enum: {0:`0x8058`, 1:`0x8056`, 2:`0x8057`, 3:`0x8050`}.
+  `0x7dab00` has two paths: arg nonzero = 16-bit word-to-dword
+  expansion (shifts/masks at `0x7daba0..0x7dabd9`), arg zero = BGRA
+  byte swizzle. The caller passes nonzero only when texture flag
+  bit `0x20` is set, with the format enum as arg. A placeholder
+  allocation at `0x7da550` calls `glTexImage2D` with internalFormat
+  `0x8058`, format `0x80e1`, type `0x1401`, pixels NULL — i.e. a
+  RGB565-sized storage alloc, not the data upload.
+- What this still does not qualify: the table entries were read as
+  raw constants; no byte in the qualified image names the 16-bit
+  channel order, alpha semantics, or rounding for the `0x7dab00`
+  expansion, and the transient `0x8058` alloc does not define the
+  expanded RGBA layout. The GL data upload is RGBA/`0x1908`/
+  `0x1401` after expansion, not a 16-bit GL store. Therefore the
+  16-bit consumer remains unsupported: no RGB565/1555/4444 path is
+  implemented, and `one_mip` / `derive_texture_quality` keep
+  refusing 2-byte depth fail-closed.
+
+## Next precise function
+
+OpenGL upload worker at VA `0x7da8xx` -> expander `0x7dab00`
+(word-to-dword path at `0x7daba0`) -> `glTexImage2D` at `0x7daa24`.
+That triplet is the precise place a qualified 16-bit layout would
+have to be named; until a byte names channel order/alpha/rounding
+there, 16-bit stays unsupported.
