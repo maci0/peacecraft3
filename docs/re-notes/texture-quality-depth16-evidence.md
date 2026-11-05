@@ -198,10 +198,170 @@ bytes committed.
   implemented, and `one_mip` / `derive_texture_quality` keep
   refusing 2-byte depth fail-closed.
 
+## Word expander decoded; texcolordepth link still missing (2026-11-05)
+
+Bounded REA trace ONLY of expander `0x7dab00` word path
+`0x7daba0..0x7dabd9`, caller upload `0x7daa24` and internal-format
+table `0xebc5f4`, in the qualified image
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
+(PE32, ImageBase `0x400000`). No client executed, no original bytes
+committed, bounded reads only.
+
+### Expander format recovered from instructions (not assumed RGB565)
+
+Per `movzwl` word `w` at `0x7daba0`, the shifts/masks are
+`shr 4` + `and 0xf0`, `shr 8`, `shl 4` on the low byte, `shl 8`
+stages, `and 0xfffffff0` on the high byte — no `0x07e0`/`0xf800`
+565 masks and no 5/6/5 splits anywhere in the loop. The stored
+little-endian dword bytes `[b0,b1,b2,b3]` (uploaded as GL format
+`0x1908`, so `R=b0, G=b1, B=b2, A=b3`) are:
+
+- `R = ((w >> 8) & 0x0f) << 4`
+- `G = ((w >> 4) & 0x0f) << 4`
+- `B = (w & 0x0f) << 4`
+- `A = ((w >> 12) & 0x0f) << 4`
+
+i.e. nibbles `A R G B` from high to low (`A` bits 12-15, `R` 8-11,
+`G` 4-7, `B` 0-3; little-endian word low byte holds `G|B`, high
+byte holds `A|R`). Alpha has no branch: `A` nibble `0` expands to
+`0`, never forced opaque. Expansion is truncation `nibble << 4`
+with low nibble zero (`0x0f -> 0xf0`, not `0xff`): no
+bit-replication and no rounding. This is an ARGB4444 word layout
+as named by the masks/shifts. The other expander path
+(`0x7dab40`, arg zero) is a BGRA byte swizzle:
+`out = [src3, src0, src1, src2]` per 4-byte pixel.
+
+### Caller and table
+
+`glTexImage2D` at `0x7daa24`: target `0xde1`, level from loop,
+internal format from table `0xebc5f4` indexed by format enum at
+descriptor+`0x1c`, format `0x1908`, type `0x1401`. Table bytes:
+`{0: 0x8058, 1: 0x8056, 2: 0x8057, 3: 0x8050}`. The `0x8058`
+placeholder at `0x7da550` (`glTexImage2D` internal `0x8058`,
+format `0x80e1`, type `0x1401`, pixels NULL) is a storage alloc,
+not the data upload. The data upload is RGBA/`0x1908`/`0x1401`
+after expansion, not a 16-bit GL store.
+
+### Gx+e8 relationship (does not select the expander)
+
+Base setter `0x7d3280` stores its arg to device+`0xe8`; getter
+`0x7d32a0` returns it. Dispatcher at `0x42abeb`: depth `16` calls
+setter `0`, depth `32` calls setter `1` (each only when the getter
+does not already hold that value), so `+0xe8 == 0` means 16-bit
+depth selected and `+0xe8 == 1` means 32-bit. In the upload worker
+at `0x7da762`, `ebp-0x2c = (+0xe8 != 0 && dword[device+0xb0] > 0x10)
+? 1 : 0`; at `0x7da9ee` that flag only decides whether the table
+internal format is forced to `0x1908` (when nonzero and the
+expander arg is zero). It never selects the word expander.
+
+Expander selection is independent: at `0x7da9a8` the caller tests
+flag bit `0x20` at descriptor+`0x20` and passes
+`flag ? descriptor+0x1c : 0` as the expander arg. That flag is
+stored at texture creation (`0x7d2bf0`: `+0x20 = arg4`, via
+`0x7d4590` / `0x7d11f0` from the BLP/TGA call sites at
+`0x970458`/`0x970646`, whose flags arg is the loader caller's
+`0xc(%ebp)`). No traced byte sets flag `0x20` from
+`texcolordepth` or from Gx+`0xe8`; the only Gx+`0xe8` readers in
+the upload path are `0x7da762` and `0x7df333`.
+
+### Exact missing link
+
+The bounded trace does not establish that any BLP/TGA texture
+reaches the upload with flag `0x20` set, nor that
+`texcolordepth == 16` causes it. The packed-word expander alone
+could serve another 16-bit asset input. No byte in the traced
+region quantizes RGBA8 down to 16-bit words (only the 16-to-32
+expand appears), so a texcolordepth quantize/expand RGBA8 path
+would still be invented, including the RGBA8-to-nibble inverse.
+Therefore no conversion is implemented: `one_mip` and
+`derive_texture_quality` keep refusing 2-byte depth fail-closed,
+and `Refusal::Depth16Unresolved` still retains the previous
+texture. The unclosed callsite is now the caller of
+`0x970280`/`0x9704b0` that supplies the flags word reaching
+descriptor+`0x20`; until a byte there ties flag `0x20` to the
+16-bit depth selection, the 4444 expansion stays a recovered
+expander format, not a texcolordepth policy.
+
 ## Next precise function
 
-OpenGL upload worker at VA `0x7da8xx` -> expander `0x7dab00`
-(word-to-dword path at `0x7daba0`) -> `glTexImage2D` at `0x7daa24`.
-That triplet is the precise place a qualified 16-bit layout would
-have to be named; until a byte names channel order/alpha/rounding
-there, 16-bit stays unsupported.
+Caller of `0x970280`/`0x9704b0` supplying the flags word stored
+to descriptor+`0x20` at `0x7d2bf0`. Until that caller is traced,
+the expander-vs-`texcolordepth` link stays open and 16-bit stays
+unsupported.
+
+## Flag 0x20 clearing verified at all sampled callers (2026-11-05)
+
+Bounded trace of ALL direct callers of `0x9721b0` (11 sites) and of
+`0x7d11f0` (10 sites) in the qualified image, plus the worker
+`0x7da740..0x7daaf1` decision bytes. No client executed, no original
+bytes committed.
+
+- Dispatcher `0x9721b0`: `0x970280` (BLP) `flags = dispatcher +0xc`;
+  `0x9704b0` (TGA) same position. Inside `0x970280` the `0x7d11f0`
+  call pushes `[ebp+0xc]` as flags, `eax` (BLP switch) as format.
+  The BLP switch at `0x970412`: `word-2` on header field at
+  struct+`0x1c`, jump table `0x970498 = [0x97043f,0x97042a,0x970431,
+  0x970438]` mapping `{2:0,3:2,4:1,5:3}`, else 0. Format enum is
+  asset-derived (BLP header `picture_type` word), never `texcolordepth`.
+  `0x9704b0` (TGA) pushes constant format 0.
+- Every sampled flags construction clears bit `0x20`:
+  `0x71b7fa` `and 0xffffffce; or 0xe`;
+  `0x87ab23`/`0x87abbf`/`0x87ac06` `and 0xffffffd1; or 0x11` plus
+  synthetic `12*bit`;
+  `0x87cbc3`/`0x87cc4b` `and 0xffffffce; or 0xe`;
+  `0x887d21` `and 0xffffffd1; or 0x11`;
+  `0x920d73`/`0x9246fd` `and 0xffffffc2; or 2/4/8`;
+  `0x925527` `and 0xffffffc2` on `edi` plus channel-derived bits;
+  `0x542e8c`/`0x7e41d0` `and 0xffffffc1; or 1`;
+  `0x7e9e8a` `and 0xffffffc0`;
+  `0x6378a8` pushes 0/1; `0x745250` pushes a stack word.
+  The masks `0xffffffc0/c1/c2/ce/d1` all clear bit 5 (`0x20`).
+  No traced caller ORs `0x20` into flags, and no traced byte ties
+  flags to `texcolordepth` or Gx+`0xe8`.
+- Worker `0x7da740`: `ebp-0x2c = (Gx+0xe8 != 0 && dword[Gx+0xb0] > 0x10) ? 1 : 0`
+  (`0x7da762`); `ebp-0x28` set only on first upload when
+  `descriptor+0x30 == 0` (`0x7da7a0`). At `0x7da9ee`, only when
+  `ebp-0x28 != 0`: `internal = table[descriptor+0x1c]`; if
+  `ebp-0x2c != 0 && expander_arg == 0` then `internal = 0x1908`.
+  Expander arg at `0x7da9a8`: `test descriptor+0x20, 0x20` -> arg is
+  `descriptor+0x1c` or 0. The expander ignores the arg value except
+  for the nonzero test (`0x7dab09`), so the format enum never
+  selects 4444 vs 565; only the flag does.
+- GL enum meanings are format invariants (stable OpenGL constants,
+  not measured asset data): table `0xebc5f4 = {0:0x8058 GL_RGB565,
+  1:0x8056 GL_RGBA4, 2:0x8057 GL_RGB5_A1, 3:0x8050 GL_RGB5}`.
+  Neighboring texparam tables `0xebc5e4`/`0xebc5d4` are indexed by
+  the same format enum (`descriptor+0x20 & 3` at `0x7da7c0`/
+  `0x7da7dd`).
+- Creator `0x7d2bf0`: `descriptor+0x1c = arg3 (format)`,
+  `descriptor+0x20 = arg4 (flags)` via `0x7d4590` / `0x7d11f0`
+  vtable+`0xa8`. The descriptor `+0x28` decode callback at
+  `0x7da8f8` returns the pixel buffer that the expander consumes;
+  the callback is selected at creation, not by `texcolordepth`.
+- Alpha: no traced byte derives alpha from asset alpha or from
+  `texcolordepth`. The expander preserves the alpha nibble
+  (`A = (w>>12)&0xf << 4`, zero stays zero); the BGRA swizzle
+  preserves all four bytes. The decoder callback owns alpha
+  production; the worker never branches on it.
+
+Decision: RGBA8. No RGBA8->nibble quantize exists in the traced
+bytes, word expander is unreachable for BLP/TGA (flag cleared),
+and forcing ARGB4444 for texcolordepth would be inventing the
+quantize. `one_mip` and `derive_texture_quality` keep refusing
+2-byte depth fail-closed; `Refusal::Depth16Unresolved` retains
+the previous texture. The word expander stays a pinned spec test
+only (`word_expander_4444_nibble_shift_spec`), separate from
+quality quantization. GLenum channel layouts in the table are
+format invariants; per-texture choice comes from the source
+header (BLP `picture_type` word) via `descriptor+0x1c`, which the
+native path already implements - this recreation's BLP path
+decodes to RGBA8 directly and does not need the table.
+
+## Next precise function (updated)
+
+Nothing further on the flag-`0x20` question within the traced
+callers: the flag is cleared on every sampled path. The remaining
+open item is whether any *non-traced* texture source sets flag
+`0x20` - that source would be a different loader, not BLP/TGA,
+and not `texcolordepth`. Until a byte there ties flag `0x20` to
+the 16-bit depth selection, 16-bit stays unsupported.

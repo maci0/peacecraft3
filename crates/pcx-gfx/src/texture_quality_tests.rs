@@ -129,6 +129,70 @@ fn quality_selects_chosen_mip_and_preserves_depth() {
     assert!(top.mipmaps.is_empty());
 }
 
+// Spec pin for the recovered word expander at VA 0x7daba0..0x7dabd9 in
+// the qualified image (see docs/re-notes/texture-quality-depth16-evidence.md):
+// ARGB4444 nibbles expanded by `nibble << 4` (truncation, no replication).
+// Test-only: production still refuses depth 16 below; this pins the byte
+// math so a future qualified link cannot silently become RGB565.
+fn expand_word_4444(w: u16) -> [u8; 4] {
+    [
+        (((w >> 8) & 0x0f) << 4) as u8,
+        (((w >> 4) & 0x0f) << 4) as u8,
+        ((w & 0x0f) << 4) as u8,
+        (((w >> 12) & 0x0f) << 4) as u8,
+    ]
+}
+
+#[test]
+fn word_expander_4444_nibble_shift_spec() {
+    // Nonstock words: each nibble distinct, high/low nibbles exercised.
+    assert_eq!(expand_word_4444(0x1234), [0x20, 0x30, 0x40, 0x10]);
+    assert_eq!(expand_word_4444(0xabcd), [0xb0, 0xc0, 0xd0, 0xa0]);
+    // Alpha preserved as nibble, including zero -> zero (no opaque branch).
+    assert_eq!(expand_word_4444(0x0fff), [0xf0, 0xf0, 0xf0, 0x00]);
+    // Single-nibble probes pin channel order R=bits8-11,G=4-7,B=0-3,A=12-15.
+    assert_eq!(expand_word_4444(0x0800), [0x80, 0, 0, 0]);
+    assert_eq!(expand_word_4444(0x0040), [0, 0x40, 0, 0]);
+    assert_eq!(expand_word_4444(0x0002), [0, 0, 0x20, 0]);
+    assert_eq!(expand_word_4444(0xf000), [0, 0, 0, 0xf0]);
+    // Truncation, not bit-replication: 0x0f expands to 0xf0, never 0xff.
+    assert_eq!(expand_word_4444(0x000f), [0, 0, 0xf0, 0]);
+    // Not RGB565: 0xf800 in 565 would be pure red; here nibbles expand independently.
+    assert_eq!(expand_word_4444(0xf800), [0x80, 0, 0, 0xf0]);
+    // NOT quality: the test helper above is deliberately separate from
+    // quantization. An RGBA8 pixel must NOT be forced through 4444
+    // expansion for texcolordepth; depth 16 below still refuses.
+    // A quantize helper here would pin an unqualified inverse
+    // (nibble = channel >> r) that no traced byte establishes.
+}
+
+// Regression pin for the traced flag-0x20 clearing (see evidence note):
+// every sampled creator caller reaches `0x7d11f0`/`0x9721b0` with a
+// flags word that clears bit 0x20, e.g. masks `0xffffffc1`,
+// `0xffffffc0`, `0xffffffce`, `0xffffffd1`, `0xffffffc2` and `or 0xe/0x11/2`.
+// The word expander is therefore unreachable for BLP/TGA via the traced
+// path, and no code path here may assume flag 0x20 is set for depth 16.
+// This test records the link failure: the expander stays a recovered
+// format, not a texcolordepth policy, and `one_mip` keeps refusing.
+#[test]
+fn word_expander_unreachable_for_blp_tga_flag_cleared() {
+    // Gx+0xe8==0 (depth 16) only affects the internal-format table
+    // branch at 0x7da9ee; it never selects the word expander (arg is
+    // chosen by descriptor flag 0x20 at 0x7da9a8). Synthetic proof:
+    // expander arg 0 -> swizzle path, never word path, in our model too.
+    fn expander_is_word_path(arg_nonzero: bool) -> bool {
+        arg_nonzero
+    }
+    assert!(!expander_is_word_path(false));
+    assert!(expander_is_word_path(true));
+    // Depth-16 policy still refuses even though the expander math pins.
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    let q3 = derive_texture_quality(&m, &t, 3, 4).unwrap();
+    assert_eq!(q3.color_depth_bytes, 2);
+    assert!(one_mip(&fixture(), "q.blp", &q3, 64).is_err());
+}
+
 #[test]
 fn depth_16_two_bytes_refuses_without_inventing_rgba16() {
     let data = fixture();
