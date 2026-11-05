@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-assets"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "pcx-casc",
  "pcx-mpq",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-blp"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "jpeg-decoder",
  "pcx-mpq",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-casc"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "flate2",
  "md5",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-map"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "pcx-blp",
  "pcx-mpq",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mdl"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "pcx-mpq",
  "thiserror",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mpq"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "flate2",
  "implode",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-objects"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "pcx-mpq",
  "pcx-slq",
@@ -175,14 +175,14 @@ dependencies = [
 
 [[package]]
 name = "pcx-slq"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "pcx-tera"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "pcx-map",
  "pcx-slq",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tga"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "thiserror",
 ]
