@@ -2302,8 +2302,8 @@ fn canonical_fixture_real_interaction() {
         dir.display()
     );
     assert!(
-        processed >= 3,
-        "move+step+cancel+stop must be processed: {processed}"
+        processed >= 2,
+        "fixture loop must end via Stop after the driven orders: {processed}"
     );
 }
 

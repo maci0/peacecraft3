@@ -46,6 +46,9 @@ OBSERVATION = {
             "position_source": "live",
             "life": 400.0,
             "max_life": 400.0,
+            "owner": 1,
+            "owned": True,
+            "control": True,
             "current_order": 0,
             "screen": None,
             "in_viewport": True,
@@ -57,6 +60,9 @@ OBSERVATION = {
             "position_source": "live",
             "life": 300.0,
             "max_life": 300.0,
+            "owner": 2,
+            "owned": False,
+            "control": False,
             "current_order": 0,
             "screen": None,
             "in_viewport": True,
@@ -161,6 +167,22 @@ class DecisionAdapterTests(unittest.TestCase):
         action = choice_to_action(CHOICE_MOVE_EAST, choices)
         self.assertEqual(action["type"], "move")
         self.assertEqual(action["units"], [10])
+
+    def test_visible_enemy_never_ordered(self):
+        # Visible but not owned/controlled: excluded even with most life.
+        obs = json.loads(json.dumps(OBSERVATION))
+        obs["units"].append({
+            "id": "ff", "rawcode": "hfoo", "position": [50.0, 50.0],
+            "position_source": "live", "life": 9999.0, "max_life": 9999.0,
+            "owner": 2, "owned": False, "control": False,
+            "current_order": 0, "screen": None, "in_viewport": True,
+        })
+        choices = build_choices(obs)
+        self.assertEqual(choices.unit_uid, 0xA)
+        # Legacy schema without owner fields must fail closed, not assume own.
+        legacy = {"units": [{"id": "a", "position": [1.0, 1.0], "life": 10.0}]}
+        with self.assertRaises(DecisionError):
+            build_choices(legacy)
 
     def test_unknown_choice_fails_closed(self):
         with self.assertRaises(DecisionError):

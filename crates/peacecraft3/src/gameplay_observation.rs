@@ -28,6 +28,13 @@ pub struct ObservedUnit {
     pub position_source: &'static str,
     pub life: Option<f32>,
     pub max_life: Option<f32>,
+    /// Owner player number (`player_settings(owner).number`), when resolvable.
+    /// Only `owned`/`control` (local player) units are orderable downstream;
+    /// visible-but-not-owned units are listed but never orderable. A `None`
+    /// owner is unauthenticated, never orderable.
+    pub owner: Option<i32>,
+    pub owned: bool,
+    pub control: bool,
     /// `GetUnitCurrentOrder` result when the activity runtime is admitted.
     pub current_order: Option<i32>,
     /// Viewport pixel the camera projects this unit to, when it is in front
@@ -70,11 +77,15 @@ pub fn observe(
         if scanned > limit.saturating_mul(64).max(1024) {
             break;
         }
-        let owned = local.is_some_and(|n| {
-            objects
-                .player_settings(record.owner)
-                .is_ok_and(|p| p.number == n)
-        });
+        let owner_number = objects
+            .player_settings(record.owner)
+            .ok()
+            .map(|p| p.number);
+        let owned = local.is_some_and(|n| owner_number == Some(n));
+        // Canonical orders go through the local-player input path
+        // (`select_units` + `standard_target`): only owned units are
+        // orderable. Visible non-owned units are never orderable.
+        let control = owned;
         let visible = viewer.is_some_and(|v| {
             let pos = record.position.unwrap_or([record.x, record.y]);
             objects
@@ -113,6 +124,9 @@ pub fn observe(
             position_source: source,
             life: record.vitals.as_ref().map(|v| v.life),
             max_life: record.vitals.as_ref().map(|v| v.max_life),
+            owner: owner_number,
+            owned,
+            control,
             current_order: objects.current_unit_order(id).ok(),
             screen,
             in_viewport,

@@ -113,17 +113,21 @@ def _finite(value, name: str) -> float:
 
 
 def observed_owned_units(observation: dict) -> list[dict]:
-    """CURRENT observed owned units: position + life present, hex id > 0.
+    """CURRENT observed owned+controlled units only: position + life present,
+    hex id > 0, and explicit ``owned``/``control`` true with an ``owner``
+    number equal to ``local_player``.
 
-    ``gameplay_observation::observe`` already limits to owned/visible
-    units; this adapter re-checks position/life so no hidden unit can
-    be ordered. Enemy/undead-hidden units never reach the catalog.
+    ``gameplay_observation::observe`` lists owned OR visible units; visible
+    non-owned (enemy) units must never reach the order catalog. Any unit
+    missing the owner/control fields (older schema) is rejected, never
+    assumed owned. Hidden units are never enumerated upstream.
     """
     if not isinstance(observation, dict):
         raise DecisionError("observation must be an object")
     units = observation.get("units")
     if not isinstance(units, list) or not units:
         raise DecisionError("observation has no units; refusing to invent targets")
+    local = observation.get("local_player")
     owned = []
     for unit in units:
         if not isinstance(unit, dict):
@@ -132,6 +136,14 @@ def observed_owned_units(observation: dict) -> list[dict]:
         life = unit.get("life")
         uid_raw = unit.get("id")
         if position is None or life is None or uid_raw is None:
+            continue
+        # Ownership gate: explicit fields required, never assumed.
+        if unit.get("owned") is not True or unit.get("control") is not True:
+            continue
+        owner = unit.get("owner")
+        if isinstance(owner, bool) or not isinstance(owner, int):
+            continue
+        if isinstance(local, int) and not isinstance(local, bool) and owner != local:
             continue
         try:
             uid = int(str(uid_raw), 16)
