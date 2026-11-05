@@ -263,7 +263,6 @@ fn join(frame: &str) -> Option<(&'static str, Kind)> {
         "AutosaveReplayCheckBox" => ("autosaveReplay", C),
         "AmbientCheckBox" => ("ambient", C),
         "MovementCheckBox" => ("movement", C),
-        "UnitCheckBox" => ("unit", C),
         "SubtitlesCheckBox" => ("subtitles", C),
         "EnviroCheckBox" => ("environmental", C),
         "PositionalCheckBox" => ("positional", C),

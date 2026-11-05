@@ -26,6 +26,9 @@ pub(crate) mod camera;
 #[path = "menu_gameplay_settings.rs"]
 pub(crate) mod gameplay;
 
+#[path = "menu_sound_preference.rs"]
+pub(crate) mod sound_preference;
+
 #[path = "menu_slider.rs"]
 mod slider;
 
@@ -211,6 +214,7 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
             name.as_str(),
             "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
         ) && !gameplay::supports(name)
+            && !sound_preference::supports(name)
     }) {
         return Err("Saved settings contain an unsupported toggle".into());
     }
@@ -1453,6 +1457,24 @@ fn attach_controls(
         .iter()
         .any(|(_, c)| gameplay::supports(&c.name))
         .then(|| gameplay::defaults(launcher.as_deref()));
+    let unit_sound = controls
+        .iter()
+        .any(|(_, c)| sound_preference::supports(&c.name))
+        .then(|| {
+            let install = launcher
+                .as_deref()
+                .and_then(crate::launch_gui::selected_install);
+            crate::menu_lighting::with_client_image(install.as_deref(), |source, image| {
+                sound_preference::unit_default(
+                    image,
+                    pcx_play::scripts::AssetIdentity {
+                        source: source.into(),
+                        edition: "selected menu client".into(),
+                        version: "reviewed Legacy 1.29.2.9231 unit-sound profile".into(),
+                    },
+                )
+            })
+        });
     let tooltip = controls
         .iter()
         .any(|(_, c)| c.name == "TooltipsCheckBox")
@@ -1472,6 +1494,21 @@ fn attach_controls(
             })
         });
     for (entity, control) in &controls {
+        if sound_preference::supports(&control.name) {
+            let result = unit_sound
+                .as_ref()
+                .expect("unit-sound batch")
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|seed| {
+                    sound_preference::attach(&mut commands, entity, control, &mut nav, *seed)
+                });
+            if let Err(error) = result {
+                commands.entity(entity).insert(InteractionDisabled);
+                nav.notice = format!("{}: {error}", control.name);
+            }
+            continue;
+        }
         if gameplay::supports(&control.name) {
             let result = gameplay_defaults
                 .as_ref()
@@ -1661,6 +1698,7 @@ fn checkbox_changed(
         control.name.as_str(),
         "MusicCheckBox" | "SoundCheckBox" | "MouseScrollDisableCheckBox" | "TooltipsCheckBox"
     ) && !gameplay::supports(&control.name)
+        && !sound_preference::supports(&control.name)
     {
         return;
     }

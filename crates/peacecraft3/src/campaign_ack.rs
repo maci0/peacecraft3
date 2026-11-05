@@ -94,6 +94,7 @@ pub(crate) fn unit_sound(definition: &Definition) -> Result<Option<String>, Stri
     Ok((!matches!(text, "" | "_" | "-")).then(|| text.to_owned()))
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy system param set, matches existing pattern in this crate
 fn unit_voices(
     mut commands: Commands,
     input: Res<CampaignInput>,
@@ -102,7 +103,15 @@ fn unit_voices(
     mut assets: ResMut<Assets<AudioSource>>,
     sources: Sources,
     live: Query<(Entity, &GameSound)>,
+    preferences: Option<Res<crate::menu_screens::Navigation>>,
 ) {
+    // UnitCheckBox (`unit` preference) gates this producer only; text, orders
+    // and music keep their own consumers. Draft never gates: applied only.
+    if !crate::menu_settings::sound_preference::unit_voices_enabled(
+        preferences.as_deref().map(|nav| &nav.applied),
+    ) {
+        return;
+    }
     let entries = input.commands.entries();
     if entries.len() < audio.commands_seen {
         audio.commands_seen = 0;
@@ -245,6 +254,23 @@ mod tests {
             let queued = PlayerCommand::Queued(Box::new(inner));
             assert_eq!(ack_for(&queued, |_, _| false), expected);
         }
+    }
+
+    #[test]
+    fn unit_preference_gates_the_producer_not_the_mapping() {
+        use crate::menu_screens::Settings;
+        use crate::menu_settings::sound_preference::{UNIT_TOGGLE, unit_voices_enabled};
+        // Mapping still resolves; the gate lives in unit_voices before playback.
+        assert_eq!(
+            ack_for(&point("move"), |_, _| false),
+            Some((id(1), Ack::Yes))
+        );
+        let mut applied = Settings::default();
+        applied.toggles.insert(UNIT_TOGGLE.into(), false);
+        assert!(!unit_voices_enabled(Some(&applied)));
+        applied.toggles.insert(UNIT_TOGGLE.into(), true);
+        assert!(unit_voices_enabled(Some(&applied)));
+        assert!(unit_voices_enabled(None));
     }
 
     #[test]

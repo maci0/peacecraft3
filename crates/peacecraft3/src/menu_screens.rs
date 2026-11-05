@@ -422,6 +422,7 @@ pub fn supported(name: &str) -> bool {
             | "MusicCheckBox"
     ) || crate::menu_settings::camera::supports(name)
         || crate::menu_settings::gameplay::supports(name)
+        || crate::menu_settings::sound_preference::supports(name)
 }
 
 #[derive(Component)]

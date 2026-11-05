@@ -56,7 +56,12 @@ MAX_CRITERIA = 255  # JevProvider / SystemOne choice cap
 
 
 def _finite_number(v) -> bool:
-    return type(v) in (int, float) and math.isfinite(float(v))
+    if type(v) not in (int, float):
+        return False
+    try:
+        return math.isfinite(float(v))
+    except OverflowError:
+        return False  # e.g. huge int coord 10**400: not finite-representable
 
 
 def _safe_int_coord(v, extent: int):
