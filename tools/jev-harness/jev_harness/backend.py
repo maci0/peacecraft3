@@ -399,6 +399,9 @@ class PeaceCraftBrowserBackend:
         # only after the startup response, never before.
         try:
             resp = self._receive(self.startup_timeout_s)
+        except Exception:
+            self._terminate()
+            raise
         finally:
             try:
                 Path(tmp.name).unlink(missing_ok=True)
