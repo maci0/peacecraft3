@@ -18,6 +18,7 @@ pub mod campaign_score_assets;
 pub mod campaign_score_layout;
 pub mod campaign_startup;
 pub mod campaign_weather;
+pub mod custom_game;
 pub mod fdf;
 pub mod game_input;
 #[cfg(feature = "test-fixtures")]
