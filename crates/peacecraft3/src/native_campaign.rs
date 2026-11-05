@@ -1822,6 +1822,7 @@ pub(crate) mod tests {
     /// Writes `PCX_LOADING_CAPTURE_DIR/<map>-<stages>.ppm` for the selected chapter at no, half and
     /// full progress. Offscreen on a Vulkan adapter, no window.
     #[test]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[ignore = "requires a Vulkan adapter, PCX_NATIVE_CHAPTER_* and PCX_LOADING_CAPTURE_DIR"]
     fn selected_chapter_loading_screen_renders_offscreen() {
         let install =
@@ -1846,6 +1847,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL with original RoC and TFT campaign assets"]
     fn selected_install_every_indexed_map_builds_its_loading_screen() {
         let install =

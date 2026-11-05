@@ -30,10 +30,20 @@ pub struct Discovery {
     pub read: usize,
     /// Maps stored in `maps` (<= read).
     pub stored: usize,
-    /// More candidates remained in the inventory than the budget examined.
+    /// More candidates remained, or traversal stopped at the inventory
+    /// budget before the inventory ended.
     pub truncated: bool,
-    /// Candidates left unexamined because the budget ran out.
-    pub unexamined: usize,
+    /// Candidates left unexamined because the budget ran out. Exact only
+    /// when the whole inventory was visited; otherwise `None` (unknown
+    /// remainder — counting it would require an O(N) full scan).
+    pub unexamined: Option<usize>,
+    /// Inventory entries visited, including non-map filler skipped before
+    /// the candidate filter. This is the traversal work actually done,
+    /// bounded by `inventory_budget` (see [`DiscoveryBudget`]).
+    pub inventory_visited: usize,
+    /// True when traversal stopped at the inventory budget with entries
+    /// whose candidate-ness was never determined.
+    pub inventory_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,8 +54,13 @@ pub struct DiscoverySkip {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveryBudget {
-    /// Maximum candidates examined; bounds collection work.
+    /// Maximum candidates examined; bounds read/parse work.
     pub max_maps: usize,
+    /// Maximum inventory entries *visited* (including non-map filler
+    /// skipped by the extension filter); bounds traversal work. Discovery
+    /// stops with truncated/unknown remainder rather than scanning the
+    /// whole inventory to produce an exact leftover count.
+    pub max_inventory: usize,
     /// Per-map byte limit passed to `Resolver::resolve_bounded`.
     pub max_bytes_per_map: u64,
 }
@@ -54,9 +69,26 @@ impl DiscoveryBudget {
     /// Refuses a zero collection budget: discovery with no candidates
     /// examined is a caller bug, not an empty result.
     pub fn new(max_maps: usize, max_bytes_per_map: u64) -> Result<Self, Error> {
+        Self::with_inventory(max_maps, usize::MAX, max_bytes_per_map)
+    }
+
+    /// Like [`Self::new`] but also bounds inventory traversal: at most
+    /// `max_inventory` entries are visited. [`usize::MAX`] means no
+    /// traversal cap beyond the candidate budget.
+    pub fn with_inventory(
+        max_maps: usize,
+        max_inventory: usize,
+        max_bytes_per_map: u64,
+    ) -> Result<Self, Error> {
         if max_maps == 0 {
             return Err(Error::InvalidBudget {
                 field: "max_maps",
+                value: 0,
+            });
+        }
+        if max_inventory == 0 {
+            return Err(Error::InvalidBudget {
+                field: "max_inventory",
                 value: 0,
             });
         }
@@ -68,6 +100,7 @@ impl DiscoveryBudget {
         }
         Ok(Self {
             max_maps,
+            max_inventory,
             max_bytes_per_map,
         })
     }
@@ -93,13 +126,20 @@ impl std::error::Error for Error {}
 /// Inventories `.w3m`/`.w3x` paths lazily from `resolver.paths()` (already
 /// sorted/deduped in the resolver's `BTreeSet`), reads each candidate under
 /// `budget.max_bytes_per_map` via `resolve_bounded`, and parses it with
-/// `pcx_map::Map::parse` + checked `info()`. Work is strictly bounded: at
-/// most `max_maps` candidates are visited/read/stored, and leftover
-/// inventory is reported as `truncated`/`unexamined` counts instead of
-/// per-entry skip records. Titles come only from the map's `war3map.w3i`.
-/// Entries in `maps/` are custom candidates; other directories are only
-/// inventoried if the resolver has them mounted, never guessed from an
-/// install directory.
+/// `pcx_map::Map::parse` + checked `info()`. Work is strictly bounded:
+/// at most `budget.max_inventory` inventory entries are *visited*
+/// (`inventory_visited`, including non-map filler skipped before the
+/// extension filter) and at most `budget.max_maps` candidates are
+/// examined/read/stored. Traversal stops at the inventory budget without
+/// scanning the rest: the leftover is then truncated with
+/// `unexamined = None` (unknown remainder) rather than an exact count
+/// that would require an O(N) full scan. When the candidate budget runs
+/// out first, traversal continues only to count the leftover candidates
+/// when no inventory cap forces an early stop; in that case
+/// `unexamined` is the exact remaining-candidate count. Titles come only
+/// from the map's `war3map.w3i`. Entries in `maps/` are custom
+/// candidates; other directories are only inventoried if the resolver
+/// has them mounted, never guessed from an install directory.
 pub fn discover_custom_maps(
     resolver: &pcx_assets::Resolver,
     budget: &DiscoveryBudget,
@@ -109,16 +149,28 @@ pub fn discover_custom_maps(
     let mut examined = 0usize;
     let mut read = 0usize;
     let mut truncated = false;
-    let mut unexamined = 0usize;
+    let mut unexamined: Option<usize> = Some(0);
+    let mut inventory_visited = 0usize;
+    let mut inventory_truncated = false;
+    let mut paths = resolver.paths();
 
-    for path in resolver.paths() {
+    for path in &mut paths {
+        if inventory_visited >= budget.max_inventory {
+            inventory_truncated = true;
+            truncated = true;
+            unexamined = None;
+            break;
+        }
+        inventory_visited += 1;
         let asset_path = path.as_str();
         if !(asset_path.ends_with(".w3m") || asset_path.ends_with(".w3x")) {
             continue;
         }
         if examined >= budget.max_maps {
             truncated = true;
-            unexamined += 1;
+            if let Some(n) = unexamined.as_mut() {
+                *n += 1;
+            }
             continue;
         }
         examined += 1;
@@ -140,6 +192,8 @@ pub fn discover_custom_maps(
         stored,
         truncated,
         unexamined,
+        inventory_visited,
+        inventory_truncated,
     }
 }
 
@@ -416,8 +470,10 @@ mod tests {
         let d = discover_custom_maps(&resolver, &budget);
         assert_eq!(d.maps.len(), 1);
         assert!(d.truncated, "leftover inventory must be explicit truncation");
-        assert_eq!(d.unexamined, 1);
+        assert_eq!(d.unexamined, Some(1));
         assert_eq!(d.examined, 1);
+        assert_eq!(d.inventory_visited, 2, "every entry visited is counted: {d:?}");
+        assert!(!d.inventory_truncated);
         assert_eq!(d.skipped.len(), 0, "truncation must not emit per-entry skips");
     }
 
@@ -447,7 +503,13 @@ mod tests {
         assert_eq!(d.maps.len(), 2);
         assert_eq!(d.skipped.len(), 0, "truncation must not emit per-entry skip records: {d:?}");
         assert!(d.truncated, "remaining inventory beyond budget must be an explicit outcome");
-        assert_eq!(d.unexamined, 1, "maps/c.w3m unexamined: {d:?}");
+        assert_eq!(d.unexamined, Some(1), "maps/c.w3m unexamined: {d:?}");
+        // The 5000 filler entries were *visited* (counted as inventory
+        // work), never read — traversal work is visible, not hidden.
+        assert_eq!(
+            d.inventory_visited, 5003,
+            "inventory_visited must count non-map filler too: {d:?}"
+        );
         // Parse-failure skips stay bounded by examined count too.
         let budget2 = DiscoveryBudget::new(10, 1 << 20).unwrap();
         let d2 = discover_custom_maps(&resolver, &budget2);
@@ -455,6 +517,37 @@ mod tests {
         assert_eq!(d2.read, 3);
         assert_eq!(d2.stored, 3);
         assert!(!d2.truncated);
-        assert_eq!(d2.unexamined, 0);
+        assert_eq!(d2.unexamined, Some(0));
+        assert_eq!(d2.inventory_visited, 5003);
+    }
+
+    #[test]
+    fn inventory_budget_stops_traversal_with_unknown_remainder() {
+        // Sorted order: maps/a.w3m, maps/b.w3m, then 5000 filler .txt
+        // entries. An inventory cap of 3 must stop traversal before the
+        // filler, report inventory_visited == 3 (not a faked "read"
+        // counter), and leave the remainder unknown instead of scanning
+        // all 5003 entries for an exact count.
+        let m = synthetic_w3m(&w3i_bytes("T"));
+        let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+        for i in 0..5000 {
+            files.push((format!(r"Maps\filler\z{i:05}.txt"), b"x".to_vec()));
+        }
+        files.push((r"Maps\a.w3m".into(), m.clone()));
+        files.push((r"Maps\b.w3m".into(), m));
+        let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
+        let fixture = Fixture::new("invbudget", &refs);
+        let resolver = fixture.resolver();
+        let budget = DiscoveryBudget::with_inventory(10, 3, 1 << 20).unwrap();
+        let d = discover_custom_maps(&resolver, &budget);
+        assert_eq!(d.inventory_visited, 3, "traversal must stop at the inventory budget: {d:?}");
+        assert_eq!(d.examined, 2, "only maps/a.w3m and maps/b.w3m examined: {d:?}");
+        assert!(d.truncated);
+        assert!(d.inventory_truncated);
+        assert_eq!(
+            d.unexamined, None,
+            "remainder must be unknown, not an exact count requiring a full scan: {d:?}"
+        );
+        assert_eq!(d.maps.len(), 2);
     }
 }
