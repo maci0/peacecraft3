@@ -35,6 +35,7 @@ enum Page {
     Main,
     End,
     ConfirmExit,
+    Tips,
 }
 impl Page {
     fn frame(self) -> &'static str {
@@ -42,6 +43,7 @@ impl Page {
             Self::Main => "MainPanel",
             Self::End => "EndGamePanel",
             Self::ConfirmExit => "ConfirmQuitPanel",
+            Self::Tips => "TipsPanel",
         }
     }
     fn back(self) -> Option<Self> {
@@ -49,6 +51,7 @@ impl Page {
             Self::Main => None,
             Self::End => Some(Self::Main),
             Self::ConfirmExit => Some(Self::End),
+            Self::Tips => Some(Self::Main),
         }
     }
 }
@@ -195,6 +198,7 @@ fn enabled(frame: &str) -> bool {
             | "ExitButton"
             | "ConfirmQuitQuitButton"
             | "ConfirmQuitCancelButton"
+            | "TipsButton"
     )
 }
 fn act(
@@ -223,6 +227,7 @@ fn act(
         "PreviousButton" => state.page = Page::Main,
         "ExitButton" => state.page = Page::ConfirmExit,
         "ConfirmQuitCancelButton" => state.page = Page::End,
+        "TipsButton" => state.page = Page::Tips,
         "ConfirmQuitQuitButton" => {
             if cfg!(target_arch = "wasm32") {
                 inputs.session.clear();
@@ -303,6 +308,14 @@ fn items(
     }
     let (mut items, unsupported) =
         glue_menu::control_items(fdf, page.frame(), size).map_err(|e| e.to_string())?;
+    // TEXTAREA rendering is pending (see docs/re-notes/escape-help-tips.md);
+    // first slice admits the Tips panel chrome without its text area.
+    // The actual Tips OK button name is pending FDF confirmation; closing
+    // the page uses the generic page.back()/Escape path for now.
+    let unsupported: Vec<_> = unsupported
+        .into_iter()
+        .filter(|name| name != "TEXTAREA TipsTextArea")
+        .collect();
     if !unsupported.is_empty() {
         return Err(format!("escape menu: unsupported controls {unsupported:?}"));
     }
@@ -409,7 +422,7 @@ fn load(
     let mut seen = HashSet::new();
     let mut total = 0usize;
     let mut font_bytes = 0usize;
-    for page in [Page::Main, Page::End, Page::ConfirmExit] {
+    for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Tips] {
         for item in items(
             &source.fdf,
             &source.skin,
@@ -864,6 +877,38 @@ mod tests {
                     .just_pressed(KeyCode::Escape)
             );
         }
+    }
+    #[test]
+    fn tips_page_maps_to_tips_panel_and_backs_to_main() {
+        assert_eq!(Page::Tips.frame(), "TipsPanel");
+        assert_eq!(Page::Tips.back(), Some(Page::Main));
+        assert!(enabled("TipsButton"));
+        // No Help transition imported in this Tips-only slice.
+        assert!(!enabled("HelpButton"));
+        // Tips OK button name pending FDF confirmation; closing uses back()/Escape.
+        let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
+        let fdf_tips = Fdf::parse(
+            r#"
+Frame "FRAME" "EscMenuMainPanel" {
+ SetAllPoints,
+}
+Frame "FRAME" "TipsPanel" {
+ Width 0.432,
+ Height 0.284,
+ Frame "TEXTAREA" "TipsTextArea" {
+  Width 0.362,
+  Height 0.147,
+  SetPoint TOP, "TipsPanel", TOP, 0.0, -0.05,
+ }
+}
+Frame "BACKDROP" "EscMenuBackdrop" {
+ BackdropBackground "PanelArt",
+}
+"#,
+        )
+        .unwrap();
+        let plan = items(&fdf_tips, &skin, &["Default".into()], Page::Tips, &layout()).unwrap();
+        assert!(plan.iter().all(|i| i.frame != "TipsTextArea"));
     }
     #[test]
     fn single_player_pause_is_hidden_without_reflowing_anchored_controls() {
