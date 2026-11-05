@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(filters.0, [0, 1, 1]);
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting a chapter, and PCX_WAR3_EXE"]
     fn selected_chapter_mounts_the_buttons_and_applies_presses() {

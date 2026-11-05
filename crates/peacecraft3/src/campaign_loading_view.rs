@@ -966,6 +966,7 @@ fn drive_bar(
 }
 
 /// Builds the screen in a bare world, for tests of original assets.
+#[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
 #[cfg(test)]
 pub(crate) mod harness {
     use super::*;

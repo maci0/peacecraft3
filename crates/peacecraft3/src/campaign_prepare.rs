@@ -141,9 +141,8 @@ fn choose_seed(requested: Option<i32>) -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     use super::*;
-    use pcx_play::map_startup_host::MapStartupHost;
-    use peacecraft3::map_script_session::MapScriptSession;
 
     #[test]
     fn explicit_seed_retains_zero_and_signed_bits() {
@@ -152,9 +151,12 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires selected PCX_NATIVE_CHAPTER_INSTALL, MAP and ADDON inputs"]
     fn admitted_preparation_ignores_later_launcher_install_and_edition_changes() {
+        use pcx_play::map_startup_host::MapStartupHost;
+        use peacecraft3::map_script_session::MapScriptSession;
         let mut app = crate::native_campaign::tests::started_app();
         let context = app
             .world()

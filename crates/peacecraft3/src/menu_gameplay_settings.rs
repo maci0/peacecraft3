@@ -149,9 +149,7 @@ mod tests {
         // through decode_preferences: a persisted true must round-trip and
         // remain distinct from an absent toggle.
         let mut nav = Navigation::default();
-        nav.draft
-            .toggles
-            .insert("CustomKeysCheckBox".into(), true);
+        nav.draft.toggles.insert("CustomKeysCheckBox".into(), true);
         let mut backend = Backend::default();
         let mut saved = String::new();
         super::super::commit(&mut nav, &mut Window::default(), &mut backend, |text| {
@@ -160,7 +158,10 @@ mod tests {
         })
         .unwrap();
         let prefs = super::super::decode_preferences(&saved).unwrap();
-        assert_eq!(prefs.settings.toggles.get("CustomKeysCheckBox"), Some(&true));
+        assert_eq!(
+            prefs.settings.toggles.get("CustomKeysCheckBox"),
+            Some(&true)
+        );
         assert_eq!(
             crate::campaign_custom_keys::enabled_for_test(true, Some(b"0")),
             Ok(true)
