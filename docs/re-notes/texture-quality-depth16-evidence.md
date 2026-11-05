@@ -45,7 +45,13 @@ would be inventing a pixel format. The exact consumer function that
 names the format (the D3D surface-creation call that receives the depth
 word on the texture-upload path) remains the unclosed evidence; until
 it is isolated, the unsupported-format consumer is recorded here rather
-than implemented. The `TEXTURE_QUALITY_COUNT = 4` ordinal bound is a
-crate-local count for the four authored popup choices, not a copied
-asset value, and stays in the texture-quality module only (no menu
-wiring).
+than implemented. The ordinal bound is no longer a crate-local constant:
+`derive_texture_quality` takes a caller-supplied `domain` measured from
+the actual `TextureQualityMenu` FDF `MenuItem` records by the menu layer
+(which owns the FDF parser), so pcx-gfx never copies the popup count.
+Synthetic tests prove a non-four domain (3 and 6) bounds the ordinal;
+the original-image gate reads the real source count from the selected
+install's Options FDF. The remaining menu-consumer hook is unchanged:
+the UI layer must parse the popup choices, pass their length as
+`domain`, and call `derive_texture_quality` + `one_mip` on selection —
+no menu wiring is added here.

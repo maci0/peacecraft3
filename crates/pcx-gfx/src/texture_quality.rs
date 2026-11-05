@@ -29,8 +29,12 @@
 //! and special indexes from their opcode sequences. A changed operand in
 //! a nonstock fixture changes the derived policy.
 
-/// The four authored Texture Quality choices, by ordinal.
-pub const TEXTURE_QUALITY_COUNT: usize = 4;
+// Caller-supplied ordinal domain: the number of authored
+// `TextureQualityMenu` popup choices read from the actual FDF
+// `MenuItem` records for the selected client (see `menu_screens`
+// `Widget::Popup { choices }`). pcx-gfx must not pull the FDF/UI
+// layer in to learn this count; the menu layer owns the source and
+// passes its measured length. A zero domain admits no ordinal.
 
 /// Native-mapped texture policy for one ordinal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +49,7 @@ pub struct TextureQuality {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyError {
-    OrdinalOutOfRange { ordinal: u32 },
+    OrdinalOutOfRange { ordinal: u32, domain: usize },
     /// Branch window does not match either supported opcode shape.
     MalformedBranch,
     /// Depth word is not a validated bit depth (16 or 32).
@@ -55,8 +59,8 @@ pub enum PolicyError {
 impl std::fmt::Display for PolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OrdinalOutOfRange { ordinal } => {
-                write!(f, "texture quality ordinal {ordinal} is outside the authored {TEXTURE_QUALITY_COUNT} choices")
+            Self::OrdinalOutOfRange { ordinal, domain } => {
+                write!(f, "texture quality ordinal {ordinal} is outside the caller-supplied authored domain of {domain} choices")
             }
             Self::MalformedBranch => write!(f, "texture quality branch window is malformed"),
             Self::UnsupportedDepth { word } => {
@@ -165,15 +169,19 @@ fn parse_texcolordepth(b: &[u8]) -> Option<(u32, u32, u32)> {
 }
 
 /// Derive the policy for `ordinal` from branch windows read from the
-/// reviewed image. Both windows must be the complete branch sequences
-/// (see module docs); malformed windows refuse.
+/// reviewed image. `domain` is the caller-supplied count of authored
+/// `TextureQualityMenu` choices measured from the actual FDF popup
+/// records (not a copied constant); an ordinal at or beyond it
+/// refuses. Both windows must be the complete branch sequences (see
+/// module docs); malformed windows refuse.
 pub fn derive_texture_quality(
     miplevel_branch: &[u8],
     texcolordepth_branch: &[u8],
     ordinal: u32,
+    domain: usize,
 ) -> Result<TextureQuality, PolicyError> {
-    if ordinal as usize >= TEXTURE_QUALITY_COUNT {
-        return Err(PolicyError::OrdinalOutOfRange { ordinal });
+    if ordinal as usize >= domain {
+        return Err(PolicyError::OrdinalOutOfRange { ordinal, domain });
     }
     let (mip_special_idx, mip_default, mip_special) =
         parse_miplevel(miplevel_branch).ok_or(PolicyError::MalformedBranch)?;
