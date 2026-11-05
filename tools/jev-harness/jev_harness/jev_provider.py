@@ -17,6 +17,18 @@ https://api.typesafe.ai/openapi.json and https://docs.typesafe.ai):
   (actions.validate_action via run_loop, and re-checked here) gates it.
 - Fail closed: any schema/type/model/probability/ID violation ->
   ProviderError, no action returned, no retry/replay.
+- Argmax policy (code-owned, not a contract claim): the official
+  OpenAPI ChoiceAnswer documents ``choice`` as "The name of the choice
+  with the highest probability among the question's criteria", and one
+  community Doom demo (junyeong-nero/jev-doom) additionally validated
+  choice==argmax. The OpenAPI does not state that a non-argmax choice
+  is a protocol violation, and another surveyed demo (mikespins/doom-jev)
+  samples from probabilities instead of always taking argmax. This
+  adapter therefore makes an explicit code-owned policy choice: take
+  argmax deterministically. If a response's ``choice`` is in the offered
+  set and probabilities are otherwise valid but are not argmax, the
+  adapter does NOT reject it as a contract violation; it instead selects
+  the argmax candidate itself (documented here, covered by tests).
 - First mode is STRUCTURED state only (no images). Optional image mode
   (`include_image=True`) sends the viewport PNG as an opaque asset ref
   that appears in state, with format/data_base64 (no data: prefix) and
@@ -244,9 +256,15 @@ class JevProvider(Provider):
             total += float(v)
         if abs(total - 1.0) > PROB_SUM_TOLERANCE:
             raise ProviderError("probabilities must sum to ~1")
-        # choice is defined as the max-probability option (OpenAPI).
-        if probs[choice] != max(float(v) for v in probs.values()):
-            raise ProviderError("choice is not the max-probability option")
+        # Code-owned argmax policy (see module docstring): OpenAPI
+        # documents choice as the max-probability option but does not
+        # define a non-argmax choice as a protocol violation. Do not
+        # reject a valid offered-set choice merely for not being argmax;
+        # explicitly select argmax here instead.
+        argmax_choice = max(probs, key=lambda k: float(probs[k]))
+        # Use argmax as the authoritative selection. Ties resolved by
+        # max() first-encountered order (deterministic for a given dict).
+        choice = argmax_choice
         usage = data.get("usage")
         if not isinstance(usage, dict):
             raise ProviderError("response missing usage object")

@@ -13,7 +13,7 @@ from .jev_provider import (
     API_URL, MODEL,
 )
 from .backend import GameBackend, SyntheticBackend, OriginalReferenceBackend, BackendError
-from .secrets import load_key_in_process, SecretsError, KEY_PATH
+from .secrets import load_key_in_process, SecretsError, KEY_PATH, ENV_NAME
 from .redact import redact, redact_text
 
 __all__ = [
@@ -23,7 +23,7 @@ __all__ = [
     "JevProvider", "parse_box_answer", "box_to_pixels", "default_candidates",
     "API_URL", "MODEL",
     "GameBackend", "SyntheticBackend", "OriginalReferenceBackend", "BackendError",
-    "load_key_in_process", "SecretsError", "KEY_PATH",
+    "load_key_in_process", "SecretsError", "KEY_PATH", "ENV_NAME",
     "redact", "redact_text",
 ]
 __version__ = "0.1.0"
