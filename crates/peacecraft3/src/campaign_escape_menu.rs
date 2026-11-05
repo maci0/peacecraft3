@@ -101,6 +101,8 @@ struct Inputs<'w> {
     sources: Res<'w, SelectedMapSources>,
     session: ResMut<'w, MapScriptSession<MapStartupHost>>,
     view: ResMut<'w, CampaignCamera>,
+    route: Option<ResMut<'w, crate::campaign_in_game_options::InGameOptionsRoute>>,
+    nav: Option<ResMut<'w, crate::menu_screens::Navigation>>,
 }
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<EscapeMenu>()
@@ -185,9 +187,13 @@ fn keyboard(
     }
 }
 fn enabled(frame: &str) -> bool {
+    // G01-owned escape controls known to dispatch in `act`. `OptionsButton`
+    // is included by the campaign_in_game_options entry slice; the
+    // `act` arm for it is the actual dispatch.
     matches!(
         frame,
         "ReturnButton"
+            | "OptionsButton"
             | "EndGameButton"
             | "PreviousButton"
             | "QuitButton"
@@ -219,6 +225,19 @@ fn act(
     }
     match frame.as_str() {
         "ReturnButton" => inputs.view.set_menu_open(false),
+        "OptionsButton" => {
+            // Admitted-session witness; keep CampaignCamera menu open (pause)
+            // while Options route is active. The escape root stays mounted so
+            // Back/Escape-close can unwind; this slice does not add OK/Cancel.
+            let Some(witness) = inputs.session.session_witness() else {
+                return;
+            };
+            let (Some(route), Some(nav)) = (inputs.route.as_deref_mut(), inputs.nav.as_deref_mut())
+            else {
+                return;
+            };
+            crate::campaign_in_game_options::route_open_escape_options(route, nav, &witness);
+        }
         "EndGameButton" => state.page = Page::End,
         "PreviousButton" => state.page = Page::Main,
         "ExitButton" => state.page = Page::ConfirmExit,
@@ -997,6 +1016,46 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
         assert_eq!(state.pending.as_ref().unwrap().0, "QuitButton");
     }
 
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn no_session_options_button_does_not_open_in_game_route() {
+        // `act` never touches real assets: pending/guards are all set directly.
+        // No real session witness exists here; the dispatcher requires the
+        // admitted witness already checked at the top of `act`, so this test
+        // runs through `act` with a witness-bearing pending entry only when a
+        // session is admitted. With no session, `act` must refuse.
+        use bevy::ecs::system::RunSystemOnce;
+        let witness = Arc::new(());
+        let foreign = Arc::downgrade(&witness);
+        let mut app = App::new();
+        app.init_resource::<EscapeMenu>()
+            .init_resource::<MapRequests>()
+            .init_resource::<SelectedMapSources>()
+            .init_resource::<MapScriptSession<MapStartupHost>>()
+            .init_resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+            .init_resource::<crate::menu_screens::Navigation>()
+            .add_message::<CampaignTransitionRequest>()
+            .add_message::<AppExit>();
+        let mut view = CampaignCamera::active_for_test(Entity::PLACEHOLDER);
+        view.set_menu_open(true);
+        app.insert_resource(view);
+        app.insert_resource(EscapeMenu {
+            page: Page::Main,
+            pending: Some(("OptionsButton".into(), Page::Main, foreign)),
+            ..default()
+        });
+        app.world_mut().run_system_once(act).unwrap();
+        let route = app
+            .world()
+            .resource::<crate::campaign_in_game_options::InGameOptionsRoute>();
+        assert_eq!(
+            route.state,
+            crate::campaign_in_game_options::InGameRoute::Escape
+        );
+        assert!(!route.is_open());
+        assert!(app.world().resource::<CampaignCamera>().menu_open());
+    }
+
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires selected unchanged PCX_NATIVE_CHAPTER_* inputs; assets only, no rendered parity claim"]
@@ -1044,7 +1103,12 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             );
         }
         app.add_message::<AppExit>()
-            .add_message::<CampaignTransitionRequest>();
+            .add_message::<CampaignTransitionRequest>()
+            .init_resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+            .init_resource::<crate::menu_screens::Navigation>();
+        app.world_mut()
+            .resource_mut::<crate::menu_screens::Navigation>()
+            .screen = crate::menu_screens::Screen::Main;
         let context = app
             .world()
             .resource::<MapScriptSession<MapStartupHost>>()
@@ -1075,6 +1139,52 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             pending: Some(("RestartButton".into(), Page::End, witness.clone())),
             ..default()
         });
+        app.world_mut().run_system_once(act).unwrap();
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<CampaignTransitionRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 1);
+        assert!(Arc::ptr_eq(&requests[0].context, &context));
+        assert_eq!(requests[0].next_level, member);
+        assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.page = Page::Main;
+            state.pending = Some(("OptionsButton".into(), Page::Main, witness.clone()));
+        }
+        app.world_mut().run_system_once(act).unwrap();
+        {
+            let route = app
+                .world()
+                .resource::<crate::campaign_in_game_options::InGameOptionsRoute>();
+            assert!(route.is_open());
+            assert_eq!(
+                route.state,
+                crate::campaign_in_game_options::InGameRoute::Options
+            );
+            assert!(
+                route
+                    .session
+                    .as_ref()
+                    .is_some_and(|w| Weak::ptr_eq(w, &witness))
+            );
+        }
+        assert!(app.world().resource::<CampaignCamera>().menu_open());
+        assert_eq!(
+            app.world()
+                .resource::<crate::menu_screens::Navigation>()
+                .requested,
+            Some(crate::menu_screens::Screen::Options(
+                crate::menu_screens::Page::Unselected
+            ))
+        );
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.page = Page::End;
+            state.pending = Some(("RestartButton".into(), Page::End, witness.clone()));
+        }
         app.world_mut().run_system_once(act).unwrap();
         let requests = app
             .world_mut()

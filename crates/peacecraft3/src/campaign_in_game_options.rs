@@ -39,27 +39,30 @@ pub const OPTIONS_OK_BUTTON: &str = "OKButton";
 pub enum InGameRoute {
     #[default]
     Escape,
-    #[allow(dead_code)]
     Options,
 }
 
 /// Focused route state. Witness binds the modal to one admitted session.
 #[derive(Debug, Clone, Default, Resource)]
 pub struct InGameOptionsRoute {
-    #[allow(dead_code)]
     pub state: InGameRoute,
-    #[allow(dead_code)]
     pub session: Option<Weak<()>>,
 }
 
 impl InGameOptionsRoute {
     #[allow(dead_code)]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     #[allow(dead_code)]
-    pub fn is_open(&self) -> bool { self.state == InGameRoute::Options }
+    pub fn is_open(&self) -> bool {
+        self.state == InGameRoute::Options
+    }
     #[allow(dead_code)]
     fn bound(&self, witness: &Weak<()>) -> bool {
-        self.session.as_ref().is_some_and(|w| Weak::ptr_eq(w, witness))
+        self.session
+            .as_ref()
+            .is_some_and(|w| Weak::ptr_eq(w, witness))
     }
 }
 
@@ -69,16 +72,21 @@ pub struct InGameOptionsOpened;
 
 #[derive(Debug, Clone, PartialEq, Eq, Event)]
 #[allow(dead_code)]
-pub struct InGameOptionsClosed { pub cancelled: bool }
+pub struct InGameOptionsClosed {
+    pub cancelled: bool,
+}
 
-#[allow(dead_code)]
 pub fn route_open_escape_options(
     route: &mut InGameOptionsRoute,
     nav: &mut Navigation,
     witness: &Weak<()>,
 ) -> bool {
-    if route.state == InGameRoute::Options { return false; }
-    if !matches!(nav.screen, Screen::Main | Screen::Options(Page::Unselected)) && route.state != InGameRoute::Escape {
+    if route.state == InGameRoute::Options {
+        return false;
+    }
+    if !matches!(nav.screen, Screen::Main | Screen::Options(Page::Unselected))
+        && route.state != InGameRoute::Escape
+    {
         return false;
     }
     nav.draft = nav.applied.clone();
@@ -95,7 +103,9 @@ pub fn route_back_to_escape(
     nav: &mut Navigation,
     witness: &Weak<()>,
 ) -> bool {
-    if !route.bound(witness) { return false; }
+    if !route.bound(witness) {
+        return false;
+    }
     route.state = InGameRoute::Escape;
     route.session = None;
     nav.open(Screen::Main);
@@ -108,7 +118,9 @@ pub fn route_cancel_options(
     nav: &mut Navigation,
     witness: &Weak<()>,
 ) -> bool {
-    if !route.bound(witness) { return false; }
+    if !route.bound(witness) {
+        return false;
+    }
     nav.draft = nav.applied.clone();
     nav.selected_offer = None;
     route.state = InGameRoute::Escape;
@@ -129,8 +141,12 @@ pub fn route_ok_options(
     witness: &Weak<()>,
     committed: Result<(), String>,
 ) -> bool {
-    if committed.is_err() { return false; }
-    if !route.bound(witness) { return false; }
+    if committed.is_err() {
+        return false;
+    }
+    if !route.bound(witness) {
+        return false;
+    }
     nav.selected_offer = None;
     route.state = InGameRoute::Escape;
     route.session = None;
@@ -140,7 +156,6 @@ pub fn route_ok_options(
 
 /// Minimal registration. Events are plain types; main can register them with
 /// `World::register_event` if a message system is needed.
-#[allow(dead_code)]
 pub fn install(app: &mut bevy::prelude::App) {
     app.init_resource::<InGameOptionsRoute>();
 }
@@ -151,7 +166,10 @@ mod tests {
     use std::sync::Arc;
 
     fn setup() -> (InGameOptionsRoute, Navigation, Weak<()>) {
-        let mut nav = Navigation { screen: Screen::Main, ..Default::default() };
+        let mut nav = Navigation {
+            screen: Screen::Main,
+            ..Default::default()
+        };
         nav.applied.toggles.insert("TooltipsCheckBox".into(), true);
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
         let arc = Arc::new(());
@@ -207,7 +225,12 @@ mod tests {
         route_open_escape_options(&mut route, &mut nav, &w);
         nav.draft.toggles.insert("TooltipsCheckBox".into(), false);
         // Failed commit: helper refuses; Options, draft, applied intact.
-        assert!(!route_ok_options(&mut route, &mut nav, &w, Err("save failed".into())));
+        assert!(!route_ok_options(
+            &mut route,
+            &mut nav,
+            &w,
+            Err("save failed".into())
+        ));
         assert_eq!(route.state, InGameRoute::Options);
         assert!(route.is_open());
         assert!(!nav.draft.toggles["TooltipsCheckBox"]);
