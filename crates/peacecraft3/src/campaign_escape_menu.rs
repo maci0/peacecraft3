@@ -82,6 +82,10 @@ struct Source {
     fonts: HashMap<String, Handle<Font>>,
     reader: Arc<pcx_assets::Resolver>,
     receipts: Vec<AssetReceipt>,
+    help: pcx_play::escape_help_tips::HelpStrings,
+    help_style: crate::menu_text::TextStyle,
+    help_rect: Rect,
+    help_inset: f32,
 }
 #[derive(Component)]
 pub(crate) struct EscapeRoot;
@@ -391,6 +395,7 @@ fn load(
     race: Option<String>,
     fonts: &mut Assets<Font>,
     layout: pcx_play::escape_layout::Rules,
+    install: Option<&std::path::Path>,
 ) -> Result<Source, String> {
     let mut receipts = Vec::new();
     let mut fdf =
@@ -402,6 +407,49 @@ fn load(
         .map_err(|e| e.to_string())?;
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let strings = text(&reader, r"UI\FrameDef\GlobalStrings.fdf", &mut receipts)?;
+    // Help body + qualified default font (bounded; no scrollbar first slice).
+    let help_text = text(&reader, r"UI\HelpStrings.txt", &mut receipts)?;
+    let help = pcx_play::escape_help_tips::HelpStrings::parse(&help_text)?;
+    let misc = text(&reader, r"UI\MiscUI.txt", &mut receipts)?;
+    let default_font = crate::menu_lighting::with_client_image(install, |src, image| {
+        pcx_play::escape_help_tips::DefaultFont::read(
+            image,
+            pcx_play::scripts::AssetIdentity {
+                source: src.into(),
+                edition: "selected menu client".into(),
+                version: "reviewed Legacy 1.29.2.9231 escape default font".into(),
+            },
+            &misc,
+        )
+    })?;
+    let help_rect = fdf
+        .rect("HelpTextArea", (layout.viewport[0], layout.viewport[1]))
+        .map_err(|e| e.to_string())?;
+    let inset_numbers = fdf
+        .numbers("EscMenuTextAreaTemplate", "TextAreaInset")
+        .map_err(|e| e.to_string())?
+        .ok_or("EscMenuTextAreaTemplate: missing TextAreaInset")?;
+    let [inset] = inset_numbers.as_slice() else {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    };
+    if !inset.is_finite() || *inset < 0. {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    }
+    let help_style = crate::menu_text::render_style_with_font(
+        &fdf,
+        "HelpTextArea",
+        "HelpPanel",
+        Some((default_font.font_path.clone(), default_font.wrapping_height())),
+    )?;
+    // Ensure decoded default-font bytes resolve through the same reader.
+    {
+        let asset = reader
+            .resolve_bounded(&default_font.font_path, 16 << 20)
+            .map_err(|e| format!("{}: {e}", default_font.font_path))?;
+        if !crate::hud_render::font_registers(&asset.bytes) {
+            return Err(format!("{}: unreadable font", default_font.font_path));
+        }
+    }
     if fdf.frame(&layout.root_frame).is_none() {
         return Err(format!(
             "escape menu: missing native root {}",
@@ -417,6 +465,10 @@ fn load(
         fonts: HashMap::new(),
         reader,
         receipts,
+        help,
+        help_style,
+        help_rect,
+        help_inset: *inset,
     };
     let mut decoded = HashMap::new();
     let mut seen = HashSet::new();
@@ -558,7 +610,7 @@ fn project(
                     .as_deref()
                     .and_then(crate::launch_gui::selected_install);
                 let layout = read_layout(install.as_deref())?;
-                load(reader, race, &mut fonts, layout)
+                load(reader, race, &mut fonts, layout, install.as_deref())
             }) {
             Ok(source) => state.source = Some(source),
             Err(error) => {
@@ -617,6 +669,48 @@ fn project(
         ))
         .id();
     glue_menu::spawn_in(&mut commands, root, &items, source.layout.viewport);
+    if state.page == Page::Help {
+        let view = source.layout.viewport;
+        let mut rect = source.help_rect;
+        let panel = (
+            source.fdf.width("HelpPanel").unwrap_or(0.),
+            source.fdf.height("HelpPanel").unwrap_or(0.),
+        );
+        let origin = source.layout.position([panel.0, panel.1]).unwrap_or([0., 0.]);
+        rect.left += origin[0];
+        rect.bottom += origin[1];
+        let container = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(rect.left / view[0] * 100.),
+                    top: percent((view[1] - rect.top()) / view[1] * 100.),
+                    width: percent(rect.width / view[0] * 100.),
+                    height: percent(rect.height / view[1] * 100.),
+                    padding: UiRect::all(Val::Vh(source.help_inset / view[1] * 100.)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(root).add_child(container);
+        let font_handle = source.fonts.get(&source.help_style.font).cloned();
+        if let Some(font) = font_handle {
+            let _ = crate::campaign_script_dialogs::label(
+                &mut commands,
+                container,
+                &source.help.body,
+                &source.help_style,
+                &font,
+            );
+        } else {
+            state.last_error = Some(format!(
+                "HelpTextArea: missing decoded font {}",
+                source.help_style.font
+            ));
+        }
+    }
     if let Some(old) = state.root.replace(root) {
         commands.entity(old).try_despawn();
     }
@@ -1080,9 +1174,13 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             race,
             &mut fonts,
             read_layout(Some(&install)).unwrap(),
+            Some(&install),
         )
         .unwrap();
         assert!(!source.receipts.is_empty() && !fonts.is_empty());
+        assert!(!source.help.body.is_empty());
+        assert!(source.help_style.height > 0.);
+        assert!(!source.help_style.font.is_empty());
         for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Help] {
             let plan = items(
                 &source.fdf,
