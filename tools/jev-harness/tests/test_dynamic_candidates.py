@@ -218,6 +218,58 @@ def test_run_loop_second_applied_click_uses_fresh_coords():
     assert result.stop_reason.value == "action_budget_exhausted"
 
 
+def test_oversized_and_malformed_inputs_never_invalid_request():
+    # many observed units: hard cap at Jev 255, noop preserved, aligned
+    units = [{"id": f"u{i}", "screen": [float(i % 640), float((i // 640) % 480)],
+              "in_viewport": True} for i in range(1000)]
+    cands, crit = build_candidates(_obs(0, units))
+    assert len(cands) == len(crit) == 255
+    assert set(cands) == set(crit) and NOOP_ID in cands
+    assert list(cands)[1] == "select_unit_u0"  # observation order, no reordering
+    for n in (254, 255, 300):
+        u = [{"id": f"u{i}", "screen": [10.0, 10.0], "in_viewport": True}
+             for i in range(n)]
+        c, cr = build_candidates(_obs(0, u))
+        assert len(c) == len(cr) == 255 and set(c) == set(cr)
+    # duplicate opaque ids (incl. str/int equivalent after _unit_id) excluded
+    for u in [
+        [{"id": "x", "screen": [10., 10.], "in_viewport": True},
+         {"id": "x", "screen": [20., 20.], "in_viewport": True}],
+        [{"id": "1", "screen": [10., 10.], "in_viewport": True},
+         {"id": 1, "screen": [20., 20.], "in_viewport": True}],
+    ]:
+        c, _ = build_candidates(_obs(0, u))
+        assert set(c) == {NOOP_ID}, c
+    # sanitisation collision: first wins, second skipped (no overwrite)
+    c, _ = build_candidates(_obs(0, [
+        {"id": "a b", "screen": [10., 10.], "in_viewport": True},
+        {"id": "a_b", "screen": [20., 20.], "in_viewport": True}]))
+    assert c["select_unit_a_b"] == {"kind": "click", "x": 10, "y": 10, "button": "left"}, c
+    assert len(c) == 2
+    # malformed ids of every type excluded, never crash
+    for mid in [None, True, False, 1.5, [], {}, "", "   ", b"a", float("nan")]:
+        c, _ = build_candidates(_obs(0, [{"id": mid, "screen": [10., 10.],
+                                          "in_viewport": True}]))
+        assert set(c) == {NOOP_ID}, mid
+    # huge-int coordinates: excluded, never OverflowError (was: uncaught)
+    for s in ([10 ** 400, 10], [10, 10 ** 400], [10 ** 400, -10 ** 400]):
+        c, _ = build_candidates(_obs(0, [{"id": "a", "screen": s,
+                                          "in_viewport": True}]))
+        assert set(c) == {NOOP_ID}, s
+    # no-proj variants: noop only, never (0,0) candidate
+    for u in [[{"id": "a"}], [{"id": "a", "screen": None}],
+              [{"id": "a", "screen": []}], [{"id": "a", "screen": [5]}],
+              [{"id": "a", "screen": "5,5"}], [{"id": "a", "screen": [None, 5]}]]:
+        c, _ = build_candidates(_obs(0, u))
+        assert set(c) == {NOOP_ID}, u
+    # oversized (255 valid candidates) still constructs JevProvider cleanly
+    t = MockTransport()
+    p = DynamicJevProvider(api_key="k", transport=t)
+    p(_obs(0, units))
+    payload = json.loads(t.calls[0]["body"])
+    assert len(payload["questions"]["action"]["criteria"]) == 255
+
+
 def test_missing_projection_in_run_loop_emits_no_invalid_click():
     from jev_harness import LoopConfig, run_loop, StopReason
 
