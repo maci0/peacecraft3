@@ -93,6 +93,7 @@ pub struct FixtureRequest {
 
 /// Bounded request actions. Only an explicit legal player order exists;
 /// there is no teleport/hidden-state/cinematic/pause/session action.
+/// Label: structured canonical order, not native input / UI vision.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RequestAction {
@@ -104,6 +105,10 @@ pub enum RequestAction {
     },
     /// No-order step by `seconds` (0 < s <= MAX_STEP_SECONDS).
     Step { seconds: f32 },
+    /// Canonical stop (cancel) order for `units`, then step by `seconds`.
+    /// Issued via `activate_standard(Kind::Stop)` -> `issue_form(Immediate)`
+    /// on the canonical `MapStartupHost`/`ObjectHost`, not `pcx_sim`.
+    Cancel { units: Vec<u64>, seconds: f32 },
     /// Graceful stop request (writes response, returns from run loop).
     Stop,
 }
@@ -160,6 +165,18 @@ fn validate(req: &FixtureRequest) -> Result<(), String> {
             Ok(())
         }
         RequestAction::Step { seconds } => {
+            if !seconds.is_finite() || *seconds <= 0.0 || *seconds > MAX_STEP_SECONDS {
+                return Err(format!("seconds {seconds} out of bounds"));
+            }
+            Ok(())
+        }
+        RequestAction::Cancel { units, seconds } => {
+            if units.is_empty() || units.len() > MAX_ORDER_UNITS {
+                return Err(format!("units length {} out of bounds", units.len()));
+            }
+            if units.iter().any(|u| *u == 0) {
+                return Err("unit id 0 is invalid".into());
+            }
             if !seconds.is_finite() || *seconds <= 0.0 || *seconds > MAX_STEP_SECONDS {
                 return Err(format!("seconds {seconds} out of bounds"));
             }
@@ -261,6 +278,49 @@ pub fn issue_move(started: &mut Started, unit_ids: &[u64], target: [f32; 2]) -> 
     );
     match result {
         Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Issue a canonical stop (cancel) order through the normal local-player
+/// input path (`activate_standard(Kind::Stop)` -> `issue_form(Immediate)`).
+/// Returns count of units for which a stop order was admitted (0 = none).
+pub fn issue_cancel(started: &mut Started, unit_ids: &[u64]) -> usize {
+    let handles: Vec<HandleId> = unit_ids
+        .iter()
+        .filter_map(|id| std::num::NonZeroU64::new(*id).map(HandleId::new))
+        .collect();
+    if handles.is_empty() {
+        return 0;
+    }
+    let app = &mut started.app;
+    app.world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects_mut()
+        .select_units(&handles, true);
+    let witness = app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .expect("live session witness");
+    let count = app.world_mut().resource_scope(
+        |world, mut input: Mut<crate::campaign_input::CampaignInput>| {
+            let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
+            let host = session.host().unwrap();
+            let first = handles[0];
+            crate::campaign_input::activate_standard(
+                host,
+                &mut input,
+                first,
+                pcx_play::standard_command::Kind::Stop,
+                witness.clone(),
+            )
+        },
+    );
+    match count {
+        Ok(()) => handles.len(),
         Err(_) => 0,
     }
 }
@@ -387,6 +447,23 @@ pub fn run_fixture(
                     state: Some(format!("{step:?}")),
                 }
             }
+            RequestAction::Cancel { units, seconds } => {
+                let issued = issue_cancel(started, units);
+                let step = step_seconds(started, *seconds);
+                let obs = bounded(started.observe());
+                FixtureResponse {
+                    protocol: PROTOCOL_VERSION,
+                    id: req.id,
+                    ok: issued > 0,
+                    error: if issued == 0 {
+                        Some("no eligible units for cancel".into())
+                    } else {
+                        None
+                    },
+                    observation: Some(obs),
+                    state: Some(format!("{step:?}")),
+                }
+            }
         };
         write_response(dir, &resp)?;
         append_journal(dir, req.id)?;
@@ -471,7 +548,35 @@ mod unit_fixture_tests {
             r#"{"protocol":1,"id":9,"action":{"type":"stop"},"teleport":[0,0]}"#;
         assert!(serde_json::from_str::<FixtureRequest>(with_extra).is_err());
 
-        // pcx-sim protocol roundtrip: move issues, stop cancels the target.
+        // Canonical cancel roundtrip (serde): Cancel validates and
+        // preserves its fields. This is the campaign cancel path; the
+        // ignored canonical test proves the live order clears. The
+        // pcx_sim Move/Stop unit test below is test-only and does not
+        // drive campaign control.
+        let cancel = FixtureRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 10,
+            action: RequestAction::Cancel {
+                units: vec![1, 2],
+                seconds: 1.0,
+            },
+        };
+        assert!(validate(&cancel).is_ok());
+        let cancel_json = serde_json::to_string(&cancel).unwrap();
+        let cancel_back: FixtureRequest = serde_json::from_str(&cancel_json).unwrap();
+        assert_eq!(cancel_back, cancel);
+        let bad_cancel = FixtureRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 11,
+            action: RequestAction::Cancel {
+                units: vec![],
+                seconds: 1.0,
+            },
+        };
+        assert!(validate(&bad_cancel).is_err());
+
+        // pcx-sim protocol roundtrip (test-only serde/step check, not
+        // campaign control): move issues, stop cancels the target.
         let mut world = pcx_sim::World::empty();
         let id = world.spawn(0, 0, 0);
         let mut rng = pcx_sim::Rng::new(1);
