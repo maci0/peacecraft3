@@ -178,7 +178,7 @@ class JevProvider(Provider):
             raise ProviderError("candidate map must be non-empty")
         for _cid, _act in self.candidates.items():
             try:
-                Action.from_dict(_act)
+                validate_action(Action.from_dict(_act), 100000, 100000)
             except ValidationError as e:
                 raise ProviderError(f"candidate {_cid!r} invalid: {redact_text(str(e))}") from None
         self.criteria = dict(criteria) if criteria is not None else {
