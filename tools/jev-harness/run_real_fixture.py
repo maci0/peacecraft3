@@ -166,20 +166,43 @@ def main() -> int:
             ys = [cb[1], cb[3], cb[5], cb[7]]
             target[0] = min(max(target[0], min(xs) + 1.0), max(xs) - 1.0)
             target[1] = min(max(target[1], min(ys) + 1.0), max(ys) - 1.0)
+        # Atomic refusal: unknown unit id must be refused before any
+        # selection/step, leaving game_time/selection unchanged.
+        r_unknown = client.move([0x7FFFFFFF], target, 5.0, timeout=120.0)
+        assert r_unknown.id == 1 and not r_unknown.ok and r_unknown.error, f"unknown move must refuse: {r_unknown}"
+        assert r_unknown.observation["game_time"] == t0, f"unknown move must not advance time: {r_unknown.observation['game_time']} != {t0}"
+        assert r_unknown.observation["selection"] == initial["observation"]["selection"], "unknown move must not change selection"
+        print(f"real-fixture: unknown-refused id={r_unknown.id} ok={r_unknown.ok} error={r_unknown.error} game_time={t0}", flush=True)
+        transcript.append({"phase": "unknown_refused", "request": {"units": [0x7FFFFFFF], "target": target, "seconds": 5.0}, "response": r_unknown.raw})
+
+        # Foreign unit: a visible-but-not-owned unit (if any) must refuse.
+        foreign = next((u for u in initial["observation"]["units"] if not u.get("owned")), None)
+        if foreign is not None:
+            fid = int(foreign["id"], 16)
+            r_foreign = client.move([fid], target, 5.0, timeout=120.0)
+            assert r_foreign.id == 2 and not r_foreign.ok and r_foreign.error, f"foreign move must refuse: {r_foreign}"
+            assert r_foreign.observation["game_time"] == t0, "foreign move must not advance time"
+            assert r_foreign.observation["selection"] == initial["observation"]["selection"], "foreign move must not change selection"
+            print(f"real-fixture: foreign-refused id={r_foreign.id} unit={foreign['id']} error={r_foreign.error}", flush=True)
+            transcript.append({"phase": "foreign_refused", "request": {"units": [fid], "target": target, "seconds": 5.0}, "response": r_foreign.raw})
+            next_id = 3
+        else:
+            next_id = 2
+
         r_move = client.move([uid], target, 5.0, timeout=120.0)
-        assert r_move.id == 1 and r_move.ok, f"move failed: {r_move}"
+        assert r_move.id == next_id and r_move.ok, f"move failed: {r_move}"
         t1 = r_move.observation["game_time"]
         print(f"real-fixture: move id={r_move.id} ok={r_move.ok} state={r_move.state} game_time {t0}->{t1}", flush=True)
         transcript.append({"phase": "move", "request": {"units": [uid], "target": target, "seconds": 5.0}, "response": r_move.raw})
 
         r_step = client.step(5.0, timeout=120.0)
-        assert r_step.id == 2 and r_step.ok, f"step failed: {r_step}"
+        assert r_step.id == next_id + 1 and r_step.ok, f"step failed: {r_step}"
         t2 = r_step.observation["game_time"]
         print(f"real-fixture: step id={r_step.id} state={r_step.state} game_time {t1}->{t2}", flush=True)
         transcript.append({"phase": "step", "response": r_step.raw})
 
         r_cancel = client.cancel([uid], 5.0, timeout=120.0)
-        assert r_cancel.id == 3 and r_cancel.ok, f"cancel failed: {r_cancel}"
+        assert r_cancel.id == next_id + 2 and r_cancel.ok, f"cancel failed: {r_cancel}"
         t3 = r_cancel.observation["game_time"]
         print(f"real-fixture: cancel id={r_cancel.id} state={r_cancel.state} game_time {t2}->{t3}", flush=True)
         transcript.append({"phase": "cancel", "response": r_cancel.raw})
@@ -192,7 +215,7 @@ def main() -> int:
         assert moved is not None and moved > 1.0, f"unit must move: before={pos0} after={pos_after} moved_sq={moved}"
 
         r_stop = client.stop(timeout=120.0)
-        assert r_stop.id == 4 and r_stop.ok, f"stop failed: {r_stop}"
+        assert r_stop.id == next_id + 3 and r_stop.ok, f"stop failed: {r_stop}"
         print(f"real-fixture: stop id={r_stop.id} state={r_stop.state}", flush=True)
         transcript.append({"phase": "stop", "response": r_stop.raw})
 
@@ -200,14 +223,14 @@ def main() -> int:
         out = proc.stdout.read() if proc.stdout else ""
         assert rc == 0, f"owned cargo-test process exited {rc}\n{out[-4000:]}"
         journal = json.loads((fixture_dir / "fixture-journal.json").read_text())
-        assert journal == [1, 2, 3, 4], f"journal must be [1,2,3,4], got {journal}"
+        assert journal == list(range(1, next_id + 4)), f"journal mismatch, got {journal}"
         digest = hashlib.sha256(json.dumps(transcript, sort_keys=True).encode()).hexdigest()
         summary = {
             "cmd": cmd, "install": args.install, "map": args.map, "addon": args.addon,
             "display": display, "game_time": [t0, t1, t2, t3],
             "unit": unit["id"], "target": target,
             "moved_squared": moved, "journal": journal,
-            "transcript_sha256": digest, "requests": 4, "responses": 5,
+            "transcript_sha256": digest, "requests": next_id + 3, "responses": next_id + 4,
             "child_exit": rc,
         }
         (run_dir / "real-fixture-summary.json").write_text(json.dumps(summary, indent=2) + "\n")

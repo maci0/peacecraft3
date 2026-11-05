@@ -164,6 +164,57 @@ pub const STEP_TICKS: u32 = 64;
 pub const STEP_DT: f64 = 0.25;
 pub const STEP_EVENT_BUDGET: usize = 4096;
 
+/// One read of witness/session, pause, cinematic and clock using the
+/// single `step_start` helper. Returns the would-be `StepState` on
+/// refusal, or `Ok(start)` when a step could advance. Read-only aside
+/// from the `&mut` borrow needed to reach the host (no timers/events).
+fn step_start(
+    session: &mut pcx_play::map_script_session::MapScriptSession<
+        pcx_play::map_startup_host::MapStartupHost,
+    >,
+    witness_before: &std::sync::Weak<()>,
+    ticks: u32,
+) -> Result<f64, StepState> {
+    if ticks == 0 {
+        return Err(StepState::Refused);
+    }
+    let current = session.session_witness();
+    let same_session = match (&current, witness_before.upgrade()) { (Some(cur), Some(before)) => std::sync::Weak::ptr_eq(cur, &std::sync::Arc::downgrade(&before)), _ => false };
+    if current.is_none() {
+        return Err(StepState::NoSession);
+    }
+    if !same_session {
+        return Err(StepState::Refused);
+    }
+    let (paused_now, cinematic_now, start) = {
+        let Some(host) = session.host() else {
+            return Err(StepState::NoSession);
+        };
+        let objects = host.objects();
+        (objects.game_paused() == Some(true), objects.presentation().is_some_and(|p| p.control_enabled == Some(false)), objects.timer_game_time())
+    };
+    if paused_now {
+        return Err(StepState::Paused);
+    }
+    if cinematic_now {
+        return Err(StepState::Cinematic);
+    }
+    start.ok_or(StepState::Refused)
+}
+
+/// Read-only precheck for fixture prevalidation: same witness/pause/
+/// cinematic/clock/budget verdict `step_once` computes before its
+/// first tick, without advancing timers or events.
+pub fn step_can_advance(
+    session: &mut pcx_play::map_script_session::MapScriptSession<
+        pcx_play::map_startup_host::MapStartupHost,
+    >,
+    witness_before: &std::sync::Weak<()>,
+    ticks: u32,
+) -> Result<(), StepState> {
+    step_start(session, witness_before, ticks).map(|_| ())
+}
+
 /// Advance the canonical game update by a bounded step, respecting pause,
 /// cinematic (control-off) and session ownership. Never teleports, never
 /// touches hidden state: only `advance_timers` + `advance_queued_events`
@@ -176,29 +227,9 @@ pub fn step_once(
     ticks: u32,
 ) -> StepState {
     let ticks = ticks.min(STEP_TICKS);
-    let current = session.session_witness();
-    let same_session = match (&current, witness_before.upgrade()) { (Some(cur), Some(before)) => std::sync::Weak::ptr_eq(cur, &std::sync::Arc::downgrade(&before)), _ => false };
-    if current.is_none() {
-        return StepState::NoSession;
-    }
-    if !same_session {
-        return StepState::Refused;
-    }
-    let (paused_now, cinematic_now, start) = {
-        let Some(host) = session.host() else {
-            return StepState::NoSession;
-        };
-        let objects = host.objects();
-        (objects.game_paused() == Some(true), objects.presentation().is_some_and(|p| p.control_enabled == Some(false)), objects.timer_game_time())
-    };
-    if paused_now {
-        return StepState::Paused;
-    }
-    if cinematic_now {
-        return StepState::Cinematic;
-    }
-    let Some(start) = start else {
-        return StepState::Refused;
+    let start = match step_start(session, witness_before, ticks) {
+        Ok(start) => start,
+        Err(state) => return state,
     };
     let mut done = 0u32;
     for tick in 1..=ticks {

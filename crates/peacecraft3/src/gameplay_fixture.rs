@@ -247,8 +247,85 @@ fn seconds_to_ticks(seconds: f32) -> u32 {
     ticks.clamp(1, gameplay_observation::STEP_TICKS)
 }
 
+/// Restore a previously captured selection (used when an order issued
+/// after selection still refuses: selection is put back, no step runs).
+fn restore_selection(started: &mut Started, previous: &[HandleId]) {
+    started
+        .app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects_mut()
+        .select_units(previous, true);
+}
+
+/// Atomic prevalidation for Move/Cancel: every requested id must exist,
+/// be locally owned/control, and have a standard order for `kind`; the
+/// session witness must be live and the requested step budget must be
+/// able to advance (`step_can_advance`, the same checks `step_once`
+/// performs first). On refusal `Err` is returned with nothing mutated:
+/// no selection change, no order, no step, no game-time advance.
+fn precheck_order(
+    started: &mut Started,
+    unit_ids: &[u64],
+    kind: pcx_play::standard_command::Kind,
+    seconds: f32,
+) -> Result<Vec<HandleId>, String> {
+    let handles: Vec<HandleId> = unit_ids
+        .iter()
+        .map(|id| {
+            std::num::NonZeroU64::new(*id)
+                .map(HandleId::new)
+                .ok_or_else(|| "unit id 0 is invalid".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    let witness = started
+        .app
+        .world()
+        .resource::<MapScriptSession<MapStartupHost>>()
+        .session_witness()
+        .ok_or_else(|| "no live session".to_string())?;
+    let ticks = seconds_to_ticks(seconds);
+    let mut session = started
+        .app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    gameplay_observation::step_can_advance(&mut session, &witness, ticks)
+        .map_err(|state| format!("step cannot advance: {state:?}"))?;
+    let host = session.host().ok_or_else(|| "no live session".to_string())?;
+    let objects = host.objects();
+    let local = objects
+        .local_player_number()
+        .ok_or_else(|| "standard command has no local player".to_string())?;
+    for &handle in &handles {
+        let record = objects
+            .executed_unit(handle)
+            .map_err(|_| format!("unit {handle:?} does not exist"))?;
+        let owner_number = objects
+            .player_settings(record.owner)
+            .map_err(|e| e.to_string())?
+            .number;
+        if owner_number != local {
+            return Err(format!("unit {handle:?} is not locally owned"))?;
+        }
+        if objects
+            .standard_command_order(handle, kind)
+            .map_err(|e| e.to_string())?
+            .is_none()
+        {
+            return Err(format!("unit {handle:?} has no order for {kind:?}"));
+        }
+    }
+    Ok(handles)
+}
+
 /// Issue a legal move order through the normal local-player input path.
-/// Returns count of issued orders (0 = no eligible units, fail-closed no-op).
+/// Assumes `precheck_order` already passed for `handles`; if the order
+/// still refuses after selection, the previous selection is restored
+/// and `0` is returned so the caller can refuse without stepping.
+/// Nothing is rolled back if a group order was already issued — the
+/// precheck guarantees every requested unit is eligible first.
 pub fn issue_move(started: &mut Started, unit_ids: &[u64], target: [f32; 2]) -> usize {
     let handles: Vec<HandleId> = unit_ids
         .iter()
@@ -257,6 +334,15 @@ pub fn issue_move(started: &mut Started, unit_ids: &[u64], target: [f32; 2]) -> 
     if handles.is_empty() {
         return 0;
     }
+    let previous: Vec<HandleId> = started
+        .app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects()
+        .selection()
+        .to_vec();
     let app = &mut started.app;
     app.world_mut().resource_mut::<MapScriptSession<MapStartupHost>>()
         .host()
@@ -278,7 +364,10 @@ pub fn issue_move(started: &mut Started, unit_ids: &[u64], target: [f32; 2]) -> 
     );
     match result {
         Ok(()) => 1,
-        Err(_) => 0,
+        Err(_) => {
+            restore_selection(started, &previous);
+            0
+        }
     }
 }
 
@@ -293,6 +382,15 @@ pub fn issue_cancel(started: &mut Started, unit_ids: &[u64]) -> usize {
     if handles.is_empty() {
         return 0;
     }
+    let previous: Vec<HandleId> = started
+        .app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects()
+        .selection()
+        .to_vec();
     let app = &mut started.app;
     app.world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>()
@@ -321,7 +419,10 @@ pub fn issue_cancel(started: &mut Started, unit_ids: &[u64]) -> usize {
     );
     match count {
         Ok(()) => handles.len(),
-        Err(_) => 0,
+        Err(_) => {
+            restore_selection(started, &previous);
+            0
+        }
     }
 }
 
@@ -418,52 +519,134 @@ pub fn run_fixture(
                 units,
                 target,
                 seconds,
-            } => {
-                let issued = issue_move(started, units, *target);
-                let step = step_seconds(started, *seconds);
-                let obs = bounded(started.observe());
-                FixtureResponse {
+            } => match precheck_order(
+                started,
+                units,
+                pcx_play::standard_command::Kind::Move,
+                *seconds,
+            ) {
+                Err(error) => FixtureResponse {
                     protocol: PROTOCOL_VERSION,
                     id: req.id,
-                    ok: issued > 0,
-                    error: if issued == 0 {
-                        Some("no eligible units for order".into())
+                    ok: false,
+                    error: Some(error),
+                    observation: Some(bounded(started.observe())),
+                    state: Some("refused".into()),
+                },
+                Ok(_) => {
+                    let issued = issue_move(started, units, *target);
+                    if issued == 0 {
+                        FixtureResponse {
+                            protocol: PROTOCOL_VERSION,
+                            id: req.id,
+                            ok: false,
+                            error: Some("no eligible units for order".into()),
+                            observation: Some(bounded(started.observe())),
+                            state: Some("refused".into()),
+                        }
                     } else {
-                        None
-                    },
-                    observation: Some(obs),
-                    state: Some(format!("{step:?}")),
+                        let step = step_seconds(started, *seconds);
+                        let obs = bounded(started.observe());
+                        FixtureResponse {
+                            protocol: PROTOCOL_VERSION,
+                            id: req.id,
+                            ok: true,
+                            error: None,
+                            observation: Some(obs),
+                            state: Some(format!("{step:?}")),
+                        }
+                    }
                 }
-            }
+            },
             RequestAction::Step { seconds } => {
-                let step = step_seconds(started, *seconds);
-                let obs = bounded(started.observe());
-                FixtureResponse {
-                    protocol: PROTOCOL_VERSION,
-                    id: req.id,
-                    ok: true,
-                    error: None,
-                    observation: Some(obs),
-                    state: Some(format!("{step:?}")),
-                }
-            }
-            RequestAction::Cancel { units, seconds } => {
-                let issued = issue_cancel(started, units);
-                let step = step_seconds(started, *seconds);
-                let obs = bounded(started.observe());
-                FixtureResponse {
-                    protocol: PROTOCOL_VERSION,
-                    id: req.id,
-                    ok: issued > 0,
-                    error: if issued == 0 {
-                        Some("no eligible units for cancel".into())
-                    } else {
-                        None
+                // Budget/session/pause/cinematic precheck before any
+                // advance: a refused step changes nothing.
+                let witness = started
+                    .app
+                    .world()
+                    .resource::<MapScriptSession<MapStartupHost>>()
+                    .session_witness();
+                let precheck = match witness {
+                    Some(witness) => {
+                        let ticks = seconds_to_ticks(*seconds);
+                        let mut session = started
+                            .app
+                            .world_mut()
+                            .resource_mut::<MapScriptSession<MapStartupHost>>();
+                        gameplay_observation::step_can_advance(&mut session, &witness, ticks)
+                    }
+                    None => Err(gameplay_observation::StepState::NoSession),
+                };
+                match precheck {
+                    Err(state) => FixtureResponse {
+                        protocol: PROTOCOL_VERSION,
+                        id: req.id,
+                        ok: false,
+                        error: Some(format!("step cannot advance: {state:?}")),
+                        observation: Some(bounded(started.observe())),
+                        state: Some(format!("{state:?}")),
                     },
-                    observation: Some(obs),
-                    state: Some(format!("{step:?}")),
+                    Ok(()) => {
+                        let step = step_seconds(started, *seconds);
+                        let ok = matches!(
+                            step,
+                            gameplay_observation::StepState::Advanced { .. }
+                        );
+                        let obs = bounded(started.observe());
+                        FixtureResponse {
+                            protocol: PROTOCOL_VERSION,
+                            id: req.id,
+                            ok,
+                            error: if ok {
+                                None
+                            } else {
+                                Some(format!("step cannot advance: {step:?}"))
+                            },
+                            observation: Some(obs),
+                            state: Some(format!("{step:?}")),
+                        }
+                    }
                 }
             }
+            RequestAction::Cancel { units, seconds } => match precheck_order(
+                started,
+                units,
+                pcx_play::standard_command::Kind::Stop,
+                *seconds,
+            ) {
+                Err(error) => FixtureResponse {
+                    protocol: PROTOCOL_VERSION,
+                    id: req.id,
+                    ok: false,
+                    error: Some(error),
+                    observation: Some(bounded(started.observe())),
+                    state: Some("refused".into()),
+                },
+                Ok(_) => {
+                    let issued = issue_cancel(started, units);
+                    if issued == 0 {
+                        FixtureResponse {
+                            protocol: PROTOCOL_VERSION,
+                            id: req.id,
+                            ok: false,
+                            error: Some("no eligible units for cancel".into()),
+                            observation: Some(bounded(started.observe())),
+                            state: Some("refused".into()),
+                        }
+                    } else {
+                        let step = step_seconds(started, *seconds);
+                        let obs = bounded(started.observe());
+                        FixtureResponse {
+                            protocol: PROTOCOL_VERSION,
+                            id: req.id,
+                            ok: true,
+                            error: None,
+                            observation: Some(obs),
+                            state: Some(format!("{step:?}")),
+                        }
+                    }
+                }
+            },
         };
         write_response(dir, &resp)?;
         append_journal(dir, req.id)?;
