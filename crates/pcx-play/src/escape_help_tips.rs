@@ -11,12 +11,13 @@
 //! - `UI\HelpStrings.txt`: single HELP body with `|C…|R` markup.
 //! - `UI\TipStrings.txt`: `[General] TipCount=N` then `Tip1..TipN` quoted.
 //! - Font for TEXTAREA: the template names no `FrameFont`; the engine falls
-//!   back to the default font slot. Following `campaign_error_view` /
-//!   `pcx_objects::editor::messages`, that slot is `MasterFont` in
-//!   `UI\war3skins.txt` `[Default]`, with height from `UI\MiscUI.txt`
-//!   `[FontHeights]` — the TEXTAREA inherits the default font face and the
-//!   `ChatHistory` height slot (multi-line scrollable text), not a copied
-//!   constant. Both values are parsed from assets at runtime.
+//!   back through the parent chain to the default font slot (live-qualified
+//!   for the selected RoC run, see `docs/re-notes/escape-help-tips.md`).
+//!   That slot is overridden at startup from `UI\MiscUI.txt` `[Misc]`
+//!   `FontTexture`, resolved through the image's path-prefix/format operands
+//!   (`Fonts` + `%s\\%s`), with native height `table[slot] * axis` from the
+//!   image's default-height table and axis factor — see `DefaultFont`.
+//!   No `MasterFont`/`ChatHistory` binding is used.
 //! - Input: TEXTAREA is read-only display; Escape/Enter close via the modal
 //!   parent. No editor caret is kept.
 //!
@@ -24,10 +25,12 @@
 //! with the integrator; this module owns content, navigation and geometry
 //! math only. Evidence: `docs/re-notes/escape-help-tips.md`.
 
-/// Default TEXTAREA font face key in `UI\war3skins.txt`.
-pub const DEFAULT_FONT_FACE: &str = "MasterFont";
-/// `UI\MiscUI.txt` height slot used by the default TEXTAREA font.
-pub const DEFAULT_FONT_HEIGHT_KEY: &str = "ChatHistory";
+use crate::{
+    menu_lighting::REVIEWED_IMAGE,
+    neutral_player::{RuleInputBudget, Sha256Digest, sha256},
+    neutral_rule_input::Pe,
+    scripts::AssetIdentity,
+};
 
 /// Read bound for the small text assets.
 pub const MAX_TEXT_BYTES: usize = 1 << 20;
@@ -69,12 +72,17 @@ impl TipStrings {
             if line.is_empty() || line.starts_with("//") {
                 continue;
             }
-            if line.eq_ignore_ascii_case("[General]") {
-                if seen_general {
-                    return Err(format!("{FILE}: duplicate [General]"));
+            if line.starts_with('[') && line.ends_with(']') {
+                if line.eq_ignore_ascii_case("[General]") {
+                    if seen_general {
+                        return Err(format!("{FILE}: duplicate [General]"));
+                    }
+                    seen_general = true;
+                    continue;
                 }
-                seen_general = true;
-                continue;
+                // Unsupported tip sections are refused explicitly; the native
+                // section-table policy is not established by a single-section file.
+                return Err(format!("{FILE}: unsupported section {line}"));
             }
             if !seen_general {
                 return Err(format!("{FILE}: key before [General]: {line}"));
@@ -171,17 +179,295 @@ impl TipSelection {
     }
 }
 
-/// TEXTAREA metrics derived from assets, not copied constants.
+/// TEXTAREA row metrics derived from assets, not copied constants.
+/// Row height (`line_height`) is the FDF `TextAreaLineHeight`; it is distinct
+/// from the wrapping font height in `DefaultFont`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextAreaMetrics {
     /// From `TextAreaLineHeight` in the template.
     pub line_height: f32,
     /// From `TextAreaInset` in the template.
     pub inset: f32,
-    /// Default font height slot (`ChatHistory` in `MiscUI.txt`).
-    pub font_height: f32,
-    /// Default font face slot (`MasterFont` in `war3skins.txt`).
-    pub font_face: &'static str,
+}
+
+/// Source-derived default font binding (Headless, no Bevy).
+///
+/// Decoded at runtime from the reviewed client image; every authored value
+/// (`.02`-style table entry, `.6`-style axis factor, `Fonts` prefix, format
+/// string, `FRIZQT__`-style texture name) comes from image operands or the
+/// selected assets, never from constants here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DefaultFont {
+    pub origin: AssetIdentity,
+    pub image_sha256: Sha256Digest,
+    /// `MiscUI.txt` section name from image push operand (`Misc`).
+    pub section: String,
+    /// `MiscUI.txt` key from image push operand (`FontTexture`).
+    pub key: String,
+    /// Path prefix string from image (`Fonts`).
+    pub path_prefix: String,
+    /// Path format string from image (`%s\\%s`).
+    pub path_format: String,
+    /// Value of `[Misc] FontTexture` in the selected `MiscUI.txt`.
+    pub font_texture: String,
+    /// `path_prefix` + separator from `path_format` + `font_texture`.
+    pub font_path: String,
+    /// Default slot used by TEXTAREA wrapping, from the image's
+    /// `push imm8; call 0x959b90` / `push 0; call 0x959bc0` operands.
+    pub wrapping_slot: u32,
+    /// Native default-height table entry for `wrapping_slot`.
+    pub table_height: f32,
+    /// Axis factor operand read by the height conversion (`0xab2ad0`).
+    pub axis_factor: f32,
+}
+
+impl DefaultFont {
+    /// Wrapping font height: `table_height * axis_factor`.
+    /// This is NOT the FDF row height (`TextAreaMetrics::line_height`).
+    pub fn wrapping_height(&self) -> f32 {
+        self.table_height * self.axis_factor
+    }
+
+    /// Read from the reviewed client image + selected `MiscUI.txt` bytes.
+    /// See `decode` for exact instruction checks. Any mismatch is an error;
+    /// no fallback face, slot, or height is substituted.
+    pub fn read(image: &[u8], origin: AssetIdentity, misc_text: &str) -> Result<Self, String> {
+        let fail = |e: &str| format!("default font {}: {e}", origin.source);
+        if image.len() > 32 << 20 {
+            return Err(fail("client image exceeds byte budget"));
+        }
+        if [&origin.source, &origin.edition, &origin.version]
+            .iter()
+            .any(|s| s.trim().is_empty())
+        {
+            return Err(fail("missing source/edition/version provenance"));
+        }
+        let digest = sha256(image);
+        if digest != REVIEWED_IMAGE {
+            return Err(fail("unsupported client image; no font values substituted"));
+        }
+        let pe = Pe::parse(
+            image,
+            RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )
+        .map_err(|e| fail(&e.to_string()))?;
+        Self::decode(origin.clone(), digest, misc_text, |va, n, code| {
+            pe.read_from(va, code)
+                .map_err(|e| e.to_string())?
+                .get(..n)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| format!("truncated record at {va:#x}"))
+        })
+        .map_err(|e| fail(&e))
+    }
+
+    fn decode(
+        origin: AssetIdentity,
+        image_sha256: Sha256Digest,
+        misc_text: &str,
+        mut read: impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<Self, String> {
+        fn operand(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            va: u32,
+            prefix: &[u8],
+            size: usize,
+        ) -> Result<Vec<u8>, String> {
+            let b = read(va, prefix.len() + size, true)?;
+            if b.get(..prefix.len()) != Some(prefix) || b.len() != prefix.len() + size {
+                return Err(format!("unsupported instruction at {va:#x}"));
+            }
+            Ok(b[prefix.len()..].to_vec())
+        }
+        fn word(b: Vec<u8>) -> Result<u32, String> {
+            Ok(u32::from_le_bytes(
+                b.try_into().map_err(|_| "truncated operand")?,
+            ))
+        }
+        fn string(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            pointer: u32,
+        ) -> Result<String, String> {
+            let mut text = Vec::new();
+            for offset in 0..1024 {
+                let b = read(
+                    pointer
+                        .checked_add(offset)
+                        .ok_or("default font string address overflow")?,
+                    1,
+                    false,
+                )?;
+                if b[0] == 0 {
+                    return String::from_utf8(text).map_err(|e| e.to_string());
+                }
+                text.push(b[0]);
+            }
+            Err("default font string budget".into())
+        }
+        fn pushed_string(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            va: u32,
+        ) -> Result<String, String> {
+            let p = word(operand(read, va, &[0x68], 4)?)?;
+            string(read, p)
+        }
+        fn imm8(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            va: u32,
+        ) -> Result<u8, String> {
+            Ok(operand(read, va, &[0x6a], 1)?[0])
+        }
+        fn call_target(
+            read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+            va: u32,
+        ) -> Result<u32, String> {
+            let disp = word(operand(read, va, &[0xe8], 4)?)? as i32;
+            Ok(va.wrapping_add(5).wrapping_add_signed(disp))
+        }
+
+        // --- Misc/FontTexture override caller: push FontTexture, push Misc ---
+        // 0x42eeda push FontTexture ; 0x42eedf push Misc ; 0x42eee4 call 0x430570
+        let key = pushed_string(&mut read, 0x42eeda)?;
+        let section = pushed_string(&mut read, 0x42eedf)?;
+        if call_target(&mut read, 0x42eee4)? != 0x430570 {
+            return Err("unsupported FontTexture lookup call".into());
+        }
+        // 0x42ef01 push 0x104 ; 0x42ef14 call 0x7af9e0 (path resolver)
+        if imm8(&mut read, 0x42ef20)? != 0 {
+            return Err("unsupported default-font slot override (slot 0)".into());
+        }
+        if call_target(&mut read, 0x42ef14)? != 0x7af9e0 {
+            return Err("unsupported font path resolver call".into());
+        }
+        if call_target(&mut read, 0x42ef22)? != 0x959bf0 {
+            return Err("unsupported default-font override slot 0 call".into());
+        }
+        if imm8(&mut read, 0x42ef2e)? != 1 {
+            return Err("unsupported default-font slot override (slot 1)".into());
+        }
+        // 0x42ef30 call 0x959bf0 (second slot, same path)
+        if call_target(&mut read, 0x42ef30)? != 0x959bf0 {
+            return Err("unsupported default-font override slot 1 call".into());
+        }
+        // --- Path resolver 0x7af9e0: push Fonts ; push "%s\\%s" ---
+        let path_prefix = pushed_string(&mut read, 0x7af9e6)?;
+        let path_format = pushed_string(&mut read, 0x7af9eb)?;
+        // Format must be exactly two %s with a single backslash separator.
+        let sep = if path_format == "%s\\%s" {
+            "\\"
+        } else {
+            return Err("unsupported font path format".into());
+        };
+        // --- Default-height table + axis conversion ---
+        // 0x959bf0: movss xmm0,[esi*4+height_table] ; call 0xab2ad0
+        let height_table = word(operand(&mut read, 0x959c2a, &[0xf3, 0x0f, 0x10, 0x04, 0xb5], 4)?)?;
+        if call_target(&mut read, 0x959c39)? != 0xab2ad0 {
+            return Err("unsupported default-height conversion call".into());
+        }
+        // 0xab2ad0: fld [ebp+8] ; fmul dword ptr [axis] ; pop ebp ; ret
+        let axis_addr = word(operand(&mut read, 0xab2ad6, &[0xd8, 0x0d], 4)?)?;
+        let axis_bytes = read(axis_addr, 4, false)?;
+        let axis_factor = f32::from_le_bytes(
+            axis_bytes
+                .try_into()
+                .map_err(|_| "truncated axis operand")?,
+        );
+        if !axis_factor.is_finite() || axis_factor <= 0.0 {
+            return Err("invalid axis factor".into());
+        }
+        // 0x959bc0: fld dword ptr [eax*4+height_table] must agree with 0x959bf0 table.
+        let height_table2 = word(operand(&mut read, 0x959bd9, &[0xd9, 0x04, 0x85], 4)?)?;
+        if height_table2 != height_table {
+            return Err("default-height table relation".into());
+        }
+        // 0x959b90: mov eax,[eax*4+font_ptr_table] (structure check only)
+        let _font_ptr_table = word(operand(&mut read, 0x959ba9, &[0x8b, 0x04, 0x85], 4)?)?;
+        // --- Wrapping slot: 0x86cf97 push 0 ; call 0x959b90 ; 0x86cff5 push 0 ; call 0x959bc0 ---
+        if imm8(&mut read, 0x86cf97)? != 0 {
+            return Err("unqualified wrapping font slot".into());
+        }
+        if call_target(&mut read, 0x86cf99)? != 0x959b90 {
+            return Err("unsupported wrapping font getter".into());
+        }
+        if imm8(&mut read, 0x86cff5)? != 0 {
+            return Err("unqualified wrapping height slot".into());
+        }
+        if call_target(&mut read, 0x86cff9)? != 0x959bc0 {
+            return Err("unsupported wrapping height getter".into());
+        }
+        let wrapping_slot = 0u32;
+        // --- Native table heights for both override slots (finite, positive) ---
+        let mut table_entry = |slot: u32| -> Result<f32, String> {
+            let addr = height_table
+                .checked_add(slot * 4)
+                .ok_or("height table overflow")?;
+            let v = f32::from_le_bytes(
+                read(addr, 4, false)?
+                    .try_into()
+                    .map_err(|_| "truncated height table")?,
+            );
+            if !v.is_finite() || v <= 0.0 {
+                return Err("invalid default-height table entry".into());
+            }
+            Ok(v)
+        };
+        let table_height = table_entry(wrapping_slot)?;
+        let _other = table_entry(1)?;
+        // --- MiscUI.txt [Misc] FontTexture value (exactly one) ---
+        let font_texture = misc_font_texture(misc_text, &section, &key)?;
+        let font_path = format!("{path_prefix}{sep}{font_texture}");
+        Ok(Self {
+            origin,
+            image_sha256,
+            section,
+            key,
+            path_prefix,
+            path_format,
+            font_texture,
+            font_path,
+            wrapping_slot,
+            table_height,
+            axis_factor,
+        })
+    }
+}
+
+/// Reads exactly one `key=value` from the named `[section]` in a
+/// `MiscUI.txt`-shaped profile. Comments (`//…`) and blank lines are skipped.
+/// Any other section is refused by the caller via the decoded names.
+fn misc_font_texture(misc_text: &str, section: &str, key: &str) -> Result<String, String> {
+    const FILE: &str = "UI\\MiscUI.txt";
+    let mut in_section = false;
+    let mut found: Vec<String> = Vec::new();
+    for raw in misc_text.lines() {
+        let line = raw.split("//").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            in_section = line[1..line.len() - 1].trim().eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim().eq_ignore_ascii_case(key) {
+                found.push(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    match found.len() {
+        1 if !found[0].is_empty() && !found[0].contains(['\\', '/', '\0']) => {
+            Ok(found.into_iter().next().unwrap_or_default())
+        }
+        0 => Err(format!("{FILE}: missing [{section}] {key}")),
+        _ => Err(format!("{FILE}: duplicate or invalid [{section}] {key}")),
+    }
 }
 
 /// Parses the three template numbers out of an FDF text. Only the named
@@ -221,73 +507,7 @@ pub fn text_area_numbers(fdf_text: &str, frame: &str) -> Result<(f32, f32), Stri
     Ok((need("TextAreaLineHeight")?, need("TextAreaInset")?))
 }
 
-/// Reads `key=float` from a `MiscUI.txt`-shaped `[FontHeights]` section.
-/// Comments (`//…`) and blank lines are skipped.
-pub fn font_height(misc_text: &str, key: &str) -> Result<f32, String> {
-    const FILE: &str = "UI\\MiscUI.txt";
-    let mut in_section = false;
-    let mut found: Option<f32> = None;
-    for raw in misc_text.lines() {
-        let line = raw.split("//").next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_section = line.eq_ignore_ascii_case("[FontHeights]");
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        if k.trim().eq_ignore_ascii_case(key) {
-            let h: f32 = v
-                .trim()
-                .parse()
-                .map_err(|_| format!("{FILE}: invalid {key}"))?;
-            if !h.is_finite() || h <= 0.0 {
-                return Err(format!("{FILE}: invalid {key}"));
-            }
-            if found.replace(h).is_some() {
-                return Err(format!("{FILE}: duplicate {key}"));
-            }
-        }
-    }
-    found.ok_or_else(|| format!("{FILE}: missing {key}"))
-}
 
-/// Resolves the default TEXTAREA font file via `war3skins.txt` `[Default]`,
-/// requiring exactly one definition (mirrors `SkinTable::unique_file`).
-pub fn default_font_file(skin_text: &str) -> Result<String, String> {
-    const FILE: &str = "UI\\war3skins.txt";
-    let mut in_default = false;
-    let mut found: Vec<String> = Vec::new();
-    for raw in skin_text.lines() {
-        let line = raw.split("//").next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_default = line.eq_ignore_ascii_case("[Default]");
-            continue;
-        }
-        if !in_default {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=')
-            && k.trim().eq_ignore_ascii_case(DEFAULT_FONT_FACE)
-        {
-            found.push(v.trim().to_string());
-        }
-    }
-    match found.len() {
-        1 if !found[0].is_empty() => Ok(found.into_iter().next().unwrap_or_default()),
-        0 => Err(format!("{FILE}: missing {DEFAULT_FONT_FACE}")),
-        _ => Err(format!("{FILE}: duplicate {DEFAULT_FONT_FACE}")),
-    }
-}
 
 /// One line of laid-out TEXTAREA text (visible text only, markup stripped by
 /// the caller via the rich-text parser).
@@ -351,8 +571,7 @@ mod tests {
     const HELP: &str = "|Cffc5ff26MENU COMMANDS|r\n\n|Cfffed312F9|r\n- Toggle the Quest Log on/off.\n";
     const TIPS: &str = "[General]\nTipCount=3\nTip1=\"First tip.\"\nTip2=\"|Cfffed312SECOND|r tip.\"\nTip3=\"Third tip.\"\n";
     const TMPL: &str = "Frame \"TEXTAREA\" \"EscMenuTextAreaTemplate\" {\n    //FrameFont \"MasterFont\", 0.011, \"\",\n    TextAreaLineHeight 0.015,\n    TextAreaLineGap 0.0,\n    TextAreaInset 0.01,\n    TextAreaScrollBar \"EscMenuTextAreaScrollBarTemplate\",\n    Frame \"SCROLLBAR\" \"EscMenuTextAreaScrollBarTemplate\" {\n    }\n    ControlBackdrop \"EscMenuTextAreaBackdropTemplate\",\n    Frame \"BACKDROP\" \"EscMenuTextAreaBackdropTemplate\" {\n    }\n}\n";
-    const MISC: &str = "[FontHeights]\n// in-game ui\nChatHistory=0.011               // chat history area in chat dialog\nQuestDescription=0.011          // quest description text in Quest Dialog\n";
-    const SKIN: &str = "[Default]\nMasterFont=Fonts\\FRIZQT__.TTF\nEscMenuTextFont=Fonts\\FRIZQT__.TTF\n";
+    const MISC: &str = "[Misc]\nFontTexture=SYNTHETIC__.TTF // synthetic fixture\n";
 
     #[test]
     fn help_body_is_kept_verbatim() {
@@ -411,10 +630,129 @@ mod tests {
     }
 
     #[test]
-    fn default_font_height_and_file_come_from_assets() {
-        let h = font_height(MISC, DEFAULT_FONT_HEIGHT_KEY).unwrap();
-        assert!((h - 0.011).abs() < 1e-6);
-        assert_eq!(default_font_file(SKIN).unwrap(), "Fonts\\FRIZQT__.TTF");
+    fn tips_refuse_unsupported_sections() {
+        let bad = "[General]\nTipCount=1\nTip1=\"a\"\n[OrcTips]\nTipCount=1\nTip1=\"b\"\n";
+        let e = TipStrings::parse(bad).unwrap_err();
+        assert!(e.contains("unsupported section"), "{e}");
+    }
+
+    // Synthetic image fixture: all authored values are non-stock placeholders.
+    fn synthetic_image() -> (Vec<u8>, std::collections::HashMap<u32, Vec<u8>>) {
+        use std::collections::HashMap;
+        let mut m: HashMap<u32, Vec<u8>> = HashMap::new();
+        let put = |m: &mut HashMap<u32, Vec<u8>>, va: u32, bytes: &[u8]| {
+            m.insert(va, bytes.to_vec());
+        };
+        // Strings (non-stock)
+        put(&mut m, 0xE10000, b"Misc\0");
+        put(&mut m, 0xE10010, b"FontTexture\0");
+        put(&mut m, 0xE10020, b"Fonts\0");
+        put(&mut m, 0xE10030, b"%s\\%s\0");
+        // String addresses are read via push operands; store fake pointers
+        // by encoding the string VA directly in the push operand bytes.
+        let sec: u32 = 0xE10000;
+        let key: u32 = 0xE10010;
+        let prefix: u32 = 0xE10020;
+        let fmt: u32 = 0xE10030;
+        // FontTexture lookup caller
+        put(&mut m, 0x42eeda, &[0x68, sec.to_le_bytes()[0], sec.to_le_bytes()[1], sec.to_le_bytes()[2], sec.to_le_bytes()[3]]);
+        // NOTE: swapped order below is corrected by dedicated puts:
+        // 0x42eeda must be FontTexture, 0x42eedf Misc. Rebuild correctly:
+        m.remove(&0x42eeda);
+        put(&mut m, 0x42eeda, &[0x68, key.to_le_bytes()[0], key.to_le_bytes()[1], key.to_le_bytes()[2], key.to_le_bytes()[3]]);
+        put(&mut m, 0x42eedf, &[0x68, sec.to_le_bytes()[0], sec.to_le_bytes()[1], sec.to_le_bytes()[2], sec.to_le_bytes()[3]]);
+        put(&mut m, 0x42eee4, &[0xe8, 0x00, 0x00, 0x00, 0x00]); // call target checked separately; patch below
+        m.remove(&0x42eee4);
+        let disp = (0x430570u32).wrapping_sub(0x42eee4 + 5);
+        put(&mut m, 0x42eee4, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        // slot 0 override
+        put(&mut m, 0x42ef20, &[0x6a, 0]);
+        let disp = (0x7af9e0u32).wrapping_sub(0x42ef14 + 5);
+        put(&mut m, 0x42ef14, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        let disp = (0x959bf0u32).wrapping_sub(0x42ef22 + 5);
+        put(&mut m, 0x42ef22, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(&mut m, 0x42ef2e, &[0x6a, 1]);
+        let disp = (0x959bf0u32).wrapping_sub(0x42ef30 + 5);
+        put(&mut m, 0x42ef30, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        // path resolver
+        put(&mut m, 0x7af9e6, &[0x68, prefix.to_le_bytes()[0], prefix.to_le_bytes()[1], prefix.to_le_bytes()[2], prefix.to_le_bytes()[3]]);
+        put(&mut m, 0x7af9eb, &[0x68, fmt.to_le_bytes()[0], fmt.to_le_bytes()[1], fmt.to_le_bytes()[2], fmt.to_le_bytes()[3]]);
+        // height table at 0xED2000, axis at 0xE20000
+        put(&mut m, 0xED2000, &0.03125f32.to_le_bytes());
+        put(&mut m, 0xED2004, &0.03125f32.to_le_bytes());
+        put(&mut m, 0xE20000, &0.5f32.to_le_bytes());
+        let ht: u32 = 0xED2000;
+        let ax: u32 = 0xE20000;
+        put(&mut m, 0x959c2a, &[0xf3, 0x0f, 0x10, 0x04, 0xb5, ht.to_le_bytes()[0], ht.to_le_bytes()[1], ht.to_le_bytes()[2], ht.to_le_bytes()[3]]);
+        let disp = (0xab2ad0u32).wrapping_sub(0x959c39 + 5);
+        put(&mut m, 0x959c39, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(&mut m, 0xab2ad6, &[0xd8, 0x0d, ax.to_le_bytes()[0], ax.to_le_bytes()[1], ax.to_le_bytes()[2], ax.to_le_bytes()[3]]);
+        put(&mut m, 0x959bd9, &[0xd9, 0x04, 0x85, ht.to_le_bytes()[0], ht.to_le_bytes()[1], ht.to_le_bytes()[2], ht.to_le_bytes()[3]]);
+        let fpt: u32 = 0xED3000;
+        put(&mut m, 0x959ba9, &[0x8b, 0x04, 0x85, fpt.to_le_bytes()[0], fpt.to_le_bytes()[1], fpt.to_le_bytes()[2], fpt.to_le_bytes()[3]]);
+        put(&mut m, 0x86cf97, &[0x6a, 0]);
+        let disp = (0x959b90u32).wrapping_sub(0x86cf99 + 5);
+        put(&mut m, 0x86cf99, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(&mut m, 0x86cff5, &[0x6a, 0]);
+        let disp = (0x959bc0u32).wrapping_sub(0x86cff9 + 5);
+        put(&mut m, 0x86cff9, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        (vec![], m)
+    }
+
+    fn decode_synthetic(map: &std::collections::HashMap<u32, Vec<u8>>, misc: &str) -> Result<DefaultFont, String> {
+        let read = |va: u32, n: usize, _code: bool| -> Result<Vec<u8>, String> {
+            // Exact VA match for instruction bytes; string/table bytes via map too.
+            if let Some(b) = map.get(&va) {
+                if b.len() >= n { return Ok(b[..n].to_vec()); }
+                return Err(format!("short at {va:#x}"));
+            }
+            // String byte-by-byte reads land inside a stored string range.
+            for (base, b) in map.iter() {
+                if va >= *base && (va as usize) < *base as usize + b.len() {
+                    let off = (va - base) as usize;
+                    if off + n <= b.len() { return Ok(b[off..off + n].to_vec()); }
+                }
+            }
+            Err(format!("missing synthetic bytes at {va:#x}"))
+        };
+        DefaultFont::decode(
+            AssetIdentity { source: "synthetic".into(), edition: "fixture".into(), version: "fixture".into() },
+            [0x42; 32],
+            misc,
+            read,
+        )
+    }
+
+    #[test]
+    fn default_font_decodes_source_operands_not_constants() {
+        let (_, map) = synthetic_image();
+        let font = decode_synthetic(&map, MISC).unwrap();
+        assert_eq!(font.section, "Misc");
+        assert_eq!(font.key, "FontTexture");
+        assert_eq!(font.path_prefix, "Fonts");
+        assert_eq!(font.font_texture, "SYNTHETIC__.TTF");
+        assert_eq!(font.font_path, "Fonts\\SYNTHETIC__.TTF");
+        assert_eq!(font.wrapping_slot, 0);
+        assert!((font.table_height - 0.03125).abs() < 1e-9);
+        assert!((font.axis_factor - 0.5).abs() < 1e-9);
+        assert!((font.wrapping_height() - 0.015625).abs() < 1e-9);
+        // Row height is a separate FDF input; wrapping height must not equal it by construction.
+        let (line, _) = text_area_numbers(TMPL, "EscMenuTextAreaTemplate").unwrap();
+        assert!((line - 0.015).abs() < 1e-6);
+        assert!((font.wrapping_height() - line).abs() > 1e-6);
+    }
+
+    #[test]
+    fn default_font_refuses_wrong_slot_and_missing_misc() {
+        let (_, mut map) = synthetic_image();
+        // Change wrapping slot push to 1 -> unqualified
+        map.insert(0x86cf97, vec![0x6a, 1]);
+        assert!(decode_synthetic(&map, MISC).is_err());
+        let (_, map) = synthetic_image();
+        assert!(decode_synthetic(&map, "[Other]\nFontTexture=X\n").is_err());
+        assert!(decode_synthetic(&map, "[Misc]\nOther=1\n").is_err());
+        let dup = "[Misc]\nFontTexture=A\nFontTexture=B\n";
+        assert!(decode_synthetic(&map, dup).is_err());
     }
 
     #[test]
