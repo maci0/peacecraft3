@@ -127,6 +127,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+pub mod ai_data;
 pub mod cameras;
 pub mod campaign_info;
 pub mod doodads;
@@ -141,6 +142,9 @@ pub mod wpmp;
 pub mod pathing;
 pub mod regions;
 pub mod units;
+pub use ai_data::{
+    AiCall, AiCallKind, AiCondition, AiData, AiDataError, AiParam, AiParamKind, ArityTable,
+};
 pub use grid_alignment::{
     GridAlignment, GridAlignmentError, GridDimensions, PathingGridDimensions, TerrainGridDimensions,
 };
@@ -240,6 +244,8 @@ pub enum Error {
     Regions(#[from] regions::RegionError),
     #[error("map imports: {0}")]
     Imports(#[from] imports::ImportError),
+    #[error("ai data: {0}")]
+    AiData(#[from] ai_data::AiDataError),
     #[error("unit placements: {0}")]
     Units(#[from] units::UnitPlacementError),
     #[error("io: {0}")]
