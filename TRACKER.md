@@ -6980,3 +6980,28 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Clippy, native/full-WASM builds and formatting pass. Screenshots/provenance
   refreshed. Task 1c8480fb-c63d-4aec-a970-9eecd2a26915 remains open for explored
   history, marker memory, other native camera/line cases and broader fidelity.
+
+- 2026-11-10: The ten `pc3-menu-01..10` lane branches are merged into main and
+  their worktrees retired, at the user's request. `pc3-menu-10`'s integration
+  commits are the base. Lanes 01, 02, 04, 05 and 09 were already fully carried
+  there and are recorded as merged. Lane 03 adds the canonical gameplay fixture
+  and Jev decision adapter; 06 the Tips body, Next/Back/OK and a CustomKeys card
+  test; 07 texture quality parsed from the native branch windows, superseding
+  `c03664f`'s hard-coded `q=3 -> 32-bit` mapping (the startup writer at
+  `0x428682` confirms `q=2`); 08 dialogue `show_text` and the subtitle/ambient
+  consumer notes. From uncommitted lane work: lane 10's Tips integration; lane
+  02's Escape/Cancel wiring for in-game Options, which previously could not be
+  cancelled (the real-asset escape test covers both paths and fails without
+  it); lane 05's `World::unit(0)` underflow fix, with a test. Left out and kept
+  locally under `.scratch/lane-wip/`: lane 09's long-edge border repeat
+  experiment (native repeat unverified) and its `ownedrun5` diary, lane 03's
+  harness-sim save/replay modules (no caller, two Clippy errors), lane 04's
+  unwired profile/custom-campaign drafts and lane 05's debug examples.
+  Workspace tests with `pcx-play/test-fixtures,peacecraft3/test-fixtures,
+  pcx-net/session-server`: 5,453 passed, 1 failed, 356 ignored. The failure,
+  `pose_composition::supplied_pose_adapter_preserves_exact_legacy_boundary_outputs`,
+  fails identically on `c03664f` and on the 0.14.0 release. Strict native and
+  WASM Clippy (all targets, with and without fixtures), native and WASM
+  workspace builds and formatting pass; `pytest tools/jev-harness/tests` passes
+  91; the Prologue02 escape-menu asset gate passes headless and muted. Open: the
+  menu texture-quality adapter is still unwired behind `#![allow(dead_code)]`.
