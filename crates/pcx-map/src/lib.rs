@@ -1604,8 +1604,7 @@ mod tests {
 
     #[test]
     fn unproven_doo_version_is_refused() {
-        // Version 8 adds item-drop fields no shipped byte proves the place
-        // of. One synthetic flip of the version word is refused, not guessed.
+        // Only versions 7 and 8 have a measured layout. A flip to 9 is refused, not guessed.
         let Some(dir) = install_dir() else { return };
         let Some(m) = shipped(&dir, MAP_SHEEP) else {
             return;

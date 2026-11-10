@@ -1769,9 +1769,10 @@ The list below is the measured part; the rest of the container surface is tracke
       indices span only 5,477..14,336 of 16,384 so the data cannot supply the mapping
       either. Terrain is per-corner, not a sampled heightfield — the older "tilepoints +
       interior heightmap" framing in `PLAN.md` was wrong and is corrected.
-- [x] `pcx-map`: `war3map.doo` doodad instances — `W3do` + version 7 (8+ **refused**,
-       its records are wider by item-drop fields no shipped file proves the offset of),
-       subversion 9 on all 132, `16 + 42·n + 8 + 16·m == file_len` on 132/132. Instance
+- [x] `pcx-map`: `war3map.doo` doodad instances — `W3do` + version 7 (subversion 9 on
+       all 132, `16 + 42·n + 8 + 16·m == file_len` on 132/132), or version 8 (subversion
+       11, Frozen Throne maps; exact framing on 9 probed files, pair order unverified;
+       see `docs/re-notes/item-drops.md`). Instance
        record is a fixed 42 bytes: type fourcc, variation, position (3×f32), rotation,
        scale (3×f32), flags byte, life byte, creation number. Terrain doodads are 16
        bytes. Creation numbers are unique but **not** dense and not bounded by `n`
@@ -1797,6 +1798,11 @@ The list below is the measured part; the rest of the container surface is tracke
       profile. Actual Vulkan edge/minification and failed-publication checks pass;
       original appearance and coherent gameplay-world integration remain open.
       See `docs/re-notes/admitted-ground-rendering.md`.
+- [~] `pcx-play`: terrain (cliff) doodads from `war3map.doo` load without refusing the
+      map and are logged as not placed. All 18 IDs seen in the nine maps are `Doodads.slk` category `C`. The
+      file stores only type, variation and grid cell, so placing them needs a height and
+      orientation derivation that does not exist yet. Original cliff doodad rendering and
+      any pathing they add remain open.
 - [~] `pcx-tera`: caller-selected cliff wall geometry and source-selected water
       surface geometry are implemented and tested. Water levels use the loaded
       `Water.slk` row and W3E words under the pinned recreation profile.

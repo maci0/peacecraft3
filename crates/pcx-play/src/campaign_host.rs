@@ -176,6 +176,13 @@ pub fn create_host(
                 tables,
             )
             .map_err(MapStartupError::Placement)?;
+            let unplaced_terrain = catalog.terrain_doodads().len();
+            if unplaced_terrain > 0 {
+                eprintln!(
+                    "{}: {unplaced_terrain} terrain doodads not placed, war3map.doo stores no height or orientation for them",
+                    placement_context.map_digest.label
+                );
+            }
             if let Some(now) = host.objects().timer_game_time() {
                 let doodads = catalog
                     .decorative_models(&reader, &edition, now)

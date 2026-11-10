@@ -1098,9 +1098,8 @@ identity rather than a count — 132/132 shipped maps carry all four, on both bu
 | `war3map.mmp` | marker table: `8 + 16·n`, 16-byte records of kind/`x`/`y`/`0xAARRGGBB` | `8 + 16·n == file_len` |
 | `war3mapMap.blp` | the minimap image — all 132 are BLP1 JPEG, `256×256`, one mip; framed through `pcx-blp`, not re-decoded here | `pcx-blp`'s own two relations |
 
-Two refusals in this set, both deliberate: doodad **version 8+** records are wider by
-item-drop fields no shipped file proves the offset of, and a map that really contains
-the literal `war3map.map` / `war3map.ter` is refused — those names occur in 0 of 133
+One refusal in this set, deliberate: a map that really contains the literal
+`war3map.map` / `war3map.ter` is refused — those names occur in 0 of 133
 shipped maps, 0 of 200 loose community maps, no `(listfile)`, and neither build's name
 tables, so there is no layout to read them with.
 

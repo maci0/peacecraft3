@@ -29,9 +29,11 @@
 //! 38  4   creation number (the World Editor's per-instance id)
 //! ```
 //!
-//! Version 7 carries **no item-drop data**. Version 8 (accepted, no shipped file)
-//! adds a signed `table_id` and per-set pairs ahead of the creation number. The
-//! offsets are not proven against shipped bytes: all 132 shipped files are version 7.
+//! Version 7 carries **no item-drop data**. Version 8 (subversion 11, the Frozen
+//! Throne campaign maps) adds a signed `table_id` and per-set pairs ahead of the
+//! creation number. Its framing identity holds exactly on the 9 shipped version-8
+//! files probed (the total length is consumed to the byte), which proves the field
+//! widths, not the meaning of each word: the pair order is unverified.
 //!
 //! Terrain-doodad record, 16 bytes (cliff/terrain-palette placements):
 //!
@@ -64,8 +66,8 @@ use crate::Error;
 /// File magic.
 pub const DOO_MAGIC: [u8; 4] = *b"W3do";
 
-/// The only version either shipped build writes. Version 8 is also accepted; its
-/// item-drop layout is unproven against shipped bytes (see the module docs).
+/// The version the Human campaign and Reign of Chaos maps write. Version 8, which the
+/// Frozen Throne maps write, is also accepted; see the module docs for its layout.
 pub const DOO_VERSION: u32 = 7;
 
 /// Byte length of one version-7 instance record.
@@ -394,6 +396,52 @@ impl Doodads {
 #[cfg(test)]
 mod version8_regressions {
     use super::*;
+    #[test]
+    fn terrain_section_follows_version_eight_item_sets() {
+        let mut data = DOO_MAGIC.to_vec();
+        for word in [8u32, 11, 1] {
+            data.extend(word.to_le_bytes());
+        }
+        let mut core = vec![0; 38];
+        core[..4].copy_from_slice(b"TEST");
+        data.extend(core);
+        data.extend((-1i32).to_le_bytes());
+        for word in [1u32, 1, 25, 0x41424344, 123, 0, 1] {
+            data.extend(word.to_le_bytes());
+        }
+        data.extend(b"YCc2");
+        for word in [0u32, 7, 9] {
+            data.extend(word.to_le_bytes());
+        }
+        let parsed = Doodads::from_bytes(data.clone()).unwrap();
+        assert_eq!(parsed.instances()[0].creation_number, 123);
+        assert_eq!(
+            parsed.terrain_doodads(),
+            [TerrainDoodad {
+                type_id: *b"YCc2",
+                variation: 0,
+                grid_x: 7,
+                grid_y: 9,
+            }]
+        );
+        assert_eq!(parsed.canonical_bytes(), data);
+        for length in 0..data.len() {
+            assert!(Doodads::from_bytes(data[..length].to_vec()).is_err());
+        }
+    }
+
+    #[test]
+    fn terrain_count_larger_than_the_file_is_refused() {
+        let mut data = DOO_MAGIC.to_vec();
+        for word in [7u32, 9, 0, 0, u32::MAX] {
+            data.extend(word.to_le_bytes());
+        }
+        assert!(matches!(
+            Doodads::from_bytes(data),
+            Err(Error::DoodadSize { .. })
+        ));
+    }
+
     #[test]
     fn item_sets_do_not_displace_the_creation_number_or_terrain_section() {
         let mut data = DOO_MAGIC.to_vec();

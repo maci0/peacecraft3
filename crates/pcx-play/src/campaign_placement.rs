@@ -38,6 +38,7 @@ const STATIONARY_CELLS: usize = 1 << 20;
 pub struct Catalog {
     objects: DestructableCatalog,
     doodads: Vec<pcx_map::Doodad>,
+    terrain_doodads: Vec<pcx_map::TerrainDoodad>,
     destructables: Overlay,
     decorations: Overlay,
 }
@@ -70,6 +71,18 @@ enum PlacedRole {
     Decoration,
 }
 
+/// Decodes `war3map.doo`, refusing a declared instance count over the stationary
+/// budget before any record is decoded.
+fn parse_doodads(doodad_bytes: Vec<u8>) -> Result<pcx_map::Doodads, String> {
+    let count = doodad_bytes
+        .get(12..16)
+        .ok_or("truncated placement doodad count")?;
+    if u32::from_le_bytes(count.try_into().unwrap()) > 100000 {
+        return Err("placement stationary count budget".into());
+    }
+    pcx_map::Doodads::from_bytes(doodad_bytes).map_err(|e| e.to_string())
+}
+
 impl Catalog {
     pub fn read(
         context: &ParsedMapContext,
@@ -90,17 +103,7 @@ impl Catalog {
             )
             .map_err(|e| e.to_string())
         };
-        let doodad_bytes = extract("war3map.doo")?.ok_or("missing placement doodads")?;
-        let count = doodad_bytes
-            .get(12..16)
-            .ok_or("truncated placement doodad count")?;
-        if u32::from_le_bytes(count.try_into().unwrap()) > 100000 {
-            return Err("placement stationary count budget".into());
-        }
-        let doodads = pcx_map::Doodads::from_bytes(doodad_bytes).map_err(|e| e.to_string())?;
-        if doodads.instances().len() > 100000 || !doodads.terrain_doodads().is_empty() {
-            return Err("placement stationary count or unsupported terrain doodads".into());
-        }
+        let doodads = parse_doodads(extract("war3map.doo")?.ok_or("missing placement doodads")?)?;
         let overlay = |member: &'static str| -> Result<Overlay, String> {
             extract(member)?
                 .map(|raw| {
@@ -128,6 +131,7 @@ impl Catalog {
         Ok(Self {
             objects: DestructableCatalog::new(tables, destructables.clone(), decorations.clone()),
             doodads: doodads.instances().to_vec(),
+            terrain_doodads: doodads.terrain_doodads().to_vec(),
             destructables,
             decorations,
         })
@@ -139,6 +143,13 @@ impl Catalog {
 
     pub fn doodads(&self) -> &[pcx_map::Doodad] {
         &self.doodads
+    }
+
+    /// Terrain (cliff) doodads from `war3map.doo`. They are not placed: the file stores
+    /// only a type, a variation and a grid cell for each, with no height or orientation,
+    /// and this crate has no derivation for either.
+    pub fn terrain_doodads(&self) -> &[pcx_map::TerrainDoodad] {
+        &self.terrain_doodads
     }
 
     fn role(&self, instance: &pcx_map::Doodad) -> Result<PlacedRole, String> {
@@ -1198,6 +1209,7 @@ mod tests {
                 Overlay::default(),
             ),
             doodads: Vec::new(),
+            terrain_doodads: Vec::new(),
             destructables: Overlay::default(),
             decorations: Overlay::default(),
         }
@@ -1239,6 +1251,77 @@ mod tests {
             catalog.script_paths().resolve(edited, true).unwrap(),
             "dead.tga"
         );
+    }
+
+    /// Version-7 `war3map.doo`: one instance when `instance` is set, then the terrain
+    /// section with one 16-byte record per `(grid_x, grid_y)`.
+    fn doo(instance: bool, terrain: &[[u32; 2]]) -> Vec<u8> {
+        let mut data = b"W3do".to_vec();
+        for word in [7u32, 9, u32::from(instance)] {
+            data.extend(word.to_le_bytes());
+        }
+        if instance {
+            data.extend(*b"LOsm");
+            data.extend(0u32.to_le_bytes());
+            for value in [0.0f32, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0] {
+                data.extend(value.to_le_bytes());
+            }
+            data.extend([2u8, 100u8]);
+            data.extend(7u32.to_le_bytes());
+        }
+        data.extend(0u32.to_le_bytes());
+        data.extend(u32::try_from(terrain.len()).unwrap().to_le_bytes());
+        for [x, y] in terrain {
+            data.extend(*b"LCc0");
+            data.extend(0u32.to_le_bytes());
+            data.extend(x.to_le_bytes());
+            data.extend(y.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn terrain_doodads_are_kept_without_refusing_the_doodad_file() {
+        let parsed = parse_doodads(doo(true, &[[44, 116]])).unwrap();
+        assert_eq!(parsed.instances().len(), 1);
+        assert_eq!(
+            parsed.terrain_doodads(),
+            [pcx_map::TerrainDoodad {
+                type_id: *b"LCc0",
+                variation: 0,
+                grid_x: 44,
+                grid_y: 116,
+            }]
+        );
+    }
+
+    #[test]
+    fn truncated_doodad_headers_are_refused() {
+        for empty in [Vec::new(), b"W3do\x07\0\0\0\x09\0\0\0".to_vec()] {
+            assert_eq!(
+                parse_doodads(empty).unwrap_err(),
+                "truncated placement doodad count"
+            );
+        }
+        let data = doo(false, &[]);
+        assert!(parse_doodads(data[..data.len() - 1].to_vec()).is_err());
+    }
+
+    #[test]
+    fn truncated_terrain_record_is_refused_with_the_declared_counts() {
+        let data = doo(false, &[[1, 2]]);
+        let error = parse_doodads(data[..data.len() - 1].to_vec()).unwrap_err();
+        assert!(error.contains("terrain doodads, which need"), "{error}");
+    }
+
+    #[test]
+    fn declared_instance_count_over_the_budget_is_refused_before_decoding() {
+        let mut data = b"W3do".to_vec();
+        for word in [7u32, 9, 100001] {
+            data.extend(word.to_le_bytes());
+        }
+        let error = parse_doodads(data).unwrap_err();
+        assert_eq!(error, "placement stationary count budget");
     }
 
     fn doodad(creation_number: u32, life: u8) -> pcx_map::Doodad {

@@ -120,6 +120,8 @@ drop framing was wrong, and `units.rs` no longer cites them.
 ## Doodads version 8
 
 `crates/pcx-map/src/doodads.rs` accepts version 8: a signed `table_id`, a set count,
-then per set an item count and two-word pairs, ahead of the creation number. No shipped
-file is version 8 (132/132 are version 7). The version 8 layout and pair order are
-unproven. The parser and the docs agree on that.
+then per set an item count and two-word pairs, ahead of the creation number. Version 8
+(subversion 11) ships in the Frozen Throne campaign maps: the framing identity
+(`from_bytes` consumes the file exactly) holds on the 9 probed (NightElfX01, NightElfX03, NightElfX04, NightElfX05,
+NightElfX06Interlude, NightElfX06, NightElfX07, OrcX01, OrcX02). The field widths are
+proven by that; the pair order and the meaning of each word are unverified.
