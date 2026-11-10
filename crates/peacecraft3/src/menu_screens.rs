@@ -884,4 +884,43 @@ Frame "FRAME" "A" {
         assert_eq!(slider_value(7.0, 31.0, 3.0, 0.5), 19.0);
         assert_eq!(slider_value(7.0, 31.0, 3.0, 2.0), 31.0);
     }
+
+    /// Reads every `.toc` member of the install named by `PEACECRAFT3_INSTALL`
+    /// (the Warcraft III (Legacy) directory holding `War3x.mpq`) and checks that
+    /// each `SCREEN_FILES` entry is listed by one of them.
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL pointing at the Warcraft III (Legacy) install directory"]
+    fn shipped_tocs_list_every_screen_file() {
+        use pcx_mpq::MpqSet;
+
+        let install = std::path::PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+        );
+        let mut archives = MpqSet::open_wc3(&install).expect("open MPQ archives");
+        let names = archives.file_list().expect("read archive listfiles");
+        let tocs: Vec<&String> = names
+            .iter()
+            .filter(|name| name.to_ascii_lowercase().ends_with(".toc"))
+            .collect();
+        assert!(!tocs.is_empty(), "install lists no .toc members");
+
+        let mut listed = std::collections::HashSet::new();
+        for name in tocs {
+            let bytes = archives.extract(name).expect("extract .toc member");
+            let members =
+                peacecraft3::fdf_toc::parse(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+            eprintln!("{name}: {} members", members.len());
+            listed.extend(members.iter().map(|m| m.to_ascii_lowercase()));
+        }
+
+        let missing: Vec<&str> = SCREEN_FILES
+            .iter()
+            .copied()
+            .filter(|screen| !listed.contains(&screen.to_ascii_lowercase()))
+            .collect();
+        for screen in &missing {
+            eprintln!("not listed by any shipped .toc: {screen}");
+        }
+        assert!(missing.is_empty(), "SCREEN_FILES absent from every .toc");
+    }
 }

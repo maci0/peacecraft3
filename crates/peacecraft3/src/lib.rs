@@ -20,6 +20,7 @@ pub mod campaign_startup;
 pub mod campaign_weather;
 pub mod custom_game;
 pub mod fdf;
+pub mod fdf_toc;
 pub mod game_input;
 #[cfg(feature = "test-fixtures")]
 pub mod gameplay_observation;
