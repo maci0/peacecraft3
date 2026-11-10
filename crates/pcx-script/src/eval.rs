@@ -1973,7 +1973,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     Err(why) => Err(crate::Error::run(
                         span,
                         format!(
-                            "native `{declared}` is not implemented; it is declared as `{signature}` at {source}:{}..{}: {why}",
+                            "native `{declared}` refused: {why} (declared as `{signature}` at {source}:{}..{})",
                             declared_at.start, declared_at.end
                         ),
                     )),
