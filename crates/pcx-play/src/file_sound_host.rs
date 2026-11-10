@@ -1,5 +1,5 @@
 use super::{Entry, Error, Failure, ObjectHost};
-use crate::file_sounds::{Assets, Budget, Mp3Resource};
+use crate::file_sounds::{Assets, Budget, FileLoad, FileSoundBinding, Mp3Resource};
 use crate::label_sounds::PcmResource;
 use pcx_script::{HandleId, Value};
 pub(super) struct State {
@@ -7,7 +7,7 @@ pub(super) struct State {
     eax_bytes: usize,
     loader: Option<(FileSoundLoader, Budget)>,
 }
-type FileSoundLoader = Box<dyn FnMut(&str, Budget) -> Result<Assets, String> + Send + Sync>;
+type FileSoundLoader = Box<dyn FnMut(&str, Budget) -> Result<FileLoad, String> + Send + Sync>;
 /// Exact creation inputs, without effective fade/channel/EAX or playback guesses.
 #[derive(Debug)]
 pub struct FileSoundState<'a, R = PcmResource> {
@@ -83,7 +83,7 @@ impl ObjectHost {
     pub fn admit_file_sound_loader(
         &mut self,
         budget: Budget,
-        loader: impl FnMut(&str, Budget) -> Result<Assets, String> + Send + Sync + 'static,
+        loader: impl FnMut(&str, Budget) -> Result<FileLoad, String> + Send + Sync + 'static,
     ) -> Result<(), Error> {
         let fail = |reason| self.inner.error("CreateSound", reason);
         let state = self
@@ -112,8 +112,7 @@ impl ObjectHost {
             .as_ref()
             .ok_or_else(|| fail(Failure::SoundState("file sounds not admitted")))?;
         let Entry::FileSound {
-            resource,
-            mp3,
+            binding,
             looping,
             is_3d,
             stop_when_out_of_range,
@@ -125,16 +124,20 @@ impl ObjectHost {
         else {
             return Err(fail(Failure::WrongFamily));
         };
-        if *mp3 {
-            return Err(fail(Failure::SoundState("integer PCM required")));
-        }
+        let index = match *binding {
+            FileSoundBinding::Pcm(index) => index,
+            FileSoundBinding::Mp3(_) => {
+                return Err(fail(Failure::SoundState("integer PCM required")));
+            }
+            FileSoundBinding::Absent(index) => return Err(self.absent_refusal(index)),
+        };
         Ok(FileSoundState {
             identity,
             duration: self.sound_duration(identity)?,
             resource: state
                 .assets
                 .resources()
-                .get(*resource)
+                .get(index)
                 .ok_or_else(|| fail(Failure::Identity))?,
             looping: *looping,
             is_3d: *is_3d,
@@ -155,8 +158,7 @@ impl ObjectHost {
             .as_ref()
             .ok_or_else(|| fail(Failure::SoundState("file sounds not admitted")))?;
         let Entry::FileSound {
-            resource,
-            mp3,
+            binding,
             looping,
             is_3d,
             stop_when_out_of_range,
@@ -168,13 +170,17 @@ impl ObjectHost {
         else {
             return Err(fail(Failure::WrongFamily));
         };
-        if !*mp3 {
-            return Err(fail(Failure::SoundState("MPEG audio required")));
-        }
+        let index = match *binding {
+            FileSoundBinding::Mp3(index) => index,
+            FileSoundBinding::Pcm(_) => {
+                return Err(fail(Failure::SoundState("MPEG audio required")));
+            }
+            FileSoundBinding::Absent(index) => return Err(self.absent_refusal(index)),
+        };
         let mp3 = state
             .assets
             .mp3_resources()
-            .get(*resource)
+            .get(index)
             .ok_or_else(|| fail(Failure::Identity))?;
         Ok(FileSoundState {
             identity,
@@ -187,6 +193,29 @@ impl ObjectHost {
             fade_out_rate: *fade_out_rate,
             eax_setting,
         })
+    }
+    /// True for a `CreateSound` handle whose file no mounted layer holds. Such a
+    /// handle has no audio: playback consumers skip its starts.
+    pub fn is_absent_file_sound(&self, identity: HandleId) -> bool {
+        matches!(
+            self.inner.entry(identity),
+            Ok(Entry::FileSound {
+                binding: FileSoundBinding::Absent(_),
+                ..
+            })
+        )
+    }
+    fn absent_refusal(&self, index: usize) -> Error {
+        let member = self
+            .file_sounds
+            .as_ref()
+            .and_then(|state| state.assets.absent_member(index));
+        match member {
+            Some(member) => self
+                .inner
+                .error("CreateSound", Failure::AbsentSoundFile(member.into())),
+            None => self.inner.error("CreateSound", Failure::Identity),
+        }
     }
     pub(super) fn file_sound_native(
         &mut self,
@@ -248,41 +277,48 @@ impl ObjectHost {
         let state = self.file_sounds.as_mut().expect("admitted");
         Some((|| {
             let fail = |reason| self.inner.error(name, reason);
-            let (resource, mp3) = match state.assets.find(&member) {
-                Some(binding) => binding,
-                None => {
-                    let Some((loader, budget)) = &mut state.loader else {
-                        return Err(fail(Failure::MissingSoundFile(member.clone())));
-                    };
-                    let remaining = state
-                        .assets
-                        .remaining_budget(*budget)
-                        .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
-                    if remaining.resources == 0
-                        || remaining.total_bytes == 0
-                        || remaining.metadata_bytes == 0
-                    {
-                        return Err(fail(Failure::Budget("file sound bank")));
+            let binding =
+                match state.assets.binding(&member) {
+                    Some(binding) => binding,
+                    None => {
+                        let Some((loader, budget)) = &mut state.loader else {
+                            return Err(fail(Failure::MissingSoundFile(member.clone())));
+                        };
+                        let remaining = state
+                            .assets
+                            .remaining_budget(*budget)
+                            .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
+                        if remaining.resources == 0
+                            || remaining.total_bytes == 0
+                            || remaining.metadata_bytes == 0
+                        {
+                            return Err(fail(Failure::Budget("file sound bank")));
+                        }
+                        match loader(&member, remaining)
+                            .map_err(|error| fail(Failure::SoundSource(error)))?
+                        {
+                            FileLoad::Absent => state
+                                .assets
+                                .append_absent(&member, *budget)
+                                .map_err(|error| fail(Failure::SoundSource(error.to_string())))?,
+                            FileLoad::Bound(next) => {
+                                if next.resources().len() + next.mp3_resources().len() != 1
+                                    || next.find(&member).is_none()
+                                {
+                                    return Err(fail(Failure::SoundState(
+                                        "loader must return exactly the requested file",
+                                    )));
+                                }
+                                state.assets.append(next, *budget).map_err(|error| {
+                                    fail(Failure::SoundSource(error.to_string()))
+                                })?;
+                                state.assets.binding(&member).ok_or_else(|| {
+                                    fail(Failure::MissingSoundFile(member.clone()))
+                                })?
+                            }
+                        }
                     }
-                    let next = loader(&member, remaining)
-                        .map_err(|error| fail(Failure::SoundSource(error)))?;
-                    if next.resources().len() + next.mp3_resources().len() != 1
-                        || next.find(&member).is_none()
-                    {
-                        return Err(fail(Failure::SoundState(
-                            "loader must return exactly the requested file",
-                        )));
-                    }
-                    state
-                        .assets
-                        .append(next, *budget)
-                        .map_err(|error| fail(Failure::SoundSource(error.to_string())))?;
-                    state
-                        .assets
-                        .find(&member)
-                        .ok_or_else(|| fail(Failure::MissingSoundFile(member.clone())))?
-                }
-            };
+                };
             let mut eax_setting = String::new();
             eax_setting
                 .try_reserve_exact(eax.len())
@@ -291,9 +327,8 @@ impl ObjectHost {
             self.inner
                 .allocate(
                     Entry::FileSound {
-                        resource,
+                        binding,
                         properties: super::SoundProperties::default(),
-                        mp3,
                         parameters,
                         duration: None,
                         looping,

@@ -158,3 +158,31 @@ native winners and release equivalence are unestablished. The two lighting input
 also pass the shared identity adapter. No original bytes are saved or published,
 and no chapter or original game is run. Evidence:
 `.scratch/campaign-sound-source-root-20261019/`.
+
+## Absent source members
+
+Archive listings (`mpqxtract list`, Legacy 1.29 install) show that
+`Sound\Dialogue\OrcCampaign\Orc01\O01Grunt46.mp3` and `O01Grunt45.mp3` are in none
+of `War3.mpq`, `War3x.mpq`, `War3xLocal.mpq`, `War3Local.mpq` or `Deprecated.mpq`.
+The 1.28c `war3.mpq`, `War3x.mpq` and `War3Patch.mpq` do not hold them either. Their
+siblings `O01Grunt43`, `44`, `47` and `48` are present. The shipped Orc01
+`war3map.j` (near line 585) still passes `O01Grunt46.mp3` to `CreateSound`. This is
+archive-listing evidence only. Whether the original `CreateSound` returns a usable
+handle for such a name, and what a duration query returns for it, is not established.
+
+The port treats only a name that no mounted layer lists (the resolver's
+`MissingAsset`) as absent. Layer read failures, budget refusals, malformed bytes and
+identity errors still refuse without issuing a handle. An absent name becomes a
+`FileSoundBinding::Absent` handle. Its absence is recorded in the bank, counts
+against the same resource and metadata budgets, and repeat requests reuse it without
+another source query. This keeps the chapter running as an implementation choice,
+not as a verified copy of original behavior.
+
+Absent handles accept the same handle natives as loaded sounds (`SetSoundDuration`,
+`StartSound`, `StopSound`, parameter and property setters). The Bevy consumer skips
+their starts without a voice or error. Every answer that needs audio refuses with
+"sound file ... is absent from every mounted layer": `file_sound_state`,
+`file_mp3_state`, `sound_resource`, and the length behind `GetSoundDuration` when no
+explicit duration was assigned. An explicit `SetSoundDuration` value is script
+metadata and remains readable. A wait on such a sound (`WaitForSound`) does not
+park, because `thread_host` drops the refusal; that scheduling is unchanged here.

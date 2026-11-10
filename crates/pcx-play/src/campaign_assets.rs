@@ -112,15 +112,23 @@ pub fn file_sound(
     member: &str,
     budget: crate::file_sounds::Budget,
     mp3: crate::file_sounds::Mp3Budget,
-) -> Result<crate::file_sounds::Assets, String> {
+) -> Result<crate::file_sounds::FileLoad, String> {
     // Application metadata cap also bounds adapter identity formatting before copies.
     let metadata = budget.metadata_bytes.min(16 << 10);
     if member.len() > metadata || edition.len() > metadata || budget.resources == 0 {
         return Err("CreateSound: source path/identity/count budget exceeded".into());
     }
-    let asset = reader
+    let asset = match reader
         .resolve_bounded(member, budget.resource_bytes.min(budget.total_bytes) as u64)
-        .map_err(|error| format!("CreateSound {member}: {error}"))?;
+    {
+        Ok(asset) => asset,
+        // Only the resolver's no-layer-holds-it result is absence. Layer, budget and
+        // read failures keep refusing.
+        Err(pcx_assets::Error::MissingAsset { .. }) => {
+            return Ok(crate::file_sounds::FileLoad::Absent);
+        }
+        Err(error) => return Err(format!("CreateSound {member}: {error}")),
+    };
     let (label, origin) = identity(&asset, edition, metadata)
         .map_err(|error| format!("CreateSound {member}: {error}"))?;
     crate::file_sounds::Assets::read_encoded(
@@ -135,6 +143,7 @@ pub fn file_sound(
         budget,
         mp3,
     )
+    .map(crate::file_sounds::FileLoad::Bound)
     .map_err(|error| format!("CreateSound {member}: {error}"))
 }
 
@@ -446,5 +455,72 @@ mod preparation_tests {
             .empty_label_bank(budget)
             .expect_err("missing source table");
         assert_eq!(error, "selected sources contain no sound constructor table");
+    }
+
+    /// One listed member whose read fails, and an unlisted name.
+    struct FailingLayer {
+        info: pcx_assets::SourceInfo,
+    }
+
+    impl pcx_assets::ContentSource for FailingLayer {
+        fn info(&self) -> &pcx_assets::SourceInfo {
+            &self.info
+        }
+        fn paths(&self) -> Result<Vec<String>, pcx_assets::SourceError> {
+            Ok(vec![r"Sound\listed.wav".into()])
+        }
+        fn read(
+            &self,
+            _member: &str,
+        ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+            Err(pcx_assets::SourceError::InvalidInput {
+                detail: "unreadable".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn only_a_name_no_layer_holds_is_absent_and_read_failures_refuse() {
+        let reader = pcx_assets::Resolver::new(
+            pcx_assets::GameMode::default(),
+            None,
+            vec![pcx_assets::ArchiveLayer {
+                priority: 1,
+                source: Box::new(FailingLayer {
+                    info: pcx_assets::SourceInfo {
+                        id: "synthetic".into(),
+                        kind: pcx_assets::LayerKind::Mpq,
+                        origin: "synthetic.mpq".into(),
+                        version: Some("fixture".into()),
+                    },
+                }),
+            }],
+        )
+        .unwrap();
+        let budget = crate::file_sounds::Budget {
+            resources: 1,
+            resource_bytes: 1024,
+            total_bytes: 1024,
+            metadata_bytes: 1024,
+        };
+        let mp3 = crate::file_sounds::Mp3Budget {
+            max_input_allocation_bytes: 1024,
+            max_decoder_steps: 1,
+            max_packets: 1,
+            max_frames: 1,
+            max_samples: 1,
+        };
+        let load = |member| file_sound(&reader, "synthetic", member, budget, mp3);
+        assert!(matches!(
+            load(r"Sound\unlisted.wav"),
+            Ok(crate::file_sounds::FileLoad::Absent)
+        ));
+        let error = load(r"Sound\listed.wav")
+            .err()
+            .expect("a listed member whose read fails refuses");
+        assert!(
+            error.starts_with(r"CreateSound Sound\listed.wav:"),
+            "{error}"
+        );
     }
 }

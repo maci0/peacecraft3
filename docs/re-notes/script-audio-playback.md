@@ -43,6 +43,10 @@ runs after settings updates and script playback. Unmapped native volume, pitch
 and parameter assignments remain refused; backend gain and speed are recreation
 policy, not measured native levels.
 
+A queued start for a `CreateSound` file that no mounted layer holds is consumed
+without a voice and without error. Such a handle has no audio to play; see
+[file sounds](script-file-sounds.md#absent-source-members).
+
 PCM uses the fmt/data-first `DecoderWave` view. MP3 keeps its encoded bytes. The
 voice receipt retains the original SHA-256, member, source label and edition/version.
 Both targets enable the existing Bevy `wav` and `mp3` features and use the same

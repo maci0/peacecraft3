@@ -1,4 +1,5 @@
 use super::{Entry, Error, Failure, ObjectHost};
+use crate::file_sounds::FileSoundBinding;
 use crate::label_sounds::{BoundSound, Budget, LoadBudget, PcmResource, SoundBank};
 pub(super) type Loader = Box<dyn FnMut(&str, Budget) -> Result<SoundBank, String> + Send + Sync>;
 use pcx_script::{HandleId, Value};
@@ -303,7 +304,10 @@ impl ObjectHost {
             return Ok(duration);
         }
         let (frames, rate) = match self.inner.entry(id)? {
-            Entry::FileSound { mp3: true, .. } => {
+            Entry::FileSound {
+                binding: FileSoundBinding::Mp3(_),
+                ..
+            } => {
                 let frames = self.file_mp3_state(id)?.resource.frames();
                 (frames.decoded_frames, frames.sample_rate)
             }
@@ -502,10 +506,20 @@ impl ObjectHost {
     }
     pub(crate) fn sound_admitted(&self, identity: HandleId) -> Result<(), Error> {
         match self.inner.entry(identity)? {
-            Entry::FileSound { mp3: true, .. } => self.file_mp3_state(identity).map(|_| ()),
-            Entry::Sound { .. } | Entry::FileSound { mp3: false, .. } => {
-                self.sound_resource(identity).map(|_| ())
-            }
+            // Absent files stay admitted for handle natives; only audio access refuses.
+            Entry::FileSound {
+                binding: FileSoundBinding::Absent(_),
+                ..
+            } => Ok(()),
+            Entry::FileSound {
+                binding: FileSoundBinding::Mp3(_),
+                ..
+            } => self.file_mp3_state(identity).map(|_| ()),
+            Entry::Sound { .. }
+            | Entry::FileSound {
+                binding: FileSoundBinding::Pcm(_),
+                ..
+            } => self.sound_resource(identity).map(|_| ()),
             _ => Err(self.inner.error("sound resource", Failure::WrongFamily)),
         }
     }

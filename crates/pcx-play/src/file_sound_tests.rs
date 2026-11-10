@@ -1258,6 +1258,7 @@ fn incremental_file_loading_keeps_old_resources_and_cached_reads() {
             if member.ends_with(".bin") { MPEG } else { &pcm },
             remaining,
         )
+        .map(FileLoad::Bound)
     })
     .unwrap();
     let mut ids = Vec::new();
@@ -1329,10 +1330,10 @@ fn incremental_file_loading_refuses_arguments_and_wrong_bindings_before_mutation
         calls.fetch_add(1, Ordering::SeqCst);
         match member {
             "missing" => Err("qualified source missing".into()),
-            "wrong" => loaded_file("another", &wave(), remaining),
-            "many" => Ok(mixed_assets()),
-            "malformed" => loaded_file(member, b"not audio", remaining),
-            _ => loaded_file(member, &wave(), remaining),
+            "wrong" => loaded_file("another", &wave(), remaining).map(FileLoad::Bound),
+            "many" => Ok(FileLoad::Bound(mixed_assets())),
+            "malformed" => loaded_file(member, b"not audio", remaining).map(FileLoad::Bound),
+            _ => loaded_file(member, &wave(), remaining).map(FileLoad::Bound),
         }
     })
     .unwrap();
@@ -1450,7 +1451,7 @@ fn incremental_file_loader_requires_admission_and_preserves_it_on_rejection() {
         .is_err()
     );
     h.admit_file_sound_loader(budget(), |member, remaining| {
-        loaded_file(member, &wave(), remaining)
+        loaded_file(member, &wave(), remaining).map(FileLoad::Bound)
     })
     .unwrap();
     assert!(
@@ -1461,4 +1462,80 @@ fn incremental_file_loader_requires_admission_and_preserves_it_on_rejection() {
     let mut a = args();
     a[0] = Value::Str("second".into());
     assert!(h.native("CreateSound", &a).is_ok());
+}
+
+#[test]
+fn absent_file_creates_a_handle_that_plays_nothing_and_refuses_audio_queries() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = host(COMMON, "", 8)
+        .with_file_sounds(Assets::read(&[], budget()).unwrap(), 64)
+        .unwrap()
+        .with_sound_starts(4)
+        .unwrap()
+        .with_sound_duration()
+        .unwrap();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&loads);
+    h.admit_file_sound_loader(budget(), move |member, _| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        match member {
+            r"Media\a.wav" => Ok(FileLoad::Absent),
+            _ => Err("unexpected member".into()),
+        }
+    })
+    .unwrap();
+    let Value::Handle(id) = h.native("CreateSound", &args()).unwrap() else {
+        panic!("sound")
+    };
+    let Value::Handle(again) = h.native("CreateSound", &args()).unwrap() else {
+        panic!("sound")
+    };
+    assert_ne!(id, again, "each call issues its own identity");
+    assert_eq!(loads.load(Ordering::SeqCst), 1, "absence is recorded once");
+    assert!(h.is_absent_file_sound(id));
+    assert!(h.is_absent_file_sound(again));
+
+    // Starting is queued like any sound, and the audio is never read.
+    assert_eq!(
+        h.native("StartSound", &[Value::Handle(id)]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.pending_sound_starts(), &[id]);
+
+    // The duration has no audio to measure, so it refuses until a script assigns one.
+    let error = h.sound_length_ms(id).unwrap_err().to_string();
+    assert!(
+        error.contains(r"sound file Media\a.wav is absent from every mounted layer"),
+        "{error}"
+    );
+    assert!(h.file_sound_state(id).is_err());
+    assert!(h.sound_resource(id).is_err());
+
+    // An explicit SetSoundDuration is script metadata and remains readable.
+    assert_eq!(
+        h.native("SetSoundDuration", &[Value::Handle(again), Value::Int(539)])
+            .unwrap(),
+        Value::Null
+    );
+    assert_eq!(h.sound_length_ms(again).unwrap(), 539);
+    assert!(h.is_absent_file_sound(again));
+}
+
+#[test]
+fn file_load_failures_other_than_absence_refuse_without_issuing_a_handle() {
+    let mut h = host(COMMON, "", 8)
+        .with_file_sounds(Assets::read(&[], budget()).unwrap(), 64)
+        .unwrap();
+    h.admit_file_sound_loader(budget(), |member, remaining| match member {
+        "layer" => Err("layer read failed".into()),
+        _ => loaded_file(member, b"not audio", remaining).map(FileLoad::Bound),
+    })
+    .unwrap();
+    let before = h.inner().handles();
+    for member in ["layer", "bytes"] {
+        let mut a = args();
+        a[0] = Value::Str(member.into());
+        assert!(h.native("CreateSound", &a).is_err(), "{member}");
+    }
+    assert_eq!(h.inner().handles(), before);
 }

@@ -74,6 +74,10 @@ pub enum Failure {
     MissingSoundLabel(String),
     #[error("sound file is not admitted: {0}")]
     MissingSoundFile(String),
+    #[error(
+        "sound file {0} is absent from every mounted layer; its audio cannot be decoded or measured"
+    )]
+    AbsentSoundFile(String),
     #[error("sound file source: {0}")]
     SoundSource(String),
     #[error("enumerand {0} is outside this native's admitted source domain")]
@@ -233,9 +237,8 @@ enum Entry {
         fade_out_rate: i32,
     },
     FileSound {
-        resource: usize,
+        binding: crate::file_sounds::FileSoundBinding,
         properties: objects::SoundProperties,
-        mp3: bool,
         parameters: Option<crate::sound_parameters::ParameterKey>,
         duration: Option<i32>,
         looping: bool,

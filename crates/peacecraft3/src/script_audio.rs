@@ -570,6 +570,10 @@ fn publish_queued_starts(
         .collect();
     let mut serial = memory.next_serial;
     for id in ids {
+        // A file no mounted layer holds has no audio, so its start plays nothing and needs no voice.
+        if objects.is_absent_file_sound(id) {
+            continue;
+        }
         // A repeat replaces its identity's voice, so that voice never counts against capacity.
         let mut classified_sound = classify(objects, id, profile.clone())?;
         if let Classified::Play(plan) = &mut classified_sound
@@ -1331,7 +1335,7 @@ mod tests {
     use super::*;
     use bevy::audio::PlaybackMode;
     use bevy::ecs::system::RunSystemOnce;
-    use pcx_play::file_sounds::{Assets as SoundAssets, Budget, Mp3Budget, SoundInput};
+    use pcx_play::file_sounds::{Assets as SoundAssets, Budget, FileLoad, Mp3Budget, SoundInput};
     use pcx_play::label_sounds::{Budget as LabelBudget, SoundBank, SoundInput as LabelInput};
     use pcx_play::playercolor_host::{EnumHost, Limits};
     use pcx_play::scripts::ScriptAsset;
@@ -2012,6 +2016,33 @@ endglobals
         publish(&mut world).unwrap();
         assert_eq!(count::<ScriptVoice>(&mut world), 1);
         assert_eq!(world.resource::<ScriptAudioReport>().played, 1);
+        assert!(
+            world
+                .resource::<Fixture>()
+                .host
+                .pending_sound_starts()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn absent_file_start_is_consumed_without_a_voice_or_refusal() {
+        let mut object_host = host(SoundAssets::read(&[], file_budget(16, 1)).unwrap());
+        object_host
+            .admit_file_sound_loader(file_budget(16, 1), |_, _| Ok(FileLoad::Absent))
+            .unwrap();
+        let id = start(
+            &mut object_host,
+            &create(r"Media\missing.wav", false, false, false, 0, 0, ""),
+        );
+        assert!(object_host.is_absent_file_sound(id));
+        assert_eq!(object_host.pending_sound_starts(), &[id]);
+        let mut world = world_for(object_host, limits_for(0));
+        publish(&mut world).unwrap();
+        assert_eq!(count::<ScriptVoice>(&mut world), 0);
+        let report = world.resource::<ScriptAudioReport>();
+        assert_eq!((report.played, report.refusal_count), (0, 0));
+        assert!(report.last_refusal.is_none());
         assert!(
             world
                 .resource::<Fixture>()

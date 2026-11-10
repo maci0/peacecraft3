@@ -46,10 +46,27 @@ pub enum Problem {
     #[error("{0}")]
     Mp3(#[source] DecodeError),
 }
+/// Result of a source load for one requested member.
+pub enum FileLoad {
+    /// Exactly the requested member, with its retained bytes.
+    Bound(Assets),
+    /// The member is absent from every mounted source layer.
+    Absent,
+}
+
+/// Where a `CreateSound` handle's audio lives. `Absent` indexes the bank's absent-member list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileSoundBinding {
+    Pcm(usize),
+    Mp3(usize),
+    Absent(usize),
+}
+
 #[derive(Debug)]
 pub struct Assets {
     resources: Vec<PcmResource>,
     mp3: Vec<Mp3Resource>,
+    absent: Vec<String>,
     path_limit: usize,
 }
 #[derive(Clone, Copy)]
@@ -204,6 +221,7 @@ impl Assets {
         Ok(Self {
             resources,
             mp3,
+            absent: Vec::new(),
             path_limit: budget.metadata_bytes,
         })
     }
@@ -230,6 +248,67 @@ impl Assets {
             })
     }
 
+    /// Binding of an already retained member, present or recorded absent.
+    pub(crate) fn binding(&self, member: &str) -> Option<FileSoundBinding> {
+        self.find(member)
+            .map(|(index, mp3)| {
+                if mp3 {
+                    FileSoundBinding::Mp3(index)
+                } else {
+                    FileSoundBinding::Pcm(index)
+                }
+            })
+            .or_else(|| {
+                self.absent
+                    .iter()
+                    .position(|name| name == member)
+                    .map(FileSoundBinding::Absent)
+            })
+    }
+
+    /// Member name of an absent binding; `None` for an index this bank never issued.
+    pub fn absent_member(&self, index: usize) -> Option<&str> {
+        self.absent.get(index).map(String::as_str)
+    }
+
+    fn contains_member(&self, member: &str) -> bool {
+        self.find(member).is_some() || self.absent.iter().any(|name| name == member)
+    }
+
+    /// Record a member that no mounted layer holds, so later calls do not re-query sources.
+    pub(crate) fn append_absent(
+        &mut self,
+        member: &str,
+        budget: Budget,
+    ) -> Result<FileSoundBinding, Error> {
+        if self.contains_member(member) {
+            return Err(Error {
+                source_context: "selected file sounds".into(),
+                problem: Problem::Duplicate,
+            });
+        }
+        retained_budget(
+            self.bindings(),
+            self.absent
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(member)),
+            budget,
+        )?;
+        let budget_error = || Error {
+            source_context: "selected file sounds".into(),
+            problem: Problem::Budget,
+        };
+        let mut name = String::new();
+        name.try_reserve_exact(member.len())
+            .map_err(|_| budget_error())?;
+        name.push_str(member);
+        self.absent.try_reserve(1).map_err(|_| budget_error())?;
+        self.absent.push(name);
+        self.path_limit = budget.metadata_bytes;
+        Ok(FileSoundBinding::Absent(self.absent.len() - 1))
+    }
+
     fn bindings(&self) -> impl Iterator<Item = (&str, &str, &AssetIdentity, &[u8])> {
         self.resources
             .iter()
@@ -242,7 +321,11 @@ impl Assets {
     }
 
     pub(crate) fn remaining_budget(&self, budget: Budget) -> Result<Budget, Error> {
-        let (count, total, metadata) = retained_budget(self.bindings(), budget)?;
+        let (count, total, metadata) = retained_budget(
+            self.bindings(),
+            self.absent.iter().map(String::as_str),
+            budget,
+        )?;
         Ok(Budget {
             resources: budget.resources - count,
             resource_bytes: budget.resource_bytes.min(budget.total_bytes - total),
@@ -259,10 +342,14 @@ impl Assets {
 
     /// Keep both codec index spaces stable for already-issued sound handles.
     pub(crate) fn append(&mut self, mut next: Self, budget: Budget) -> Result<(), Error> {
-        retained_budget(self.bindings().chain(next.bindings()), budget)?;
+        retained_budget(
+            self.bindings().chain(next.bindings()),
+            self.absent.iter().map(String::as_str),
+            budget,
+        )?;
         if next
             .bindings()
-            .any(|(member, ..)| self.find(member).is_some())
+            .any(|(member, ..)| self.contains_member(member))
         {
             return Err(Error {
                 source_context: "selected file sounds".into(),
@@ -285,6 +372,7 @@ impl Assets {
 
 fn retained_budget<'a>(
     bindings: impl Iterator<Item = (&'a str, &'a str, &'a AssetIdentity, &'a [u8])>,
+    absent: impl Iterator<Item = &'a str>,
     budget: Budget,
 ) -> Result<(usize, usize, usize), Error> {
     let fail = || Error {
@@ -317,6 +405,16 @@ fn retained_budget<'a>(
                 .filter(|&n| n <= budget.metadata_bytes)
                 .ok_or_else(fail)?;
         }
+    }
+    for member in absent {
+        count = count
+            .checked_add(1)
+            .filter(|&n| n <= budget.resources)
+            .ok_or_else(fail)?;
+        metadata = metadata
+            .checked_add(member.len())
+            .filter(|&n| n <= budget.metadata_bytes)
+            .ok_or_else(fail)?;
     }
     Ok((count, total, metadata))
 }
