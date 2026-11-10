@@ -765,8 +765,18 @@ fn spawn_backdrop(commands: &mut Commands, parent: Entity, art: &Backdrop, size:
 }
 
 /// Conventional nine-slice placement; corners shrink together to fit small frames.
+/// The authored corner square is preserved when it fits on each axis, even if
+/// two corners would overlap by less than one corner on the smaller axis (the
+/// main-menu button: 0.016 corner on a 0.031 height). Clamping to half the
+/// smaller axis would compress the Top/Bottom edge art by that overlap and
+/// shift its bright line by a device pixel. Side pieces whose span goes
+/// non-positive are skipped by the caller.
 pub(crate) fn edge_rect(piece: EdgePiece, size: Vec2, corner: f32) -> Rect {
-    let c = corner.min(size.x * 0.5).min(size.y * 0.5);
+    let c = if corner <= size.x && corner <= size.y {
+        corner
+    } else {
+        corner.min(size.x * 0.5).min(size.y * 0.5)
+    };
     let (left, bottom, width, height) = match piece {
         EdgePiece::Left => (0.0, c, c, size.y - 2.0 * c),
         EdgePiece::Right => (size.x - c, c, c, size.y - 2.0 * c),
@@ -2209,8 +2219,20 @@ Frame "FRAME" "MainMenuFrame" {
             (top.left, top.bottom, top.width, top.height),
             (0.02, 0.08, 0.16, 0.02)
         );
-        let small = edge_rect(EdgePiece::UpperLeft, Vec2::new(0.01, 0.01), 0.02);
-        assert_eq!((small.width, small.height), (0.005, 0.005));
+        let small_corner = edge_rect(EdgePiece::UpperLeft, Vec2::new(0.01, 0.01), 0.02);
+        assert_eq!((small_corner.width, small_corner.height), (0.005, 0.005));
+        let button_top = edge_rect(EdgePiece::Top, Vec2::new(0.179, 0.031), 0.016);
+        assert_eq!(
+            (
+                button_top.left,
+                button_top.bottom,
+                button_top.width,
+                button_top.height
+            ),
+            (0.016, 0.031 - 0.016, 0.147, 0.016)
+        );
+        let button_side = edge_rect(EdgePiece::Left, Vec2::new(0.179, 0.031), 0.016);
+        assert!(button_side.height <= 0.0);
     }
 
     #[test]

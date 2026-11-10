@@ -24,6 +24,7 @@ mod campaign_escape_menu;
 mod campaign_game_input;
 mod campaign_ground_lighting;
 mod campaign_hud;
+mod campaign_in_game_options;
 mod campaign_input;
 mod campaign_inventory;
 mod campaign_leaderboards;
@@ -74,6 +75,8 @@ mod menu_audio;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod menu_colour_gpu_tests;
 mod menu_composition;
+#[cfg(not(target_arch = "wasm32"))]
+mod menu_credits;
 mod menu_fade;
 mod menu_fog;
 mod menu_lighting;

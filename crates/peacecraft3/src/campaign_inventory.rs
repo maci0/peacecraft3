@@ -1361,7 +1361,7 @@ fn measure_tooltip(
     state.tooltip = Some(tip);
 }
 
-#[cfg(all(test, feature = "test-fixtures"))]
+#[cfg(all(test, feature = "test-fixtures", not(target_arch = "wasm32")))]
 pub(crate) fn tooltip_component_fixture(
     app: &mut App,
     reader: &pcx_assets::Resolver,

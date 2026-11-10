@@ -269,7 +269,7 @@ PIXEL_POLICY = {
 
 
 def report(args):
-    from PIL import Image
+    from PIL import Image, ImageChops
     reference = Path(args.reference).resolve(strict=True)
     recreation = Path(args.recreation).resolve(strict=True)
     native = Path(args.native).resolve(strict=True) if getattr(args, 'native', None) else None
@@ -293,6 +293,22 @@ def report(args):
     target.mkdir(parents=True, mode=0o700)
     for _, path, name in images:
         shutil.copyfile(path, target / name)
+    # Offline derived artifacts from the same exact RGB pair: amplified
+    # difference, binary change mask, and 50/50 averaged overlay. No
+    # thresholding beyond exact decoded RGB inequality (any channel != 0).
+    with Image.open(reference) as ref_im, Image.open(recreation) as rec_im:
+        ref_rgb, rec_rgb = ref_im.convert('RGB'), rec_im.convert('RGB')
+        diff = ImageChops.difference(ref_rgb, rec_rgb)
+        diff.save(target / 'diff.png')
+        r, g, b = diff.split()
+        changed = ImageChops.lighter(ImageChops.lighter(r, g), b)
+        changed.point(lambda v: 255 if v else 0).save(target / 'mask.png')
+        ImageChops.add(ref_rgb, rec_rgb, scale=2, offset=0).save(target / 'overlay.png')
+        width, height = size
+        side = Image.new('RGB', (width * 2, height))
+        side.paste(ref_rgb, (0, 0))
+        side.paste(rec_rgb, (width, 0))
+        side.save(target / 'side-by-side.png')
     receipt = {'reference': str(reference), 'reference_sha256': digest(reference),
                'recreation': str(recreation), 'recreation_sha256': digest(recreation),
                'extent': size, 'note': args.note, 'pixel_policy': PIXEL_POLICY,
@@ -303,12 +319,17 @@ def report(args):
                        provenance='caller-supplied PNGs; application execution identities require the replay receipt')
     write_json(target / 'receipt.json', receipt)
     metadata = html.escape(json.dumps(receipt, indent=2))
+    figures = ''.join('<figure><figcaption>' + label + '</figcaption><img src="' + name + '"></figure>'
+                      for label, _, name in images)
+    figures += ''.join('<figure><figcaption>' + label + '</figcaption><img src="' + name + '"></figure>'
+                       for label, name in [('Side-by-side (original | candidate)', 'side-by-side.png'),
+                                           ('Overlay (50/50 average)', 'overlay.png'),
+                                           ('RGB difference (amplified)', 'diff.png'),
+                                           ('Binary change mask', 'mask.png')])
     (target / 'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Local original comparison</title>'
-        '<style>body{font-family:system-ui;background:#17191c;color:#eee;margin:24px}main{display:flex;gap:16px}'
+        '<style>body{font-family:system-ui;background:#17191c;color:#eee;margin:24px}main{display:flex;gap:16px;flex-wrap:wrap}'
         'figure{margin:0;flex:1;min-width:0}img{width:100%;height:auto}pre{white-space:pre-wrap}</style>'
-        '<h1>Local original comparison</h1><main>' +
-        ''.join('<figure><figcaption>' + label + '</figcaption><img src="' + name + '"></figure>'
-                for label, _, name in images) + '</main><pre>' + metadata + '</pre>')
+        '<h1>Local original comparison</h1><main>' + figures + '</main><pre>' + metadata + '</pre>')
     return {'report': str(target / 'index.html'), 'extent': size}
 
 

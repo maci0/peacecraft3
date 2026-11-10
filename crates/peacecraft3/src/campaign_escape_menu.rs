@@ -35,6 +35,8 @@ enum Page {
     Main,
     End,
     ConfirmExit,
+    Help,
+    Tips,
 }
 impl Page {
     fn frame(self) -> &'static str {
@@ -42,6 +44,8 @@ impl Page {
             Self::Main => "MainPanel",
             Self::End => "EndGamePanel",
             Self::ConfirmExit => "ConfirmQuitPanel",
+            Self::Help => "HelpPanel",
+            Self::Tips => "TipsPanel",
         }
     }
     fn back(self) -> Option<Self> {
@@ -49,6 +53,8 @@ impl Page {
             Self::Main => None,
             Self::End => Some(Self::Main),
             Self::ConfirmExit => Some(Self::End),
+            Self::Help => Some(Self::Main),
+            Self::Tips => Some(Self::Main),
         }
     }
 }
@@ -79,6 +85,10 @@ struct Source {
     fonts: HashMap<String, Handle<Font>>,
     reader: Arc<pcx_assets::Resolver>,
     receipts: Vec<AssetReceipt>,
+    help: pcx_play::escape_help_tips::HelpStrings,
+    help_style: crate::menu_text::TextStyle,
+    help_rect: Rect,
+    help_inset: f32,
 }
 #[derive(Component)]
 pub(crate) struct EscapeRoot;
@@ -101,6 +111,8 @@ struct Inputs<'w> {
     sources: Res<'w, SelectedMapSources>,
     session: ResMut<'w, MapScriptSession<MapStartupHost>>,
     view: ResMut<'w, CampaignCamera>,
+    route: Option<ResMut<'w, crate::campaign_in_game_options::InGameOptionsRoute>>,
+    nav: Option<ResMut<'w, crate::menu_screens::Navigation>>,
 }
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<EscapeMenu>()
@@ -185,9 +197,13 @@ fn keyboard(
     }
 }
 fn enabled(frame: &str) -> bool {
+    // G01-owned escape controls known to dispatch in `act`. `OptionsButton`
+    // is included by the campaign_in_game_options entry slice; the
+    // `act` arm for it is the actual dispatch.
     matches!(
         frame,
         "ReturnButton"
+            | "OptionsButton"
             | "EndGameButton"
             | "PreviousButton"
             | "QuitButton"
@@ -195,6 +211,9 @@ fn enabled(frame: &str) -> bool {
             | "ExitButton"
             | "ConfirmQuitQuitButton"
             | "ConfirmQuitCancelButton"
+            | "HelpButton"
+            | "HelpOKButton"
+            | "TipsButton"
     )
 }
 fn act(
@@ -219,10 +238,26 @@ fn act(
     }
     match frame.as_str() {
         "ReturnButton" => inputs.view.set_menu_open(false),
+        "OptionsButton" => {
+            // Admitted-session witness; keep CampaignCamera menu open (pause)
+            // while Options route is active. The escape root stays mounted so
+            // Back/Escape-close can unwind; this slice does not add OK/Cancel.
+            let Some(witness) = inputs.session.session_witness() else {
+                return;
+            };
+            let (Some(route), Some(nav)) = (inputs.route.as_deref_mut(), inputs.nav.as_deref_mut())
+            else {
+                return;
+            };
+            crate::campaign_in_game_options::route_open_escape_options(route, nav, &witness);
+        }
         "EndGameButton" => state.page = Page::End,
         "PreviousButton" => state.page = Page::Main,
         "ExitButton" => state.page = Page::ConfirmExit,
         "ConfirmQuitCancelButton" => state.page = Page::End,
+        "HelpButton" => state.page = Page::Help,
+        "HelpOKButton" => state.page = Page::Main,
+        "TipsButton" => state.page = Page::Tips,
         "ConfirmQuitQuitButton" => {
             if cfg!(target_arch = "wasm32") {
                 inputs.session.clear();
@@ -303,6 +338,14 @@ fn items(
     }
     let (mut items, unsupported) =
         glue_menu::control_items(fdf, page.frame(), size).map_err(|e| e.to_string())?;
+    // TEXTAREA rendering is pending (see docs/re-notes/escape-help-tips.md);
+    // first slice admits the Help/Tips panel chrome without its text areas.
+    // Tips OK button name is pending FDF confirmation; closing Tips uses the
+    // generic page.back()/Escape path for now.
+    let unsupported: Vec<_> = unsupported
+        .into_iter()
+        .filter(|name| name != "TEXTAREA HelpTextArea" && name != "TEXTAREA TipsTextArea")
+        .collect();
     if !unsupported.is_empty() {
         return Err(format!("escape menu: unsupported controls {unsupported:?}"));
     }
@@ -378,6 +421,7 @@ fn load(
     race: Option<String>,
     fonts: &mut Assets<Font>,
     layout: pcx_play::escape_layout::Rules,
+    install: Option<&std::path::Path>,
 ) -> Result<Source, String> {
     let mut receipts = Vec::new();
     let mut fdf =
@@ -389,6 +433,49 @@ fn load(
         .map_err(|e| e.to_string())?;
     let sections = crate::campaign_hud::race_sections(&skin, race)?;
     let strings = text(&reader, r"UI\FrameDef\GlobalStrings.fdf", &mut receipts)?;
+    // Help body + qualified default font (bounded; no scrollbar first slice).
+    let help_text = text(&reader, r"UI\HelpStrings.txt", &mut receipts)?;
+    let help = pcx_play::escape_help_tips::HelpStrings::parse(&help_text)?;
+    let misc = text(&reader, r"UI\MiscUI.txt", &mut receipts)?;
+    let default_font = crate::menu_lighting::with_client_image(install, |src, image| {
+        pcx_play::escape_help_tips::DefaultFont::read(
+            image,
+            pcx_play::scripts::AssetIdentity {
+                source: src.into(),
+                edition: "selected menu client".into(),
+                version: "reviewed Legacy 1.29.2.9231 escape default font".into(),
+            },
+            &misc,
+        )
+    })?;
+    let help_rect = fdf
+        .rect("HelpTextArea", (layout.viewport[0], layout.viewport[1]))
+        .map_err(|e| e.to_string())?;
+    let inset_numbers = fdf
+        .numbers("EscMenuTextAreaTemplate", "TextAreaInset")
+        .map_err(|e| e.to_string())?
+        .ok_or("EscMenuTextAreaTemplate: missing TextAreaInset")?;
+    let [inset] = inset_numbers.as_slice() else {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    };
+    if !inset.is_finite() || *inset < 0. {
+        return Err("EscMenuTextAreaTemplate: invalid TextAreaInset".into());
+    }
+    let help_style = crate::menu_text::render_style_with_font(
+        &fdf,
+        "HelpTextArea",
+        "HelpPanel",
+        Some((default_font.font_path.clone(), default_font.wrapping_height())),
+    )?;
+    // Ensure decoded default-font bytes resolve through the same reader.
+    {
+        let asset = reader
+            .resolve_bounded(&default_font.font_path, 16 << 20)
+            .map_err(|e| format!("{}: {e}", default_font.font_path))?;
+        if !crate::hud_render::font_registers(&asset.bytes) {
+            return Err(format!("{}: unreadable font", default_font.font_path));
+        }
+    }
     if fdf.frame(&layout.root_frame).is_none() {
         return Err(format!(
             "escape menu: missing native root {}",
@@ -404,12 +491,16 @@ fn load(
         fonts: HashMap::new(),
         reader,
         receipts,
+        help,
+        help_style,
+        help_rect,
+        help_inset: *inset,
     };
     let mut decoded = HashMap::new();
     let mut seen = HashSet::new();
     let mut total = 0usize;
     let mut font_bytes = 0usize;
-    for page in [Page::Main, Page::End, Page::ConfirmExit] {
+    for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Help, Page::Tips] {
         for item in items(
             &source.fdf,
             &source.skin,
@@ -545,7 +636,7 @@ fn project(
                     .as_deref()
                     .and_then(crate::launch_gui::selected_install);
                 let layout = read_layout(install.as_deref())?;
-                load(reader, race, &mut fonts, layout)
+                load(reader, race, &mut fonts, layout, install.as_deref())
             }) {
             Ok(source) => state.source = Some(source),
             Err(error) => {
@@ -604,6 +695,48 @@ fn project(
         ))
         .id();
     glue_menu::spawn_in(&mut commands, root, &items, source.layout.viewport);
+    if state.page == Page::Help {
+        let view = source.layout.viewport;
+        let mut rect = source.help_rect;
+        let panel = (
+            source.fdf.width("HelpPanel").unwrap_or(0.),
+            source.fdf.height("HelpPanel").unwrap_or(0.),
+        );
+        let origin = source.layout.position([panel.0, panel.1]).unwrap_or([0., 0.]);
+        rect.left += origin[0];
+        rect.bottom += origin[1];
+        let container = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(rect.left / view[0] * 100.),
+                    top: percent((view[1] - rect.top()) / view[1] * 100.),
+                    width: percent(rect.width / view[0] * 100.),
+                    height: percent(rect.height / view[1] * 100.),
+                    padding: UiRect::all(Val::Vh(source.help_inset / view[1] * 100.)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(root).add_child(container);
+        let font_handle = source.fonts.get(&source.help_style.font).cloned();
+        if let Some(font) = font_handle {
+            let _ = crate::campaign_script_dialogs::label(
+                &mut commands,
+                container,
+                &source.help.body,
+                &source.help_style,
+                &font,
+            );
+        } else {
+            state.last_error = Some(format!(
+                "HelpTextArea: missing decoded font {}",
+                source.help_style.font
+            ));
+        }
+    }
     if let Some(old) = state.root.replace(root) {
         commands.entity(old).try_despawn();
     }
@@ -851,7 +984,11 @@ mod tests {
         let mut view = CampaignCamera::active_for_test(Entity::PLACEHOLDER);
         view.set_menu_open(true);
         app.insert_resource(view);
-        for (page, open) in [(Page::End, true), (Page::Main, true), (Page::Main, false)] {
+        for (page, open) in [
+            (Page::End, true),
+            (Page::Main, true),
+            (Page::Main, false),
+        ] {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
             keys.press(KeyCode::Escape);
@@ -866,7 +1003,73 @@ mod tests {
         }
     }
     #[test]
+    fn help_page_maps_to_help_panel_and_backs_to_main() {
+        assert_eq!(Page::Help.frame(), "HelpPanel");
+        assert_eq!(Page::Help.back(), Some(Page::Main));
+        assert!(enabled("HelpButton"));
+        assert!(enabled("HelpOKButton"));
+    }
+    #[test]
+    fn tips_page_maps_to_tips_panel_and_backs_to_main() {
+        assert_eq!(Page::Tips.frame(), "TipsPanel");
+        assert_eq!(Page::Tips.back(), Some(Page::Main));
+        assert!(enabled("TipsButton"));
+        // Tips OK button name pending FDF confirmation; closing uses back()/Escape.
+        let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
+        let fdf_tips = Fdf::parse(
+            r#"
+Frame "FRAME" "EscMenuMainPanel" {
+ SetAllPoints,
+}
+Frame "FRAME" "TipsPanel" {
+ Width 0.432,
+ Height 0.284,
+ Frame "TEXTAREA" "TipsTextArea" {
+  Width 0.362,
+  Height 0.147,
+  SetPoint TOP, "TipsPanel", TOP, 0.0, -0.05,
+ }
+}
+Frame "BACKDROP" "EscMenuBackdrop" {
+ BackdropBackground "PanelArt",
+}
+"#,
+        )
+        .unwrap();
+        let plan = items(&fdf_tips, &skin, &["Default".into()], Page::Tips, &layout()).unwrap();
+        assert!(plan.iter().all(|i| i.frame != "TipsTextArea"));
+    }
+    #[test]
     fn single_player_pause_is_hidden_without_reflowing_anchored_controls() {
+        let skin = SkinTable::parse("[Default]\nPanelArt=synthetic/panel.blp\n").unwrap();
+        let fdf_help = Fdf::parse(
+            r#"
+Frame "FRAME" "EscMenuMainPanel" {
+ SetAllPoints,
+}
+Frame "FRAME" "HelpPanel" {
+ Width 0.432,
+ Height 0.384,
+ Frame "TEXTAREA" "HelpTextArea" {
+  Width 0.362,
+  Height 0.264,
+  SetPoint TOP, "HelpPanel", TOP, 0.0, -0.05,
+ }
+ Frame "GLUETEXTBUTTON" "HelpOKButton" {
+  Width 0.16,
+  Height 0.031,
+  SetPoint BOTTOM, "HelpPanel", BOTTOM, 0.0, 0.03,
+ }
+}
+Frame "BACKDROP" "EscMenuBackdrop" {
+ BackdropBackground "PanelArt",
+}
+"#,
+        )
+        .unwrap();
+        let plan = items(&fdf_help, &skin, &["Default".into()], Page::Help, &layout()).unwrap();
+        assert!(plan.iter().any(|i| i.frame == "HelpOKButton"));
+        assert!(plan.iter().all(|i| i.frame != "HelpTextArea"));
         let fdf = Fdf::parse(
             r#"
 Frame "FRAME" "EscMenuMainPanel" {
@@ -997,6 +1200,46 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
         assert_eq!(state.pending.as_ref().unwrap().0, "QuitButton");
     }
 
+    #[cfg(feature = "test-fixtures")]
+    #[test]
+    fn no_session_options_button_does_not_open_in_game_route() {
+        // `act` never touches real assets: pending/guards are all set directly.
+        // No real session witness exists here; the dispatcher requires the
+        // admitted witness already checked at the top of `act`, so this test
+        // runs through `act` with a witness-bearing pending entry only when a
+        // session is admitted. With no session, `act` must refuse.
+        use bevy::ecs::system::RunSystemOnce;
+        let witness = Arc::new(());
+        let foreign = Arc::downgrade(&witness);
+        let mut app = App::new();
+        app.init_resource::<EscapeMenu>()
+            .init_resource::<MapRequests>()
+            .init_resource::<SelectedMapSources>()
+            .init_resource::<MapScriptSession<MapStartupHost>>()
+            .init_resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+            .init_resource::<crate::menu_screens::Navigation>()
+            .add_message::<CampaignTransitionRequest>()
+            .add_message::<AppExit>();
+        let mut view = CampaignCamera::active_for_test(Entity::PLACEHOLDER);
+        view.set_menu_open(true);
+        app.insert_resource(view);
+        app.insert_resource(EscapeMenu {
+            page: Page::Main,
+            pending: Some(("OptionsButton".into(), Page::Main, foreign)),
+            ..default()
+        });
+        app.world_mut().run_system_once(act).unwrap();
+        let route = app
+            .world()
+            .resource::<crate::campaign_in_game_options::InGameOptionsRoute>();
+        assert_eq!(
+            route.state,
+            crate::campaign_in_game_options::InGameRoute::Escape
+        );
+        assert!(!route.is_open());
+        assert!(app.world().resource::<CampaignCamera>().menu_open());
+    }
+
     #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires selected unchanged PCX_NATIVE_CHAPTER_* inputs; assets only, no rendered parity claim"]
@@ -1026,10 +1269,14 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             race,
             &mut fonts,
             read_layout(Some(&install)).unwrap(),
+            Some(&install),
         )
         .unwrap();
         assert!(!source.receipts.is_empty() && !fonts.is_empty());
-        for page in [Page::Main, Page::End, Page::ConfirmExit] {
+        assert!(!source.help.body.is_empty());
+        assert!(source.help_style.height > 0.);
+        assert!(!source.help_style.font.is_empty());
+        for page in [Page::Main, Page::End, Page::ConfirmExit, Page::Help, Page::Tips] {
             let plan = items(
                 &source.fdf,
                 &source.skin,
@@ -1038,13 +1285,20 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
                 &source.layout,
             )
             .unwrap();
-            assert!(
-                plan.iter()
-                    .any(|i| matches!(i.kind, Kind::Button(_)) && enabled(&i.frame))
-            );
+            if page != Page::Tips {
+                assert!(
+                    plan.iter()
+                        .any(|i| matches!(i.kind, Kind::Button(_)) && enabled(&i.frame))
+                );
+            }
         }
         app.add_message::<AppExit>()
-            .add_message::<CampaignTransitionRequest>();
+            .add_message::<CampaignTransitionRequest>()
+            .init_resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+            .init_resource::<crate::menu_screens::Navigation>();
+        app.world_mut()
+            .resource_mut::<crate::menu_screens::Navigation>()
+            .screen = crate::menu_screens::Screen::Main;
         let context = app
             .world()
             .resource::<MapScriptSession<MapStartupHost>>()
@@ -1075,6 +1329,52 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             pending: Some(("RestartButton".into(), Page::End, witness.clone())),
             ..default()
         });
+        app.world_mut().run_system_once(act).unwrap();
+        let requests = app
+            .world_mut()
+            .resource_mut::<Messages<CampaignTransitionRequest>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 1);
+        assert!(Arc::ptr_eq(&requests[0].context, &context));
+        assert_eq!(requests[0].next_level, member);
+        assert!(app.world().resource::<Messages<AppExit>>().is_empty());
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.page = Page::Main;
+            state.pending = Some(("OptionsButton".into(), Page::Main, witness.clone()));
+        }
+        app.world_mut().run_system_once(act).unwrap();
+        {
+            let route = app
+                .world()
+                .resource::<crate::campaign_in_game_options::InGameOptionsRoute>();
+            assert!(route.is_open());
+            assert_eq!(
+                route.state,
+                crate::campaign_in_game_options::InGameRoute::Options
+            );
+            assert!(
+                route
+                    .session
+                    .as_ref()
+                    .is_some_and(|w| Weak::ptr_eq(w, &witness))
+            );
+        }
+        assert!(app.world().resource::<CampaignCamera>().menu_open());
+        assert_eq!(
+            app.world()
+                .resource::<crate::menu_screens::Navigation>()
+                .requested,
+            Some(crate::menu_screens::Screen::Options(
+                crate::menu_screens::Page::Unselected
+            ))
+        );
+        {
+            let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+            state.page = Page::End;
+            state.pending = Some(("RestartButton".into(), Page::End, witness.clone()));
+        }
         app.world_mut().run_system_once(act).unwrap();
         let requests = app
             .world_mut()

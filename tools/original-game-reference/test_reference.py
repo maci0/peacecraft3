@@ -198,6 +198,22 @@ class ReferenceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertFalse((tmp / 'mismatch').exists())
 
+    def test_report_artifacts_one_pixel_math(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); a, b = tmp / 'a.png', tmp / 'b.png'
+            Image.new('RGB', (1, 1), (10, 20, 30)).save(a)
+            Image.new('RGB', (1, 1), (11, 20, 30)).save(b)
+            result = self.invoke('report', '--reference', str(a), '--recreation', str(b),
+                                 '--output', str(tmp / 'report'), '--note', 'one-pixel')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Image.open(tmp / 'report/diff.png').convert('RGB').getpixel((0, 0)), (1, 0, 0))
+            self.assertEqual(Image.open(tmp / 'report/mask.png').convert('L').getpixel((0, 0)), 255)
+            self.assertEqual(Image.open(tmp / 'report/overlay.png').convert('RGB').getpixel((0, 0)), (10, 20, 30))
+            side = Image.open(tmp / 'report/side-by-side.png').convert('RGB')
+            self.assertEqual(side.size, (2, 1))
+            self.assertEqual([side.getpixel((0, 0)), side.getpixel((1, 0))], [(10, 20, 30), (11, 20, 30)])
+
     def replay_run(self, tmp, payload=b'synthetic replay fixture', user='tester', docs='Documents'):
         run = Path(tmp) / 'run'
         run.mkdir()

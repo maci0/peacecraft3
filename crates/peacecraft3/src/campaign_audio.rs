@@ -1204,6 +1204,7 @@ mod tests {
         assert!(play(&mut world, "TestYes").is_err());
     }
 
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an installed chapter"]
     fn the_installed_sound_tables_resolve_row_by_row() {

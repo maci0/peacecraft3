@@ -621,7 +621,7 @@ mod tests {
         };
         assert!((size - 5.).abs() < 0.00001);
     }
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     fn show_synthetic_component_message(host: &mut MapStartupHost, position: [f32; 2], text: &str) {
         use pcx_script::{Host, Value};
         let objects = host.objects_mut();
@@ -643,7 +643,7 @@ mod tests {
     }
     /// Component test for host-bound layout admission. The timed text is injected
     /// through each published host's own natives; it is not mission evidence.
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an admitted local chapter map"]
     fn launcher_changes_and_lookalike_sessions_cannot_rebind_message_layout() {

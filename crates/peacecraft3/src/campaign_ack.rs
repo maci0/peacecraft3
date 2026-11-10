@@ -94,6 +94,7 @@ pub(crate) fn unit_sound(definition: &Definition) -> Result<Option<String>, Stri
     Ok((!matches!(text, "" | "_" | "-")).then(|| text.to_owned()))
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy system param set, matches existing pattern in this crate
 fn unit_voices(
     mut commands: Commands,
     input: Res<CampaignInput>,
@@ -102,7 +103,15 @@ fn unit_voices(
     mut assets: ResMut<Assets<AudioSource>>,
     sources: Sources,
     live: Query<(Entity, &GameSound)>,
+    preferences: Option<Res<crate::menu_screens::Navigation>>,
 ) {
+    // UnitCheckBox (`unit` preference) gates this producer only; text, orders
+    // and music keep their own consumers. Draft never gates: applied only.
+    if !crate::menu_settings::sound_preference::unit_voices_enabled(
+        preferences.as_deref().map(|nav| &nav.applied),
+    ) {
+        return;
+    }
     let entries = input.commands.entries();
     if entries.len() < audio.commands_seen {
         audio.commands_seen = 0;
@@ -155,9 +164,71 @@ fn unit_voices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use pcx_play::player_command_log::StartIdentity;
 
     fn id(token: u64) -> HandleId {
         HandleId::new(std::num::NonZeroU64::new(token).unwrap())
+    }
+
+    fn identity() -> StartIdentity {
+        use pcx_play::map_admission::MapInputSources;
+        use pcx_play::scripts::AssetIdentity;
+        let asset = |source: &str| AssetIdentity {
+            edition: "fixture".into(),
+            version: "fixture".into(),
+            source: source.into(),
+        };
+        StartIdentity {
+            seed: 7,
+            map_label: "fixture.w3x".into(),
+            map_sha256: [0xA5; 32],
+            sources: MapInputSources {
+                map: asset("map"),
+                common: asset("common"),
+                blizzard: asset("blizzard"),
+                catalog: asset("catalog"),
+            },
+        }
+    }
+
+    /// Runs the real `unit_voices` system fn once with one pending unit
+    /// command and the given applied/draft preference state. Returns
+    /// (`commands_seen`, spawned `GameSound` count). No session witness, so an
+    /// enabled run records the entry then returns before playback; a gated
+    /// run returns before even recording. Default (unpublished) sources keep
+    /// `ensure_bank` from retaining a bank on either arm.
+    fn run_producer(applied: bool, draft: bool) -> (usize, usize) {
+        use crate::campaign_input::CampaignInput;
+        use crate::menu_screens::Navigation;
+        use crate::menu_settings::sound_preference::UNIT_TOGGLE;
+        use peacecraft3::{
+            browser_configuration::SelectedMapSources, campaign_startup::CampaignSeed,
+            map_requests::MapRequests,
+        };
+
+        let mut world = World::new();
+        world.init_resource::<Assets<AudioSource>>();
+        world.init_resource::<CampaignAudio>();
+        world.init_resource::<MapScriptSession<MapStartupHost>>();
+        world.init_resource::<CampaignInput>();
+        world.init_resource::<MapRequests>();
+        world.init_resource::<SelectedMapSources>();
+        world.init_resource::<CampaignSeed>();
+        world.init_resource::<crate::menu_settings::Backend>();
+        let mut nav = Navigation::default();
+        nav.applied.toggles.insert(UNIT_TOGGLE.into(), applied);
+        nav.draft.toggles.insert(UNIT_TOGGLE.into(), draft);
+        world.insert_resource(nav);
+        {
+            let mut input = world.resource_mut::<CampaignInput>();
+            input.commands.begin(identity());
+            input.commands.record(Some(0.0), point("move")).unwrap();
+        }
+        world.run_system_once(unit_voices).unwrap();
+        let seen = world.resource::<CampaignAudio>().commands_seen;
+        let sounds = world.query::<&GameSound>().iter(&world).count();
+        (seen, sounds)
     }
 
     fn point(order: &str) -> PlayerCommand {
@@ -245,6 +316,40 @@ mod tests {
             let queued = PlayerCommand::Queued(Box::new(inner));
             assert_eq!(ack_for(&queued, |_, _| false), expected);
         }
+    }
+
+    #[test]
+    fn producer_system_applied_false_skips_pending_command_and_draft_false_does_not_gate() {
+        // Real `unit_voices` system fn via RunSystemOnce (no audio plugin, no
+        // device; consistent with campaign_audio tests). Pending command is
+        // recorded (commands_seen advances) only on the enabled path.
+        let (gated_seen, gated_sounds) = run_producer(false, false);
+        assert_eq!(
+            gated_seen, 0,
+            "applied=false must not consume the pending command"
+        );
+        assert_eq!(gated_sounds, 0, "applied=false must spawn no voice");
+
+        let (enabled_seen, enabled_sounds) = run_producer(true, false);
+        assert_eq!(enabled_seen, 1, "draft=false must not gate the producer");
+        assert_eq!(enabled_sounds, 0, "no session witness: no voice spawns");
+    }
+
+    #[test]
+    fn unit_preference_gates_the_producer_not_the_mapping() {
+        use crate::menu_screens::Settings;
+        use crate::menu_settings::sound_preference::{UNIT_TOGGLE, unit_voices_enabled};
+        // Mapping still resolves; the gate lives in unit_voices before playback.
+        assert_eq!(
+            ack_for(&point("move"), |_, _| false),
+            Some((id(1), Ack::Yes))
+        );
+        let mut applied = Settings::default();
+        applied.toggles.insert(UNIT_TOGGLE.into(), false);
+        assert!(!unit_voices_enabled(Some(&applied)));
+        applied.toggles.insert(UNIT_TOGGLE.into(), true);
+        assert!(unit_voices_enabled(Some(&applied)));
+        assert!(unit_voices_enabled(None));
     }
 
     #[test]

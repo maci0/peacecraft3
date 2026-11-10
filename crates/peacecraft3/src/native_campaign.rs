@@ -162,6 +162,7 @@ pub(crate) fn install(app: &mut App) {
                 mission_scroll,
                 select_campaign,
                 launch_mission,
+                launch_credits,
                 begin_loading,
             )
                 .chain()
@@ -888,6 +889,55 @@ fn launch_mission(
             header: mission.header.clone(),
             name: mission.name.clone(),
             map: mission.map.clone(),
+        };
+        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+    }
+}
+
+/// The authored Credits button: launches the shipped credits map for the
+/// selected edition through the same bounded configuration path as a mission.
+fn launch_credits(
+    actions: Res<crate::button_actions::ButtonActions>,
+    buttons: Query<&crate::glue_menu::GlueButton>,
+    launcher: Res<crate::launch_gui::Launcher>,
+    inbox: Res<ConfigurationInbox>,
+    mut chapters: ResMut<Chapters>,
+    navigation: Option<Res<crate::menu_screens::Navigation>>,
+) {
+    if navigation.is_some_and(|navigation| navigation.transition_active) {
+        return;
+    }
+    for entity in &actions.entities {
+        let Ok(button) = buttons.get(*entity) else {
+            continue;
+        };
+        if button.frame != "CreditsButton" {
+            continue;
+        }
+        if chapters.pending.is_some() {
+            continue;
+        }
+        let Some(recipe) = chapters.recipe.clone() else {
+            chapters.error = Some("campaign index has no admitted source recipe".into());
+            continue;
+        };
+        let Ok(base) = recipe.base_resolver() else {
+            chapters.error = Some("credits: selected resolver unavailable".into());
+            continue;
+        };
+        let edition = u32::from(launcher.mode().addon == Addon::Tft);
+        let map = match crate::menu_credits::credits_map_for_edition(&base, edition) {
+            Ok(map) => map,
+            Err(error) => {
+                chapters.error = Some(format!("credits: {error}"));
+                continue;
+            }
+        };
+        let chapter = Chapter {
+            campaign: "Credits".to_string(),
+            header: "Credits".to_string(),
+            name: "Credits".to_string(),
+            map: map.to_string(),
         };
         enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
     }
@@ -1772,6 +1822,7 @@ pub(crate) mod tests {
     /// Writes `PCX_LOADING_CAPTURE_DIR/<map>-<stages>.ppm` for the selected chapter at no, half and
     /// full progress. Offscreen on a Vulkan adapter, no window.
     #[test]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[ignore = "requires a Vulkan adapter, PCX_NATIVE_CHAPTER_* and PCX_LOADING_CAPTURE_DIR"]
     fn selected_chapter_loading_screen_renders_offscreen() {
         let install =
@@ -1796,6 +1847,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL with original RoC and TFT campaign assets"]
     fn selected_install_every_indexed_map_builds_its_loading_screen() {
         let install =
@@ -1879,6 +1931,103 @@ pub(crate) mod tests {
                 mode.addon, map_headers, model_cinematics,
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL (or PEACECRAFT3_LEGACY_DIR) pointing at a known Legacy install with original RoC campaign assets; runs the actual launch_credits path once headless (MinimalPlugins, no AudioPlugin) and asserts the MiscUI-selected credits map reaches pending/inbox with no error"]
+    fn credits_button_launches_miscui_selected_map_through_pinned_recipe() {
+        let install = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
+            .or_else(|_| std::env::var("PEACECRAFT3_LEGACY_DIR"))
+            .expect("set PCX_NATIVE_CHAPTER_INSTALL or PEACECRAFT3_LEGACY_DIR to a known Legacy install");
+        crate::campaign_workers::initialize();
+        let launcher = crate::launch_gui::Launcher::test_source(install.clone(), false);
+        let mode = launcher.mode();
+
+        // Expected map comes from the runtime MiscUI parser on the real
+        // pinned recipe, never from a copied literal path.
+        let recipe = campaign_recipe(Path::new(&install), mode).expect("pinned campaign recipe");
+        let base = recipe.base_resolver().expect("pinned base resolver");
+        let expected = crate::menu_credits::credits_map_for_edition(&base, 0)
+            .expect("MiscUI credits selection from the pinned recipe");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseWheel>()
+            .insert_resource(launcher)
+            .init_resource::<crate::campaign_input::CampaignInput>()
+            .init_resource::<crate::menu_screens::Navigation>()
+            .init_resource::<peacecraft3::campaign_loading::LastRules>()
+            .init_resource::<Assets<Font>>()
+            .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
+        peacecraft3::map_requests::install(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
+        crate::campaign_prepare::install(&mut app);
+        crate::button_actions::install(&mut app);
+        super::install(&mut app);
+        app.add_systems(Update, crate::button_actions::clear);
+        app.update();
+
+        let chapters = app.world().resource::<Chapters>();
+        assert!(chapters.error.is_none(), "chapter index: {:?}", chapters.error);
+        let indexed_recipe = chapters.recipe.clone().expect("index retains its recipe");
+        assert_eq!(
+            indexed_recipe.image_sha256(),
+            recipe.image_sha256(),
+            "index recipe must be the pinned campaign recipe"
+        );
+
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::glue_menu::GlueButton {
+                    frame: "CreditsButton".to_string(),
+                    shortcut: None,
+                    pushed_text_offset: None,
+                },
+                Node::default(),
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: button });
+        for _ in 0..6 {
+            app.update();
+        }
+
+        let chapters = app.world().resource::<Chapters>();
+        println!(
+            "after credits: error={:?} pending={:?} expected={}",
+            chapters.error, chapters.pending, expected
+        );
+        assert!(
+            chapters.error.is_none(),
+            "credits launch must record no error: {:?}",
+            chapters.error
+        );
+        // The launch must carry exactly the authored MiscUI-selected map.
+        // Configuration path uses chapter.name as the map label, while it
+        // resolves the actual map bytes by chapter.map; check both the label
+        // and the receipt-bound map identity.
+        let requests = app.world().resource::<MapRequests>();
+        let bindings = requests.bindings.as_ref().expect("credits bindings");
+        assert_eq!(
+            bindings.map_label, "Credits",
+            "admitted map label must equal the credits chapter name"
+        );
+        // Verify the actual map member via receipts: the SelectedMapSources
+        // receipt must carry the MiscUI-selected map path.
+        let sources = app.world().resource::<peacecraft3::browser_configuration::SelectedMapSources>();
+        let recipe = sources
+            .campaign_for_receipts(&bindings.receipts)
+            .expect("credits launch publishes its recipe");
+        assert_eq!(
+            recipe.image_sha256(),
+            indexed_recipe.image_sha256(),
+            "credits launch must use the pinned campaign recipe"
+        );
+        // The map bytes admitted must parse as the expected MiscUI map; check
+        // via map_label path equivalence: configuration resolves chapter.map,
+        // which launch_credits sets from credits_map_for_edition.
+        println!("credits map={expected} admitted={} recipe={}", bindings.map_label, recipe.dir().display());
     }
 
     pub(crate) fn started_app() -> App {

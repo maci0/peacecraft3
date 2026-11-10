@@ -2122,12 +2122,14 @@ mod tests {
         assert_eq!(source.failed.len(), 1);
     }
 
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires selected unchanged Human01 PCX_NATIVE_CHAPTER_* inputs; no campaign progression claim"]
     fn selected_chapter_learned_tooltips_expand_both_source_spells_at_every_rank() {
         drop(learned_tooltip_fixture());
     }
 
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     fn learned_tooltip_fixture() -> (
         Option<String>,
         Vec<(ability_profile::Button, ability_profile::Tooltip)>,
@@ -2324,7 +2326,7 @@ mod tests {
         (race, learned)
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires unchanged Human01 and selected PCX_NATIVE_CHAPTER_* inputs and PCX_WAR3_EXE"]
     fn selected_chapter_mounts_the_card_under_its_admitted_console_and_retires_it() {
@@ -2576,21 +2578,21 @@ mod tests {
         assert!(app.world().resource::<CommandCard>().root.is_none());
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires live desktop, selected install/executable, and PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
     fn selected_original_command_icon_native_component() {
         native_component(false);
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     #[test]
     #[ignore = "requires live desktop and unchanged Human01 PCX_NATIVE_CHAPTER_* plus PCX_COMMAND_CARD_ABILITY=AHhb|AHwe"]
     fn selected_original_command_tooltip_native_component() {
         native_component(true);
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(all(feature = "test-fixtures", not(target_arch = "wasm32")))]
     fn native_component(with_tooltip: bool) {
         let (mut source, mut view, reader) = selected_icons();
         let ability = std::env::var("PCX_COMMAND_CARD_ABILITY").expect("choose a fixture ability");
@@ -3114,6 +3116,96 @@ mod tests {
         );
         let none = CustomKeys::default();
         assert_eq!(resolve(&none, "hfoo", Field::Hotkey, 0, key('F')), key('F'));
+    }
+
+    #[test]
+    #[ignore = "requires PCX_WAR3_EXE selecting a reviewed local client image"]
+    fn set_custom_keys_stores_source_keys_resolves_hotkey_settles_and_invalidates_signature() {
+        let path = std::env::var("PCX_WAR3_EXE").expect("set PCX_WAR3_EXE");
+        let bytes = std::fs::read(&path).unwrap();
+        let identity = AssetIdentity {
+            source: path,
+            edition: "selected local client".into(),
+            version: "reviewed image".into(),
+        };
+        let rules = Rules::reviewed_legacy(&bytes, identity).unwrap();
+        let source = Source {
+            active_art: String::new(),
+            active_material: None,
+            badge_art: String::new(),
+            badge_font: None,
+            badge_height: 0.,
+            disabled_path: "fixture-disabled/".into(),
+            rules,
+            console: "synthetic parent".into(),
+            standard: Vec::new(),
+            skill: fixture_menu(),
+            cancel: fixture_menu(),
+            cancel_build: fixture_menu(),
+            custom_keys: CustomKeys::default(),
+            hero_bar: Err("fixture".into()),
+            group_panel: Err("fixture".into()),
+            images: HashMap::new(),
+            failed: HashMap::new(),
+            retained: 0,
+            receipts: Vec::new(),
+        };
+        let unit = HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+        let owner = HandleId::new(std::num::NonZeroU64::new(9).unwrap());
+        let populated = Signature {
+            header: Header {
+                current: None,
+                held: false,
+                hero: None,
+                unit,
+                owner,
+                local: 1,
+                shown: true,
+                dead: None,
+                movable: true,
+                can_attack: false,
+                constructing: false,
+            },
+            abilities: Vec::new(),
+            builds: Vec::new(),
+            trains: Vec::new(),
+        };
+        let mut card = CommandCard {
+            source: Some(source),
+            signature: Some(populated),
+            ..default()
+        };
+        assert!(
+            card.signature.is_some(),
+            "signature must be populated before invalidation"
+        );
+        assert!(!card.custom_keys_settled);
+        card.set_custom_keys(CustomKeys::parse("[CmdMove]\nHotkey=T\n").unwrap());
+        let stored = card
+            .source
+            .as_ref()
+            .expect("source present")
+            .custom_keys
+            .get("CmdMove", Field::Hotkey)
+            .expect("CmdMove Hotkey stored");
+        assert_eq!(
+            pcx_play::command_hotkey::at_rank(stored, 0),
+            Some(Hotkey::letter('T').unwrap())
+        );
+        let profile = Some(Hotkey::letter('F').unwrap());
+        assert_eq!(
+            card.source
+                .as_ref()
+                .unwrap()
+                .hotkey("CmdMove", Field::Hotkey, 0, profile),
+            Some(Hotkey::letter('T').unwrap()),
+            "Source::hotkey must resolve T over synthetic profile F"
+        );
+        assert!(card.custom_keys_settled, "set_custom_keys must settle");
+        assert!(
+            card.signature.is_none(),
+            "populated signature must be invalidated"
+        );
     }
 }
 
