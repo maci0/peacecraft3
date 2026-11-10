@@ -1706,6 +1706,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP and PCX_NATIVE_CHAPTER_ADDON; enqueues the chapter directly because a fresh profile cannot open its campaign from the menu (default_open is false)"]
+    fn selected_install_locked_chapter_startup_probe() {
+        let (install_dir, map, expansion) = selected_chapter_env();
+        let mut app = chapter_app(install_dir, expansion);
+        let (campaign, mission, indexed_recipe) = locate_chapter(&app, &map);
+        app.world_mut()
+            .run_system_once(
+                move |launcher: Res<crate::launch_gui::Launcher>,
+                      inbox: Res<ConfigurationInbox>,
+                      mut chapters: ResMut<Chapters>| {
+                    let entry = &chapters.campaigns[campaign];
+                    let source = &entry.missions[mission];
+                    let chapter = Chapter {
+                        campaign: entry.title.clone(),
+                        header: source.header.clone(),
+                        name: source.name.clone(),
+                        map: source.map.clone(),
+                    };
+                    enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+                },
+            )
+            .expect("probe system runs");
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_published_chapter(&mut app, &map, indexed_recipe);
+    }
+
+    #[test]
     #[ignore = "requires PCX_NATIVE_CHAPTER_* selecting an unchanged chapter with a skippable opening"]
     fn selected_install_opening_skip_reaches_player_control() {
         opening_skip_replay(120);
@@ -2040,8 +2069,8 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn started_app() -> App {
-        crate::campaign_workers::initialize();
+    /// The install, map member and edition selected by the `PCX_NATIVE_CHAPTER_*` variables.
+    fn selected_chapter_env() -> (String, String, bool) {
         let install_dir = std::env::var("PCX_NATIVE_CHAPTER_INSTALL")
             .expect("set PCX_NATIVE_CHAPTER_INSTALL to the selected local install");
         let map = std::env::var("PCX_NATIVE_CHAPTER_MAP")
@@ -2051,6 +2080,12 @@ pub(crate) mod tests {
             Ok("tft") => true,
             _ => panic!("PCX_NATIVE_CHAPTER_ADDON must explicitly select roc or tft"),
         };
+        (install_dir, map, expansion)
+    }
+
+    /// An app with the selected install's chapter index loaded and no chapter configured.
+    fn chapter_app(install_dir: String, expansion: bool) -> App {
+        crate::campaign_workers::initialize();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseWheel>()
@@ -2072,7 +2107,12 @@ pub(crate) mod tests {
         app.add_systems(Update, crate::button_actions::clear);
         app.world_mut().resource_mut::<CampaignSeed>().requested = Some(1);
         app.update();
+        app
+    }
 
+    /// The campaign and mission indexes of `map` in the loaded chapter index, and the
+    /// recipe that index was admitted from.
+    fn locate_chapter(app: &App, map: &str) -> (usize, usize, Arc<CampaignRecipe>) {
         let chapters = app.world().resource::<Chapters>();
         assert!(
             chapters.error.is_none(),
@@ -2086,15 +2126,22 @@ pub(crate) mod tests {
                 entry
                     .missions
                     .iter()
-                    .any(|m| m.map.eq_ignore_ascii_case(&map))
+                    .any(|m| m.map.eq_ignore_ascii_case(map))
             })
             .expect("requested map must come from the selected install's campaign index");
         let mission = chapters.campaigns[campaign]
             .missions
             .iter()
-            .position(|m| m.map.eq_ignore_ascii_case(&map))
+            .position(|m| m.map.eq_ignore_ascii_case(map))
             .unwrap();
         let indexed_recipe = chapters.recipe.clone().expect("index retains its recipe");
+        (campaign, mission, indexed_recipe)
+    }
+
+    pub(crate) fn started_app() -> App {
+        let (install_dir, map, expansion) = selected_chapter_env();
+        let mut app = chapter_app(install_dir, expansion);
+        let (campaign, mission, indexed_recipe) = locate_chapter(&app, &map);
         // Activate is the widget's keyboard/pointer boundary; physical picking is
         // a separate gate. The mission button is the only launch trigger; merely
         // selecting a campaign never launches.
@@ -2106,6 +2153,13 @@ pub(crate) mod tests {
         for _ in 0..6 {
             app.update();
         }
+        assert_published_chapter(&mut app, &map, indexed_recipe);
+        app
+    }
+
+    /// Asserts that the configured chapter published its admitted session and that its
+    /// unchanged main created units, then prints the probe line.
+    fn assert_published_chapter(app: &mut App, map: &str, indexed_recipe: Arc<CampaignRecipe>) {
         let chapters = app.world().resource::<Chapters>();
         assert!(
             chapters.error.is_none(),
@@ -2200,7 +2254,6 @@ pub(crate) mod tests {
         };
         assert!(units > 0, "unchanged chapter main must create units");
         println!("chapter={map} seed=1 executed_units={units} published=true");
-        app
     }
 
     #[test]
