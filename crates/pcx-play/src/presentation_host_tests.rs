@@ -24,6 +24,7 @@ native SetCineFilterStartColor takes integer r, integer g, integer b, integer a 
 native SetCineFilterEndColor takes integer r, integer g, integer b, integer a returns nothing
 native SetCineFilterDuration takes real duration returns nothing
 native DisplayCineFilter takes boolean show returns nothing
+native SetWaterBaseColor takes integer red, integer green, integer blue, integer alpha returns nothing
 globals
 constant blendmode BLEND_MODE_BLEND=ConvertBlendMode(73)
 constant blendmode OTHER=ConvertBlendMode(74)
@@ -408,6 +409,36 @@ fn occlusion_capability_checks_optional_native_source_and_signature() {
         "native EnableOcclusion takes boolean flag returns nothing",
     );
     assert!(h.admit_no_occlusion_pass().is_err());
+}
+
+#[test]
+fn water_base_color_records_each_channel_and_refuses_out_of_range_values() {
+    let mut h = host(COMMON, "");
+    h.admit_presentation(64).unwrap();
+    assert_eq!(h.presentation().unwrap().water_base_color, None);
+    h.native(
+        "SetWaterBaseColor",
+        &[
+            Value::Int(0),
+            Value::Int(128),
+            Value::Int(255),
+            Value::Int(64),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        h.presentation().unwrap().water_base_color,
+        Some([0, 128, 255, 64])
+    );
+    for channels in [[256, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0, i32::MAX]] {
+        let args = channels.map(Value::Int);
+        let error = h.native("SetWaterBaseColor", &args).unwrap_err();
+        assert!(error.contains("0 to 255"), "{error}");
+    }
+    assert_eq!(
+        h.presentation().unwrap().water_base_color,
+        Some([0, 128, 255, 64])
+    );
 }
 
 #[test]

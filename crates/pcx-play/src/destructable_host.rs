@@ -11,6 +11,7 @@ use crate::{
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
     scripts::AssetIdentity,
+    unit_model::{Animation, QUEUED_LIMIT},
 };
 use pcx_objects::editor::{
     FieldDef, FieldKind, FieldSource, Overlay, SlkId,
@@ -267,6 +268,66 @@ pub struct DestructableVisual {
     pub member: String,
     pub replacement: Option<(u32, String)>,
     pub tint: [f32; 3],
+}
+
+/// Longest accepted animation name, in bytes.
+const ANIMATION_NAME_LIMIT: usize = 16 << 10;
+
+/// One script animation call on a destructable. `queued` calls play after the
+/// current clip; the others restart the sequence. `requested` is the game time of the call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimationRequest {
+    clip: String,
+    queued: bool,
+    requested: f64,
+}
+
+/// A destructable's animation calls since its last `SetDestructableAnimation`.
+/// `epoch` changes on each restart, so a renderer can tell a restarted sequence
+/// from a continued one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DestructableAnimation {
+    epoch: u64,
+    requests: Vec<AnimationRequest>,
+}
+
+/// A renderer's position in a [`DestructableAnimation`] log.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AnimationCursor {
+    epoch: u64,
+    applied: usize,
+}
+
+impl DestructableAnimation {
+    /// Applies the calls that `cursor` has not seen to the drawn model animation.
+    /// A call recorded before the animation's clock takes effect at that clock,
+    /// so a destructable first drawn after its call starts the clip when drawn.
+    pub fn apply_unseen(
+        &self,
+        animation: &mut Animation,
+        cursor: &mut AnimationCursor,
+    ) -> Result<(), String> {
+        if cursor.epoch != self.epoch {
+            *cursor = AnimationCursor {
+                epoch: self.epoch,
+                applied: 0,
+            };
+        }
+        let pending = self
+            .requests
+            .get(cursor.applied..)
+            .ok_or("destructable animation cursor is past its log")?;
+        for request in pending {
+            let at = request.requested.max(animation.request_clock());
+            if request.queued {
+                animation.queue(&request.clip, at)?;
+            } else {
+                animation.select(&request.clip, at, None)?;
+            }
+            cursor.applied += 1;
+        }
+        Ok(())
+    }
 }
 
 /// The selected object tables plus this map's `.w3b`/`.w3d` overlays.
@@ -638,7 +699,7 @@ pub struct PlacedDestructable {
     pub source: PlacedSource,
 }
 
-const RUNTIME: [(&str, &[&str], &str); 11] = [
+const RUNTIME: [(&str, &[&str], &str); 13] = [
     (
         "SetDestructableInvulnerable",
         &["destructable", "boolean"],
@@ -658,7 +719,19 @@ const RUNTIME: [(&str, &[&str], &str); 11] = [
         &["destructable", "real", "boolean"],
         "nothing",
     ),
+    (
+        "SetDestructableAnimation",
+        &["destructable", "string"],
+        "nothing",
+    ),
+    (
+        "QueueDestructableAnimation",
+        &["destructable", "string"],
+        "nothing",
+    ),
 ];
+
+const ANIMATION_NATIVES: [&str; 2] = ["SetDestructableAnimation", "QueueDestructableAnimation"];
 
 const DEATH_NATIVES: [&str; 3] = [
     "SetDestructableLife",
@@ -1225,6 +1298,13 @@ impl ObjectHost {
         ) {
             return Err(self.inner.error(name, Failure::WrongFamily));
         }
+        if ANIMATION_NATIVES.contains(&name) {
+            let Some(Value::Str(clip)) = rest.first() else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.record_destructable_animation(id, name, clip)?;
+            return Ok(Value::Null);
+        }
         if DEATH_NATIVES.contains(&name) {
             let Some(plan) = self.plan_life(name, target, rest)? else {
                 return Ok(Value::Null);
@@ -1287,6 +1367,53 @@ impl ObjectHost {
             self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?);
         }
         Ok(value)
+    }
+
+    /// Appends a call to the destructable's animation log. `SetDestructableAnimation`
+    /// starts a new epoch and drops the earlier calls. The queue refuses at
+    /// [`QUEUED_LIMIT`] queued calls since the last set, as units do.
+    fn record_destructable_animation(
+        &mut self,
+        id: HandleId,
+        name: &str,
+        clip: &str,
+    ) -> Result<(), Error> {
+        if clip.len() > ANIMATION_NAME_LIMIT || clip.chars().any(char::is_control) {
+            return Err(self
+                .inner
+                .error(name, Failure::DestructableState("invalid animation name")));
+        }
+        let Some(now) = self.timer_game_time() else {
+            return Err(self
+                .inner
+                .error(name, Failure::DestructableState("missing game clock")));
+        };
+        let queued = name == "QueueDestructableAnimation";
+        let log = self.destructable_animations.entry(id).or_default();
+        if queued {
+            if log.requests.iter().filter(|r| r.queued).count() >= QUEUED_LIMIT {
+                return Err(self
+                    .inner
+                    .error(name, Failure::DestructableState("animation queue capacity")));
+            }
+        } else {
+            log.epoch = log.epoch.checked_add(1).ok_or_else(|| {
+                self.inner
+                    .error(name, Failure::DestructableState("animation epoch overflow"))
+            })?;
+            log.requests.clear();
+        }
+        log.requests.push(AnimationRequest {
+            clip: clip.to_owned(),
+            queued,
+            requested: now,
+        });
+        Ok(())
+    }
+
+    /// The script animation calls a renderer applies to this destructable's model.
+    pub fn destructable_animation(&self, id: HandleId) -> Option<&DestructableAnimation> {
+        self.destructable_animations.get(&id)
     }
 
     fn destructable_dead(&self, id: HandleId, name: &str) -> Result<bool, Error> {
@@ -1412,6 +1539,9 @@ fn runtime_signature(name: &str, rest: &[Value]) -> bool {
         | "GetDestructableLife"
         | "GetDestructableMaxLife" => rest.is_empty(),
         "SetDestructableLife" => matches!(rest, [Value::Real(value)] if value.is_finite()),
+        "SetDestructableAnimation" | "QueueDestructableAnimation" => {
+            matches!(rest, [Value::Str(_)])
+        }
         "DestructableRestoreLife" => {
             matches!(rest, [Value::Real(value), Value::Bool(_)] if value.is_finite())
         }

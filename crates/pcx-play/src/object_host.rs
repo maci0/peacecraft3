@@ -89,6 +89,8 @@ pub struct ObjectHost {
     destructable_catalog: Option<destructables::DestructableCatalog>,
     destructable_restore: Option<destructables::RestoreLifePolicy>,
     placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
+    destructable_animations:
+        std::collections::BTreeMap<HandleId, destructables::DestructableAnimation>,
     map_music: Option<music::State>,
     play_music: Option<play_music::State>,
     sound_environments: Option<environments::State>,
@@ -279,6 +281,7 @@ impl ObjectHost {
             destructable_catalog: None,
             destructable_restore: None,
             placed_sources: std::collections::BTreeMap::new(),
+            destructable_animations: std::collections::BTreeMap::new(),
             map_music: None,
             play_music: None,
             sound_environments: None,
@@ -1350,9 +1353,9 @@ pub use camera_setup::{AppliedCameraSetup, CameraDestination, CameraFieldRecord}
 #[path = "destructable_host.rs"]
 mod destructables;
 pub use destructables::{
-    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, DestructableStats, DestructableVisual, PlacedDestructable, PlacedSource,
-    RestoreLifeBinding, RestoreLifePolicy,
+    AnimationCursor, DestructableAnimation, DestructableBudget, DestructableCatalog,
+    DestructableCreation, DestructableOrigin, DestructableState, DestructableStats,
+    DestructableVisual, PlacedDestructable, PlacedSource, RestoreLifeBinding, RestoreLifePolicy,
 };
 
 #[path = "unit_construction_host.rs"]

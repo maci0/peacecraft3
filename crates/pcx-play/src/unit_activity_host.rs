@@ -307,7 +307,10 @@ pub(crate) fn column_real(
         .as_ref()
         .map_err(|e| format!("unit {table:?} {wanted}: {e:?}"))?
     {
-        FieldValue::Cell(s) => s.trim().parse::<f32>().map_err(|e| e.to_string())?,
+        FieldValue::Cell(s) => s
+            .trim()
+            .parse::<f32>()
+            .map_err(|e| format!("unit {table:?} {wanted} cell {s:?}: {e}"))?,
         FieldValue::Override(pcx_objects::Value::Int(n)) if metadata.kind == FieldKind::Int => {
             f32::from_bits(
                 crate::script_random::real::from_i32(*n as i32).map_err(|e| e.to_string())?,

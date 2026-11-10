@@ -2,7 +2,7 @@
 use super::*;
 use bevy::camera::primitives::Aabb;
 use pcx_play::{
-    playercolor_host::{DestructableCreation, DestructableVisual, ObjectHost},
+    playercolor_host::{AnimationCursor, DestructableCreation, DestructableVisual, ObjectHost},
     unit_model::{Animation, Model},
 };
 
@@ -24,6 +24,7 @@ pub(super) struct Instance {
     pub(super) pose: Transform,
     pub(super) face: f32,
     dead: bool,
+    animation_seen: AnimationCursor,
 }
 
 fn load(
@@ -163,6 +164,7 @@ pub(super) fn project(
                     pose,
                     face,
                     dead: current.dead,
+                    animation_seen: AnimationCursor::default(),
                 });
             }
             let instance = draw.instances.get_mut(&id).expect("inserted destructable");
@@ -175,6 +177,9 @@ pub(super) fn project(
                     None,
                 )?;
                 instance.dead = current.dead;
+            }
+            if let Some(calls) = objects.destructable_animation(id) {
+                calls.apply_unseen(&mut instance.animation, &mut instance.animation_seen)?;
             }
             instance.animation.advance(input.now)?;
             let visual = Visual::Destructable(instance);

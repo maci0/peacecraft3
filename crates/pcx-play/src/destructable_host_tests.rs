@@ -1,15 +1,17 @@
 use super::{COMMON, budget, context, object, slots_rule};
 use crate::file_sounds::{Assets, Budget as SoundBudget, SoundInput};
 use crate::playercolor_host::{
-    DestructableBudget, DestructableCatalog, DestructableCreation, DestructableOrigin,
-    DestructableState, EnumHost, Failure, Limits, ObjectHost, PlacedDestructable, PlacedSource,
+    AnimationCursor, DestructableBudget, DestructableCatalog, DestructableCreation,
+    DestructableOrigin, DestructableState, EnumHost, Failure, Limits, ObjectHost,
+    PlacedDestructable, PlacedSource,
 };
 use crate::scripts::{AssetIdentity, ScriptAsset};
+use crate::unit_model::{Animation, Model, QUEUED_LIMIT};
 use crate::unit_placement::{
     Budget as PlacementBudget, Footprint, FootprintLoader, Grid, Placement, StationaryKey,
     StationaryStamp,
 };
-use pcx_script::{Host, Prelude, Value};
+use pcx_script::{HandleId, Host, Prelude, Value};
 use pcx_sim::world::Source;
 use std::{
     collections::BTreeMap,
@@ -698,6 +700,194 @@ fn missing_catalog_refuses_life_operations_without_inventing_hp() {
     let state = host.destructable_state(id).unwrap();
     assert_eq!(state.life, None);
     assert!(!state.dead);
+}
+
+/// Host with the two animation natives declared and no game clock.
+fn clockless_animation_host() -> ObjectHost {
+    let declarations = format!(
+        "{}native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\nnative TimerGetElapsed takes timer t returns real\nnative TimerGetRemaining takes timer t returns real\nnative TimerGetTimeout takes timer t returns real\nnative GetExpiredTimer takes nothing returns timer\nnative SetDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\nnative QueueDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\n",
+        life_declarations()
+    );
+    let mut host = host_from(&declarations, "", 8)
+        .with_destructables(DestructableBudget { max_records: 4 })
+        .unwrap();
+    host.admit_destructable_catalog(life_catalog()).unwrap();
+    host
+}
+
+/// [`clockless_animation_host`] with the game clock at 7 seconds.
+fn animation_host() -> ObjectHost {
+    clockless_animation_host().with_timer_runtime(7.).unwrap()
+}
+
+fn drawn_model() -> Arc<Model> {
+    let sequences = [
+        ("Birth", 0, 100, true),
+        ("Stand", 100, 200, false),
+        ("Death", 200, 300, true),
+    ]
+    .into_iter()
+    .map(
+        |(name, interval_start, interval_end, non_looping)| pcx_mdl::Sequence {
+            name: name.into(),
+            interval_start,
+            interval_end,
+            non_looping,
+            move_speed: 0.,
+            trailing: [0; 7],
+        },
+    )
+    .collect();
+    Arc::new(Model {
+        origin: AssetIdentity {
+            source: "synthetic:destructable-model".into(),
+            edition: "fixture".into(),
+            version: "test".into(),
+        },
+        member: "Synthetic/Destructable.mdx".into(),
+        bytes: Arc::from([]),
+        sequences,
+        blend_time_ms: 0,
+        joints: Vec::new(),
+        global_sequences: Vec::new(),
+    })
+}
+
+fn sequence_index(model: &Model, name: &str) -> Option<usize> {
+    model
+        .sequences
+        .iter()
+        .position(|sequence| sequence.name.eq_ignore_ascii_case(name))
+}
+
+fn animation_call(
+    host: &mut ObjectHost,
+    name: &str,
+    id: HandleId,
+    clip: &str,
+) -> Result<Value, String> {
+    host.native(name, &[Value::Handle(id), Value::Str(clip.into())])
+}
+
+/// Applies the host's unseen calls to a fresh animation, then advances it to `now`.
+fn drawn_at(
+    host: &ObjectHost,
+    id: HandleId,
+    cursor: &mut AnimationCursor,
+    animation: &mut Animation,
+    now: f64,
+) -> Result<(), String> {
+    if let Some(calls) = host.destructable_animation(id) {
+        calls.apply_unseen(animation, cursor)?;
+    }
+    animation.advance(now)
+}
+
+#[test]
+fn animation_calls_restart_then_queue_and_a_restart_drops_the_queue() {
+    let mut host = animation_host();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let model = drawn_model();
+    let stand = sequence_index(&model, "stand");
+    let birth = sequence_index(&model, "birth");
+    let death = sequence_index(&model, "death");
+    let mut animation = Animation::new(Arc::clone(&model), 7.).unwrap();
+    let mut cursor = AnimationCursor::default();
+
+    animation_call(&mut host, "SetDestructableAnimation", id, "birth").unwrap();
+    animation_call(&mut host, "QueueDestructableAnimation", id, "stand").unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.05).unwrap();
+    assert_eq!(animation.sequence, birth);
+    drawn_at(&host, id, &mut cursor, &mut animation, 8.).unwrap();
+    assert_eq!(animation.sequence, stand, "the queued clip follows birth");
+
+    // A restart after a queued clip has been applied, while birth still plays:
+    // the queued stand must not follow the restarted death.
+    animation_call(&mut host, "SetDestructableAnimation", id, "birth").unwrap();
+    animation_call(&mut host, "QueueDestructableAnimation", id, "stand").unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 8.05).unwrap();
+    animation_call(&mut host, "SetDestructableAnimation", id, "death").unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 9.).unwrap();
+    assert_eq!(animation.sequence, death);
+    drawn_at(&host, id, &mut cursor, &mut animation, 20.).unwrap();
+    assert_eq!(
+        animation.sequence, death,
+        "a restart drops the calls queued before it"
+    );
+}
+
+#[test]
+fn a_call_recorded_before_the_drawn_clock_starts_when_first_drawn() {
+    let mut host = animation_host();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    animation_call(&mut host, "SetDestructableAnimation", id, "death").unwrap();
+    let model = drawn_model();
+    let mut animation = Animation::new(Arc::clone(&model), 20.).unwrap();
+    let mut cursor = AnimationCursor::default();
+    drawn_at(&host, id, &mut cursor, &mut animation, 20.).unwrap();
+    assert_eq!(animation.sequence, sequence_index(&model, "death"));
+    assert_eq!(animation.started, 20.);
+}
+
+#[test]
+fn animation_calls_refuse_bad_names_capacity_clock_and_signature() {
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let mut host = animation_host();
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let control = animation_call(&mut host, "SetDestructableAnimation", id, "stand\n").unwrap_err();
+    assert!(control.contains("invalid animation name"), "{control}");
+    for _ in 0..QUEUED_LIMIT {
+        animation_call(&mut host, "QueueDestructableAnimation", id, "stand").unwrap();
+    }
+    let full = animation_call(&mut host, "QueueDestructableAnimation", id, "stand").unwrap_err();
+    assert!(full.contains("animation queue capacity"), "{full}");
+    animation_call(&mut host, "SetDestructableAnimation", id, "birth").unwrap();
+    animation_call(&mut host, "QueueDestructableAnimation", id, "stand").unwrap();
+
+    let wrong_type = host
+        .native(
+            "SetDestructableAnimation",
+            &[Value::Handle(id), Value::Int(1)],
+        )
+        .unwrap_err();
+    assert!(
+        wrong_type.contains("incompatible native/type declaration"),
+        "{wrong_type}"
+    );
+
+    assert_eq!(
+        animation_call(&mut host, "SetDestructableAnimation", id, "stand").unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        host.native(
+            "QueueDestructableAnimation",
+            &[Value::Null, Value::Str("stand".into())]
+        )
+        .unwrap(),
+        Value::Null
+    );
+
+    let mut untimed = clockless_animation_host();
+    let Value::Handle(untimed_id) = create(&mut untimed, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let clock = animation_call(
+        &mut untimed,
+        "SetDestructableAnimation",
+        untimed_id,
+        "stand",
+    )
+    .unwrap_err();
+    assert!(clock.contains("missing game clock"), "{clock}");
 }
 
 #[test]

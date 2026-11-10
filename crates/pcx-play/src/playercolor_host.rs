@@ -982,17 +982,18 @@ pub use objects::{
     UnitRangeEntry, UnitSleep, UnitStateBudget, WeatherEffect,
 };
 pub use objects::{
+    AnimationCursor, CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent,
+    DestructableAnimation, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
+    DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, GatheringObservation,
+    HeroEvent, Indicator, MinimapPing, PlacedDestructable, PlacedSource, PurchaseOutcome,
+    PurchaseRefusal, Relation, ScriptDialog, SummonContext, VisionCapability, VisionCell,
+    VisionOrigin, VisionSampleStats, VisionShape, VisionSource, VisionState, Vitals, Weapon,
+    present_vision,
+};
+pub use objects::{
     BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionContext, ConstructionOrder,
     ConstructionPhase, ConstructionPreview, ConstructionSite, TrainOption, TrainUnavailable,
     TrainingQueueEntry, UnitConstruction,
-};
-pub use objects::{
-    CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent, DestructableState,
-    DialogBudget, DialogButton, DialogQuitRequest, DialogState, EventSubject, FiredEvent,
-    FogModifier, GameExitRequest, GatheringObservation, HeroEvent, Indicator, MinimapPing,
-    PlacedDestructable, PlacedSource, PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog,
-    SummonContext, VisionCapability, VisionCell, VisionOrigin, VisionSampleStats, VisionShape,
-    VisionSource, VisionState, Vitals, Weapon, present_vision,
 };
 pub use objects::{ItemCommand, ItemDrop};
 pub use objects::{OrderForm, QueueBudget, QueueOutcome, QueueRefusal, SmartRefusal, SmartTarget};

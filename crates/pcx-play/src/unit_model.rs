@@ -185,7 +185,7 @@ pub fn model_path(definition: &Definition) -> Result<Option<String>, String> {
 }
 
 /// Recreation bound: the original queue capacity is not established.
-const QUEUED_LIMIT: usize = 8;
+pub(crate) const QUEUED_LIMIT: usize = 8;
 /// Floating-point guard for authored millisecond boundaries (one nanosecond).
 const SCHEDULE_EPSILON: f64 = 1e-9;
 
@@ -437,6 +437,10 @@ impl Animation {
     }
     pub fn has_pending(&self) -> bool {
         !self.queued.is_empty()
+    }
+    /// Earliest game time that `select` or `queue` accepts.
+    pub(crate) fn request_clock(&self) -> f64 {
+        self.started.max(self.phase_at)
     }
     /// Whether a queued clip is playing or still waiting to play.
     pub fn needs_advance(&self) -> bool {

@@ -60,6 +60,11 @@ pub struct PresentationState {
     pub world_fog_boundary: Option<bool>,
     /// Executed `ForceCinematicSubtitles` flag. Absent until a script sets it.
     pub cinematic_subtitles: Option<bool>,
+    /// Executed `SetWaterBaseColor` channels (red, green, blue, alpha), each 0 to 255.
+    /// The water renderer does not read this yet: the `Water.slk` colour cells stay
+    /// raw, and no evidence establishes how a base colour combines with the frame
+    /// texture or those cells.
+    pub water_base_color: Option<[u8; 4]>,
     pub filter: Option<CineFilter>,
     texture: Option<String>,
     blend: Option<HandleId>,
@@ -93,6 +98,10 @@ const CONTRACTS: &[(&str, &[&str])] = &[
     ),
     ("SetCineFilterDuration", &["real"]),
     ("DisplayCineFilter", &["boolean"]),
+    (
+        "SetWaterBaseColor",
+        &["integer", "integer", "integer", "integer"],
+    ),
 ];
 impl ObjectHost {
     pub fn admit_presentation(&mut self, path_bytes: usize) -> Result<(), Error> {
@@ -240,6 +249,31 @@ impl ObjectHost {
                 .as_mut()
                 .expect("admitted")
                 .control_enabled = Some(*enabled);
+            return Ok(Value::Null);
+        }
+        if name == "SetWaterBaseColor" {
+            let [
+                Value::Int(red),
+                Value::Int(green),
+                Value::Int(blue),
+                Value::Int(alpha),
+            ] = args
+            else {
+                return Err(fail("expected integer water colour channels"));
+            };
+            let channel = |value: &i32| {
+                u8::try_from(*value).map_err(|_| fail("water colour channel outside 0 to 255"))
+            };
+            let color = [
+                channel(red)?,
+                channel(green)?,
+                channel(blue)?,
+                channel(alpha)?,
+            ];
+            self.presentation
+                .as_mut()
+                .expect("admitted")
+                .water_base_color = Some(color);
             return Ok(Value::Null);
         }
         if name == "ForceCinematicSubtitles" {
