@@ -57,6 +57,7 @@ mod geoset1800;
 mod joint1800;
 mod material;
 mod material1800;
+mod morph;
 mod particle2;
 pub use fafx1800::{FafxRecord1800, FafxStream1800};
 pub use geoset1800::{
@@ -69,6 +70,7 @@ pub use joint1800::{
 };
 pub use material::{MaterialLayer, TextureFrameTrack};
 pub use material1800::{MaterialLayer1800, MaterialTrack1800, SubTexture1800};
+pub use morph::{MRF_MAGIC, MorphError, MorphFile, MorphVertex};
 pub use particle2::Particle2Properties;
 
 mod pose;
