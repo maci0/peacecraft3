@@ -128,6 +128,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 pub mod cameras;
+pub mod campaign_info;
 pub mod doodads;
 pub mod grid_alignment;
 pub mod info;
@@ -146,6 +147,7 @@ pub use pathing::{Pathing, PathingError};
 pub use regions::{Region, RegionBounds, RegionError, Regions};
 pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};
 
+pub use campaign_info::{CAMPAIGN_INFO_NAME, CampaignInfo, CampaignInfoError};
 pub use doodads::{Doodad, Doodads, ItemDropData, TerrainDoodad};
 pub use info::{Force, MapInfo, Player};
 pub use ini::{INI_NAME, Ini, SCRIPT_MEMBERS, preferred_script};
@@ -270,6 +272,8 @@ pub enum Error {
     UnsupportedInfoVersion(u32),
     #[error("map info: {0}")]
     InfoFraming(#[from] info::FramingViolation),
+    #[error("campaign info: {0}")]
+    CampaignInfo(#[from] campaign_info::CampaignInfoError),
     #[error("bad doodad magic {0:?}, expected W3do")]
     BadDoodadMagic([u8; 4]),
     #[error("unsupported doodad version {0}; supported versions are 7 and 8")]
