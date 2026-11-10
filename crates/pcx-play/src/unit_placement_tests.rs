@@ -162,21 +162,21 @@ fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_ea
         base,
         vec![
             StationaryStamp {
-                key: StationaryKey::Placed(1),
+                key: id(1),
                 live: vec![100, 10],
                 dead: vec![200],
                 mask: 0x04,
                 active: true,
             },
             StationaryStamp {
-                key: StationaryKey::Placed(2),
+                key: id(2),
                 live: vec![100],
                 dead: vec![],
                 mask: 0x08,
                 active: true,
             },
             StationaryStamp {
-                key: StationaryKey::Placed(3),
+                key: id(3),
                 live: vec![200],
                 dead: vec![100],
                 mask: 0x10,
@@ -188,16 +188,16 @@ fn stationary_layers_swap_live_and_dead_footprints_without_erasing_terrain_or_ea
     assert_eq!(p.grid.pathing.cells[100], 0x1d);
     assert_eq!(p.grid.pathing.cells[10], 0x04);
     assert_eq!(p.grid.pathing.cells[200], 0x01);
-    assert!(p.set_placed_active(1, false));
+    assert!(p.set_destructable_active(id(1), false));
     assert_eq!(p.grid.pathing.cells[100], 0x19);
     assert_eq!(p.grid.pathing.cells[10], 0x00);
     assert_eq!(p.grid.pathing.cells[200], 0x05);
-    assert!(p.set_placed_active(2, false));
+    assert!(p.set_destructable_active(id(2), false));
     assert_eq!(p.grid.pathing.cells[100], 0x11);
-    assert!(p.set_placed_active(3, true));
+    assert!(p.set_destructable_active(id(3), true));
     assert_eq!(p.grid.pathing.cells[100], 0x01);
     assert_eq!(p.grid.pathing.cells[200], 0x15);
-    assert!(!p.set_placed_active(99, true));
+    assert!(!p.set_destructable_active(id(99), true));
 }
 
 #[test]

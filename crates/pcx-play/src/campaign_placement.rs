@@ -7,8 +7,8 @@ use crate::{
     },
     spatial_pool::{Geometry, PoolOwner, SpatialRules, Texture},
     unit_placement::{
-        Budget, Footprint, FootprintLoader, Grid, NativeTexture, Placement, Rules, StationaryKey,
-        StationaryStamp, TexturePolicy,
+        Budget, Footprint, FootprintLoader, Grid, NativeTexture, Placement, Rules, StationaryStamp,
+        TexturePolicy,
     },
 };
 use pcx_assets::{AssetPath, Resolver};
@@ -346,12 +346,6 @@ pub fn assemble(
     for (id, instance, state) in objects.destructables_with_handles() {
         let live_path = catalog.path(tables, instance.objectid.to_be_bytes(), false)?;
         let dead_path = catalog.path(tables, instance.objectid.to_be_bytes(), true)?;
-        let key = match instance.origin {
-            DestructableOrigin::Placed { creation_number } => {
-                StationaryKey::Placed(creation_number)
-            }
-            DestructableOrigin::Script => StationaryKey::Destructable(id),
-        };
         let live = footprint_cells(
             &grid,
             rules,
@@ -371,20 +365,21 @@ pub fn assemble(
             &mut work,
         )?;
         if let Some(pool) = &mut pool {
-            let owner = match key {
-                StationaryKey::Placed(creation) => Texture::Placed(creation),
-                StationaryKey::Destructable(id) => Texture::Destructable(id),
-            };
             let point = [instance.x, instance.y];
             let turns = f64::from(instance.face) / 90.0;
             let live_pixels =
                 native_footprint_cells(&grid, rules, &textures, &live_path, point, turns)?;
             let dead_pixels =
                 native_footprint_cells(&grid, rules, &textures, &dead_path, point, turns)?;
-            pool.stationary_pixels(owner, live_pixels, dead_pixels, !state.dead);
+            pool.stationary_pixels(
+                Texture::Destructable(id),
+                live_pixels,
+                dead_pixels,
+                !state.dead,
+            );
         }
         layers.push(StationaryStamp {
-            key,
+            key: id,
             live,
             dead,
             mask: rules.solid_mask(),

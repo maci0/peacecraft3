@@ -204,7 +204,8 @@ impl RestoreLifePolicy {
 }
 
 /// Where a destructable entered the session. Placed objects keep the authored
-/// creation number that also keys their collision layer. The complete authored
+/// creation number, which is not unique per file and so does not identify the
+/// destructable. Collision layers are keyed by handle. The complete authored
 /// `.doo` record is retained separately by handle; the creation scalars here are
 /// the shared script-facing projection, not the full placed origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -742,7 +743,6 @@ const DEATH_NATIVES: [&str; 3] = [
 #[derive(Clone, Copy)]
 struct LifePlan {
     id: HandleId,
-    origin: DestructableOrigin,
     life: f32,
     dead: bool,
     was_dead: bool,
@@ -754,7 +754,6 @@ struct LifePlan {
 #[derive(Clone, Copy)]
 pub(crate) struct PreparedDestructableDamage {
     id: HandleId,
-    origin: DestructableOrigin,
     life: f32,
     dead: bool,
     was_dead: bool,
@@ -965,8 +964,8 @@ impl ObjectHost {
                 Failure::DestructableState("finite nonnegative damage"),
             ));
         }
-        let (origin, life, was_dead) = {
-            let Ok(Entry::Destructable { creation, state }) = self.inner.entry(id) else {
+        let (life, was_dead) = {
+            let Ok(Entry::Destructable { state, .. }) = self.inner.entry(id) else {
                 return Err(self.inner.error(name, Failure::WrongFamily));
             };
             let (Some(max_life), Some(current)) = (state.max_life, state.life) else {
@@ -978,7 +977,7 @@ impl ObjectHost {
                 return Ok(None);
             }
             let life = (current - amount).max(0.0).min(max_life);
-            (creation.origin, life, state.dead)
+            (life, state.dead)
         };
         let dead = was_dead || life <= 0.0;
         let events = if dead && !was_dead {
@@ -991,7 +990,6 @@ impl ObjectHost {
         }
         Ok(Some(PreparedDestructableDamage {
             id,
-            origin,
             life,
             dead,
             was_dead,
@@ -1011,7 +1009,7 @@ impl ObjectHost {
             }
             _ => unreachable!("prepared destructable entry"),
         }
-        self.sync_destructable_collision(plan.id, plan.origin, !plan.dead);
+        self.sync_destructable_collision(plan.id, !plan.dead);
         if plan.events > 0 {
             self.push_death_events(plan.id, plan.events);
         }
@@ -1089,7 +1087,7 @@ impl ObjectHost {
             Value::Handle(id) => *id,
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         };
-        let Ok(Entry::Destructable { creation, state }) = self.inner.entry(id) else {
+        let Ok(Entry::Destructable { state, .. }) = self.inner.entry(id) else {
             return Err(self.inner.error(name, Failure::WrongFamily));
         };
         let Some(max_life) = state.max_life else {
@@ -1132,7 +1130,6 @@ impl ObjectHost {
         };
         Ok(Some(LifePlan {
             id,
-            origin: creation.origin,
             life,
             dead,
             was_dead: state.dead,
@@ -1147,7 +1144,7 @@ impl ObjectHost {
             }
             _ => unreachable!("planned destructable entry"),
         }
-        self.sync_destructable_collision(plan.id, plan.origin, !plan.dead);
+        self.sync_destructable_collision(plan.id, !plan.dead);
     }
 
     fn death_event_count(&self, id: HandleId) -> usize {
@@ -1323,34 +1320,30 @@ impl ObjectHost {
             }
             return Ok(Value::Null);
         }
-        let (origin, value, changed) = {
+        let (value, changed) = {
             let Ok(Entry::Destructable { creation, state }) = self.inner.entry_mut(id) else {
                 unreachable!("checked destructable entry");
             };
             match (name, rest) {
                 ("SetDestructableInvulnerable", [Value::Bool(flag)]) => {
                     state.invulnerable = *flag;
-                    (creation.origin, Value::Null, false)
+                    (Value::Null, false)
                 }
                 ("ShowDestructable", [Value::Bool(flag)]) => {
                     state.hidden = !flag;
-                    (creation.origin, Value::Null, false)
+                    (Value::Null, false)
                 }
-                ("IsDestructableInvulnerable", []) => {
-                    (creation.origin, Value::Bool(state.invulnerable), false)
-                }
-                ("GetDestructableX", []) => (creation.origin, Value::Real(creation.x), false),
-                ("GetDestructableY", []) => (creation.origin, Value::Real(creation.y), false),
-                ("GetDestructableTypeId", []) => {
-                    (creation.origin, Value::Int(creation.objectid), false)
-                }
+                ("IsDestructableInvulnerable", []) => (Value::Bool(state.invulnerable), false),
+                ("GetDestructableX", []) => (Value::Real(creation.x), false),
+                ("GetDestructableY", []) => (Value::Real(creation.y), false),
+                ("GetDestructableTypeId", []) => (Value::Int(creation.objectid), false),
                 ("GetDestructableLife", []) => {
                     let Some(life) = state.life else {
                         return Err(self
                             .inner
                             .error(name, Failure::DestructableState("catalog HP not resolved")));
                     };
-                    (creation.origin, Value::Real(life), false)
+                    (Value::Real(life), false)
                 }
                 ("GetDestructableMaxLife", []) => {
                     let Some(max_life) = state.max_life else {
@@ -1358,13 +1351,13 @@ impl ObjectHost {
                             .inner
                             .error(name, Failure::DestructableState("catalog HP not resolved")));
                     };
-                    (creation.origin, Value::Real(max_life), false)
+                    (Value::Real(max_life), false)
                 }
                 _ => return Err(self.inner.error(name, Failure::Signature)),
             }
         };
         if changed {
-            self.sync_destructable_collision(id, origin, !self.destructable_dead(id, name)?);
+            self.sync_destructable_collision(id, !self.destructable_dead(id, name)?);
         }
         Ok(value)
     }
@@ -1423,23 +1416,11 @@ impl ObjectHost {
         }
     }
 
-    fn sync_destructable_collision(
-        &mut self,
-        id: HandleId,
-        origin: DestructableOrigin,
-        active: bool,
-    ) {
+    fn sync_destructable_collision(&mut self, id: HandleId, active: bool) {
         let Some(placement) = self.unit_placement.as_mut() else {
             return;
         };
-        match origin {
-            DestructableOrigin::Placed { creation_number } => {
-                placement.set_placed_active(creation_number, active);
-            }
-            DestructableOrigin::Script => {
-                placement.set_destructable_active(id, active);
-            }
-        }
+        placement.set_destructable_active(id, active);
     }
 
     fn admitted(&self) -> Result<&Admission, Error> {

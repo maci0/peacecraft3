@@ -440,20 +440,14 @@ pub struct Budget {
     pub queries: usize,
 }
 
-/// Identity of one stationary destructable whose collision can change.
-///
-/// Placed objects are keyed by their authored creation number; script objects by
-/// their arena handle. Both share the same overlay path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum StationaryKey {
-    Placed(u32),
-    Destructable(HandleId),
-}
-
 /// One destructable's live and dead footprint cells over a shared base raster.
+///
+/// `key` is the destructable's arena handle, placed or script-created. Authored
+/// creation numbers are not unique: shipped UndeadX08 `war3map.doo` has two walls
+/// numbered 197 at different positions.
 #[derive(Clone, Debug)]
 pub struct StationaryStamp {
-    pub key: StationaryKey,
+    pub key: HandleId,
     pub live: Vec<usize>,
     pub dead: Vec<usize>,
     pub mask: u8,
@@ -499,8 +493,8 @@ pub struct Placement {
     water_occupied: Vec<u32>,
     footprint_occupied: Vec<u32>,
     stamps: Vec<(HandleId, Prepared)>,
-    stationary: BTreeMap<StationaryKey, StationaryLayer>,
-    stationary_cells: BTreeMap<usize, Vec<(StationaryKey, bool)>>,
+    stationary: BTreeMap<HandleId, StationaryLayer>,
+    stationary_cells: BTreeMap<usize, Vec<(HandleId, bool)>>,
     stationary_cells_used: usize,
     stationary_work: usize,
     base_pathing: Option<Pathing>,
@@ -1010,45 +1004,31 @@ impl Placement {
         Ok(self)
     }
 
-    /// Toggle one placed tree. `false` means the state did not change.
-    pub fn set_placed_active(&mut self, creation: u32, active: bool) -> bool {
-        self.set_stationary_active(StationaryKey::Placed(creation), active)
-    }
-
-    /// Toggle one script-created destructable.
+    /// Toggle one destructable's stationary layer. `false` means the state did not change.
     pub fn set_destructable_active(&mut self, id: HandleId, active: bool) -> bool {
-        self.set_stationary_active(StationaryKey::Destructable(id), active)
-    }
-
-    /// Toggle one retained stationary layer without allocating.
-    pub fn set_stationary_active(&mut self, key: StationaryKey, active: bool) -> bool {
-        let Some(layer) = self.stationary.get_mut(&key) else {
+        let Some(layer) = self.stationary.get_mut(&id) else {
             return false;
         };
         if layer.active == active {
             return false;
         }
         layer.active = active;
-        self.recompose_key(key);
-        self.register_stationary(key);
+        self.recompose_key(id);
+        self.register_stationary(id);
         true
     }
 
     /// Give the spatial owner a layer's currently effective cells and mask.
-    fn register_stationary(&mut self, key: StationaryKey) {
+    fn register_stationary(&mut self, key: HandleId) {
         let (Some(pool), Some(layer)) = (self.spatial.as_deref_mut(), self.stationary.get(&key))
         else {
             return;
         };
-        let owner = match key {
-            StationaryKey::Placed(creation) => Texture::Placed(creation),
-            StationaryKey::Destructable(id) => Texture::Destructable(id),
-        };
-        pool.stationary_active(owner, layer.active);
+        pool.stationary_active(Texture::Destructable(key), layer.active);
     }
 
     /// Recompose one layer over its retained cells without allocating.
-    fn recompose_key(&mut self, key: StationaryKey) {
+    fn recompose_key(&mut self, key: HandleId) {
         let (Some(base), Some(layer)) = (&self.base_pathing, self.stationary.get(&key)) else {
             return;
         };
@@ -1272,25 +1252,21 @@ impl Placement {
         id: HandleId,
         prepared: PreparedStationary,
     ) {
-        let key = StationaryKey::Destructable(id);
-        debug_assert!(!self.stationary.contains_key(&key));
+        debug_assert!(!self.stationary.contains_key(&id));
         for &i in &prepared.live {
-            self.stationary_cells
-                .entry(i)
-                .or_default()
-                .push((key, true));
+            self.stationary_cells.entry(i).or_default().push((id, true));
         }
         for &i in &prepared.dead {
             self.stationary_cells
                 .entry(i)
                 .or_default()
-                .push((key, false));
+                .push((id, false));
         }
         self.stationary_cells_used += prepared.live.len() + prepared.dead.len();
         self.stationary_work -= prepared.work;
         let cells = prepared.cells;
         self.stationary.insert(
-            key,
+            id,
             StationaryLayer {
                 live: prepared.live,
                 dead: prepared.dead,
@@ -1307,7 +1283,7 @@ impl Placement {
                 prepared.active,
             );
         } else {
-            self.register_stationary(key);
+            self.register_stationary(id);
         }
     }
 

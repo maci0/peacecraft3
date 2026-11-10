@@ -101,8 +101,10 @@ pub struct Doodad {
     /// Life, raw byte. Observed 0..=255; the world-unit meaning is
     /// unattributed and this crate does not convert it.
     pub life: u8,
-    /// The World Editor's unique per-instance id. Unique within a file, not
-    /// dense, not bounded by the instance count.
+    /// The World Editor's per-instance id. Not dense and not bounded by the
+    /// instance count. Usually unique within a file, but `UndeadX08.w3x` repeats
+    /// one value (see [`Doodads::creation_numbers_are_unique`]), so it is not an
+    /// identity.
     pub creation_number: u32,
 }
 
@@ -333,9 +335,10 @@ impl Doodads {
 
     /// `true` when every creation number is distinct.
     ///
-    /// Measured true on all 132 shipped files. The parser does not require it:
-    /// the bytes say "unique", not "a permutation of 0..n", and ids past `n`
-    /// are normal.
+    /// Measured true on the 132 shipped `.w3m`/`.w3n` maps. Not a file invariant:
+    /// `UndeadX08.w3x` holds two destructables numbered 197 at different
+    /// positions, and the original loads it. The parser does not require
+    /// uniqueness, and ids past `n` are normal.
     pub fn creation_numbers_are_unique(&self) -> bool {
         let set: BTreeSet<u32> = self.instances.iter().map(|d| d.creation_number).collect();
         set.len() == self.instances.len()

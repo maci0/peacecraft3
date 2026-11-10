@@ -1,8 +1,6 @@
 use super::*;
 use crate::scripts::AssetIdentity;
-use crate::unit_placement::{
-    Footprint, Movement, Placement, StationaryKey, StationaryStamp, tests::placement,
-};
+use crate::unit_placement::{Footprint, Movement, Placement, StationaryStamp, tests::placement};
 use pcx_map::Pathing;
 use pcx_sim::world::Source;
 
@@ -152,10 +150,11 @@ fn texture_pixels_create_separate_ordered_entries_and_restore_them() {
 #[test]
 fn unknown_stationary_pixels_stop_the_live_pool() {
     let mut pool = pool();
-    pool.stationary_active(Texture::Placed(12), true);
+    let handle = id(12);
+    pool.stationary_active(Texture::Destructable(handle), true);
     assert_eq!(
         pool.refusal().unwrap().error,
-        ChainError::MissingTexturePixels(PLACED_TAG | 12)
+        ChainError::MissingTexturePixels(handle.token())
     );
 }
 
@@ -325,6 +324,7 @@ fn a_structure_without_retained_texture_pixels_is_refused() {
 
 #[test]
 fn stationary_layers_swap_their_cells_when_the_object_dies() {
+    let handle = id(3);
     let mut p = placement(source("stationary"), 10000)
         .with_stationary(
             Pathing {
@@ -334,7 +334,7 @@ fn stationary_layers_swap_their_cells_when_the_object_dies() {
                 cells: vec![0; 1024],
             },
             vec![StationaryStamp {
-                key: StationaryKey::Placed(3),
+                key: handle,
                 live: vec![100],
                 dead: vec![200],
                 mask: 0x10,
@@ -343,20 +343,25 @@ fn stationary_layers_swap_their_cells_when_the_object_dies() {
         )
         .unwrap();
     let mut owner = pool();
-    owner.stationary_pixels(Texture::Placed(3), vec![(100, 4)], vec![(200, 4)], true);
-    let placed = owner.texture_entries[&(PLACED_TAG | 3)][2].0;
+    owner.stationary_pixels(
+        Texture::Destructable(handle),
+        vec![(100, 4)],
+        vec![(200, 4)],
+        true,
+    );
+    let placed = owner.texture_entries[&handle.token()][2].0;
     p.attach_spatial(owner);
     // Pathing cell 100 is native cell [3, 4]; cell 200 is [6, 8].
     assert_eq!(chain(&p, [3, 4]), [link(placed, OBJECT)]);
 
-    assert!(p.set_placed_active(3, false));
+    assert!(p.set_destructable_active(handle, false));
     assert_eq!(
         chain(&p, [3, 4]),
         [link(placed, REMOVAL), link(placed, OBJECT)]
     );
     assert_eq!(chain(&p, [6, 8]), [link(placed, OBJECT)]);
 
-    assert!(p.set_placed_active(3, true));
+    assert!(p.set_destructable_active(handle, true));
     assert_eq!(
         chain(&p, [6, 8]),
         [link(placed, REMOVAL), link(placed, OBJECT)]

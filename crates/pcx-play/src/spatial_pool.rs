@@ -22,7 +22,6 @@ const LINK_BUDGET: usize = 1 << 20;
 const ENTRY_BUDGET: usize = 1 << 16;
 /// Identity space above every arena handle token for objects the arena does not own.
 const DECORATION_TAG: u64 = 1 << 62;
-const PLACED_TAG: u64 = 1 << 63;
 const TEXTURE_ENTRY_TAG: u64 = 1 << 61;
 type ReachOperands = (u8, u32, u32, usize, i32, u32);
 
@@ -485,7 +484,6 @@ pub(crate) struct Stamp<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Texture {
     Decoration(u32),
-    Placed(u32),
     Destructable(HandleId),
 }
 
@@ -493,7 +491,6 @@ impl Texture {
     fn identity(self) -> u64 {
         match self {
             Self::Decoration(index) => DECORATION_TAG | u64::from(index),
-            Self::Placed(creation) => PLACED_TAG | u64::from(creation),
             Self::Destructable(id) => id.token(),
         }
     }

@@ -8,8 +8,7 @@ use crate::playercolor_host::{
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use crate::unit_model::{Animation, Model, QUEUED_LIMIT};
 use crate::unit_placement::{
-    Budget as PlacementBudget, Footprint, FootprintLoader, Grid, Placement, StationaryKey,
-    StationaryStamp,
+    Budget as PlacementBudget, Footprint, FootprintLoader, Grid, Placement, StationaryStamp,
 };
 use pcx_script::{HandleId, Host, Prelude, Value};
 use pcx_sim::world::Source;
@@ -1126,7 +1125,7 @@ fn death_toggles_only_the_script_objects_stationary_layer() {
     .with_stationary(
         base,
         vec![crate::unit_placement::StationaryStamp {
-            key: crate::unit_placement::StationaryKey::Destructable(id),
+            key: id,
             live: vec![100],
             dead: vec![200],
             mask: 0x02,
@@ -1154,6 +1153,62 @@ fn death_toggles_only_the_script_objects_stationary_layer() {
 }
 
 #[test]
+fn placed_destructables_sharing_a_creation_number_toggle_their_own_layers() {
+    // Shipped UndeadX08 war3map.doo holds two ITw2 walls with creation number
+    // 197 at different positions.
+    let mut host = life_host(2);
+    let ids = host
+        .admit_placed_destructables(&[placed_row(197, false), placed_row(197, false)])
+        .unwrap();
+    let placement = crate::unit_placement::tests::placement(
+        pcx_sim::world::Source {
+            install: "synthetic".into(),
+            edition: "test".into(),
+            map: "shared creation".into(),
+        },
+        1000,
+    )
+    .with_stationary(
+        pcx_map::Pathing {
+            version: 0,
+            width: 32,
+            height: 32,
+            cells: vec![0; 1024],
+        },
+        vec![
+            StationaryStamp {
+                key: ids[0],
+                live: vec![100],
+                dead: vec![200],
+                mask: 0x02,
+                active: true,
+            },
+            StationaryStamp {
+                key: ids[1],
+                live: vec![101],
+                dead: vec![201],
+                mask: 0x04,
+                active: true,
+            },
+        ],
+    )
+    .unwrap();
+    host.test_attach_placement(placement);
+    assert_eq!(host.test_placement_cell(100), Some(0x02));
+    assert_eq!(host.test_placement_cell(101), Some(0x04));
+    host.native("KillDestructable", &[Value::Handle(ids[0])])
+        .unwrap();
+    assert_eq!(host.test_placement_cell(100), Some(0x00));
+    assert_eq!(host.test_placement_cell(200), Some(0x02));
+    assert_eq!(host.test_placement_cell(101), Some(0x04));
+    assert_eq!(host.test_placement_cell(201), Some(0x00));
+    host.native("KillDestructable", &[Value::Handle(ids[1])])
+        .unwrap();
+    assert_eq!(host.test_placement_cell(101), Some(0x00));
+    assert_eq!(host.test_placement_cell(201), Some(0x04));
+}
+
+#[test]
 fn late_script_creation_composes_live_and_dead_layers_over_existing_collision() {
     let tree = i32::from_be_bytes(*b"LTlt");
     let mut host = life_host(2);
@@ -1161,7 +1216,7 @@ fn late_script_creation_composes_live_and_dead_layers_over_existing_collision() 
         16,
         1 << 20,
         vec![StationaryStamp {
-            key: StationaryKey::Placed(1),
+            key: HandleId::new(std::num::NonZeroU64::new(1 << 40).unwrap()),
             live: vec![cell(8, 8)],
             dead: Vec::new(),
             mask: 0x02,
@@ -1289,9 +1344,9 @@ fn late_script_creation_refuses_cell_and_layer_budgets_atomically() {
     assert_eq!(host.test_placement_cell(cell(8, 8)), Some(0x00));
     assert_eq!(host.test_placement_cell(cell(9, 8)), Some(0x00));
 
-    let layers = (0..64)
+    let layers = (0u32..64)
         .map(|n| StationaryStamp {
-            key: StationaryKey::Placed(n),
+            key: HandleId::new(std::num::NonZeroU64::new(u64::from(n) + 1).unwrap()),
             live: Vec::new(),
             dead: Vec::new(),
             mask: 0x08,
