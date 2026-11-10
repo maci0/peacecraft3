@@ -121,7 +121,7 @@ mod tests {
         section[depth_at..depth_at + texcolor.len()].copy_from_slice(&texcolor);
         assert_eq!(section.len(), span);
         let _ = text_rva;
-        let bytes = synthetic_image(&[(&crate::pe_image::TEXT, text_rva, &section)]);
+        let bytes = synthetic_image(&[(crate::pe_image::TEXT, text_rva, &section)]);
         (bytes, miplevel, texcolor)
     }
 

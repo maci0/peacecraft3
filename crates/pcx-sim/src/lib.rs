@@ -154,12 +154,11 @@ impl World {
         // fall back to a linear scan when the fast index does not match. The
         // wire codec also accepts the full u32 domain, including 0, which
         // has no fast index.
-        if let Some(idx) = id.checked_sub(1) {
-            if let Some(unit) = self.units.get(idx as usize)
-                && unit.id == id
-            {
-                return Some(unit);
-            }
+        if let Some(idx) = id.checked_sub(1)
+            && let Some(unit) = self.units.get(idx as usize)
+            && unit.id == id
+        {
+            return Some(unit);
         }
         self.units.iter().find(|u| u.id == id)
     }

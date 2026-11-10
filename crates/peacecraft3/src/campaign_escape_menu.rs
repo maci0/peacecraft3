@@ -168,8 +168,11 @@ fn clicked(
     }
 }
 #[derive(SystemParam)]
-struct KeyboardInputs<'w> {
+struct KeyboardInputs<'w, 's> {
     session: Res<'w, MapScriptSession<MapStartupHost>>,
+    actions: Res<'w, crate::button_actions::ButtonActions>,
+    options_buttons:
+        Query<'w, 's, &'static crate::glue_menu::GlueButton, Without<InteractionDisabled>>,
     route: Option<ResMut<'w, crate::campaign_in_game_options::InGameOptionsRoute>>,
     nav: Option<ResMut<'w, crate::menu_screens::Navigation>>,
 }
@@ -177,8 +180,6 @@ fn keyboard(
     mut events: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<&EscapeButton, Without<InteractionDisabled>>,
-    actions: Res<crate::button_actions::ButtonActions>,
-    options_buttons: Query<&crate::glue_menu::GlueButton, Without<InteractionDisabled>>,
     mut state: ResMut<EscapeMenu>,
     mut view: ResMut<CampaignCamera>,
     keys_in: KeyboardInputs,
@@ -224,15 +225,16 @@ fn keyboard(
         keys_in.session.session_witness(),
     ) && route.is_open()
     {
-        let cancel_exists = options_buttons
+        let cancel_exists = keys_in
+            .options_buttons
             .iter()
             .any(|b| b.frame == crate::campaign_in_game_options::OPTIONS_CANCEL_BUTTON);
         if cancel_exists {
             // `actions.entities` are the pressed entities; match by frame.
             // A queued Cancel for a frame that no longer exists is skipped.
             let mut cancelled = false;
-            for entity in &actions.entities {
-                if options_buttons.get(*entity).is_ok_and(|b| {
+            for entity in &keys_in.actions.entities {
+                if keys_in.options_buttons.get(*entity).is_ok_and(|b| {
                     b.frame == crate::campaign_in_game_options::OPTIONS_CANCEL_BUTTON
                 }) {
                     cancelled = crate::campaign_in_game_options::route_cancel_options(
@@ -1590,10 +1592,11 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
             .id();
         for click in [false, true] {
             if click {
-                let mut state = app.world_mut().resource_mut::<EscapeMenu>();
-                state.page = Page::Main;
-                state.pending = Some(("OptionsButton".into(), Page::Main, witness.clone()));
-                drop(state);
+                {
+                    let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+                    state.page = Page::Main;
+                    state.pending = Some(("OptionsButton".into(), Page::Main, witness.clone()));
+                }
                 app.world_mut().run_system_once(act).unwrap();
             }
             assert!(

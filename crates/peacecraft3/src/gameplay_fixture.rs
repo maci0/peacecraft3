@@ -309,7 +309,7 @@ fn precheck_order(
             .map_err(|e| e.to_string())?
             .number;
         if owner_number != local {
-            return Err(format!("unit {handle:?} is not locally owned"))?;
+            return Err(format!("unit {handle:?} is not locally owned"));
         }
         if objects
             .standard_command_order(handle, kind)
