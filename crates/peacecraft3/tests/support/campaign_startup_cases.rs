@@ -337,7 +337,7 @@ fn budgets() -> MapStartupBudgets {
         timer_events: 4,
         game_state_events: 4,
         player_state_events: 4,
-        unit_state_events: Some(4),
+        unit_state_events: None,
         stock: None,
         quests: None,
         dialogs: None,
