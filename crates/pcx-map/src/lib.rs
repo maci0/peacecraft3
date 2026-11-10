@@ -131,6 +131,7 @@ pub mod cameras;
 pub mod campaign_info;
 pub mod doodads;
 pub mod grid_alignment;
+pub mod imports;
 pub mod info;
 pub mod ini;
 pub mod minimap;
@@ -149,6 +150,7 @@ pub use units::{RandomUnit, UnitPlacement, UnitPlacementError, Units};
 
 pub use campaign_info::{CAMPAIGN_INFO_NAME, CampaignInfo, CampaignInfoError};
 pub use doodads::{Doodad, Doodads, ItemDropData, TerrainDoodad};
+pub use imports::{ImportEntry, ImportError, Imports};
 pub use info::{Force, MapInfo, Player};
 pub use ini::{INI_NAME, Ini, SCRIPT_MEMBERS, preferred_script};
 pub use minimap::{Marker, MinimapImage, MinimapImageKind, MinimapMarkers};
@@ -236,6 +238,8 @@ pub enum Error {
     Pathing(#[from] pathing::PathingError),
     #[error("map regions: {0}")]
     Regions(#[from] regions::RegionError),
+    #[error("map imports: {0}")]
+    Imports(#[from] imports::ImportError),
     #[error("unit placements: {0}")]
     Units(#[from] units::UnitPlacementError),
     #[error("io: {0}")]
