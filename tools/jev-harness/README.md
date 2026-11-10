@@ -37,6 +37,24 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 - **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend` (in-memory fixture) or fully mocked transports. Default candidate coordinates are synthetic fixtures, not PeaceCraft targets. Nothing observed here is PeaceCraft gameplay or the original WC3 client.
 - **Bridge lane note (2ecd48b, integrated in 1ac7c02):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay. Hidden-unit guard: upstream `observe()` already filters to own-or-visible; the provider only fails closed on an explicit per-unit `visible=False`/`hidden=True`, and does not ban mere field names.
 
+## Canonical fixture client and decision adapter (pc3-menu-03)
+
+The canonical gameplay-fixture client (`jev_harness.canonical_fixture.FixtureClient`,
+protocol 1) speaks the file protocol in `crates/peacecraft3/src/gameplay_fixture.rs`:
+typed Move/Step/Cancel/Stop orders, request ≤8192 bytes, response ≤1 MiB, atomic
+writes, id-matched receipts. It is exported as `FixtureClient` from
+`jev_harness` alongside `DecisionAdapter`. `DecisionAdapter` is explicit typed
+canonical mode (not mouse/vision/fake clicks): the model returns only a typed
+choice id; code derives legal canonical targets from current observed owned
+units; choice ids map 1:1 to protocol orders via `FixtureClient`. Provider
+reuse is from verified `campaign_agent` (`jev_request`/`post_json`/`answers_of`/
+env key), adapted to the committed harness transport: no-retry, size caps,
+no-redirect, redaction, strict action validation preserved. Key comes only
+from supported worker env (`TYPESAFE_API_KEY`/`JEV_API_KEY`) or injected
+mock; secret-file reads refused. Tests live under `tools/jev-harness/tests/`
+(standard pytest discovery, no duplicate collection); the pc3-menu-10
+security/backend/dynamic suite (78 tests) is preserved unchanged.
+
 ### Run (stdlib only, headless, no network in tests)
 
 Env isolation for any live run: `DISPLAY`/`WAYLAND_DISPLAY` unset, Pulse
@@ -193,11 +211,14 @@ Hidden enemies excluded; no raw assets/paths/secrets. Ignored GPU test
 one real `IssuePointOrder(standard_target)` with fake policy (16 units,
 moved_sq=40000 on Prologue02 per prior run; not re-run, no changed behavior).
 
-Verification (headless/muted, shared target `/home/maci/Desktop/peacecraft3/target`,
-isolated `xvfb-run :99`, `SDL_AUDIODRIVER=dummy`, `ALSA_CARD=null`):
-`cargo test -p peacecraft3 --features test-fixtures` →
-80 + 950 + 2 + 209 + 217 + 7 passed, 0 failed, 127 ignored.
-`pytest tools/jev-harness/tests` → 50 passed after integrating the final
-lane05 harness state (fail-closed noop default, all-candidate schema
-check, chosen-action actual-viewport bound, explicit hidden-flag guard
-only). Observation-only; no gameplay claim.
+Verification (headless/muted): `cargo test -p peacecraft3 --features
+test-fixtures` → 80 + 950 + 2 + 209 + 217 + 7 passed, 0 failed, 127 ignored
+(lane run). `pytest tools/jev-harness/tests` → 91 passed: the 78
+pc3-menu-10 security/backend/dynamic tests plus 13 canonical tests, with no
+duplicate collection (re-run 2026-11-10 on the merged tree). Mock-real
+canonical fixture proof: transcript sha256
+`38eeaf95ea2db7e46fd27e3a1fa4e315290696a95d1fc0345541d82dc310e3c3`,
+moved_sq=332800.0, journal [1,2], child exit 0. Live blocker: no confirmed
+env key location, so no live call; secret-file refusal is asserted.
+Full-repo pytest has 8 pre-existing `jsonschema` ModuleNotFound failures in
+other tools.
