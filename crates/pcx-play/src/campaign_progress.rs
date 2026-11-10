@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 const MAGIC: &[u8] = b"PCXPROGRESS1\n";
 const MAGIC_COMPLETION: &[u8] = b"PCXPROGRESS2\n";
+const MAGIC_CAMPAIGN: &[u8] = b"PCXPROGRESS3\n";
 pub(crate) const MAX_ENTRIES: usize = 65536;
 pub(crate) const MAX_BYTES: usize = 8 << 20;
 
@@ -12,11 +13,29 @@ pub(crate) const MAX_BYTES: usize = 8 << 20;
 pub struct Progress {
     missions: BTreeMap<(i32, i32), bool>,
     completed: BTreeMap<(i32, i32), bool>,
+    campaigns: BTreeMap<i32, bool>,
 }
 
 impl Progress {
     pub fn mission_available(&self, campaign: i32, mission: i32) -> Option<bool> {
         self.missions.get(&(campaign, mission)).copied()
+    }
+
+    /// Campaign-level availability written by `SetCampaignAvailable`, keyed by the
+    /// script's campaign number. `None` until a script assigns it.
+    pub fn campaign_available(&self, campaign: i32) -> Option<bool> {
+        self.campaigns.get(&campaign).copied()
+    }
+
+    pub(crate) fn set_campaign(&mut self, campaign: i32, available: bool) -> Result<(), String> {
+        if campaign < 0 {
+            return Err("negative campaign index is not admitted".into());
+        }
+        if !self.campaigns.contains_key(&campaign) && self.campaigns.len() >= MAX_ENTRIES {
+            return Err("campaign availability entry policy exceeded".into());
+        }
+        self.campaigns.insert(campaign, available);
+        Ok(())
     }
 
     /// Authored `DefaultOpen` availability refined by executed assignments.
@@ -90,28 +109,32 @@ impl Progress {
         !ordered.is_empty() && self.next_incomplete(ordered).is_none()
     }
 
+    /// Encodes the `PCXPROGRESS3` layout: three `u32` counts (missions, completions,
+    /// campaigns), then 9-byte mission and completion entries and 5-byte campaign entries.
     pub(crate) fn encode(&self) -> Result<Vec<u8>, String> {
         let length = self
             .missions
             .len()
             .checked_add(self.completed.len())
             .and_then(|n| n.checked_mul(9))
-            .and_then(|size| size.checked_add(MAGIC_COMPLETION.len() + 8))
+            .and_then(|size| size.checked_add(self.campaigns.len().checked_mul(5)?))
+            .and_then(|size| size.checked_add(MAGIC_CAMPAIGN.len() + 12))
             .filter(|size| *size <= MAX_BYTES)
             .ok_or("campaign progress byte policy exceeded")?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(length).map_err(|e| e.to_string())?;
-        bytes.extend_from_slice(MAGIC_COMPLETION);
-        bytes.extend_from_slice(
-            &u32::try_from(self.missions.len())
-                .map_err(|e| e.to_string())?
-                .to_le_bytes(),
-        );
-        bytes.extend_from_slice(
-            &u32::try_from(self.completed.len())
-                .map_err(|e| e.to_string())?
-                .to_le_bytes(),
-        );
+        bytes.extend_from_slice(MAGIC_CAMPAIGN);
+        for count in [
+            self.missions.len(),
+            self.completed.len(),
+            self.campaigns.len(),
+        ] {
+            bytes.extend_from_slice(
+                &u32::try_from(count)
+                    .map_err(|e| e.to_string())?
+                    .to_le_bytes(),
+            );
+        }
         for (&(campaign, mission), &available) in &self.missions {
             bytes.extend_from_slice(&campaign.to_le_bytes());
             bytes.extend_from_slice(&mission.to_le_bytes());
@@ -121,6 +144,10 @@ impl Progress {
             bytes.extend_from_slice(&campaign.to_le_bytes());
             bytes.extend_from_slice(&mission.to_le_bytes());
             bytes.push(1);
+        }
+        for (&campaign, &available) in &self.campaigns {
+            bytes.extend_from_slice(&campaign.to_le_bytes());
+            bytes.push(u8::from(available));
         }
         Ok(bytes)
     }
@@ -146,9 +173,75 @@ impl Progress {
         Ok(())
     }
 
+    fn decode_v3(bytes: &[u8]) -> Result<Self, String> {
+        let header = bytes
+            .get(MAGIC_CAMPAIGN.len()..MAGIC_CAMPAIGN.len() + 12)
+            .ok_or("truncated campaign progress header")?;
+        let count = |at: usize| -> Result<usize, String> {
+            let n = usize::try_from(u32::from_le_bytes(header[at..at + 4].try_into().unwrap()))
+                .map_err(|e| e.to_string())?;
+            if n > MAX_ENTRIES {
+                return Err("campaign progress count/length policy".into());
+            }
+            Ok(n)
+        };
+        let (available, done, campaigns) = (count(0)?, count(4)?, count(8)?);
+        let body = &bytes[MAGIC_CAMPAIGN.len() + 12..];
+        let expected = available
+            .checked_add(done)
+            .and_then(|n| n.checked_mul(9))
+            .and_then(|m| m.checked_add(campaigns.checked_mul(5)?));
+        if expected != Some(body.len()) {
+            return Err("campaign progress count/length policy".into());
+        }
+        let (missions, rest) = body.split_at(available * 9);
+        let (completions, campaign_entries) = rest.split_at(done * 9);
+        let mut value = Self::default();
+        for entry in missions.as_chunks::<9>().0 {
+            let campaign = i32::from_le_bytes(entry[..4].try_into().unwrap());
+            let mission = i32::from_le_bytes(entry[4..8].try_into().unwrap());
+            let available = match entry[8] {
+                0 => false,
+                1 => true,
+                _ => return Err("invalid mission availability boolean".into()),
+            };
+            if value.mission_available(campaign, mission).is_some() {
+                return Err("duplicate campaign progress entry".into());
+            }
+            value.set(campaign, mission, available)?;
+        }
+        for entry in completions.as_chunks::<9>().0 {
+            let campaign = i32::from_le_bytes(entry[..4].try_into().unwrap());
+            let mission = i32::from_le_bytes(entry[4..8].try_into().unwrap());
+            if entry[8] != 1 {
+                return Err("invalid mission completion boolean".into());
+            }
+            if value.is_complete(campaign, mission) {
+                return Err("duplicate campaign completion entry".into());
+            }
+            value.mark_complete(campaign, mission)?;
+        }
+        for entry in campaign_entries.as_chunks::<5>().0 {
+            let campaign = i32::from_le_bytes(entry[..4].try_into().unwrap());
+            let available = match entry[4] {
+                0 => false,
+                1 => true,
+                _ => return Err("invalid campaign availability boolean".into()),
+            };
+            if value.campaign_available(campaign).is_some() {
+                return Err("duplicate campaign availability entry".into());
+            }
+            value.set_campaign(campaign, available)?;
+        }
+        Ok(value)
+    }
+
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_BYTES {
             return Err("unsupported campaign progress format/byte policy".into());
+        }
+        if bytes.starts_with(MAGIC_CAMPAIGN) {
+            return Self::decode_v3(bytes);
         }
         if bytes.starts_with(MAGIC_COMPLETION) {
             let header = bytes
@@ -245,13 +338,66 @@ mod tests {
         *boolean.last_mut().unwrap() = 2;
         assert!(Progress::decode(&boolean).is_err());
         let mut duplicate = valid.clone();
-        duplicate[MAGIC_COMPLETION.len()..MAGIC_COMPLETION.len() + 4]
+        duplicate[MAGIC_CAMPAIGN.len()..MAGIC_CAMPAIGN.len() + 4]
             .copy_from_slice(&2u32.to_le_bytes());
-        duplicate.extend_from_slice(&valid[MAGIC_COMPLETION.len() + 8..]);
+        duplicate.extend_from_slice(&valid[MAGIC_CAMPAIGN.len() + 12..]);
         assert!(Progress::decode(&duplicate).is_err());
         let mut negative = valid;
-        negative[MAGIC_COMPLETION.len() + 8..MAGIC_COMPLETION.len() + 12]
+        negative[MAGIC_CAMPAIGN.len() + 12..MAGIC_CAMPAIGN.len() + 16]
             .copy_from_slice(&(-1i32).to_le_bytes());
         assert!(Progress::decode(&negative).is_err());
+    }
+
+    #[test]
+    fn campaign_availability_is_distinct_from_missions_and_round_trips() {
+        let mut progress = Progress::default();
+        assert_eq!(progress.campaign_available(4), None);
+        progress.set_campaign(4, false).unwrap();
+        progress.set_campaign(4, true).unwrap();
+        progress.set(4, 0, false).unwrap();
+        assert_eq!(progress.campaign_available(4), Some(true));
+        assert_eq!(progress.mission_available(4, 0), Some(false));
+        assert_eq!(progress.campaign_available(5), None);
+        assert!(progress.set_campaign(-1, true).is_err());
+        assert_eq!(
+            Progress::decode(&progress.encode().unwrap()).unwrap(),
+            progress
+        );
+    }
+
+    #[test]
+    fn campaign_entries_refuse_bad_booleans_duplicates_and_truncation() {
+        let mut progress = Progress::default();
+        progress.set_campaign(2, true).unwrap();
+        let valid = progress.encode().unwrap();
+        assert_eq!(valid.len(), MAGIC_CAMPAIGN.len() + 12 + 5);
+        for end in 0..valid.len() {
+            assert!(Progress::decode(&valid[..end]).is_err());
+        }
+        let mut boolean = valid.clone();
+        *boolean.last_mut().unwrap() = 3;
+        assert!(Progress::decode(&boolean).is_err());
+        let mut duplicate = Vec::from(MAGIC_CAMPAIGN);
+        duplicate.extend_from_slice(&0u32.to_le_bytes());
+        duplicate.extend_from_slice(&0u32.to_le_bytes());
+        duplicate.extend_from_slice(&2u32.to_le_bytes());
+        for _ in 0..2 {
+            duplicate.extend_from_slice(&2i32.to_le_bytes());
+            duplicate.push(1);
+        }
+        assert!(Progress::decode(&duplicate).is_err());
+    }
+
+    #[test]
+    fn legacy_v2_profiles_still_decode_without_campaign_availability() {
+        let mut legacy = Vec::from(MAGIC_COMPLETION);
+        legacy.extend_from_slice(&1u32.to_le_bytes());
+        legacy.extend_from_slice(&0u32.to_le_bytes());
+        legacy.extend_from_slice(&3i32.to_le_bytes());
+        legacy.extend_from_slice(&7i32.to_le_bytes());
+        legacy.push(1);
+        let decoded = Progress::decode(&legacy).unwrap();
+        assert_eq!(decoded.mission_available(3, 7), Some(true));
+        assert_eq!(decoded.campaign_available(3), None);
     }
 }

@@ -210,7 +210,10 @@ and differing-fraction policy; no reference pixels are hard-coded. The existing
 projection behavior are unchanged.
 
 `Progress` now records executed full-mission victories alongside availability
-in a `PCXPROGRESS2` encoding (v1 still decodes). `mark_complete`/`is_complete`
+in a `PCXPROGRESS3` encoding (v1 and v2 still decode). `SetCampaignAvailable`
+writes campaign-level availability keyed by the script's campaign number into
+the same store; the campaign menu does not read it yet, so `default_open` still
+drives the menu. `mark_complete`/`is_complete`
 only reflect observed wins; `next_incomplete`/`order_complete` run over a
 caller-supplied authored order. The menu maps rows to native
 `(source_index, mission row)` keys via `native_mission_key` (blank slots

@@ -5,6 +5,8 @@ use std::sync::{
 };
 
 const PROGRESS: &str = "native SetMissionAvailable takes integer c, integer m, boolean a returns nothing\nnative SetNextLevel takes string map returns nothing\n";
+const CAMPAIGN_DECLARATION: &str =
+    "native SetCampaignAvailable takes integer c, boolean a returns nothing\n";
 #[derive(Default)]
 struct Memory {
     bytes: Mutex<Option<Vec<u8>>>,
@@ -85,9 +87,61 @@ fn mission_assignments_are_durable_and_failed_writes_leave_state_unchanged() {
 }
 
 #[test]
+fn campaign_availability_is_durable_and_failed_writes_leave_state_unchanged() {
+    let memory = Arc::new(Memory::default());
+    let p = program(&format!("{PROGRESS}{CAMPAIGN_DECLARATION}"), "", "");
+    let mut h = host(p.clone(), 4);
+    assert!(
+        h.native(CAMPAIGN, &[Value::Int(2), Value::Bool(true)])
+            .is_err()
+    );
+    h.admit_campaign_progress_storage(memory.clone()).unwrap();
+    assert_eq!(h.campaign_progress().unwrap().campaign_available(2), None);
+    h.native(CAMPAIGN, &[Value::Int(2), Value::Bool(true)])
+        .unwrap();
+    let saved = memory.load(1000).unwrap();
+    memory.fail.store(true, Ordering::Relaxed);
+    assert!(
+        h.native(CAMPAIGN, &[Value::Int(2), Value::Bool(false)])
+            .is_err()
+    );
+    assert_eq!(
+        h.campaign_progress().unwrap().campaign_available(2),
+        Some(true)
+    );
+    assert_eq!(memory.load(1000).unwrap(), saved);
+    memory.fail.store(false, Ordering::Relaxed);
+    let mut restored = host(p, 4);
+    restored.admit_campaign_progress_storage(memory).unwrap();
+    assert_eq!(
+        restored.campaign_progress().unwrap().campaign_available(2),
+        Some(true)
+    );
+    assert_eq!(
+        restored
+            .campaign_progress()
+            .unwrap()
+            .mission_available(2, 0),
+        None
+    );
+    for args in [
+        vec![],
+        vec![Value::Int(-1), Value::Bool(true)],
+        vec![Value::Bool(true), Value::Bool(true)],
+    ] {
+        assert!(restored.native(CAMPAIGN, &args).is_err());
+        assert_eq!(
+            restored.campaign_progress().unwrap().campaign_available(2),
+            Some(true)
+        );
+    }
+}
+
+#[test]
 fn selected_native_contracts_are_required_and_next_map_is_session_local() {
     for declaration in [
         "native SetMissionAvailable takes integer c, real m, boolean a returns nothing\n",
+        "native SetCampaignAvailable takes integer c, real a returns nothing\n",
         "constant native SetNextLevel takes string map returns nothing\n",
     ] {
         assert!(

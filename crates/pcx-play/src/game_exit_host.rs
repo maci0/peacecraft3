@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 const END_GAME: &str = "EndGame";
 const MISSION: &str = "SetMissionAvailable";
+const CAMPAIGN: &str = "SetCampaignAvailable";
 const NEXT_LEVEL: &str = "SetNextLevel";
 const CHANGE_LEVEL: &str = "ChangeLevel";
 
@@ -22,7 +23,7 @@ pub struct GameExitRequest {
 }
 
 pub(super) struct GameExits {
-    admitted: [bool; 4],
+    admitted: [bool; 5],
     max_pending: usize,
     requests: Vec<GameExitRequest>,
     progress: Option<(Progress, Arc<dyn Storage>)>,
@@ -41,12 +42,13 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<GameExitRequest>(max_pending)
             .map_err(|_| self.inner.error(END_GAME, Failure::Capacity))?;
-        let mut admitted = [false; 4];
+        let mut admitted = [false; 5];
         for (index, (name, args)) in [
             (END_GAME, &["boolean"][..]),
             (MISSION, &["integer", "integer", "boolean"][..]),
             (NEXT_LEVEL, &["string"][..]),
             (CHANGE_LEVEL, &["string", "boolean"][..]),
+            (CAMPAIGN, &["integer", "boolean"][..]),
         ]
         .into_iter()
         .enumerate()
@@ -152,7 +154,11 @@ impl ObjectHost {
         &mut self,
         storage: Arc<dyn Storage>,
     ) -> Result<(), Error> {
-        let Some(state) = self.game_exit.as_ref().filter(|s| s.admitted[1]) else {
+        let Some(state) = self
+            .game_exit
+            .as_ref()
+            .filter(|s| s.admitted[1] || s.admitted[4])
+        else {
             return Ok(());
         };
         let fail = |detail| self.inner.error(MISSION, Failure::CampaignProgress(detail));
@@ -191,6 +197,9 @@ impl ObjectHost {
         let state = self.game_exit.as_ref()?;
         if name == MISSION && state.admitted[1] {
             return Some(self.set_mission_available(args));
+        }
+        if name == CAMPAIGN && state.admitted[4] {
+            return Some(self.set_campaign_available(args));
         }
         if name == NEXT_LEVEL && state.admitted[2] {
             return Some(self.set_next_level(args));
@@ -244,6 +253,30 @@ impl ObjectHost {
         }
         let mut next = profile.clone();
         next.set(*campaign, *mission, *available).map_err(fail)?;
+        let bytes = next.encode().map_err(fail)?;
+        storage.save(&bytes).map_err(fail)?;
+        *profile = next;
+        Ok(Value::Null)
+    }
+
+    fn set_campaign_available(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |detail| {
+            self.inner
+                .error(CAMPAIGN, Failure::CampaignProgress(detail))
+        };
+        let [Value::Int(campaign), Value::Bool(available)] = args else {
+            return Err(fail("campaign and availability required".into()));
+        };
+        let (profile, storage) = self
+            .game_exit
+            .as_mut()
+            .and_then(|s| s.progress.as_mut())
+            .ok_or_else(|| fail("progress storage is not admitted".into()))?;
+        if profile.campaign_available(*campaign) == Some(*available) {
+            return Ok(Value::Null);
+        }
+        let mut next = profile.clone();
+        next.set_campaign(*campaign, *available).map_err(fail)?;
         let bytes = next.encode().map_err(fail)?;
         storage.save(&bytes).map_err(fail)?;
         *profile = next;
