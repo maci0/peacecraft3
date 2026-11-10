@@ -6,13 +6,15 @@ class getters lead to their class-code and on/off-order virtuals. The bound
 classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`),
 Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`), Web (`CAbilityWeb`,
 code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
-(`CAbilityRenew`, code `Aren`) and Bloodlust (`CAbilityBloodlust`, code `Ablo`).
-The reader decodes all nine with the same OFF handler checks and refuses the image
-otherwise. Each OFF order name is the `Orderoff` of an ability section in the
-`*AbilityFunc.txt` members, and each section's `code` (from `Units\AbilityData.slk`)
-selects the class: `weboff` in `[Aweb]` and `[ACwb]`, `faeriefireoff` in `[Afae]`,
-`[Afa2]` and `[ACff]`, `renewoff` in `[Aren]`, `bloodlustoff` in `[Ablo]` and
-`[ACbb]`/`[ACbl]`. The OFF handler
+(`CAbilityRenew`, code `Aren`), Bloodlust (`CAbilityBloodlust`, code `Ablo`), Frost
+Armor (`CAbilityFrostArmorAuto`, code `AUfu`) and Restoration (`CAbilityRestoration`,
+code `Arst`). The reader decodes all eleven with the same OFF handler checks and
+refuses the image otherwise. Each OFF order name is the `Orderoff` of an ability
+section in the `*AbilityFunc.txt` members, and each section's `code` (from
+`Units\AbilityData.slk`) selects the class: `weboff` in `[Aweb]` and `[ACwb]`,
+`faeriefireoff` in `[Afae]`, `[Afa2]` and `[ACff]`, `renewoff` in `[Aren]`,
+`bloodlustoff` in `[Ablo]` and `[ACbb]`/`[ACbl]`, `frostarmoroff` in `[AUfu]`,
+`[ACfu]` and `[ACf2]`, `restorationoff` in `[Arst]`. The OFF handler
 joins a tested state-bit operand to its complementary clear operand and the
 already-clear return branch. The reader derives these operands and IDs; it does
 not embed native addresses or order IDs. Synthetic relocated/nonstock fixtures
@@ -61,9 +63,36 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic effects of the nine
+slice. ON orders explicitly refuse before mutation: automatic effects of the eleven
 bound classes, their default-enabled automatic operation, and the later
 `ravenform` transformation remain required work.
+
+## Mana Shield, Frost Armor base class and Burrow (not bound)
+
+`manashieldoff` is the OFF order of `[ANms]` (`Orderon=manashieldon`,
+`Orderoff=manashieldoff`), code `ANms`, class `CAbilityManaShield`. Its on/off
+values are immediates and its OFF virtual reaches the same shared handler as the
+bound classes, so the shape check passes. The repo has no mana shield active
+state or effect: `ANms` and the class appear nowhere outside the class list. An
+OFF would therefore change state with no verified effect. The order stays
+refused. Missing evidence: the meaning of the tested state bit for a toggle, the
+shield's absorption effect and timing, and the return for a unit without an
+active shield.
+
+`CAbilityFrostArmor` (code `AUfa`, alias `[AUfa]`, which has no `Orderoff`) is not
+the class for `frostarmoroff`. Its OFF virtual is `mov eax, [global]`, not an
+immediate, and the reader does not read initialized data for a class constant.
+The `AUfu` alias binds through `CAbilityFrostArmorAuto`, whose constants are
+immediates.
+
+`burrow` is the order of `[Abur]`, `[Abu2]`, `[Abu3]` and `[Abu5]`
+(`Order=burrow`, `Unorder=unburrow`). None of these sections has an `Orderoff`,
+so the autocast OFF profile check cannot apply. `CAbilityBurrow` is a morph
+ability. The repo's form-change path is `prepare_form` in `unit_host.rs`, reached
+by Raven Form (`unit_morph_rules.rs`, `script-unit-morph.md`) and by Polymorph
+(`unit_curse_host.rs`). No burrow state or its movement and targeting effects
+exist in the repo. Burrow stays refused until that state and its effects are
+established.
 
 ## Root and unroot (not autocast)
 

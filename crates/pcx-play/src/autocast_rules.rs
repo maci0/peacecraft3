@@ -19,7 +19,7 @@ pub struct Rules {
     pub classes: Vec<Class>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
-const CLASS_NAMES: [&str; 9] = [
+const CLASS_NAMES: [&str; 11] = [
     "CAbilitySlow",
     "CAbilityInnerFire",
     "CAbilityHeal",
@@ -29,6 +29,8 @@ const CLASS_NAMES: [&str; 9] = [
     "CAbilityFaerieFire",
     "CAbilityRenew",
     "CAbilityBloodlust",
+    "CAbilityFrostArmorAuto",
+    "CAbilityRestoration",
 ];
 const SCANS_PER_CLASS: usize = 3;
 fn word(b: &[u8], at: usize) -> Result<u32, String> {

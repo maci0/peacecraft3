@@ -22,7 +22,12 @@ fn fixture(shift: u32, mask: u8) -> Vec<(u32, Vec<u8>, bool)> {
         memory.push((f, constant(n), true));
         memory.push((
             f + 0x10,
-            constant(u32::from_be_bytes([b'X', b'0', b'0' + i as u8, b'1'])),
+            constant(u32::from_be_bytes([
+                b'X',
+                b'0' + (i / 10) as u8,
+                b'0' + (i % 10) as u8,
+                b'1',
+            ])),
             true,
         ));
         memory.push((f + 0x20, constant(7000 + i as u32 * 2), true));
@@ -123,7 +128,7 @@ fn selected_original_autocast_classes_bind() {
     assert_eq!(rules.classes.len(), CLASS_NAMES.len());
     assert!(rules.classes.iter().all(|c| c.on != c.off));
     let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
-    for code in [b"Aweb", b"Afae", b"Aren", b"Ablo"] {
+    for code in [b"Aweb", b"Afae", b"Aren", b"Ablo", b"AUfu", b"Arst"] {
         assert!(codes.contains(code), "missing autocast class {code:?}");
     }
 }
