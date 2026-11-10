@@ -37,7 +37,11 @@ fn selected_original_help_tips_default_font_gate() -> Result<(), Box<dyn std::er
         .expect("set PEACECRAFT3_LEGACY_DIR to the selected 1.29.2.9231 install");
     let dir = std::path::PathBuf::from(dir);
     let exe = std::fs::read(dir.join("Warcraft III.exe"))?;
-    assert_eq!(sha256_hex(&exe), LEGACY_EXE_SHA256, "selected executable identity");
+    assert_eq!(
+        sha256_hex(&exe),
+        LEGACY_EXE_SHA256,
+        "selected executable identity"
+    );
 
     let mut set = MpqSet::open_wc3(&dir)?;
     let misc = set.extract(r"UI\MiscUI.txt")?;
@@ -51,23 +55,39 @@ fn selected_original_help_tips_default_font_gate() -> Result<(), Box<dyn std::er
         .map_err(|e| format!("DefaultFont::read: {e}"))?;
     println!(
         "DefaultFont section={} key={} prefix={} format={:?} texture={} path={} slot={} table={} axis={} wrapping={}",
-        font.section, font.key, font.path_prefix, font.path_format, font.font_texture,
-        font.font_path, font.wrapping_slot, font.table_height, font.axis_factor,
+        font.section,
+        font.key,
+        font.path_prefix,
+        font.path_format,
+        font.font_texture,
+        font.font_path,
+        font.wrapping_slot,
+        font.table_height,
+        font.axis_factor,
         font.wrapping_height()
     );
     assert_eq!(font.section, "Misc");
     assert_eq!(font.key, "FontTexture");
     assert_eq!(font.wrapping_slot, 0);
     assert!(font.table_height > 0.0 && font.axis_factor > 0.0);
-    assert_eq!(font.font_path, format!("{}\\{}", font.path_prefix, font.font_texture));
+    assert_eq!(
+        font.font_path,
+        format!("{}\\{}", font.path_prefix, font.font_texture)
+    );
 
     // Decoded path must resolve to an actual font member in the selected archives.
     let font_member = font.font_path.replace('\\', "/");
     println!("font member lookup: {font_member}");
-    assert!(set.contains(&font.font_path) || set.contains(&font_member), "decoded font path must resolve in selected archives: {}", font.font_path);
-    let font_bytes = set.extract(&font.font_path).or_else(|_| set.extract(&font_member))?;
+    assert!(
+        set.contains(&font.font_path) || set.contains(&font_member),
+        "decoded font path must resolve in selected archives: {}",
+        font.font_path
+    );
+    let font_bytes = set
+        .extract(&font.font_path)
+        .or_else(|_| set.extract(&font_member))?;
     println!("font bytes: {}", font_bytes.len());
-    assert!(font_bytes.len() > 0, "decoded font is empty");
+    assert!(!font_bytes.is_empty(), "decoded font is empty");
 
     // FDF row height is a separate input from wrapping height.
     let templates = set.extract(r"UI\FrameDef\UI\EscMenuTemplates.fdf")?;
