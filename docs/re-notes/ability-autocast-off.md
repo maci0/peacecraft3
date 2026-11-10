@@ -3,10 +3,16 @@
 The selected Legacy client capability is read from the retained executable, with
 its input identity and SHA checked at admission. Named Slow, Inner Fire and Heal
 class getters lead to their class-code and on/off-order virtuals. The bound
-classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`)
-and Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`); the reader
-decodes all five with the same OFF handler checks and refuses the image
-otherwise. The OFF handler
+classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`),
+Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`), Web (`CAbilityWeb`,
+code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
+(`CAbilityRenew`, code `Aren`) and Bloodlust (`CAbilityBloodlust`, code `Ablo`).
+The reader decodes all nine with the same OFF handler checks and refuses the image
+otherwise. Each OFF order name is the `Orderoff` of an ability section in the
+`*AbilityFunc.txt` members, and each section's `code` (from `Units\AbilityData.slk`)
+selects the class: `weboff` in `[Aweb]` and `[ACwb]`, `faeriefireoff` in `[Afae]`,
+`[Afa2]` and `[ACff]`, `renewoff` in `[Aren]`, `bloodlustoff` in `[Ablo]` and
+`[ACbb]`/`[ACbl]`. The OFF handler
 joins a tested state-bit operand to its complementary clear operand and the
 already-clear return branch. The reader derives these operands and IDs; it does
 not embed native addresses or order IDs. Synthetic relocated/nonstock fixtures
@@ -55,7 +61,25 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic effects of the five
+slice. ON orders explicitly refuse before mutation: automatic effects of the nine
 bound classes, their default-enabled automatic operation, and the later
-`ravenform` transformation remain required work. No full autocast or interlude
+`ravenform` transformation remain required work.
+
+## Root and unroot (not autocast)
+
+`unroot` is the uproot order of the Night Elf root ability, not an autocast OFF.
+`[Aroo]` in `NightElfAbilityFunc.txt` and `[Aro1]`/`[Aro2]` in
+`NeutralAbilityFunc.txt` declare `Order=root` and `Unorder=unroot`; their `code`
+is `Aroo`, and the executable carries a `CAbilityRoot` class name. The
+locked-chapter probe for NightElf01 reaches `unroot` on unit `etol`, which
+carries `Aro1` at rank one, and receives the generic unsupported
+immediate-order refusal.
+
+The root effect is not established. `ai-construction.md` records state bits
+`0x80` and `0x8000000` as candidate rooted/uprooted building states with an
+unproven mapping to live ability state, and the recreation does not implement
+that state. Missing evidence: the state transition, its timing, movement and
+attack effects, the cost or cooldown, and the return for an already-uprooted
+unit. A native trace or runtime probe must establish these before `unroot` is
+bound. Until then the order stays refused. No full autocast or interlude
 completion is claimed by these parser and synthetic host tests.

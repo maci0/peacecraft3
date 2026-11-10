@@ -122,6 +122,10 @@ fn selected_original_autocast_classes_bind() {
     .unwrap();
     assert_eq!(rules.classes.len(), CLASS_NAMES.len());
     assert!(rules.classes.iter().all(|c| c.on != c.off));
+    let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
+    for code in [b"Aweb", b"Afae", b"Aren", b"Ablo"] {
+        assert!(codes.contains(code), "missing autocast class {code:?}");
+    }
 }
 
 #[test]
