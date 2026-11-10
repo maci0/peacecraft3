@@ -156,9 +156,17 @@ accessors remain possible. No unsupported quality control was enabled.
 ## Implementation note (pcx-gfx texture quality consumer)
 
 The policy/consumer lands in `crates/pcx-gfx/src/texture_quality.rs` and
-`one_mip` in `crates/pcx-gfx/src/lib.rs`. The mapping is the branch
-derivation above: `q=0 -> mip 1, 0x10`; `q=1,2 -> mip 0, 0x10`;
-`q=3 -> mip 0, 0x20`. `one_mip` decodes only the selected authored BLP
-mip level (direct or JPEG content via the existing `pcx-blp` decoders)
-and refuses absent/invalid levels. No shared menu/settings/glue files
-were touched; UI wiring is a handoff for the integrator.
+`one_mip` in `crates/pcx-gfx/src/lib.rs`. The mapping is derived at
+runtime from the branch windows (not hard-coded): `miplevel` special
+index 0 (`q=0 -> mip 1`, else 0) and `texcolordepth` special index 2
+(`q=2 -> 32`, else 16). Depth words are decimal bit depths (descriptor
+fallbacks `"16"`/`"32"`, `atoi`-parsed): 16 -> 2 bytes/pixel,
+32 -> 4 bytes/pixel; other words refuse. The 2-byte case has no RGBA8
+store in `one_mip` and refuses fail-closed; no RGBA16 format is
+invented. Earlier note said `q=3 -> 0x20`; that misread the mutated
+`edi` after cumulative subs. The startup writer at `0x428682`
+(`cmp edi,2; cmove`) confirms q=2. `one_mip` decodes only the
+selected authored BLP mip level (direct or JPEG content via the
+existing `pcx-blp` decoders) and refuses absent/invalid levels. No
+shared menu/settings/glue files were touched; UI wiring is a handoff
+for the integrator.

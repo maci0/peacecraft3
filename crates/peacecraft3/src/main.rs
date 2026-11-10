@@ -84,6 +84,7 @@ mod menu_material;
 mod menu_panel;
 mod menu_particle_order;
 mod menu_screens;
+mod menu_texture_quality;
 mod menu_settings;
 mod menu_skin;
 mod menu_sprites;

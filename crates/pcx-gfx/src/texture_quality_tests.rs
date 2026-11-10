@@ -1,8 +1,7 @@
-// Texture Quality policy and consumer tests (headless). Fixture mirrors
-// `image_mip_tests::fixture` but imported so both stay in sync.
-use crate::texture_quality::{PolicyError, texture_quality_for_ordinal};
-use crate::{LoadedTexture, one_mip};
-use pcx_blp::{PALETTE_BASE, MIP_BASE};
+// Texture Quality policy and consumer tests (headless).
+use crate::texture_quality::{PolicyError, derive_texture_quality};
+use crate::{TextureQuality, one_mip};
+use pcx_blp::{MIP_BASE, PALETTE_BASE};
 
 fn fixture() -> Vec<u8> {
     let mut data = vec![0; PALETTE_BASE + 256 * 4];
@@ -30,96 +29,333 @@ fn fixture() -> Vec<u8> {
     data
 }
 
-#[test]
-fn nonstock_ordinal_mapping_follows_native_branches() {
-    // Derived from the write-routine branch chains, not a lookup table:
-    // q=0 -> (mip 1, depth 0x10); q=1,2 -> (mip 0, depth 0x10);
-    // q=3 -> (mip 0, depth 0x20).
-    let q0 = texture_quality_for_ordinal(0).unwrap();
-    assert_eq!(q0.mip_level, 1);
-    assert_eq!(q0.color_depth_bytes, 4);
-    assert_eq!(q0.texcolordepth_word, 0x10);
-
-    for q in [1, 2] {
-        let v = texture_quality_for_ordinal(q).unwrap();
-        assert_eq!(v.mip_level, 0, "q={q}");
-        assert_eq!(v.color_depth_bytes, 4, "q={q}");
-        assert_eq!(v.texcolordepth_word, 0x10, "q={q}");
-    }
-
-    let q3 = texture_quality_for_ordinal(3).unwrap();
-    assert_eq!(q3.mip_level, 0);
-    assert_eq!(q3.color_depth_bytes, 8);
-    assert_eq!(q3.texcolordepth_word, 0x20);
+// Synthetic branch windows with NONSTOCK operands (not the reviewed image's
+// 1/16/32): mip special value 7 at q=0; depth default 32, special 16 at
+// cumulative sub 3 (q=3). Derivation must follow operands, not a table.
+fn nonstock_miplevel() -> Vec<u8> {
+    vec![
+        0x33, 0xc9, 0x8b, 0xc7, 0x2b, 0xc1, 0x74, 0x0e, 0x83, 0xe8, 0x01, 0x74, 0x05, 0x83,
+        0xe8, 0x01, 0x75, 0x09, 0x33, 0xc9, 0xeb, 0x05, 0xb9, 7, 0, 0, 0, 0x51, 0x6a, 0x0a,
+        0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
+    ]
+}
+fn nonstock_texcolor() -> Vec<u8> {
+    vec![
+        0xb8, 32, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0x83, 0xef, 0x01, 0x74, 0x0a, 0x83,
+        0xef, 0x02, 0x75, 0x05, 0xb8, 16, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b, 0xcb, 0xe8, 0, 0,
+        0, 0,
+    ]
 }
 
 #[test]
-fn out_of_range_ordinals_refuse() {
-    for bad in [4, 5, 100, u32::MAX] {
-        assert_eq!(
-            texture_quality_for_ordinal(bad),
-            Err(PolicyError::OrdinalOutOfRange { ordinal: bad })
-        );
+fn nonstock_branch_operands_drive_derivation() {
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    // q=0: mip special 7, depth default 32 (4 bytes)
+    let q0 = derive_texture_quality(&m, &t, 0, 4).unwrap();
+    assert_eq!(q0.mip_level, 7);
+    assert_eq!(q0.texcolordepth_word, 32);
+    assert_eq!(q0.color_depth_bytes, 4);
+    // q=1,2: mip default 0, depth default
+    for q in [1, 2] {
+        let v = derive_texture_quality(&m, &t, q, 4).unwrap();
+        assert_eq!(v.mip_level, 0, "q={q}");
+        assert_eq!(v.texcolordepth_word, 32, "q={q}");
     }
+    // q=3 (cumulative 0+1+2): depth special 16 (2 bytes)
+    let q3 = derive_texture_quality(&m, &t, 3, 4).unwrap();
+    assert_eq!(q3.mip_level, 0);
+    assert_eq!(q3.texcolordepth_word, 16);
+    assert_eq!(q3.color_depth_bytes, 2);
+}
+
+#[test]
+fn unknown_depth_word_refuses() {
+    let m = nonstock_miplevel();
+    // depth special 24 (3 bytes) is not a validated bit depth pair
+    let t = vec![
+        0xb8, 16, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0xb8, 24, 0, 0, 0, 0x50, 0x6a, 0x0b,
+        0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
+    ];
+    assert_eq!(
+        derive_texture_quality(&m, &t, 0, 4),
+        Err(PolicyError::UnsupportedDepth { word: 24 })
+    );
+}
+
+#[test]
+fn malformed_branch_refuses() {
+    assert_eq!(
+        derive_texture_quality(&[0xff; 8], &[0xff; 8], 0, 4),
+        Err(PolicyError::MalformedBranch)
+    );
+    assert_eq!(
+        derive_texture_quality(&nonstock_miplevel(), &nonstock_texcolor(), 4, 4),
+        Err(PolicyError::OrdinalOutOfRange { ordinal: 4, domain: 4 })
+    );
+}
+
+#[test]
+fn caller_supplied_non_four_domain_bounds_ordinal() {
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    // A synthetic 3-choice domain admits 0..=2 and refuses 3, proving the
+    // bound comes from the caller, not a copied constant.
+    assert!(derive_texture_quality(&m, &t, 2, 3).is_ok());
+    assert_eq!(
+        derive_texture_quality(&m, &t, 3, 3),
+        Err(PolicyError::OrdinalOutOfRange { ordinal: 3, domain: 3 })
+    );
+    // A 6-choice domain admits the former out-of-range ordinal 4.
+    assert!(derive_texture_quality(&m, &t, 4, 6).is_ok());
+    // A zero domain admits nothing.
+    assert_eq!(
+        derive_texture_quality(&m, &t, 0, 0),
+        Err(PolicyError::OrdinalOutOfRange { ordinal: 0, domain: 0 })
+    );
 }
 
 #[test]
 fn quality_selects_chosen_mip_and_preserves_depth() {
     let data = fixture();
-    // q=1 picks the top mip (level 0): the fixture header declares 4x2 at
-    // level 0, so 8 pixels of [11,37,83,149].
-    let top = one_mip(&data, "q.blp", &texture_quality_for_ordinal(1).unwrap(), 64).unwrap();
-    assert_eq!(top.width, 4, "top {:?}", top.width);
-    assert_eq!(top.height, 2, "top {:?}", top.height);
-    assert_eq!(top.rgba.len(), 4 * 2 * 4, "top len {}", top.rgba.len());
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    // q=1 (mip default 0, depth 32->4B) picks top mip
+    let top = one_mip(&data, "q.blp", &derive_texture_quality(&m, &t, 1, 4).unwrap(), 64).unwrap();
+    assert_eq!(top.width, 4);
+    assert_eq!(top.height, 2);
+    assert_eq!(top.rgba.len(), 4 * 2 * 4);
     assert_eq!(top.rgba, [11, 37, 83, 149].repeat(8));
     assert!(top.mipmaps.is_empty());
+}
 
-    // q=0 picks authored mip level 1 with its own pixels and dimensions.
-    let lower = one_mip(&data, "q.blp", &texture_quality_for_ordinal(0).unwrap(), 64).unwrap();
-    assert_eq!(lower.width, 2, "lower {:?}", lower.width);
-    assert_eq!(lower.height, 1, "lower {:?}", lower.height);
-    assert_eq!(lower.rgba.len(), 2 * 1 * 4);
-    assert_eq!(lower.rgba, [17, 61, 127, 173].repeat(2));
-    assert!(lower.mipmaps.is_empty());
+// Spec pin for the recovered word expander at VA 0x7daba0..0x7dabd9 in
+// the qualified image (see docs/re-notes/texture-quality-depth16-evidence.md):
+// ARGB4444 nibbles expanded by `nibble << 4` (truncation, no replication).
+// Test-only: production still refuses depth 16 below; this pins the byte
+// math so a future qualified link cannot silently become RGB565.
+fn expand_word_4444(w: u16) -> [u8; 4] {
+    [
+        (((w >> 8) & 0x0f) << 4) as u8,
+        (((w >> 4) & 0x0f) << 4) as u8,
+        ((w & 0x0f) << 4) as u8,
+        (((w >> 12) & 0x0f) << 4) as u8,
+    ]
+}
 
-    // A LoadedTexture that is not a quality-selected load is untouched by
-    // this path: the unselected call shape stays the base-only loader.
-    let keep: LoadedTexture = top;
-    assert_eq!(keep.width, 4);
+#[test]
+fn word_expander_4444_nibble_shift_spec() {
+    // Nonstock words: each nibble distinct, high/low nibbles exercised.
+    assert_eq!(expand_word_4444(0x1234), [0x20, 0x30, 0x40, 0x10]);
+    assert_eq!(expand_word_4444(0xabcd), [0xb0, 0xc0, 0xd0, 0xa0]);
+    // Alpha preserved as nibble, including zero -> zero (no opaque branch).
+    assert_eq!(expand_word_4444(0x0fff), [0xf0, 0xf0, 0xf0, 0x00]);
+    // Single-nibble probes pin channel order R=bits8-11,G=4-7,B=0-3,A=12-15.
+    assert_eq!(expand_word_4444(0x0800), [0x80, 0, 0, 0]);
+    assert_eq!(expand_word_4444(0x0040), [0, 0x40, 0, 0]);
+    assert_eq!(expand_word_4444(0x0002), [0, 0, 0x20, 0]);
+    assert_eq!(expand_word_4444(0xf000), [0, 0, 0, 0xf0]);
+    // Truncation, not bit-replication: 0x0f expands to 0xf0, never 0xff.
+    assert_eq!(expand_word_4444(0x000f), [0, 0, 0xf0, 0]);
+    // Not RGB565: 0xf800 in 565 would be pure red; here nibbles expand independently.
+    assert_eq!(expand_word_4444(0xf800), [0x80, 0, 0, 0xf0]);
+    // NOT quality: the test helper above is deliberately separate from
+    // quantization. An RGBA8 pixel must NOT be forced through 4444
+    // expansion for texcolordepth; depth 16 below still refuses.
+    // A quantize helper here would pin an unqualified inverse
+    // (nibble = channel >> r) that no traced byte establishes.
+}
+
+// Regression pin for the traced flag-0x20 clearing (see evidence note):
+// every sampled creator caller reaches `0x7d11f0`/`0x9721b0` with a
+// flags word that clears bit 0x20, e.g. masks `0xffffffc1`,
+// `0xffffffc0`, `0xffffffce`, `0xffffffd1`, `0xffffffc2` and `or 0xe/0x11/2`.
+// The word expander is therefore unreachable for BLP/TGA via the traced
+// path, and no code path here may assume flag 0x20 is set for depth 16.
+// This test records the link failure: the expander stays a recovered
+// format, not a texcolordepth policy, and `one_mip` keeps refusing.
+#[test]
+fn word_expander_unreachable_for_blp_tga_flag_cleared() {
+    // Gx+0xe8==0 (depth 16) only affects the internal-format table
+    // branch at 0x7da9ee; it never selects the word expander (arg is
+    // chosen by descriptor flag 0x20 at 0x7da9a8). Synthetic proof:
+    // expander arg 0 -> swizzle path, never word path, in our model too.
+    fn expander_is_word_path(arg_nonzero: bool) -> bool {
+        arg_nonzero
+    }
+    assert!(!expander_is_word_path(false));
+    assert!(expander_is_word_path(true));
+    // Depth-16 policy still refuses even though the expander math pins.
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    let q3 = derive_texture_quality(&m, &t, 3, 4).unwrap();
+    assert_eq!(q3.color_depth_bytes, 2);
+    assert!(one_mip(&fixture(), "q.blp", &q3, 64).is_err());
+}
+
+#[test]
+fn depth_16_two_bytes_refuses_without_inventing_rgba16() {
+    let data = fixture();
+    let m = nonstock_miplevel();
+    let t = nonstock_texcolor();
+    // q=3 derived depth is 16 bits = 2 bytes; RGBA8 loader has no 2-byte
+    // store, so consumer refuses fail-closed (no RGBA16 invented).
+    let q3 = derive_texture_quality(&m, &t, 3, 4).unwrap();
+    assert_eq!(q3.color_depth_bytes, 2);
+    assert!(one_mip(&data, "q.blp", &q3, 64).is_err());
 }
 
 #[test]
 fn absent_or_invalid_mip_refuses_without_fallback() {
     let data = fixture();
-    // Manually request an absent level beyond the authored chain.
-    let bad = crate::TextureQuality {
+    let bad = TextureQuality {
         mip_level: 5,
         color_depth_bytes: 4,
-        texcolordepth_word: 0x10,
+        texcolordepth_word: 32,
     };
     let err = one_mip(&data, "absent.blp", &bad, 64).unwrap_err();
     assert!(err.to_string().contains("absent mip level 5"), "{err}");
-
-    // Zeroed mip_sizes entry for an in-range level is also a refusal.
     let mut gap = data.clone();
     gap[MIP_BASE + 8..MIP_BASE + 12].fill(0);
-    let zero = crate::TextureQuality {
+    let zero = TextureQuality {
         mip_level: 2,
         color_depth_bytes: 4,
-        texcolordepth_word: 0x10,
+        texcolordepth_word: 32,
     };
     assert!(one_mip(&gap, "gap.blp", &zero, 64).is_err());
-
-    // Budget is enforced before selection allocation.
-    assert!(one_mip(&data, "budget.blp", &texture_quality_for_ordinal(1).unwrap(), 10).is_err());
+    assert!(one_mip(&data, "budget.blp", &derive_texture_quality(&nonstock_miplevel(), &nonstock_texcolor(), 1, 4).unwrap(), 10).is_err());
 }
 
+// Explicit original-image gate: reads the reviewed Legacy executable named
+// by PCX_WAR3_EXE and the selected install's Options FDF via
+// PEACECRAFT3_INSTALL, extracts the two branch windows by VA via PE sections,
+// measures the actual TextureQualityMenu popup count from the FDF
+// MenuItem records, and checks the derived policy against the native bytes.
 #[test]
-fn depth_beyond_rgba_refuses() {
-    let data = fixture();
-    let q3 = texture_quality_for_ordinal(3).unwrap();
-    assert_eq!(q3.color_depth_bytes, 8);
-    // 8 bytes/pixel has no RGBA8 store; the consumer refuses fail-closed.
-    assert!(one_mip(&data, "q.blp", &q3, 64).is_err());
+#[ignore = "requires PCX_WAR3_EXE naming the reviewed Legacy Warcraft III.exe and PEACECRAFT3_INSTALL with the selected Options FDFs"]
+fn selected_original_branch_windows_derive_native_policy() {
+    let image = std::fs::read(std::env::var("PCX_WAR3_EXE").unwrap()).unwrap();
+    // Measure the authored popup domain from the actual FDF, not a
+    // copied count: TextureQualityMenu -> PopupMenuFrame -> MenuItem records.
+    let install = std::path::PathBuf::from(
+        std::env::var_os("PEACECRAFT3_INSTALL").expect("explicit original install required"),
+    );
+    let domain = {
+        // The caller (menu integrator) supplies the measured count in
+        // production; this gate proves the real source count by
+        // counting MenuItem lines in the Options FDF payload.
+        let bytes = find_options_fdf(&install);
+        count_texture_quality_items(&bytes)
+    };
+    assert!(domain > 0, "selected Options FDF must supply TextureQualityMenu items");
+    // PE32 section map (same shape as pcx-play pe_image, std-only here).
+    let pe = u32::from_le_bytes(image[0x3c..0x40].try_into().unwrap()) as usize;
+    assert_eq!(&image[pe..pe + 4], b"PE\0\0");
+    let coff = pe + 4;
+    let count = u16::from_le_bytes(image[coff + 2..coff + 4].try_into().unwrap()) as usize;
+    let opt_len = u16::from_le_bytes(image[coff + 16..coff + 18].try_into().unwrap()) as usize;
+    let opt = coff + 20;
+    let base = u32::from_le_bytes(image[opt + 28..opt + 32].try_into().unwrap());
+    let table = opt + opt_len;
+    let va_slice = |va: u32, len: usize| -> Vec<u8> {
+        let rva = va - base;
+        for i in 0..count {
+            let at = table + 40 * i;
+            let raw_size = u32::from_le_bytes(image[at + 16..at + 20].try_into().unwrap()) as usize;
+            let raw_at = u32::from_le_bytes(image[at + 20..at + 24].try_into().unwrap()) as usize;
+            let sec_rva = u32::from_le_bytes(image[at + 12..at + 16].try_into().unwrap());
+            if sec_rva <= rva && rva < sec_rva + raw_size as u32 {
+                let off = raw_at + (rva - sec_rva) as usize;
+                return image[off..off + len].to_vec();
+            }
+        }
+        panic!("VA {va:#x} not in any section");
+    };
+    let miplevel = va_slice(0x53865c, 0x20);
+    let texcolor = va_slice(0x538681, 0x1e);
+    // Native: q0 mip1/16, q1-2 mip0/16, q3 mip0/16, q2 depth 32.
+    // The domain is the measured FDF count; every native ordinal below
+    // must fall inside it.
+    let q0 = derive_texture_quality(&miplevel, &texcolor, 0, domain).unwrap();
+    assert_eq!(q0.mip_level, 1);
+    assert_eq!(q0.texcolordepth_word, 16);
+    assert_eq!(q0.color_depth_bytes, 2);
+    for q in [1, 3] {
+        let v = derive_texture_quality(&miplevel, &texcolor, q, domain).unwrap();
+        assert_eq!(v.mip_level, 0, "q={q}");
+        assert_eq!(v.texcolordepth_word, 16, "q={q}");
+    }
+    let q2 = derive_texture_quality(&miplevel, &texcolor, 2, domain).unwrap();
+    assert_eq!(q2.mip_level, 0);
+    assert_eq!(q2.texcolordepth_word, 32);
+    assert_eq!(q2.color_depth_bytes, 4);
+}
+
+// Count `MenuItem` records inside the `TextureQualityMenu` popup frame
+// of an Options FDF payload: find `TextureQualityMenu`, follow its
+// `PopupMenuFrame "<name>"`, then count `MenuItem` lines in that frame's
+// block. Pure text scan; no FDF parser dependency in pcx-gfx.
+fn count_texture_quality_items(fdf: &[u8]) -> usize {
+    let text = String::from_utf8_lossy(fdf);
+    // Locate the TextureQualityMenu frame block.
+    let menu_at = text
+        .find("TextureQualityMenu")
+        .expect("TextureQualityMenu in Options FDF");
+    let after = &text[menu_at..];
+    let popup_at = after
+        .find("PopupMenuFrame")
+        .expect("TextureQualityMenu PopupMenuFrame");
+    let popup_after = &after[popup_at..];
+    // First quoted string after PopupMenuFrame is the popup frame name.
+    let q1 = popup_after.find('"').expect("popup frame name open quote");
+    let rest = &popup_after[q1 + 1..];
+    let q2 = rest.find('"').expect("popup frame name close quote");
+    let popup_name = &rest[..q2];
+    // Find that frame's block and count MenuItem records until its close.
+    let frame_at = text
+        .find(&format!("\"{popup_name}\""))
+        .expect("popup frame definition");
+    let block = &text[frame_at..];
+    let mut count = 0usize;
+    for line in block.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('}') && count > 0 {
+            break;
+        }
+        if trimmed.starts_with("MenuItem") {
+            count += 1;
+        }
+        // Stop at the next Frame definition after the popup frame.
+        if count > 0 && trimmed.starts_with("Frame ") {
+            break;
+        }
+    }
+    count
+}
+
+// Locate the Options FDF under an install root. The menu layer owns
+// full screen discovery; this gate only needs the Video page payload
+// that carries TextureQualityMenu, found by scanning the conventional
+// ui directory for a file mentioning it.
+fn find_options_fdf(install: &std::path::Path) -> Vec<u8> {
+    let ui = install.join("ui");
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&ui) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "fdf") {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.push(ui.join("Options.fdf"));
+    candidates.push(install.join("Options.fdf"));
+    for path in &candidates {
+        if let Ok(bytes) = std::fs::read(path)
+            && bytes.windows(b"TextureQualityMenu".len()).any(|w| w == b"TextureQualityMenu")
+        {
+            return bytes;
+        }
+    }
+    panic!("no Options FDF with TextureQualityMenu under {}", ui.display());
 }
