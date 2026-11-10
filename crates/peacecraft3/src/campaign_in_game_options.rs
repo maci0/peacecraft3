@@ -25,15 +25,8 @@ use bevy::prelude::Resource;
 
 use crate::menu_screens::{Navigation, Page, Screen};
 
-/// Authored escape-menu entry that opens in-game Options.
-#[allow(dead_code)]
-pub const ESCAPE_OPTIONS_BUTTON: &str = "OptionsButton";
 /// Authored Options-menu cancel button.
-#[allow(dead_code)]
 pub const OPTIONS_CANCEL_BUTTON: &str = "CancelButton";
-/// Authored Options-menu confirm button.
-#[allow(dead_code)]
-pub const OPTIONS_OK_BUTTON: &str = "OKButton";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InGameRoute {
