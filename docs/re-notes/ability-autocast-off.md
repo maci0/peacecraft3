@@ -2,14 +2,22 @@
 
 The selected Legacy client capability is read from the retained executable, with
 its input identity and SHA checked at admission. Named Slow, Inner Fire and Heal
-class getters lead to their class-code and on/off-order virtuals. The OFF handler
+class getters lead to their class-code and on/off-order virtuals. The bound
+classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`)
+and Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`); the reader
+decodes all five with the same OFF handler checks and refuses the image
+otherwise. The OFF handler
 joins a tested state-bit operand to its complementary clear operand and the
 already-clear return branch. The reader derives these operands and IDs; it does
 not embed native addresses or order IDs. Synthetic relocated/nonstock fixtures
 and malformed/ambiguous/budget refusal tests cover this reader.
 
 Unit ability aliases and map overlays remain owned by the existing ability
-resolver. `UnitAbilities.auto` supplies the initial enabled aliases, and the
+resolver. `UnitAbilities.auto` lists ability codes, not aliases: an alias starts
+enabled when its `AbilityData` `code` appears there (`ACrd`, code `Arai`, is enabled
+by `auto` `Arai`). Checked against `Units\UnitAbilities.slk` and
+`Units\AbilityData.slk` in `War3x.mpq`, all 74 `auto` entries resolve this way:
+19 name an alias equal to its code and 55 name the code of another alias. The
 resolved ability profiles' `Orderon`/`Orderoff` must agree with the admitted class
 and registry. A canonical unit stores only changes from that source default.
 Missing or malformed authored data is an error, not an invented default.
@@ -47,7 +55,7 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic Slow, Inner Fire
-and Heal effects, their default-enabled automatic operation, and the later
+slice. ON orders explicitly refuse before mutation: automatic effects of the five
+bound classes, their default-enabled automatic operation, and the later
 `ravenform` transformation remain required work. No full autocast or interlude
 completion is claimed by these parser and synthetic host tests.

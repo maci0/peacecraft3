@@ -18,6 +18,15 @@ pub struct Rules {
     pub image_sha256: Sha256Digest,
     pub classes: Vec<Class>,
 }
+/// Native class names whose getter, class ABI and OFF handler are read from the selected client.
+const CLASS_NAMES: [&str; 5] = [
+    "CAbilitySlow",
+    "CAbilityInnerFire",
+    "CAbilityHeal",
+    "CAbilityRaiseDead",
+    "CAbilityAutoDispelMagic",
+];
+const SCANS_PER_CLASS: usize = 3;
 fn word(b: &[u8], at: usize) -> Result<u32, String> {
     b.get(at..at + 4)
         .and_then(|s| s.try_into().ok())
@@ -57,7 +66,8 @@ impl Rules {
             sha256(image),
             pe.code_ranges().collect(),
             pe.initialized_ranges().collect(),
-            128 << 20,
+            // Each class scans the sections three times (name, getter, name slot); sections do not overlap.
+            CLASS_NAMES.len() * SCANS_PER_CLASS * image.len(),
             |va, n, code| {
                 pe.read_from(va, code)
                     .map_err(|e| e.to_string())?
@@ -94,7 +104,7 @@ impl Rules {
             unique(matches.into_iter())
         };
         let mut classes = Vec::new();
-        for name in ["CAbilitySlow", "CAbilityInnerFire", "CAbilityHeal"] {
+        for name in CLASS_NAMES {
             let name_va = find(&data, format!("{name}\0").as_bytes())?;
             let mut getter = vec![0xb8];
             getter.extend(name_va.to_le_bytes());

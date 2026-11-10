@@ -8,10 +8,7 @@ fn identity() -> AssetIdentity {
 }
 fn fixture(shift: u32, mask: u8) -> Vec<(u32, Vec<u8>, bool)> {
     let mut memory = Vec::new();
-    for (i, name) in ["CAbilitySlow", "CAbilityInnerFire", "CAbilityHeal"]
-        .iter()
-        .enumerate()
-    {
+    for (i, name) in CLASS_NAMES.iter().enumerate() {
         let n = shift + 0x30000 + i as u32 * 0x1000;
         let f = shift + 0x10000 + i as u32 * 0x1000;
         let table = shift + 0x40000 + i as u32 * 0x1000;
@@ -92,6 +89,9 @@ fn relocated_nonstock_classes_orders_and_state_bit_are_derived() {
         assert_eq!(rules.classes[0].code, *b"X001");
         assert_eq!(rules.classes[1].on, 7002);
         assert_eq!(rules.classes[2].off, 7005);
+        assert_eq!(rules.classes[4].code, *b"X041");
+        assert_eq!(rules.classes[4].on, 7008);
+        assert_eq!(rules.classes[4].off, 7009);
     }
 }
 #[test]
@@ -120,7 +120,7 @@ fn selected_original_autocast_classes_bind() {
         },
     )
     .unwrap();
-    assert_eq!(rules.classes.len(), 3);
+    assert_eq!(rules.classes.len(), CLASS_NAMES.len());
     assert!(rules.classes.iter().all(|c| c.on != c.off));
 }
 

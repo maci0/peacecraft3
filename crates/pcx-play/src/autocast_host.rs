@@ -65,17 +65,18 @@ impl ObjectHost {
         let code = self
             .ability_data_text(alias, "code")
             .map_err(|e| self.hero_error("autocast", e))?;
-        if !native
+        let Some(class) = native
             .classes
             .iter()
-            .any(|c| c.code.as_slice() == code.as_bytes())
-        {
+            .find(|c| c.code.as_slice() == code.as_bytes())
+        else {
             return Ok(None);
-        }
+        };
+        // UnitAbilities `auto` lists ability codes, which can differ from the alias (ACrd is code Arai).
         let defaults = ability_list(&record.definition, "auto", rules.budget.abilities_per_unit)
             .map_err(|e| self.hero_error("autocast", e))?;
         Ok(Some(
-            defaults.contains(&alias) && !abilities.autocast_disabled.contains(&alias),
+            defaults.contains(&class.code) && !abilities.autocast_disabled.contains(&alias),
         ))
     }
     fn prepare_autocast_off(

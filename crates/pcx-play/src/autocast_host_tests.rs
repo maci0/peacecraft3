@@ -65,7 +65,7 @@ fn open(default: &str, present: bool) -> (Vm, HandleId) {
         SlkId::UnitAbilities,
         "abilList",
         FieldKind::Token,
-        if present { "X001" } else { "_" },
+        if present { "X002" } else { "_" },
     ));
     fields.push(column(
         b"A010",
@@ -89,7 +89,7 @@ fn open(default: &str, present: bool) -> (Vm, HandleId) {
     let rules = rules.with_autocast(Ok(autocast));
     let data = sylk(
         &["alias", "code", "levels", "reqLevel", "levelSkip", "hero"],
-        &[&["X001", "X001", "1", "0", "0", "0"]],
+        &[&["X002", "X001", "1", "0", "0", "0"]],
     );
     let tables = DefaultTables::from_bytes(
         Identity {
@@ -99,7 +99,7 @@ fn open(default: &str, present: bool) -> (Vm, HandleId) {
         &[(SlkId::AbilityData.path(), &data)],
         &[(
             "Units\\HumanAbilityFunc.txt",
-            b"[X001]\nOrderon=repair\nOrderoff=delta\n",
+            b"[X002]\nOrderon=repair\nOrderoff=delta\n",
         )],
         pcx_objects::editor::EditorReadLimits {
             max_listed_paths: 4,
@@ -172,7 +172,7 @@ fn changed_off_interrupts_motion_and_all_callbacks_observe_ephemeral_order() {
     assert_eq!(vm.global("Response"), Value::Handle(u));
     assert_eq!(current(&mut vm, u), 0);
     assert_eq!(
-        vm.host().inner.unit_autocast_enabled(u, *b"X001").unwrap(),
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
         Some(false)
     );
     let before = vm.host().inner.executed_unit(u).unwrap().clone();
@@ -242,7 +242,7 @@ fn frame_preflight_refusal_and_no_change_paths_do_not_mutate_units_or_events() {
     vm.host().inner.test_synchronous_frame_limit();
     assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(false));
     assert_eq!(
-        vm.host().inner.unit_autocast_enabled(u, *b"X001").unwrap(),
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
         Some(false)
     );
 }
@@ -266,7 +266,7 @@ fn enable_refuses_and_pause_or_retirement_preserves_typed_contracts() {
         .unwrap();
     assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(false));
     assert_eq!(
-        vm.host().inner.unit_autocast_enabled(u, *b"X001").unwrap(),
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
         Some(true)
     );
     vm.host()
@@ -296,7 +296,7 @@ fn callback_abort_drops_pending_off_context_and_pause_is_not_restored() {
     assert!(vm.call("off", &[]).is_err());
     assert_eq!(current(&mut vm, u), 0);
     assert_eq!(
-        vm.host().inner.unit_autocast_enabled(u, *b"X001").unwrap(),
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
         Some(false)
     );
     let (mut vm, u) = open("X001", true);
