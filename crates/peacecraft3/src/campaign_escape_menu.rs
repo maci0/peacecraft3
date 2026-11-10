@@ -265,13 +265,12 @@ fn keyboard(
     }
 }
 fn enabled(frame: &str) -> bool {
-    // G01-owned escape controls known to dispatch in `act`. `OptionsButton`
-    // is included by the campaign_in_game_options entry slice; the
-    // `act` arm for it is the actual dispatch.
+    // Escape controls that dispatch in `act`. `OptionsButton` stays disabled:
+    // its route reaches the front-end Options screen, which is hidden while a
+    // campaign plays, and the in-game `EscMenuOptionsPanel` is not rendered.
     matches!(
         frame,
         "ReturnButton"
-            | "OptionsButton"
             | "EndGameButton"
             | "PreviousButton"
             | "QuitButton"
@@ -1135,6 +1134,10 @@ mod tests {
         assert_eq!(Page::Help.back(), Some(Page::Main));
         assert!(enabled("HelpButton"));
         assert!(enabled("HelpOKButton"));
+        assert!(
+            !enabled("OptionsButton"),
+            "no in-game options panel is rendered"
+        );
     }
     #[test]
     fn tips_page_maps_to_tips_panel_and_backs_to_main() {

@@ -25,7 +25,7 @@ screen authored by the original. Missing screen discovery remains open.
 | Gameplay options | Scroll controls, Enhanced Tooltips and Custom Keys have applied/persisted consumers; other controls remain incomplete | Open |
 | Video options | Client-size request/confirmation exists; Texture Quality stays a read-only preview until its 16-bit storage is established; remaining quality and display behavior remains incomplete | Open |
 | Sound options | Music/effects enable and volume and Unit Responses have applied/persisted consumers; remaining category/provider behavior remains incomplete | Open |
-| In-game Main menu | Return, End Game, Help and Tips work (Tips: Next/Back/OK with retained selection); Options opens in-game Options, which Cancel or Escape close, while its OK is not wired yet; Save and Load remain incomplete; Pause is hidden in the single-player modal | Open |
+| In-game Main menu | Return, End Game, Help and Tips work (Tips: Next/Back/OK with retained selection); Options is disabled because the in-game `UI\FrameDef\UI\EscMenuOptionsPanel.fdf` panel is not rendered (its escape-menu route reached the front-end Options screen, which stays hidden during play); Save and Load remain incomplete; Pause is hidden in the single-player modal | Open |
 | In-game End Game | Back, restart, quit mission and exit route have consumers | Open |
 | In-game exit confirmation | Confirm/cancel have consumers; native/browser exit behaviors are distinct | Open |
 | Other original dialogs, popups and screens | Enumerate from selected original inputs and runtime observations; absence from current types is unfinished scope | Open |
