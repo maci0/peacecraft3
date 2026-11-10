@@ -1,11 +1,12 @@
-//! Group actions run on the owning VM over a retained member snapshot.
+//! Group and force callbacks run on the owning VM over a retained member snapshot.
 use super::{Error, Failure, NativeCallback, ObjectHost};
 use pcx_script::{HandleId, ScriptCall, Value, value::FunctionId};
 
+/// Snapshot of members; `members[next - 1]` is the current member.
 pub(super) struct Iteration {
-    members: Vec<HandleId>,
-    next: usize,
-    function: FunctionId,
+    pub(super) members: Vec<HandleId>,
+    pub(super) next: usize,
+    pub(super) function: FunctionId,
 }
 
 impl ObjectHost {
@@ -74,11 +75,14 @@ impl ObjectHost {
         Ok(Some(ScriptCall::Call(*function)))
     }
 
-    pub(super) fn continue_group_call(&mut self) -> Result<ScriptCall, Error> {
-        let Some(NativeCallback::Group(frame)) = self.callbacks.last_mut() else {
-            return Err(self
-                .inner
-                .error("ForGroup", Failure::GroupState("no active group callback")));
+    pub(super) fn continue_member_call(&mut self) -> Result<ScriptCall, Error> {
+        let Some(NativeCallback::Group(frame) | NativeCallback::Force(frame)) =
+            self.callbacks.last_mut()
+        else {
+            return Err(self.inner.error(
+                "ForGroup",
+                Failure::GroupState("no active group or force callback"),
+            ));
         };
         if frame.next < frame.members.len() {
             frame.next += 1;

@@ -1001,27 +1001,47 @@ impl ObjectHost {
             if kind != "unitstate" {
                 return Err(self.inner.error(GET, Failure::WrongFamily));
             }
-            let slot = rules
-                .states
-                .iter()
-                .position(|s| s == enumerand)
-                .ok_or_else(|| self.inner.error(GET, Failure::OutsideDomain(*enumerand)))?;
+            if !rules.states.contains(enumerand) {
+                return Err(self.inner.error(GET, Failure::OutsideDomain(*enumerand)));
+            }
             // Null and removed units read as zero, so the BJ dead test holds.
-            let vitals = match unit {
-                Value::Null => return Ok(Value::Real(0.0)),
-                Value::Handle(id) => match self.inner.entry(*id)? {
-                    Entry::RemovedUnit { .. } => return Ok(Value::Real(0.0)),
-                    Entry::Unit { record } => record.vitals.ok_or_else(|| {
-                        self.inner.error(GET, Failure::UnitState("vitals missing"))
-                    })?,
-                    _ => return Err(self.inner.error(GET, Failure::WrongFamily)),
-                },
-                _ => return Err(self.inner.error(GET, Failure::WrongFamily)),
-            };
-            Ok(Value::Real(
-                [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana][slot],
-            ))
+            match unit {
+                Value::Null => Ok(Value::Real(0.0)),
+                Value::Handle(id) => Ok(Value::Real(
+                    self.unit_state_value(*id, *enumerand)?.unwrap_or(0.0),
+                )),
+                _ => Err(self.inner.error(GET, Failure::WrongFamily)),
+            }
         })())
+    }
+
+    /// Live value of an admitted unit state on `unit`. `None` for a removed unit.
+    pub(super) fn unit_state_value(
+        &self,
+        unit: HandleId,
+        enumerand: i32,
+    ) -> Result<Option<f32>, Error> {
+        let rules = self.unit_vitals.as_ref().ok_or_else(|| {
+            self.inner
+                .error(GET, Failure::UnitState("vitals not admitted"))
+        })?;
+        let slot = rules
+            .states
+            .iter()
+            .position(|s| *s == enumerand)
+            .ok_or_else(|| self.inner.error(GET, Failure::OutsideDomain(enumerand)))?;
+        match self.inner.entry(unit)? {
+            Entry::RemovedUnit { .. } => Ok(None),
+            Entry::Unit { record } => {
+                let vitals = record
+                    .vitals
+                    .ok_or_else(|| self.inner.error(GET, Failure::UnitState("vitals missing")))?;
+                Ok(Some(
+                    [vitals.life, vitals.max_life, vitals.mana, vitals.max_mana][slot],
+                ))
+            }
+            _ => Err(self.inner.error(GET, Failure::WrongFamily)),
+        }
     }
 }
 

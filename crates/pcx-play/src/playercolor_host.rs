@@ -359,6 +359,8 @@ enum Entry {
     },
     /// One source-bound player-state subscription, with its last observed value.
     RegisteredPlayerStateEvent(objects::PlayerStateEventRegistration),
+    /// One source-bound unit-state subscription, with its last observed value.
+    RegisteredUnitStateEvent(objects::UnitStateEventRegistration),
     /// One source-bound game-state subscription; no evaluated comparison.
     RegisteredGameStateEvent {
         trigger: HandleId,
@@ -848,6 +850,7 @@ impl EnumHost {
             | Entry::RegisteredTimedEvent { .. }
             | Entry::RegisteredTimerEvent { .. }
             | Entry::RegisteredPlayerStateEvent(_)
+            | Entry::RegisteredUnitStateEvent(_)
             | Entry::RegisteredGameStateEvent { .. }
             | Entry::RegisteredVariableEvent { .. } => "event",
             Entry::TriggerAction { .. } => "triggeraction",

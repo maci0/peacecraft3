@@ -1,9 +1,13 @@
 //! Explicit force memberships on the existing session arena.
 use super::super::{Entry, Error, Failure, below};
-use super::ObjectHost;
+use super::group_iteration::Iteration;
+use super::{NativeCallback, ObjectHost};
 use crate::map_admission::ParsedMapContext;
-use pcx_script::{HandleId, Value};
+use pcx_script::{HandleId, ScriptCall, Value};
 use std::sync::Arc;
+
+const FOR_FORCE: &str = "ForForce";
+const ENUM_PLAYER: &str = "GetEnumPlayer";
 /// Caller limits independent of the shared identity cap.
 #[derive(Clone, Copy, Debug)]
 pub struct ForceBudget {
@@ -64,6 +68,32 @@ impl ObjectHost {
                 .get(name)
                 .ok_or_else(|| fail(Failure::Signature))?;
             if &native.source != source {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        for (name, params, result, constant, family) in [
+            (
+                FOR_FORCE,
+                &["force", "code"][..],
+                "nothing",
+                false,
+                Some("force"),
+            ),
+            (ENUM_PLAYER, &[][..], "player", true, None),
+        ] {
+            if self.inner.program.natives().get(name).is_none() {
+                continue;
+            }
+            Self::contract(&self.inner, name, params, result, constant, family)?;
+            if self
+                .inner
+                .program
+                .natives()
+                .get(name)
+                .ok_or_else(|| fail(Failure::Signature))?
+                .source
+                != *source
+            {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
@@ -256,8 +286,93 @@ impl ObjectHost {
             "ForceEnumPlayers" if self.forces.as_ref()?.startup_players.is_some() => {
                 Some(self.force_enum_players(args))
             }
+            ENUM_PLAYER => Some(self.enum_player(args)),
             _ => None,
         }
+    }
+
+    /// `ForForce` runs its callback once per explicit member, over a snapshot taken
+    /// at the call. Members are visited in insertion order, the same policy as
+    /// `ForGroup`; the native visit order is not established.
+    pub(super) fn begin_force_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<ScriptCall>, Error> {
+        if name != FOR_FORCE
+            || self.forces.is_none()
+            || self.inner.program.natives().get(name).is_none()
+        {
+            return Ok(None);
+        }
+        let [Value::Handle(force), Value::Code(function)] = args else {
+            return Err(self
+                .inner
+                .error(name, Failure::ForceState("expected force and callback")));
+        };
+        let callback = self
+            .inner
+            .program
+            .functions()
+            .get(function.index())
+            .ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::ForceState("callback is not a loaded function"),
+                )
+            })?;
+        if !callback.params.is_empty()
+            || callback.ret.array
+            || callback.ret.kind.name() != "nothing"
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::ForceState("callback takes nothing returns nothing"),
+            ));
+        }
+        let members = self
+            .force_members(*force)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        if members.is_empty() {
+            return Ok(Some(ScriptCall::Return(Value::Null)));
+        }
+        if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("nested native callbacks")));
+        }
+        let mut snapshot = Vec::new();
+        snapshot
+            .try_reserve_exact(members.len())
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        snapshot.extend_from_slice(members);
+        self.callbacks
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        self.callbacks.push(NativeCallback::Force(Iteration {
+            members: snapshot,
+            next: 1,
+            function: *function,
+        }));
+        Ok(Some(ScriptCall::Call(*function)))
+    }
+
+    /// The current member of the innermost running `ForForce`, or null outside one.
+    fn enum_player(&self, args: &[Value]) -> Result<Value, Error> {
+        if !args.is_empty() {
+            return Err(self
+                .inner
+                .error(ENUM_PLAYER, Failure::ForceState("expected no arguments")));
+        }
+        Ok(self
+            .callbacks
+            .iter()
+            .rev()
+            .find_map(|frame| match frame {
+                NativeCallback::Force(frame) => Some(Value::Handle(frame.members[frame.next - 1])),
+                _ => None,
+            })
+            .unwrap_or(Value::Null))
     }
     fn is_player_in_force(&self, args: &[Value]) -> Result<Value, Error> {
         let name = "IsPlayerInForce";

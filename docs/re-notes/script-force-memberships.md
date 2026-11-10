@@ -45,8 +45,12 @@ malformed/wrong-family/unknown/reserved identities, missing player admission,
 source/type/interface overrides and an extra authored ancestry edge. Native and
 actual WASI execute the same tests.
 
-`ForForce`/`GetEnumPlayer`, destruction, removal and clear natives remain
-unsupported. The membership query is described below. `ForceEnumPlayers` requires the separately admitted
+`ForForce` and `GetEnumPlayer` are admitted when declared with the force
+family (`force_host.rs`, `begin_force_call`). `ForForce` snapshots the explicit
+members at call time and visits them in insertion order, the same policy as
+`ForGroup`. The native visit order is not established. `GetEnumPlayer` returns the
+innermost running member, or null outside a callback. Destruction, removal and
+clear natives remain unsupported. The membership query is described below. `ForceEnumPlayers` requires the separately admitted
 startup participation described below; callback iteration must execute on the same VM with an explicit
 candidate context. Neither operation follows from container retention.
 

@@ -58,6 +58,31 @@ The later [Filter wrapper slice](script-filter-wrappers.md) retains boolean
 callbacks on the same arena without evaluating them. This does not add trigger
 conditions or predicate delivery; those remain separate consumers.
 
+## Unit-state subscriptions
+
+`ObjectHost::with_unit_state_events(max_records)` admits
+`TriggerRegisterUnitStateEvent(trigger, unit, unitstate, limitop, real) -> event`
+on the trigger arena, after trigger creation. It requires the `ConvertUnitState`,
+`ConvertLimitOp` and `ConvertUnitEvent` conversions and the `unitstate`, `limitop`
+and `unitevent` types to share the native's source. Startup opts in through
+`MapStartupBudgets::unit_state_events`; `None` keeps the native unsupported.
+
+Registration seeds the observed value from live vitals (`unit_vitals_host.rs`,
+`unit_state_value`). Vitals must be admitted by the time the native is called. A
+removed unit at registration refuses. The `GetEventUnitState` response returns the
+registered `unitstate` handle.
+
+Delivery is a boundary poll (`poll_unit_state_events`), run in
+`advance_unit_ranges` after the player-state poll. An event is queued when the
+live value differs from the last observation and the comparison holds at the new
+value, the same rule as player-state events. Removed units are skipped.
+
+Unverified: whether the native fires on every qualifying change or only on the
+transition, whether the event fires synchronously inside `SetUnitState` (this poll
+fires at the next script boundary instead), and the event's firing order relative
+to other events. The shipped `Undead07` chapter uses the registration and does
+not establish these rules. No synthetic test covers the poll path yet.
+
 ## Timer-expiry subscriptions
 
 `ObjectHost::with_timer_events(max_records)` independently admits

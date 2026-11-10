@@ -559,6 +559,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .inner
             .objects_mut()
             .poll_player_state_events(&mut work)?;
+        active
+            .vm
+            .host()
+            .inner
+            .objects_mut()
+            .poll_unit_state_events(&mut work)?;
         let watches = active.vm.host().inner.objects().variable_event_watches();
         let samples: Vec<_> = watches
             .iter()

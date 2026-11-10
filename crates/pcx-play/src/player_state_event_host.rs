@@ -237,7 +237,7 @@ impl ObjectHost {
 const CONVERT_STATE: &str = "ConvertPlayerState";
 const CONVERT_LIMIT: &str = "ConvertLimitOp";
 const RESPONSE: &str = "GetEventPlayerState";
-const LIMIT_OPS: [&str; 6] = [
+pub(super) const LIMIT_OPS: [&str; 6] = [
     "LESS_THAN",
     "LESS_THAN_OR_EQUAL",
     "EQUAL",
@@ -260,7 +260,7 @@ pub struct PlayerStateEventRegistration {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Comparison {
+pub(super) enum Comparison {
     LessThan,
     LessThanOrEqual,
     Equal,
@@ -288,7 +288,7 @@ pub(crate) struct PlayerStateChange {
 }
 
 impl Comparison {
-    fn at(index: usize) -> Option<Self> {
+    pub(super) fn at(index: usize) -> Option<Self> {
         Some(match index {
             0 => Self::LessThan,
             1 => Self::LessThanOrEqual,
@@ -299,9 +299,8 @@ impl Comparison {
             _ => return None,
         })
     }
-    fn holds(self, value: i32, limit: f32) -> bool {
-        let value = f64::from(value);
-        let limit = f64::from(limit);
+    pub(super) fn holds(self, value: impl Into<f64>, limit: impl Into<f64>) -> bool {
+        let (value, limit) = (value.into(), limit.into());
         match self {
             Self::LessThan => value < limit,
             Self::LessThanOrEqual => value <= limit,

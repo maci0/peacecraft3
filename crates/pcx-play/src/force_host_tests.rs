@@ -353,3 +353,23 @@ fn membership_query_requires_its_optional_exact_same_source_declaration() {
             .is_err()
     );
 }
+
+const FOR_FORCE: &str = "native ForForce takes force f, code c returns nothing\nconstant native GetEnumPlayer takes nothing returns player\n";
+
+#[test]
+fn for_force_visits_members_in_insertion_order_and_exposes_enum_player() {
+    let c = format!("{}{FOR_FORCE}", common());
+    let map = "globals\nplayer A = Player(0)\nplayer B = Player(1)\nforce F = null\nforce E = null\nplayer last = null\ninteger hits = 0\nendglobals\nfunction visit takes nothing returns nothing\nset hits = hits + 1\nset last = GetEnumPlayer()\nendfunction\nfunction setup takes nothing returns nothing\nset F = CreateForce()\nset E = CreateForce()\ncall ForceAddPlayer(F,A)\ncall ForceAddPlayer(F,B)\nendfunction\nfunction run takes nothing returns nothing\ncall ForForce(F, function visit)\nendfunction\nfunction run_empty takes nothing returns nothing\ncall ForForce(E, function visit)\nendfunction\n";
+    let host = host(&c, map, 16, true).with_forces(bound(2, 2)).unwrap();
+    drop(c);
+    let mut vm = host.into_vm();
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    assert_eq!(vm.host().native("GetEnumPlayer", &[]).unwrap(), Value::Null);
+    vm.call("run_empty", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(0));
+    vm.call("run", &[]).unwrap();
+    assert_eq!(vm.global("hits"), Value::Int(2));
+    assert_eq!(vm.global("last"), vm.global("B"));
+    assert_eq!(vm.host().native("GetEnumPlayer", &[]).unwrap(), Value::Null);
+}

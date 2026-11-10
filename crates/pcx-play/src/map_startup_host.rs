@@ -91,6 +91,8 @@ pub struct MapStartupBudgets {
     pub timer_events: usize,
     pub game_state_events: usize,
     pub player_state_events: usize,
+    /// None keeps `TriggerRegisterUnitStateEvent` unsupported.
+    pub unit_state_events: Option<usize>,
     /// None keeps stock slot natives unsupported.
     pub stock: Option<StockBudget>,
     /// None keeps quest and quest-item natives unsupported.
@@ -865,6 +867,9 @@ fn assemble_inner(
         .with_timer_events(budgets.timer_events)?
         .with_game_state_events(budgets.game_state_events)?
         .with_player_state_events(budgets.player_state_events)?;
+    if let Some(limit) = budgets.unit_state_events {
+        object = object.with_unit_state_events(limit)?;
+    }
     if let Some(limit) = budgets.trigger_conditions {
         object = object.with_trigger_conditions(limit)?;
     }

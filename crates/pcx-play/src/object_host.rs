@@ -168,6 +168,7 @@ enum NativeCallback {
     Trigger(trigger_runtime::DirectCall),
     Rectangle(unit_positions::Enumeration),
     Group(group_iteration::Iteration),
+    Force(group_iteration::Iteration),
 }
 pub type TimerHost = ObjectHost;
 impl ObjectHost {
@@ -839,6 +840,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_force_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_selection_call(name, args)
             .map_err(|e| e.to_string())?
         {
@@ -889,7 +896,9 @@ impl Host for ObjectHost {
             Some(NativeCallback::Widget(_)) => self.continue_widget_call(value),
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
-            Some(NativeCallback::Group(_)) => self.continue_group_call(),
+            Some(NativeCallback::Group(_) | NativeCallback::Force(_)) => {
+                self.continue_member_call()
+            }
             None => return Err("no native script callback is active".into()),
         }
         .map_err(|e| e.to_string())
@@ -1397,7 +1406,7 @@ pub use trigger_admission::{
     DeathEventRegistration, GameStateEventRegistration, PlayerEventRegistration,
     PlayerStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
     TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitEventRegistration,
-    UnitInRangeRegistration,
+    UnitInRangeRegistration, UnitStateEventRegistration,
 };
 
 #[cfg(test)]

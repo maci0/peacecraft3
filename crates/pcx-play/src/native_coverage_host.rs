@@ -84,6 +84,7 @@ impl ObjectHost {
             "GetConstructedStructure",
             "GetConstructingStructure",
             "GetEventPlayerState",
+            "GetEventUnitState",
             "GetIssuedOrderId",
             "GetKillingUnit",
             "GetLearnedSkill",
@@ -117,7 +118,9 @@ impl ObjectHost {
             "FogModifierStop",
             // force_host.rs
             "CreateForce",
+            "ForForce",
             "ForceAddPlayer",
+            "GetEnumPlayer",
             // game_event_host.rs
             "ConvertGameEvent",
             "TriggerRegisterGameEvent",
@@ -338,6 +341,8 @@ impl ObjectHost {
             "IsPointBlighted",
             "SetBlight",
             "SetBlightLoc",
+            // unit_state_event_host.rs
+            "TriggerRegisterUnitStateEvent",
             // unit_visibility_host.rs
             "IsUnitHidden",
             "ShowUnit",

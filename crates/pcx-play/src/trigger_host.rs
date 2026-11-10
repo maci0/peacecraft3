@@ -22,6 +22,10 @@ mod player_state_events;
 pub(super) use player_state_events::PlayerStateChange;
 pub use player_state_events::PlayerStateEventRegistration;
 
+#[path = "unit_state_event_host.rs"]
+mod unit_state_events;
+pub use unit_state_events::UnitStateEventRegistration;
+
 #[path = "player_unit_event_host.rs"]
 mod player_unit_events;
 pub use player_unit_events::PlayerUnitEventRegistration;
@@ -112,6 +116,7 @@ pub(super) struct Admission {
     player_state_ops: Option<[i32; 6]>,
     player_state_event: Option<HandleId>,
     player_state_registrations: Vec<HandleId>,
+    unit_state: Option<unit_state_events::Admission>,
     variable_ops: Option<[i32; 6]>,
     variable_registrations: Vec<HandleId>,
 }
@@ -257,6 +262,7 @@ impl ObjectHost {
             player_state_ops: None,
             player_state_event: None,
             player_state_registrations: Vec::new(),
+            unit_state: None,
             variable_ops: None,
             variable_registrations: Vec::new(),
         });
@@ -334,6 +340,9 @@ impl ObjectHost {
                 if self.triggers.as_ref()?.player_state_event_limit.is_some() =>
             {
                 Some(self.register_player_state_event(args))
+            }
+            unit_state_events::REGISTER if self.triggers.as_ref()?.unit_state.is_some() => {
+                Some(self.register_unit_state_event(args))
             }
             trigger_conditions::ADD if self.triggers.as_ref()?.condition_limit.is_some() => {
                 Some(self.add_trigger_condition(args))

@@ -23,6 +23,8 @@ pub struct EventSubject {
     pub player: Option<HandleId>,
     /// Player state whose change fired the event (`GetEventPlayerState`).
     pub player_state: Option<HandleId>,
+    /// Unit state whose change fired the event (`GetEventUnitState`).
+    pub unit_state: Option<HandleId>,
     /// Target of the spell whose effect fired the event (`GetSpellTargetUnit`).
     pub spell_target: Option<HandleId>,
     pub spell_ability: Option<i32>,
@@ -89,7 +91,7 @@ struct DeliveryContext {
     active: bool,
 }
 
-const RESPONSES: [&str; 31] = [
+const RESPONSES: [&str; 32] = [
     "GetConstructingStructure",
     "GetConstructedStructure",
     "GetCancelledStructure",
@@ -119,6 +121,7 @@ const RESPONSES: [&str; 31] = [
     "GetClickedButton",
     "GetTriggerPlayer",
     "GetEventPlayerState",
+    "GetEventUnitState",
     "GetTriggerWidget",
     "GetTriggerDestructable",
 ];
@@ -619,6 +622,7 @@ impl ObjectHost {
             "GetClickedButton" => subject.button,
             "GetTriggerPlayer" => subject.player,
             "GetEventPlayerState" => subject.player_state,
+            "GetEventUnitState" => subject.unit_state,
             "GetTriggerWidget" => subject.unit.or(subject.destructable),
             "GetTriggerDestructable" => subject.destructable,
             "GetSpellTargetUnit" => subject.spell_target,
