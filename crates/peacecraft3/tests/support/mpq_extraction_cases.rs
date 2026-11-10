@@ -149,9 +149,7 @@ pub fn budgets_forged_lengths_and_metadata_have_typed_preflight_refusals() {
                 .unwrap_err()
                 .cause
                 .as_ref(),
-            ExtractionCause::Mpq(Error::Unsupported(
-                "packed member extends past the declared archive"
-            ))
+            ExtractionCause::Mpq(Error::Unsupported("packed member extends past the archive"))
         ));
     }
     for kind in 0..4 {

@@ -7,11 +7,9 @@
 //!
 //! The framing everyone expects — a `(fourcc, offset, size)` chunk table with a
 //! `TERRAIN` chunk in it — is **not what either shipped build writes**. Both
-//! builds ship the same shape, and it is not a guess: the embedded archive's
-//! declared `archive_size` equals `file_len - 0x200` on all 133 shipped maps,
-//! and the game's own writer stores the literal `HM3W` where the chunk table
-//! would begin (`game.dll` file offsets `0x719b8b`, `0x726e9b`, `0x726f53`).
-//! The same writer then opens an MPQ and never returns to a chunk table.
+//! builds ship the same shape: the game's own writer stores the literal `HM3W`
+//! where the chunk table would begin (`game.dll` file offsets `0x719b8b`,
+//! `0x726e9b`, `0x726f53`), then opens an MPQ and never returns to a chunk table.
 //!
 //! ```text
 //! offset  size  field
@@ -21,8 +19,8 @@
 //!   +0   4     field A — varies per map, meaning unattributed
 //!   +0   4     field B — the map's player count
 //! 0x020   0x1E0 zero padding
-//! 0x200   ...   MPQ archive, "MPQ\x1a", `archive_size == len - 0x200`
-//! EOF-260 260   trailer: "NGIS" + 256 unattributed bytes
+//! 0x200   ...   MPQ archive, "MPQ\x1a"; it ends where its block table ends
+//! archive end   optional trailer, opaque (see below)
 //! ```
 //!
 //! `field B` is *measured*, not named from the filename: it equals the `(N)`
@@ -32,11 +30,37 @@
 //! 1..39966 with no relation to any other field measured here, and guessing at
 //! it would be a plausible-looking lie.
 //!
-//! The trailer is present on 89 of the 133 maps and absent on the other 44;
-//! where present it always starts `NGIS` followed by 256 opaque bytes. Those
-//! bytes are **not** decoded and **not** interpreted as a hash of anything. A
-//! map with a trailer of any other length, or without the `NGIS` tag, is
-//! refused rather than parsed.
+//! # Archive end and trailer, measured on the 1.28c `Maps` tree
+//!
+//! 811 map files sit under `wc3/game/app/Maps`: 809 begin with `HM3W`, and 2 are
+//! zero bytes. Framing across the 809, probed with the same rules as
+//! [`Map::parse`]:
+//!
+//! | shape | files | declared `archive_size` | after the archive end |
+//! |---|---:|---|---|
+//! | exact | 617 | equals the archive end, which is EOF | nothing |
+//! | `NGIS` | 165 | equals the archive end | `NGIS` + 256 bytes |
+//! | table tail | 25 | 3 to 255 bytes short of the archive end | nothing: the file ends at the archive end |
+//! | other | 2 | equals the archive end | 1 and 219 untagged bytes |
+//!
+//! In every shape the hash table, the block table and every member lie inside
+//! the archive end, and every populated hash slot names an existing block. In
+//! the table-tail shape the archive end is the block table end, past the
+//! declared size. 201 block-table entries reach past the declared size across
+//! those 25 maps; 200 are live (`EXISTS` set and named by a hash slot) and one
+//! is empty. No member's data reaches past the declared size. The Legacy 1.29
+//! `Maps` tree holds 187 maps, all `NGIS`, and no table-tail or untagged shape.
+//!
+//! The trailer bytes are **not** decoded and **not** interpreted as a hash of
+//! anything. Nothing in the archive refers to them, so [`Map::parse`] keeps
+//! them opaque and accepts any length. Accepting the two untagged trailers rests
+//! on that and on the premise that these maps play in the original; the
+//! original's handling of trailing bytes is not traced in `Storm.dll`.
+//!
+//! Whether the original bounds its table reads by the declared size is not
+//! traced. A reader bounded by it could not reach the 200 live entries, so the
+//! table-tail acceptance follows from the premise that these maps play in the
+//! original.
 //!
 //! # The terrain file
 //!
@@ -179,12 +203,6 @@ pub const MAP_VERSION: u32 = 0;
 /// Byte offset of the embedded MPQ archive, fixed across every shipped map.
 pub const MAP_ARCHIVE_OFFSET: usize = 0x200;
 
-/// Byte length of the trailer that may follow the archive.
-pub const MAP_TRAILER_LEN: usize = 260;
-
-/// First four bytes of the trailer, where one is present.
-pub const MAP_TRAILER_TAG: [u8; 4] = [0x4E, 0x47, 0x49, 0x53];
-
 /// Magic of the terrain file inside the map archive.
 pub const TERRAIN_MAGIC: [u8; 4] = *b"W3E!";
 
@@ -258,10 +276,8 @@ pub enum Error {
     UnterminatedName(usize),
     #[error("no \"MPQ\\x1a\" at +0x{0:x}; the map body is not an embedded archive")]
     NoArchive(usize),
-    #[error("archive declares {declared} bytes but only {available} follow the 0x200 header")]
-    ArchiveSize { declared: usize, available: usize },
-    #[error("map is {have} bytes, which is {left} short of header + archive + trailer")]
-    TrailingBytes { have: usize, left: usize },
+    #[error("embedded archive: {0}")]
+    Archive(#[from] pcx_mpq::HeaderParseError),
     #[error("bad terrain magic {0:?}, expected W3E!")]
     BadTerrainMagic([u8; 4]),
     #[error("unsupported terrain version {0}; 1.28c and 1.29b both write 11")]
@@ -348,9 +364,10 @@ pub struct MapHeader {
     pub name_offset: usize,
     /// Offset of the embedded archive, always [`MAP_ARCHIVE_OFFSET`].
     pub archive_offset: usize,
-    /// The archive's declared size, which equals `file_len - archive_offset`.
+    /// The archive's extent: its block table end, which equals the declared size
+    /// except on the table-tail maps described in the module docs.
     pub archive_size: usize,
-    /// The trailer, when the file has one.
+    /// Every byte after the archive end, when there are any. Opaque.
     pub trailer: Option<Vec<u8>>,
 }
 
@@ -418,10 +435,10 @@ impl std::fmt::Debug for MemberCache {
 impl<'a> Map<'a> {
     /// Parse the header and the whole framing relation around it.
     ///
-    /// Proves, on the bytes, that the archive is framed by the header: the
-    /// declared archive size plus the fixed header plus any trailer add up to
-    /// the file length exactly. A map that fails this is refused rather than
-    /// returned with a shrug.
+    /// Proves, on the bytes, that the archive lies inside the file and that its
+    /// block table ends inside it. Anything after the archive end is kept as an
+    /// opaque trailer. A map that fails this is refused rather than returned
+    /// with a shrug.
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "map.parse_container")
@@ -458,36 +475,19 @@ impl<'a> Map<'a> {
         if &arch != b"MPQ\x1a" {
             return Err(Error::NoArchive(archive_offset));
         }
-        let archive_size = u32_at(data, archive_offset + 8)? as usize;
-        let available = data.len() - archive_offset;
-        if archive_size > available {
-            return Err(Error::ArchiveSize {
-                declared: archive_size,
-                available,
-            });
-        }
-
-        let archive_end = archive_offset + archive_size;
-        let rest = &data[archive_end..];
-        let trailer = match rest.len() {
-            0 => None,
-            n if n == MAP_TRAILER_LEN => {
-                if rest[..4] == MAP_TRAILER_TAG {
-                    Some(rest.to_vec())
-                } else {
-                    return Err(Error::TrailingBytes {
-                        have: data.len(),
-                        left: rest.len(),
-                    });
-                }
-            }
-            n => {
-                return Err(Error::TrailingBytes {
-                    have: data.len(),
-                    left: n,
-                });
-            }
-        };
+        // Frames the archive by its header: the declared size and the block
+        // table end lie inside the file. Table layout is checked when the
+        // archive opens, not here. The archive ends at the block table end.
+        let header = pcx_mpq::Header::parse(&mut std::io::Cursor::new(&data[archive_offset..]))?;
+        let archive_size = usize::try_from(header.archive_end()).map_err(|_| {
+            Error::Extraction(pcx_mpq::Error::Unsupported(
+                "archive size does not fit a usize",
+            ))
+        })?;
+        let trailer = data
+            .get(archive_offset + archive_size..)
+            .filter(|rest| !rest.is_empty())
+            .map(<[u8]>::to_vec);
 
         Ok(Self {
             header: MapHeader {
@@ -505,7 +505,7 @@ impl<'a> Map<'a> {
         })
     }
 
-    /// The embedded archive's bytes, exactly as declared.
+    /// The embedded archive's bytes, from the header to the block table end.
     pub fn archive(&self) -> &'a [u8] {
         &self.data
             [self.header.archive_offset..self.header.archive_offset + self.header.archive_size]
@@ -1286,8 +1286,8 @@ mod tests {
             return;
         };
         let t = m.header.trailer.as_ref().expect("trailer");
-        assert_eq!(t.len(), MAP_TRAILER_LEN);
-        assert_eq!(&t[..4], &MAP_TRAILER_TAG);
+        assert_eq!(t.len(), 260);
+        assert_eq!(&t[..4], b"NGIS");
         assert!(
             t[4..].iter().any(|&b| b != 0),
             "the 256 opaque bytes are not padding"

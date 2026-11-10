@@ -623,14 +623,14 @@ impl MpqArchive {
         // The block's position and packed length come from the archive's own
         // block table, so a malformed archive can place a member anywhere.
         // The extent the member occupies on disk must lie inside the archive,
-        // which is what `read_block_raw` reads below; the header already
-        // checks the archive's declared size against the real length of the
-        // file, so this bound is against bytes that actually exist.
+        // which is what `read_block_raw` reads below. The archive ends at its
+        // block table end, which can be past the declared size; the header
+        // parse has already checked that this end lies inside the file.
         //
         // The *decoded* size is not bounded here: a compressed member may
         // legitimately decode to more bytes than the archive holds, which is
         // what the shipped `Maps\(4)Adrenaline.w3m` members do.
-        let archive_size = usize::try_from(self.header.archive_size)
+        let archive_end = usize::try_from(self.header.archive_end())
             .map_err(|_| Error::Unsupported("archive size does not fit a usize"))?;
         let file_pos = usize::try_from(block.file_pos)
             .map_err(|_| Error::Unsupported("member position does not fit a usize"))?;
@@ -639,7 +639,7 @@ impl MpqArchive {
         let end = file_pos
             .checked_add(packed)
             .ok_or(Error::Unsupported("member extent overflows"))?;
-        if archive_size != 0 && end > archive_size {
+        if archive_end != 0 && end > archive_end {
             return Err(Error::Unsupported("member lies outside the archive"));
         }
         let raw = self.read_block_raw(&block)?;

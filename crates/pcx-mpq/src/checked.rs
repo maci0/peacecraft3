@@ -266,12 +266,12 @@ impl<'a> CheckedArchive<'a> {
             self.tables.budget.max_raw_packed_bytes,
         )?;
         if u64::from(block.file_pos) + u64::from(block.compressed_size)
-            > u64::from(self.tables.header.archive_size)
+            > self.tables.header.archive_end()
         {
             return Err(member_error(
                 self.source,
                 member,
-                Error::Unsupported("packed member extends past the declared archive"),
+                Error::Unsupported("packed member extends past the archive"),
             ));
         }
         Ok(Some(size))

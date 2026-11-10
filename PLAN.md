@@ -189,8 +189,10 @@ brute-force sweep used the wrong keystream table.
    | `0x20` / `0x24` | 4 | present, semantics still unattributed |
 
    The `0x00030000` word at `0x0C` is *two* fields: version `0` and shift `3`.
-   Two invariants hold in all four archives and are asserted in tests:
+   Two invariants hold in all four Legacy archives and are asserted in tests:
    `block_pos == hash_pos + hash_entries*16` and `block_pos + block_entries*16 == archive_size`.
+   Map archives may declare less than their block table end (3 to 255 bytes less on 25
+   loose 1.28c maps); see `pcx_mpq::Header::is_self_consistent`.
 
 2. **Encryption table.** Fixed 1280 dwords (5 slices of 256), built from `seed = 0x00100001`
    with `seed = (seed*125 + 3) % 0x2AAAAB`. Measured caveat recorded in
@@ -1074,11 +1076,12 @@ shadows, fog and original filter equality remain open. See
 
 **Measured, and it overturned the assumed framing.** There is no `TERRAIN` chunk in a
 `.w3m` and no chunk table. Both builds write `HM3W` + a fixed `0x200` header + an
-**embedded MPQ archive**, with `archive_size == file_len - 0x200` on all 133 shipped maps,
-and `game.dll`'s writer stores that literal and then opens an MPQ rather than returning
-to a chunk table. Terrain is `war3map.w3e` *inside* the embedded archive. The trailer is
-`NGIS` + 256 opaque bytes, present on 89/133 and absent on 44; any other trailer length
-or a missing `NGIS` is refused.
+**embedded MPQ archive**, and `game.dll`'s writer stores that literal and then opens an MPQ
+rather than returning to a chunk table. Terrain is `war3map.w3e` *inside* the embedded
+archive. The archive ends at its block table; on 784 of the 809 loose 1.28c maps the
+declared size equals that end, and on 25 it is 3 to 255 bytes short. Bytes after the
+archive end are an opaque trailer: `NGIS` + 256 bytes on 165 maps, untagged on 2, none
+on the rest. The framing and measured shapes are in `crates/pcx-map/src/lib.rs`.
 
 Also measured, and **the height ramp does not exist**: the corner table consumes the
 terrain file *exactly* on all 132 terrains, leaving zero bytes for the interior grid the
@@ -1533,7 +1536,7 @@ Current numbers:
 | `pcx-gfx` `load_image` | fixed | routes JPEG and palettised BLP; was failing on 4,924 of 6,696 textures |
 | `pcx-tga` images | 383 / 0 fail | 435 / 0 fail, 0 unread — one pinned footer-split constant is 1.28c-only, see `TRACKER.md` |
 | `pcx-slq` tables | 59 / 59, 0 fail, 768,067 cells, 10,373,503 B | 65 / 65, 0 fail, 983,763 cells, 12,971,315 B — 12 vs 13 sound tables |
-| `pcx-map` container | 89 maps, `archive_size == file_len - 0x200` on all 89 | 44 maps; same relation, 133/133 across both builds |
+| `pcx-map` container | 89 maps, block table ends at `file_len - 0x200` on all 89 (earlier census; loose-tree shapes in `crates/pcx-map/src/lib.rs`) | 44 maps; same relation, 133/133 across both builds |
 | `pcx-map` terrain | 88 `w3e` decoded, framing exact, 0 remainder | 44 `w3e`; same relation |
 | `pcx-map` `doo` / `shd` / `mmp` / minimap | 132 present, 132 parsed, 0 fail | 132 present, 132 parsed, 0 fail (both builds share the same 132) |
 | `pcx-objects` `w3u`/`w3t` | 48 files (47 `.w3u` + 1 `.w3t`), framing 92/92 across both builds, round-trip exact | same two relations; 44 `.w3u`, one at version 2 |

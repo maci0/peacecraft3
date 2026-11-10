@@ -332,7 +332,9 @@ pub fn malformed_archive_or_grid_and_missing_script_cannot_publish() {
     let fixture = Fixture::new("1", 1.0);
     let mut bytes = fixture.bytes();
     let offset = Map::parse(&bytes).unwrap().header.archive_offset;
-    bytes[offset + 28..offset + 32].copy_from_slice(&u32::MAX.to_le_bytes());
+    // Move the hash table off the block table's start: framing still holds,
+    // and the archive's own layout check refuses it when it opens.
+    bytes[offset + 16..offset + 20].copy_from_slice(&0u32.to_le_bytes());
     let map = Map::parse(&bytes).unwrap();
     let mut budget = fixture.budget(&map);
     budget.scripts.max_archive_table_bytes = usize::MAX;

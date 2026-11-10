@@ -18,10 +18,13 @@
 //! 0x24    4     word 0x24 (not yet attributed)
 //! ```
 //!
-//! Two invariants hold in all four archives and are asserted in the tests:
+//! Two invariants hold in all four Legacy archives and are asserted in the tests:
 //!
 //! * `block_table_pos == hash_table_pos + hash_entries * 16`
 //! * `block_table_pos + block_entries * 16 == archive_size`
+//!
+//! Map archives may declare less than their block table end; see
+//! [`Header::is_self_consistent`].
 //!
 //! The `0x0C` word reads `0x00030000` everywhere, which the split above renders
 //! as format version `0` and sector shift `3`, i.e. 4096-byte sectors.
@@ -43,6 +46,8 @@ pub enum HeaderParseError {
     UnsupportedHeaderSize(u32),
     #[error("archive size {declared} exceeds file length {actual}")]
     SizeMismatch { declared: u32, actual: u64 },
+    #[error("block table ends at {end}, past the {actual}-byte file")]
+    TablesPastEnd { end: u64, actual: u64 },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -85,7 +90,7 @@ impl Header {
             });
         }
 
-        Ok(Self {
+        let header = Self {
             header_size,
             archive_size,
             format_version: u16::from_le_bytes(buf[0x0C..0x0E].try_into().unwrap()),
@@ -96,7 +101,17 @@ impl Header {
             block_entries: u32::from_le_bytes(buf[0x1C..0x20].try_into().unwrap()),
             w20: u32::from_le_bytes(buf[0x20..0x24].try_into().unwrap()),
             w24: u32::from_le_bytes(buf[0x24..0x28].try_into().unwrap()),
-        })
+        };
+        // The table counts come from the header, so this bound is what keeps the
+        // table reads that follow inside the file.
+        let end = header.archive_end();
+        if end > declared_len {
+            return Err(HeaderParseError::TablesPastEnd {
+                end,
+                actual: declared_len,
+            });
+        }
+        Ok(header)
     }
 
     /// `0x200 << sector_size_shift`. All four shipped archives use `3`.
@@ -123,15 +138,23 @@ impl Header {
         u64::from(self.block_table_pos) == u64::from(self.hash_table_pos) + self.hash_table_bytes()
     }
 
-    /// `block_table_pos + block_entries * 16 == archive_size`, i.e. the tables
-    /// are the last thing in the file.
-    pub fn tables_end_at_archive_end(&self) -> bool {
-        u64::from(self.block_table_pos) + self.block_table_bytes() == u64::from(self.archive_size)
+    /// Byte after the block table. In every archive measured, the block table is
+    /// the last structure, so this is where the archive ends; members must lie
+    /// before it.
+    pub fn archive_end(&self) -> u64 {
+        u64::from(self.block_table_pos) + self.block_table_bytes()
     }
 
-    /// Both structural invariants.
+    /// The tables are adjacent, and the declared size does not exceed
+    /// [`Header::archive_end`].
+    ///
+    /// A declared size below the archive end is accepted: the four Legacy
+    /// archives declare exactly their archive end, while 25 loose 1.28c map
+    /// archives declare 3 to 255 bytes less, with the last block-table entries
+    /// past the declared size and every member inside it. A declared size past
+    /// the archive end has no table or member to account for, and is refused.
     pub fn is_self_consistent(&self) -> bool {
-        self.tables_are_adjacent() && self.tables_end_at_archive_end()
+        self.tables_are_adjacent() && u64::from(self.archive_size) <= self.archive_end()
     }
 
     /// Round-trip helper for RE diffing against the shipped files.
@@ -181,9 +204,10 @@ mod tests {
                 h.tables_are_adjacent(),
                 "{name}: block_pos != hash_pos + hash_count*16"
             );
-            assert!(
-                h.tables_end_at_archive_end(),
-                "{name}: tables do not end at archive end"
+            assert_eq!(
+                h.archive_end(),
+                u64::from(h.archive_size),
+                "{name}: tables do not end at the declared size"
             );
         }
     }

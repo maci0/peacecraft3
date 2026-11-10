@@ -150,11 +150,8 @@ impl MpqArchive {
                 .into(),
             )));
         }
-        if u64::from(block.file_pos) + u64::from(block.compressed_size) > u64::from(h.archive_size)
-        {
-            return Err(unsupported(
-                "packed member extends past the declared archive",
-            ));
+        if u64::from(block.file_pos) + u64::from(block.compressed_size) > h.archive_end() {
+            return Err(unsupported("packed member extends past the archive"));
         }
         let raw = self
             .read_at(u64::from(block.file_pos), packed)

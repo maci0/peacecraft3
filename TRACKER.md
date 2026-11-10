@@ -1757,9 +1757,13 @@ The list below is the measured part; the rest of the container surface is tracke
 `PLAN.md` §3.11 and is **unverified** until each lands with its framing asserted.
 
 - [x] `pcx-map`: W3M/W3N container — **`HM3W` + `0x200` header + embedded MPQ**, no chunk
-      table. `archive_size == file_len - 0x200` on 133/133; `NGIS`+256B trailer on 89/133,
-      absent on 44, any other length refused. 89 maps on 1.28c (88 `.w3m` + 1 `.w3n`),
-      44 on 1.29b.
+      table. Earlier census: block table ends at `file_len - 0x200` on 133/133; `NGIS`+256B
+      trailer on 89/133, absent on 44. 89 maps on 1.28c (88 `.w3m` + 1 `.w3n`), 44 on 1.29b.
+      Loose 1.28c `Maps` tree (809 HM3W files): declared size equals the block table end on
+      784, 3 to 255 bytes short on 25 (the table tail is past it, members inside). Trailers:
+      `NGIS` on 165, untagged 1 and 219 bytes on 2, none on the rest. Accepted and framed by
+      `pcx-map` and `pcx-mpq`; the untagged trailers rest on the original playing these maps,
+      not on a traced Storm.dll rule. The 1.29 Legacy `Maps` tree (187) is all `NGIS`.
 - [x] `pcx-map`: terrain `war3map.w3e` inside the embedded archive — framing
       `17 + 4N + 4 + 4M + 16 + 7·(w+1)·(h+1)` holds on **132/132**, zero remainder.
       Sizes 64×64 … 224×160, 127 distinct slot fourccs.
@@ -2172,6 +2176,7 @@ Format: `date — subsystem — symptom — root cause — status`
 | 2026-10-13 | Bevy 0.20 migration | the UI compiled against 0.17 and silently lost behaviour on 0.20 | four API changes, none of them a compile error in the shape we had: `BorderRadius` stopped being a standalone Component and became a `Node` field; `bevy::ui::Button` became a deprecated alias for a crate-private unit struct that cannot be spawned; click handling moved from polling `&Interaction` to querying `(With<Button>, With<Pressed>)` while keeping while-held semantics and the `InteractionDisabled` + `Pick::Download` double-guard; and on wasm `AssetSourceBuilder::default().with_reader(..)` became `AssetSourceBuilder::new(reader)` | **fixed** — and verified by pixels, not by compilation: the offscreen capture is 46,006 bytes / 18.7% lit / 100% opaque / 1,339 distinct colours, silhouette head→torso→legs plus the terrain tile intact |
 | 2026-10-13 | Map container | the tracker and plan both named the minimap pair `war3map.map` + `war3map.ter` | neither name exists — 0 of 133 shipped maps, 0 of 200 loose community maps, no `(listfile)`, in neither build's name tables. What the tracker describes by function ships as `war3mapMap.blp` (BLP1 JPEG, 256×256) and `war3map.mmp` | **fixed** — measured names decoded on 132/132 both builds; a map really carrying the literal names is refused rather than parsed against an invented layout |
 | 2026-10-13 | Object data | 285 of 5,975 `w3t`/`w3u` modification entries carry a non-zero **end word** | 0 in 5,690; the 285 exceptions are 106 that repeat their record's own original id (`DemoCampaign.w3n`'s `war3campaign.w3u`) and **179 that sit next to an `umdl`/`uico` art path with what reads like the owning unit's rawcode** — `"hcth"` beside `units\human\TheCaptain\TheCaptain` | **recorded as a hypothesis, not a proof** — the word is handed out as bytes. Two hand-checked samples do not prove an art-owner relation |
+| 2026-11-11 | Map container | `pcx-mpq` refused 25 embedded archives whose declared size is 3 to 255 bytes short, and `pcx-map` refused 27 maps with a trailer that is not 260 `NGIS` bytes, on the loose 1.28c `Maps` tree (809 HM3W files, 2 zero-byte) | the 25 have their block table, every hash slot and every member inside the file; 200 of the 201 block entries past the declared size are live and named by the hash table; the 1.29 Legacy tree has no such shape. Whether the original bounds its table reads by the declared size is inferred from the premise that these maps play, not traced in `Storm.dll` | **fixed** — the archive ends at its block table end, a declared size may fall short of it, and a declared size past it, tables past EOF and non-adjacent tables stay refused; `pcx-map` keeps any trailer as opaque bytes. Pinned by `pcx-mpq/tests/archive_framing.rs`, `pcx-map/tests/map_framing.rs` and the ignored `loose_map_framing` report (809 open, 2 refused) |
 ## Multiplayer
 
 - [x] `pcx-sim`: deterministic fixed-tick sim, fixed-point, no Bevy — 8 tests
