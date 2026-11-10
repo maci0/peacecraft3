@@ -397,6 +397,25 @@ pub struct Skeleton {
     pub names: Vec<String>,
 }
 
+/// Parent lookup for both posing paths. `parentId` addresses the whole node
+/// space, so it resolves against the supplied BONE/HELP list, not
+/// LoadedModel's bones-only name table. A repeated object id answers with its
+/// first bone's parent; a parent id no bone carries resolves to no parent.
+fn bone_parents(bones: &[pcx_mdl::Bone]) -> impl Fn(u32) -> Option<u32> {
+    let mut parent_ids = std::collections::HashMap::with_capacity(bones.len());
+    for b in bones {
+        parent_ids.entry(b.object_id).or_insert(b.parent_id);
+    }
+    let parents: std::collections::HashMap<u32, u32> = parent_ids
+        .iter()
+        .filter_map(|(&id, &parent)| {
+            let parent = u32::try_from(parent).ok()?;
+            parent_ids.contains_key(&parent).then_some((id, parent))
+        })
+        .collect();
+    move |object_id| parents.get(&object_id).copied()
+}
+
 /// Builds a posed skeleton from a model.
 ///
 /// `parent` resolves a bone's parent node, which is what makes a bone that hangs
@@ -411,29 +430,7 @@ pub fn pose_skeleton(
     pivots: &pcx_mdl::Pivots,
     frame: u32,
 ) -> Skeleton {
-    // `parentId` addresses the whole node space, so resolve it against the
-    // supplied BONE/HELP list, not LoadedModel's bones-only name table.
-    let parents: Vec<Option<u32>> = {
-        let by_id: std::collections::HashMap<u32, i32> =
-            bones.iter().map(|b| (b.object_id, b.parent_id)).collect();
-        bones
-            .iter()
-            .map(|b| {
-                if b.parent_id < 0 {
-                    None
-                } else {
-                    let p = b.parent_id as u32;
-                    by_id.contains_key(&p).then_some(p)
-                }
-            })
-            .collect()
-    };
-    let bone_index: std::collections::HashMap<u32, usize> = bones
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.object_id, i))
-        .collect();
-    let parent = |object_id: u32| -> Option<u32> { parents[bone_index[&object_id]] };
+    let parent = bone_parents(bones);
     let matrices = pcx_mdl::bone_matrices(bones, &parent, pivots, frame);
     Skeleton {
         matrices,
@@ -456,27 +453,7 @@ pub fn pose_from_poses(
     pivots: &pcx_mdl::Pivots,
     poses: &[pcx_mdl::Pose],
 ) -> Skeleton {
-    let parents: Vec<Option<u32>> = {
-        let by_id: std::collections::HashMap<u32, i32> =
-            bones.iter().map(|b| (b.object_id, b.parent_id)).collect();
-        bones
-            .iter()
-            .map(|b| {
-                if b.parent_id < 0 {
-                    None
-                } else {
-                    let p = b.parent_id as u32;
-                    by_id.contains_key(&p).then_some(p)
-                }
-            })
-            .collect()
-    };
-    let bone_index: std::collections::HashMap<u32, usize> = bones
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.object_id, i))
-        .collect();
-    let parent = |object_id: u32| -> Option<u32> { parents[bone_index[&object_id]] };
+    let parent = bone_parents(bones);
     let matrices = pcx_mdl::bone_matrices_from_poses(bones, &parent, pivots, poses);
     Skeleton {
         matrices,
