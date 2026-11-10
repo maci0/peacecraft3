@@ -45,7 +45,9 @@ browser it clears the session and frontend layer to return to setup. Cancellatio
 emits no exit. Buttons carry the originating session witness and panel identity,
 so stale widget actions cannot act on a replacement session or another panel.
 
-Save, Load, Options, Help and Tips are still unavailable. Their source disabled
+Help and Tips are available ([bindings](escape-help-tips.md)). Save, Load and
+Options are still unavailable: the in-game options panel
+(`UI\FrameDef\UI\EscMenuOptionsPanel.fdf`) is not rendered. Their source disabled
 art/text are shown, and they do not report placeholder success. The separate
 Pause control is omitted in this single-player modal, matching the isolated RoC
 reference capture; its FDF frame remains available to resolve other controls'
