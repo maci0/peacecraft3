@@ -119,6 +119,33 @@ fn repeated_colour_edits_select_the_authored_variation_and_refuse_ambiguous_sele
     }
 }
 #[test]
+fn version_one_repeated_edits_name_the_variation_in_their_id() {
+    let paths = ["synthetic/decoration0.mdx", "synthetic/decoration1.mdx"];
+    let edit = |field: &[u8; 4], value: u32| pcx_objects::Mod {
+        field: *field,
+        value_type: pcx_objects::ValueType::Int,
+        selectors: None,
+        value: pcx_objects::Value::Int(value),
+        end_word: 0,
+    };
+    let read = |overlay: &Overlay, variation: u32| {
+        let mut doodad = instance();
+        doodad.variation = variation;
+        appearance_source(&tables(), overlay, &doodad, paths.into_iter())
+    };
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("Zx91".into(), vec![edit(b"Zre2", 197), edit(b"Zre1", 205)]);
+    assert_eq!(read(&overlay, 1).unwrap().1, [197., 103., 179.]);
+    assert_eq!(read(&overlay, 0).unwrap().1, [205., 91., 151.]);
+    for id in [b"Zre9", b"Zre0", b"Zrex"] {
+        overlay.mods.get_mut("Zx91").unwrap()[0].field = *id;
+        assert!(read(&overlay, 1).is_err(), "{id:?}");
+    }
+}
+
+#[test]
 fn a_single_variation_model_must_be_an_unambiguous_source_member() {
     assert_eq!(
         model_member(

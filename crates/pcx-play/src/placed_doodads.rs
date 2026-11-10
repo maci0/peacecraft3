@@ -149,22 +149,23 @@ fn appearance_source<'a>(
                 "{name}: doodad tint variation exceeds metadata repeat"
             ));
         }
+        let repeat_max = repeat
+            .as_ref()
+            .and_then(|n| n.text.parse::<u32>().ok())
+            .unwrap_or(0);
         if repeated
             && mods.iter().any(|m| {
-                m.field == def.fourcc
-                    && !m.selectors.is_some_and(|[n, data]| {
-                        data == 0
-                            && n > 0
-                            && repeat
-                                .as_ref()
-                                .is_some_and(|r| r.text.parse::<u32>().is_ok_and(|max| n <= max))
-                    })
+                is_repeated_edit(m, def.fourcc) && repeated_variation(m, repeat_max).is_none()
             })
         {
             return Err(format!("{name}: unsupported doodad {column} selector"));
         }
         let edit = mods.iter().rev().find(|m| {
-            m.field == def.fourcc && (!repeated || m.selectors.is_some_and(|s| s == [level, 0]))
+            if repeated {
+                is_repeated_edit(m, def.fourcc) && repeated_variation(m, repeat_max) == Some(level)
+            } else {
+                m.field == def.fourcc
+            }
         });
         if let Some(edit) = edit {
             if (!repeated && edit.selectors.is_some_and(|s| s != [0, 0]))
@@ -226,6 +227,36 @@ fn appearance_source<'a>(
         }
     }
     Ok((model_member(&file, instance.variation, count, paths)?, tint))
+}
+
+/// Version-1 doodad edits spell the variation as the last character of the
+/// 4-character id, so the tenth variation is `0` (`dvr0`, after `dvr9`).
+const TENTH_VARIATION_SUFFIX: u8 = b'0';
+const TENTH_VARIATION: u32 = 10;
+
+/// Whether `edit` belongs to a repeated column whose metadata row is `field`.
+/// Indexed edits must carry the exact id; version-1 edits share its first three
+/// characters and differ in the variation suffix.
+fn is_repeated_edit(edit: &pcx_objects::Mod, field: [u8; 4]) -> bool {
+    match edit.selectors {
+        Some(_) => edit.field == field,
+        None => edit.field[..3] == field[..3],
+    }
+}
+
+/// The variation a repeated-column edit names, within `1..=repeat`. Indexed edits
+/// name it as their first selector with data `0`.
+fn repeated_variation(edit: &pcx_objects::Mod, repeat: u32) -> Option<u32> {
+    let variation = match edit.selectors {
+        Some([variation, 0]) => variation,
+        Some(_) => return None,
+        None => match edit.field[3] {
+            digit @ b'1'..=b'9' => u32::from(digit - b'0'),
+            TENTH_VARIATION_SUFFIX => TENTH_VARIATION,
+            _ => return None,
+        },
+    };
+    (1..=repeat).contains(&variation).then_some(variation)
 }
 
 pub(crate) fn model_member<'a>(

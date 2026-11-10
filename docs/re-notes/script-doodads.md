@@ -16,6 +16,14 @@ Repeated colour overrides select the authored variation through their metadata
 selector. Missing, out-of-range or unsupported selectors refuse instead of
 silently falling back to the default table colour.
 
+Indexed `war3map.w3d` edits carry the variation as the first selector with data
+`0`. Version-1 tables have no selectors: the variation is the last character of
+the 4-character id, so `dvr1` through `dvr9` name variations 1 to 9. The reading
+that `0` names variation 10 (`dvr0`) is inferred, not measured in native code:
+the selected `UndeadX07c.w3x` ZZcd edits contain exactly those ten ids, and the
+metadata row `dvr1` has `repeat` 10. The ZZcd tint is `80,180,220` for variation
+1 in that map, measured with `objx dump`.
+
 ## Native evidence
 
 REA/Ghidra inspected the selected executable with SHA-256
