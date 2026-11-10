@@ -95,6 +95,17 @@ the check records their archive identities and member fingerprints separately.
 Those dimensions are observations, not production constants or release inference.
 No original assets are written by that check or published with the code.
 
+The water surface uses the selected `Water.slk` row's `texFile` and `numTex`:
+frames are `texFile` + two-digit index (`00` to `numTex - 1`) + `.blp`. On the
+Legacy install, the 18 data rows name 766 frames in total, all present and
+decodable (`shipped_water_rows_resolve_every_frame`, explicit install check).
+Before this, the bare `texFile` was looked up as a file and wet maps refused
+with "absent from every mounted layer". Frame 0 is the material texture; the
+frame sequence is held on the water entity. Open: the frame clock, because
+the unit of the row's `texRate` is not established, so the surface stays on frame 0; and
+the memory budget for the frame sequence, which is not yet tied to
+`GroundSupply`.
+
 The automatic budget caller is checked through actual map delivery, including
 changed binding revisions, cached updates, missing replacement textures and
 read/texture budget refusal before publication. All five ground cases pass on

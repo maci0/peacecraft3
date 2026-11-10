@@ -502,7 +502,7 @@ fn publish_admitted_water(
             publication.receipts.clear();
             publication.last_error = None;
         }
-        Ok(Some((mesh, material, receipts))) => {
+        Ok(Some((mesh, material, frames, receipts))) => {
             if let Some(previous) = publication.entity.take() {
                 commands.entity(previous).despawn();
             }
@@ -510,6 +510,7 @@ fn publish_admitted_water(
                 .spawn((
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
+                    WaterFrames(frames),
                     bevy::camera::visibility::RenderLayers::layer(
                         crate::campaign_camera::RENDER_LAYER,
                     ),
@@ -527,14 +528,66 @@ fn publish_admitted_water(
 }
 
 /// Build the admitted water surface, if the map has any wet tile. Returns
-/// `Ok(None)` for a dry map. The texture path comes from the selected
-/// `Water.slk` row's `texFile`; its alpha channel is the blend, matching the
-/// ground-sheet convention of authored alpha rather than numeric weights.
+/// `Ok(None)` for a dry map. The frames come from the selected `Water.slk`
+/// row's `texFile` and `numTex` (see `selected_frame_paths`); frame 0 is the
+/// material texture. Its alpha channel is the blend, matching the ground-sheet
+/// convention of authored alpha rather than numeric weights.
 #[allow(clippy::too_many_arguments)]
 /// Prepared water mesh, material and per-asset receipts for publication.
 /// Factored out so the fallible preparation reads separately from the
 /// infallible ECS publication below.
-type PreparedWater = Option<(Handle<Mesh>, Handle<StandardMaterial>, Vec<AssetReceipt>)>;
+type PreparedWater = Option<(
+    Handle<Mesh>,
+    Handle<StandardMaterial>,
+    Vec<Handle<Image>>,
+    Vec<AssetReceipt>,
+)>;
+
+/// Two-digit frame index of a `Water.slk` texture sequence. The shipped names
+/// use this width, so it is a format invariant rather than row data.
+const WATER_FRAME_INDEX_LIMIT: u32 = 100;
+/// Extension of the frames named by a row's `texFile`.
+const WATER_FRAME_EXTENSION: &str = ".blp";
+
+/// Frame sequence of the mounted water surface, in index order. The surface
+/// shows frame 0. The frame clock is not wired; the `Water.slk` `texRate`
+/// unit is not established.
+#[derive(Component)]
+pub struct WaterFrames(pub Vec<Handle<Image>>);
+
+/// Frame paths of the selected row: `texFile`, a two-digit index in
+/// `0..numTex`, and the BLP extension.
+fn selected_frame_paths(profile: &pcx_tera::WaterProfile<'_>) -> Result<Vec<String>, String> {
+    let tex_file = profile
+        .field("texFile")
+        .ok_or("selected row has no texFile")?;
+    let tex_file = tex_file.trim().trim_matches('"');
+    if tex_file.is_empty() {
+        return Err("selected row texFile is empty".into());
+    }
+    let num_tex = profile
+        .field("numTex")
+        .ok_or("selected row has no numTex")?;
+    let count = num_tex
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("selected row numTex {num_tex:?} is not a count"))?;
+    water_frame_paths(tex_file, count)
+}
+
+fn water_frame_paths(tex_file: &str, count: u32) -> Result<Vec<String>, String> {
+    if count == 0 {
+        return Err("selected row numTex is zero".into());
+    }
+    if count > WATER_FRAME_INDEX_LIMIT {
+        return Err(format!(
+            "selected row numTex {count} exceeds two-digit frame indices"
+        ));
+    }
+    Ok((0..count)
+        .map(|index| format!("{tex_file}{index:02}{WATER_FRAME_EXTENSION}"))
+        .collect())
+}
 
 fn prepare_water(
     terrain: &Terrain,
@@ -586,51 +639,56 @@ fn prepare_water(
     if mesh.wet_tiles == 0 {
         return Ok(None);
     }
-    let tex_file = profile.field("texFile").ok_or_else(|| {
-        read_error(
-            "TerrainArt\\Water.slk",
-            "selected row has no texFile".into(),
-        )
-    })?;
-    let tex_file = tex_file.trim().trim_matches('"');
-    if tex_file.is_empty() {
-        return Err(read_error(
-            "TerrainArt\\Water.slk",
-            "selected row texFile is empty".into(),
-        ));
+    let frame_paths = selected_frame_paths(&profile)
+        .map_err(|detail| read_error("TerrainArt\\Water.slk", detail))?;
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(frame_paths.len())
+        .map_err(|_| MapGroundError::Allocation)?;
+    for path in &frame_paths {
+        let asset = reader
+            .resolve_bounded(path, read_limit)
+            .map_err(|e| read_error(path, e.to_string()))?;
+        let loaded = pcx_gfx::load_image_bounded(&asset.bytes, path, 8 << 20)
+            .map_err(|e| read_error(path, e.to_string()))?;
+        if loaded.width == 0 || loaded.height == 0 {
+            return Err(read_error(path, "water frame is empty".into()));
+        }
+        if let Some(limits) = device
+            && (loaded.width > limits.max_texture_dimension_2d
+                || loaded.height > limits.max_texture_dimension_2d)
+        {
+            return Err(read_error(path, "water frame exceeds device limits".into()));
+        }
+        frames.push((loaded, asset));
     }
-    let texture_asset = reader
-        .resolve_bounded(tex_file, read_limit)
-        .map_err(|e| read_error(tex_file, e.to_string()))?;
-    let loaded = pcx_gfx::load_image_bounded(&texture_asset.bytes, tex_file, 8 << 20)
-        .map_err(|e| read_error(tex_file, e.to_string()))?;
-    if loaded.width == 0 || loaded.height == 0 {
-        return Err(read_error(tex_file, "water texture is empty".into()));
+    let mut frame_handles = Vec::new();
+    frame_handles
+        .try_reserve_exact(frames.len())
+        .map_err(|_| MapGroundError::Allocation)?;
+    let mut receipts = Vec::new();
+    receipts
+        .try_reserve_exact(frames.len() + 1)
+        .map_err(|_| MapGroundError::Allocation)?;
+    receipts.push(receipt(&table_asset));
+    for (loaded, asset) in frames {
+        let mut water_image = Image::new(
+            Extent3d {
+                width: loaded.width,
+                height: loaded.height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            loaded.rgba,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        water_image.sampler = bevy::image::ImageSampler::linear();
+        frame_handles.push(images.add(water_image));
+        receipts.push(receipt(&asset));
     }
-    if let Some(limits) = device
-        && (loaded.width > limits.max_texture_dimension_2d
-            || loaded.height > limits.max_texture_dimension_2d)
-    {
-        return Err(read_error(
-            tex_file,
-            "water texture exceeds device limits".into(),
-        ));
-    }
-    let mut water_image = Image::new(
-        Extent3d {
-            width: loaded.width,
-            height: loaded.height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        loaded.rgba,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    );
-    water_image.sampler = bevy::image::ImageSampler::linear();
-    let texture = images.add(water_image);
     let material = materials.add(StandardMaterial {
-        base_color_texture: Some(texture),
+        base_color_texture: frame_handles.first().cloned(),
         base_color: Color::WHITE,
         alpha_mode: AlphaMode::Blend,
         double_sided: true,
@@ -654,13 +712,7 @@ fn prepare_water(
     render_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, mesh.uvs.clone());
     render_mesh.insert_indices(Indices::U32(mesh.indices.clone()));
     let handle = meshes.add(render_mesh);
-    let mut receipts = Vec::new();
-    receipts
-        .try_reserve_exact(2)
-        .map_err(|_| MapGroundError::Allocation)?;
-    receipts.push(receipt(&table_asset));
-    receipts.push(receipt(&texture_asset));
-    Ok(Some((handle, material, receipts)))
+    Ok(Some((handle, material, frame_handles, receipts)))
 }
 
 fn prepare_shadow(
@@ -890,6 +942,7 @@ pub fn spawn_admitted(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn shadow_grid_keeps_source_orientation_values_and_device_limits() {
@@ -913,7 +966,8 @@ mod tests {
     fn terrain(nibble: u8) -> Terrain {
         let mut bytes = pcx_map::TERRAIN_MAGIC.to_vec();
         bytes.extend(pcx_map::TERRAIN_VERSION.to_le_bytes());
-        bytes.push(0);
+        // Tileset `L` (Lordaeron summer), matching the `Ldrt` tile below.
+        bytes.push(b'L');
         bytes.extend(0u32.to_le_bytes());
         bytes.extend(1u32.to_le_bytes());
         bytes.extend_from_slice(b"Ldrt");
@@ -1127,5 +1181,312 @@ mod tests {
         let publication = app.world().resource::<GroundPublication>();
         assert!(publication.entity.is_none());
         assert!(publication.last_error.is_none());
+    }
+
+    /// A `Water.slk` with one `LSha` row whose `texFile` and `numTex` cells are
+    /// the given raw text. Passing `None` omits the `numTex` column.
+    fn water_slk(tex_file: &str, num_tex: Option<&str>) -> Vec<u8> {
+        let (header, cell) = match num_tex {
+            Some(num_tex) => ("C;X4;K\"numTex\"\r\n", format!("C;X4;K{num_tex}\r\n")),
+            None => ("", String::new()),
+        };
+        format!(
+            "ID;PWXL;N;E\r\nC;Y1;X1;K\"waterID\"\r\nC;X2;K\"height\"\r\nC;X3;K\"texFile\"\r\n\
+             {header}C;Y2;X1;K\"LSha\"\r\nC;X2;K-0.7\r\nC;X3;K\"{tex_file}\"\r\n{cell}E\r\n"
+        )
+        .into_bytes()
+    }
+
+    /// Fixture files under `.scratch/`, removed when dropped.
+    struct FixtureDir(PathBuf);
+
+    impl FixtureDir {
+        fn new(name: &str, files: &[(&str, Vec<u8>)]) -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.scratch/water-fixtures")
+                .join(format!(
+                    "{}-{}-{name}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+            let _ = std::fs::remove_dir_all(&root);
+            for (path, bytes) in files {
+                let at = root.join(path.replace('\\', "/"));
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                std::fs::write(at, bytes).unwrap();
+            }
+            Self(root)
+        }
+
+        fn resolver(&self) -> pcx_assets::Resolver {
+            let mode = pcx_assets::GameMode {
+                build: pcx_assets::Build::V1_29b,
+                addon: pcx_assets::Addon::Tft,
+                assets: pcx_assets::AssetMode::Vanilla,
+                behaviour: pcx_assets::Behaviour::Vanilla,
+            };
+            pcx_assets::Resolver::new(
+                mode,
+                Some(pcx_assets::OverrideDirectory::open(&self.0, "water-test", None).unwrap()),
+                Vec::new(),
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for FixtureDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn wet_terrain_publishes_the_frame_sequence_named_by_its_row() {
+        let frame = sheet();
+        let fixture = FixtureDir::new(
+            "sequence",
+            &[
+                (
+                    "TerrainArt\\Water.slk",
+                    water_slk(r"ReplaceableTextures\Water\Water", Some("3")),
+                ),
+                ("ReplaceableTextures\\Water\\Water00.blp", frame.clone()),
+                ("ReplaceableTextures\\Water\\Water01.blp", frame.clone()),
+                ("ReplaceableTextures\\Water\\Water02.blp", frame),
+            ],
+        );
+        let mut meshes = Assets::<Mesh>::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let prepared = prepare_water(
+            &terrain(0x40),
+            &fixture.resolver(),
+            1 << 20,
+            None,
+            &mut meshes,
+            &mut images,
+            &mut materials,
+        )
+        .unwrap();
+        let (_, material, frames, receipts) = prepared.expect("wet terrain yields a water surface");
+        assert_eq!(frames.len(), 3);
+        assert_eq!(images.len(), 3);
+        assert_eq!(receipts.len(), 4);
+        assert_eq!(
+            materials.get(&material).unwrap().base_color_texture,
+            Some(frames[0].clone())
+        );
+    }
+
+    #[test]
+    fn a_missing_frame_refuses_the_surface_and_publishes_no_images() {
+        let frame = sheet();
+        let fixture = FixtureDir::new(
+            "missing-frame",
+            &[
+                (
+                    "TerrainArt\\Water.slk",
+                    water_slk(r"ReplaceableTextures\Water\Water", Some("3")),
+                ),
+                ("ReplaceableTextures\\Water\\Water00.blp", frame.clone()),
+                ("ReplaceableTextures\\Water\\Water01.blp", frame),
+            ],
+        );
+        let mut meshes = Assets::<Mesh>::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let error = prepare_water(
+            &terrain(0x40),
+            &fixture.resolver(),
+            1 << 20,
+            None,
+            &mut meshes,
+            &mut images,
+            &mut materials,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            &error,
+            MapGroundError::Read { path, .. }
+                if path.as_str() == r"ReplaceableTextures\Water\Water02.blp"
+        ));
+        assert!(images.iter().next().is_none());
+    }
+
+    #[test]
+    fn frame_names_follow_the_row_texfile_and_count() {
+        assert_eq!(
+            water_frame_paths(r"ReplaceableTextures\Water\Water", 3).unwrap(),
+            [
+                r"ReplaceableTextures\Water\Water00.blp",
+                r"ReplaceableTextures\Water\Water01.blp",
+                r"ReplaceableTextures\Water\Water02.blp",
+            ]
+        );
+        let full = water_frame_paths("X", 100).unwrap();
+        assert_eq!(full.len(), 100);
+        assert_eq!(full[99], "X99.blp");
+        assert_eq!(
+            water_frame_paths("X", 0).unwrap_err(),
+            "selected row numTex is zero"
+        );
+        assert!(
+            water_frame_paths("X", 101)
+                .unwrap_err()
+                .contains("exceeds two-digit")
+        );
+    }
+
+    #[test]
+    fn the_selected_row_must_supply_a_texfile_and_a_count() {
+        let selected = |slk: Vec<u8>| {
+            let table = pcx_slq::Table::parse(&slk).unwrap();
+            let profile = pcx_tera::WaterProfile::open(
+                &table,
+                "Water.slk",
+                pcx_tera::WaterSelection::Tileset,
+                &terrain(0x40),
+            )
+            .unwrap();
+            selected_frame_paths(&profile)
+        };
+        assert_eq!(
+            selected(water_slk(r"ReplaceableTextures\Water\Water", Some("2"))).unwrap(),
+            [
+                r"ReplaceableTextures\Water\Water00.blp",
+                r"ReplaceableTextures\Water\Water01.blp",
+            ]
+        );
+        assert_eq!(
+            selected(water_slk("", Some("2"))).unwrap_err(),
+            "selected row texFile is empty"
+        );
+        assert_eq!(
+            selected(water_slk("X", None)).unwrap_err(),
+            "selected row has no numTex"
+        );
+        assert!(
+            selected(water_slk("X", Some("two")))
+                .unwrap_err()
+                .contains("not a count")
+        );
+        assert!(
+            selected(water_slk("X", Some("-1")))
+                .unwrap_err()
+                .contains("not a count")
+        );
+    }
+
+    /// Pins the Legacy install's own archives the way the app's campaign
+    /// recipe does. Reads archives only.
+    fn legacy_resolver(install: &std::path::Path) -> pcx_assets::Resolver {
+        use pcx_play::campaign_data_set::{CampaignRecipe, ImageRules};
+        let image_path = install.join("Warcraft III.exe");
+        let image = std::fs::read(&image_path).unwrap();
+        let identity =
+            pcx_play::campaign_inputs::client_identity(&image, &image_path.display().to_string());
+        let rules = ImageRules::read(&image, identity).unwrap();
+        CampaignRecipe::pin(
+            install,
+            pcx_assets::GameMode::default(),
+            rules,
+            &image,
+            None,
+            "VERSION_FROZEN_THRONE",
+        )
+        .unwrap()
+        .base_resolver()
+        .unwrap()
+    }
+
+    /// Every `Water.slk` data row names frames that resolve and decode from the
+    /// install, and wet Human01 publishes its selected sequence.
+    #[test]
+    #[ignore = "requires PEACECRAFT3_INSTALL (Legacy install directory); reads original archives only"]
+    fn shipped_water_rows_resolve_every_frame() {
+        let install = PathBuf::from(
+            std::env::var_os("PEACECRAFT3_INSTALL")
+                .expect("set PEACECRAFT3_INSTALL to the Legacy install directory"),
+        );
+        let resolver = legacy_resolver(&install);
+        let map_bytes = resolver
+            .resolve_bounded("Maps\\Campaign\\Human01.w3m", 64 << 20)
+            .unwrap()
+            .bytes;
+        let terrain = pcx_map::Map::parse(&map_bytes).unwrap().terrain().unwrap();
+        const WATER_SLK: &str = "TerrainArt\\Water.slk";
+        let slk = resolver.resolve_bounded(WATER_SLK, 4 << 20).unwrap();
+        let table = pcx_slq::Table::parse(&slk.bytes).unwrap();
+
+        // Row 1 is the header; data rows follow it.
+        let mut failures = Vec::new();
+        let mut frames_checked = 0usize;
+        for index in 2..=table.row_count() {
+            let water_id = table.by_name(index, "waterID").unwrap();
+            let profile = pcx_tera::WaterProfile::open(
+                &table,
+                WATER_SLK,
+                pcx_tera::WaterSelection::Explicit(water_id),
+                &terrain,
+            )
+            .unwrap();
+            let paths = match selected_frame_paths(&profile) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    failures.push(format!("{water_id}: {error}"));
+                    continue;
+                }
+            };
+            for path in paths {
+                frames_checked += 1;
+                let decoded = resolver
+                    .resolve_bounded(&path, 8 << 20)
+                    .map_err(|e| e.to_string())
+                    .and_then(|asset| {
+                        pcx_gfx::load_image_bounded(&asset.bytes, &path, 8 << 20)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    });
+                if let Err(error) = decoded {
+                    failures.push(format!("{water_id} {path}: {error}"));
+                }
+            }
+        }
+        assert!(frames_checked > 0, "no water rows were checked");
+        assert!(
+            failures.is_empty(),
+            "unresolved water frames: {failures:#?}"
+        );
+
+        let selected = pcx_tera::WaterProfile::open(
+            &table,
+            WATER_SLK,
+            pcx_tera::WaterSelection::Tileset,
+            &terrain,
+        )
+        .unwrap();
+        let expected = selected_frame_paths(&selected).unwrap();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let (_, _, frames, _) = prepare_water(
+            &terrain,
+            &resolver,
+            4 << 20,
+            None,
+            &mut meshes,
+            &mut images,
+            &mut materials,
+        )
+        .unwrap()
+        .expect("wet Human01 yields a water surface");
+        assert_eq!(frames.len(), expected.len());
+        println!(
+            "water rows checked={} frames checked={frames_checked} selected={} frames={}",
+            table.row_count().saturating_sub(1),
+            selected.water_id(),
+            frames.len()
+        );
     }
 }
