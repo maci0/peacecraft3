@@ -77,7 +77,7 @@ def test_request_exact_official_schema():
     q = payload["questions"]["action"]
     assert q["type"] == "choice"
     assert set(q["criteria"]) == {"stop_noop", "select_unit", "move_selected", "order_attack"}
-    # No OpenAI/chat schema anywhere in the request
+    # No chat-completions schema anywhere in the request
     blob = call["body"].decode()
     assert "messages" not in blob and "chat" not in blob and "tools" not in blob
     assert p.last_summary["model"] == MODEL

@@ -6,8 +6,8 @@ Configured selection (explicit, no filesystem search, no shell sourcing):
 1. Explicit ``path`` argument wins when given.
 2. Otherwise the documented ``TYPESAFE_API_KEY`` environment variable,
    read in-process via ``os.environ`` (never logged, never sourced).
-3. Otherwise ``KEY_PATH`` (``/home/maci/Desktop/peacecraft3/.secrets``,
-   parent checkout, not worktree copy) as legacy default.
+3. Otherwise ``KEY_PATH``: ``.secrets`` at the repository root (the first
+   parent holding both ``AGENTS.md`` and ``Cargo.toml``), as the default.
 
 If both an explicit ``path`` and a non-empty env var are supplied,
 ``path`` takes precedence; the env value is ignored when ``path`` is
@@ -23,11 +23,20 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-KEY_PATH = Path("/home/maci/Desktop/peacecraft3/.secrets")
-ENV_NAME = "TYPESAFE_API_KEY"
-
 class SecretsError(RuntimeError):
     pass
+
+
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "AGENTS.md").is_file() and (parent / "Cargo.toml").is_file():
+            return parent
+    raise SecretsError(f"no repository root (AGENTS.md and Cargo.toml) above {here}")
+
+
+KEY_PATH = _repo_root() / ".secrets"
+ENV_NAME = "TYPESAFE_API_KEY"
 
 def _parse_key_file(text: str, path: Path) -> str:
     stripped = text.strip()

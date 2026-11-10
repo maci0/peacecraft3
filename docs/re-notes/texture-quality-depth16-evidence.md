@@ -113,7 +113,7 @@ The preceding section's "not present on this machine" claim is wrong for
 this workspace. The exact qualified ordinary asset path was re-checked
 with normal file tools (no broad search, no alternate-version fallback):
 
-- Path: `/home/maci/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III (Legacy)/Warcraft III.exe`
+- Path: the local Legacy install's `Warcraft III.exe` (identified by the SHA-256 below)
 - Size: 14858960 bytes; SHA-256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`
 - PE32, ImageBase `0x400000`, entry RVA `0x6574bc`, sections
   `.text` RVA `0x1000` size `0xa64941`, `.rdata` RVA `0xa66000`, etc.

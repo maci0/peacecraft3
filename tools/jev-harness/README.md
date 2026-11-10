@@ -4,12 +4,12 @@ Provider-neutral, bounded capture→provider→validate→apply→capture loop.
 FakeProvider is the offline default. `JevProvider` implements the official
 TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 (official OpenAPI at `https://api.typesafe.ai/openapi.json`, docs at
-`https://docs.typesafe.ai`). No OpenAI/chat schema is used anywhere.
+`https://docs.typesafe.ai`). No chat-completions schema is used anywhere.
 
 ## JevProvider (live adapter)
 
 - **Endpoint:** `POST https://api.typesafe.ai/v1/systemone`
-- **Auth:** `Authorization: Bearer $TYPESAFE_API_KEY`, key loaded in-process only via `load_key_in_process()` with explicit precedence: explicit `path` argument > `TYPESAFE_API_KEY` env (in-process `os.environ` read) > legacy default file `/home/maci/Desktop/peacecraft3/.secrets` (parent checkout). Never logged, never sent as model text, never sourced as shell; transport refuses redirects so the header is never forwarded across hosts. No filesystem search for other credential files; no alternate access after a read refusal.
+- **Auth:** `Authorization: Bearer $TYPESAFE_API_KEY`, key loaded in-process only via `load_key_in_process()` with explicit precedence: explicit `path` argument > `TYPESAFE_API_KEY` env (in-process `os.environ` read) > default file `.secrets` at the repository root. Never logged, never sent as model text, never sourced as shell; transport refuses redirects so the header is never forwarded across hosts. No filesystem search for other credential files; no alternate access after a read refusal.
 - **Pinned model:** `jev-1.14.0` (verified current 2026-10-14; aliases
   `jev-latest`/`jev-preview` resolve to it — code pins the versioned ID and
   fails closed on any other response model).
@@ -33,7 +33,7 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
 
 ### Live status (honest)
 
-- **Real-API status 2026-11-05:** no live call was made. Credential location is user-confirmed pending: explicit path > `TYPESAFE_API_KEY` env > legacy default file; until the user confirms the exact location, no live call is made and tests use fake fixtures only (injected `environ` / tmp `path`). No provisioning/payment/account action was taken.
+- **Real-API status 2026-11-05:** no live call was made. Credential location is user-confirmed pending: explicit path > `TYPESAFE_API_KEY` env > default file; until the user confirms the exact location, no live call is made and tests use fake fixtures only (injected `environ` / tmp `path`). No provisioning/payment/account action was taken.
 - **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend` (in-memory fixture) or fully mocked transports. Default candidate coordinates are synthetic fixtures, not PeaceCraft targets. Nothing observed here is PeaceCraft gameplay or the original WC3 client.
 - **Bridge lane note (2ecd48b, integrated in 1ac7c02):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay. Hidden-unit guard: upstream `observe()` already filters to own-or-visible; the provider only fails closed on an explicit per-unit `visible=False`/`hidden=True`, and does not ban mere field names.
 
@@ -94,7 +94,7 @@ Default `LoopConfig`: ≤3 model calls, ≤8 game actions, per-call 30s, total 1
 
 ## Secrets
 
-Credential selection is explicit (no search, no shell sourcing): explicit `path` > `TYPESAFE_API_KEY` env > legacy default file `/home/maci/Desktop/peacecraft3/.secrets` (parent checkout). `.secrets` is git-ignored (root `.gitignore` entries `.secrets` and `*.secrets` — verify before staging; private `.git/info/exclude` checked 2026-11-05 contains no secrets rule but root `.gitignore` covers it). Key is loaded in-process only via `load_key_in_process()` at the auth boundary; never printed, never sent as model text, never sourced as shell. Trace logs redact `Authorization`/`api-key`/`Bearer`/`sk-…` patterns. Until the user supplies the exact path/env location, no live call is made; tests use fake fixtures only (injected `environ` mapping / tmp `path`).
+Credential selection is explicit (no search, no shell sourcing): explicit `path` > `TYPESAFE_API_KEY` env > default file `.secrets` at the repository root. `.secrets` is git-ignored (root `.gitignore` entries `.secrets` and `*.secrets` — verify before staging; private `.git/info/exclude` checked 2026-11-05 contains no secrets rule but root `.gitignore` covers it). Key is loaded in-process only via `load_key_in_process()` at the auth boundary; never printed, never sent as model text, never sourced as shell. Trace logs redact `Authorization`/`api-key`/`Bearer`/`sk-…` patterns. Until the user supplies the exact path/env location, no live call is made; tests use fake fixtures only (injected `environ` mapping / tmp `path`).
 
 ## Live-contract blockers (exact)
 

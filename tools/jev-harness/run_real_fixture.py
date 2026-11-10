@@ -37,7 +37,6 @@ sys.path.insert(0, str(ROOT / "tools" / "jev-harness"))
 from jev_harness.canonical_fixture import FixtureClient, FixtureError  # noqa: E402
 
 TEST_NAME = "campaign_entry_gpu_tests::canonical_fixture_real_interaction"
-DEFAULT_INSTALL = "/home/maci/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III (Legacy)"
 
 
 def _test_binary() -> Path:
@@ -62,12 +61,15 @@ def _private_xvfb(run_dir: Path) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--install", default=DEFAULT_INSTALL)
+    ap.add_argument("--install", default=os.environ.get("PCX_NATIVE_CHAPTER_INSTALL"),
+                    help="Legacy install directory (default: $PCX_NATIVE_CHAPTER_INSTALL)")
     ap.add_argument("--map", default=r"Maps\Campaign\Prologue01.w3m")
     ap.add_argument("--addon", default="roc")
     ap.add_argument("--run-dir", default=".scratch/real-fixture")
     ap.add_argument("--timeout", type=float, default=600.0)
     args = ap.parse_args()
+    if not args.install:
+        ap.error("--install or PCX_NATIVE_CHAPTER_INSTALL is required")
 
     run_dir = (ROOT / args.run_dir).resolve()
     if run_dir.exists():
