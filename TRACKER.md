@@ -7005,3 +7005,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   workspace builds and formatting pass; `pytest tools/jev-harness/tests` passes
   91; the Prologue02 escape-menu asset gate passes headless and muted. Open: the
   menu texture-quality adapter is still unwired behind `#![allow(dead_code)]`.
+
+- 2026-11-10: Follow-up to the lane merge, at the user's request. `pcx-gfx`
+  skeleton posing resolves a repeated bone object id to its first bone's
+  parent again: `34cb17c` precomputed parents through a map that kept the last
+  bone, and `pose_composition` had failed since. The unwired menu
+  texture-quality adapter and its whole-file `allow(dead_code)` are removed,
+  along with the forwarder and alias only it used. The selected Legacy
+  `OptionsMenu.fdf` offers three Texture Quality choices; only `q=2` is 32-bit
+  on the reviewed image and matches the current upload, and the 16-bit choices
+  refuse, so the popup stays a read-only preview (see
+  [options initialization](docs/re-notes/original-options-initialization.md)).
+  The real-asset policy gate now reads that FDF from the install's archives and
+  checks every offered ordinal; it passes on the local Legacy install.
+  Workspace tests with the gate features: 5,452 passed, 0 failed, 355 ignored.
+  Strict native and WASM Clippy, both workspace builds and formatting pass.
