@@ -112,7 +112,6 @@ pub fn route_back_to_escape(
     true
 }
 
-#[allow(dead_code)]
 pub fn route_cancel_options(
     route: &mut InGameOptionsRoute,
     nav: &mut Navigation,

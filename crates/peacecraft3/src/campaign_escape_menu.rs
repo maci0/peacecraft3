@@ -167,12 +167,21 @@ fn clicked(
         queue(&mut state, button, &view);
     }
 }
+#[derive(SystemParam)]
+struct KeyboardInputs<'w> {
+    session: Res<'w, MapScriptSession<MapStartupHost>>,
+    route: Option<ResMut<'w, crate::campaign_in_game_options::InGameOptionsRoute>>,
+    nav: Option<ResMut<'w, crate::menu_screens::Navigation>>,
+}
 fn keyboard(
     mut events: MessageReader<KeyboardInput>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<&EscapeButton, Without<InteractionDisabled>>,
+    actions: Res<crate::button_actions::ButtonActions>,
+    options_buttons: Query<&crate::glue_menu::GlueButton, Without<InteractionDisabled>>,
     mut state: ResMut<EscapeMenu>,
     mut view: ResMut<CampaignCamera>,
+    keys_in: KeyboardInputs,
 ) {
     if !view.menu_open() {
         events.clear();
@@ -180,6 +189,22 @@ fn keyboard(
     }
     if keys.just_pressed(KeyCode::Escape) {
         keys.clear_just_pressed(KeyCode::Escape);
+        // In-game Options is open *above* the escape panels while the live
+        // campaign keeps `menu_open`. `menu_navigation_keys` is gated on
+        // `campaign_is_hidden` and never runs here, and the page-based
+        // Escape below would close/unpause the campaign before Cancel could
+        // run. Consult the route first: Escape cancels Options and keeps
+        // the escape menu (and its pause) open.
+        if let (Some(mut route), Some(mut nav), Some(witness)) = (
+            keys_in.route,
+            keys_in.nav,
+            keys_in.session.session_witness(),
+        ) && route.is_open()
+        {
+            crate::campaign_in_game_options::route_cancel_options(&mut route, &mut nav, &witness);
+            events.clear();
+            return;
+        }
         if let Some(page) = state.page.back() {
             state.page = page;
         } else {
@@ -187,6 +212,42 @@ fn keyboard(
         }
         events.clear();
         return;
+    }
+    // Clicking Cancel in the live in-game Options frame routes through
+    // `ButtonActions`; the frontend `apply_menu_clicks` consumer never sees
+    // it live (campaign visible). Handle it here, in the campaign chain,
+    // before `button_actions::clear` drains it. Limited to a frame that
+    // actually exists in the mounted Options screen.
+    if let (Some(mut route), Some(mut nav), Some(witness)) = (
+        keys_in.route,
+        keys_in.nav,
+        keys_in.session.session_witness(),
+    ) && route.is_open()
+    {
+        let cancel_exists = options_buttons
+            .iter()
+            .any(|b| b.frame == crate::campaign_in_game_options::OPTIONS_CANCEL_BUTTON);
+        if cancel_exists {
+            // `actions.entities` are the pressed entities; match by frame.
+            // A queued Cancel for a frame that no longer exists is skipped.
+            let mut cancelled = false;
+            for entity in &actions.entities {
+                if options_buttons.get(*entity).is_ok_and(|b| {
+                    b.frame == crate::campaign_in_game_options::OPTIONS_CANCEL_BUTTON
+                }) {
+                    cancelled = crate::campaign_in_game_options::route_cancel_options(
+                        &mut route, &mut nav, &witness,
+                    );
+                    if cancelled {
+                        break;
+                    }
+                }
+            }
+            if cancelled {
+                events.clear();
+                return;
+            }
+        }
     }
     for event in events.read().filter(|e| e.state.is_pressed() && !e.repeat) {
         let Key::Character(value) = &event.logical_key else {
@@ -1041,6 +1102,10 @@ mod tests {
         let mut app = App::new();
         app.add_message::<KeyboardInput>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .init_resource::<MapScriptSession<MapStartupHost>>()
+            .init_resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+            .init_resource::<crate::menu_screens::Navigation>()
             .insert_resource(EscapeMenu {
                 page: Page::ConfirmExit,
                 ..default()
@@ -1509,6 +1574,70 @@ Frame "BACKDROP" "EscMenuBackdrop" {{
                 crate::menu_screens::Page::Unselected
             ))
         );
+        // Escape, then a click on the mounted Cancel frame, each cancel the
+        // open in-game Options (draft := applied) and keep the escape menu
+        // and its pause open.
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::button_actions::ButtonActions>()
+            .add_message::<KeyboardInput>();
+        let cancel = app
+            .world_mut()
+            .spawn(glue_menu::GlueButton {
+                frame: crate::campaign_in_game_options::OPTIONS_CANCEL_BUTTON.into(),
+                shortcut: None,
+                pushed_text_offset: None,
+            })
+            .id();
+        for click in [false, true] {
+            if click {
+                let mut state = app.world_mut().resource_mut::<EscapeMenu>();
+                state.page = Page::Main;
+                state.pending = Some(("OptionsButton".into(), Page::Main, witness.clone()));
+                drop(state);
+                app.world_mut().run_system_once(act).unwrap();
+            }
+            assert!(
+                app.world()
+                    .resource::<crate::campaign_in_game_options::InGameOptionsRoute>()
+                    .is_open()
+            );
+            app.world_mut()
+                .resource_mut::<crate::menu_screens::Navigation>()
+                .draft
+                .toggles
+                .insert("DraftOnlyProbe".into(), true);
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            if !click {
+                keys.press(KeyCode::Escape);
+            }
+            app.world_mut()
+                .resource_mut::<crate::button_actions::ButtonActions>()
+                .entities = if click { vec![cancel] } else { Vec::new() };
+            app.world_mut().run_system_once(keyboard).unwrap();
+            let route = app
+                .world()
+                .resource::<crate::campaign_in_game_options::InGameOptionsRoute>();
+            assert!(!route.is_open(), "click={click}");
+            assert_eq!(
+                route.state,
+                crate::campaign_in_game_options::InGameRoute::Escape
+            );
+            assert!(
+                !app.world()
+                    .resource::<crate::menu_screens::Navigation>()
+                    .draft
+                    .toggles
+                    .contains_key("DraftOnlyProbe"),
+                "cancel restores draft := applied (click={click})"
+            );
+            assert!(app.world().resource::<CampaignCamera>().menu_open());
+            assert_eq!(app.world().resource::<EscapeMenu>().page, Page::Main);
+        }
+        app.world_mut()
+            .resource_mut::<crate::button_actions::ButtonActions>()
+            .entities
+            .clear();
         {
             let mut state = app.world_mut().resource_mut::<EscapeMenu>();
             state.page = Page::End;
