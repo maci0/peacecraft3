@@ -391,7 +391,6 @@ mod tests {
     }
 
     fn isolate_campaign_profile() {
-        use std::os::unix::fs::PermissionsExt;
         let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.scratch")
             .canonicalize()
@@ -408,12 +407,16 @@ mod tests {
             profile.starts_with(&scratch),
             "test profile must stay under .scratch"
         );
-        let mode = std::fs::metadata(&profile)
-            .expect("profile metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o700, "isolated profile must be mode 0700");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&profile)
+                .expect("profile metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "isolated profile must be mode 0700");
+        }
         assert!(
             !profile.join("peacecraft3/campaign-cache.bin").exists(),
             "use a fresh campaign profile"
