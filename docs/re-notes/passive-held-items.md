@@ -317,3 +317,66 @@ one-item difference. These observations do not alone determine which base and
 attribute terms the percentage modifies. Exact records and limitations remain
 under `.scratch/passive-mana-probe/`; the implemented multiplicand is inferred,
 not native-qualified.
+
+## Orb families (`AIfb`, `AIcb`, `AIgd`): registration established, refused
+
+Status: refused. The class registrations are established. The on-hit effects are not, and
+the passive design has no partial admission, so the pickup refuses atomically with the
+existing `unsupported passive ability` diagnostic.
+
+Registration, reviewed image (SHA-256 `3f2ed012…`), static disassembly with `objdump -d`:
+
+- `AIfb` window at `0xca6d40`: `push 0x11b98ec`, `push "AIDB"` (`0x41494442`), `push "AIfb"`
+  (`0x41496662`), `call 0x7f6360`, `add esp,0xc`, `ret`.
+- `AIcb` window at `0xca6ce0`: the same shape with class `AIcb`.
+- `AIgd` has no registration. Its row's code is `AIfb`, so the code check resolves it to the
+  `AIfb` window.
+- Base `AIDB` has no row in `Units\AbilityData.slk`, so it is a native base like `APbo`. These
+  windows use `AIDB`, not `APbo`, so a family that admits them needs its own base decision.
+
+Shipped rows (`Units\AbilityData.slk`, War3x.mpq; blank cells omitted):
+
+| Row | code | DataA1 | DataB1 | DataE1 | Dur1 | Area1 | BuffID1 |
+|---|---|---|---|---|---|---|---|
+| `AIfb` Orb of Fire | `AIfb` | 5 | | 2 | 0 | 140 | |
+| `AIcb` Orb of Corruption | `AIcb` | 5 | 5 | 2 | 5 | | `BIcb` |
+| `AIgd` Orb of Kil'jaeden | `AIfb` | 6 | | 2 | 0 | 140 | |
+
+Editor meaning (`Units\AbilityMetaData.slk` with `UI\WorldEditStrings.txt`):
+
+- `Idam` ("Damage Bonus", real, DataA) admits `AIfb` among other codes. No metadata row
+  admits `AIgd`.
+- `Iob5` ("Enabled Attack Index", int, DataE, max 2) admits `AIfb` and `AIcb` among others.
+- `Idic` ("Damage Bonus Dice", int, DataA) admits `AIcb` among others.
+- `Iarp` ("Armor Penalty", int, DataB) admits `AIcb` only.
+
+Ubertip text (`Units\ItemStrings.txt`, sections `[ofir]`, `[ocor]`, `[gldo]`): Orb of Fire adds
+bonus fire damage to the carrier's attack, makes its attacks ranged against air, and does
+splash damage to nearby enemies. Orb of Corruption adds bonus damage, makes its attacks ranged
+against air, and reduces enemy armor for `Dur1` seconds. Orb of Kil'jaeden matches Orb of Fire.
+
+Why each family stays refused:
+
+- `AIfb` (and `AIgd`): the splash (`Area1` 140), the ranged-against-air attack type, and the
+  bonus fire damage have no recreation path. Modeling the bonus as flat `held_damage` (the `AIat`
+  path) would apply one damage total with armor applied once. The native application as a
+  separate fire hit, its splash amount and targeting, and the air-ranged change are not
+  established, so that model is a guess.
+- `AIcb`: the armor penalty needs a timed per-target armor reduction (`Iarp`, `BIcb`, `Dur1`).
+  No code reads `Iarp`, `Idic`, `Iob5` or `Idam`, and the curse path reads only the Slow,
+  Polymorph and Dark Conversion effect columns (`unit_curse_host.rs`). The `BIcb` buff row is not
+  read.
+- `AIgd`: even with the `AIfb` class admitted, `Idam` does not admit the `AIgd` alias, so its
+  amount (6) refuses at the alias check.
+
+Not verified: native order of on-hit effects against armor, splash damage and targeting, whether
+the bonus is a separate armor-reduced hit, the meaning of `Enabled Attack Index` 2 for a hero
+with one attack, the air-ranged switch, and `BIcb` duration and stacking.
+
+Locked-chapter probe (`selected_install_locked_chapter_startup_probe`, selected install, headless
+wrapper): RoC Undead02, TFT UndeadX01Interlude, TFT HumanX05 and TFT UndeadX08 each refuse at
+the same `UnitAddItemToSlotById` call before and after this doc change. The code is unchanged.
+
+REA `search` and `inspect` with `REA_ANALYSIS_PROVIDER=ghidra` failed on this host: the Ghidra
+flatpak `active` path resolves to a previous commit that lacks `support/launch.properties`
+(`Ghidra LaunchSupport -envvars`). The registrations above come from `objdump`, not from REA.
