@@ -149,15 +149,19 @@ impl World {
     }
 
     pub fn unit(&self, id: u32) -> Option<&Unit> {
-        // Ids are monotonic from 1 and never reused; units are pushed in id
-        // order, but `retain` can drop dead units, so validate by id and
-        // fall back to a linear scan when the fast index does not match.
-        let idx = (id - 1) as usize;
-        let candidate = self.units.get(idx);
-        match candidate {
-            Some(unit) if unit.id == id => Some(unit),
-            _ => self.units.iter().find(|u| u.id == id),
+        // Spawned ids are monotonic from 1 and never reused; units are pushed
+        // in id order, but `retain` can drop dead units, so validate by id and
+        // fall back to a linear scan when the fast index does not match. The
+        // wire codec also accepts the full u32 domain, including 0, which
+        // has no fast index.
+        if let Some(idx) = id.checked_sub(1) {
+            if let Some(unit) = self.units.get(idx as usize)
+                && unit.id == id
+            {
+                return Some(unit);
+            }
         }
+        self.units.iter().find(|u| u.id == id)
     }
 }
 
@@ -518,6 +522,14 @@ mod tests {
         w.units.retain(|u| u.id != first);
         let second = w.spawn(0, 0, 0);
         assert_ne!(first, second, "a dead id must not come back");
+    }
+
+    #[test]
+    fn unit_lookup_covers_the_whole_wire_id_domain() {
+        let (w, id) = world_with_unit();
+        assert_eq!(w.unit(id).map(|u| u.id), Some(id));
+        assert!(w.unit(0).is_none(), "id 0 is never spawned");
+        assert!(w.unit(u32::MAX).is_none());
     }
 
     #[test]
