@@ -4,12 +4,10 @@ Stdlib + pytest only, headless, muted, no network, no real key, no live
 backend: SyntheticBackend (fake) only — never OriginalReferenceBackend,
 never a native client, never tools/original-game-reference.
 """
-import json
 import math
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -83,12 +81,15 @@ def test_non_int_and_unknown_fields_rejected():
 
 
 def test_delayed_provider_result_never_applied_after_timeout():
+    release = threading.Event()
     finished = threading.Event()
 
     class Delayed(Provider):
         name = "delayed"
         def __call__(self, obs):
-            time.sleep(0.5)
+            # Held until run_loop has returned, so the call always outlives
+            # the per-call timeout.
+            release.wait(timeout=5)
             finished.set()
             return {"kind": "click", "x": 10, "y": 10}
 
@@ -98,26 +99,31 @@ def test_delayed_provider_result_never_applied_after_timeout():
     assert result.stop_reason == StopReason.PROVIDER_ERROR
     assert result.actions_applied == 0
     assert backend.applied == 0
-    # Let the late provider thread finish; its result must still never apply.
+    # Let the late provider finish; its result must still never apply.
+    release.set()
     assert finished.wait(timeout=5)
-    time.sleep(0.05)
     assert backend.applied == 0
     assert result.actions_applied == 0
 
 
 def test_cancelled_slow_provider_result_never_applied():
+    cancel = threading.Event()
+    called = threading.Event()
+
     class Slow(Provider):
         name = "slow"
         def __call__(self, obs):
-            time.sleep(0.4)
+            called.set()
+            # Return only after the canceller has fired, so the result always
+            # arrives after cancellation.
+            assert cancel.wait(timeout=5), "cancel never arrived"
             return {"kind": "click", "x": 10, "y": 10}
 
     backend = SyntheticBackend(640, 480)
-    cancel = threading.Event()
-    threading.Thread(target=lambda: (time.sleep(0.05), cancel.set()),
+    threading.Thread(target=lambda: called.wait(timeout=5) and cancel.set(),
                      daemon=True).start()
     result = run_loop(backend, Slow(),
-                      LoopConfig(per_call_timeout_s=5), cancel=cancel)
+                      LoopConfig(per_call_timeout_s=10), cancel=cancel)
     assert result.stop_reason == StopReason.CANCELLED
     assert result.actions_applied == 0
     assert backend.applied == 0
