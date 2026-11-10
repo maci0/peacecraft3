@@ -442,12 +442,32 @@ impl ObjectHost {
             .and_then(|players| players.upgrade_research.as_ref())
             .expect("routed upgrade model");
         let table = model.rules.effects().map_err(fail)?;
-        if table.flags(upgrade).is_some_and(|(_, global)| global) {
-            return Err(fail(
-                "global upgrade player-level effect routines are not decoded".into(),
-            ));
-        }
+        let code = upgrade.to_be_bytes();
         let (applied, pending) = split(table, table.slots(upgrade), from, to);
+        if table.flags(upgrade).is_some_and(|(_, global)| global) {
+            // A global upgrade dispatches each effect to a player-level routine, which is not
+            // decoded for any effect id. A level change that moves no slot dispatches nothing.
+            let moved: Vec<String> = applied
+                .iter()
+                .map(|(slot, _)| slot)
+                .chain(pending.iter().map(|(slot, _)| slot))
+                .map(|slot| {
+                    let effect = String::from_utf8_lossy(&slot.effect);
+                    if slot.code.is_empty() {
+                        format!("{effect} (slot {})", slot.number)
+                    } else {
+                        format!("{effect} (slot {}, code {})", slot.number, slot.code)
+                    }
+                })
+                .collect();
+            if !moved.is_empty() {
+                return Err(fail(format!(
+                    "global upgrade {}: player-level routines are not decoded for {}",
+                    String::from_utf8_lossy(&code),
+                    moved.join(", ")
+                )));
+            }
+        }
         let mut plan = Plan {
             number,
             upgrade,
@@ -469,7 +489,6 @@ impl ObjectHost {
         if applied.is_empty() {
             return Ok(plan);
         }
-        let code = upgrade.to_be_bytes();
         let mut owned = Vec::new();
         for (id, record) in self.executed_units() {
             if record.owner == owner

@@ -61,6 +61,7 @@ fn table() -> Table {
             ),
             (code(b"Qneg"), vec![slot(1, b"rhpx", -150.0, 0.0)]),
             (code(b"Qoth"), vec![slot(1, b"rmnx", 500.0, 0.0)]),
+            (code(b"Qzer"), vec![slot(1, b"ratd", 0.0, 0.0)]),
         ],
     )
 }
@@ -217,16 +218,18 @@ fn refused_ownership_projection_leaves_research_and_units_unchanged() {
 }
 
 #[test]
-fn global_upgrade_refuses_before_changing_research_or_units() {
+fn global_upgrade_refuses_each_moved_effect_before_changing_research_or_units() {
     let table = table().synthetic_flags(code(b"Qeff"), false, true);
     let (mut vm, a, _) = open_with(table, "Qeff");
     let player = owner(&mut vm, a);
     let before = pools(&mut vm, a);
+    let refusal = research(&mut vm, player, b"Qeff", 1).unwrap_err();
+    // The zero-delta `ratd` slot moves nothing and is not named.
     assert!(
-        research(&mut vm, player, b"Qeff", 1)
-            .unwrap_err()
-            .contains("player-level")
+        refusal.contains("rmnx (slot 1), rhpx (slot 2)"),
+        "{refusal}"
     );
+    assert!(!refusal.contains("ratd"), "{refusal}");
     assert_eq!(pools(&mut vm, a), before);
     assert!(
         vm.host()
@@ -235,6 +238,23 @@ fn global_upgrade_refuses_before_changing_research_or_units() {
             .unwrap()
             .research_levels
             .is_empty()
+    );
+}
+
+#[test]
+fn global_upgrade_whose_slots_do_not_move_researches_without_refusal() {
+    let table = table().synthetic_flags(code(b"Qzer"), false, true);
+    let (mut vm, a, _) = open_with(table, "Qeff");
+    let player = owner(&mut vm, a);
+    research(&mut vm, player, b"Qzer", 1).unwrap();
+    assert_eq!(pools(&mut vm, a), [100.0, 100.0, 50.0, 200.0]);
+    assert!(
+        vm.host()
+            .inner
+            .player_settings(player)
+            .unwrap()
+            .research_levels
+            .contains(&(code(b"Qzer"), 1))
     );
 }
 

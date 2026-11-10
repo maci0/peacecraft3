@@ -121,8 +121,19 @@ applied from zero (`0x69d4ca`, `0x69d4e9`, `0x6dd280`).
 For `global`, `0x6e0b80` reads the flag through `0x6b1db0`. A nonzero value dispatches
 each effect through its player-level virtual method; zero enumerates units and calls the
 unit-level method. The player-level behavior is effect-specific and remains undecoded.
-The host refuses a research change with nonzero `global` until those player-level routines
-are decoded. The editor labels alone do not establish additional behavior.
+The editor labels alone do not establish additional behavior.
+
+The host refuses a level change that moves any slot of a `global` upgrade (applied or
+unapplied effect), naming each moved effect with its slot and code column. A change that
+moves no slot is accepted. No player-level routine is decoded, so no effect id is applied
+for a `global` upgrade, and the unit-level formulas above do not transfer to it.
+The `global` flag is set only in the selected `UpgradeData` sets `Units\` and `Custom_V1\`
+(TFT): `Robk` (`rtma` for `ohun` and `otbk`), `Rhrt` (`rtma` for `hmtt` and `hrtt`) and `Roch`
+(no slot). The `Custom_V0\` set (Reign of Chaos) has no `global` row. Five TFT chapters
+research `Robk` or `Rhrt` in startup `InitUpgrades_PlayerN` and still refuse on `rtma`:
+OrcX01, OrcX02, OrcX03a (`Robk`) and HumanX03, UndeadX06 (`Rhrt`). `rtma` is not decoded.
+Its tooltip for `Robk` reads “Transforms Headhunters into Troll Berserkers”, which names the
+units without establishing the mechanism.
 
 For ownership changes the host stages removal of the old owner's supported effects,
 inherited research and its effects on the receiving player's units, and application of
@@ -204,3 +215,8 @@ on the synthetic tests. `ratd` 1/1 of `Rhst` remains unapplied.
   seconds later they had 13.165 and 6.666 mana respectively. The 6.499 difference
   is consistent with the selected top-level row's 0.65 rate increase for ten seconds;
   it does not establish item or hero interactions.
+- Locked-chapter startup probe (`selected_install_locked_chapter_startup_probe`, selected
+  install, headless): OrcX01, OrcX02, OrcX03a, HumanX03 and UndeadX06 fail at their
+  `SetPlayerTechResearched` call for `Robk` or `Rhrt`, before and after this change; the
+  refusal now names `rtma` with its codes. OrcX05 (RoC) passes, and OrcX08 (RoC) fails on an
+  unrelated `CreateUnit` missile-speed refusal.
