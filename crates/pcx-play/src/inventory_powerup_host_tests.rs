@@ -4,7 +4,7 @@ use super::*;
 use crate::inventory::{InventoryBudget, Rules as InventoryRules};
 use crate::inventory_powerup::Rules as TomeRules;
 use crate::playercolor_host::{
-    ExecutedItem, ExecutedUnit, HeroBudget, ItemBudget, UnitStateBudget,
+    ExecutedItem, ExecutedUnit, HeroBudget, ItemBudget, MissileSpeed, UnitStateBudget,
 };
 use crate::scripts::AssetIdentity;
 use pcx_objects::editor::defaults::Identity;
@@ -1838,7 +1838,7 @@ fn held_flat_damage_changes_real_damage() {
         dice: 0,
         sides: 1,
         attack: 0,
-        missile_speed: None,
+        missile_speed: MissileSpeed::Instant,
         min_range: 0.0,
         splash: None,
     };
@@ -1877,7 +1877,7 @@ fn held_armor_changes_real_damage_and_its_drop_restores_it() {
         dice: 0,
         sides: 1,
         attack: 0,
-        missile_speed: None,
+        missile_speed: MissileSpeed::Instant,
         min_range: 0.0,
         splash: None,
     };

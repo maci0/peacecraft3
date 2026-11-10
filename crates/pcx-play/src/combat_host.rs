@@ -39,6 +39,21 @@ const ORDER_BY_ID: &str = "IssueTargetOrderById";
 const GROUND_ORDER: &str = "attackground";
 const KILL: &str = "KillUnit";
 
+pub(super) const ABSENT_MISSILE_SPEED: &str =
+    "missile launch needs Missilespeed, absent from the unit profile";
+
+/// How a weapon's hit reaches its target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MissileSpeed {
+    /// `normal` or `instant`: damage applies at the swing's hit point.
+    Instant,
+    /// A missile weapon with its profile's `Missilespeed`.
+    Travel(f32),
+    /// A missile weapon whose profile gives no `Missilespeed`. A launch needs the
+    /// speed, so the launch refuses; creation and orders do not.
+    Absent,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Weapon {
     pub range: f32,
@@ -49,7 +64,7 @@ pub struct Weapon {
     pub dice: i32,
     pub sides: i32,
     pub attack: usize,
-    pub missile_speed: Option<f32>,
+    pub missile_speed: MissileSpeed,
     /// `UnitWeapons` `minRange`; zero when the cell is empty.
     pub min_range: f32,
     /// The weapon-1 splash columns, when all five are numeric.
@@ -217,11 +232,11 @@ fn profile<'a>(d: &'a Definition, wanted: &str) -> Result<Option<&'a FieldValue>
     if found.next().is_some() {
         return Err(format!("ambiguous unit profile {wanted}"));
     }
-    field
-        .value
-        .as_ref()
-        .map(Some)
-        .map_err(|e| format!("unit profile {wanted}: {e:?}"))
+    match &field.value {
+        Ok(value) => Ok(Some(value)),
+        Err(pcx_sim::world::FieldProblem::Missing) => Ok(None),
+        Err(e) => Err(format!("unit profile {wanted}: {e:?}")),
+    }
 }
 
 /// An SLK `-`/empty cell is an empty numeric.
@@ -279,15 +294,18 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
             .ok_or_else(|| format!("unsupported attack type {attack_name}"))?;
         let kind = word(SlkId::UnitWeapons, "weapTp1")?;
         let missile_speed = match kind {
-            "normal" | "instant" => None,
-            "missile" | "msplash" | "mbounce" | "mline" | "artillery" | "aline" => Some(
-                profile(d, "missilespeed")?
+            "normal" | "instant" => MissileSpeed::Instant,
+            "missile" | "msplash" | "mbounce" | "mline" | "artillery" | "aline" => {
+                match profile(d, "missilespeed")?
                     .map(|v| number(v, "Missilespeed"))
                     .transpose()?
                     .flatten()
-                    .filter(|v| *v > 0.0)
-                    .ok_or("missile weapon without a positive Missilespeed")?,
-            ),
+                {
+                    Some(speed) if speed > 0.0 => MissileSpeed::Travel(speed),
+                    Some(_) => return Err("missile weapon with a non-positive Missilespeed".into()),
+                    None => MissileSpeed::Absent,
+                }
+            }
             other => return Err(format!("unsupported weapon type {other}")),
         };
         Some(Weapon {
@@ -2041,6 +2059,11 @@ impl ObjectHost {
                     }
                 }
                 Some((swung, hit_at)) if now >= hit_at => {
+                    if weapon.missile_speed == MissileSpeed::Absent {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::UnitActivity(ABSENT_MISSILE_SPEED.into())));
+                    }
                     if self.weapon_target(swung).is_none() {
                         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                             record.combat.as_mut().expect("combat").swing = None;
@@ -2049,7 +2072,7 @@ impl ObjectHost {
                     }
                     // A refused melee source consumes no RNG and leaves the swing
                     // pending; the missile impact is the incoming hit instead.
-                    let preflight = weapon.missile_speed.is_none()
+                    let preflight = weapon.missile_speed == MissileSpeed::Instant
                         && self.campaign_flee_source_preflight(unit, swung)?;
                     let checkpoint = self.script_random_primary_checkpoint();
                     let prepared = (|| -> Result<_, Error> {
@@ -2087,7 +2110,12 @@ impl ObjectHost {
                         return Err(error);
                     }
                     match weapon.missile_speed {
-                        Some(speed) => {
+                        MissileSpeed::Absent => {
+                            return Err(self
+                                .inner
+                                .error(name, Failure::UnitActivity(ABSENT_MISSILE_SPEED.into())));
+                        }
+                        MissileSpeed::Travel(speed) => {
                             let missiles = &mut self.combat.as_mut().expect("combat").missiles;
                             missiles
                                 .try_reserve(1)
@@ -2099,7 +2127,7 @@ impl ObjectHost {
                                 damage,
                             });
                         }
-                        None => {
+                        MissileSpeed::Instant => {
                             let mut applied = false;
                             if let Err(error) =
                                 self.apply_damage_commit(unit, swung, damage, retreat, &mut applied)

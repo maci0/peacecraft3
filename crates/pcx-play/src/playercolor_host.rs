@@ -988,10 +988,10 @@ pub use objects::{
     AnimationCursor, CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent,
     DestructableAnimation, DestructableState, DialogBudget, DialogButton, DialogQuitRequest,
     DialogState, EventSubject, FiredEvent, FogModifier, GameExitRequest, GatheringObservation,
-    HeroEvent, Indicator, MinimapPing, PlacedDestructable, PlacedSource, PurchaseOutcome,
-    PurchaseRefusal, Relation, ScriptDialog, SummonContext, VisionCapability, VisionCell,
-    VisionOrigin, VisionSampleStats, VisionShape, VisionSource, VisionState, Vitals, Weapon,
-    present_vision,
+    HeroEvent, Indicator, MinimapPing, MissileSpeed, PlacedDestructable, PlacedSource,
+    PurchaseOutcome, PurchaseRefusal, Relation, ScriptDialog, SummonContext, VisionCapability,
+    VisionCell, VisionOrigin, VisionSampleStats, VisionShape, VisionSource, VisionState, Vitals,
+    Weapon, present_vision,
 };
 pub use objects::{
     BuildMenuCommand, BuildOption, BuildUnavailable, ConstructionContext, ConstructionOrder,

@@ -92,14 +92,19 @@ fn regen_type(definition: &Definition) -> Result<RegenType, String> {
     if matches.next().is_some() {
         return Err("ambiguous unit balance regenType".into());
     }
-    let FieldValue::Cell(token) = field
+    // A map may override the token with a string (`uhrt`); both spellings name one token.
+    let token = match field
         .value
         .as_ref()
         .map_err(|e| format!("regenType: {e:?}"))?
-    else {
-        return Err("unsupported unit balance regenType field".into());
+    {
+        FieldValue::Cell(token) => token.trim(),
+        FieldValue::Override(pcx_objects::Value::Str(bytes)) => std::str::from_utf8(bytes)
+            .map_err(|_| "unit balance regenType override is not UTF-8")?
+            .trim(),
+        _ => return Err("unsupported unit balance regenType field".into()),
     };
-    match token.trim() {
+    match token {
         "always" => Ok(RegenType::Always),
         "day" => Ok(RegenType::Day),
         "night" => Ok(RegenType::Night),

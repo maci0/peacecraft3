@@ -23,7 +23,7 @@
 //! unit of a listed class in the area, allies and the shooter included, unless `notself`.
 //! This is a reading of the table, not an observed game.
 //! Destructables, trees and items in the area are not damaged.
-use super::combat::{Splash, Weapon, distance};
+use super::combat::{ABSENT_MISSILE_SPEED, MissileSpeed, Splash, Weapon, distance};
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 
@@ -186,12 +186,22 @@ impl ObjectHost {
                 }
             }
             Some(at) if now >= at => {
+                if weapon.missile_speed == MissileSpeed::Absent {
+                    return Err(self
+                        .inner
+                        .error(NAME, Failure::UnitActivity(ABSENT_MISSILE_SPEED.into())));
+                }
                 let base = self.roll_base_damage(unit, weapon)?;
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.combat.as_mut().expect("combat").ground_swing = None;
                 }
                 match weapon.missile_speed {
-                    Some(speed) => {
+                    MissileSpeed::Absent => {
+                        return Err(self
+                            .inner
+                            .error(NAME, Failure::UnitActivity(ABSENT_MISSILE_SPEED.into())));
+                    }
+                    MissileSpeed::Travel(speed) => {
                         let missiles = &mut self.combat.as_mut().expect("combat").ground_missiles;
                         missiles
                             .try_reserve(1)
@@ -204,7 +214,9 @@ impl ObjectHost {
                             weapon,
                         });
                     }
-                    None => self.ground_impact(unit, point, base, weapon, splash)?,
+                    MissileSpeed::Instant => {
+                        self.ground_impact(unit, point, base, weapon, splash)?
+                    }
                 }
             }
             _ => {}

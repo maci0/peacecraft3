@@ -1609,7 +1609,7 @@ mod attack_ground;
 
 #[path = "combat_host.rs"]
 mod combat;
-pub use combat::{Combat, CombatActor, CombatTraceEvent, Relation, Weapon};
+pub use combat::{Combat, CombatActor, CombatTraceEvent, MissileSpeed, Relation, Weapon};
 
 #[path = "event_delivery_host.rs"]
 mod event_delivery;

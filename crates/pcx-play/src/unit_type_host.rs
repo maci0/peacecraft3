@@ -1,7 +1,7 @@
 //! `IsUnitType` from each unit's resolved definition and live state. Type
 //! names resolve through the script's own `UNIT_TYPE_*` constants. Status
 //! types without a modeled effect (stunned, ...) read false. Natural sleep uses live unit state.
-use super::{Entry, Error, Failure, ObjectHost};
+use super::{Entry, Error, Failure, MissileSpeed, ObjectHost};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::Value;
 use pcx_sim::world::{Definition, FieldValue};
@@ -166,9 +166,9 @@ impl ObjectHost {
                     .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e.into())))?
                     != crate::unit_placement::Movement::Air
             } else if is("UNIT_TYPE_MELEE_ATTACKER") {
-                weapon.is_some_and(|w| w.missile_speed.is_none())
+                weapon.is_some_and(|w| w.missile_speed == MissileSpeed::Instant)
             } else if is("UNIT_TYPE_RANGED_ATTACKER") {
-                weapon.is_some_and(|w| w.missile_speed.is_some())
+                weapon.is_some_and(|w| w.missile_speed != MissileSpeed::Instant)
             } else if let Some(&global) = CLASSES.iter().find(|global| is(global)) {
                 class(definition, global)
                     .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e)))?

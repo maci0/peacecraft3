@@ -61,7 +61,11 @@ admission rather than falling back to a copied numeric range.
 For a definition, authored speed is `UnitBalance/spd`. Structure classification is
 `UnitBalance/isbldg`, so a movable `foot`, `horse` or `fly` unit uses the unit pair
 and a building uses the building pair. Movable units have their authored speed
-clamped when the activity state is created. `SetUnitMoveSpeed` accepts any finite
+clamped when the activity state is created. An SLK `-`, `_` or empty `spd` cell is an
+absent speed, not zero: the unit starts no route, and `GetUnitMoveSpeed` and
+`GetUnitDefaultMoveSpeed` refuse. The selected install has 219 `-` rows: 193 with
+movement class `_`, which creation does not read, and 26 with `foot`, `float` or
+`amph`, which creation accepts without a speed. `SetUnitMoveSpeed` accepts any finite
 real, including a negative input, and passes it through the same source-derived
 clamp. `GetUnitMoveSpeed` returns the stored speed after that clamp;
 `GetUnitDefaultMoveSpeed` returns authored `spd` without applying the setter

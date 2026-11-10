@@ -2356,6 +2356,40 @@ fn night_and_blight_regeneration_refuse_without_their_source_state() {
 }
 
 #[test]
+fn map_string_override_of_regen_type_uses_the_same_tokens_as_the_base_cell() {
+    // A war3map.w3u `uhrt` entry is a string override, not a UnitBalance cell.
+    for (token, reason) in [
+        (
+            "night",
+            "day/night regeneration needs the admitted time-of-day window",
+        ),
+        ("blight", "blight regeneration needs terrain blight state"),
+    ] {
+        // `armed` also pushes an H008; the last entry is the one the resolver keeps.
+        let mut fields = regen_fields("0.25", "always", "0");
+        let field = fields
+            .iter_mut()
+            .rev()
+            .find(|(id, _)| id == b"H008")
+            .map(|(_, field)| field)
+            .unwrap();
+        field.value = Ok(FieldValue::Override(pcx_objects::Value::Str(
+            token.as_bytes().to_vec(),
+        )));
+        let (mut vm, a, _) = open(&fields);
+        set_pools(&mut vm, a, 5.0, 0.0);
+        vm.host().inner.next_timer_expiry(1.0, &mut 100).unwrap();
+        let error = vm
+            .host()
+            .inner
+            .advance_unit_activity(1.0, &mut 65536)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{token}: {error}");
+    }
+}
+
+#[test]
 fn dead_units_do_not_regenerate_and_their_clock_still_advances() {
     let fields = regen_fields("0.25", "always", "0.5");
     let (mut vm, a, _) = open(&fields);
@@ -4700,6 +4734,34 @@ fn melee_hit_starts_the_route_and_traces_damage_once() {
     assert!(life(&mut vm, b) < 20.0);
     assert!(vm.host().inner.campaign_flee_motion_owns(b));
     assert_eq!(damage_events(&mut vm), 1);
+}
+
+#[test]
+fn missile_weapon_without_shipped_missile_speed_refuses_only_at_launch() {
+    // No `Missilespeed` key in the unit profile: creation and the attack order succeed,
+    // and the launch, which needs the speed to time the impact, refuses.
+    let fields = flee_fields_with("40", "missile", "1", "8");
+    let (mut vm, a, b) = flee_fixture_with_margin(&fields, 1.0);
+    set_life(&mut vm, b, 20.0);
+    issue_attack(&mut vm, a, b);
+    let mut error = None;
+    for _ in 0..256 {
+        let h = &mut vm.host().inner;
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(e) = h.advance_unit_activity(next, &mut 65536) {
+            error = Some(e.to_string());
+            break;
+        }
+        if let Err(e) = h.test_advance_combat() {
+            error = Some(e.to_string());
+            break;
+        }
+    }
+    let error = error.expect("the launch must refuse");
+    assert!(error.contains("Missilespeed"), "{error}");
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(vm.host().inner.test_missile_count(), 0);
 }
 
 #[test]

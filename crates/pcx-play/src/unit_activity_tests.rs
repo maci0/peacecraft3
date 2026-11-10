@@ -1506,6 +1506,31 @@ fn selected_speed_overrides_and_movement_class_control_real_displacement() {
 }
 
 #[test]
+fn movable_unit_with_dash_speed_is_created_without_a_route_or_invented_speed() {
+    // SLK `-` in UnitBalance `spd`: a foot unit with no authored speed.
+    let mut h = profile(FieldValue::Cell("-".into()), Some("foot"));
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native(
+            "IssuePointOrder",
+            &[
+                a.clone(),
+                Value::Str("gamma".into()),
+                Value::Real(72.),
+                Value::Real(16.)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+            .is_err()
+    );
+    assert!(h.native("GetUnitDefaultMoveSpeed", &[a]).is_err());
+}
+
+#[test]
 fn hover_units_use_ground_collision_routes_and_authored_speed() {
     let mut vm = open_with_fields(&profile_fields(
         FieldValue::Cell("11".into()),
@@ -1595,7 +1620,8 @@ fn malformed_orders_and_profiles_refuse_without_position_or_handle_mutation() {
     );
     assert_eq!(position(&mut vm, a), [16., 16.]);
     assert_eq!(vm.host().inner.inner().handles(), count);
-    for value in ["_", "NaN", "-1"] {
+    // A `_` or `-` speed is an absent speed, which a unit with no movement class may carry.
+    for value in ["NaN", "-1"] {
         let mut h = profile(FieldValue::Cell(value.into()), None);
         let owner = h.native("Player", &[Value::Int(4)]).unwrap();
         let before = h.inner().handles();

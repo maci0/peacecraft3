@@ -271,8 +271,15 @@ impl UnitActivity {
     }
 }
 
-fn speed(definition: &Definition) -> Result<f32, String> {
-    balance_real(definition, "spd")
+/// The authored `UnitBalance` `spd`. A `-`, `_` or empty cell is an absent speed: the
+/// unit can start no route, and a speed query refuses instead of reading zero.
+fn speed(definition: &Definition) -> Result<Option<f32>, String> {
+    column_optional_real(definition, SlkId::UnitBalance, "spd")
+}
+
+/// The authored speed for a query. An absent `spd` refuses rather than reading as zero.
+fn authored_speed(definition: &Definition) -> Result<f32, String> {
+    speed(definition)?.ok_or_else(|| "unit UnitBalance spd is absent".into())
 }
 
 fn clamp_move_speed(speed: f32, (minimum, maximum): (f32, f32)) -> f32 {
@@ -289,6 +296,16 @@ pub(crate) fn column_real(
     table: SlkId,
     wanted: &str,
 ) -> Result<f32, String> {
+    column_optional_real(definition, table, wanted)?
+        .ok_or_else(|| format!("unit {table:?} {wanted} is empty"))
+}
+
+/// Like [`column_real`], but a `-`, `_` or empty SLK cell is `None` rather than an error.
+pub(crate) fn column_optional_real(
+    definition: &Definition,
+    table: SlkId,
+    wanted: &str,
+) -> Result<Option<f32>, String> {
     let mut matches = definition.fields.iter().filter(|(id, f)| {
         f.metadata.as_ref().is_some_and(|m|
         m.fourcc==**id && m.from==SlkId::UnitMetaData && matches!(m.index,-1|0)
@@ -307,6 +324,7 @@ pub(crate) fn column_real(
         .as_ref()
         .map_err(|e| format!("unit {table:?} {wanted}: {e:?}"))?
     {
+        FieldValue::Cell(s) if matches!(s.trim(), "-" | "_" | "") => return Ok(None),
         FieldValue::Cell(s) => s
             .trim()
             .parse::<f32>()
@@ -329,7 +347,7 @@ pub(crate) fn column_real(
             "finite nonnegative unit {table:?} {wanted} required"
         ));
     }
-    Ok(value)
+    Ok(Some(value))
 }
 
 impl ObjectHost {
@@ -569,10 +587,11 @@ impl ObjectHost {
             "" | "_" | "none" => false,
             _ => return Err(fail(format!("movement class `{movement}` is not admitted"))),
         };
-        let mut speed = movable
-            .then(|| speed(definition))
-            .transpose()
-            .map_err(fail)?;
+        let mut speed = if movable {
+            speed(definition).map_err(fail)?
+        } else {
+            None
+        };
         if let (Some(value), Some(limits)) = (
             speed.as_mut(),
             self.unit_activity
@@ -1972,7 +1991,7 @@ impl ObjectHost {
             return Ok(Value::Null);
         }
         if name == "GetUnitDefaultMoveSpeed" {
-            return speed(&record.definition)
+            return authored_speed(&record.definition)
                 .map(Value::Real)
                 .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)));
         }
@@ -1993,7 +2012,7 @@ impl ObjectHost {
                 }
                 None => speed,
             },
-            None => speed(&record.definition)
+            None => authored_speed(&record.definition)
                 .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))?,
         };
         Ok(Value::Real(speed))

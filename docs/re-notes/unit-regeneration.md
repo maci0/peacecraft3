@@ -32,7 +32,7 @@ after motion and before combat and inventory. Each step integrates
 |---|---|---|
 | `regenHP` (`uhpr`) | `Units/UnitBalance.slk`, column `regenHP` | base life per second; SLK `-` reads as 0 |
 | `regenMana` (`umpr`) | `Units/UnitBalance.slk`, column `regenMana` | base mana per second; SLK `-` reads as 0 |
-| `regenType` | `Units/UnitBalance.slk`, column `regenType` (Token) | life eligibility: `always`, `day`, `night`, `none`, `blight` |
+| `regenType` | `Units/UnitBalance.slk`, column `regenType` (Token); map override `uhrt` as a string | life eligibility: `always`, `day`, `night`, `none`, `blight`. An override carries the same tokens (RoC `Undead01` sets `uhrt` to `always` and `blight`; TFT `UndeadX02` sets `none`) |
 | `StrRegenBonus`, `IntRegenBonus` | `Units/MiscGame.txt` `[Misc]` | life/mana regen per derived STR/INT point, via `HeroVitals` |
 | `bj_TOD_DAWN`, `bj_TOD_DUSK` | `Scripts/Blizzard.j` constants | day window `[6, 18)` hours, read from the admitted program globals |
 | `DayLength`, `DayHours` | `Units/MiscGame.txt` | game seconds per hour (existing time-of-day clock) |
@@ -44,6 +44,8 @@ after motion and before combat and inventory. Each step integrates
 
 - `Warcraft III.exe` SHA256 must be `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 - `UnitBalance.slk`: the three columns exist; every row's `regenType` is admitted.
+- One row, `ubsp`, has `regenMana` `-3`. A negative rate is refused: no source states
+  whether it drains mana, so the probe for `TFT UndeadX07Interlude` still refuses there.
   Census on the selected install: always 502, blight 41, night 51, none 242 (837 rows).
   No row uses `day`. Parser admits `day` in the editor's token family.
 - `MiscGame.txt` through the production `HeroVitals::read`: `StrRegenBonus=0.05`,
