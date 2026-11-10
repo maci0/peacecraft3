@@ -129,9 +129,7 @@ impl Storage {
         // the directory already reported instead of a fresh `stat` per path.
         let mut entries = std::fs::read_dir(install.join("Data/data"))
             .map_err(|err| io_error(&install.join("Data/data"), err))?
-            .map(|entry| {
-                entry.map_err(|err| io_error(&install.join("Data/data"), err))
-            })
+            .map(|entry| entry.map_err(|err| io_error(&install.join("Data/data"), err)))
             .collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(|a| a.path());
         let mut selected: BTreeMap<u8, (u32, PathBuf)> = BTreeMap::new();
@@ -150,10 +148,7 @@ impl Storage {
                     .map_err(|_| error(name, 0, Failure::Malformed("data part number".into())))?;
                 data_part_sizes.insert(
                     number,
-                    entry
-                        .metadata()
-                        .map_err(|err| io_error(&path, err))?
-                        .len(),
+                    entry.metadata().map_err(|err| io_error(&path, err))?.len(),
                 );
             }
             if !name.ends_with(".idx") {

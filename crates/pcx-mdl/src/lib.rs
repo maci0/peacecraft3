@@ -4812,10 +4812,8 @@ mod tests {
         assert_eq!(tex.len(), 3, "804 / 268 must be 3 records");
         assert_eq!(tex[0].path, "Textures\\Footman.blp");
         // Some records carry no path at all; those are legal, not empty bugs.
-        assert!(
-            tex.iter()
-                .all(|t| t.path.is_empty() || (t.path.len() >= 4 && t.path[t.path.len() - 4..].eq_ignore_ascii_case(".blp")))
-        );
+        assert!(tex.iter().all(|t| t.path.is_empty()
+            || (t.path.len() >= 4 && t.path[t.path.len() - 4..].eq_ignore_ascii_case(".blp"))));
     }
 
     #[test]
@@ -6042,7 +6040,8 @@ mod tests {
                         Ok(t) => {
                             for x in &t {
                                 if !x.path.is_empty()
-                                    && !(x.path.len() >= 4 && x.path[x.path.len() - 4..].eq_ignore_ascii_case(".blp"))
+                                    && !(x.path.len() >= 4
+                                        && x.path[x.path.len() - 4..].eq_ignore_ascii_case(".blp"))
                                 {
                                     anomalies.insert(format!("{rel}: texture path {:?}", x.path));
                                 }

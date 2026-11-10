@@ -50,7 +50,9 @@ impl HelpStrings {
         if text.contains('\0') {
             return Err("UI\\HelpStrings.txt: NUL byte".into());
         }
-        Ok(Self { body: text.to_string() })
+        Ok(Self {
+            body: text.to_string(),
+        })
     }
 }
 
@@ -126,14 +128,22 @@ impl TipStrings {
         let n = count.ok_or_else(|| format!("{FILE}: missing TipCount"))?;
         tips.sort_by_key(|(i, _)| *i);
         if tips.len() != n {
-            return Err(format!("{FILE}: TipCount={n} but found {} tips", tips.len()));
+            return Err(format!(
+                "{FILE}: TipCount={n} but found {} tips",
+                tips.len()
+            ));
         }
         for (idx, (i, _)) in tips.iter().enumerate() {
             if *i != idx + 1 {
-                return Err(format!("{FILE}: gap: expected Tip{}, found Tip{i}", idx + 1));
+                return Err(format!(
+                    "{FILE}: gap: expected Tip{}, found Tip{i}",
+                    idx + 1
+                ));
             }
         }
-        Ok(Self { tips: tips.into_iter().map(|(_, v)| v).collect() })
+        Ok(Self {
+            tips: tips.into_iter().map(|(_, v)| v).collect(),
+        })
     }
 }
 
@@ -364,7 +374,12 @@ impl DefaultFont {
         };
         // --- Default-height table + axis conversion ---
         // 0x959bf0: movss xmm0,[esi*4+height_table] ; call 0xab2ad0
-        let height_table = word(operand(&mut read, 0x959c2a, &[0xf3, 0x0f, 0x10, 0x04, 0xb5], 4)?)?;
+        let height_table = word(operand(
+            &mut read,
+            0x959c2a,
+            &[0xf3, 0x0f, 0x10, 0x04, 0xb5],
+            4,
+        )?)?;
         if call_target(&mut read, 0x959c39)? != 0xab2ad0 {
             return Err("unsupported default-height conversion call".into());
         }
@@ -507,8 +522,6 @@ pub fn text_area_numbers(fdf_text: &str, frame: &str) -> Result<(f32, f32), Stri
     Ok((need("TextAreaLineHeight")?, need("TextAreaInset")?))
 }
 
-
-
 /// One line of laid-out TEXTAREA text (visible text only, markup stripped by
 /// the caller via the rich-text parser).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -534,7 +547,11 @@ impl TextAreaView {
         } else {
             1
         };
-        Self { total_lines, offset_lines: 0, visible_lines: visible }
+        Self {
+            total_lines,
+            offset_lines: 0,
+            visible_lines: visible,
+        }
     }
 
     pub fn max_offset(&self) -> usize {
@@ -568,7 +585,8 @@ impl TextAreaView {
 mod tests {
     use super::*;
 
-    const HELP: &str = "|Cffc5ff26MENU COMMANDS|r\n\n|Cfffed312F9|r\n- Toggle the Quest Log on/off.\n";
+    const HELP: &str =
+        "|Cffc5ff26MENU COMMANDS|r\n\n|Cfffed312F9|r\n- Toggle the Quest Log on/off.\n";
     const TIPS: &str = "[General]\nTipCount=3\nTip1=\"First tip.\"\nTip2=\"|Cfffed312SECOND|r tip.\"\nTip3=\"Third tip.\"\n";
     const TMPL: &str = "Frame \"TEXTAREA\" \"EscMenuTextAreaTemplate\" {\n    //FrameFont \"MasterFont\", 0.011, \"\",\n    TextAreaLineHeight 0.015,\n    TextAreaLineGap 0.0,\n    TextAreaInset 0.01,\n    TextAreaScrollBar \"EscMenuTextAreaScrollBarTemplate\",\n    Frame \"SCROLLBAR\" \"EscMenuTextAreaScrollBarTemplate\" {\n    }\n    ControlBackdrop \"EscMenuTextAreaBackdropTemplate\",\n    Frame \"BACKDROP\" \"EscMenuTextAreaBackdropTemplate\" {\n    }\n}\n";
     const MISC: &str = "[Misc]\nFontTexture=SYNTHETIC__.TTF // synthetic fixture\n";
@@ -655,68 +673,248 @@ mod tests {
         let prefix: u32 = 0xE10020;
         let fmt: u32 = 0xE10030;
         // FontTexture lookup caller
-        put(&mut m, 0x42eeda, &[0x68, sec.to_le_bytes()[0], sec.to_le_bytes()[1], sec.to_le_bytes()[2], sec.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42eeda,
+            &[
+                0x68,
+                sec.to_le_bytes()[0],
+                sec.to_le_bytes()[1],
+                sec.to_le_bytes()[2],
+                sec.to_le_bytes()[3],
+            ],
+        );
         // NOTE: swapped order below is corrected by dedicated puts:
         // 0x42eeda must be FontTexture, 0x42eedf Misc. Rebuild correctly:
         m.remove(&0x42eeda);
-        put(&mut m, 0x42eeda, &[0x68, key.to_le_bytes()[0], key.to_le_bytes()[1], key.to_le_bytes()[2], key.to_le_bytes()[3]]);
-        put(&mut m, 0x42eedf, &[0x68, sec.to_le_bytes()[0], sec.to_le_bytes()[1], sec.to_le_bytes()[2], sec.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42eeda,
+            &[
+                0x68,
+                key.to_le_bytes()[0],
+                key.to_le_bytes()[1],
+                key.to_le_bytes()[2],
+                key.to_le_bytes()[3],
+            ],
+        );
+        put(
+            &mut m,
+            0x42eedf,
+            &[
+                0x68,
+                sec.to_le_bytes()[0],
+                sec.to_le_bytes()[1],
+                sec.to_le_bytes()[2],
+                sec.to_le_bytes()[3],
+            ],
+        );
         put(&mut m, 0x42eee4, &[0xe8, 0x00, 0x00, 0x00, 0x00]); // call target checked separately; patch below
         m.remove(&0x42eee4);
         let disp = (0x430570u32).wrapping_sub(0x42eee4 + 5);
-        put(&mut m, 0x42eee4, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42eee4,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         // slot 0 override
         put(&mut m, 0x42ef20, &[0x6a, 0]);
         let disp = (0x7af9e0u32).wrapping_sub(0x42ef14 + 5);
-        put(&mut m, 0x42ef14, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42ef14,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         let disp = (0x959bf0u32).wrapping_sub(0x42ef22 + 5);
-        put(&mut m, 0x42ef22, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42ef22,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         put(&mut m, 0x42ef2e, &[0x6a, 1]);
         let disp = (0x959bf0u32).wrapping_sub(0x42ef30 + 5);
-        put(&mut m, 0x42ef30, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x42ef30,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         // path resolver
-        put(&mut m, 0x7af9e6, &[0x68, prefix.to_le_bytes()[0], prefix.to_le_bytes()[1], prefix.to_le_bytes()[2], prefix.to_le_bytes()[3]]);
-        put(&mut m, 0x7af9eb, &[0x68, fmt.to_le_bytes()[0], fmt.to_le_bytes()[1], fmt.to_le_bytes()[2], fmt.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x7af9e6,
+            &[
+                0x68,
+                prefix.to_le_bytes()[0],
+                prefix.to_le_bytes()[1],
+                prefix.to_le_bytes()[2],
+                prefix.to_le_bytes()[3],
+            ],
+        );
+        put(
+            &mut m,
+            0x7af9eb,
+            &[
+                0x68,
+                fmt.to_le_bytes()[0],
+                fmt.to_le_bytes()[1],
+                fmt.to_le_bytes()[2],
+                fmt.to_le_bytes()[3],
+            ],
+        );
         // height table at 0xED2000, axis at 0xE20000
         put(&mut m, 0xED2000, &0.03125f32.to_le_bytes());
         put(&mut m, 0xED2004, &0.03125f32.to_le_bytes());
         put(&mut m, 0xE20000, &0.5f32.to_le_bytes());
         let ht: u32 = 0xED2000;
         let ax: u32 = 0xE20000;
-        put(&mut m, 0x959c2a, &[0xf3, 0x0f, 0x10, 0x04, 0xb5, ht.to_le_bytes()[0], ht.to_le_bytes()[1], ht.to_le_bytes()[2], ht.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x959c2a,
+            &[
+                0xf3,
+                0x0f,
+                0x10,
+                0x04,
+                0xb5,
+                ht.to_le_bytes()[0],
+                ht.to_le_bytes()[1],
+                ht.to_le_bytes()[2],
+                ht.to_le_bytes()[3],
+            ],
+        );
         let disp = (0xab2ad0u32).wrapping_sub(0x959c39 + 5);
-        put(&mut m, 0x959c39, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
-        put(&mut m, 0xab2ad6, &[0xd8, 0x0d, ax.to_le_bytes()[0], ax.to_le_bytes()[1], ax.to_le_bytes()[2], ax.to_le_bytes()[3]]);
-        put(&mut m, 0x959bd9, &[0xd9, 0x04, 0x85, ht.to_le_bytes()[0], ht.to_le_bytes()[1], ht.to_le_bytes()[2], ht.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x959c39,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
+        put(
+            &mut m,
+            0xab2ad6,
+            &[
+                0xd8,
+                0x0d,
+                ax.to_le_bytes()[0],
+                ax.to_le_bytes()[1],
+                ax.to_le_bytes()[2],
+                ax.to_le_bytes()[3],
+            ],
+        );
+        put(
+            &mut m,
+            0x959bd9,
+            &[
+                0xd9,
+                0x04,
+                0x85,
+                ht.to_le_bytes()[0],
+                ht.to_le_bytes()[1],
+                ht.to_le_bytes()[2],
+                ht.to_le_bytes()[3],
+            ],
+        );
         let fpt: u32 = 0xED3000;
-        put(&mut m, 0x959ba9, &[0x8b, 0x04, 0x85, fpt.to_le_bytes()[0], fpt.to_le_bytes()[1], fpt.to_le_bytes()[2], fpt.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x959ba9,
+            &[
+                0x8b,
+                0x04,
+                0x85,
+                fpt.to_le_bytes()[0],
+                fpt.to_le_bytes()[1],
+                fpt.to_le_bytes()[2],
+                fpt.to_le_bytes()[3],
+            ],
+        );
         put(&mut m, 0x86cf97, &[0x6a, 0]);
         let disp = (0x959b90u32).wrapping_sub(0x86cf99 + 5);
-        put(&mut m, 0x86cf99, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x86cf99,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         put(&mut m, 0x86cff5, &[0x6a, 0]);
         let disp = (0x959bc0u32).wrapping_sub(0x86cff9 + 5);
-        put(&mut m, 0x86cff9, &[0xe8, disp.to_le_bytes()[0], disp.to_le_bytes()[1], disp.to_le_bytes()[2], disp.to_le_bytes()[3]]);
+        put(
+            &mut m,
+            0x86cff9,
+            &[
+                0xe8,
+                disp.to_le_bytes()[0],
+                disp.to_le_bytes()[1],
+                disp.to_le_bytes()[2],
+                disp.to_le_bytes()[3],
+            ],
+        );
         (vec![], m)
     }
 
-    fn decode_synthetic(map: &std::collections::HashMap<u32, Vec<u8>>, misc: &str) -> Result<DefaultFont, String> {
+    fn decode_synthetic(
+        map: &std::collections::HashMap<u32, Vec<u8>>,
+        misc: &str,
+    ) -> Result<DefaultFont, String> {
         let read = |va: u32, n: usize, _code: bool| -> Result<Vec<u8>, String> {
             // Exact VA match for instruction bytes; string/table bytes via map too.
             if let Some(b) = map.get(&va) {
-                if b.len() >= n { return Ok(b[..n].to_vec()); }
+                if b.len() >= n {
+                    return Ok(b[..n].to_vec());
+                }
                 return Err(format!("short at {va:#x}"));
             }
             // String byte-by-byte reads land inside a stored string range.
             for (base, b) in map.iter() {
                 if va >= *base && (va as usize) < *base as usize + b.len() {
                     let off = (va - base) as usize;
-                    if off + n <= b.len() { return Ok(b[off..off + n].to_vec()); }
+                    if off + n <= b.len() {
+                        return Ok(b[off..off + n].to_vec());
+                    }
                 }
             }
             Err(format!("missing synthetic bytes at {va:#x}"))
         };
         DefaultFont::decode(
-            AssetIdentity { source: "synthetic".into(), edition: "fixture".into(), version: "fixture".into() },
+            AssetIdentity {
+                source: "synthetic".into(),
+                edition: "fixture".into(),
+                version: "fixture".into(),
+            },
             [0x42; 32],
             misc,
             read,

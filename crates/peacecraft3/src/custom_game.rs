@@ -153,10 +153,7 @@ pub struct SelectedMap {
 
 /// Build the identity for a discovered map from the pinned recipe's own
 /// edition. `map_name` is the authored title, possibly empty.
-pub fn selected_map(
-    recipe: &CampaignRecipe,
-    map: &SkirmishMap,
-) -> SelectedMap {
+pub fn selected_map(recipe: &CampaignRecipe, map: &SkirmishMap) -> SelectedMap {
     let edition = format!("{:?} custom game map", recipe.mode().addon);
     SelectedMap {
         asset_path: map.asset_path.clone(),
@@ -278,11 +275,7 @@ pub fn configuration(
     let catalog_identity = AssetIdentity {
         edition,
         version: recipe.rules().origin.version.clone(),
-        source: format!(
-            "{}::{}",
-            recipe.dir().display(),
-            reader.selection.prefix
-        ),
+        source: format!("{}::{}", recipe.dir().display(), reader.selection.prefix),
     };
     Ok(Configuration {
         resolver,
@@ -320,9 +313,7 @@ pub fn enqueue_selected(
     revision: u64,
 ) -> Result<u32, String> {
     let request = configuration(recipe, map, revision)?;
-    inbox
-        .enqueue(request)
-        .map_err(|error| error.to_string())
+    inbox.enqueue(request).map_err(|error| error.to_string())
 }
 
 /// Inventories `.w3m`/`.w3x` paths lazily from `resolver.paths()` (already
@@ -411,8 +402,7 @@ pub fn inspect_asset(
 }
 
 pub fn inspect_bytes(asset_path: &str, bytes: &[u8]) -> Result<SkirmishMap, String> {
-    let map = pcx_map::Map::parse(bytes)
-        .map_err(|e| format!("{asset_path}: map parse: {e:?}"))?;
+    let map = pcx_map::Map::parse(bytes).map_err(|e| format!("{asset_path}: map parse: {e:?}"))?;
     let info = map
         .info()
         .map_err(|e| format!("{asset_path}: war3map.w3i: {e:?}"))?;
@@ -660,23 +650,27 @@ mod tests {
     #[test]
     fn over_budget_candidates_are_skipped_not_read() {
         let m = synthetic_w3m(&w3i_bytes("T"));
-        let fixture = Fixture::new(
-            "budget",
-            &[
-                (r"Maps\a.w3m", m.clone()),
-                (r"Maps\b.w3m", m),
-            ],
-        );
+        let fixture = Fixture::new("budget", &[(r"Maps\a.w3m", m.clone()), (r"Maps\b.w3m", m)]);
         let resolver = fixture.resolver();
         let budget = DiscoveryBudget::new(1, 1 << 20).unwrap();
         let d = discover_custom_maps(&resolver, &budget);
         assert_eq!(d.maps.len(), 1);
-        assert!(d.truncated, "leftover inventory must be explicit truncation");
+        assert!(
+            d.truncated,
+            "leftover inventory must be explicit truncation"
+        );
         assert_eq!(d.unexamined, Some(1));
         assert_eq!(d.examined, 1);
-        assert_eq!(d.inventory_visited, 2, "every entry visited is counted: {d:?}");
+        assert_eq!(
+            d.inventory_visited, 2,
+            "every entry visited is counted: {d:?}"
+        );
         assert!(!d.inventory_truncated);
-        assert_eq!(d.skipped.len(), 0, "truncation must not emit per-entry skips");
+        assert_eq!(
+            d.skipped.len(),
+            0,
+            "truncation must not emit per-entry skips"
+        );
     }
 
     #[test]
@@ -692,7 +686,8 @@ mod tests {
         files.push((r"Maps\a.w3m".into(), m.clone()));
         files.push((r"Maps\b.w3m".into(), m.clone()));
         files.push((r"Maps\c.w3m".into(), m));
-        let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
+        let refs: Vec<(&str, Vec<u8>)> =
+            files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
         let fixture = Fixture::new("large", &refs);
         let resolver = fixture.resolver();
         let budget = DiscoveryBudget::new(2, 1 << 20).unwrap();
@@ -703,8 +698,15 @@ mod tests {
         assert_eq!(d.read, 2, "read must be bounded by max_maps: {d:?}");
         assert_eq!(d.stored, 2, "stored must be bounded by max_maps: {d:?}");
         assert_eq!(d.maps.len(), 2);
-        assert_eq!(d.skipped.len(), 0, "truncation must not emit per-entry skip records: {d:?}");
-        assert!(d.truncated, "remaining inventory beyond budget must be an explicit outcome");
+        assert_eq!(
+            d.skipped.len(),
+            0,
+            "truncation must not emit per-entry skip records: {d:?}"
+        );
+        assert!(
+            d.truncated,
+            "remaining inventory beyond budget must be an explicit outcome"
+        );
         assert_eq!(d.unexamined, Some(1), "maps/c.w3m unexamined: {d:?}");
         // The 5000 filler entries were *visited* (counted as inventory
         // work), never read — traversal work is visible, not hidden.
@@ -737,13 +739,20 @@ mod tests {
         }
         files.push((r"Maps\a.w3m".into(), m.clone()));
         files.push((r"Maps\b.w3m".into(), m));
-        let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
+        let refs: Vec<(&str, Vec<u8>)> =
+            files.iter().map(|(p, b)| (p.as_str(), b.clone())).collect();
         let fixture = Fixture::new("invbudget", &refs);
         let resolver = fixture.resolver();
         let budget = DiscoveryBudget::with_inventory(10, 3, 1 << 20).unwrap();
         let d = discover_custom_maps(&resolver, &budget);
-        assert_eq!(d.inventory_visited, 3, "traversal must stop at the inventory budget: {d:?}");
-        assert_eq!(d.examined, 2, "only maps/a.w3m and maps/b.w3m examined: {d:?}");
+        assert_eq!(
+            d.inventory_visited, 3,
+            "traversal must stop at the inventory budget: {d:?}"
+        );
+        assert_eq!(
+            d.examined, 2,
+            "only maps/a.w3m and maps/b.w3m examined: {d:?}"
+        );
         assert!(d.truncated);
         assert!(d.inventory_truncated);
         assert_eq!(
@@ -773,11 +782,15 @@ mod tests {
         // admission catalog — no invented players/difficulty anywhere.
         let install = std::env::var_os("PEACECRAFT3_INSTALL")
             .or_else(|| std::env::var_os("PEACECRAFT3_LEGACY_DIR"))
-            .expect("custom-game admission requires an explicit Legacy install (PEACECRAFT3_INSTALL)");
+            .expect(
+                "custom-game admission requires an explicit Legacy install (PEACECRAFT3_INSTALL)",
+            );
         let install = PathBuf::from(install);
         let recipe = pinned_legacy_recipe(&install)
             .expect("pinned Legacy recipe must pin against the reviewed image");
-        let resolver = recipe.base_resolver().expect("pinned recipe must yield a resolver");
+        let resolver = recipe
+            .base_resolver()
+            .expect("pinned recipe must yield a resolver");
         let budget = DiscoveryBudget::new(256, 1 << 20).unwrap();
         let d = discover_custom_maps(&resolver, &budget);
         assert!(
@@ -842,9 +855,7 @@ mod tests {
     /// 32 MiB ceiling the native campaign path uses; the recipe's rules,
     /// catalog and edition all derive from that image and the install's own
     /// archives. No recipe is fabricated.
-    fn pinned_legacy_recipe(
-        install: &std::path::Path,
-    ) -> Result<Arc<CampaignRecipe>, String> {
+    fn pinned_legacy_recipe(install: &std::path::Path) -> Result<Arc<CampaignRecipe>, String> {
         use std::io::Read;
         let image_path = install.join("Warcraft III.exe");
         let mut file = std::fs::File::open(&image_path)
@@ -886,7 +897,9 @@ mod tests {
         let install = PathBuf::from(install);
         let recipe = pinned_legacy_recipe(&install)
             .expect("pinned Legacy recipe must pin against the reviewed image");
-        let resolver = recipe.base_resolver().expect("pinned recipe must yield a resolver");
+        let resolver = recipe
+            .base_resolver()
+            .expect("pinned recipe must yield a resolver");
         let budget = DiscoveryBudget::new(256, 1 << 20).unwrap();
         let d = discover_custom_maps(&resolver, &budget);
         assert!(
@@ -895,7 +908,9 @@ mod tests {
             d.skipped
         );
         assert!(
-            d.maps.iter().all(|m| m.asset_path.ends_with(".w3m") || m.asset_path.ends_with(".w3x")),
+            d.maps
+                .iter()
+                .all(|m| m.asset_path.ends_with(".w3m") || m.asset_path.ends_with(".w3x")),
             "every discovered map must be a .w3m/.w3x member"
         );
     }
@@ -909,12 +924,12 @@ mod custom_game_synthetic_sys_fixture {
     //! refusal/preservation contract directly, without fabricating a recipe.
     //! Uses the same opaque `Memory`-backed resolver pattern as
     //! `campaign_audio`'s synthetic source.
-    use crate::browser_configuration::{ConfigurationInbox, Configuration, Member, Poll};
-    use crate::custom_game::{admission_limits, inspect_asset};
     use super::tests::{synthetic_w3m, w3i_bytes};
+    use crate::browser_configuration::{Configuration, ConfigurationInbox, Member, Poll};
+    use crate::custom_game::{admission_limits, inspect_asset};
     use crate::map_requests::MapRequests;
     use bevy::prelude::App;
-    use pcx_assets::{ArchiveLayer, ContentSource, SourceInfo, SourceContent, SourceError};
+    use pcx_assets::{ArchiveLayer, ContentSource, SourceContent, SourceError, SourceInfo};
     use pcx_play::scripts::AssetIdentity;
 
     struct Memory {
@@ -1028,7 +1043,10 @@ mod custom_game_synthetic_sys_fixture {
         let missing = resolver
             .source_for("Scripts\\common.j")
             .map_err(|e| e.to_string());
-        assert!(missing.is_err(), "sys fixture must have no common.j: {missing:?}");
+        assert!(
+            missing.is_err(),
+            "sys fixture must have no common.j: {missing:?}"
+        );
 
         // Refusal #2 — inbox busy: a pending synthetic request is not
         // replaced by a second synthetic enqueue.

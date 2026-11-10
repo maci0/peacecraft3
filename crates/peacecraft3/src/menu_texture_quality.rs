@@ -56,13 +56,8 @@ pub(crate) fn apply_from_image(
     current: pcx_gfx::LoadedTexture,
     inputs: Inputs<'_>,
 ) -> Result<Replacement, (pcx_gfx::LoadedTexture, Refusal)> {
-    let windows =
-        TextureQualityWindows::read(inputs.image, inputs.origin).map_err(|_e| {
-            (
-                current.clone(),
-                Refusal::MalformedBranch,
-            )
-        })?;
+    let windows = TextureQualityWindows::read(inputs.image, inputs.origin)
+        .map_err(|_e| (current.clone(), Refusal::MalformedBranch))?;
     load_from_request(
         current,
         pcx_gfx::texture_quality_consumer::Request {
@@ -82,13 +77,11 @@ mod tests {
     use super::*;
 
     fn options_fdf(items: &str) -> crate::fdf::Fdf {
-        crate::fdf::Fdf::parse(
-            &format!(
-                "Frame \"CHOICES\" \"TextureQualityItems\" {{\n{items}\n}}\n\
+        crate::fdf::Fdf::parse(&format!(
+            "Frame \"CHOICES\" \"TextureQualityItems\" {{\n{items}\n}}\n\
                  Frame \"POPUPMENU\" \"TextureQualityMenu\" {{\n\
                  PopupMenuFrame \"TextureQualityItems\",\n}}\n"
-            ),
-        )
+        ))
         .unwrap()
     }
 
@@ -166,6 +159,9 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(kept.source, current.source);
-        assert!(matches!(refusal, Refusal::Depth16Unresolved { .. }), "{refusal:?}");
+        assert!(
+            matches!(refusal, Refusal::Depth16Unresolved { .. }),
+            "{refusal:?}"
+        );
     }
 }

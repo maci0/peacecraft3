@@ -35,16 +35,15 @@ fn fixture() -> Vec<u8> {
 // texture_quality_tests; operands differ from the reviewed image.
 fn nonstock_miplevel() -> Vec<u8> {
     vec![
-        0x33, 0xc9, 0x8b, 0xc7, 0x2b, 0xc1, 0x74, 0x0e, 0x83, 0xe8, 0x01, 0x74, 0x05, 0x83,
-        0xe8, 0x01, 0x75, 0x09, 0x33, 0xc9, 0xeb, 0x05, 0xb9, 7, 0, 0, 0, 0x51, 0x6a, 0x0a,
-        0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
+        0x33, 0xc9, 0x8b, 0xc7, 0x2b, 0xc1, 0x74, 0x0e, 0x83, 0xe8, 0x01, 0x74, 0x05, 0x83, 0xe8,
+        0x01, 0x75, 0x09, 0x33, 0xc9, 0xeb, 0x05, 0xb9, 7, 0, 0, 0, 0x51, 0x6a, 0x0a, 0x8b, 0xcb,
+        0xe8, 0, 0, 0, 0,
     ]
 }
 fn nonstock_texcolor() -> Vec<u8> {
     vec![
-        0xb8, 32, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0x83, 0xef, 0x01, 0x74, 0x0a, 0x83,
-        0xef, 0x02, 0x75, 0x05, 0xb8, 16, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b, 0xcb, 0xe8, 0, 0,
-        0, 0,
+        0xb8, 32, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0x83, 0xef, 0x01, 0x74, 0x0a, 0x83, 0xef,
+        0x02, 0x75, 0x05, 0xb8, 16, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
     ]
 }
 
@@ -71,7 +70,10 @@ fn depth16_refuses_with_user_visible_state_and_retains_previous() {
     // q=3 derives depth 16 (2 bytes); the consumer refuses fail-closed.
     let err = replacement(&data, "q.blp", &m, &t, 3, 4, 64).unwrap_err();
     assert_eq!(err, Refusal::Depth16Unresolved { word: 16 });
-    assert!(err.to_string().contains("no established channel format"), "{err}");
+    assert!(
+        err.to_string().contains("no established channel format"),
+        "{err}"
+    );
     // Retain-on-refusal returns the current texture unchanged.
     let current = LoadedTexture {
         width: 1,
@@ -107,7 +109,10 @@ fn ordinal_outside_authored_domain_refuses() {
     // even though it is a well-formed branch index.
     assert_eq!(
         replacement(&data, "q.blp", &m, &t, 3, 3, 64).unwrap_err(),
-        Refusal::OrdinalOutOfRange { ordinal: 3, domain: 3 }
+        Refusal::OrdinalOutOfRange {
+            ordinal: 3,
+            domain: 3
+        }
     );
 }
 
@@ -133,9 +138,12 @@ fn policy_alone_resolves_words_without_pixels() {
     let m = nonstock_miplevel();
     let t = nonstock_texcolor();
     let p = policy(&m, &t, 3, 4).unwrap();
-    assert_eq!(p, TextureQuality {
-        mip_level: 0,
-        color_depth_bytes: 2,
-        texcolordepth_word: 16,
-    });
+    assert_eq!(
+        p,
+        TextureQuality {
+            mip_level: 0,
+            color_depth_bytes: 2,
+            texcolordepth_word: 16,
+        }
+    );
 }

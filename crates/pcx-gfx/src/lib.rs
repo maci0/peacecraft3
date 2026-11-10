@@ -110,7 +110,12 @@ pub fn rgba_mip_bytes(
 /// The returned texture carries the selected level as its base image with
 /// no further mip chain, because the native quality setting names a single
 /// authored level for this load.
-pub fn one_mip<Quality>(bytes: &[u8], source: &str, quality: &Quality, max_rgba_bytes: usize) -> Result<LoadedTexture, Error>
+pub fn one_mip<Quality>(
+    bytes: &[u8],
+    source: &str,
+    quality: &Quality,
+    max_rgba_bytes: usize,
+) -> Result<LoadedTexture, Error>
 where
     Quality: std::borrow::Borrow<TextureQuality>,
 {
@@ -409,10 +414,8 @@ pub fn pose_skeleton(
     // `parentId` addresses the whole node space, so resolve it against the
     // supplied BONE/HELP list, not LoadedModel's bones-only name table.
     let parents: Vec<Option<u32>> = {
-        let by_id: std::collections::HashMap<u32, i32> = bones
-            .iter()
-            .map(|b| (b.object_id, b.parent_id))
-            .collect();
+        let by_id: std::collections::HashMap<u32, i32> =
+            bones.iter().map(|b| (b.object_id, b.parent_id)).collect();
         bones
             .iter()
             .map(|b| {
@@ -430,9 +433,7 @@ pub fn pose_skeleton(
         .enumerate()
         .map(|(i, b)| (b.object_id, i))
         .collect();
-    let parent = |object_id: u32| -> Option<u32> {
-        parents[bone_index[&object_id]]
-    };
+    let parent = |object_id: u32| -> Option<u32> { parents[bone_index[&object_id]] };
     let matrices = pcx_mdl::bone_matrices(bones, &parent, pivots, frame);
     Skeleton {
         matrices,
@@ -456,10 +457,8 @@ pub fn pose_from_poses(
     poses: &[pcx_mdl::Pose],
 ) -> Skeleton {
     let parents: Vec<Option<u32>> = {
-        let by_id: std::collections::HashMap<u32, i32> = bones
-            .iter()
-            .map(|b| (b.object_id, b.parent_id))
-            .collect();
+        let by_id: std::collections::HashMap<u32, i32> =
+            bones.iter().map(|b| (b.object_id, b.parent_id)).collect();
         bones
             .iter()
             .map(|b| {
@@ -477,9 +476,7 @@ pub fn pose_from_poses(
         .enumerate()
         .map(|(i, b)| (b.object_id, i))
         .collect();
-    let parent = |object_id: u32| -> Option<u32> {
-        parents[bone_index[&object_id]]
-    };
+    let parent = |object_id: u32| -> Option<u32> { parents[bone_index[&object_id]] };
     let matrices = pcx_mdl::bone_matrices_from_poses(bones, &parent, pivots, poses);
     Skeleton {
         matrices,

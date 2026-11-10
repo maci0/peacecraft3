@@ -34,16 +34,15 @@ fn fixture() -> Vec<u8> {
 // cumulative sub 3 (q=3). Derivation must follow operands, not a table.
 fn nonstock_miplevel() -> Vec<u8> {
     vec![
-        0x33, 0xc9, 0x8b, 0xc7, 0x2b, 0xc1, 0x74, 0x0e, 0x83, 0xe8, 0x01, 0x74, 0x05, 0x83,
-        0xe8, 0x01, 0x75, 0x09, 0x33, 0xc9, 0xeb, 0x05, 0xb9, 7, 0, 0, 0, 0x51, 0x6a, 0x0a,
-        0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
+        0x33, 0xc9, 0x8b, 0xc7, 0x2b, 0xc1, 0x74, 0x0e, 0x83, 0xe8, 0x01, 0x74, 0x05, 0x83, 0xe8,
+        0x01, 0x75, 0x09, 0x33, 0xc9, 0xeb, 0x05, 0xb9, 7, 0, 0, 0, 0x51, 0x6a, 0x0a, 0x8b, 0xcb,
+        0xe8, 0, 0, 0, 0,
     ]
 }
 fn nonstock_texcolor() -> Vec<u8> {
     vec![
-        0xb8, 32, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0x83, 0xef, 0x01, 0x74, 0x0a, 0x83,
-        0xef, 0x02, 0x75, 0x05, 0xb8, 16, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b, 0xcb, 0xe8, 0, 0,
-        0, 0,
+        0xb8, 32, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0x83, 0xef, 0x01, 0x74, 0x0a, 0x83, 0xef,
+        0x02, 0x75, 0x05, 0xb8, 16, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
     ]
 }
 
@@ -74,8 +73,8 @@ fn unknown_depth_word_refuses() {
     let m = nonstock_miplevel();
     // depth special 24 (3 bytes) is not a validated bit depth pair
     let t = vec![
-        0xb8, 16, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0xb8, 24, 0, 0, 0, 0x50, 0x6a, 0x0b,
-        0x8b, 0xcb, 0xe8, 0, 0, 0, 0,
+        0xb8, 16, 0, 0, 0, 0x83, 0xef, 0x00, 0x74, 0x0f, 0xb8, 24, 0, 0, 0, 0x50, 0x6a, 0x0b, 0x8b,
+        0xcb, 0xe8, 0, 0, 0, 0,
     ];
     assert_eq!(
         derive_texture_quality(&m, &t, 0, 4),
@@ -91,7 +90,10 @@ fn malformed_branch_refuses() {
     );
     assert_eq!(
         derive_texture_quality(&nonstock_miplevel(), &nonstock_texcolor(), 4, 4),
-        Err(PolicyError::OrdinalOutOfRange { ordinal: 4, domain: 4 })
+        Err(PolicyError::OrdinalOutOfRange {
+            ordinal: 4,
+            domain: 4
+        })
     );
 }
 
@@ -104,14 +106,20 @@ fn caller_supplied_non_four_domain_bounds_ordinal() {
     assert!(derive_texture_quality(&m, &t, 2, 3).is_ok());
     assert_eq!(
         derive_texture_quality(&m, &t, 3, 3),
-        Err(PolicyError::OrdinalOutOfRange { ordinal: 3, domain: 3 })
+        Err(PolicyError::OrdinalOutOfRange {
+            ordinal: 3,
+            domain: 3
+        })
     );
     // A 6-choice domain admits the former out-of-range ordinal 4.
     assert!(derive_texture_quality(&m, &t, 4, 6).is_ok());
     // A zero domain admits nothing.
     assert_eq!(
         derive_texture_quality(&m, &t, 0, 0),
-        Err(PolicyError::OrdinalOutOfRange { ordinal: 0, domain: 0 })
+        Err(PolicyError::OrdinalOutOfRange {
+            ordinal: 0,
+            domain: 0
+        })
     );
 }
 
@@ -121,7 +129,13 @@ fn quality_selects_chosen_mip_and_preserves_depth() {
     let m = nonstock_miplevel();
     let t = nonstock_texcolor();
     // q=1 (mip default 0, depth 32->4B) picks top mip
-    let top = one_mip(&data, "q.blp", &derive_texture_quality(&m, &t, 1, 4).unwrap(), 64).unwrap();
+    let top = one_mip(
+        &data,
+        "q.blp",
+        &derive_texture_quality(&m, &t, 1, 4).unwrap(),
+        64,
+    )
+    .unwrap();
     assert_eq!(top.width, 4);
     assert_eq!(top.height, 2);
     assert_eq!(top.rgba.len(), 4 * 2 * 4);
@@ -223,7 +237,15 @@ fn absent_or_invalid_mip_refuses_without_fallback() {
         texcolordepth_word: 32,
     };
     assert!(one_mip(&gap, "gap.blp", &zero, 64).is_err());
-    assert!(one_mip(&data, "budget.blp", &derive_texture_quality(&nonstock_miplevel(), &nonstock_texcolor(), 1, 4).unwrap(), 10).is_err());
+    assert!(
+        one_mip(
+            &data,
+            "budget.blp",
+            &derive_texture_quality(&nonstock_miplevel(), &nonstock_texcolor(), 1, 4).unwrap(),
+            10
+        )
+        .is_err()
+    );
 }
 
 // Explicit original-image gate: reads the reviewed Legacy executable named
@@ -247,7 +269,10 @@ fn selected_original_branch_windows_derive_native_policy() {
         let bytes = find_options_fdf(&install);
         count_texture_quality_items(&bytes)
     };
-    assert!(domain > 0, "selected Options FDF must supply TextureQualityMenu items");
+    assert!(
+        domain > 0,
+        "selected Options FDF must supply TextureQualityMenu items"
+    );
     // PE32 section map (same shape as pcx-play pe_image, std-only here).
     let pe = u32::from_le_bytes(image[0x3c..0x40].try_into().unwrap()) as usize;
     assert_eq!(&image[pe..pe + 4], b"PE\0\0");
@@ -352,10 +377,15 @@ fn find_options_fdf(install: &std::path::Path) -> Vec<u8> {
     candidates.push(install.join("Options.fdf"));
     for path in &candidates {
         if let Ok(bytes) = std::fs::read(path)
-            && bytes.windows(b"TextureQualityMenu".len()).any(|w| w == b"TextureQualityMenu")
+            && bytes
+                .windows(b"TextureQualityMenu".len())
+                .any(|w| w == b"TextureQualityMenu")
         {
             return bytes;
         }
     }
-    panic!("no Options FDF with TextureQualityMenu under {}", ui.display());
+    panic!(
+        "no Options FDF with TextureQualityMenu under {}",
+        ui.display()
+    );
 }

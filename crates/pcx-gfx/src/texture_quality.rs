@@ -49,18 +49,26 @@ pub struct TextureQuality {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyError {
-    OrdinalOutOfRange { ordinal: u32, domain: usize },
+    OrdinalOutOfRange {
+        ordinal: u32,
+        domain: usize,
+    },
     /// Branch window does not match either supported opcode shape.
     MalformedBranch,
     /// Depth word is not a validated bit depth (16 or 32).
-    UnsupportedDepth { word: u32 },
+    UnsupportedDepth {
+        word: u32,
+    },
 }
 
 impl std::fmt::Display for PolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OrdinalOutOfRange { ordinal, domain } => {
-                write!(f, "texture quality ordinal {ordinal} is outside the caller-supplied authored domain of {domain} choices")
+                write!(
+                    f,
+                    "texture quality ordinal {ordinal} is outside the caller-supplied authored domain of {domain} choices"
+                )
             }
             Self::MalformedBranch => write!(f, "texture quality branch window is malformed"),
             Self::UnsupportedDepth { word } => {

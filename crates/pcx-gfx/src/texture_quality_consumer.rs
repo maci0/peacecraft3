@@ -51,7 +51,10 @@ impl std::fmt::Display for Refusal {
                 write!(f, "texture quality branch window is malformed")
             }
             Self::OrdinalOutOfRange { ordinal, domain } => {
-                write!(f, "texture quality ordinal {ordinal} is outside the authored {domain} choices")
+                write!(
+                    f,
+                    "texture quality ordinal {ordinal} is outside the authored {domain} choices"
+                )
             }
             Self::UnsupportedDepth { word } => {
                 write!(f, "texcolordepth word {word} is not a validated bit depth")
@@ -61,7 +64,10 @@ impl std::fmt::Display for Refusal {
                 "texture quality depth word {word} (16-bit colour) has no established channel format; previous texture retained"
             ),
             Self::MipUnavailable => {
-                write!(f, "texture quality selected mip is unavailable; previous texture retained")
+                write!(
+                    f,
+                    "texture quality selected mip is unavailable; previous texture retained"
+                )
             }
         }
     }
@@ -102,20 +108,15 @@ pub fn replacement(
     domain: usize,
     max_rgba_bytes: usize,
 ) -> Result<Replacement, Refusal> {
-    let policy = derive_texture_quality(
-        miplevel_branch,
-        texcolordepth_branch,
-        ordinal,
-        domain,
-    )
-    .map_err(Refusal::from)?;
+    let policy = derive_texture_quality(miplevel_branch, texcolordepth_branch, ordinal, domain)
+        .map_err(Refusal::from)?;
     if policy.color_depth_bytes == 2 {
         return Err(Refusal::Depth16Unresolved {
             word: policy.texcolordepth_word,
         });
     }
-    let texture = one_mip(bytes, source, &policy, max_rgba_bytes)
-        .map_err(|_| Refusal::MipUnavailable)?;
+    let texture =
+        one_mip(bytes, source, &policy, max_rgba_bytes).map_err(|_| Refusal::MipUnavailable)?;
     let mut image = rgba_image(&texture);
     image.texture_descriptor.format = TextureFormat::Rgba8Unorm;
     Ok(Replacement { texture, image })
@@ -172,7 +173,10 @@ pub fn policy(
 /// `texcolordepth_branch` are the windows read from the selected-client
 /// image. Callers retain the old texture on `Err`.
 #[allow(clippy::too_many_arguments)]
-pub fn load_from_request(current: LoadedTexture, request: Request<'_>) -> Result<Replacement, (LoadedTexture, Refusal)> {
+pub fn load_from_request(
+    current: LoadedTexture,
+    request: Request<'_>,
+) -> Result<Replacement, (LoadedTexture, Refusal)> {
     retain_on_refusal(current, request)
 }
 

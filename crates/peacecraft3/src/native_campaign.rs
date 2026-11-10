@@ -1968,7 +1968,11 @@ pub(crate) mod tests {
         app.update();
 
         let chapters = app.world().resource::<Chapters>();
-        assert!(chapters.error.is_none(), "chapter index: {:?}", chapters.error);
+        assert!(
+            chapters.error.is_none(),
+            "chapter index: {:?}",
+            chapters.error
+        );
         let indexed_recipe = chapters.recipe.clone().expect("index retains its recipe");
         assert_eq!(
             indexed_recipe.image_sha256(),
@@ -2015,7 +2019,9 @@ pub(crate) mod tests {
         );
         // Verify the actual map member via receipts: the SelectedMapSources
         // receipt must carry the MiscUI-selected map path.
-        let sources = app.world().resource::<peacecraft3::browser_configuration::SelectedMapSources>();
+        let sources = app
+            .world()
+            .resource::<peacecraft3::browser_configuration::SelectedMapSources>();
         let recipe = sources
             .campaign_for_receipts(&bindings.receipts)
             .expect("credits launch publishes its recipe");
@@ -2027,7 +2033,11 @@ pub(crate) mod tests {
         // The map bytes admitted must parse as the expected MiscUI map; check
         // via map_label path equivalence: configuration resolves chapter.map,
         // which launch_credits sets from credits_map_for_edition.
-        println!("credits map={expected} admitted={} recipe={}", bindings.map_label, recipe.dir().display());
+        println!(
+            "credits map={expected} admitted={} recipe={}",
+            bindings.map_label,
+            recipe.dir().display()
+        );
     }
 
     pub(crate) fn started_app() -> App {
