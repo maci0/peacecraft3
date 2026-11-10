@@ -166,19 +166,3 @@ pub fn policy(
     derive_texture_quality(miplevel_branch, texcolordepth_branch, ordinal, domain)
         .map_err(Refusal::from)
 }
-
-/// Loader entry point for the menu layer: forwards to [`retain_on_refusal`]
-/// with the existing [`Request`] shape. `domain` is the caller-measured
-/// popup length from parsed source assets; `miplevel_branch` and
-/// `texcolordepth_branch` are the windows read from the selected-client
-/// image. Callers retain the old texture on `Err`.
-#[allow(clippy::too_many_arguments)]
-pub fn load_from_request(
-    current: LoadedTexture,
-    request: Request<'_>,
-) -> Result<Replacement, (LoadedTexture, Refusal)> {
-    retain_on_refusal(current, request)
-}
-
-/// Alias kept for the menu hook name used across worktrees.
-pub type QualityRequest<'a> = Request<'a>;

@@ -1421,5 +1421,3 @@ mod sparse_id_tests {
         );
     }
 }
-
-pub use texture_quality_consumer::{Replacement, load_from_request};

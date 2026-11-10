@@ -167,6 +167,14 @@ invented. Earlier note said `q=3 -> 0x20`; that misread the mutated
 `edi` after cumulative subs. The startup writer at `0x428682`
 (`cmp edi,2; cmove`) confirms q=2. `one_mip` decodes only the
 selected authored BLP mip level (direct or JPEG content via the
-existing `pcx-blp` decoders) and refuses absent/invalid levels. No
-shared menu/settings/glue files were touched; UI wiring is a handoff
-for the integrator.
+existing `pcx-blp` decoders) and refuses absent/invalid levels.
+
+The Options `TextureQualityMenu` stays a read-only preview. The selected
+Legacy `UI\FrameDef\Glue\OptionsMenu.fdf` offers three choices, and on the
+reviewed image only `q=2` selects 32-bit; its policy (mip 0, RGBA8) is what
+the renderer already uploads. `q=0` and `q=1` are 16-bit, which refuses
+until the 16-bit storage format is established
+([evidence](texture-quality-depth16-evidence.md)), so a live control would
+change no texture. Gate: `selected_original_branch_windows_derive_native_policy`
+in `crates/pcx-gfx/src/texture_quality_tests.rs` (needs `PCX_WAR3_EXE` and
+`PEACECRAFT3_INSTALL`).

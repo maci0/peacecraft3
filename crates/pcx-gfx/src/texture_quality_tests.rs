@@ -269,6 +269,7 @@ fn selected_original_branch_windows_derive_native_policy() {
         let bytes = find_options_fdf(&install);
         count_texture_quality_items(&bytes)
     };
+    println!("TextureQualityMenu choices: {domain}");
     assert!(
         domain > 0,
         "selected Options FDF must supply TextureQualityMenu items"
@@ -298,22 +299,22 @@ fn selected_original_branch_windows_derive_native_policy() {
     };
     let miplevel = va_slice(0x53865c, 0x20);
     let texcolor = va_slice(0x538681, 0x1e);
-    // Native: q0 mip1/16, q1-2 mip0/16, q3 mip0/16, q2 depth 32.
-    // The domain is the measured FDF count; every native ordinal below
-    // must fall inside it.
-    let q0 = derive_texture_quality(&miplevel, &texcolor, 0, domain).unwrap();
-    assert_eq!(q0.mip_level, 1);
-    assert_eq!(q0.texcolordepth_word, 16);
-    assert_eq!(q0.color_depth_bytes, 2);
-    for q in [1, 3] {
+    // Native: miplevel special index 0 (q0 -> mip 1, else 0) and
+    // texcolordepth special index 2 (q2 -> 32, else 16), for every ordinal
+    // the measured popup offers; the first ordinal past it refuses.
+    assert!(domain > 2, "the popup must offer the 32-bit choice");
+    for q in 0..domain as u32 {
         let v = derive_texture_quality(&miplevel, &texcolor, q, domain).unwrap();
-        assert_eq!(v.mip_level, 0, "q={q}");
-        assert_eq!(v.texcolordepth_word, 16, "q={q}");
+        let (mip, word, bytes) = match q {
+            0 => (1, 16, 2),
+            2 => (0, 32, 4),
+            _ => (0, 16, 2),
+        };
+        assert_eq!(v.mip_level, mip, "q={q}");
+        assert_eq!(v.texcolordepth_word, word, "q={q}");
+        assert_eq!(v.color_depth_bytes, bytes, "q={q}");
     }
-    let q2 = derive_texture_quality(&miplevel, &texcolor, 2, domain).unwrap();
-    assert_eq!(q2.mip_level, 0);
-    assert_eq!(q2.texcolordepth_word, 32);
-    assert_eq!(q2.color_depth_bytes, 4);
+    assert!(derive_texture_quality(&miplevel, &texcolor, domain as u32, domain).is_err());
 }
 
 // Count `MenuItem` records inside the `TextureQualityMenu` popup frame
@@ -358,34 +359,20 @@ fn count_texture_quality_items(fdf: &[u8]) -> usize {
     count
 }
 
-// Locate the Options FDF under an install root. The menu layer owns
-// full screen discovery; this gate only needs the Video page payload
-// that carries TextureQualityMenu, found by scanning the conventional
-// ui directory for a file mentioning it.
+// Read the Options FDF that carries TextureQualityMenu from the install's
+// own archives, the member the menu layer loads.
 fn find_options_fdf(install: &std::path::Path) -> Vec<u8> {
-    let ui = install.join("ui");
-    let mut candidates = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&ui) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "fdf") {
-                candidates.push(path);
-            }
-        }
-    }
-    candidates.push(ui.join("Options.fdf"));
-    candidates.push(install.join("Options.fdf"));
-    for path in &candidates {
-        if let Ok(bytes) = std::fs::read(path)
-            && bytes
-                .windows(b"TextureQualityMenu".len())
-                .any(|w| w == b"TextureQualityMenu")
-        {
-            return bytes;
-        }
-    }
-    panic!(
-        "no Options FDF with TextureQualityMenu under {}",
-        ui.display()
+    let member = r"UI\FrameDef\Glue\OptionsMenu.fdf";
+    let mut archives = pcx_mpq::MpqSet::open_wc3(install)
+        .unwrap_or_else(|e| panic!("open archives under {}: {e}", install.display()));
+    let bytes = archives
+        .extract(member)
+        .unwrap_or_else(|e| panic!("{member}: {e}"));
+    assert!(
+        bytes
+            .windows(b"TextureQualityMenu".len())
+            .any(|w| w == b"TextureQualityMenu"),
+        "{member} has no TextureQualityMenu"
     );
+    bytes
 }

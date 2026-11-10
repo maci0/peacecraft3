@@ -88,7 +88,6 @@ mod menu_settings;
 mod menu_skin;
 mod menu_sprites;
 mod menu_text;
-mod menu_texture_quality;
 #[cfg(not(target_arch = "wasm32"))]
 mod startup_window;
 mod viewer_args;
