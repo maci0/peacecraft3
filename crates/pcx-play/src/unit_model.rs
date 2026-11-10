@@ -64,9 +64,6 @@ impl Model {
         let sequences = model
             .sequences(&bytes)
             .map_err(|e| format!("{member}: SEQS: {e}"))?;
-        if sequences.iter().any(|s| s.interval_end < s.interval_start) {
-            return Err(format!("{member}: invalid animation interval"));
-        }
         Ok(Self {
             origin,
             member,
@@ -102,11 +99,18 @@ impl Model {
         if wanted.is_empty() {
             return None;
         }
+        // A shipped model may carry an inverted, unused record (HeroFarSeer SEQS
+        // record 0, "nothing", spans -167..0). It stays in the table but is never
+        // selected, so the rest of the model still animates.
+        let playable = |s: &pcx_mdl::Sequence| s.interval_end >= s.interval_start;
         self.sequences
             .iter()
-            .position(|s| s.name.eq_ignore_ascii_case(name.trim()))
+            .position(|s| playable(s) && s.name.eq_ignore_ascii_case(name.trim()))
             .or_else(|| {
                 self.sequences.iter().position(|s| {
+                    if !playable(s) {
+                        return false;
+                    }
                     let tokens: Vec<_> = s
                         .name
                         .split(|c: char| c.is_ascii_whitespace() || c == '-')
@@ -825,21 +829,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn inverted_sequence_interval_is_still_refused() {
+    fn inverted_sequence_is_kept_but_never_selected() {
         let original = model();
         let parsed = pcx_mdl::Mdlx::parse(&original.bytes).unwrap();
         let seqs = parsed.chunk(pcx_mdl::tag::SEQS).unwrap();
         let mut bytes = original.bytes.to_vec();
         let walk = seqs.offset + 8 + 3 * pcx_mdl::SEQUENCE_SIZE;
         bytes[walk + 80..walk + 84].copy_from_slice(&4000u32.to_le_bytes());
-        let error = Model::read(
+        let model = Model::read(
             original.origin.clone(),
             original.member.clone(),
             bytes.into(),
             4096,
         )
-        .unwrap_err();
-        assert!(error.contains("invalid animation interval"), "{error}");
+        .unwrap();
+        assert_ne!(
+            model.select("Walk"),
+            Some(3),
+            "inverted Walk must not be selected"
+        );
+        assert!(
+            model.select("Stand").is_some(),
+            "ordered sequences still select"
+        );
     }
 
     #[test]
