@@ -50,7 +50,7 @@ in progress. The minimap now uses source-derived live sight, occlusion heights, 
 
 ## Status
 
-Current release: [0.15.0](docs/releases/0.15.0.md).
+Current release: [0.15.1](docs/releases/0.15.1.md).
 
 Human01 and Human02 have reached authored Victory in local scripted gameplay runs.
 The remaining campaign, interlude continuation and complete rendering fidelity are
