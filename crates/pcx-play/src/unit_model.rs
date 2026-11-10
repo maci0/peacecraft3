@@ -64,11 +64,8 @@ impl Model {
         let sequences = model
             .sequences(&bytes)
             .map_err(|e| format!("{member}: SEQS: {e}"))?;
-        if sequences
-            .iter()
-            .any(|s| s.interval_end < s.interval_start || s.name.chars().any(char::is_control))
-        {
-            return Err(format!("{member}: invalid animation interval/name"));
+        if sequences.iter().any(|s| s.interval_end < s.interval_start) {
+            return Err(format!("{member}: invalid animation interval"));
         }
         Ok(Self {
             origin,
@@ -805,6 +802,46 @@ pub(crate) mod tests {
         a.resume_after_pause(0.5, 4.5);
         assert_eq!(posed(&a, 4.5), pose);
     }
+    #[test]
+    fn sequence_names_keep_the_stored_bytes_and_still_match_by_token() {
+        // Shipped MalFurion.mdx stores "Stand Ready", CR/LF bytes, then NUL padding
+        // in its 80-byte name field. Shipped campaign chapters use it, so the name
+        // is kept as the stored C string and matched by whitespace tokens.
+        let original = model();
+        let parsed = pcx_mdl::Mdlx::parse(&original.bytes).unwrap();
+        let seqs = parsed.chunk(pcx_mdl::tag::SEQS).unwrap();
+        let mut bytes = original.bytes.to_vec();
+        let walk = seqs.offset + 8 + 3 * pcx_mdl::SEQUENCE_SIZE;
+        bytes[walk..walk + 7].copy_from_slice(b"Walk\r\r\n");
+        let model = Model::read(
+            original.origin.clone(),
+            original.member.clone(),
+            bytes.into(),
+            4096,
+        )
+        .unwrap();
+        assert_eq!(model.sequences[3].name, "Walk\r\r\n");
+        assert_eq!(model.select("walk"), Some(3));
+    }
+
+    #[test]
+    fn inverted_sequence_interval_is_still_refused() {
+        let original = model();
+        let parsed = pcx_mdl::Mdlx::parse(&original.bytes).unwrap();
+        let seqs = parsed.chunk(pcx_mdl::tag::SEQS).unwrap();
+        let mut bytes = original.bytes.to_vec();
+        let walk = seqs.offset + 8 + 3 * pcx_mdl::SEQUENCE_SIZE;
+        bytes[walk + 80..walk + 84].copy_from_slice(&4000u32.to_le_bytes());
+        let error = Model::read(
+            original.origin.clone(),
+            original.member.clone(),
+            bytes.into(),
+            4096,
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid animation interval"), "{error}");
+    }
+
     #[test]
     fn truncated_model_header_does_not_invent_a_default_blend() {
         let original = model();
