@@ -271,7 +271,7 @@ fn project(
             }
         }
         if let Some(dialogue) = state.dialogue.as_mut() {
-            match dialogue.paint(&mut commands, scene, &images, &mut materials) {
+            match dialogue.paint(&mut commands, scene, &images, &mut materials, true) {
                 Ok(root) => state.scene = Some((root, scene.started)),
                 Err(error) => state.last_error = Some(error),
             }
