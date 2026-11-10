@@ -51,6 +51,9 @@ const ATTRIBUTES: [(&str, &str); 3] = [
     ("GetHeroAgi", "AGI"),
     ("GetHeroInt", "INT"),
 ];
+/// Ability-list edits on the unit's ability state. Both are `(unit, integer) returns boolean`.
+const ADD_ABILITY: &str = "UnitAddAbility";
+const REMOVE_ABILITY: &str = "UnitRemoveAbility";
 
 #[cfg(test)]
 mod cached_tests {
@@ -146,6 +149,38 @@ mod cached_tests {
         assert_eq!(restored, before);
         restored.restore_cached(&saved, &rules, budget).unwrap();
         assert_eq!(restored.hero.as_ref().unwrap().experience, None);
+    }
+
+    #[test]
+    fn grant_and_withdraw_keep_the_list_within_budget_and_report_overrides() {
+        let mut state = UnitAbilities {
+            hero: None,
+            levels: vec![(*b"B001", 1)],
+            cooldowns: vec![],
+            autocast_disabled: vec![],
+            autocast_revision: 0,
+            autocast_order: None,
+            learnable: vec![],
+        };
+        assert_eq!(
+            state.grant(*b"A001", 1, 1),
+            Err("per-unit ability budget exceeded")
+        );
+        assert_eq!(state.grant(*b"A001", 1, 2), Ok(true));
+        assert_eq!(
+            state.grant(*b"A001", 1, 2),
+            Ok(false),
+            "a listed alias is not appended again"
+        );
+        assert_eq!(state.levels, vec![(*b"B001", 1), (*b"A001", 1)]);
+        assert!(state.withdraw(*b"B001"));
+        assert!(!state.withdraw(*b"B001"));
+        assert!(!state.has_alias_overrides(*b"A001"));
+        state.cooldowns.push((*b"A001", 1, 0));
+        assert!(state.has_alias_overrides(*b"A001"));
+        state.cooldowns.clear();
+        state.autocast_disabled.push(*b"A001");
+        assert!(state.has_alias_overrides(*b"A001"));
     }
 }
 
@@ -252,6 +287,41 @@ impl UnitAbilities {
             .find(|(alias, _)| *alias == ability)
             .map_or(0, |(_, level)| *level)
     }
+    /// Lists `ability` at `rank`. `Ok(false)` leaves the list unchanged when it is already listed.
+    fn grant(
+        &mut self,
+        ability: [u8; 4],
+        rank: i32,
+        capacity: usize,
+    ) -> Result<bool, &'static str> {
+        if self.levels.iter().any(|(alias, _)| *alias == ability) {
+            return Ok(false);
+        }
+        if self.levels.len() >= capacity {
+            return Err("per-unit ability budget exceeded");
+        }
+        self.levels
+            .try_reserve(1)
+            .map_err(|_| "ability allocation")?;
+        self.levels.push((ability, rank));
+        Ok(true)
+    }
+    /// Drops the list entry. The caller has already refused any state this entry keys.
+    fn withdraw(&mut self, ability: [u8; 4]) -> bool {
+        let Some(index) = self.levels.iter().position(|(alias, _)| *alias == ability) else {
+            return false;
+        };
+        self.levels.remove(index);
+        true
+    }
+    fn is_learnable(&self, ability: [u8; 4]) -> bool {
+        self.learnable.iter().any(|skill| skill.alias == ability)
+    }
+    /// Cooldown overrides or an autocast-off record keyed by `ability`.
+    fn has_alias_overrides(&self, ability: [u8; 4]) -> bool {
+        self.cooldowns.iter().any(|(alias, _, _)| *alias == ability)
+            || self.autocast_disabled.contains(&ability)
+    }
     fn capacity(&self) -> Result<i32, String> {
         self.learnable.iter().try_fold(0i32, |sum, skill| {
             sum.checked_add((skill.maximum - self.level(skill.alias)).max(0))
@@ -348,6 +418,8 @@ pub(super) struct Admission {
     attributes: [bool; 3],
     cooldown_natives: [bool; cooldown::NATIVES.len()],
     experience_natives: [bool; experience::NATIVES.len()],
+    /// Admitted `UnitAddAbility`, `UnitRemoveAbility` in that order.
+    ability_edit: [bool; 2],
 }
 
 impl ObjectHost {
@@ -516,6 +588,23 @@ impl ObjectHost {
                 cooldown_natives[index] = true;
             }
         }
+        let mut ability_edit = [false; 2];
+        for (index, name) in [ADD_ABILITY, REMOVE_ABILITY].into_iter().enumerate() {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["unit", "integer"],
+                    "boolean",
+                    false,
+                    Some(KIND),
+                )?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                ability_edit[index] = true;
+            }
+        }
         let mut experience_natives = [false; experience::NATIVES.len()];
         if rules.experience.is_some() {
             for (index, (name, params, result)) in experience::NATIVES.into_iter().enumerate() {
@@ -548,6 +637,7 @@ impl ObjectHost {
             attributes: [strength, agility, intelligence],
             cooldown_natives,
             experience_natives,
+            ability_edit,
         });
         Ok(self)
     }
@@ -675,6 +765,12 @@ impl ObjectHost {
             let (_, stat) = ATTRIBUTES[index];
             return input.attributes[index].then(|| self.hero_attribute(name, stat, args));
         }
+        if let Some(index) = [ADD_ABILITY, REMOVE_ABILITY]
+            .iter()
+            .position(|native| *native == name)
+        {
+            return input.ability_edit[index].then(|| self.unit_ability_edit(name, args));
+        }
         if !match name {
             LEARN => input.learn,
             LEVEL => input.level,
@@ -738,6 +834,111 @@ impl ObjectHost {
             return Err(self.hero_error(name, format!("hero attribute {stat} exceeds integer")));
         }
         Ok(Value::Int(value as i32))
+    }
+
+    /// Adds or removes one entry of the unit's ability list, which the command card, the
+    /// `GetUnitAbilityLevel` query and the family hosts read. Adding grants the alias at the
+    /// admitted first rank and returns false when it is already listed. Removing returns false
+    /// when the alias is not listed. Hero progression entries refuse, since their learn and
+    /// remove effects are not derived here. Removal also refuses the families whose runtime
+    /// state is keyed by the unit, and aliases holding cooldown or autocast-off records.
+    fn unit_ability_edit(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [unit, Value::Int(ability)] = args else {
+            return Err(self.hero_error(name, "unit and ability rawcode required".into()));
+        };
+        let unit = match unit {
+            Value::Null => return Ok(Value::Bool(false)),
+            Value::Handle(unit) => *unit,
+            _ => return Err(self.hero_error(name, "unit identity required".into())),
+        };
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
+            return Ok(Value::Bool(false));
+        }
+        let alias = ability.to_be_bytes();
+        let adding = name == ADD_ABILITY;
+        let (first_rank, capacity, hero_component) = {
+            let input = self
+                .heroes_admission()
+                .map_err(|detail| self.hero_error(name, detail))?;
+            if adding {
+                input
+                    .number(alias, "levels")
+                    .map_err(|detail| self.hero_error(name, detail))?;
+            }
+            (
+                input.rules.first_rank,
+                input.budget.abilities_per_unit,
+                alias == input.rules.hero_alias || input.rules.other_implicit.contains(&alias),
+            )
+        };
+        let record = self.created_unit(unit, name)?;
+        let state = record
+            .abilities
+            .as_ref()
+            .ok_or_else(|| self.hero_error(name, "ability state not admitted".into()))?;
+        let listed = state.levels().any(|(listed, _)| listed == alias);
+        if !adding && !listed {
+            return Ok(Value::Bool(false));
+        }
+        let alias_text = String::from_utf8_lossy(&alias).into_owned();
+        if hero_component || state.is_learnable(alias) {
+            return Err(self.hero_error(
+                name,
+                format!(
+                    "hero progression entry {alias_text}: add and remove effects are not derived"
+                ),
+            ));
+        }
+        if !adding {
+            if let Some(family) = self.unit_keyed_family(alias) {
+                return Err(self.hero_error(
+                    name,
+                    format!(
+                        "{family} runtime state of {alias_text} is keyed by the unit and not withdrawn"
+                    ),
+                ));
+            }
+            if state.has_alias_overrides(alias) {
+                return Err(self.hero_error(
+                    name,
+                    format!("cooldown or autocast-off record of {alias_text} is not withdrawn"),
+                ));
+            }
+        }
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!()
+        };
+        let state = record.abilities.as_mut().expect("checked");
+        let outcome = if adding {
+            state.grant(alias, first_rank, capacity)
+        } else {
+            Ok(state.withdraw(alias))
+        };
+        let changed = outcome.map_err(|detail| self.hero_error(name, detail.into()))?;
+        Ok(Value::Bool(changed))
+    }
+
+    /// The family whose host state is keyed by the unit rather than by the ability list.
+    fn unit_keyed_family(&self, ability: [u8; 4]) -> Option<&'static str> {
+        if ability == crate::map_startup_host::HOLY_LIGHT_ROW {
+            return Some("holy light");
+        }
+        if ability == crate::playercolor_host::objects::divine_shield::ABILITY {
+            return Some("divine shield");
+        }
+        if ability == crate::playercolor_host::objects::unit_summon::ABILITY {
+            return Some("summoning");
+        }
+        if self.mirror_alias(ability) {
+            return Some("mirror image");
+        }
+        if self.curse_alias_is_bound(ability) {
+            return Some("curse");
+        }
+        if self.chain_alias_is_bound(ability) {
+            return Some("chain lightning");
+        }
+        None
     }
 
     fn hero_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {

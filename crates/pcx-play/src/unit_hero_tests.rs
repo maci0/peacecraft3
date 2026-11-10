@@ -1661,3 +1661,97 @@ fn learned_buttons_accept_a_map_slot_and_skip_slots_without_art() {
         "L001 authors a slot but no art"
     );
 }
+
+const EDIT_NATIVES: &str = "native SelectHeroSkill takes unit u, integer ability returns nothing\nconstant native GetHeroLevel takes unit u returns integer\nconstant native GetHeroSkillPoints takes unit u returns integer\nconstant native GetUnitAbilityLevel takes unit u, integer ability returns integer\nnative UnitAddAbility takes unit u, integer ability returns boolean\nnative UnitRemoveAbility takes unit u, integer ability returns boolean\n";
+
+fn edit(
+    vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+    name: &str,
+    unit: Value,
+    ability: [u8; 4],
+) -> Result<bool, String> {
+    match vm
+        .host()
+        .inner
+        .native(name, &[unit, Value::Int(i32::from_be_bytes(ability))])
+    {
+        Ok(Value::Bool(changed)) => Ok(changed),
+        Ok(other) => panic!("boolean result expected, got {other:?}"),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn level_of(
+    vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+    unit: &Value,
+    ability: [u8; 4],
+) -> i32 {
+    let Value::Int(level) = vm
+        .host()
+        .inner
+        .native(
+            "GetUnitAbilityLevel",
+            &[unit.clone(), Value::Int(i32::from_be_bytes(ability))],
+        )
+        .unwrap()
+    else {
+        panic!("integer level")
+    };
+    level
+}
+
+#[test]
+fn unit_ability_edits_change_the_listed_levels_and_refuse_hero_entries() {
+    let mut vm = host(EDIT_NATIVES, "L001,L002", Overlay::default(), "", 8);
+    vm.call("setup", &[]).unwrap();
+    let plain = vm.global("N");
+    let hero = vm.global("H");
+    assert_eq!(level_of(&mut vm, &plain, *b"L002"), 0);
+    assert_eq!(
+        edit(&mut vm, "UnitAddAbility", plain.clone(), *b"L002"),
+        Ok(true)
+    );
+    assert_eq!(level_of(&mut vm, &plain, *b"L002"), 1);
+    assert_eq!(
+        edit(&mut vm, "UnitAddAbility", plain.clone(), *b"L002"),
+        Ok(false),
+        "an already listed alias is not granted again"
+    );
+    assert_eq!(
+        edit(&mut vm, "UnitRemoveAbility", plain.clone(), *b"L002"),
+        Ok(true)
+    );
+    assert_eq!(level_of(&mut vm, &plain, *b"L002"), 0);
+    assert_eq!(
+        edit(&mut vm, "UnitRemoveAbility", plain.clone(), *b"L002"),
+        Ok(false)
+    );
+    assert_eq!(
+        edit(&mut vm, "UnitRemoveAbility", plain.clone(), *b"L000"),
+        Ok(true),
+        "an authored entry is removed like any other"
+    );
+    assert_eq!(level_of(&mut vm, &plain, *b"L000"), 0);
+    assert_eq!(
+        edit(&mut vm, "UnitAddAbility", Value::Null, *b"L002"),
+        Ok(false)
+    );
+    assert!(
+        edit(&mut vm, "UnitAddAbility", plain.clone(), *b"Zzzz").is_err(),
+        "an alias absent from the ability data refuses"
+    );
+    assert_eq!(level_of(&mut vm, &plain, *b"L000"), 0);
+    assert!(
+        edit(&mut vm, "UnitAddAbility", hero.clone(), *b"L001").is_err(),
+        "a learnable hero skill refuses"
+    );
+    assert_eq!(
+        edit(&mut vm, "UnitRemoveAbility", hero.clone(), *b"L001"),
+        Ok(false),
+        "an unlisted hero skill has nothing to remove"
+    );
+    assert!(
+        edit(&mut vm, "UnitRemoveAbility", hero, *b"Yher").is_err(),
+        "the hero component refuses removal"
+    );
+}

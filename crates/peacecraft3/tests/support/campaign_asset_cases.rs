@@ -484,12 +484,13 @@ pub fn failed_sound_source_work_is_bounded_and_cached_files_do_not_charge_it() {
     let before = reads.load(std::sync::atomic::Ordering::SeqCst);
     call(&mut app, "repeat").unwrap();
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), before);
-    for _ in 0..126 {
+    // The file-sound load cap (`FILE_SOUND_RESOURCES`, 256) less the two loads setup takes.
+    for _ in 0..254 {
         assert!(call(&mut app, "absent").is_err());
     }
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
-        before + 126
+        before + 254
     );
     let error = call(&mut app, "absent").expect_err("source work cap");
     assert!(
@@ -499,7 +500,7 @@ pub fn failed_sound_source_work_is_bounded_and_cached_files_do_not_charge_it() {
     );
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
-        before + 126
+        before + 254
     );
     assert!(call(&mut app, "repeat").is_ok());
 }
@@ -738,7 +739,8 @@ pub fn parameter_source_work_is_bounded_without_rereading_tables() {
     let mut app = app();
     let reads = deliver(&mut app, &parameter_script(), parameter_assets(), 1);
     let before = reads.load(std::sync::atomic::Ordering::SeqCst);
-    for _ in 0..126 {
+    // The label cap (`SOUND_PARAMETER_LABELS`, 256) less the two loads setup takes.
+    for _ in 0..254 {
         assert!(call(&mut app, "missing_parameters").is_err());
     }
     assert!(

@@ -4,7 +4,7 @@ use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
-const ABILITY: [u8; 4] = *b"AHwe";
+pub(super) const ABILITY: [u8; 4] = *b"AHwe";
 const NATIVE: &str = "IssueImmediateOrder";
 
 pub(super) struct State {

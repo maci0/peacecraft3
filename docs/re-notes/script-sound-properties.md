@@ -94,3 +94,41 @@ label parameters, fades 10) and later 3D unit sounds. The application consumer i
 `script_audio.rs` still refuses 3D, fades, duration and parameter profiles per
 sound, so these sounds stay silent and appear in the refusal report. Spatial
 playback, listener mapping and audible parity remain open.
+
+## File and parameter sound budgets (2026-11-11)
+
+The session caps `CreateSound` file loads and `SetSoundParamsFromLabel` label loads
+(`campaign_host.rs`, `FILE_SOUND_RESOURCES` and `SOUND_PARAMETER_LABELS`). Each
+distinct member or label costs one loader call. Before this change both caps were
+128. Locked chapter `Maps\FrozenThrone\Campaign\OrcX01.w3x` refused at the 129th
+distinct file, `Sound\Dialogue\OrcExpCamp\OrcQuest10x\D10Thrall03.mp3` at
+`war3map.j:3368`, with `file sound bank policy exceeded`. Its 129th distinct label,
+`D10Thrall03`, then refused at `war3map.j:3369`.
+
+Measurement, from the 97 shipped campaign maps (44 `Maps\Campaign\*.w3m` in
+`War3Local.mpq`, 53 `Maps\FrozenThrone\Campaign\*.w3x` in `War3x.mpq` and
+`War3xLocal.mpq`; a duplicate resolves to `War3x.mpq`, the higher-priority archive):
+
+| Measure | Maximum map | Next largest |
+| --- | --- | --- |
+| Distinct `CreateSound` filenames | OrcX01: 166 | NightElf05: 83 |
+| Distinct `SetSoundParamsFromLabel` labels | OrcX01: 159 | NightElfX03: 82 |
+| Summed declared size of distinct `CreateSound` files | OrcX01: 14,016,014 bytes | 7,703,835 bytes (NightElfX03) |
+| Largest single `CreateSound` file | 4,505,310 bytes | n/a |
+
+Every one of the 3,907 `CreateSound` call sites takes a literal filename. No shipped
+campaign map calls `CreateSoundFromLabel` or `CreateSoundFilenameWithLabel`, so the
+label-sound bank (`sounds: 128`) is not exercised and is unchanged. Thirteen
+distinct `CreateSound` names resolve in no install archive (NightElf03: 10, Orc03:
+2, Orc01: 1); they are absent-member handles and carry no bytes. The byte totals
+use the declared sizes from `mpqxtract show`, not decoded sizes. The 128 MiB total
+and 16 MiB per-file caps are not reached by any measured map.
+
+Both caps are now 256, 1.5 to 1.6 times the largest measured count. The byte caps
+are unchanged. The method: strip the 0x200-byte `HM3W` header from each map, extract
+`war3map.j`, collect the `CreateSound( "..."` literals, and size each name from its
+winning archive. The sample scripts are not committed.
+
+The next first refusal for OrcX01 is `SetPlayerTechResearched` at `war3map.j:32540`
+(`global upgrade player-level effect routines are not decoded`). It is outside this
+budget.

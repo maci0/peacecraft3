@@ -127,3 +127,45 @@ supplies the existing campaign-drop fixtures explicitly. Unchanged Human03 with
 seed one, ROC mode and a known-absent isolated profile passes its hero setup and
 next refuses `UnitAddSleep` at `Blizzard.j:3524`. That startup gate exits 101;
 it does not establish campaign playability or original-client parity.
+
+## Unit ability list edits (2026-11-11)
+
+`UnitAddAbility` and `UnitRemoveAbility` (`common.j:1624-1625`, both
+`takes unit whichUnit, integer abilityId returns boolean`) dispatch in
+`unit_hero_host.rs` when `with_hero_skills` finds their declarations. The edit
+acts on the unit's ability list, the state that `GetUnitAbilityLevel`, the
+`learned_ability_buttons` command card and the family hosts read.
+
+- Add lists the alias at the admitted first rank, bounded by `abilities_per_unit`.
+  It returns false, with no change, when the alias is already listed.
+- Remove drops the list entry, so `GetUnitAbilityLevel` returns 0 afterward. It
+  returns false, with no change, when the alias is not listed.
+- A null or removed unit returns false.
+- The alias must resolve in the ability data for add. An unresolved alias refuses.
+- Hero progression entries refuse both edits: the hero component (`hero_alias`),
+  the implicit components and the learnable skills. Their learn and remove
+  effects are not derived here.
+- Remove refuses the families whose runtime state is keyed by the unit rather than
+  by the list: holy light, divine shield, summoning, mirror image, curse and chain
+  lightning. It also refuses an alias that holds a cooldown override or an
+  autocast-off record, because those records are not withdrawn.
+
+The boolean results are this recreation's contract. The retained native's return
+values for these calls are unverified. The game cache does not carry an edited
+list. `CachedUnit` restore compares the saved list with the authored `abilList`,
+so a saved game that contains an added or removed entry refuses to restore with
+`cached unit lacks a current source ability` or `cached ability is absent from
+current unit data`. The refusal is loud. Persisting the edited list is open.
+
+Evidence: the locked chapter `Maps\FrozenThrone\Campaign\UndeadX07c.w3x` ran its
+`UnitRemoveAbilityBJ` and `UnitAddAbilityBJ` calls (`war3map.j:2357-2361`, inside
+`Trig_Init_02_Units_Actions`) without a refusal, and its next first refusal is
+`SetDoodadAnimationRect` for doodad `ZZcd` at `war3map.j:2403`, with
+`unsupported doodad vertR selector` from `placed_doodads.rs`. `UnitMakeAbilityPermanent`
+is not declared by this chapter and has no implementation here.
+
+Tests: `unit_ability_edits_change_the_listed_levels_and_refuse_hero_entries` drives
+the natives through the VM on a non-hero and a hero unit.
+`grant_and_withdraw_keep_the_list_within_budget_and_report_overrides` covers the
+budget boundary and the override records. The family refusals have no synthetic
+test because the family constants need admitted host state.

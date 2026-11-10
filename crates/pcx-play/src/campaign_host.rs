@@ -8,6 +8,16 @@ use pcx_assets::Resolver;
 use pcx_script::value::FunctionId;
 use std::sync::Arc;
 
+/// Distinct `CreateSound` files one session may load. The shipped campaign maps request at most
+/// 166 distinct files (Maps\FrozenThrone\Campaign\OrcX01.w3x); the next largest set has 83.
+/// 256 leaves headroom above that measured maximum. See docs/re-notes/script-sound-properties.md.
+const FILE_SOUND_RESOURCES: usize = 256;
+
+/// Distinct `SetSoundParamsFromLabel` labels one session may load. The shipped campaign maps
+/// request at most 159 (Maps\FrozenThrone\Campaign\OrcX01.w3x); the next largest set has 82.
+/// See docs/re-notes/script-sound-properties.md.
+const SOUND_PARAMETER_LABELS: usize = 256;
+
 /// The map script text can start an AI player, so the session tracks spatial history
 /// from its first registration. The AI script is chosen at run time, so the gate is
 /// textual and conservative.
@@ -228,7 +238,7 @@ pub fn create_host(
             };
             let sound_sources = Arc::new(std::sync::OnceLock::new());
             let parameter_sources = Arc::clone(&sound_sources);
-            let mut remaining_parameters = 128usize;
+            let mut remaining_parameters = SOUND_PARAMETER_LABELS;
             host.objects_mut()
                 .admit_sound_parameter_loader(parameter_budget, move |label| {
                     remaining_parameters = remaining_parameters
@@ -287,11 +297,11 @@ pub fn create_host(
             )?;
             let sound_reader = Arc::clone(&reader);
             let sound_edition = edition.clone();
-            let mut remaining_sounds = 128usize;
+            let mut remaining_sounds = FILE_SOUND_RESOURCES;
             // Application source/decoder limits, not authored sound settings.
             host.objects_mut().admit_file_sound_loader(
                 crate::file_sounds::Budget {
-                    resources: 128,
+                    resources: FILE_SOUND_RESOURCES,
                     resource_bytes: 16 << 20,
                     total_bytes: 128 << 20,
                     metadata_bytes: 1 << 20,
