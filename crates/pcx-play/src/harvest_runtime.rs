@@ -355,7 +355,12 @@ impl ObjectHost {
             .ok_or_else(|| self.harvest_error("clock not admitted"))?;
         let setup = self
             .harvest_setup(&record.definition, owner)?
-            .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
+            .ok_or_else(|| {
+                self.harvest_error(format!(
+                    "unit {} has no Ahar or Ahrl harvest capability",
+                    String::from_utf8_lossy(&record.definition.rawcode)
+                ))
+            })?;
         if cargo.gold.is_none() {
             validate_rules(&setup.rules).map_err(|detail| self.harvest_error(detail))?;
         }
@@ -549,9 +554,12 @@ impl ObjectHost {
         }
         self.slow_chopping_for(unit)?;
         self.require_work_animation(unit)?;
-        let setup = self
-            .harvest_setup(&definition, owner)?
-            .ok_or_else(|| self.harvest_error("unit has no Ahar harvest capability"))?;
+        let setup = self.harvest_setup(&definition, owner)?.ok_or_else(|| {
+            self.harvest_error(format!(
+                "unit {} has no Ahar or Ahrl harvest capability",
+                String::from_utf8_lossy(&definition.rawcode)
+            ))
+        })?;
         let rules = setup.rules;
         validate_rules(&rules).map_err(|detail| self.harvest_error(detail))?;
         let reach = tree_reach(&rules);
@@ -1503,7 +1511,7 @@ mod tests {
     fn reach_uses_the_ahar_range() {
         let rules = HarvestRules {
             source: "synthetic".into(),
-            ahar_alias: "Ahar".into(),
+            harvest_alias: "Ahar".into(),
             damage: 7.0,
             lumber_capacity: 10,
             gold_capacity: 0,

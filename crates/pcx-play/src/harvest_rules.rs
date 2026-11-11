@@ -15,6 +15,7 @@ use pcx_objects::editor::{FieldKind, FieldSource, Overlay, SlkId};
 use pcx_sim::world::{Definition, FieldValue};
 
 const AHAR: &str = "Ahar";
+const AHRL: &str = "Ahrl";
 const AWHA: &str = "Awha";
 const ARTN: &str = "Artn";
 const SENTINEL: &str = "-";
@@ -22,9 +23,11 @@ const SENTINEL: &str = "-";
 #[derive(Debug, Clone, PartialEq)]
 pub struct HarvestRules {
     pub source: String,
-    pub ahar_alias: String,
+    /// The `Ahar` or `Ahrl` alias the numbers come from.
+    pub harvest_alias: String,
     pub damage: f32,
     pub lumber_capacity: i32,
+    /// `Ahar` `DataC1`. Zero for `Ahrl`, whose class never reads `DataC`.
     pub gold_capacity: i32,
     pub search_radius: f32,
     pub range: f32,
@@ -1163,7 +1166,7 @@ fn work_weapon_from_tables(
 }
 
 impl HarvestRules {
-    /// `Ok(None)` when the worker has no `Ahar` capability.
+    /// `Ok(None)` when the worker has neither `Ahar` nor `Ahrl`.
     pub fn from_tables(
         tables: &DefaultTables,
         worker_code: [u8; 4],
@@ -1299,18 +1302,36 @@ impl HarvestRules {
         aliases: &[String],
         work_weapon: Option<WorkWeapon>,
     ) -> Result<Option<Self>, HarvestError> {
-        let Some(ahar_alias) = find_alias_with_code(tables, abilities, aliases, AHAR)? else {
-            return Ok(None);
+        // `Ahrl` is `CAbilityHarvestLumber`; `Ahar` (`CAbilityHarvest`) extends it with `DataC`, the
+        // gold capacity. See docs/re-notes/ghoul-harvest.md.
+        let (harvest_alias, carries_gold) = match (
+            find_alias_with_code(tables, abilities, aliases, AHAR)?,
+            find_alias_with_code(tables, abilities, aliases, AHRL)?,
+        ) {
+            (Some(alias), None) => (alias, true),
+            (None, Some(alias)) => (alias, false),
+            (None, None) => return Ok(None),
+            (Some(_), Some(alias)) => {
+                return Err(HarvestError::Ambiguous {
+                    rawcode: alias,
+                    column: "abilList".to_string(),
+                    detail: "both Ahar and Ahrl harvest abilities".to_string(),
+                });
+            }
         };
         let cell = |value: AbilityValue<'_>, kind: pcx_objects::editor::FieldKind, column: &str| {
             match abilities {
-                Some(overlay) => overlay_ability_cell(tables, overlay, &ahar_alias, value, 1, kind),
+                Some(overlay) => {
+                    overlay_ability_cell(tables, overlay, &harvest_alias, value, 1, kind)
+                }
                 None => match value {
                     AbilityValue::Data(ordinal) => {
                         let stem = format!("Data{}", char::from(b'A' + ordinal - 1));
-                        ability_level_cell(tables, &ahar_alias, &stem, 1)
+                        ability_level_cell(tables, &harvest_alias, &stem, 1)
                     }
-                    AbilityValue::Scalar(stem) => ability_level_cell(tables, &ahar_alias, stem, 1),
+                    AbilityValue::Scalar(stem) => {
+                        ability_level_cell(tables, &harvest_alias, stem, 1)
+                    }
                 }
                 .map_err(|error| match error {
                     HarvestError::Missing {
@@ -1325,7 +1346,7 @@ impl HarvestRules {
             }
         };
         let damage = parse_i32(
-            &ahar_alias,
+            &harvest_alias,
             &cell(
                 AbilityValue::Data(1),
                 pcx_objects::editor::FieldKind::Int,
@@ -1334,7 +1355,7 @@ impl HarvestRules {
             "DataA1",
         )? as f32;
         let lumber_capacity = parse_nonneg_i32(
-            &ahar_alias,
+            &harvest_alias,
             &cell(
                 AbilityValue::Data(2),
                 pcx_objects::editor::FieldKind::Int,
@@ -1342,17 +1363,21 @@ impl HarvestRules {
             )?,
             "DataB1",
         )?;
-        let gold_capacity = parse_nonneg_i32(
-            &ahar_alias,
-            &cell(
-                AbilityValue::Data(3),
-                pcx_objects::editor::FieldKind::Int,
+        let gold_capacity = if carries_gold {
+            parse_nonneg_i32(
+                &harvest_alias,
+                &cell(
+                    AbilityValue::Data(3),
+                    pcx_objects::editor::FieldKind::Int,
+                    "DataC1",
+                )?,
                 "DataC1",
-            )?,
-            "DataC1",
-        )?;
+            )?
+        } else {
+            0
+        };
         let range = parse_f32(
-            &ahar_alias,
+            &harvest_alias,
             &cell(
                 AbilityValue::Scalar("Rng"),
                 pcx_objects::editor::FieldKind::Unreal,
@@ -1361,7 +1386,7 @@ impl HarvestRules {
             "Rng1",
         )?;
         let search_radius = parse_f32(
-            &ahar_alias,
+            &harvest_alias,
             &cell(
                 AbilityValue::Scalar("Area"),
                 pcx_objects::editor::FieldKind::Unreal,
@@ -1370,7 +1395,7 @@ impl HarvestRules {
             "Area1",
         )?;
         let work_duration = parse_f32(
-            &ahar_alias,
+            &harvest_alias,
             &cell(
                 AbilityValue::Scalar("Dur"),
                 pcx_objects::editor::FieldKind::Unreal,
@@ -1381,7 +1406,7 @@ impl HarvestRules {
         let _ = raw;
         Ok(Some(Self {
             source: source_of(tables),
-            ahar_alias,
+            harvest_alias,
             damage,
             lumber_capacity,
             gold_capacity,

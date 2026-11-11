@@ -431,7 +431,7 @@ fn harvest_rules_read_source_cells() {
     let rules = HarvestRules::from_tables(&tables, *b"hpea")
         .unwrap()
         .expect("Ahar");
-    assert_eq!(rules.ahar_alias, "Ahar");
+    assert_eq!(rules.harvest_alias, "Ahar");
     assert_eq!(rules.damage, 7.0);
     assert_eq!(rules.lumber_capacity, 25);
     assert_eq!(rules.gold_capacity, 30);
@@ -459,7 +459,7 @@ fn custom_ahar_alias_reads_from_the_resolved_alias() {
     let rules = HarvestRules::from_tables(&tables, *b"hpea")
         .unwrap()
         .expect("Ahar");
-    assert_eq!(rules.ahar_alias, "Harv");
+    assert_eq!(rules.harvest_alias, "Harv");
     assert_eq!(rules.damage, 3.0);
     assert_eq!(rules.lumber_capacity, 11);
     assert_eq!(rules.gold_capacity, 12);
@@ -1179,7 +1179,7 @@ fn definition_reads_nonstock_ahar_damage_and_capacity() {
     let rules = HarvestRules::from_definition(&tables, &Overlay::default(), &definition)
         .unwrap()
         .expect("nonstock Ahar");
-    assert_eq!(rules.ahar_alias, "Ahar");
+    assert_eq!(rules.harvest_alias, "Ahar");
     assert_eq!(rules.damage, 13.0);
     assert_eq!(rules.lumber_capacity, 41);
     assert_eq!(rules.gold_capacity, 7);
@@ -1594,4 +1594,36 @@ fn definition_with_an_empty_upgrade_list_keeps_reading_rules() {
         })
         .unwrap();
     assert_eq!(rules.damage, 7.0);
+}
+
+#[test]
+fn ahrl_reads_the_lumber_cells_and_never_reads_datac() {
+    // Ahrl (CAbilityHarvestLumber) loads Area, DataA and DataB only; DataC is "-" in its row.
+    let ability_rows = vec![ahar_ability("2", "20", "-", "Ahrl", "Ahrl")];
+    let unit_rows = vec![vec!["ugho", "Ghoul", "Ahrl", "-"]];
+    let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
+    let rules = HarvestRules::from_tables(&tables, *b"ugho")
+        .unwrap()
+        .expect("Ahrl");
+    assert_eq!(rules.harvest_alias, "Ahrl");
+    assert_eq!(rules.damage, 2.0);
+    assert_eq!(rules.lumber_capacity, 20);
+    assert_eq!(rules.gold_capacity, 0);
+    assert_eq!(rules.search_radius, 1000.0);
+    assert_eq!(rules.range, 200.0);
+    assert_eq!(rules.work_duration, 3.5);
+}
+
+#[test]
+fn a_unit_with_both_harvest_classes_is_ambiguous() {
+    let ability_rows = vec![
+        ahar_ability("2", "20", "-", "Ahrl", "Ahrl"),
+        ahar_ability("7", "25", "30", "Ahar", "Ahar"),
+    ];
+    let unit_rows = vec![vec!["ugho", "Ghoul", "Ahrl,Ahar", "-"]];
+    let tables = tables_with(&ability_rows, &unit_rows, &[], &[]);
+    assert!(matches!(
+        HarvestRules::from_tables(&tables, *b"ugho"),
+        Err(HarvestError::Ambiguous { .. })
+    ));
 }

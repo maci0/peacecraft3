@@ -166,6 +166,10 @@ fn harvest_tables_for_search_range(
         &[
             "Ahar", "Ahar", "1", "0", "0", damage, capacity, "30", range, search, duration,
         ],
+        // Harvest Lumber (ghoul): 3 damage, 12 lumber, no DataC.
+        &[
+            "Ahrl", "Ahrl", "1", "0", "0", "3", "12", "-", range, search, duration,
+        ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
         &["Arlm", "Artn", "1", "0", "0", "0", "1", "-", "-", "-", "-"],
         // Wisp Harvest: 4.75 lumber (truncated to 4) every 3 seconds within reach 30; DataB and
@@ -248,7 +252,7 @@ fn harvest_tables_for_search_range(
             "4",
             "1",
             "0",
-            "Ahar",
+            "Ahar,Ahrl",
             "-",
             "int",
             "stats",
@@ -261,7 +265,7 @@ fn harvest_tables_for_search_range(
             "4",
             "2",
             "0",
-            "Ahar",
+            "Ahar,Ahrl",
             "-",
             "int",
             "stats",
@@ -287,7 +291,7 @@ fn harvest_tables_for_search_range(
             "4",
             "0",
             "0",
-            "Ahar",
+            "Ahar,Ahrl",
             "-",
             "unreal",
             "stats",
@@ -300,7 +304,7 @@ fn harvest_tables_for_search_range(
             "4",
             "0",
             "0",
-            "Ahar",
+            "Ahar,Ahrl",
             "-",
             "unreal",
             "stats",
@@ -313,7 +317,7 @@ fn harvest_tables_for_search_range(
             "4",
             "0",
             "0",
-            "Ahar",
+            "Ahar,Ahrl",
             "-",
             "unreal",
             "stats",
@@ -3307,4 +3311,83 @@ fn a_worker_model_without_an_attack_sequence_harvests_and_keeps_its_animation() 
 
     assert_eq!(tree_life(&mut vm, tree), 62.0);
     assert!(!animation_name(&mut vm, worker).starts_with("Attack"));
+}
+
+/// `Ahrl` is `CAbilityHarvestLumber` (`docs/re-notes/ghoul-harvest.md`): the immediate
+/// `autoharvestlumber` order is accepted through its `DataB` lumber capacity, the carried load
+/// is that capacity, and a gold order is refused because the class has no gold capacity.
+#[test]
+fn a_ghoul_with_ahrl_harvests_lumber_at_its_own_capacity_and_refuses_gold() {
+    let (mut vm, tree) = open_harvest();
+    let ghoul = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    create_unit(&mut vm, *b"htow", 36.0, 32.0);
+    gold_role(&mut vm, ghoul, "Ahrl", false, None);
+    let life_before = vm
+        .host()
+        .inner
+        .destructable_state(tree)
+        .unwrap()
+        .life
+        .unwrap();
+    let Value::Handle(player) = vm.host().inner.native("Player", &[Value::Int(0)]).unwrap() else {
+        panic!("player handle")
+    };
+    let lumber = vm
+        .host()
+        .inner
+        .player_resource_value(player, "PLAYER_STATE_RESOURCE_LUMBER")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(ghoul), Value::Int(12347)]
+            )
+            .unwrap(),
+        Value::Bool(false),
+        "autoharvestgold needs a gold capacity"
+    );
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(ghoul), Value::Int(900)]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    let mut now = 0.0;
+    while now < 60.0
+        && vm
+            .host()
+            .inner
+            .player_resource_value(player, "PLAYER_STATE_RESOURCE_LUMBER")
+            .unwrap()
+            == Some(lumber)
+    {
+        now += 0.5;
+        tick(&mut vm, now);
+    }
+    assert_eq!(
+        vm.host()
+            .inner
+            .player_resource_value(player, "PLAYER_STATE_RESOURCE_LUMBER")
+            .unwrap(),
+        Some(lumber + 12),
+        "the first deposit is Ahrl DataB1"
+    );
+    let damage = life_before
+        - vm.host()
+            .inner
+            .destructable_state(tree)
+            .unwrap()
+            .life
+            .unwrap();
+    assert!(
+        damage > 0.0 && damage % 3.0 == 0.0,
+        "each swing does Ahrl DataA1: {damage}"
+    );
 }
