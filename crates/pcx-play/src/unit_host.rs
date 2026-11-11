@@ -214,6 +214,8 @@ pub struct ExecutedUnit {
     pub shown: bool,
     /// Start of an explicit PauseUnit interval on host game time.
     pub paused_since: Option<f64>,
+    /// `UnitSetUsesAltIcon` state. Its presentation consumer is not decoded.
+    pub uses_alt_icon: bool,
     /// Natural sleep state when admitted from the selected unit definition.
     pub sleep: Option<super::unit_sleep::UnitSleep>,
     /// Live life/mana when vitals are admitted.
@@ -404,6 +406,7 @@ impl ObjectHost {
         self.unit_vision_declaration(&declaration_source)?;
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
+        self.unit_alt_icon_declarations(&declaration_source)?;
         self.unit_revive_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
@@ -1340,6 +1343,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_pause_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_alt_icon_native(name, args) {
             return Some(result);
         }
         if let Some(result) = self.unit_revive_native(name, args) {
@@ -2543,6 +2549,7 @@ impl ObjectHost {
                 activity: None,
                 shown: true,
                 paused_since: None,
+                uses_alt_icon: false,
                 sleep: None,
                 vitals: None,
                 permanent_strength: 0,

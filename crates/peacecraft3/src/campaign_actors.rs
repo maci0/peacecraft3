@@ -2507,6 +2507,7 @@ mod tests {
             activity: None,
             shown: true,
             paused_since: None,
+            uses_alt_icon: false,
             sleep: None,
             vitals: None,
             combat: None,

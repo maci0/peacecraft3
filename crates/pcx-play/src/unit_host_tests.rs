@@ -156,6 +156,7 @@ native QueueUnitAnimation takes unit whichUnit, string whichAnimation returns no
 native SetUnitLookAt takes unit u, string bone, unit target, real x, real y, real z returns nothing
 native ResetUnitLookAt takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
+native UnitSetUsesAltIcon takes unit whichUnit, boolean flag returns nothing
 ",
     );
     let ctx = context(300, &common, MAP, "unit-catalog");
@@ -265,6 +266,32 @@ fn unit_animation_selects_the_retained_model_without_new_unit_or_handle() {
     )
     .unwrap();
     assert_eq!(host.inner().handles(), before);
+}
+
+#[test]
+fn unit_set_uses_alt_icon_stores_the_flag_on_the_unit_only() {
+    let (mut h, _) = animation_vm(false);
+    h.vm.init_globals().unwrap();
+    h.vm.call("main", &[]).unwrap();
+    let unit = h.vm.global("U");
+    let Value::Handle(id) = unit else {
+        panic!("unit")
+    };
+    let host = &mut h.vm.host().inner;
+    assert!(!host.executed_unit(id).unwrap().uses_alt_icon);
+    host.native("UnitSetUsesAltIcon", &[unit.clone(), Value::Bool(true)])
+        .unwrap();
+    assert!(host.executed_unit(id).unwrap().uses_alt_icon);
+    host.native("UnitSetUsesAltIcon", &[unit.clone(), Value::Bool(false)])
+        .unwrap();
+    assert!(!host.executed_unit(id).unwrap().uses_alt_icon);
+    host.native("UnitSetUsesAltIcon", &[Value::Null, Value::Bool(true)])
+        .unwrap();
+    let wrong_family = host
+        .native("UnitSetUsesAltIcon", &[Value::Int(0), Value::Bool(true)])
+        .unwrap_err();
+    assert!(wrong_family.contains("another family"), "{wrong_family}");
+    assert!(!host.executed_unit(id).unwrap().uses_alt_icon);
 }
 
 #[test]

@@ -1516,6 +1516,9 @@ pub use unit_look_at::UnitLookAt;
 #[path = "unit_pause_host.rs"]
 mod unit_pause;
 
+#[path = "unit_alt_icon_host.rs"]
+mod unit_alt_icon;
+
 #[path = "placement_events_host.rs"]
 mod placement_events;
 

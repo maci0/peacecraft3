@@ -317,6 +317,8 @@ impl ObjectHost {
             // unit_pause_host.rs
             "IsUnitPaused",
             "PauseUnit",
+            // unit_alt_icon_host.rs
+            "UnitSetUsesAltIcon",
             // unit_look_at_host.rs
             "ResetUnitLookAt",
             "SetUnitLookAt",
