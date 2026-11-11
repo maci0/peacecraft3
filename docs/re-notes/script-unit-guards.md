@@ -28,6 +28,37 @@ These are shipped instruction observations from the qualified local image,
 not a recording of native execution. Private disassembly inputs/output stay
 under `.scratch/unit-guard-host/` and are not committed.
 
+## RecycleGuardPosition
+
+Registration push at `0x4a101e` (name `0xe77690`), handler `0x4a4e30`. A null or
+removed unit ends the call (`0x483940`). Otherwise `0xab5f80` runs three steps on the
+unit object, in this order:
+
+1. `0xab6a50`, the removal `RemoveGuardPosition` uses (AI manager release at
+   `0xac1500`, which stops the unit, and AI-list removal at `0xacc910`).
+2. `0x68e1a0` with argument 0. It walks the list at unit `+0x3e8` and clears bit `0x2`
+   of each entry's flag word (`+0x20`) when the entry's counter at `+0x3c` is not
+   positive, then calls the entry's virtual at `+0xc8`. Registration calls it with
+   argument 1 and the removal event handler (`0xac46fd`) with 0. The meaning of that
+   flag and of the list entries is not decoded.
+3. `0xab4550`, the registration creation (`0x687f68`) and owner transfer
+   (`0x69d795`) call. It skips a unit with `+0x164` bit `0x100` or with bit `0x10` in
+   the unit's virtual `+0x114` result, then registers the unit with its owner's AI
+   state (`0xabb260`, newest registration first, see `ai-construction.md`). It sets
+   `+0x164` bit `0x4` and calls `0x68e1a0` with 1 only when that bit was clear.
+   When the owner has no AI state it notifies each of the 24 player slots instead
+   (`0x6bffb0`); that branch is not modeled.
+
+Recreation (`unit_guard_host.rs`): the unit takes the `RemoveGuardPosition` release
+(stop order, patrol, inventory order and combat target cleared), then the creation
+and transfer enrollment path re-enrolls it: an eligible computer unit gets a fresh
+guard record at its current position (`released` false, no return in progress,
+chase timer reset), and every unit becomes the newest town registration of its
+owner. A human-owned or ineligible unit keeps no guard record. Open: the ability list
+flag of step 2 (`0x68e1a0`) has no recreation state, and step 3 sets the `+0x164`
+bit `0x4` that is not modeled, so a unit recycled after registration keeps the flag
+cleared by step 2 in the original.
+
 ## Observable recreation
 
 The bounded host tracks a computer-owned, live, armed mobile unit's accepted

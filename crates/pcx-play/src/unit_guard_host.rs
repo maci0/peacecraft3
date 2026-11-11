@@ -6,6 +6,7 @@ use pcx_script::{HandleId, Value};
 use pcx_sim::world::Definition;
 const REMOVE: &str = "RemoveGuardPosition";
 const REMOVE_ALL: &str = "RemoveAllGuardPositions";
+const RECYCLE: &str = "RecycleGuardPosition";
 #[derive(Clone, Copy, Debug)]
 pub struct GuardBudget {
     pub max_units: usize,
@@ -597,13 +598,19 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name != REMOVE && name != REMOVE_ALL {
+        if name != REMOVE && name != REMOVE_ALL && name != RECYCLE {
             return None;
         }
         self.guards.as_ref()?;
+        if name == RECYCLE && self.inner.program.natives().get(RECYCLE).is_none() {
+            return None;
+        }
         Some((|| {
             if name == REMOVE_ALL {
                 return self.remove_all_guard_positions(args);
+            }
+            if name == RECYCLE {
+                self.check_recycle_declaration()?;
             }
             let unit = match args {
                 [Value::Null] => return Ok(Value::Null),
@@ -615,9 +622,62 @@ impl ObjectHost {
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }
-            self.release_guard_position(unit, name)?;
+            if name == RECYCLE {
+                self.recycle_guard_position(unit)?;
+            } else {
+                self.release_guard_position(unit, name)?;
+            }
             Ok(Value::Null)
         })())
+    }
+
+    fn check_recycle_declaration(&self) -> Result<(), Error> {
+        Self::contract(
+            &self.inner,
+            RECYCLE,
+            &["unit"],
+            "nothing",
+            false,
+            Some("unit"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(RECYCLE).map(|n| &n.source) != natives.get(REMOVE).map(|n| &n.source) {
+            return Err(self.inner.error(RECYCLE, Failure::Source));
+        }
+        Ok(())
+    }
+
+    /// `RecycleGuardPosition` (`0x4a4e30`) runs three steps on the unit object:
+    /// the `RemoveGuardPosition` removal (`0xab6a50`), a flag write on the unit's
+    /// ability list (`0x68e1a0`, argument 0), then the registration used at creation
+    /// and owner transfer (`0xab4550`). The removal stops the unit. Registration
+    /// re-enrolls an eligible computer unit at its current position with a fresh
+    /// chase state, and makes it the newest registration of its owner. The ability
+    /// list flag has no state in the recreation.
+    fn recycle_guard_position(&mut self, unit: HandleId) -> Result<(), Error> {
+        self.release_guard_position(unit, RECYCLE)?;
+        let owner = self.executed_unit(unit)?.owner;
+        let guard = if self.guard_managed_owner(owner)? {
+            let record = self.executed_unit(unit)?;
+            let eligible = candidate(&record.definition, record.combat.as_ref())
+                .map_err(|error| self.inner.error(RECYCLE, Failure::UnitActivity(error)))?;
+            if eligible {
+                let position = record.position.ok_or_else(|| {
+                    self.inner.error(
+                        RECYCLE,
+                        Failure::UnitActivity("guard recycle requires accepted placement".into()),
+                    )
+                })?;
+                self.prepare_unit_guard(Some(unit), owner, position, true)?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.record_town_registration(unit);
+        self.publish_unit_guard(unit, guard);
+        Ok(())
     }
 
     /// `RemoveAllGuardPositions(player)`: the single-unit release for every unit the managed

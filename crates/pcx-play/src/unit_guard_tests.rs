@@ -80,6 +80,7 @@ fn guarded_configured_with_orders(
         DECLARATIONS,
         r#"
 native RemoveGuardPosition takes unit u returns nothing
+native RecycleGuardPosition takes unit u returns nothing
 native RemoveAllGuardPositions takes player num returns nothing
 native RemoveUnit takes unit u returns nothing
 native SetUnitOwner takes unit u, player p, boolean color returns nothing
@@ -749,6 +750,78 @@ fn ownership_reenrolls_at_current_position_and_removal_releases_record() {
     h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
     assert!(h.guard_state().unwrap().get(a).is_none());
 }
+#[test]
+fn recycle_stops_the_unit_and_re_enrolls_it_at_its_current_position() {
+    let (mut vm, a, b) = guarded();
+    attack(&mut vm, a, b);
+    step(&mut vm, 0.5);
+    let h = &mut vm.host().inner;
+    let first_home = h.guard_state().unwrap().get(a).unwrap().home;
+    let position = h.executed_unit(a).unwrap().position.unwrap();
+    assert_ne!(position, first_home, "the unit left its post");
+    let before = h.town_registration_sequence(a).unwrap().unwrap();
+    h.native("RecycleGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    let after = h.town_registration_sequence(a).unwrap().unwrap();
+    assert!(
+        after.1 > before.1,
+        "recycle makes the unit the newest registration"
+    );
+    let activity = h.executed_unit(a).unwrap().activity.as_ref().unwrap();
+    assert!(!activity.moving(), "recycle stops the unit like a release");
+    assert!(
+        h.executed_unit(a)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .target
+            .is_none()
+    );
+    let guard = h.guard_state().unwrap().get(a).unwrap();
+    assert_eq!(guard.home, position);
+    assert!(!guard.released, "recycle enrolls the unit again");
+    assert!(!guard.returning);
+    // Unlike `RemoveGuardPosition`, the recycled unit is guarded again.
+    h.native("RemoveGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert!(h.guard_state().unwrap().get(a).unwrap().released);
+}
+
+#[test]
+fn recycle_of_a_human_owned_unit_enrolls_nothing() {
+    let (mut vm, a, _) = guarded();
+    let h = &mut vm.host().inner;
+    let user = h.native("Player", &[Value::Int(5)]).unwrap();
+    h.native(
+        "SetUnitOwner",
+        &[Value::Handle(a), user, Value::Bool(false)],
+    )
+    .unwrap();
+    assert!(h.guard_state().unwrap().get(a).is_none());
+    h.native("RecycleGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert!(h.guard_state().unwrap().get(a).is_none());
+}
+
+#[test]
+fn recycle_of_a_null_or_removed_unit_is_a_no_op_and_bad_calls_refuse() {
+    let (mut vm, a, _) = guarded();
+    let h = &mut vm.host().inner;
+    let guard = *h.guard_state().unwrap().get(a).unwrap();
+    h.native("RecycleGuardPosition", &[Value::Null]).unwrap();
+    assert_eq!(*h.guard_state().unwrap().get(a).unwrap(), guard);
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    h.native("RecycleGuardPosition", &[Value::Handle(a)])
+        .unwrap();
+    assert!(h.guard_state().unwrap().get(a).is_none());
+
+    let player = h.native("Player", &[Value::Int(4)]).unwrap();
+    for args in [vec![], vec![Value::Int(1)], vec![player]] {
+        assert!(h.native("RecycleGuardPosition", &args).is_err());
+    }
+}
+
 #[test]
 fn invalid_guard_calls_leave_current_activity_and_membership_unchanged() {
     let (mut vm, a, b) = guarded();
