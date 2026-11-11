@@ -10,6 +10,8 @@ pub struct UnitModels {
     reader: std::sync::Arc<Resolver>,
     edition: String,
     models: std::collections::BTreeMap<String, std::sync::Arc<crate::unit_model::Model>>,
+    /// Keys of model files no layer holds; such a unit has no model.
+    absent: std::collections::BTreeSet<String>,
     remaining_bytes: usize,
 }
 
@@ -19,6 +21,7 @@ impl UnitModels {
             reader,
             edition,
             models: Default::default(),
+            absent: Default::default(),
             remaining_bytes: 128 << 20,
         }
     }
@@ -30,17 +33,46 @@ impl UnitModels {
         let Some(path) = crate::unit_model::model_path(definition)? else {
             return Ok(None);
         };
+        self.read(path)
+    }
+
+    fn read(
+        &mut self,
+        path: String,
+    ) -> Result<Option<std::sync::Arc<crate::unit_model::Model>>, String> {
         let key = path.replace('\\', "/").to_ascii_lowercase();
         if let Some(model) = self.models.get(&key) {
             return Ok(Some(std::sync::Arc::clone(model)));
         }
+        if self.absent.contains(&key) {
+            return Ok(None);
+        }
         if self.models.len() >= 512 {
             return Err("unit model count budget exceeded".into());
         }
-        let asset = self
+        let asset = match self
             .reader
             .resolve_bounded(&path, self.remaining_bytes.min(16 << 20) as u64)
-            .map_err(|e| format!("{path}: {e}"))?;
+        {
+            Ok(asset) => asset,
+            // The native model loader (`0x913660`) logs a missing file and returns no model
+            // (`0x914590`), and the sprite setter (`0x967210`) then keeps no model. Only a
+            // name no layer holds is absence; layer, budget and read failures keep refusing.
+            Err(pcx_assets::Error::MissingAsset { .. }) => {
+                // The native loader retries the other model extension (`0x8ec7d0`). The text
+                // form is not parsed here, so a text model that does exist refuses.
+                let text = format!("{}.mdl", path.strip_suffix(".mdx").unwrap_or(&path));
+                if !matches!(
+                    self.reader.resolve_bounded(&text, 1),
+                    Err(pcx_assets::Error::MissingAsset { .. })
+                ) {
+                    return Err(format!("{path}: only a text model {text} exists"));
+                }
+                self.absent.insert(key);
+                return Ok(None);
+            }
+            Err(e) => return Err(format!("{path}: {e}")),
+        };
         let (_, origin) = identity(&asset, &self.edition, 16 << 10)?;
         let size = asset.bytes.len();
         let model = std::sync::Arc::new(crate::unit_model::Model::read(
@@ -522,5 +554,72 @@ mod preparation_tests {
             error.starts_with(r"CreateSound Sound\listed.wav:"),
             "{error}"
         );
+    }
+
+    struct ModelLayer {
+        info: pcx_assets::SourceInfo,
+        listed: Vec<String>,
+    }
+
+    impl pcx_assets::ContentSource for ModelLayer {
+        fn info(&self) -> &pcx_assets::SourceInfo {
+            &self.info
+        }
+        fn paths(&self) -> Result<Vec<String>, pcx_assets::SourceError> {
+            Ok(self.listed.clone())
+        }
+        fn read(
+            &self,
+            _member: &str,
+        ) -> Result<Option<pcx_assets::SourceContent>, pcx_assets::SourceError> {
+            Err(pcx_assets::SourceError::InvalidInput {
+                detail: "unreadable".into(),
+            })
+        }
+    }
+
+    fn models(listed: &[&str]) -> UnitModels {
+        let reader = pcx_assets::Resolver::new(
+            pcx_assets::GameMode::default(),
+            None,
+            vec![pcx_assets::ArchiveLayer {
+                priority: 1,
+                source: Box::new(ModelLayer {
+                    info: pcx_assets::SourceInfo {
+                        id: "synthetic".into(),
+                        kind: pcx_assets::LayerKind::Mpq,
+                        origin: "synthetic.mpq".into(),
+                        version: Some("fixture".into()),
+                    },
+                    listed: listed.iter().map(|m| (*m).into()).collect(),
+                }),
+            }],
+        )
+        .unwrap();
+        UnitModels::new(std::sync::Arc::new(reader), "synthetic".into())
+    }
+
+    #[test]
+    fn a_unit_model_no_layer_holds_leaves_the_unit_without_a_model() {
+        let mut models = models(&[r"Units\other.mdx"]);
+        assert!(models.read(r"Units\Blank.mdx".into()).unwrap().is_none());
+        assert!(models.absent.contains("units/blank.mdx"));
+        assert!(models.read(r"Units\Blank.mdx".into()).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_listed_model_that_cannot_be_read_still_refuses() {
+        let mut models = models(&[r"Units\Listed.mdx"]);
+        let error = models.read(r"Units\Listed.mdx".into()).unwrap_err();
+        assert!(error.starts_with(r"Units\Listed.mdx:"), "{error}");
+        assert!(models.absent.is_empty());
+    }
+
+    #[test]
+    fn a_text_only_model_refuses_instead_of_counting_as_absent() {
+        let mut models = models(&[r"Units\TextOnly.mdl"]);
+        let error = models.read(r"Units\TextOnly.mdx".into()).unwrap_err();
+        assert!(error.contains("only a text model"), "{error}");
+        assert!(models.absent.is_empty());
     }
 }
