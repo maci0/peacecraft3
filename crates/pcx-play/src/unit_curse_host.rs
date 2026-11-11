@@ -825,11 +825,20 @@ impl ObjectHost {
             .map_or(0.0, |slow| slow.attack)
     }
 
-    /// Whether an active slow owns the unit's move speed.
+    /// Whether an active slow or orb of frost owns the unit's move speed.
     pub(super) fn unit_speed_modified(&self, unit: HandleId) -> bool {
+        self.unit_frosted(unit)
+            || self
+                .curses
+                .as_ref()
+                .is_some_and(|state| state.slows.contains_key(&unit))
+    }
+
+    /// Whether an active polymorph owns the unit's form.
+    pub(super) fn unit_polymorphed(&self, unit: HandleId) -> bool {
         self.curses
             .as_ref()
-            .is_some_and(|state| state.slows.contains_key(&unit))
+            .is_some_and(|state| state.polymorphs.contains_key(&unit))
     }
 
     pub(super) fn advance_curses(&mut self, now: f64) -> Result<(), Error> {
@@ -1286,6 +1295,9 @@ impl ObjectHost {
         {
             return Err(self.curse_error("slow on a polymorphed unit is not modelled"));
         }
+        if self.unit_frosted(target) {
+            return Err(self.curse_error("slow on a frosted unit is not modelled"));
+        }
         self.end_slow(target)?;
         self.detach_unit_buff(target, buff);
         self.attach_unit_buff(target, Self::curse_buff(buff))?;
@@ -1349,6 +1361,9 @@ impl ObjectHost {
         expires_at: f64,
         ground_form: [u8; 4],
     ) -> Result<(), Error> {
+        if self.unit_frosted(target) {
+            return Err(self.curse_error("polymorph on a frosted unit is not modelled"));
+        }
         let state = self.curses.as_mut().expect("admitted");
         if let Some(active) = state.polymorphs.get_mut(&target) {
             active.expires_at = expires_at;

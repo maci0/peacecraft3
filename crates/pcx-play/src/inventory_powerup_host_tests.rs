@@ -17,6 +17,7 @@ constant native SetPlayerHandicap takes player p, real factor returns nothing
 constant native GetPlayerHandicap takes player p returns real
 native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 native UnitResetCooldown takes unit u returns nothing
+native UnitRemoveBuffs takes unit whichUnit, boolean removePositive, boolean removeNegative returns nothing
 type gamecache extends agent
 native InitGameCache takes string filename returns gamecache
 native SaveGameCache takes gamecache cache returns boolean
@@ -81,6 +82,15 @@ const ORB_PENALTY: f32 = 5.0;
 const ORB_DURATION: f32 = 5.0;
 const ORB_HERO_DURATION: f32 = 7.0;
 const ORB_DAMAGE: f32 = 5.0;
+/// Frost timers (the hero duration is the shorter one, as in the shipped row) and the `Misc`
+/// decreases the fixture profile supplies.
+const FROST_DURATION: &str = "3";
+const FROST_HERO_DURATION: &str = "1";
+const FROST_MOVE: f32 = 0.5;
+const FROST_ATTACK: f32 = 0.25;
+const FROST_DAMAGE: f32 = 6.0;
+/// `DataB1` of the fixture spell-resistance row.
+const SPELL_REDUCTION: &str = "0.25";
 const KILJAEDEN_DAMAGE: f32 = 6.0;
 /// Damage-bonus entry of the spells attack type against the fixture units' medium defense.
 const SPELLS_VS_MEDIUM: f32 = 0.5;
@@ -108,6 +118,40 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
         vec![
             "AIcb", "AIcb", "1", "5", "5", "0", "0", "2", "-", "-", orb_targs, "-", "5", "7",
             "BIcb",
+        ],
+        vec![
+            "AIob",
+            "AIob",
+            "1",
+            "6",
+            "0",
+            "0",
+            "0",
+            "2",
+            "-",
+            "-",
+            orb_targs,
+            "-",
+            FROST_DURATION,
+            FROST_HERO_DURATION,
+            "Bfro",
+        ],
+        vec![
+            "AIsr",
+            "AIsr",
+            "1",
+            "0",
+            SPELL_REDUCTION,
+            "0",
+            "0",
+            "-",
+            "-",
+            "-",
+            "",
+            "-",
+            "0",
+            "0",
+            "",
         ],
     ]);
     let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
@@ -164,6 +208,8 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["ofir", "AIfb", "0", "0", "0", "-"],
             &["ogld", "AIgd", "0", "0", "0", "-"],
             &["ocor", "AIcb", "0", "0", "0", "-"],
+            &["ofro", "AIob", "0", "0", "0", "-"],
+            &["brac", "AIsr", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
         ],
     );
@@ -739,7 +785,32 @@ fn open_with_regens_overlays_extra(
         &registration("AIfb", "AIDB"),
         &registration("AIcb", "AIDB"),
     )
+    .unwrap()
+    .with_frost_orb(&registration("AIob", "AIDB"))
+    .unwrap()
+    .with_frost_slow(
+        &[(
+            "synthetic MiscGame",
+            format!(
+                "[Misc]\nFrostMoveSpeedDecrease={FROST_MOVE}\nFrostAttackSpeedDecrease={FROST_ATTACK}\n"
+            )
+            .as_bytes(),
+        )],
+        4096,
+    )
+    .unwrap()
+    .with_spell_resistance(&registration("AIsr", "AIat"))
     .unwrap();
+    let activity = activity
+        .with_move_speed_profiles(
+            &[(
+                "synthetic MiscGame",
+                b"[Misc]\nMinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n"
+                    .as_slice(),
+            )],
+            4096,
+        )
+        .unwrap();
     let mut h = h
         .with_order_registry(registry)
         .unwrap()

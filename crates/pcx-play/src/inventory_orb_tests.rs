@@ -59,7 +59,31 @@ const ORB_ROWS: [Row; 3] = [
     ],
 ];
 
+/// The Frost orb row and the spell-resistance row, shaped like the shipped rows.
+const FROST_ROW: Row = [
+    "AIob",
+    "AIob",
+    "6",
+    "-",
+    "2",
+    "-",
+    "3",
+    "1",
+    "Bfro",
+    "ground,air,ward",
+];
+const SPELL_ROW: Row = ["AIsr", "AIsr", "0", "0.33", "-", "-", "0", "0", "", ""];
+/// The `Misc` section the Frost buff reads.
+const FROST_MISC: &[u8] = b"[Misc]\nFrostMoveSpeedDecrease=0.5\nFrostAttackSpeedDecrease=0.25\n";
+const FROST_PROFILES: &[(&str, &[u8])] = &[("synthetic MiscGame", FROST_MISC)];
+
 fn orb_rules_with(rows: &[Row], overlay: Overlay) -> Rules {
+    orb_rules_full(rows, FROST_ROW, SPELL_ROW, overlay)
+}
+
+fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rules {
+    let rows: Vec<Row> = rows.iter().copied().chain([frost, spell]).collect();
+    let rows = rows.as_slice();
     let items = sylk(
         &[
             "itemID",
@@ -74,6 +98,10 @@ fn orb_rules_with(rows: &[Row], overlay: Overlay) -> Rules {
             &["ocor", "AIcb", "0", "0", "0", "-"],
             &["ogld", "AIgd", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
+            &["ofro", "AIob", "0", "0", "0", "-"],
+            &["brac", "AIsr", "0", "0", "0", "-"],
+            &["bra2", "AIsr,AIsr", "0", "0", "0", "-"],
+            &["obob", "AIob,AIfb", "0", "0", "0", "-"],
         ],
     );
     let ability_rows: Vec<Vec<&str>> = rows
@@ -128,6 +156,12 @@ fn orb_rules_with(rows: &[Row], overlay: Overlay) -> Rules {
             &window("AIfb", "AIDB"),
             &window("AIcb", "AIDB"),
         )
+        .unwrap()
+        .with_frost_orb(&window("AIob", "AIDB"))
+        .unwrap()
+        .with_frost_slow(FROST_PROFILES, 4096)
+        .unwrap()
+        .with_spell_resistance(&window("AIsr", "AIat"))
         .unwrap()
 }
 
@@ -363,4 +397,228 @@ fn without_the_orb_registration_an_orb_row_stays_refused() {
         .held_attributes(&catalog_item("ofir"))
         .unwrap_err();
     assert!(err.contains("unsupported passive ability AIfb"), "{err}");
+}
+
+fn row_with(row: Row, column: usize, value: &'static str) -> Row {
+    let mut row = row;
+    row[column] = value;
+    row
+}
+
+/// Rules whose frost and spell rows are replaced by the given edited rows.
+fn rules_with_rows(frost: Row, spell: Row, overlay: Overlay) -> Rules {
+    orb_rules_full(&ORB_ROWS, frost, spell, overlay)
+}
+
+#[test]
+fn frost_orb_reads_durations_and_buff_from_its_row_and_decreases_from_misc() {
+    let held = orb_rules()
+        .held_attributes(&catalog_item("ofro"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.damage, 6);
+    assert_eq!(
+        held.orb,
+        Some(Orb {
+            kind: OrbKind::Frost {
+                move_decrease: 0.5,
+                attack_decrease: 0.25,
+                duration: 3.0,
+                hero_duration: 1.0,
+                buff: *b"Bfro",
+            },
+            damage: 6,
+            targets: OrbTargets {
+                ground: true,
+                air: true,
+                structure: false
+            },
+        })
+    );
+}
+
+#[test]
+fn frost_decreases_follow_the_profiles_in_order_and_default_to_zero() {
+    let rules = |profiles: &[(&str, &[u8])]| {
+        let base = orb_rules();
+        base.with_frost_slow(profiles, 4096)
+    };
+    let kind = |rules: Rules| {
+        rules
+            .held_attributes(&catalog_item("ofro"))
+            .unwrap()
+            .unwrap()
+            .orb
+            .unwrap()
+            .kind
+    };
+    let map = b"[Misc]\nFrostMoveSpeedDecrease=0.2\n".as_slice();
+    let OrbKind::Frost {
+        move_decrease,
+        attack_decrease,
+        ..
+    } = kind(rules(&[("stock", FROST_MISC), ("map", map)]).unwrap())
+    else {
+        panic!("frost orb");
+    };
+    // The later profile replaces only the key it names.
+    assert_eq!((move_decrease, attack_decrease), (0.2, 0.25));
+    let OrbKind::Frost {
+        move_decrease,
+        attack_decrease,
+        ..
+    } = kind(rules(&[("empty", b"[Misc]\n".as_slice())]).unwrap())
+    else {
+        panic!("frost orb");
+    };
+    assert_eq!((move_decrease, attack_decrease), (0.0, 0.0));
+    // A decrease that would stall the unit is not modelled.
+    for bad in ["1", "1.5", "-0.1"] {
+        let text = format!("[Misc]\nFrostMoveSpeedDecrease={bad}\n");
+        let err = rules(&[("bad", text.as_bytes())]).err().unwrap();
+        assert!(err.contains("FrostMoveSpeedDecrease"), "{err}");
+    }
+}
+
+#[test]
+fn frost_orb_without_the_misc_decreases_refuses() {
+    let rules = plain_with_frost_registration();
+    let err = rules.held_attributes(&catalog_item("ofro")).unwrap_err();
+    assert!(err.contains("FrostMoveSpeedDecrease"), "{err}");
+}
+
+/// The orb registrations and the frost class, without the `Misc` read.
+fn plain_with_frost_registration() -> Rules {
+    let rules = orb_rules();
+    let plain = plain_rules(Arc::clone(&rules.tables), Overlay::default());
+    plain
+        .with_orbs(
+            &computed_window(ORB_BASE_WINDOW, "AIDB"),
+            &base_code("AIat"),
+            &window("AIfb", "AIDB"),
+            &window("AIcb", "AIDB"),
+        )
+        .unwrap()
+        .with_frost_orb(&window("AIob", "AIDB"))
+        .unwrap()
+}
+
+#[test]
+fn frost_rows_outside_the_decoded_shape_refuse() {
+    let none = Overlay::default;
+    let refused = |frost: Row, overlay: Overlay| {
+        rules_with_rows(frost, SPELL_ROW, overlay)
+            .held_attributes(&catalog_item("ofro"))
+            .unwrap_err()
+    };
+    assert!(refused(row_with(FROST_ROW, 4, "1"), none()).contains("enabled attack index"));
+    assert!(refused(row_with(FROST_ROW, 6, "0"), none()).contains("duration"));
+    assert!(refused(row_with(FROST_ROW, 7, "0"), none()).contains("duration"));
+    assert!(refused(row_with(FROST_ROW, 8, "Bf"), none()).contains("BuffID1"));
+    assert!(refused(row_with(FROST_ROW, 9, "ground,enemies"), none()).contains("not decoded"));
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIob".into(), vec![int_mod(b"Idam", Some([1, 1]), 9)]);
+    assert!(refused(FROST_ROW, overlay).contains("map-modified"));
+}
+
+#[test]
+fn a_frost_orb_beside_another_orb_refuses() {
+    let err = orb_rules()
+        .held_attributes(&catalog_item("obob"))
+        .unwrap_err();
+    assert!(err.contains("two orb abilities"), "{err}");
+}
+
+#[test]
+fn frost_registration_must_name_the_orb_base_and_a_distinct_class() {
+    let plain = || plain_with_frost_registration_base();
+    assert!(plain().with_frost_orb(&window("AIob", "AIDB")).is_ok());
+    let err = plain()
+        .with_frost_orb(&window("AIob", "APbo"))
+        .err()
+        .unwrap();
+    assert!(err.contains("orb base"), "{err}");
+    let err = plain()
+        .with_frost_orb(&window("AIfb", "AIDB"))
+        .err()
+        .unwrap();
+    assert!(err.contains("distinct"), "{err}");
+    // Without the orb base attached there is nothing to derive from.
+    let rules = orb_rules();
+    let bare = plain_rules(Arc::clone(&rules.tables), Overlay::default());
+    assert!(bare.with_frost_orb(&window("AIob", "AIDB")).is_err());
+}
+
+fn plain_with_frost_registration_base() -> Rules {
+    let rules = orb_rules();
+    plain_rules(Arc::clone(&rules.tables), Overlay::default())
+        .with_orbs(
+            &computed_window(ORB_BASE_WINDOW, "AIDB"),
+            &base_code("AIat"),
+            &window("AIfb", "AIDB"),
+            &window("AIcb", "AIDB"),
+        )
+        .unwrap()
+}
+
+#[test]
+fn spell_resistance_reads_its_fraction_and_the_flat_damage_from_its_row() {
+    let held = orb_rules()
+        .held_attributes(&catalog_item("brac"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.damage, 0);
+    assert_eq!(held.spell_damage_taken, Some(1.0 - 0.33));
+    assert_eq!(held.orb, None);
+    // Two abilities multiply: each handler scales the record in turn.
+    let held = orb_rules()
+        .held_attributes(&catalog_item("bra2"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.spell_damage_taken, Some((1.0 - 0.33) * (1.0 - 0.33)));
+    // The `AIat` base adds `DataA1` as flat damage.
+    let held = rules_with_rows(FROST_ROW, row_with(SPELL_ROW, 2, "4"), Overlay::default())
+        .held_attributes(&catalog_item("brac"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.damage, 4);
+}
+
+#[test]
+fn spell_resistance_rows_outside_the_decoded_shape_refuse() {
+    let refused = |spell: Row, overlay: Overlay| {
+        rules_with_rows(FROST_ROW, spell, overlay)
+            .held_attributes(&catalog_item("brac"))
+            .unwrap_err()
+    };
+    assert!(refused(row_with(SPELL_ROW, 3, "1.5"), Overlay::default()).contains("fraction"));
+    assert!(refused(row_with(SPELL_ROW, 3, "-0.1"), Overlay::default()).contains("fraction"));
+    assert!(refused(row_with(SPELL_ROW, 2, "-1"), Overlay::default()).contains("DataA1"));
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsr".into(), vec![int_mod(b"Idam", Some([1, 1]), 9)]);
+    assert!(refused(SPELL_ROW, overlay).contains("map-modified"));
+}
+
+#[test]
+fn spell_resistance_registration_must_name_the_attack_damage_base() {
+    let rules = || plain_with_frost_registration();
+    assert!(
+        rules()
+            .with_spell_resistance(&window("AIsr", "AIat"))
+            .is_ok()
+    );
+    let err = rules()
+        .with_spell_resistance(&window("AIsr", "APbo"))
+        .err()
+        .unwrap();
+    assert!(err.contains("attack-damage base"), "{err}");
+    let err = rules()
+        .with_spell_resistance(&window("AIob", "AIat"))
+        .err()
+        .unwrap();
+    assert!(err.contains("distinct"), "{err}");
 }

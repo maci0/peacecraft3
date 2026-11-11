@@ -251,12 +251,15 @@ pub fn prepare_new_game(
         Arc::clone(&inputs.defend.tables),
         abilities.clone(),
     ));
-    inputs.inventory_powerup = Some(crate::inventory_powerup::Rules::read(
-        Arc::clone(&inputs.defend.tables),
-        abilities,
-        image,
-        client.clone(),
-    )?);
+    inputs.inventory_powerup = Some(
+        crate::inventory_powerup::Rules::read(
+            Arc::clone(&inputs.defend.tables),
+            abilities,
+            image,
+            client.clone(),
+        )?
+        .with_frost_slow(&game_profiles, 8 << 20)?,
+    );
     inputs.budgets.inventory = Some(crate::inventory::InventoryBudget {
         max_slots_per_unit: 4096,
         max_pending_orders: 65536,

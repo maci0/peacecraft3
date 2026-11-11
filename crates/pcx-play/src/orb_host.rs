@@ -1,5 +1,6 @@
 //! On-hit effects of held orbs (`AIfb` Orb of Fire and Orb of Kil'jaeden, `AIcb` Orb of
-//! Corruption). The decoded rules and their evidence are in `docs/re-notes/passive-held-items.md`.
+//! Corruption, `AIob` Orb of Frost). The decoded rules and their evidence are in
+//! `docs/re-notes/passive-held-items.md`.
 //!
 //! Every orb adds its `DataA1` to the holder's attack damage like any `AIat` item (that part is
 //! the held flat damage). On a hit that the orb arms, the reviewed client then runs the orb's own
@@ -10,6 +11,9 @@
 //!   and its attack type is the spells row of the damage-bonus table.
 //! - Corruption: armor penalty `DataB1` on the target for `Dur1` (`HeroDur1` for a hero). A
 //!   second hit replaces the penalty and restarts the timer; the penalty never stacks.
+//! - Frost: the target's move speed falls by `FrostMoveSpeedDecrease` and its attack speed by
+//!   `FrostAttackSpeedDecrease` (`MiscGame.txt`) for `Dur1` (`HeroDur1` for a hero). A second hit
+//!   restarts the timer; the decreases never stack.
 //!
 //! The orb arms when the target's class is listed in the orb row's `targs1` (so a structure is
 //! outside the stock orbs). Which unit-state flags the client also tests are open; see the note.
@@ -31,9 +35,21 @@ struct ActivePenalty {
     expires_at: f64,
 }
 
+struct ActiveFrost {
+    buff: [u8; 4],
+    /// Attack speed fraction removed from the unit.
+    attack: f32,
+    expires_at: f64,
+    /// Move speed before the decrease, when the unit can move.
+    base_speed: Option<f32>,
+    /// Definition revision the base speed belongs to.
+    revision: u64,
+}
+
 #[derive(Default)]
 pub(super) struct State {
     penalties: BTreeMap<HandleId, ActivePenalty>,
+    frosts: BTreeMap<HandleId, ActiveFrost>,
 }
 
 impl ObjectHost {
@@ -47,6 +63,22 @@ impl ObjectHost {
             .penalties
             .get(&unit)
             .map_or(0.0, |penalty| penalty.points as f32)
+    }
+
+    /// Attack speed fraction removed from the unit by slows and frost. They never stack with each
+    /// other: a frost hit on a slowed unit refuses.
+    pub(crate) fn attack_speed_penalty(&self, unit: HandleId) -> f32 {
+        self.curse_attack_penalty(unit)
+            + self
+                .orbs
+                .frosts
+                .get(&unit)
+                .map_or(0.0, |frost| frost.attack)
+    }
+
+    /// Whether an orb of frost owns the unit's move speed.
+    pub(crate) fn unit_frosted(&self, unit: HandleId) -> bool {
+        self.orbs.frosts.contains_key(&unit)
     }
 
     /// The orb the attacker's hit on `target` arms, if any: the held orb whose `targs1` lists
@@ -103,8 +135,24 @@ impl ObjectHost {
         matches!(orb.kind, OrbKind::Corruption { .. })
     }
 
-    /// Applies or refreshes the corruption penalty on `target`. Other orbs do nothing here.
-    pub(super) fn orb_corrupt(&mut self, orb: &Orb, target: HandleId) -> Result<(), Error> {
+    /// Applies or refreshes the corruption penalty or the frost decreases on `target`. The fire
+    /// orb does nothing here.
+    pub(super) fn orb_debuff(&mut self, orb: &Orb, target: HandleId) -> Result<(), Error> {
+        if let OrbKind::Frost {
+            move_decrease,
+            attack_decrease,
+            duration,
+            hero_duration,
+            buff,
+        } = orb.kind
+        {
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.orb_error("clock missing"))?;
+            let hero = self.executed_unit(target)?.definition.rawcode[0].is_ascii_uppercase();
+            let expires_at = now + f64::from(if hero { hero_duration } else { duration });
+            return self.orb_frost(target, buff, (move_decrease, attack_decrease), expires_at);
+        }
         let OrbKind::Corruption {
             armor_penalty,
             duration,
@@ -140,6 +188,75 @@ impl ObjectHost {
                 expires_at,
             },
         );
+        Ok(())
+    }
+
+    /// A first frost hit attaches the buff and lowers the target's move speed to
+    /// `base * (1 - move)`; a hit on a frosted unit restarts the timer only, because the
+    /// decreases are the same `Misc` values every time (the client removes and re-adds them).
+    /// A unit under a slow or polymorph refuses: the client adds the decreases to one speed
+    /// multiplier, and the recreation's slow keeps its own base speed.
+    fn orb_frost(
+        &mut self,
+        target: HandleId,
+        buff: [u8; 4],
+        (movement, attack): (f32, f32),
+        expires_at: f64,
+    ) -> Result<(), Error> {
+        if let Some(frost) = self.orbs.frosts.get_mut(&target) {
+            frost.expires_at = expires_at;
+            return Ok(());
+        }
+        if self.unit_speed_modified(target) || self.unit_polymorphed(target) {
+            return Err(self.orb_error("frost on a slowed or polymorphed unit is not modelled"));
+        }
+        self.attach_unit_buff(
+            target,
+            ActiveBuff::new(
+                buff,
+                BuffTraits {
+                    negative: true,
+                    ..BuffTraits::default()
+                },
+            ),
+        )?;
+        let record = self.executed_unit(target)?;
+        let (revision, base_speed) = (
+            record.definition_revision,
+            record.activity.as_ref().and_then(|a| a.form_profile().1),
+        );
+        if let Some(base) = base_speed
+            && let Err(error) = self.apply_unit_move_speed(target, base * (1.0 - movement), NAME)
+        {
+            self.detach_unit_buff(target, buff);
+            return Err(error);
+        }
+        self.orbs.frosts.insert(
+            target,
+            ActiveFrost {
+                buff,
+                attack,
+                expires_at,
+                base_speed,
+                revision,
+            },
+        );
+        Ok(())
+    }
+
+    /// Restores the unit's move speed and removes the buff.
+    fn end_frost(&mut self, unit: HandleId) -> Result<(), Error> {
+        let Some(frost) = self.orbs.frosts.remove(&unit) else {
+            return Ok(());
+        };
+        let restorable = self.executed_unit(unit).is_ok_and(|record| {
+            record.definition_revision == frost.revision
+                && record.combat.as_ref().is_some_and(|c| !c.dead)
+        });
+        if let (Some(base), true) = (frost.base_speed, restorable) {
+            self.apply_unit_move_speed(unit, base, NAME)?;
+        }
+        self.detach_unit_buff(unit, frost.buff);
         Ok(())
     }
 
@@ -184,7 +301,9 @@ impl ObjectHost {
             let damage = self
                 .attack_type_damage(SPLASH_ATTACK_TYPE, orb.damage as f32, defense)
                 .ok_or_else(|| self.orb_error("the damage-bonus table has no spells row"))?;
-            hits.push((id, damage));
+            // The splash record has the spells attack type, which spell-resistance items scale.
+            let taken = self.unit_hero_bonus(id)?.spell_damage_taken.unwrap_or(1.0);
+            hits.push((id, damage * taken));
         }
         for (id, damage) in hits {
             self.apply_damage(source, id, damage, true)?;
@@ -192,8 +311,8 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Ends every penalty whose timer has run out.
-    pub(super) fn advance_orbs(&mut self, now: f64) {
+    /// Ends every penalty and frost whose timer has run out.
+    pub(super) fn advance_orbs(&mut self, now: f64) -> Result<(), Error> {
         let due: Vec<HandleId> = self
             .orbs
             .penalties
@@ -204,6 +323,17 @@ impl ObjectHost {
         for unit in due {
             self.end_orb_penalty(unit);
         }
+        let frozen: Vec<HandleId> = self
+            .orbs
+            .frosts
+            .iter()
+            .filter(|(_, frost)| frost.expires_at <= now)
+            .map(|(unit, _)| *unit)
+            .collect();
+        for unit in frozen {
+            self.end_frost(unit)?;
+        }
+        Ok(())
     }
 
     fn end_orb_penalty(&mut self, unit: HandleId) {
@@ -213,7 +343,11 @@ impl ObjectHost {
     }
 
     /// A buff removal (`UnitRemoveBuffs`) ends the penalty its buff carries.
-    pub(super) fn orb_buff_removed(&mut self, unit: HandleId, rawcode: [u8; 4]) {
+    pub(super) fn orb_buff_removed(
+        &mut self,
+        unit: HandleId,
+        rawcode: [u8; 4],
+    ) -> Result<(), Error> {
         if self
             .orbs
             .penalties
@@ -222,10 +356,20 @@ impl ObjectHost {
         {
             self.orbs.penalties.remove(&unit);
         }
+        if self
+            .orbs
+            .frosts
+            .get(&unit)
+            .is_some_and(|frost| frost.buff == rawcode)
+        {
+            self.end_frost(unit)?;
+        }
+        Ok(())
     }
 
-    /// A dead or removed unit keeps no penalty.
+    /// A dead or removed unit keeps no penalty or frost.
     pub(super) fn forget_orb_unit(&mut self, unit: HandleId) {
         self.orbs.penalties.remove(&unit);
+        self.orbs.frosts.remove(&unit);
     }
 }

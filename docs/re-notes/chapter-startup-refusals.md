@@ -412,3 +412,11 @@ Open after this lane:
 
 - `burrow` on `Abur`: who posts event `0xd01c4`, hence when the form changes for `DataB=1`.
 - Uprooted movement, the point order `root`, and the creation-time rooted attack mask (`0xb8f470`).
+
+## Frost orb and spell resistance admitted
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX03a | `AIob` on `ofro` | `AIms` on `bspd` (speed-multiplier reason) |
+| TFT HumanX06 | `AIsr` on `brac` | `AIau` (code `AUau`) on `lgdh` (not a decoded class) |
+| RoC Undead02 | `AIms` on `bspd` | unchanged |

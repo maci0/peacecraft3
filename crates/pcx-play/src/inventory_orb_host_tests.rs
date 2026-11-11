@@ -153,6 +153,28 @@ fn fire_orb_splashes_enemies_in_the_area_and_spares_the_target_allies_and_the_fa
 }
 
 #[test]
+fn spell_resistance_scales_the_spells_type_splash_the_holder_takes() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"ofir");
+    let at = position(&h, target);
+    let bare = unit_at(&mut h, b"H001", 5, [at[0] + 36.0, at[1]]);
+    let holder = unit_at(&mut h, b"H001", 5, [at[0], at[1] + 30.0]);
+    let bracers = item(&mut h, b"brac", at[0] + 16.0);
+    assert_eq!(add(&mut h, holder, bracers), Ok(Value::Bool(true)));
+    let (bare_before, holder_before) = (life_of(&h, bare), life_of(&h, holder));
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    let full = ORB_DAMAGE * SPELLS_VS_MEDIUM;
+    assert!((bare_before - life_of(&h, bare) - full).abs() < 1e-3);
+    let taken = bare_before - life_of(&h, bare);
+    let scaled = holder_before - life_of(&h, holder);
+    let factor = 1.0 - SPELL_REDUCTION.parse::<f32>().unwrap();
+    assert!(
+        (scaled - taken * factor).abs() < 1e-3,
+        "the holder took {scaled} of {taken}"
+    );
+}
+
+#[test]
 fn splash_spares_units_of_the_attackers_own_side() {
     let (
         Fixture {
@@ -308,6 +330,9 @@ fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
     let both = item(&mut h, b"oboo", 0.0);
     assert!(add(&mut h, hero, both).is_err());
 }
+
+#[path = "inventory_frost_host_tests.rs"]
+mod frost;
 
 fn missile_fields() -> Vec<([u8; 4], ObjectField)> {
     let mut speed = column(

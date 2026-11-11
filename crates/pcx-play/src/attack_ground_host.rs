@@ -166,7 +166,7 @@ impl ObjectHost {
         }
         match release {
             None if now >= ready_at => {
-                let speed = self.hero_combat_bonuses(unit)?.speed - self.curse_attack_penalty(unit);
+                let speed = self.hero_combat_bonuses(unit)?.speed - self.attack_speed_penalty(unit);
                 if !speed.is_finite() || speed <= 0.0 {
                     return Err(self.ground_fail("attack speed multiplier is not positive"));
                 }

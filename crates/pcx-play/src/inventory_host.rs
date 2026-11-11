@@ -444,6 +444,7 @@ impl ObjectHost {
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,
+            spell_damage_taken: None,
         };
         for (item, _) in self
             .executed_items()
@@ -491,6 +492,9 @@ impl ObjectHost {
             bonus.mana_regen_fraction += passive.mana_regen_fraction;
             if !bonus.mana_regen_fraction.is_finite() {
                 return Err(overflow());
+            }
+            if let Some(taken) = passive.spell_damage_taken {
+                bonus.spell_damage_taken = Some(bonus.spell_damage_taken.unwrap_or(1.0) * taken);
             }
             if let Some(orb) = passive.orb {
                 if bonus.orb.is_some() {

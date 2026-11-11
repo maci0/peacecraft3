@@ -532,6 +532,79 @@ Items: Pendant of Mana (`pmna`, ability `AIbm`, `DataA1` 250).
   (`held_max_mana_moves_the_maximum_and_rounds_the_retained_ratio`,
   `held_max_mana_applies_to_a_non_hero_and_transfers_the_pool`).
 
+## Orb of Frost (`AIob`): implemented and tested
+
+Decoded from the same image (SHA-256 `3f2ed012…`) and the shipped rows; no runtime capture.
+
+- Registration (observed): window `0xca6d80` (`push 0x11b9994`, `push "AIDB"`, `push "AIob"`),
+  vtable `0xfc0b80`, class getter slot 7 `0xca0f50`. It differs from the `AIDB` vtable in slots 1, 7,
+  22, 83, 84, 85 (`0xca0f80`) and 203, the same set as `AIfb` and `AIcb`.
+- Hit handler (slot 85, `0xca0f80`, observed): when armed (`0x100`, cleared as in the other orbs) it
+  takes the duration `0x46f500` (`HeroDur1`) when `0xcaf450` qualifies the target and `0x46f3a0`
+  (`Dur1`) otherwise, and the owner flag `0x40000000` as a boolean. It looks up a buff of class
+  `Bfro` (`0xc5e2e0` returns `0x4266726f`) on the target (`0x6d6570`). Present: buff virtual `+0x368`
+  (`0xc5b670`, refresh). Absent: `0xc11c90` creates the buff by class id, then `+0x32c`, `+0x364`
+  (`0xc5b5e0`) and attach `0x6d4880`. Then the attack record is applied through unit virtual `+0x120`.
+- `Bfro` (observed): registration window `0xc5e4b0` (base from `0x6f4c00` = `BSPD`), vtable
+  `0xf9f71c`. Apply (`0xc5b5e0`) reads `Misc` keys `FrostMoveSpeedDecrease` (string `0xfa12a4`) and
+  `FrostAttackSpeedDecrease` (`0xfa12bc`) through `0x430620` (section string `0xe69798`, default 0),
+  or 0.0 for both when the owner-flag boolean is set, negates them and calls the `BSPD` apply
+  `0x6f0630`. That stores them at `+0xd4`/`+0xdc`, adds the movement value to the movement
+  object (`unit+0x3f8`, `0xb67720`) and the attack value to the attack-side object (`unit+0x3f4`,
+  `0xb1e490`). Removal (`0x6f0700`) adds the negated values back; refresh (`0x6f07d0`) restarts the
+  timer (`0x6f6c30`), undoes the old values and applies the new ones.
+- Values: `MiscGame.txt` has `FrostMoveSpeedDecrease=0.5` and `FrostAttackSpeedDecrease=0.25`.
+  The row `AIob` has `DataA1` 6, `DataE1` 2, `Dur1` 3, `HeroDur1` 1, `BuffID1` `Bfro`, `targs1`
+  `ground,air,ward`, no `Area1` or `DataB1`. The item text says the attack slows "the movement
+  speed and attack rate" for `Dur1` seconds.
+
+Recreation: `AIob` reuses the orb machinery (flat `DataA1` damage, air switch, `targs1` class
+filter, missile impact). A hit attaches `Bfro` (negative flag only) and sets the target's move
+speed to `base * (1 - 0.5)` through the speed host, and subtracts 0.25 from the attack speed
+multiplier the combat step uses. The duration is `HeroDur1` for a hero target (inferred from
+`0xcaf450`, as for `AIcb`) and `Dur1` otherwise. A second hit restarts the timer; the decreases
+never stack. Expiry, `UnitRemoveBuffs` and death end it. The decreases come from the `Misc` profiles
+(stock then map), a missing key reads 0, and a value outside `[0, 1)` refuses (the native
+multiplier at or below 0 is a stall state, counter `[+0x84]`, not modelled).
+
+Refused or open: a frost hit on a slowed (`Aslo`) or polymorphed unit, and a slow or polymorph on a
+frosted unit, refuse at runtime, because the client adds every decrease into one multiplier and the
+recreation's slow keeps its own base speed. That attack-side object is the attack speed
+multiplier is inferred from the key name and the item text. The `Bfro` dispel class and
+`Targetart`/`Specialart` are not modelled. Tests: `inventory_orb_tests.rs` (frost rows, `Misc`
+profiles, registration) and `inventory_frost_host_tests.rs` (speeds, timers, refresh, removal,
+missile impact, death).
+
+## Spell resistance (`AIsr`, Runed Bracers `brac`): stored, one consumer
+
+- Registration (observed): window `0xbc9ee0` (`push 0x11b649c`, `push "AIat"`, `push "AIsr"`), vtable
+  `0xf4d964`, slot 7 `0xbc0af0`. The base is the flat attack-damage class, so `DataA1` (0 in the
+  row) is added as flat damage like the orbs. Against the `AIat` vtable `0xf50450` it overrides
+  slots 1, 7, 22, 62, 63, 203 and 204.
+- Slot 62 (`+0xf8`, `0xbc0b30`) returns 6. The damage routine `0x6677c0` calls slot 62 on each
+  ability of the damaged unit (list at `unit+0x3e8`) and slot 63 (`+0xfc`) on the ones that
+  answer 1 at once and on the rest in ascending order of that number, before the armor step
+  (`0x667b2d`, damage type `0x10` only). A zero-amount record skips all of it.
+- Slot 63 (`0xbc0b60`, observed): returns 0 without effect for a null record, when the holder's
+  flag word `[unit+0x164]` has `0x40000000`, when the record's flags `[+0xc]` have `0x10`, or when
+  its attack type `[+0x20]` is nonzero. Otherwise it computes `1.0 - DataB1` (`0x46ee20`; `0x9a00b0`
+  subtracts, `0x112d810` is 1.0) and multiplies the record's amount fields `[+0x10]` and `[+0x18]`
+  (`0x6b8170`). Several abilities multiply in turn. Record layout from its constructor `0x6a9940`:
+  `+0` source, `+0xc` flags, `+0x10` amount, `+0x14` damage type, `+0x18` second amount, `+0x20`
+  attack type (0 is the first row of the damage-bonus table, the spells row). Flag `0x10` reads as
+  "zero amount" (the area routine `0x6e9ed0` sets it from a float equality at `0x6ea001`;
+  inferred), so it never blocks a real hit.
+- Row: `DataB1` 0.33. The item text says "Reduces Magic damage dealt to the Hero by 33%".
+
+Recreation: the held state is `AttributeBonus.spell_damage_taken`, the product of `1 - DataB1`
+over held `AIsr` abilities (a fraction outside `[0, 1]` refuses; map-modified rows refuse). Its
+only consumer is the Fire orb splash (`orb_splash`), whose record has attack type 0 and a nonzero
+amount, so a holder takes `splash * (1 - 0.33)`. Not consumed: the other spell damage paths
+(`damage_unit` for Holy Light and Chain Lightning, attack-ground splash), because the record
+fields they carry (attack type, flags) are not decoded. The holder flag `0x40000000` is not
+modelled (meaning not decoded). Tests: `inventory_orb_tests.rs` (rows, product of two, refusals,
+registration) and `spell_resistance_scales_the_spells_type_splash_the_holder_takes`.
+
 ## Open held classes (decoded in part, still refused at pickup)
 
 Each class below is registered in the reviewed image and its first-level structure is read. The
@@ -610,7 +683,36 @@ in `UNMODELED_PASSIVE_CLASSES` (`crates/pcx-play/src/inventory_powerup.rs`), tes
   then limits the result with the globals at `0x113e...` and the unit-type fields at `+0x1d8` and
   `+0x1dc` (`0x6975b0`, `0x697410`). Attach (`0xbbeee0`) and detach (`0xbbefc0`) call the recompute
   `0xb69430` on the movement object at `unit+0x3f8`.
-- Why it stays refused: what `[this+0x74]` and `[this+0x7c]` hold for a unit (the stored speed, and
-  what scales it), the limit values, and the interaction with the slow buff (the recreation
-  slows `base * (1 - factor)` from a stored base) are not established. A bonus applied before or
-  after the slow would give different speeds, so the multiplier source must be decoded first.
+- What the consumer fields hold (observed unless marked): the movement object (constructor
+  `0xb66360`, vtable `0xf24fc8`) keeps two tracked floats, `[+0x74]` and `[+0x7c]`.
+  `SetUnitMoveSpeed` (native handler `0x4ab880` -> `0x69cf90` -> `0xb69520`) writes `[+0x74]` and
+  recomputes, so `[+0x74]` is the base speed. The init virtual (slot 196, `0xb65260`) sets
+  `[+0x78]`'s value `[+0x7c]` to `0x112d810`, which is 1.0 (static initializer `0x401460` converts
+  the integer 1; `0x112d88c` is 0.0 from `0x401300`). `0xb67720` adds a delta to `[+0x7c]`, tracks
+  whether it is below 1.0 (counter at `[+0x84]`) and snaps to 1.0 within 0.001, so `[+0x7c]` is a
+  speed multiplier whose neutral value is 1.0. Buffs shift it additively (the Frost buff passes
+  `-FrostMoveSpeedDecrease`). The unit-type `spd` column reaches `[+0x74]` at creation (the init call
+  at `0x68115c` follows the unit-type speed read via `0x67b780`, which reads field `+0x1d4` of the
+  unit-type record; that this field is `spd` is inferred from the unit-creation call order).
+  Result: `speed = limit((max(AIms DataA1) + base) * multiplier)`, so the bonus is added before the
+  slow multiplier, and `SetUnitMoveSpeed` leaves the bonus in place.
+- `MiscGame.txt` `MoveSpeedBonusesStack` (stock 0): attach (`0xbbeee0`), detach (`0xbbefc0`) and
+  the other `AIms` handlers read it with `0x4304c0`. With 0 they call the recompute `0xb69430`
+  (the maximum rule above). With nonzero they set flag `0x80` on the ability and skip the
+  recompute; that stacking path is not decoded.
+- Why it stays refused: the recreation keeps one clamped speed per unit (`activity.speed`). Neither
+  the base nor the multiplier can be recovered from it when a slow, frost, polymorph or
+  `SetUnitMoveSpeed` has touched it, and the limit also depends on unit-type `minSpd`/`maxSpd`
+  (fields `+0x1d8`/`+0x1dc`) that the recreation does not read. Admitting the bonus needs a
+  base/multiplier speed model; it is not built.
+
+### Locked-chapter probe: frost, spell resistance, boots
+
+`selected_install_locked_chapter_startup_probe` on the selected install, first refusal before and
+after the `AIob` and `AIsr` admission.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX03a | `AIob` on `ofro` | `AIms` on `bspd` (speed-multiplier reason) |
+| TFT HumanX06 | `AIsr` on `brac` | `AIau` (code `AUau`) on `lgdh` (not a decoded class) |
+| RoC Undead02 | `AIms` on `bspd` | unchanged |

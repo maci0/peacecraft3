@@ -40,6 +40,13 @@ pub(crate) const ORB_BASE_WINDOW: u32 = 0xca6d00;
 const FIRE_ORB_WINDOW: u32 = 0xca6d40;
 /// Registration call for the Orb of Corruption class (source `AIcb`, base `AIDB`).
 const CORRUPTION_ORB_WINDOW: u32 = 0xca6ce0;
+/// Registration call for the Orb of Frost class (source `AIob`, base `AIDB`).
+const FROST_ORB_WINDOW: u32 = 0xca6d80;
+/// Registration call for the spell-resistance class (source `AIsr`, base `AIat`).
+const SPELL_RESISTANCE_WINDOW: u32 = 0xbc9ee0;
+/// `Misc` keys of `MiscGame.txt` that the Frost buff reads when it is applied (`0xc5b5e0`).
+const FROST_MOVE_KEY: &str = "FrostMoveSpeedDecrease";
+const FROST_ATTACK_KEY: &str = "FrostAttackSpeedDecrease";
 /// `AbilityData` `DataE` value that enables the unit's second attack, the only orb value decoded.
 const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// Held-item classes whose class was decoded from the reviewed client but whose effect is not
@@ -63,8 +70,8 @@ const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
     ),
     (
         "AIms",
-        "the speed bonus is the maximum of the unit's bonus abilities added to the stored \
-         speed before a multiplier, and the multiplier's source is not decoded",
+        "speed is (maximum bonus + base speed) * multiplier, but the recreation keeps one \
+         clamped speed per unit, so the base and the multiplier are not separable",
     ),
 ];
 const BASE_FN_LEN: usize = 6;
@@ -121,6 +128,24 @@ pub enum OrbKind {
         hero_duration: f32,
         buff: [u8; 4],
     },
+    /// Frost: the target's move speed falls by `move_decrease` and its attack speed by
+    /// `attack_decrease` (fractions, from `MiscGame.txt`) for `Dur1` (`HeroDur1` for a hero),
+    /// tracked under buff `buff`.
+    Frost {
+        move_decrease: f32,
+        attack_decrease: f32,
+        duration: f32,
+        hero_duration: f32,
+        buff: [u8; 4],
+    },
+}
+
+/// The orb classes a row can belong to.
+#[derive(Clone, Copy)]
+enum OrbFamily {
+    Fire,
+    Corruption,
+    Frost,
 }
 
 /// A held orb: `damage` is `DataA1`, already counted in [`AttributeBonus::damage`].
@@ -151,6 +176,10 @@ pub struct AttributeBonus {
     pub mana_regen_fraction: f32,
     /// The held orb, when one is held. A unit holds at most one.
     pub orb: Option<Orb>,
+    /// Product of `1 - DataB1` over the held spell-resistance abilities (`AIsr`), `None` when
+    /// none is held. The reviewed client applies it to spell damage the unit takes; see the
+    /// re-note for which recreation damage paths consume it.
+    pub spell_damage_taken: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -193,14 +222,27 @@ pub struct Rules {
     mana_regen: Option<FractionClass>,
     /// Orb registrations, attached by `with_orbs`. Absent until the orb windows are read.
     orbs: Option<OrbClasses>,
+    /// Spell-resistance registration, attached by `with_spell_resistance`.
+    spell_resistance: Option<String>,
 }
 
 /// The registered orb classes: the shared `AIDB` base, `AIfb` (Orb of Fire, and Orb of
 /// Kil'jaeden through its row's code) and `AIcb` (Orb of Corruption).
 #[derive(Clone, Debug)]
 struct OrbClasses {
+    base: String,
     fire: String,
     corruption: String,
+    /// `AIob` (Orb of Frost), attached by `with_frost_orb`.
+    frost: Option<FrostClass>,
+}
+
+/// The registered Frost orb class and the `Misc` decreases its buff applies, attached by
+/// `with_frost_slow`. A missing `Misc` key reads as 0, the default the client passes.
+#[derive(Clone, Debug)]
+struct FrostClass {
+    class: String,
+    decreases: Option<(f32, f32)>,
 }
 
 /// One admitted scalar ability class and its metadata-selected amount column.
@@ -280,6 +322,8 @@ impl Rules {
             .ok_or_else(|| fail("truncated orb base function"))?;
         let fire_orb = window(FIRE_ORB_WINDOW)?;
         let corruption_orb = window(CORRUPTION_ORB_WINDOW)?;
+        let frost_orb = window(FROST_ORB_WINDOW)?;
+        let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
         Self::decode(
             tables,
             overlay,
@@ -293,6 +337,8 @@ impl Rules {
         .and_then(|rules| rules.with_mana_regen(&mana_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
         .and_then(|rules| rules.with_orbs(&orb_base, &orb_base_code, &fire_orb, &corruption_orb))
+        .and_then(|rules| rules.with_frost_orb(&frost_orb))
+        .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
         .map_err(|e| fail(&e))
     }
 
@@ -337,7 +383,114 @@ impl Rules {
         {
             return Err("orb registrations must name distinct classes".into());
         }
-        self.orbs = Some(OrbClasses { fire, corruption });
+        self.orbs = Some(OrbClasses {
+            base: orb_base,
+            fire,
+            corruption,
+            frost: None,
+        });
+        Ok(self)
+    }
+
+    /// Whether `class` is one of the registrations already attached.
+    fn is_registered(&self, class: &str) -> bool {
+        let amount = |c: &Option<AmountClass>| c.as_ref().is_some_and(|c| c.class == class);
+        [
+            &self.powerup_class,
+            &self.passive_class,
+            &self.armor_class,
+            &self.damage_class,
+        ]
+        .iter()
+        .any(|c| **c == class)
+            || amount(&self.max_life)
+            || amount(&self.max_mana)
+            || amount(&self.heal)
+            || amount(&self.life_regen)
+            || self
+                .mana_regen
+                .as_ref()
+                .is_some_and(|regen| regen.class == class)
+            || self.spell_resistance.as_deref() == Some(class)
+            || self.orbs.as_ref().is_some_and(|orbs| {
+                [&orbs.base, &orbs.fire, &orbs.corruption]
+                    .iter()
+                    .any(|c| **c == class)
+                    || orbs
+                        .frost
+                        .as_ref()
+                        .is_some_and(|frost| frost.class == class)
+            })
+    }
+
+    /// Attaches the Orb of Frost class. Its registration must name the orb base, which
+    /// `with_orbs` attached.
+    pub(crate) fn with_frost_orb(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        let orbs = self
+            .orbs
+            .as_ref()
+            .ok_or("the frost orb registration needs the orb base")?;
+        if base != orbs.base {
+            return Err("frost orb registration must name the orb base class".into());
+        }
+        if orbs.frost.is_some() || self.is_registered(&class) {
+            return Err("frost orb registration must name a distinct class".into());
+        }
+        let orbs = self.orbs.as_mut().expect("checked above");
+        orbs.frost = Some(FrostClass {
+            class,
+            decreases: None,
+        });
+        Ok(self)
+    }
+
+    /// Reads the move and attack speed decreases the Frost buff applies from the `Misc` section
+    /// (`MiscGame.txt` first, then the map's profile). A key the profiles omit reads as 0, the
+    /// default the client passes; a decrease outside `[0, 1)` refuses, because a speed
+    /// multiplier of zero or below is a stall state that is not modelled.
+    pub(crate) fn with_frost_slow(
+        mut self,
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+    ) -> Result<Self, String> {
+        let ([movement, attack], _) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            [FROST_MOVE_KEY, FROST_ATTACK_KEY],
+            max_bytes,
+        )?;
+        let read = |key: &str, value: Option<f32>| {
+            let value = value.unwrap_or(0.0);
+            if (0.0..1.0).contains(&value) {
+                Ok(value)
+            } else {
+                Err(format!("Misc/{key} must be in [0, 1) to be modelled"))
+            }
+        };
+        let decreases = (
+            read(FROST_MOVE_KEY, movement)?,
+            read(FROST_ATTACK_KEY, attack)?,
+        );
+        let frost = self
+            .orbs
+            .as_mut()
+            .and_then(|orbs| orbs.frost.as_mut())
+            .ok_or("the frost decreases need the frost orb registration")?;
+        frost.decreases = Some(decreases);
+        Ok(self)
+    }
+
+    /// Attaches the spell-resistance class. Its registration must name the flat attack-damage
+    /// class as its base, as the reviewed image registers it (`0xbc9ee0`).
+    pub(crate) fn with_spell_resistance(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != self.damage_class {
+            return Err("spell-resistance registration must name the attack-damage base".into());
+        }
+        if self.spell_resistance.is_some() || self.is_registered(&class) {
+            return Err("spell-resistance registration must name a distinct class".into());
+        }
+        self.spell_resistance = Some(class);
         Ok(self)
     }
 
@@ -633,6 +786,7 @@ impl Rules {
             life_regen: None,
             mana_regen: None,
             orbs: None,
+            spell_resistance: None,
         })
     }
 
@@ -790,21 +944,39 @@ impl Rules {
                 held.mana_regen_fraction = sum;
                 continue;
             }
-            if let Some(orbs) = &self.orbs
-                && (code == orbs.fire || code == orbs.corruption)
-            {
-                if held.orb.is_some() {
-                    return Err(format!(
-                        "two orb abilities on {} are unsupported",
-                        item.rawcode()
-                    ));
+            if let Some(orbs) = &self.orbs {
+                let family = if code == orbs.fire {
+                    Some(OrbFamily::Fire)
+                } else if code == orbs.corruption {
+                    Some(OrbFamily::Corruption)
+                } else if orbs.frost.as_ref().is_some_and(|frost| frost.class == code) {
+                    Some(OrbFamily::Frost)
+                } else {
+                    None
+                };
+                if let Some(family) = family {
+                    if held.orb.is_some() {
+                        return Err(format!(
+                            "two orb abilities on {} are unsupported",
+                            item.rawcode()
+                        ));
+                    }
+                    let orb = self.orb(alias, family)?;
+                    held.damage = held
+                        .damage
+                        .checked_add(orb.damage)
+                        .ok_or("passive damage overflows")?;
+                    held.orb = Some(orb);
+                    continue;
                 }
-                let orb = self.orb(alias, code == orbs.corruption)?;
+            }
+            if self.spell_resistance.as_deref() == Some(code.as_str()) {
+                let (damage, taken) = self.spell_resistance(alias)?;
                 held.damage = held
                     .damage
-                    .checked_add(orb.damage)
+                    .checked_add(damage)
                     .ok_or("passive damage overflows")?;
-                held.orb = Some(orb);
+                held.spell_damage_taken = Some(held.spell_damage_taken.unwrap_or(1.0) * taken);
                 continue;
             }
             if code != self.passive_class {
@@ -834,20 +1006,26 @@ impl Rules {
         Ok(Some(held))
     }
 
-    /// One orb ability row at the effect level. The reviewed client reads these fields straight
-    /// from the ability row, so the amount does not go through the `Idam` metadata admission
-    /// (which omits `AIgd`). A map that modifies the row is refused, because the overrides of the
-    /// orb fields are not decoded.
-    fn orb(&self, alias: &str, corruption: bool) -> Result<Orb, String> {
+    /// The ability row of an orb or spell-resistance item at the effect level. The reviewed
+    /// client reads these fields straight from the row, so the amounts do not go through the
+    /// attribute metadata admission (which omits `AIgd`). A map that modifies the row is
+    /// refused, because the overrides of these fields are not decoded.
+    fn effect_row(&self, alias: &str, what: &str) -> Result<Object<'_>, String> {
         let modified =
             self.overlay.new_object(alias).is_some() || !self.overlay.on(alias).is_empty();
         if modified {
-            return Err(format!("map-modified orb ability {alias} is unsupported"));
+            return Err(format!(
+                "map-modified {what} ability {alias} is unsupported"
+            ));
         }
-        let ability = self
-            .tables
+        self.tables
             .object(Family::Ability, alias)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
+    }
+
+    /// One orb ability row at the effect level.
+    fn orb(&self, alias: &str, family: OrbFamily) -> Result<Orb, String> {
+        let ability = self.effect_row(alias, "orb")?;
         let cell = |name: &str| {
             ability
                 .cell(SlkId::AbilityData, name)
@@ -861,21 +1039,7 @@ impl Rules {
             Ok(Value::Real(value)) if value.is_finite() => Ok(value as f32),
             _ => Err(format!("{name} of orb {alias} is not a finite real")),
         };
-        if int("DataE1")? != ORB_ENABLED_ATTACK_INDEX {
-            return Err(format!(
-                "orb {alias} enabled attack index is not {ORB_ENABLED_ATTACK_INDEX}"
-            ));
-        }
-        let damage = i32::try_from(int("DataA1")?)
-            .ok()
-            .filter(|damage| *damage >= 0)
-            .ok_or_else(|| format!("orb {alias} damage is negative or too large"))?;
-        let targets = orb_targets(alias, cell("targs1")?.text)?;
-        let kind = if corruption {
-            let armor_penalty = i32::try_from(int("DataB1")?)
-                .ok()
-                .filter(|penalty| *penalty >= 0)
-                .ok_or_else(|| format!("orb {alias} armor penalty is negative or too large"))?;
+        let timer = || -> Result<(f32, f32, [u8; 4]), String> {
             let (duration, hero_duration) = (real("Dur1")?, real("HeroDur1")?);
             if duration <= 0.0 || hero_duration <= 0.0 {
                 return Err(format!(
@@ -888,24 +1052,87 @@ impl Rules {
                 .ok()
                 .filter(|code: &[u8; 4]| code.iter().all(u8::is_ascii_alphanumeric))
                 .ok_or_else(|| format!("orb {alias} BuffID1 is not a rawcode"))?;
-            OrbKind::Corruption {
-                armor_penalty,
-                duration,
-                hero_duration,
-                buff,
+            Ok((duration, hero_duration, buff))
+        };
+        if int("DataE1")? != ORB_ENABLED_ATTACK_INDEX {
+            return Err(format!(
+                "orb {alias} enabled attack index is not {ORB_ENABLED_ATTACK_INDEX}"
+            ));
+        }
+        let damage = i32::try_from(int("DataA1")?)
+            .ok()
+            .filter(|damage| *damage >= 0)
+            .ok_or_else(|| format!("orb {alias} damage is negative or too large"))?;
+        let targets = orb_targets(alias, cell("targs1")?.text)?;
+        let kind = match family {
+            OrbFamily::Corruption => {
+                let armor_penalty = i32::try_from(int("DataB1")?)
+                    .ok()
+                    .filter(|penalty| *penalty >= 0)
+                    .ok_or_else(|| format!("orb {alias} armor penalty is negative or too large"))?;
+                let (duration, hero_duration, buff) = timer()?;
+                OrbKind::Corruption {
+                    armor_penalty,
+                    duration,
+                    hero_duration,
+                    buff,
+                }
             }
-        } else {
-            let area = real("Area1")?;
-            if area <= 0.0 {
-                return Err(format!("orb {alias} Area1 is not positive"));
+            OrbFamily::Frost => {
+                let (move_decrease, attack_decrease) = self
+                    .orbs
+                    .as_ref()
+                    .and_then(|orbs| orbs.frost.as_ref())
+                    .and_then(|frost| frost.decreases)
+                    .ok_or_else(|| {
+                        format!(
+                            "orb {alias} reads Misc/{FROST_MOVE_KEY} and Misc/{FROST_ATTACK_KEY}, \
+                             which this rule set was not given"
+                        )
+                    })?;
+                let (duration, hero_duration, buff) = timer()?;
+                OrbKind::Frost {
+                    move_decrease,
+                    attack_decrease,
+                    duration,
+                    hero_duration,
+                    buff,
+                }
             }
-            OrbKind::Fire { area }
+            OrbFamily::Fire => {
+                let area = real("Area1")?;
+                if area <= 0.0 {
+                    return Err(format!("orb {alias} Area1 is not positive"));
+                }
+                OrbKind::Fire { area }
+            }
         };
         Ok(Orb {
             kind,
             damage,
             targets,
         })
+    }
+
+    /// One spell-resistance row: the flat attack damage its `AIat` base adds (`DataA1`) and the
+    /// factor on spell damage taken, `1 - DataB1`. A fraction outside `[0, 1]` refuses.
+    fn spell_resistance(&self, alias: &str) -> Result<(i32, f32), String> {
+        let ability = self.effect_row(alias, "spell-resistance")?;
+        let cell = |name: &str| {
+            ability
+                .cell(SlkId::AbilityData, name)
+                .map_err(|e| e.to_string())
+        };
+        let damage = match cell("DataA1")?.typed(FieldKind::Int) {
+            Ok(Value::Integer(n)) => i32::try_from(n).ok().filter(|n| *n >= 0),
+            _ => None,
+        }
+        .ok_or_else(|| format!("DataA1 of {alias} is not a nonnegative integer"))?;
+        let reduction = match cell("DataB1")?.typed(FieldKind::Real) {
+            Ok(Value::Real(value)) if (0.0..=1.0).contains(&value) => value as f32,
+            _ => return Err(format!("DataB1 of {alias} is not a fraction in [0, 1]")),
+        };
+        Ok((damage, 1.0 - reduction))
     }
 
     /// Authored real fraction at the effect level, after the map's W3A override for that field.

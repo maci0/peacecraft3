@@ -1716,8 +1716,8 @@ impl ObjectHost {
         if self.weapon_target(missile.target).is_none() {
             return Ok(());
         }
+        self.orb_debuff(&armed.orb, missile.target)?;
         if Self::orb_corrupts(&armed.orb) {
-            self.orb_corrupt(&armed.orb, missile.target)?;
             let (armor, defense) = self.victim_armor(missile.target)?;
             missile.damage = self.armored_damage(armed.base, armed.weapon, armor, defense);
         }
@@ -1940,7 +1940,7 @@ impl ObjectHost {
         self.advance_holy_light(now)?;
         self.advance_chain_lightning(now)?;
         self.advance_curses(now)?;
-        self.advance_orbs(now);
+        self.advance_orbs(now)?;
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
@@ -2149,7 +2149,7 @@ impl ObjectHost {
             match swing {
                 None if now >= ready_at => {
                     let speed =
-                        self.hero_combat_bonuses(unit)?.speed - self.curse_attack_penalty(unit);
+                        self.hero_combat_bonuses(unit)?.speed - self.attack_speed_penalty(unit);
                     if !speed.is_finite() || speed <= 0.0 {
                         return Err(self.inner.error(
                             name,
@@ -2233,7 +2233,7 @@ impl ObjectHost {
                         && let Some(orb) = &orb
                     {
                         // The client lowers the armor first, then applies the attack damage.
-                        self.orb_corrupt(orb, swung)?;
+                        self.orb_debuff(orb, swung)?;
                     }
                     let preflight = weapon.missile_speed == MissileSpeed::Instant
                         && self.campaign_flee_source_preflight(unit, swung)?;

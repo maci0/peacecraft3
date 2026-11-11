@@ -761,6 +761,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,
+            spell_damage_taken: None,
         }
     );
 }
@@ -1233,6 +1234,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,
+            spell_damage_taken: None,
         }
     );
 }
