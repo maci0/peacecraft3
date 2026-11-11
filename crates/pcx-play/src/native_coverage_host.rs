@@ -329,6 +329,9 @@ impl ObjectHost {
             "UnitSetUsesAltIcon",
             // unit_creep_guard_host.rs
             "SetUnitCreepGuard",
+            // unit_user_data_host.rs
+            "GetUnitUserData",
+            "SetUnitUserData",
             // unit_waygate_host.rs
             "WaygateActivate",
             "WaygateGetDestinationX",
@@ -820,6 +823,7 @@ mod tests {
             "unit_look_at_native",
             "unit_pause_native",
             "unit_waygate_native",
+            "unit_user_data_native",
             "unit_revive_native",
             "unit_sleep_native",
         ] {

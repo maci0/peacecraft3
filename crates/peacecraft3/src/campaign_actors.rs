@@ -2498,6 +2498,7 @@ mod tests {
             linked_mine: None,
             invulnerable: None,
             waygate: Default::default(),
+            user_data: None,
             admitted_order: None,
             abilities: None,
             animation: None,

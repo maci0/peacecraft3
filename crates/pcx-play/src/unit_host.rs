@@ -31,6 +31,8 @@ use std::sync::Arc;
 #[path = "unit_hero_host.rs"]
 mod hero;
 
+#[path = "unit_user_data_host.rs"]
+mod user_data;
 #[path = "unit_waygate_host.rs"]
 mod waygate;
 pub use hero::{HeroBudget, HeroProgress, LearnBlock, LearnableSkill, ResearchIcon, UnitAbilities};
@@ -204,6 +206,8 @@ pub struct ExecutedUnit {
     /// Waygate destination and active flag, meaningful only on a unit whose
     /// `abilList` names `Awrp`. See `docs/re-notes/waygate.md`.
     pub waygate: waygate::Waygate,
+    /// Executed `SetUnitUserData` integer. `None` means it has not run on this unit.
+    pub user_data: Option<i32>,
     /// Admitted immediate-order class on this unit.
     ///
     /// `None` means the unit ability list does not name the admitted alias,
@@ -429,6 +433,7 @@ impl ObjectHost {
         self.hero_button_reserve_declaration(&declaration_source)?;
         self.alt_minimap_icon_declaration(&declaration_source)?;
         self.unit_waygate_declarations(&declaration_source)?;
+        self.unit_user_data_declarations(&declaration_source)?;
         self.unit_revive_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
         self.unit_sleep_declarations(&declaration_source)?;
@@ -1444,6 +1449,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_waygate_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_user_data_native(name, args) {
             return Some(result);
         }
         if let Some(result) = self.unit_revive_native(name, args) {
@@ -2652,6 +2660,7 @@ impl ObjectHost {
                 linked_mine: None,
                 invulnerable: None,
                 waygate: waygate::Waygate::default(),
+                user_data: None,
                 admitted_order,
                 abilities: None,
                 animation: None,

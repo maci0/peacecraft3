@@ -3826,6 +3826,9 @@ mod enumeration;
 #[path = "unit_invulnerability_tests.rs"]
 mod invulnerability;
 
+#[path = "unit_user_data_tests.rs"]
+mod user_data;
+
 #[path = "unit_waygate_tests.rs"]
 mod waygate;
 

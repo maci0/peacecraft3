@@ -66,7 +66,7 @@ pub(super) fn ability_list_field(text: &str) -> ObjectField {
     }
 }
 
-fn open(extra: &str, map: &str) -> VmHost {
+pub(super) fn open(extra: &str, map: &str) -> VmHost {
     let common = script_common_with("widget", true, extra);
     let ctx = context(300, &common, map, "unit-catalog");
     let (_, hits, seen) = counting();
