@@ -76,9 +76,10 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
     (
         "AUau",
-        "the unholy aura applies buff BUau to friendly units within Area1 of the holder; the \
-         buff adds DataA1 to the unit's speed multiplier, but the aura's scan period, buff \
-         duration and the life regeneration addition (DataB1, DataC1) are not decoded",
+        "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
+         DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate, but \
+         when the client fires the range events, how the buff ends after a unit leaves the \
+         area, and the stacking test against the hero aura are not decoded",
     ),
     (
         "AIsb",
@@ -225,6 +226,10 @@ pub struct AttributeBonus {
     /// speed uses the largest value among its held items, kept per item by the speed state, so
     /// aggregating bonuses does not sum this.
     pub move_speed_bonus: Option<f32>,
+    /// Whether `Misc/MoveSpeedBonusesStack` is set. The client then skips the movement object's
+    /// recompute (`0xb69430`) when the ability attaches or detaches, so a unit already walking
+    /// keeps its old speed until its next order or recompute (`unit-move-speed-model.md`).
+    pub move_speed_refresh_skipped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -278,8 +283,8 @@ pub struct Rules {
 }
 
 /// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
-/// `with_move_speed_stacking`. The stacking path of the client is not decoded, so a set flag
-/// refuses the item.
+/// `with_move_speed_stacking`. The flag does not change the speed formula; it skips the
+/// movement object's recompute when the ability attaches or detaches.
 #[derive(Clone, Debug)]
 struct MoveSpeedBonusClass {
     class: String,
@@ -1219,16 +1224,7 @@ impl Rules {
                 && code == class.class
             {
                 match class.stacks {
-                    Some(false) => {}
-                    Some(true) => {
-                        return Err(format!(
-                            "speed bonus {alias} on {}: Misc/{MOVE_SPEED_STACK_KEY} is set (as in \
-                             the custom and campaign rule sets) and the client then adds DataA1 \
-                             to a unit bonus record that is summed over the unit's abilities; \
-                             where that sum reaches the speed is not decoded",
-                            item.rawcode()
-                        ));
-                    }
+                    Some(skipped) => held.move_speed_refresh_skipped |= skipped,
                     None => {
                         return Err(format!(
                             "speed bonus {alias} reads Misc/{MOVE_SPEED_STACK_KEY}, which this \

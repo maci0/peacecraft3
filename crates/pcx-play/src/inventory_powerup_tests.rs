@@ -861,6 +861,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             spell_damage_taken: None,
             attack_speed: 0.0,
             move_speed_bonus: None,
+            move_speed_refresh_skipped: false,
         }
     );
 }
@@ -1440,6 +1441,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             spell_damage_taken: None,
             attack_speed: 0.0,
             move_speed_bonus: None,
+            move_speed_refresh_skipped: false,
         }
     );
 }

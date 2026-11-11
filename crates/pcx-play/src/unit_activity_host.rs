@@ -2062,10 +2062,40 @@ impl ObjectHost {
         .map(|_| ())
     }
 
+    /// Refuses while `unit` walks a route. With `Misc/MoveSpeedBonusesStack` set the client skips
+    /// the movement object's recompute (`0xb69430`) when a speed bonus attaches or detaches, so a
+    /// walking unit keeps its old speed until its next order; the recreation re-anchors the route
+    /// to the new speed at once, which would differ.
+    pub(super) fn require_unit_not_walking(&self, unit: HandleId) -> Result<(), Error> {
+        let walking = self
+            .executed_unit(unit)?
+            .activity
+            .as_ref()
+            .is_some_and(UnitActivity::moving);
+        if walking {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::UnitActivity(
+                    "a speed bonus changes on a walking unit while Misc/MoveSpeedBonusesStack is set: \
+                     the client then keeps the old speed until the next order, which is not modelled"
+                        .into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Refuses before any state is written when `unit` cannot take a speed bonus: it needs a speed
     /// host with admitted limits, a position and a clock to re-anchor its route, and must not be
     /// a polymorph, whose type change writes to the speed state in ways that are not decoded.
-    pub(super) fn require_speed_bonus_host(&self, unit: HandleId) -> Result<(), Error> {
+    pub(super) fn require_speed_bonus_host(
+        &self,
+        unit: HandleId,
+        refresh_skipped: bool,
+    ) -> Result<(), Error> {
+        if refresh_skipped {
+            self.require_unit_not_walking(unit)?;
+        }
         let fail = |detail: &str| {
             self.inner
                 .error("inventory", Failure::UnitActivity(detail.into()))

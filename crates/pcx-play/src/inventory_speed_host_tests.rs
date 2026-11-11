@@ -139,6 +139,99 @@ fn boots_work_for_a_hero_and_move_with_the_item_to_a_new_holder() {
     assert_eq!(speed(&h, ordinary), limited(base + BOOTS));
 }
 
+fn walk(h: &mut ObjectHost, unit: HandleId) {
+    h.native(
+        "IssuePointOrder",
+        &[
+            Value::Handle(unit),
+            Value::Str("gamma".into()),
+            Value::Real(50.0),
+            Value::Real(50.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        h.executed_unit(unit)
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .moving(),
+        "the fixture unit walks"
+    );
+}
+
+#[test]
+fn stacking_rule_sets_take_the_same_largest_bonus_formula_on_an_idle_unit() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open_stacking();
+    let base = speed(&h, ordinary);
+    let strong = item(&mut h, b"bspd", 0.0);
+    let weak = item(&mut h, b"bsp2", 0.0);
+    assert_eq!(add(&mut h, ordinary, weak), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut h, ordinary, strong), Ok(Value::Bool(true)));
+    assert_eq!(
+        script_get(&mut h, ordinary),
+        limited(base + BOOTS),
+        "not the sum"
+    );
+    drop_item(&mut h, ordinary, strong);
+    assert_eq!(script_get(&mut h, ordinary), limited(base + WEAKER_BOOTS));
+    drop_item(&mut h, ordinary, weak);
+    assert_eq!(script_get(&mut h, ordinary), base);
+}
+
+#[test]
+fn stacking_rule_sets_refuse_a_bonus_change_on_a_walking_unit() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open_stacking();
+    let base = speed(&h, ordinary);
+    let boots = item(&mut h, b"bspd", 0.0);
+    walk(&mut h, ordinary);
+    let err = add(&mut h, ordinary, boots).unwrap_err();
+    assert!(err.contains("MoveSpeedBonusesStack"), "{err}");
+    assert_eq!(speed(&h, ordinary), base, "nothing was written");
+    let held = h
+        .executed_items()
+        .any(|(id, record)| id == boots && record.held_by.is_some());
+    assert!(!held);
+}
+
+#[test]
+fn stacking_rule_sets_refuse_dropping_boots_on_a_walking_unit() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open_stacking();
+    let base = speed(&h, ordinary);
+    let boots = item(&mut h, b"bspd", 0.0);
+    assert_eq!(add(&mut h, ordinary, boots), Ok(Value::Bool(true)));
+    walk(&mut h, ordinary);
+    let err = h
+        .native(
+            "UnitRemoveItem",
+            &[Value::Handle(ordinary), Value::Handle(boots)],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("MoveSpeedBonusesStack"), "{err}");
+    assert_eq!(speed(&h, ordinary), limited(base + BOOTS));
+}
+
+#[test]
+fn rule_sets_without_stacking_change_the_bonus_while_walking() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open();
+    let base = speed(&h, ordinary);
+    let boots = item(&mut h, b"bspd", 0.0);
+    walk(&mut h, ordinary);
+    assert_eq!(add(&mut h, ordinary, boots), Ok(Value::Bool(true)));
+    assert_eq!(speed(&h, ordinary), limited(base + BOOTS));
+    drop_item(&mut h, ordinary, boots);
+    assert_eq!(speed(&h, ordinary), base);
+}
+
 #[test]
 fn a_dying_holder_that_drops_its_boots_keeps_no_bonus() {
     let Fixture {

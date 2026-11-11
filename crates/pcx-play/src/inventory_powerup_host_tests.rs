@@ -720,6 +720,20 @@ fn open() -> Fixture {
     open_with_strength_regen(0.)
 }
 
+/// The fixture with `Misc/MoveSpeedBonusesStack=1`, as the custom and campaign rule sets set it.
+fn open_stacking() -> Fixture {
+    open_fixture(
+        Overlay::default(),
+        Overlay::default(),
+        0.,
+        None,
+        0.0,
+        "500",
+        &[],
+        true,
+    )
+}
+
 fn open_with_strength_regen(strength_regen: f32) -> Fixture {
     open_with_regens(strength_regen, None, 0.0)
 }
@@ -797,6 +811,31 @@ fn open_with_regens_overlays_extra(
     mana_per_intelligence: f32,
     hp: &str,
     extra: &[([u8; 4], ObjectField)],
+) -> Fixture {
+    open_fixture(
+        inventory_overlay,
+        hero_overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+        hp,
+        extra,
+        false,
+    )
+}
+
+/// `stacks` is the fixture's `Misc/MoveSpeedBonusesStack`.
+// The fixture knobs are independent scalars; the wrappers above name the common combinations.
+#[allow(clippy::too_many_arguments)]
+fn open_fixture(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+    hp: &str,
+    extra: &[([u8; 4], ObjectField)],
+    stacks: bool,
 ) -> Fixture {
     let (hero_rules, mut combat) = hero_rules();
     // Orb splash is spells-type damage; a distinct entry shows that its row is the one read.
@@ -924,7 +963,10 @@ fn open_with_regens_overlays_extra(
     .with_move_speed_bonus(&registration("AIms", "APbo"))
     .unwrap()
     .with_move_speed_stacking(
-        &[("synthetic MiscGame", b"[Misc]\nMoveSpeedBonusesStack=0\n".as_slice())],
+        &[(
+            "synthetic MiscGame",
+            format!("[Misc]\nMoveSpeedBonusesStack={}\n", u8::from(stacks)).as_bytes(),
+        )],
         4096,
     )
     .unwrap();

@@ -837,49 +837,126 @@ only one stack are not decoded.
   unit-type record; that this field is `spd` is inferred from the unit-creation call order).
   Result: `speed = limit((max(AIms DataA1) + base) * multiplier)`, so the bonus is added before the
   slow multiplier, and `SetUnitMoveSpeed` leaves the bonus in place.
-- `MiscGame.txt` `MoveSpeedBonusesStack` (string `0xf55f08`): attach (`0xbbeee0`), detach
-  (`0xbbefc0`) and the other `AIms` handlers read it with `0x4304c0`. With 0 they call the
-  recompute `0xb69430` (the maximum rule above). With nonzero they set flag `0x80` on the ability
-  and skip the recompute (the update handler slot 15, `0xbbf3c0`, sets the flag from the key and
-  clears it for an illusion when `Misc/IllusionsGetMoveSpeedBonus` is 0). While the flag is set,
-  slots 181 and 182 (`0xbbf330`, `0xbbf370`) store `DataA1` at `+0x28` of a bonus record that the
-  routine around `0x6d6960` (call site `0x6d69c0`, virtual `+0x2d4`) sums over the unit's
-  abilities; for the flat damage class the same slot (`0xbc2be0`) fills the attack damage fields
-  of such a record. Where the `+0x28` total reaches the speed is not decoded. Values in the shipped
-  files: root `Units\MiscGame.txt` 0, `Melee_V0` 0, `Custom_V0` and `Custom_V1` 1. The
-  campaign chapters run with the custom rule sets, so they use the undecoded path.
-- Implemented (2026-11-11): the full decode of the speed formula, the limit and the multiplier
-  writers is in `unit-move-speed-model.md`. The pickup binds `AIms`: each held item sets its `DataA1` as a
+- `MiscGame.txt` `MoveSpeedBonusesStack` (string `0xf55f08`), shipped values: root `Units\MiscGame.txt`
+  0, `Melee_V0` 0, `Custom_V0` and `Custom_V1` 1 (the campaign chapters run with the custom sets).
+  Attach (`0xbbeee0`), detach (`0xbbefc0`) and the other `AIms` handlers (`0xbbf020`, `0xbbf140`,
+  `0xbc8670`) read it with `0x4304c0`. With 0 they call the recompute `0xb69430` (a jump to
+  `0xb6ab70`) and never set the ability flag `0x80`. With nonzero they set flag `0x80` and skip the
+  recompute; the update handler slot 15 (`0xbbf3c0`) sets the flag from the key and clears it for an
+  illusion when `Misc/IllusionsGetMoveSpeedBonus` is 0.
+- Where the stacking total goes (decoded 2026-11-11, observed in the image): it does not reach the
+  speed formula. The formula `0xb681b0` gets its bonus only from `0x6d91f0` (its single caller, at
+  `0xb681d5`), which calls slot 97 (`0xbbf220`) on every ability of the unit and keeps the maximum.
+  Slot 97 returns `DataA1` whether or not flag `0x80` is set, so the formula is
+  `limit((max(DataA1) + base) * multiplier)` under both settings. Slots 181 and 182 (`0xbbf330`,
+  `0xbbf370`) store `DataA1` at `+0x28` of a stat record only while the flag is set. The sole callers of
+  virtual `+0x2d4` and `+0x2d8` are `0x6d69c0` and `0x6d73cb`, both inside `0x6d66d0`, which sums the
+  records of all abilities into two output records (positive and negative). `0x6d66d0` has eight
+  callers: the unit info panel update `0x6487a5` (function `0x6484a0`) and a second panel reader
+  `0x659f8a` (reads `+0x38` and `+0x40`), the hero attribute getters `0x690cad`, `0x6917ff`,
+  `0x692b2d` (they read `+0x50`, `+0x54`, `+0x58`), `0x69ca1d`, `0x69dbbd` and `0xb3e010`. Only
+  `0x6487a5` reads `+0x28`: it copies `+0x24` and `+0x28` of both records into the value pair that it
+  passes to the panel element at `this+0x158`, the third icon created at `0x632c5c` from the string
+  `SimpleInfoPanelIconArmor`. The `BUau` buff writes its speed fraction into the same field (`0xc64ae0`,
+  `0xc64b20`, value `0.1`), so the field mixes flat and fractional amounts and is display data. What the
+  panel element does with the pair (vtable `+0x70`) is not decoded.
+- What the flag changes, then, is the cache refresh: `0xb6ab70` computes `0xb681b0` and pushes it to the
+  unit's mover (unit virtual `+0xb8`, then `+0x18`). The move-order start `0xb69ec5` and the other
+  `0xb681b0` callers (`0xb69fa4`, `0xb6a1e2`, `0xb6a25e`, `0xb6a364`, `0xb6a862`, `0x654fe4`,
+  `0xad25d0`, `0xb65c50`) read the formula live. Under a set flag, a bonus that attaches or detaches
+  while the unit walks leaves the mover at its old speed until the next order or recompute (inferred
+  from the call structure; not observed at runtime). `GetUnitMoveSpeed` (`0xb68160`) reads the
+  formula live.
+- Implemented (2026-11-11): the speed formula, the limit and the multiplier writers are in
+  `unit-move-speed-model.md`. The pickup binds `AIms`: each held item sets its `DataA1` as a
   per-item entry of the unit's bonus list, the largest entry counts, dropping the item (also on
   death or removal) takes it out, and the bonus is added to the base before the multiplier and the
-  limit. Refused: a nonzero `MoveSpeedBonusesStack` (the stacking path above; this keeps the
-  campaign chapters that carry boots blocked, because the custom rule sets set it), a map-modified `AIms`
-  row (the overrides are not decoded), a unit without the speed host, position or clock, and a
-  polymorphed holder. Tests: `inventory_speed_host_tests.rs` and the `speed_bonus_*` tests in
-  `inventory_orb_tests.rs`.
+  limit. A nonzero `MoveSpeedBonusesStack` is admitted with the same formula. The recreation re-anchors
+  a walking route at once, which the skipped refresh would not do, so under a set flag a pickup or drop
+  on a walking holder refuses (`require_unit_not_walking`). Also refused: a map-modified `AIms` row
+  (the overrides are not decoded), a unit without the speed host, position or clock, and a
+  polymorphed holder. Tests: `inventory_speed_host_tests.rs` (`stacking_rule_sets_*`) and the
+  `speed_bonus_*` tests in `inventory_orb_tests.rs`.
 
-### `AIau` (Legion Doom-Horn `lgdh`, code `AUau`): still refused
+### `AIau` (Legion Doom-Horn `lgdh`, code `AUau`): decoded in part, still refused
 
-Decoded so far (no runtime capture):
+Decoded from the image (no runtime capture). Rows (shipped, same in root and `Custom_V0`): `Area1` 900,
+`targs1` `air,ground,friend,self,vuln,invu`, `DataA1` 0.1, `DataB1` 0.5, `DataC1` 0, `BuffID1` `BUau`,
+`Dur1` 0, `HeroDur1` 0, `Cool1` 0. The editor metadata rows `Uau1`, `Uau2`, `Uau3` label DataA, DataB, DataC
+"Movement Speed Increase (%)", "Life Regeneration Increase (%)", "Percent Bonus" (bool). The hero spell
+`AUau` has the same `Area1` and `targs1`, with `DataA` 0.1/0.2/0.3 and `DataB` 0.5/1/1.5.
 
-- Class (observed): `AIau` is a row whose `code` is `AUau`, the class of the hero spell Unholy Aura.
-  Registration window `0xc657d0`: descriptor `0x11b8be0`, base class id `aura` (from `0xb90db0`),
-  class id getter `0xc65710`. The buff is `BUau` (getter `0xc65720`), registered at `0xc657f0` over
-  base `BAUR` (from `0x6f4b60`), a different base from the `BSPD` of slow and frost.
-- Rows (shipped): `AIau` has `Area1` 900, `targs1` `air,ground,friend,self,vuln,invu`, `DataA1`
-  0.1, `DataB1` 0.5, `DataC1` 0, `BuffID1` `BUau`. The editor metadata rows `Uau1`, `Uau2`, `Uau3`
-  (data columns A, B, C) are labelled "Movement Speed Increase (%)", "Life Regeneration Increase (%)"
-  and "Percent Bonus" (bool). The item text says it grants the Hero and friendly nearby units
-  increased life regeneration and movement speed and does not stack with Unholy Aura.
-- Buff movement half (observed): the `BUau` apply routine `0xc65560` sets flag `0x200` on the buff
-  and shifts the unit's speed multiplier by the value at buff `+0xe8` through `0xb67720`, unless the
-  unit has flag `0x40000000` and `Misc/IllusionsGetMoveSpeedBonus` (string `0xea7520`, stock 1) is
-  0. The flag is the one `IllusionsCanRestoreLife` pairs with illusions (inferred). The speed model
-  of `unit-move-speed-model.md` can take this delta; the recreation has no aura host to call it.
-- Life regeneration half: the class getter `0xc65750` reads the `Misc` key
-  `IllusionsCanRestoreLife` for illusions. Where `DataB1`/`DataC1` reach the regeneration is not
-  decoded.
-- Open, hence refused with a message naming the class (`UNMODELED_PASSIVE_CLASSES`): the base
-  class `aura` scan (period, the unit filter against `targs1`, how a unit leaving the range loses the
-  buff), the `BUau` duration and refresh, the stacking rule with the hero spell, and the life
-  regeneration addition.
+Classes (observed). The ability is `CAbilityAuraUnholy` (vtable `0xfa4340`, class getter slot 7 `0xc64f50`
+returns `AUau`), derived from `CAbilityAura` (vtable `0xf36710`, class id `aura`, `0xb90db0`). The buff is
+`CBuffAuraUnholy` (vtable `0xfa3fac`), registered at `0xc657f0` over `BAUR`. The Unholy ability overrides
+slots 1, 7, 22, 202 (returns `0xd00f7`, base `0xd0142`) and 212 to 214 (`0xc64f70`, `0xc64fb0`, `0xc65000`).
+
+Aura base mechanics (observed, labelled where inferred):
+
+- Attach (slot 32, `0xb8f890`): reads `Area` (string at `0x10dce00`) of level 1 into the tracked field at
+  `+0x90` (value `+0x94`) and `DataA` into `+0x88` (value `+0x8c`), sets flag `0x10000000`, and registers
+  the ability in the unit's lists (`0x6c0010`, `0x6bffb0`, `0x6c00a0`, `0x698470`). If flag `0x80` (active)
+  is set it starts.
+- Start (slot 57, `0xb8fd10`; run from event `0xd01a7`): creates a periodic timer at `this+0x9c` with
+  period 2.0 s (`0x9a1620` converts the integer 2; event `0xd01c1`; `0x7fbe90`), and a range registration at
+  `this+0x98` (`0x800070`, class `CRangeEventReg`, vtable `0xe7d854`, constructors `0x8035e0`, `0x8030e0`)
+  with radius `Area1` (`0x8037a0` writes it at `+0x50`), event `0xd01c7` and a second period argument
+  2.0 / 4.0 = 0.5 s (`0x9a02d0` divides; `0x112d820` is 4.0 from the static initializer `0x401610`).
+  `0x8bc260` stores that argument at registration `+0x44` and `0x8b7ea0` schedules the next firing at game
+  time plus that value; that 0.5 s is the registration's repeat interval is inferred from those two
+  routines.
+- Events (handler slot 3, `0xb90490`): `0xd01c7` (unit handle at event `+0x10`, resolved by `0x691940`)
+  runs the target test and application `0xb90c10(this, unit)` while flag `0x80` is set; `0xd01c1` sets bit
+  2 of the registration's flags (`0x803840(1)`) and runs `0xb90c10(this, owner)`; `0xd01a7` starts;
+  `0xd01a0` stops (slot 56, `0xb8fcc0`: ends the effects through virtual `+0x310`, then releases
+  the registration); `0x80261` re-evaluates the active flag (`0xb90ea0`).
+- Target test (`0xb90c10`): reject when virtual `+0x348` (`0xb90440`) returns nonzero. That routine calls
+  `0x682450(owner, unit, this+0x4c)`, which forwards to `0x6adb90` (the allowed-target test against the
+  ability's `targs` mask; the body of `0x6adb90` is not read) and returns its result when nonzero, else
+  returns `0xdd` when `0x682180(unit, slot 202 value)` is nonzero (a scan of the unit's abilities through
+  their virtual `+0x26c`; not decoded, inferred to be the no-stacking test against the group id
+  `0xd00f7`). Also reject: target flag `[+0x20] & 0x4000000`; owner flag `[+0x164] & 0x10`; owner flag
+  `[+0x164]` bit 31 while `Misc/AnimatedUnitsBestowAuras` is 0; owner `[+0x20] & 0x4000000` while
+  `BurrowedUnitsBestowAuras` is 0; for a target other than the owner, owner `[+0x164] & 0x40000000`
+  while `IllusionsBestowAuras` is 0 and owner `[+0x164] & 0x1000000` while `InvisibleUnitsBestowAuras` is
+  0; owner polymorphed (`0x6d7d50`) while `PolymorphedUnitsBestowAuras` is 0. The `Misc` key
+  `FlyingHeroesBestowAuras` is read and its result discarded. All six keys are 0 in root, `Melee_V0`,
+  `Custom_V0` and `Custom_V1`; what each flag bit means is inferred from the key names.
+- Application (`0xb90c10`, rest): the buff id comes from `BuffID` of the level (`0xb905f0`, `0x46ea70`).
+  `0x6d6570` looks for an existing buff of that id on the target. None: slot 214 (`0xc65000`) builds the
+  `BUau` buff (`0xc65610`), sets its source, and calls buff virtual `+0x374` (`0xc647d0`) with `DataC1 != 0`,
+  which sets buff flag `0x100` ("percent"); then slot 212 (`0xc64f70`) calls buff virtual `+0x378`
+  (`0xc64820`) with `DataA` and `DataB`, which stores them at buff `+0xe8` (through the tracked field
+  `+0xe4`) and `+0xf0` (`+0xec`) and applies both halves. Existing buff: slot 213 (`0xc64fb0`) calls
+  `+0x37c` (`0xc64860`), which compares the new values with the stored ones and, on a change, removes
+  and re-applies the matching half.
+- Speed half (observed): `0xc65560` adds `+0xe8` (`DataA1`, a fraction) to the unit's speed multiplier
+  through `0xb67720`, once per buff (buff flag `0x200`); `0xc65890` subtracts it. Both are skipped when
+  the target carries unit flag `0x40000000` and `Misc/IllusionsGetMoveSpeedBonus` is 0 (the shipped
+  custom sets set it to 0). The multiplier is the additive one in `unit-move-speed-model.md`.
+- Life regeneration half (observed): `0xc65420` runs once per buff (flag `0x400`), skipped for a target
+  with unit flag `0x40000000` while `Misc/IllusionsCanRestoreLife` is 0 (`Custom_V0`, `Custom_V1` set 0).
+  The amount is `+0xf0` (`DataB1`, 0.5); with buff flag `0x100` (`DataC1` nonzero) it is multiplied by
+  the result of the target's virtual `+0x130`, which is not identified. `0xb3f600` hands the amount to
+  `0x800f40` on the life pool at `unit+0x1a0` with duration 0.0, which creates a permanent extra rate
+  operation (the same constructor as the unit's own regeneration, `unit-regeneration.md`); its handle is
+  kept at buff `+0xf4`. `0xc65810` ends it through the handle's virtual `+0x8` and releases it. The
+  pool sums the rates and evaluates `value + rate * dt` continuously, so the unit's own regeneration
+  (armed only for unit flag `0x40`, i.e. under its `regenType` rule) and this operation are
+  independent terms. The amount is not an integer, so the integer held-regeneration sum of the
+  recreation cannot carry it.
+- Buff end (observed): buff slot 209 (`0xc64a20`) removes the speed half (`0xc65890`) and then the
+  regeneration half (`0xc65810`).
+
+Not decoded, so `AUau` stays refused (`UNMODELED_PASSIVE_CLASSES`):
+
+- When the range registration fires `0xd01c7` (on entry only, or at each interval for every unit in
+  range) and what its flag bit 2 changes; the aura and buff code read no duration (`Dur1`, `HeroDur1` are 0),
+  and no path that removes a `BUau` buff when its unit leaves the area was found, so the buff lifetime
+  and removal are open.
+- The body of the allowed-target test `0x6adb90` and the stacking test `0x682180`/`0x682210`/`0x6822e0`
+  against the hero `AUau` (the item text says the two do not stack).
+- The target virtual `+0x130` used by the percent mode.
+
+Recreation consequence: an aura host needs the removal and lifetime rule; none is built, because the rule
+is not decoded.

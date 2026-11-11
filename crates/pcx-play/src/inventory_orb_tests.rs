@@ -672,15 +672,24 @@ fn speed_bonus_reads_data_a1_and_keeps_the_largest_of_several() {
 }
 
 #[test]
-fn speed_bonus_refuses_stacking_unread_misc_and_modified_rows() {
+fn speed_bonus_marks_the_skipped_refresh_and_refuses_unread_misc_and_modified_rows() {
+    let held = orb_rules()
+        .held_attributes(&catalog_item("bspd"))
+        .unwrap()
+        .unwrap();
+    assert!(!held.move_speed_refresh_skipped);
     let stacking = orb_rules()
         .with_move_speed_stacking(
             &[("map", b"[Misc]\nMoveSpeedBonusesStack=1\n".as_slice())],
             4096,
         )
         .unwrap();
-    let err = stacking.held_attributes(&catalog_item("bspd")).unwrap_err();
-    assert!(err.contains("not decoded"), "{err}");
+    let held = stacking
+        .held_attributes(&catalog_item("bspd"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.move_speed_bonus, Some(60.0));
+    assert!(held.move_speed_refresh_skipped);
     let unread = plain_rules(Arc::clone(&orb_rules().tables), Overlay::default())
         .with_move_speed_bonus(&window("AIms", "APbo"))
         .unwrap();

@@ -447,6 +447,7 @@ impl ObjectHost {
             spell_damage_taken: None,
             attack_speed: 0.0,
             move_speed_bonus: None,
+            move_speed_refresh_skipped: false,
         };
         for (item, _) in self
             .executed_items()
@@ -505,6 +506,7 @@ impl ObjectHost {
             if let Some(value) = passive.move_speed_bonus {
                 bonus.move_speed_bonus =
                     Some(bonus.move_speed_bonus.map_or(value, |v| v.max(value)));
+                bonus.move_speed_refresh_skipped |= passive.move_speed_refresh_skipped;
             }
             if let Some(orb) = passive.orb {
                 if bonus.orb.is_some() {
@@ -927,6 +929,9 @@ impl ObjectHost {
             return Ok(());
         }
         let passive = self.held_attributes(item)?;
+        if passive.move_speed_bonus.is_some() && passive.move_speed_refresh_skipped {
+            self.require_unit_not_walking(unit)?;
+        }
         self.require_passive_regen_projection(
             unit,
             passive.life_regen,
@@ -1112,7 +1117,7 @@ impl ObjectHost {
             ));
         }
         if passive.move_speed_bonus.is_some() {
-            self.require_speed_bonus_host(unit)?;
+            self.require_speed_bonus_host(unit, passive.move_speed_refresh_skipped)?;
         }
         if held.orb.is_some() && passive.orb.is_some() {
             return Err(self.inner.error(

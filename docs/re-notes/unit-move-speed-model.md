@@ -95,7 +95,8 @@ multiplier, bounds); `UnitActivity` keeps one per unit and `UnitActivity::speed(
   cell reads 0) and the `Misc` pair of the unit's class.
 - `SetUnitMoveSpeed` writes the base. Slow and frost add and remove their movement decrease through
   `shift_unit_speed`. Held `AIms` items set and remove their bonus per item
-  (`set_unit_speed_bonus`). Every change re-anchors the route and the walk animation
+  (`set_unit_speed_bonus`); with `Misc/MoveSpeedBonusesStack` set that also needs a unit that is not
+  walking (`require_unit_not_walking`). Every change re-anchors the route and the walk animation
   (`update_unit_speed`). A dead unit only has its state updated.
 - `GetUnitMoveSpeed` returns the formula result. `GetUnitDefaultMoveSpeed` returns the authored
   `spd` and refuses for a hero while `Misc/AgiMoveBonus` is nonzero or was not read.
@@ -125,7 +126,9 @@ a second decrease), `inventory_speed_host_tests.rs` (boots), `inventory_orb_test
   is read as a plain store; any rounding or notification it does is not decoded.
 - Polymorph: which writes the type change makes to the movement object. Slow, frost and a speed
   bonus on a polymorphed unit, and polymorph on a slowed or frosted unit, stay refused.
-- `Misc/MoveSpeedBonusesStack` nonzero (`Custom_V0`, `Custom_V1`, hence the campaign chapters): a
-  held `AIms` refuses. The stacking path and what is known of it are in `passive-held-items.md`.
+- `Misc/MoveSpeedBonusesStack` nonzero (`Custom_V0`, `Custom_V1`, hence the campaign chapters): the
+  formula is unchanged (the flag only skips the mover refresh and fills a display record, see
+  `passive-held-items.md`). A bonus that attaches or detaches on a walking unit refuses, because the
+  client then keeps the mover at its old speed and the recreation re-anchors the route at once.
 - `[+0x80]` (movement disable) is not modelled; nothing in the recreation sets it.
 - Hero term of `GetUnitDefaultMoveSpeed` for a nonzero `AgiMoveBonus`.
