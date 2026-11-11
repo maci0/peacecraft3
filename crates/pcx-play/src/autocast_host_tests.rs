@@ -58,6 +58,13 @@ set CallbackMode=4
 endfunction
 "#;
 fn open(default: &str, present: bool) -> (Vm, HandleId) {
+    open_with_profile(
+        default,
+        present,
+        b"[X002]\nOrderon=repair\nOrderoff=delta\n",
+    )
+}
+fn open_with_profile(default: &str, present: bool, profile: &[u8]) -> (Vm, HandleId) {
     let mut fields = hero_fields("STR");
     fields.retain(|(id, _)| id != b"A008");
     fields.push(column(
@@ -97,10 +104,7 @@ fn open(default: &str, present: bool) -> (Vm, HandleId) {
             edition_version: "fixture".into(),
         },
         &[(SlkId::AbilityData.path(), &data)],
-        &[(
-            "Units\\HumanAbilityFunc.txt",
-            b"[X002]\nOrderon=repair\nOrderoff=delta\n",
-        )],
+        &[("Units\\HumanAbilityFunc.txt", profile)],
         pcx_objects::editor::EditorReadLimits {
             max_listed_paths: 4,
             max_asset_bytes: 65536,
@@ -348,4 +352,39 @@ fn changed_state_cache_refusal_is_atomic_and_malformed_defaults_are_not_false() 
     let before = vm.host().inner.executed_unit(u).unwrap().clone();
     assert!(vm.call("off", &[]).is_err());
     assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+}
+
+#[test]
+fn toggle_keys_fall_back_to_order_unorder_when_no_orderoff_is_authored() {
+    let profile = b"[X002]\nOrder=repair\nUnorder=delta\n";
+    let (mut vm, u) = open_with_profile("_", true, profile);
+    vm.call("listen", &[]).unwrap();
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    assert_eq!(vm.global("Seen"), Value::Int(0));
+    let (mut vm, u) = open_with_profile("X001", true, profile);
+    vm.call("listen", &[]).unwrap();
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
+fn enable_refuses_even_when_the_unit_lacks_the_ability() {
+    let (mut vm, u) = open("_", false);
+    let error = vm
+        .host()
+        .inner
+        .native(
+            "IssueImmediateOrder",
+            &[Value::Handle(u), Value::Str("repair".into())],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("enabling/effects not implemented"),
+        "{error}"
+    );
 }

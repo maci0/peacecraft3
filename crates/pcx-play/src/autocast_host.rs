@@ -115,6 +115,12 @@ impl ObjectHost {
         {
             return Err(fail("autocast/order source differs".into()));
         }
+        if order == class.on {
+            return Err(fail(format!(
+                "autocast enabling/effects not implemented for class {}",
+                String::from_utf8_lossy(&class.code)
+            )));
+        }
         let record = self.executed_unit(unit)?;
         let Some(abilities) = &record.abilities else {
             return Err(fail("autocast unit abilities not admitted".into()));
@@ -129,7 +135,17 @@ impl ObjectHost {
             if code.as_bytes() != class.code {
                 continue;
             }
-            for (key, wanted) in [("Orderon", class.on), ("Orderoff", class.off)] {
+            // Most toggles author Orderon/Orderoff; Immolation authors only Order/Unorder.
+            let (on_key, off_key) =
+                if crate::ability_profile::profiles(tables, overlay, alias, "Orderoff")
+                    .map_err(fail)?
+                    .is_empty()
+                {
+                    ("Order", "Unorder")
+                } else {
+                    ("Orderon", "Orderoff")
+                };
+            for (key, wanted) in [(on_key, class.on), (off_key, class.off)] {
                 let profile =
                     crate::ability_profile::profiles(tables, overlay, alias, key).map_err(fail)?;
                 if profile.len() != 1
@@ -147,11 +163,6 @@ impl ObjectHost {
         let Some(alias) = selected else {
             return Ok(None);
         };
-        if order == class.on {
-            return Err(fail(format!(
-                "autocast enabling/effects not implemented for {alias:?}"
-            )));
-        }
         if self.unit_autocast_enabled(unit, alias)? != Some(true) {
             return Ok(None);
         }

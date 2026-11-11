@@ -7,14 +7,17 @@ classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`
 Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`), Web (`CAbilityWeb`,
 code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
 (`CAbilityRenew`, code `Aren`), Bloodlust (`CAbilityBloodlust`, code `Ablo`), Frost
-Armor (`CAbilityFrostArmorAuto`, code `AUfu`) and Restoration (`CAbilityRestoration`,
-code `Arst`). The reader decodes all eleven with the same OFF handler checks and
-refuses the image otherwise. Each OFF order name is the `Orderoff` of an ability
-section in the `*AbilityFunc.txt` members, and each section's `code` (from
+Armor (`CAbilityFrostArmorAuto`, code `AUfu`), Restoration (`CAbilityRestoration`,
+code `Arst`), Mana Shield (`CAbilityManaShield`, code `ANms`) and Immolation
+(`CAbilityImmolation`, code `AEim`). The reader decodes all thirteen with the same
+OFF handler checks and refuses the image otherwise. Each OFF order name is the
+`Orderoff` (or, for Immolation, the `Unorder`) of an ability section in the
+`*AbilityFunc.txt` members, and each section's `code` (from
 `Units\AbilityData.slk`) selects the class: `weboff` in `[Aweb]` and `[ACwb]`,
 `faeriefireoff` in `[Afae]`, `[Afa2]` and `[ACff]`, `renewoff` in `[Aren]`,
 `bloodlustoff` in `[Ablo]` and `[ACbb]`/`[ACbl]`, `frostarmoroff` in `[AUfu]`,
-`[ACfu]` and `[ACf2]`, `restorationoff` in `[Arst]`. The OFF handler
+`[ACfu]` and `[ACf2]`, `restorationoff` in `[Arst]`, `manashieldoff` in `[ANms]`,
+`unimmolation` in `[AEim]` and `[ACim]` (`ACim` has code `AEim`). The OFF handler
 joins a tested state-bit operand to its complementary clear operand and the
 already-clear return branch. The reader derives these operands and IDs; it does
 not embed native addresses or order IDs. Synthetic relocated/nonstock fixtures
@@ -63,21 +66,41 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic effects of the eleven
+slice. ON orders explicitly refuse before mutation: automatic effects of the thirteen
 bound classes, their default-enabled automatic operation, and the later
 `ravenform` transformation remain required work.
 
-## Mana Shield, Frost Armor base class and Burrow (not bound)
+## Mana Shield and Immolation toggles
 
 `manashieldoff` is the OFF order of `[ANms]` (`Orderon=manashieldon`,
-`Orderoff=manashieldoff`), code `ANms`, class `CAbilityManaShield`. Its on/off
-values are immediates and its OFF virtual reaches the same shared handler as the
-bound classes, so the shape check passes. The repo has no mana shield active
-state or effect: `ANms` and the class appear nowhere outside the class list. An
-OFF would therefore change state with no verified effect. The order stays
-refused. Missing evidence: the meaning of the tested state bit for a toggle, the
-shield's absorption effect and timing, and the return for a unit without an
-active shield.
+`Orderoff=manashieldoff`). `unimmolation` is the OFF order of `[AEim]` and `[ACim]`
+(`Order=immolation`, `Unorder=unimmolation`; no `Orderon`/`Orderoff` keys). Both
+classes read from the selected client with the shared OFF handler checks. The
+reader checks the class names, both on/off immediates and the handler shape
+(`autocast_rules_tests::selected_original_autocast_classes_bind`, run through
+`.scratch/run-asset-gate.sh`, passes with all thirteen classes).
+
+The host picks the toggle key pair per ability: `Orderon`/`Orderoff` when
+`Orderoff` is authored, else `Order`/`Unorder`. Both ability sections match their
+`code` against the class, so the same ID check covers `[AEim]` and `[ACim]`.
+
+Default state: `UnitAbilities.slk` `auto` (column `X4`) lists no `ANms` or `AEim`
+in any of its 837 rows, so both toggles start inactive. The host's
+`unit_autocast_enabled` derives state from `auto` and the explicit disabled list.
+An ON order never takes effect, so an inactive toggle stays inactive and its OFF
+returns false without a state change, the same return the shared handler
+measured for an authored-disabled Inner Fire (Arm A above). That return is
+measured for the shared handler on Inner Fire, not for `ANms` or `AEim`
+individually; the per-class return is the recreation choice, following the
+autocast precedent.
+
+ON orders (`manashieldon`, `immolation`) refuse with `autocast enabling/effects
+not implemented for class <code>` for any live unit of the class, whether or not
+the unit has the ability. Their effects are not modelled: Mana Shield absorption
+(damage, mana cost and timing) and Immolation's burn aura and mana drain.
+Missing evidence for the ON effects: absorption/drain formulas and timing.
+
+## Frost Armor base class and Burrow (not bound)
 
 `CAbilityFrostArmor` (code `AUfa`, alias `[AUfa]`, which has no `Orderoff`) is not
 the class for `frostarmoroff`. Its OFF virtual is `mov eax, [global]`, not an
