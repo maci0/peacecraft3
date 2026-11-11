@@ -743,3 +743,21 @@ Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`).
 
 `AIva` (an item vampiric aura, also behind OrcX03a) needs the aura and life-steal classes decoded
 and stays refused.
+
+## Probe results (2026-11-11, Purge and Ankh lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" was probed on the
+unmodified base `c30b6d7b` (a saved test binary), "after" on this branch. Decode and addresses:
+[passive-held-items.md](passive-held-items.md) (`AIrc`, "Purge").
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf07 | `UnitAddItemToSlotById` (`war3map.j:1037`): `AIrc` on `ankh` unsupported | passes the pickup; next `UnitAddItemToSlotById` (`war3map.j:1041`): unsupported passive ability `Adt1` (code `Adet`) on `gemt` |
+| RoC Human09 | `UnitAddItem`: `AIrc` on `ankh` unsupported | passes (`executed_units=199`) |
+| RoC Undead02Interlude | `UnitAddItemToSlotById`: `AIlb` on `olig` unsupported (the Purge reason) | passes `olig`; next `UnitAddItemToSlotById`: a second orb on one holder is unsupported (the firing order of several orbs is not decoded) |
+| TFT HumanX05 | `MultiboardSuppressDisplay` unsupported by this host | unchanged: the probe stops on the multiboard native before any swing, so the `AIll` hit is not reached |
+
+Not reached by a startup probe, so refused or open in code: a death of a unit that holds an ankh
+and a hero reincarnation ability, several ankhs, or a flier; Purge pauses (`DataD`, `DataE`, so the
+shipped `AIpg` row of `AIll`), a Purge on a summoned enemy (magic-type damage path), and a Purge
+cast on a unit with a buff whose magic bit is unread. Open: `Adet` (`gemt`) and the multi-orb order.
