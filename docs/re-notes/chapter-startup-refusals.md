@@ -274,3 +274,18 @@ row is the first refusal of `selected_install_locked_chapter_startup_probe`.
 | RoC NightElf07 | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | unchanged |
 | TFT NightElfX05 | `CreateUnit`: native texture green channel outside map | unchanged |
 | TFT HumanX06 | `CreateUnit`: native texture green channel outside map | unchanged |
+
+## Probe results (2026-11-11, max life, animation properties, alt icon)
+
+Each row is the first refusal of `selected_install_locked_chapter_startup_probe`.
+"Before" is the refusal recorded in the rows above for `main`; the native named
+there was not re-measured on the old binary. "After" is the run on this branch.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Orc03 | `Blizzard.j:3996` `SetDestructableMaxLife` unsupported | passes `SetDestructableMaxLife`; next `Blizzard.j:1321` `SetCameraTargetController` unsupported by this host |
+| RoC Human07 | `Blizzard.j:2133` `AddUnitAnimationProperties` unsupported | unchanged: refuses at `Blizzard.j:2133` (list mechanics decoded, selector coupling open, see `unit-animation-properties.md`) |
+| TFT HumanX01 | `Blizzard.j:4270` `UnitSetUsesAltIcon` unsupported | passes `UnitSetUsesAltIcon` (state only, see `unit-alt-icon.md`); next `war3map.j:7476` `SetAltMinimapIcon` unsupported by this host |
+| RoC NightElf03 | (not probed before) | first refusal unchanged: `IssueImmediateOrder` `innerfireon` (`war3map.j:675`, autocast ON); the `SetDestructableMaxLifeBJ` at `war3map.j:2394` is not reached |
+| RoC Orc08 | (not probed before) | probe passes (exit 0) |
+| TFT HumanX03 | (not probed before) | `SetPlayerTechResearched` refused at `war3map.j:12489`; its `SetDestructableMaxLifeBJ` calls are not separately observed |
