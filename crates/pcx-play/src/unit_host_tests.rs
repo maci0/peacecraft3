@@ -1893,6 +1893,56 @@ fn assignment_bits(
 }
 
 #[test]
+fn set_unit_state_on_a_null_unit_returns_without_recording_or_checking_the_arguments() {
+    let (mut vm, _, _) = state_catalog_host(&state_common(true), STATE_MAP, STATE_CONVERSIONS, 1)
+        .expect("unit state admission");
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit");
+    };
+    let first = vm.global("FIRST");
+    assert_eq!(
+        vm.host()
+            .native(
+                "SetUnitState",
+                &[Value::Null, first.clone(), Value::Real(5.0)]
+            )
+            .unwrap(),
+        Value::Null
+    );
+    // The native checks neither the state nor the value once the unit handle is zero.
+    assert_eq!(
+        vm.host()
+            .native(
+                "SetUnitState",
+                &[Value::Null, Value::Int(9), Value::Real(f32::NAN)]
+            )
+            .unwrap(),
+        Value::Null
+    );
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .unit_states
+            .is_empty()
+    );
+    // The one-record budget is untouched: a real assignment still fits.
+    vm.call("zero", &[]).unwrap();
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(unit)
+            .unwrap()
+            .unit_states
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn owned_vm_set_unit_state_retains_the_domain_handle_and_exact_finite_value() {
     let (mut vm, hits, _) =
         state_catalog_host(&state_common(true), STATE_MAP, STATE_CONVERSIONS, 1)

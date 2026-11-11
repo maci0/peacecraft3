@@ -2053,6 +2053,11 @@ impl ObjectHost {
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
         let (unit, state, value, enumerand) = {
             let fail = |reason| self.inner.error(SET_STATE, reason);
+            // `0x4abba0` resolves the unit through `0x483940`, which answers a zero handle with
+            // no object; the native then returns without checking the state or the value.
+            if let [Value::Null, _, _] = args {
+                return Ok(Value::Null);
+            }
             let [Value::Handle(unit), Value::Handle(state), value] = args else {
                 return Err(fail(Failure::UnitState(
                     "arguments do not match the unit native declaration",

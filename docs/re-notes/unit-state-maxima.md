@@ -59,3 +59,17 @@ an admitted source configuration that reaches
 the failure, or explicitly identify an internal fixture state. The admitted
 large-strength precision-loss case remains a separate reason to preflight
 sequential inventory cleanup.
+
+## Null unit handle (static, 2026-11-11)
+
+`0x4abba0` takes `(unit, state, value)`. It first compares the state with 4 (signed), then
+resolves the unit through `0x483940`, and only then re-checks the state as unsigned below 4 and
+calls `0x69dd90`. `0x483940` returns no object for a zero handle (`test esi,esi` then
+`xor eax,eax` at `0x483972`..`0x483993`), and the handler returns without reading the state
+or the value. A null unit is therefore a no-op that validates nothing. The recreation returns
+`null` for a null unit before checking the state handle or the value (`unit_host.rs`
+`set_unit_state`); a removed unit keeps its existing refusal, which is not decoded here.
+
+RoC Undead03 reaches this through `Trig_Load_Arthas_Actions` (`war3map.j:1499`):
+`SetUnitManaBJ(udg_Arthas, ...)` right after `GetLastRestoredUnitBJ()`, which is null on a fresh
+game cache. The map itself tests `udg_Arthas != null` one line later.
