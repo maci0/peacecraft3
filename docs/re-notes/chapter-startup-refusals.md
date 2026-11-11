@@ -444,3 +444,12 @@ Open after this lane:
 - Unit shop default slot count: the `Asud` constructor writes `0xb` at `0xb353d8`; deriving it from the image is not done.
 - `RecycleGuardPosition` ability list flag (`0x68e1a0`) and the global option word tested by `0x46e030` (mask `0x100`) are undecoded.
 - Camera target controller: per-frame follow and the calls that release it are undecoded; target reads refuse while one is set.
+
+## Probe results (2026-11-11, negative mana regeneration lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the sweep-6 log. Decode and addresses: [unit-regeneration.md](unit-regeneration.md#native-negative-mana-rate).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX07Interlude | `CreateUnit` refused: finite nonnegative unit `UnitBalance` `regenMana` required (`ubsp`, -3) | probe passes (`executed_units=42`) |
+| TFT NightElfX08 | `CreateUnit` at `war3map.j:1282` refused: `regenMana` required finite | passes; `SetReservedLocalHeroButtons` unsupported by this host (`war3map.j:2441`) |

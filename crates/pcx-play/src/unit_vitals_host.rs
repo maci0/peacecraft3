@@ -4,7 +4,7 @@
 //!
 //! Regeneration integrates the per-second rates over game time between
 //! advances. Day and night eligibility uses the admitted time-of-day clock.
-use super::unit_activity::balance_real;
+use super::unit_activity::{balance_real, balance_signed_real};
 use super::unit_creation::ExecutedUnit;
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::inventory_powerup::AttributeBonus;
@@ -64,7 +64,20 @@ pub(super) struct Rules {
 
 /// An SLK `-` cell is empty and reads as zero for a numeric column.
 fn balance_or_empty(definition: &Definition, column: &str) -> Result<f32, String> {
-    match balance_real(definition, column) {
+    empty_as_zero(definition, column, balance_real(definition, column))
+}
+
+/// [`balance_or_empty`] for a column whose negative values are admitted.
+fn signed_balance_or_empty(definition: &Definition, column: &str) -> Result<f32, String> {
+    empty_as_zero(definition, column, balance_signed_real(definition, column))
+}
+
+fn empty_as_zero(
+    definition: &Definition,
+    column: &str,
+    read: Result<f32, String>,
+) -> Result<f32, String> {
+    match read {
         Err(_)
             if definition.fields.values().any(|f| {
                 f.metadata.as_ref().is_some_and(
@@ -499,7 +512,7 @@ impl ObjectHost {
         let mut mana = balance_or_empty(definition, "mana0").map_err(fail)?;
         let regen = Regen {
             life_per_second: balance_or_empty(definition, "regenHP").map_err(fail)?,
-            mana_per_second: balance_or_empty(definition, "regenMana").map_err(fail)?,
+            mana_per_second: signed_balance_or_empty(definition, "regenMana").map_err(fail)?,
             life_type: regen_type(definition).map_err(fail)?,
             through: self
                 .timer_game_time()
@@ -923,7 +936,8 @@ impl ObjectHost {
 
     /// Base life, mana and unconditional bonus life rates. Base life eligibility
     /// does not gate hero strength or held-item regeneration. A held mana fraction
-    /// scales the base plus intelligence rate.
+    /// scales the base plus intelligence rate. The mana rate may be negative: the
+    /// native pool integrates rate times elapsed time, clamped to zero and the maximum.
     fn regen_rates(&self, unit: HandleId, bonuses: &HeroVitals) -> Result<(f64, f64, f64), Error> {
         let record = self.executed_unit(unit)?;
         let vitals = record.vitals.expect("filtered to vitals");
@@ -952,11 +966,19 @@ impl ObjectHost {
             mana += f64::from(derive("INT")?) * f64::from(bonuses.mana_regen_per_intelligence);
         }
         let mana_fraction = f64::from(bonus.mana_regen_fraction);
+        if mana < 0.0 && mana_fraction != 0.0 {
+            // The native fraction scaling of a draining rate is not decoded.
+            return Err(self.inner.error(
+                REGEN,
+                Failure::UnitActivity(
+                    "held mana regeneration fraction on a negative mana rate is not decoded".into(),
+                ),
+            ));
+        }
         mana *= 1.0 + mana_fraction;
         if !(life.is_finite()
             && life >= 0.0
             && mana.is_finite()
-            && mana >= 0.0
             && mana_fraction.is_finite()
             && mana_fraction >= 0.0
             && bonus_life.is_finite()

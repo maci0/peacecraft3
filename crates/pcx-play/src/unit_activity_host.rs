@@ -294,6 +294,12 @@ pub(crate) fn balance_real(definition: &Definition, wanted: &str) -> Result<f32,
     column_real(definition, SlkId::UnitBalance, wanted)
 }
 
+/// `UnitBalance` `regenMana`: the native rate has no sign test, so a finite negative value drains.
+pub(crate) fn balance_signed_real(definition: &Definition, wanted: &str) -> Result<f32, String> {
+    column_optional_signed_real(definition, SlkId::UnitBalance, wanted)?
+        .ok_or_else(|| format!("unit {:?} {wanted} is empty", SlkId::UnitBalance))
+}
+
 pub(crate) fn column_real(
     definition: &Definition,
     table: SlkId,
@@ -305,6 +311,21 @@ pub(crate) fn column_real(
 
 /// Like [`column_real`], but a `-`, `_` or empty SLK cell is `None` rather than an error.
 pub(crate) fn column_optional_real(
+    definition: &Definition,
+    table: SlkId,
+    wanted: &str,
+) -> Result<Option<f32>, String> {
+    let value = column_optional_signed_real(definition, table, wanted)?;
+    if value.is_some_and(|v| v < 0.) {
+        return Err(format!(
+            "finite nonnegative unit {table:?} {wanted} required"
+        ));
+    }
+    Ok(value)
+}
+
+/// Like [`column_optional_real`], but a finite negative value is admitted.
+pub(crate) fn column_optional_signed_real(
     definition: &Definition,
     table: SlkId,
     wanted: &str,
@@ -345,10 +366,8 @@ pub(crate) fn column_optional_real(
         }
         _ => return Err(format!("unsupported unit {table:?} {wanted} field")),
     };
-    if !value.is_finite() || value < 0. {
-        return Err(format!(
-            "finite nonnegative unit {table:?} {wanted} required"
-        ));
+    if !value.is_finite() {
+        return Err(format!("finite unit {table:?} {wanted} required"));
     }
     Ok(Some(value))
 }

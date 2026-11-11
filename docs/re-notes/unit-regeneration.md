@@ -44,9 +44,8 @@ after motion and before combat and inventory. Each step integrates
 
 - `Warcraft III.exe` SHA256 must be `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 - `UnitBalance.slk`: the three columns exist; every row's `regenType` is admitted.
-- One row, `ubsp`, has `regenMana` `-3`. A negative rate is refused: the drain rule is
-  not decoded (see [Native negative mana rate](#native-negative-mana-rate)), so the
-  probe for `TFT UndeadX07Interlude` still refuses there.
+- One row, `ubsp`, has `regenMana` `-3`. A negative rate is admitted: see
+  [Native negative mana rate](#native-negative-mana-rate).
   Census on the selected install: always 502, blight 41, night 51, none 242 (837 rows).
   No row uses `day`. Parser admits `day` in the editor's token family.
 - `MiscGame.txt` through the production `HeroVitals::read`: `StrRegenBonus=0.05`,
@@ -59,32 +58,68 @@ The gate covers source fields and constants. It does not run a map.
 
 ## Native negative mana rate
 
-Reviewed exe `Warcraft III.exe` 1.29.2.9231 (SHA-256 `3f2ed012…570eed`). Evidence is
-instruction-level; nothing here was run.
+Reviewed exe `Warcraft III.exe` 1.29.2.9231 (SHA-256 `3f2ed012…570eed`). Instruction-level
+evidence; nothing was run. VAs below are in that exe.
 
-Observed:
+Arming (observed):
 
-- The `UnitBalance` loader pushes the column name `regenMana` (VA `0xea0720`) and writes the
-  cell into the unit type record at `+0x2a8` (`0x6b4180`, via `0x6ac590`).
-- Mana refresh `0x6a1070` arms the mana regeneration operation only when the current mana pool
-  (object at unit `+0x1c0`, read by `0x800e20`) is above `0.0`. The comparison constant is the
-  float at VA `0x112d88c`; its bytes lie past the raw `.data` bytes, so it reads as zero at load.
-  A pool at or below zero cancels the operation (`0x6a118c`). The rate, unit `+0x1dc`, is passed
-  to the operation without a sign test in that routine.
-- The rate-change path `0x680310` (upgrade `rmnr`) adds the delta to the rate, calls the
-  integrator object at unit `+0x1d8` (virtual slot 0) and refreshes. It has no sign test.
-  So the negative-rate refusal in `upgrade-effects.md` is not a check in this routine.
-- The rate setter `0x8c4b40` treats a change with `|delta|` below the epsilon at VA `0x10db124`
-  as no change. It has no sign test.
+- The `UnitBalance` loader writes `regenMana` into the unit type record at `+0x2a8` (`0x6b4180`,
+  via `0x6ac590`); the refresh reads the unit's rate at `+0x1dc`.
+- Mana refresh `0x6a1070` arms the rate operation (object at unit `+0x1e0`) when the unit's
+  **maximum** mana is above `0.0`, not the current pool. `0x800e20` on the stat holder at unit
+  `+0x1c0` reads holder object field `+0x84`, the upper clamp; `0x5f9ad0` ("has a mana pool")
+  and `0x4ab820` (an amount combined with the maximum) read it the same way. This corrects
+  the earlier reading that the gate was the current pool.
+- It also cancels the operation (`0x6a118c`) when unit flags `+0x164 & 0x100` or `+0x20 & 0x100`
+  are set. The rate is passed without a sign test. If an operation already exists it only
+  updates the rate (`0x804670` then `0x8c4b40`).
+- Operation constructor `0x8043e0` (vtable `0xe7b150`, built by `0x800f40`): sets the rate with
+  `0x8c4b40` and passes a duration of `0.0`, which is stored as the large constant at `0x10dfe60`,
+  so the operation is permanent. `0x8c4b40` ignores a change under the epsilon at `0x10db124`,
+  stores the new rate, and calls `0x8c46e0` on the pool with the delta.
 
-Not decoded: the integrator's virtual slot 0 (and the operation's target object) that applies
-rate × elapsed to the pool. Whether a negative rate drains the pool and clamps it at zero is
-therefore open.
+Integrator (observed). The pool object, with the holder at unit `+0x1c0`, keeps value `+0x78`, the
+summed rate `+0x7c`, lower clamp `+0x80`, upper clamp `+0x84`, and a time stamp (`+0x70`/`+0x74`).
+The value is evaluated lazily from `dt`, the time since the stamp (`0x8ae7c0`, from the game time
+manager at `0x1161d90`):
 
-Inferred, not verified: a negative rate arms the operation, drains the pool, and the next refresh
-at zero cancels it.
+- Read `0x800d80`, `0x8c5090`: `clamp(value + rate * dt, lower, upper)`, with the lower bound tested
+  first, then the upper. Software float helpers `0x99ffe0` (multiply), `0x9a01c0` (add) and
+  `0x9a00b0` (subtract) are used throughout.
+- Rate change `0x8c46e0`: stores `clamp(value + rate * dt)` into `+0x78`, stamps the time (`0x8ae800`),
+  adds the delta to `+0x7c`, and zeroes `+0x7c` when its magnitude is under the epsilon at
+  `0x10db12c`. Value set `0x8c47a0` and range set `0x8c4990` rebase and clamp the same way.
+- No sign test exists in any of these. A negative rate decreases the value until it reaches the
+  lower clamp, which holds it. The operation is not cancelled at that point: nothing in the
+  integrator or the operation disarms it, and the refresh is not called when the pool reaches a
+  limit. A pool raised later (for example by `SetUnitState`) drains again from that moment.
+- The lower clamp of the mana pool is zero: the pool constructor (`0x806700`, stores at
+  `0x80673e`-`0x806760`) zeroes `+0x78`-`+0x88`, and unit initialisation (`0x66f449`, `0x800ff0`) sets
+  only the upper clamp and the starting value. No call sets the lower clamp of the `+0x1c0` pool
+  (`0x801070` is called only for the `+0x420` pool). This is inferred from the absence of a
+  setter, not from a runtime observation.
+- Tick period: none. The integration is continuous (rate times elapsed game time), evaluated at
+  each read or rebase. Clamping at each rebase equals clamping once for a constant-sign rate.
+- `regenType` is not read by the mana path (`0x6a1070` has no reference to it). The life
+  equivalent `0x6a0f20` (op at unit `+0x1bc`, rate `+0x1b8`, pool `+0x1a0`) has the same shape:
+  no sign test, but it arms on unit flags `+0x20 & 0x40` instead of a pool test.
 
-Refusal kept: `unit_activity_host.rs` (`finite nonnegative unit regenMana required`) for `ubsp`.
+Not decoded:
+
+- The unit of `dt` (seconds per stamp tick) in `0x8b6e60`. The per-second reading stays the
+  editor's label.
+- The native scaling of a negative rate by a held mana-regeneration fraction. A nonzero fraction on
+  a negative mana rate refuses (`held mana regeneration fraction on a negative mana rate is not decoded`).
+- Life with a negative `regenHP`: the life pool shares the integrator, but the death handling when
+  it reaches zero is not decoded, so the `regenHP` reader still refuses a negative value.
+- An upgrade (`rmnr`) that makes the summed rate negative still refuses
+  (`upgrade-effects.md`), although `0x680310` has no sign test.
+
+Implementation: `unit_activity_host.rs` `column_optional_signed_real` and `balance_signed_real`,
+`unit_vitals_host.rs` `signed_balance_or_empty` (`regenMana` only) and `regen_rates`. Tests:
+`negative_mana_rate_drains_to_zero_clamps_and_keeps_draining_after_a_refill`,
+`zero_maximum_mana_stays_empty_under_a_negative_rate`,
+`held_mana_fraction_on_a_negative_mana_rate_refuses_as_undecoded`.
 
 ## Rules implemented
 
@@ -95,7 +130,7 @@ Refusal kept: `unit_activity_host.rs` (`finite nonnegative unit regenMana requir
 - `always`: life regenerates for the whole span. `day`: only inside the day window.
   `night`: the complement. `none`: never. `blight`: refuses while the rate is nonzero.
 - Mana regenerates regardless of `regenType`.
-- Life is capped at `max_life`. Mana is clamped to `[0, max_mana]`.
+- Life is capped at `max_life`. Mana is clamped to `[0, max_mana]`, and a negative mana rate drains the pool to 0 and holds it there.
 - The day window requires the admitted time-of-day clock and dawn/dusk constants.
   Without them, a nonzero day or night rate refuses.
 

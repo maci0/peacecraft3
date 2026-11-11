@@ -2301,6 +2301,58 @@ fn regeneration_integrates_stock_rates_and_caps_at_maxima_for_any_tick_chunking(
     assert_eq!(pools(&mut stepped, d), (20.0, 50.0));
 }
 
+/// Native stat integrator (0x8c5090, 0x8c46e0): value = clamp(value + rate * dt, 0, max) with no
+/// sign test on the rate, and the rate operation stays armed when the pool reaches zero.
+#[test]
+fn negative_mana_rate_drains_to_zero_clamps_and_keeps_draining_after_a_refill() {
+    let fields = regen_fields("0", "none", "-3");
+    // One whole-span advance, as the production timer loop does at an expiry.
+    let jump = |vm: &mut Vm, until: f64| {
+        let h = &mut vm.host().inner;
+        h.next_timer_expiry(until, &mut 100).unwrap();
+        h.advance_unit_activity(until, &mut 65536).unwrap();
+    };
+    let (mut whole, a, b) = open(&fields);
+    let (mut stepped, c, d) = open(&fields);
+    for (vm, ids) in [(&mut whole, [a, b]), (&mut stepped, [c, d])] {
+        set_pools(vm, ids[0], 5.0, 10.0);
+        set_pools(vm, ids[1], 5.0, 50.0);
+    }
+    jump(&mut whole, 2.0);
+    for tick in 1..=32 {
+        step(&mut stepped, f64::from(tick) / 16.0);
+    }
+    // 10 - 3 * 2 and 50 - 3 * 2 are exact, with life untouched.
+    assert_eq!(pools(&mut whole, a), (5.0, 4.0));
+    assert_eq!(pools(&mut stepped, c), (5.0, 4.0));
+    assert_eq!(pools(&mut whole, b), (5.0, 44.0));
+    assert_eq!(pools(&mut stepped, d), (5.0, 44.0));
+    // One span past empty clamps at zero in one step or in many.
+    jump(&mut whole, 4.0);
+    for tick in 33..=64 {
+        step(&mut stepped, f64::from(tick) / 16.0);
+    }
+    assert_eq!(pools(&mut whole, a), (5.0, 0.0));
+    assert_eq!(pools(&mut stepped, c), (5.0, 0.0));
+    assert_eq!(pools(&mut whole, b), (5.0, 38.0));
+    // The rate is not disarmed at zero: a refill drains again from the refill time.
+    set_pools(&mut whole, a, 5.0, 9.0);
+    jump(&mut whole, 5.0);
+    assert_eq!(pools(&mut whole, a), (5.0, 6.0));
+    jump(&mut whole, 9.0);
+    assert_eq!(pools(&mut whole, a), (5.0, 0.0));
+}
+
+#[test]
+fn zero_maximum_mana_stays_empty_under_a_negative_rate() {
+    let fields = regen_fields("0", "none", "-3");
+    let (mut vm, a, _) = open(&fields);
+    vm.host().inner.set_test_maximum(a, None, Some(0.0));
+    set_pools(&mut vm, a, 5.0, 0.0);
+    step(&mut vm, 3.0);
+    assert_eq!(pools(&mut vm, a), (5.0, 0.0));
+}
+
 #[test]
 fn pause_freezes_regeneration_without_deferring_it_until_resume() {
     let fields = regen_fields("0.25", "always", "0.5");

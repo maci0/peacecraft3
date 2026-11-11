@@ -2677,6 +2677,29 @@ fn non_hero_base_mana_regeneration_receives_and_loses_the_held_fraction() {
 }
 
 #[test]
+fn held_mana_fraction_on_a_negative_mana_rate_refuses_as_undecoded() {
+    let Fixture {
+        mut h, ordinary, ..
+    } = open_with_regens(0., Some("-2"), 0.);
+    set_fixture_max_mana(&mut h, ordinary, 100.);
+    set_mana(&mut h, ordinary, 10.);
+    advance_passive_regen(&mut h, 1.);
+    assert_close(mana_of(&h, ordinary), 8.0, "unscaled drain");
+    let mana = item(&mut h, b"pman", 0.);
+    let reason = add(&mut h, ordinary, mana).and_then(|_| {
+        h.next_timer_expiry(2., &mut 1000)
+            .map_err(|e| e.to_string())?;
+        h.advance_unit_activity(2., &mut 65536)
+            .map_err(|e| e.to_string())
+    });
+    assert!(
+        reason
+            .unwrap_err()
+            .contains("held mana regeneration fraction on a negative mana rate is not decoded")
+    );
+}
+
+#[test]
 fn held_mana_fraction_partitions_clamps_and_pauses_with_the_unit() {
     let Fixture {
         h: mut whole,
