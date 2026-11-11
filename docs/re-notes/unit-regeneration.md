@@ -44,8 +44,9 @@ after motion and before combat and inventory. Each step integrates
 
 - `Warcraft III.exe` SHA256 must be `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 - `UnitBalance.slk`: the three columns exist; every row's `regenType` is admitted.
-- One row, `ubsp`, has `regenMana` `-3`. A negative rate is refused: no source states
-  whether it drains mana, so the probe for `TFT UndeadX07Interlude` still refuses there.
+- One row, `ubsp`, has `regenMana` `-3`. A negative rate is refused: the drain rule is
+  not decoded (see [Native negative mana rate](#native-negative-mana-rate)), so the
+  probe for `TFT UndeadX07Interlude` still refuses there.
   Census on the selected install: always 502, blight 41, night 51, none 242 (837 rows).
   No row uses `day`. Parser admits `day` in the editor's token family.
 - `MiscGame.txt` through the production `HeroVitals::read`: `StrRegenBonus=0.05`,
@@ -55,6 +56,35 @@ after motion and before combat and inventory. Each step integrates
 Run: `PEACECRAFT3_LEGACY_DIR="…/Warcraft III (Legacy)" cargo test -p pcx-play --test unit_regen_original_gate -- --ignored`.
 
 The gate covers source fields and constants. It does not run a map.
+
+## Native negative mana rate
+
+Reviewed exe `Warcraft III.exe` 1.29.2.9231 (SHA-256 `3f2ed012…570eed`). Evidence is
+instruction-level; nothing here was run.
+
+Observed:
+
+- The `UnitBalance` loader pushes the column name `regenMana` (VA `0xea0720`) and writes the
+  cell into the unit type record at `+0x2a8` (`0x6b4180`, via `0x6ac590`).
+- Mana refresh `0x6a1070` arms the mana regeneration operation only when the current mana pool
+  (object at unit `+0x1c0`, read by `0x800e20`) is above `0.0`. The comparison constant is the
+  float at VA `0x112d88c`; its bytes lie past the raw `.data` bytes, so it reads as zero at load.
+  A pool at or below zero cancels the operation (`0x6a118c`). The rate, unit `+0x1dc`, is passed
+  to the operation without a sign test in that routine.
+- The rate-change path `0x680310` (upgrade `rmnr`) adds the delta to the rate, calls the
+  integrator object at unit `+0x1d8` (virtual slot 0) and refreshes. It has no sign test.
+  So the negative-rate refusal in `upgrade-effects.md` is not a check in this routine.
+- The rate setter `0x8c4b40` treats a change with `|delta|` below the epsilon at VA `0x10db124`
+  as no change. It has no sign test.
+
+Not decoded: the integrator's virtual slot 0 (and the operation's target object) that applies
+rate × elapsed to the pool. Whether a negative rate drains the pool and clamps it at zero is
+therefore open.
+
+Inferred, not verified: a negative rate arms the operation, drains the pool, and the next refresh
+at zero cancels it.
+
+Refusal kept: `unit_activity_host.rs` (`finite nonnegative unit regenMana required`) for `ubsp`.
 
 ## Rules implemented
 
