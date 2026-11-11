@@ -76,6 +76,18 @@ admitted raise and decay bits still refuses with `unsupported UnitData/deathType
 Test (pcx-play `unit_corpse_tests`): `map_integer_death_type_override_is_the_decay_mask`.
 It failed before the fix with `text placement field required`.
 
+### Repeated decorative doodad creation numbers
+
+TFT UndeadX07a `war3map.doo` (version 8, 1166 instances) repeats creation numbers
+in the range 0..=1164, and the original loads it. Admission refused any repeat with
+`duplicate placed creation number`, and the renderer keyed actors by creation number.
+The creation number is an editor label, as the destructable fix already established
+for UndeadX08. Admission now keeps every row in file order, and the renderer keys
+actors and failures by row index.
+
+Test (pcx-play `doodad_host_tests`): `duplicate_creation_numbers_are_distinct_placements`.
+It failed before the fix with `duplicate placed creation number`.
+
 ## Open
 
 ### Odd-dimension pathing texture
@@ -145,6 +157,7 @@ on the selected install, before and after this batch.
 | TFT UndeadX07c | `Blizzard.j:2128` `SetDoodadAnimationRect`: `ZZcd` unsupported `vertR` selector | passes the doodad; `Blizzard.j:4841` `SetPlayerAlliance` refused: arguments do not match the declaration |
 | RoC Undead03 | `CreateUnit` (`war3map.j:1016`): `unit field dmgpt1 is empty` | passes `CreateUnit`; `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported by this host |
 | TFT UndeadX02 | `CreateUnit` (`war3map.j:2431`): `unit decay: unit animation: text placement field required` | passes `CreateUnit`; `UnitAddItemToSlotById` (`war3map.j:2470`) refused: unsupported passive ability `AIfb` on `ofir` (orb refusal, see passive-held-items.md) |
+| TFT UndeadX07a | `Doodad("duplicate placed creation number")` at startup | passes doodad admission; `IssueImmediateOrder` (`war3map.j:1469`) refused: `autocast enabling/effects not implemented for [65, 67, 119, 98]` (`ACwb`) |
 
 `HeroFarSeer.mdx` (War3.mpq, 133,824 bytes) SEQS record 0 is named `nothing`,
 with interval start `0xFFFFFF59` (signed -167) and end `0`. Every other record

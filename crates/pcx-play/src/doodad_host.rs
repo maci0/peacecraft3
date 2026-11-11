@@ -29,16 +29,6 @@ impl ObjectHost {
                 return Err(self.inner.error(NATIVE, Failure::Source));
             }
         }
-        let mut ids = std::collections::BTreeSet::new();
-        if rows
-            .iter()
-            .any(|row| !ids.insert(row.source.creation_number))
-        {
-            return Err(self.inner.error(
-                NATIVE,
-                Failure::Doodad("duplicate placed creation number".into()),
-            ));
-        }
         self.doodads = Some(rows);
         Ok(())
     }

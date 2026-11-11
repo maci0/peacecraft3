@@ -215,17 +215,25 @@ fn a_failed_batch_never_partially_changes_earlier_matches() {
 }
 
 #[test]
-fn malformed_contract_and_duplicate_creation_numbers_refuse_admission() {
+fn malformed_contract_refuses_admission() {
     let mut h = host(&COMMON.replace(
         "string clip, boolean random",
         "integer clip, boolean random",
     ));
     assert!(h.admit_placed_doodads(vec![]).is_err());
     assert_eq!(h.placed_doodads().count(), 0);
+}
+
+#[test]
+fn duplicate_creation_numbers_are_distinct_placements() {
+    // UndeadX07a authors decorative doodads that share a creation number; the number is
+    // an editor label, so every row is admitted in file order.
     let mut h = host(COMMON);
-    assert!(
-        h.admit_placed_doodads(vec![row(1, *b"Zx91", 0.), row(1, *b"Zx92", 0.)])
-            .is_err()
-    );
-    assert_eq!(h.placed_doodads().count(), 0);
+    h.admit_placed_doodads(vec![row(1, *b"Zx91", 0.), row(1, *b"Zx92", 5.)])
+        .unwrap();
+    let placed: Vec<(u32, f32)> = h
+        .placed_doodads()
+        .map(|row| (row.source.creation_number, row.source.position[0]))
+        .collect();
+    assert_eq!(placed, [(1, 0.), (1, 5.)]);
 }

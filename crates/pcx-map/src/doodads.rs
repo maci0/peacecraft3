@@ -54,10 +54,10 @@
 //! fixed width, the two-word terrain section head, every terrain doodad. A
 //! file that fails it is refused rather than guessed at.
 //!
-//! Creation numbers are unique within a file but are **not** dense and **not**
-//! bounded by `n`: campaign maps reach ids well past the instance count
-//! (e.g. `Undead03`: 3 941 instances, ids up to 4 146). They are editor
-//! identities, not indices.
+//! Creation numbers are **not** unique in every file (`UndeadX07a` and `UndeadX08`
+//! repeat ids), **not** dense, and **not** bounded by `n`: campaign maps reach ids
+//! well past the instance count (e.g. `Undead03`: 3 941 instances, ids up to 4 146).
+//! They are editor labels, not indices or keys.
 
 use std::collections::BTreeSet;
 

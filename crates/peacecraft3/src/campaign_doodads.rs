@@ -4,9 +4,11 @@ use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
+/// Keyed by the row index in the admitted placed-doodad list. Creation numbers repeat
+/// in shipped maps, so they cannot identify a row.
 pub(super) struct Doodads {
-    pub(super) actors: BTreeMap<u32, Actor>,
-    failed: BTreeSet<u32>,
+    pub(super) actors: BTreeMap<usize, Actor>,
+    failed: BTreeSet<usize>,
 }
 
 pub(super) fn transform(
@@ -48,21 +50,21 @@ pub(super) fn project<'a>(
     input: Input,
     rows: impl Iterator<Item = &'a pcx_play::campaign_placement::PlacedDoodad>,
 ) {
-    for row in rows {
+    for (index, row) in rows.enumerate() {
         let id = row.source.creation_number;
-        if state.doodads.failed.contains(&id) {
+        if state.doodads.failed.contains(&index) {
             continue;
         }
         let appearance = match &row.appearance {
             Ok(value) => value,
             Err(error) => {
                 state.last_error = Some(format!("doodad {id}: {error}"));
-                state.doodads.failed.insert(id);
+                state.doodads.failed.insert(index);
                 continue;
             }
         };
         let visual = Visual::Doodad(row, appearance);
-        if !state.doodads.actors.contains_key(&id) {
+        if !state.doodads.actors.contains_key(&index) {
             match Actor::spawn(
                 commands,
                 assets,
@@ -83,16 +85,16 @@ pub(super) fn project<'a>(
                 Ok((actor, bytes, vertices)) => {
                     state.image_bytes += bytes;
                     state.vertices += vertices;
-                    state.doodads.actors.insert(id, actor);
+                    state.doodads.actors.insert(index, actor);
                 }
                 Err(error) => {
                     state.last_error = Some(format!("doodad {id}: {error}"));
-                    state.doodads.failed.insert(id);
+                    state.doodads.failed.insert(index);
                     continue;
                 }
             }
         }
-        if let Some(actor) = state.doodads.actors.get_mut(&id) {
+        if let Some(actor) = state.doodads.actors.get_mut(&index) {
             if let Ok(mut visibility) = queries.visibility.get_mut(actor.root) {
                 *visibility = if row.shown {
                     Visibility::Inherited
@@ -123,12 +125,12 @@ pub(super) fn advance_particles<'a>(
     now: f64,
     parameters: &pcx_play::menu_lighting::Parameters,
 ) {
-    for row in rows {
+    for (index, row) in rows.enumerate() {
         let id = row.source.creation_number;
         let Ok(appearance) = &row.appearance else {
             continue;
         };
-        if let Some(actor) = state.doodads.actors.get_mut(&id)
+        if let Some(actor) = state.doodads.actors.get_mut(&index)
             && let Ok((_, camera, ..)) = queries.scene.single()
         {
             let local_camera = Transform::from_rotation(

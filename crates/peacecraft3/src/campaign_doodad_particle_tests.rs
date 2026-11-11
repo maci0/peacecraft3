@@ -143,7 +143,7 @@ fn deferred_spawn_publishes_before_particle_advance_then_catches_up() {
     let state = app.world().resource::<UnitActors>();
     assert!(state.last_error.is_none(), "{:?}", state.last_error);
     assert_eq!(
-        state.doodads.actors[&71].particle_clock,
+        state.doodads.actors[&0].particle_clock,
         Duration::from_secs_f64(0.1)
     );
     assert!(
@@ -162,7 +162,7 @@ fn deferred_spawn_publishes_before_particle_advance_then_catches_up() {
     let state = app.world().resource::<UnitActors>();
     assert!(state.last_error.is_none(), "{:?}", state.last_error);
     assert_eq!(
-        state.doodads.actors[&71].particle_clock,
+        state.doodads.actors[&0].particle_clock,
         Duration::from_secs_f64(0.2)
     );
     let entity = app
@@ -183,7 +183,7 @@ fn deferred_spawn_publishes_before_particle_advance_then_catches_up() {
         "real loss must still refuse"
     );
     assert_eq!(
-        state.doodads.actors[&71].particle_clock,
+        state.doodads.actors[&0].particle_clock,
         Duration::from_secs_f64(0.2)
     );
 }
@@ -193,7 +193,7 @@ fn hidden_doodad_is_hidden_on_publication_and_can_be_shown_later() {
     let mut app = app();
     app.world_mut().resource_mut::<Source>().row.shown = false;
     app.update();
-    let root = app.world().resource::<UnitActors>().doodads.actors[&71].root;
+    let root = app.world().resource::<UnitActors>().doodads.actors[&0].root;
     assert_eq!(
         *app.world().get::<Visibility>(root).unwrap(),
         Visibility::Hidden
