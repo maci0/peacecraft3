@@ -127,6 +127,7 @@ fn script_placement(
     .unwrap()
     .with_footprint_loader(|path| match path {
         "live.tga" => Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic".into(),
                 edition: "test".into(),
@@ -135,6 +136,7 @@ fn script_placement(
             cells: vec![[0, 0]],
         }),
         "dead.tga" => Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic".into(),
                 edition: "test".into(),
@@ -166,6 +168,7 @@ struct BudgetedLoader(Arc<Mutex<SyntheticSource>>);
 
 fn synthetic_footprint(cells: Vec<[i32; 2]>) -> Footprint {
     Footprint {
+        dimensions: [2, 2],
         origin: AssetIdentity {
             source: "synthetic".into(),
             edition: "test".into(),

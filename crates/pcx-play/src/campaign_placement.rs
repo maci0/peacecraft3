@@ -1,5 +1,6 @@
 //! Selected-source creation collision cache on the existing executed identities.
 use crate::{
+    footprint_geometry::{clamp_cell, rotate_offset, stationary_anchor},
     map_admission::ParsedMapContext,
     playercolor_host::{
         DestructableCatalog, DestructableCreation, DestructableOrigin, DestructableState,
@@ -445,11 +446,9 @@ pub(crate) fn project_native_texture(
     point: [f32; 2],
     turns: f64,
 ) -> Result<crate::spatial_pool::TexturePixels, String> {
-    let anchor: [i64; 2] = std::array::from_fn(|axis| {
-        ((f64::from(point[axis]) - f64::from(grid.origin[axis])) / f64::from(rules.cell_size()))
-            .round_ties_even() as i64
-    });
+    let dimensions = [u32::from(texture.height), u32::from(texture.width)];
     let quarter = turns.round_ties_even().rem_euclid(4.0) as u8;
+    let anchor = anchor(grid, rules, point, dimensions, quarter)?;
     let mut result = Vec::new();
     result
         .try_reserve_exact(texture.flags.len())
@@ -458,30 +457,57 @@ pub(crate) fn project_native_texture(
         if flags == 0 {
             continue;
         }
-        let x = (i / usize::from(texture.width)) as i64 - i64::from(texture.height) / 2;
-        let y = (i % usize::from(texture.width)) as i64 - i64::from(texture.width) / 2;
-        let (x, y) = match quarter {
-            0 => (x, y),
-            1 => (-y - 1, x),
-            2 => (-x - 1, -y - 1),
-            _ => (y, -x - 1),
-        };
-        let (x, y) = (anchor[0] + x, anchor[1] + y);
-        if x >= 0
-            && y >= 0
-            && x < i64::from(grid.pathing.width)
-            && y < i64::from(grid.pathing.height)
-        {
-            let index = (y as u64) * u64::from(grid.pathing.width) + x as u64;
-            result.push((
-                u32::try_from(index).map_err(|_| "native texture cell index overflow")?,
-                flags,
-            ));
-        } else if flags & rules.texture_policy().flags([0, 1, 0, 0]) != 0 {
-            return Err("native texture green channel outside map".into());
-        }
+        let offset = [
+            (i / usize::from(texture.width)) as i32 - i32::from(texture.height) / 2,
+            (i % usize::from(texture.width)) as i32 - i32::from(texture.width) / 2,
+        ];
+        let index = clamped_index(grid, anchor, rotate_offset(offset, dimensions, quarter));
+        result.push((
+            u32::try_from(index).map_err(|_| "native texture cell index overflow")?,
+            flags,
+        ));
     }
     Ok(result)
+}
+
+/// The anchor cell of a stationary footprint (`stationary_anchor`) on the selected grid.
+fn anchor(
+    grid: &Grid,
+    rules: &Rules,
+    point: [f32; 2],
+    dimensions: [u32; 2],
+    quarter: u8,
+) -> Result<[i64; 2], String> {
+    let size = rules.cell_size();
+    let bounds = [
+        grid.origin,
+        [
+            grid.origin[0] + grid.pathing.width as f32 * size,
+            grid.origin[1] + grid.pathing.height as f32 * size,
+        ],
+    ];
+    stationary_anchor(
+        rules.footprint_geometry(),
+        bounds,
+        size,
+        point,
+        dimensions,
+        quarter,
+    )
+}
+
+/// The cell index of a texel offset from `anchor`. `0x804be0` clamps the texel position to
+/// the map before converting it to a cell, so a texel outside the map takes a border cell.
+fn clamped_index(grid: &Grid, anchor: [i64; 2], offset: [i32; 2]) -> usize {
+    let [x, y] = clamp_cell(
+        [
+            anchor[0] + i64::from(offset[0]),
+            anchor[1] + i64::from(offset[1]),
+        ],
+        grid.pathing.width,
+        grid.pathing.height,
+    );
+    y as usize * grid.pathing.width as usize + x as usize
 }
 
 /// The chain owner for a tracked session, or `None` when region history was not enabled.
@@ -775,8 +801,7 @@ impl Textures {
         if count > FOOTPRINT_CELLS
             || header.width == 0
             || header.height == 0
-            || header.width % 2 != 0
-            || header.height % 2 != 0
+            || (building && (header.width % 2 != 0 || header.height % 2 != 0))
         {
             return Err(format!(
                 "{path}: footprint cell budget or unsupported empty/odd dimensions"
@@ -786,7 +811,7 @@ impl Textures {
         let cells = if building {
             building_raster(header.width, header.height, &rgba, self.policy)?
         } else {
-            raster(header.width, header.height, &rgba)?
+            raster(header.width, header.height, &rgba, self.policy)?
         };
         let retain_native = if let Some(cache) = &self.native {
             let key = Self::key(path)?;
@@ -830,7 +855,11 @@ impl Textures {
         self.remaining_cells = remaining_cells;
         self.remaining_bytes = remaining_bytes;
         Ok(Decoded {
-            footprint: Arc::new(Footprint { origin, cells }),
+            footprint: Arc::new(Footprint {
+                origin,
+                cells,
+                dimensions: [u32::from(header.height), u32::from(header.width)],
+            }),
             native,
             bytes,
             cells: cell_count,
@@ -900,7 +929,14 @@ fn building_raster(
     Ok(result)
 }
 
-fn raster(width: u16, height: u16, rgba: &[u8]) -> Result<Vec<[i32; 2]>, String> {
+/// Footprint cells of the texels whose red channel links the movement entries: the native
+/// constructor tests one red bit (`0x4deb57`), whatever the other bits hold.
+fn raster(
+    width: u16,
+    height: u16,
+    rgba: &[u8],
+    policy: TexturePolicy,
+) -> Result<Vec<[i32; 2]>, String> {
     let count = usize::from(width) * usize::from(height);
     if width == 0 || height == 0 || count > FOOTPRINT_CELLS || rgba.len() != count * 4 {
         return Err("footprint raster size".into());
@@ -910,13 +946,11 @@ fn raster(width: u16, height: u16, rgba: &[u8]) -> Result<Vec<[i32; 2]>, String>
         .try_reserve_exact(count)
         .map_err(|_| "footprint cell allocation")?;
     for (i, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
-        match pixel[0] {
-            0 => {}
-            255 => result.push([
+        if policy.blocks_movement(*pixel) {
+            result.push([
                 (i / usize::from(width)) as i32 - i32::from(height) / 2,
                 (i % usize::from(width)) as i32 - i32::from(width) / 2,
-            ]),
-            _ => return Err("unsupported nonbinary footprint walk channel".into()),
+            ]);
         }
     }
     Ok(result)
@@ -941,34 +975,19 @@ fn footprint_cells(
     *work = work
         .checked_sub(footprint.cells.len())
         .ok_or("stationary footprint work budget")?;
-    let cell: [f64; 2] = std::array::from_fn(|axis| {
-        ((f64::from(point[axis]) - f64::from(grid.origin[axis])) / f64::from(rules.cell_size()))
-            .round_ties_even()
-    });
-    if cell.iter().any(|v| v.abs() > f64::from(i32::MAX)) {
-        return Err("stationary cell range".into());
-    }
     // shortcut: nearest quarter-turn static raster, validated for the retained creation stream; qualify arbitrary-angle rasterization before widening fidelity claims.
     let quarter = turns.round_ties_even().rem_euclid(4.0) as u8;
+    let anchor = anchor(grid, rules, point, footprint.dimensions, quarter)?;
     let mut cells = Vec::new();
     cells
         .try_reserve_exact(footprint.cells.len())
         .map_err(|_| "stationary cell allocation")?;
-    for &[x, y] in &footprint.cells {
-        let (x, y) = match quarter {
-            0 => (i64::from(x), i64::from(y)),
-            1 => (-i64::from(y) - 1, i64::from(x)),
-            2 => (-i64::from(x) - 1, -i64::from(y) - 1),
-            _ => (i64::from(y), -i64::from(x) - 1),
-        };
-        let (x, y) = (cell[0] as i64 + x, cell[1] as i64 + y);
-        if x >= 0
-            && y >= 0
-            && x < i64::from(grid.pathing.width)
-            && y < i64::from(grid.pathing.height)
-        {
-            cells.push(y as usize * grid.pathing.width as usize + x as usize);
-        }
+    for &offset in &footprint.cells {
+        cells.push(clamped_index(
+            grid,
+            anchor,
+            rotate_offset(offset, footprint.dimensions, quarter),
+        ));
     }
     cells.sort_unstable();
     cells.dedup();
@@ -1629,8 +1648,89 @@ mod tests {
             native_footprint_cells(&grid, &rules, &textures, "flags.tga", [8., 8.], 1.).unwrap(),
             [(6, flags[0]), (5, flags[1]), (10, flags[2])]
         );
+        // Texels left of or below the map, the green one included, link to the border cell
+        // (`0x804be0` clamps the position first), in texel order.
+        assert_eq!(
+            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [0., 0.], 0.).unwrap(),
+            [(0, flags[0]), (0, flags[1]), (0, flags[2])]
+        );
+        assert_eq!(
+            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [64., 64.], 0.).unwrap(),
+            [(15, flags[0]), (15, flags[1]), (15, flags[2])]
+        );
+    }
+
+    #[test]
+    fn odd_dimensions_decode_for_stationary_footprints_and_stay_refused_for_buildings() {
+        let pixels = [[255, 0, 0]; 9];
+        let (mut textures, _) = textures_with_reads(&[("odd.tga", texture(3, 3, &pixels))]);
+        textures.remaining_cells = 64;
         assert!(
-            native_footprint_cells(&grid, &rules, &textures, "flags.tga", [0., 0.], 0.).is_err()
+            textures
+                .decode_kind("odd.tga", true)
+                .err()
+                .unwrap()
+                .contains("odd dimensions")
+        );
+        let grid = Grid {
+            source: pcx_sim::world::Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "test".into(),
+            },
+            origin: [0., 0.],
+            pathing: pcx_map::Pathing {
+                version: 0,
+                width: 32,
+                height: 32,
+                cells: vec![0; 1024],
+            },
+            domains: vec![0; 1024],
+        };
+        let rules = crate::unit_placement::tests::rules(5, 0.0);
+        let mut work = 64;
+        // Without the decoded snap an odd footprint has no defined anchor.
+        assert!(
+            footprint_cells(
+                &grid,
+                &rules,
+                &mut textures,
+                "odd.tga",
+                [240., 240.],
+                0.,
+                &mut work
+            )
+            .is_err()
+        );
+        let rules = rules
+            .with_footprint_geometry(crate::footprint_geometry::tests::with_building_quarter(3));
+        let cells = footprint_cells(
+            &grid,
+            &rules,
+            &mut textures,
+            "odd.tga",
+            [240., 240.],
+            0.,
+            &mut work,
+        )
+        .unwrap();
+        let expected: Vec<usize> = (6..=8)
+            .flat_map(|y| (6..=8).map(move |x| y * 32 + x))
+            .collect();
+        assert_eq!(cells, expected);
+        // An unaligned position snaps first (`0x6bd2a0`): 224 becomes 240 on the 3-wide axis.
+        assert_eq!(
+            footprint_cells(
+                &grid,
+                &rules,
+                &mut textures,
+                "odd.tga",
+                [224., 240.],
+                0.,
+                &mut work
+            )
+            .unwrap(),
+            expected
         );
     }
 
@@ -1816,15 +1916,22 @@ mod tests {
     }
 
     #[test]
-    fn footprint_raster_uses_authored_pixels_and_rejects_partial_or_nonbinary_data() {
+    fn footprint_raster_follows_the_red_channel_bit_and_rejects_partial_data() {
+        let policy = crate::unit_placement::tests::rules(2, 0.0).texture_policy();
         let mut rgba = vec![0; 16];
         rgba[0] = 255;
         rgba[12] = 255;
-        assert_eq!(raster(2, 2, &rgba).unwrap(), [[-1, -1], [0, 0]]);
+        assert_eq!(raster(2, 2, &rgba, policy).unwrap(), [[-1, -1], [0, 0]]);
+        // The tested bit is 2 in this fixture: another bit does not link, a value that has it does.
         rgba[4] = 1;
-        assert!(raster(2, 2, &rgba).is_err());
-        assert!(raster(2, 2, &rgba[..12]).is_err());
-        assert!(raster(0, 2, &[]).is_err());
+        assert_eq!(raster(2, 2, &rgba, policy).unwrap(), [[-1, -1], [0, 0]]);
+        rgba[8] = 0x4a;
+        assert_eq!(
+            raster(2, 2, &rgba, policy).unwrap(),
+            [[-1, -1], [0, -1], [0, 0]]
+        );
+        assert!(raster(2, 2, &rgba[..12], policy).is_err());
+        assert!(raster(0, 2, &[], policy).is_err());
     }
 
     #[test]

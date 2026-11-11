@@ -1394,8 +1394,8 @@ The tracked pool now retains individual entries for unit-owned textures and the 
 decoration and destructable textures. Script-created destructables preflight both their live
 and dead texture pixels through the staged source loader. Changing a texture between the
 three-entry and four-entry forms currently refuses because entry replacement history has not
-been established. A texture without retained pixels also refuses, as does a stationary
-texture with green pixels outside the map, where clipping would hide the selector input.
+been established. A texture without retained pixels also refuses, and a stationary texel outside the map
+links to the nearest border cell, as `0x804be0` clamps it (`chapter-startup-refusals.md`).
 Map-load ordering and the nearest-quarter-turn stationary raster remain as described above;
 this change does not establish their native behavior.
 

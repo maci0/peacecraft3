@@ -27,6 +27,7 @@ impl FootprintLoader for TrackingLoader {
             ledger.staged.insert(path.into());
         }
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: format!("synthetic source at {path}"),
                 edition: "test".into(),
@@ -212,6 +213,7 @@ fn overlapping_dynamic_footprints_preserve_other_owners_and_static_pathing() {
     )
     .with_footprint_loader(|_| {
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic".into(),
                 edition: "test".into(),
@@ -508,6 +510,7 @@ fn script_creation_refuses_a_missing_base_before_resolving_or_loading_sources() 
     .with_footprint_loader(move |path| {
         hits.fetch_add(1, Ordering::SeqCst);
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic texture".into(),
                 edition: "test".into(),
@@ -626,6 +629,7 @@ fn initial_footprint_map_is_canonical_and_refuses_alias_duplicates() {
         queries: 100,
     };
     let footprint = || Footprint {
+        dimensions: [2, 2],
         origin: AssetIdentity {
             source: "synthetic source".into(),
             edition: "test".into(),
@@ -675,6 +679,7 @@ fn lazy_footprints_cache_success_and_refuse_oversized_data_before_occupancy_chan
     let mut p = placement(source, 100).with_footprint_loader(move |path| {
         count.fetch_add(1, Ordering::SeqCst);
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic texture".into(),
                 edition: "fixture".into(),
@@ -996,6 +1001,7 @@ fn footprint_rotation_and_missing_texture_refusal_use_the_same_collision_cache()
     p.footprints.insert(
         "synthetic.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 edition: "synthetic".into(),
                 version: "fixture".into(),
@@ -1297,6 +1303,7 @@ fn construction_uses_full_authored_footprint_without_relocating_blocked_cells() 
     p.footprints.insert(
         "build.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 edition: "synthetic".into(),
                 version: "test".into(),
@@ -1352,6 +1359,7 @@ fn construction_checks_live_blight_for_each_footprint_cell() {
     p.footprints.insert(
         "build.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin: identity(),
             cells: vec![[-1, -1], [0, -1], [-1, 0], [0, 0]],
         },
@@ -1452,6 +1460,7 @@ fn diagnostic_exclusions_restore_occupancy_after_success_and_error() {
     p.footprints.insert(
         "build.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 edition: "synthetic".into(),
                 version: "test".into(),
@@ -1573,6 +1582,7 @@ fn construction_uses_its_own_rotated_footprint() {
     p.footprints.insert(
         "build.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin: origin.clone(),
             cells: vec![[0, 0]],
         },
@@ -1580,6 +1590,7 @@ fn construction_uses_its_own_rotated_footprint() {
     p.building_footprints.insert(
         "build.tga".into(),
         Footprint {
+            dimensions: [2, 2],
             origin,
             cells: vec![[-2, 0]],
         },
@@ -1761,6 +1772,7 @@ fn a_standing_footprint_keeps_its_creation_facing_across_hide_and_reveal() {
     )
     .with_footprint_loader(|_| {
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic".into(),
                 edition: "test".into(),
@@ -1785,4 +1797,168 @@ fn a_standing_footprint_keeps_its_creation_facing_across_hide_and_reveal() {
         .prepare_show(id(1), [32., 32.], None, "fixture.tga", 41.)
         .unwrap();
     assert_eq!(shown.footprint, cells);
+}
+
+/// A 32-cell by 32-cell map of 32-unit cells (extent 1024) whose footprints are the full
+/// `dimensions` rectangle, with the decoded footprint geometry attached.
+fn geometry_placement(building_quarter: u8, dimensions: [u32; 2]) -> Placement {
+    let rules = rules(5, -8192.25).with_footprint_geometry(
+        crate::footprint_geometry::tests::with_building_quarter(building_quarter),
+    );
+    let [rows, columns] = dimensions;
+    let mut cells = Vec::new();
+    for row in 0..rows as i32 {
+        for column in 0..columns as i32 {
+            cells.push([row - rows as i32 / 2, column - columns as i32 / 2]);
+        }
+    }
+    Placement::new(
+        Grid {
+            source: Source {
+                install: "synthetic".into(),
+                edition: "test".into(),
+                map: "geometry".into(),
+            },
+            origin: [0.0; 2],
+            pathing: Pathing {
+                version: 0,
+                width: 32,
+                height: 32,
+                cells: vec![0; 1024],
+            },
+            domains: vec![5; 1024],
+        },
+        rules,
+        BTreeMap::new(),
+        Budget {
+            cells: 1024,
+            footprint_cells: 1024,
+            stationary_cells: 1 << 20,
+            stationary_work: 1 << 20,
+            queries: 10000,
+        },
+    )
+    .unwrap()
+    .with_footprint_loader(move |_| {
+        Ok(Footprint {
+            dimensions,
+            origin: AssetIdentity {
+                source: "synthetic".into(),
+                edition: "test".into(),
+                version: "test".into(),
+            },
+            cells: cells.clone(),
+        })
+    })
+}
+
+fn block(x: std::ops::RangeInclusive<usize>, y: std::ops::RangeInclusive<usize>) -> Vec<usize> {
+    let mut cells: Vec<_> = y.flat_map(|y| x.clone().map(move |x| y * 32 + x)).collect();
+    cells.sort_unstable();
+    cells
+}
+
+#[test]
+fn creation_snaps_by_building_angle_and_centres_an_odd_footprint() {
+    // 3 x 3: bit 1 set and odd on both axes, so the snap adds 32 and 16 to the 64-multiple.
+    let mut p = geometry_placement(3, [3, 3]);
+    let prepared = p.prepare([200., 200.], None, "odd.tga", 270.).unwrap();
+    assert_eq!(prepared.position, [240., 240.]);
+    // The centre is the middle of cell (7, 7); the footprint is the 3 x 3 block around it.
+    assert_eq!(&*prepared.footprint, block(6..=8, 6..=8));
+}
+
+#[test]
+fn creation_snap_aligns_even_footprints_to_the_period() {
+    let mut p = geometry_placement(3, [4, 4]);
+    let prepared = p.prepare([100., 100.], None, "even.tga", 270.).unwrap();
+    assert_eq!(prepared.position, [64., 64.]);
+    assert_eq!(&*prepared.footprint, block(0..=3, 0..=3));
+    let mut p = geometry_placement(3, [2, 2]);
+    let prepared = p.prepare([100., 100.], None, "even.tga", 270.).unwrap();
+    assert_eq!(prepared.position, [96., 96.]);
+    assert_eq!(&*prepared.footprint, block(2..=3, 2..=3));
+}
+
+#[test]
+fn creation_snap_exchanges_axes_for_an_odd_building_angle() {
+    // 2 x 5 rows by columns: the first axis takes 2, so quarter 0 snaps to (96, 80) and
+    // quarter 1 (dimensions exchanged) to (80, 96).
+    let snapped = |quarter| {
+        geometry_placement(quarter, [2, 5])
+            .prepare([100., 100.], None, "odd.tga", 0.)
+            .unwrap()
+            .position
+    };
+    assert_eq!(snapped(0), [96., 80.]);
+    assert_eq!(snapped(1), [80., 96.]);
+    assert_eq!(snapped(2), [96., 80.]);
+    assert_eq!(snapped(3), [80., 96.]);
+}
+
+#[test]
+fn registered_footprint_quarter_follows_the_facing_and_is_snapped_again() {
+    // 2 rows by 4 columns, BuildingAngle quarter 0: the creation snap puts (96, 128) on the
+    // lattice and leaves it there.
+    let place = |face| {
+        geometry_placement(0, [2, 4])
+            .prepare([96., 128.], None, "slab.tga", face)
+            .unwrap()
+    };
+    // Facing 0 registers quarter 0: x covers rows -1..=0 around cell 3, y covers -2..=1
+    // around cell 4.
+    let upright = place(0.);
+    assert_eq!(upright.position, [96., 128.]);
+    assert_eq!(&*upright.footprint, block(2..=3, 2..=5));
+    // Any facing that is not 0, 90 or 180 degrees registers quarter 3 (`0x4c6ab0`), snapped
+    // again with the exchanged dimensions: (96, 128) becomes (64, 160), cell (2, 5), and the
+    // footprint turns to x -2..=1, y -1..=0 around it. The unit's own position is unchanged.
+    for face in [45., 270.] {
+        let turned = place(face);
+        assert_eq!(turned.position, [96., 128.], "{face}");
+        assert_eq!(&*turned.footprint, block(0..=3, 4..=5), "{face}");
+    }
+    // 180 degrees registers quarter 2: x -1..=0 mirrors to -1..=0, y -2..=1 to -2..=1.
+    assert_eq!(&*place(180.).footprint, block(2..=3, 2..=5));
+}
+
+#[test]
+fn facing_outside_one_turn_is_refused_until_the_pose_normalization_is_decoded() {
+    for face in [-90., 360., 450.] {
+        let error = geometry_placement(3, [2, 2])
+            .prepare([96., 96.], None, "slab.tga", face)
+            .unwrap_err();
+        assert!(error.0.contains("outside one turn"), "{face}: {}", error.0);
+    }
+}
+
+#[test]
+fn texels_outside_the_map_link_to_the_border_cells() {
+    // 6 x 6 at the map corner: the snap clamps the centre to (992, 992), cell 31, and the
+    // texels beyond the upper edge take the last row and column.
+    let mut p = geometry_placement(3, [6, 6]);
+    let prepared = p.prepare([5000., 5000.], None, "big.tga", 270.).unwrap();
+    assert_eq!(prepared.position, [992., 992.]);
+    assert_eq!(&*prepared.footprint, block(28..=31, 28..=31));
+    // And below the lower edge: the centre clamps to the origin, snaps to (32, 32), and the texels
+    // before the first row and column take cell 0.
+    let mut p = geometry_placement(3, [6, 6]);
+    let prepared = p.prepare([-5000., -5000.], None, "big.tga", 270.).unwrap();
+    assert_eq!(&*prepared.footprint, block(0..=3, 0..=3));
+}
+
+#[test]
+fn script_destructable_odd_footprint_needs_a_snapped_position() {
+    let mut p = geometry_placement(3, [3, 3]);
+    p.base_pathing = Some(p.grid.pathing.clone());
+    let cells = |p: &Placement, x, y| -> Result<Vec<usize>, Error> {
+        let mut cells = p.script_footprint_cells("odd.tga", [x, y], 0.)?;
+        cells.sort_unstable();
+        Ok(cells)
+    };
+    p.ensure_footprint("odd.tga").unwrap();
+    // 240 = 192 + 32 + 16 is on the 3 x 3 lattice: cell 7 centres the block.
+    assert_eq!(cells(&p, 240., 240.).unwrap(), block(6..=8, 6..=8));
+    // An unaligned position snaps first: 224 becomes 240 on the first (3-wide) axis.
+    assert_eq!(cells(&p, 224., 240.).unwrap(), block(6..=8, 6..=8));
 }

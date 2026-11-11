@@ -165,6 +165,7 @@ fn chain(p: &Placement, cell: [usize; 2]) -> Vec<ChainLink> {
 fn footprint_loader(cells: Vec<[i32; 2]>) -> impl FnMut(&str) -> Result<Footprint, String> {
     move |_| {
         Ok(Footprint {
+            dimensions: [2, 2],
             origin: AssetIdentity {
                 source: "synthetic".into(),
                 edition: "test".into(),

@@ -1,5 +1,6 @@
 //! Bounded creation placement. The host owns positions; this grid is a collision cache.
 use crate::camera_margins::SourceWindow;
+use crate::footprint_geometry::{FootprintGeometry, clamp_cell, rotate_offset, stationary_anchor};
 use crate::neutral_player::{RuleInputBudget, Sha256Digest, sha256};
 use crate::neutral_rule_input::Pe;
 use crate::script_random::real;
@@ -60,6 +61,11 @@ impl TexturePolicy {
             })
     }
 
+    /// Whether the red channel links the movement entries (`0x4deb57`).
+    pub(crate) fn blocks_movement(self, [red, ..]: [u8; 4]) -> bool {
+        red & self.red_test != 0
+    }
+
     pub(crate) fn checks_construction(self, pixel: [u8; 4]) -> bool {
         self.flags(pixel) & self.build_mask != 0
     }
@@ -107,6 +113,7 @@ pub struct Rules {
     height_bias: f32,
     height_factor: f32,
     texture_policy: TexturePolicy,
+    footprint: Option<FootprintGeometry>,
 }
 
 impl Rules {
@@ -314,6 +321,7 @@ impl Rules {
             height_bias,
             height_factor,
             texture_policy,
+            footprint: None,
         })
     }
 
@@ -324,6 +332,17 @@ impl Rules {
 
     pub(crate) fn texture_policy(&self) -> TexturePolicy {
         self.texture_policy
+    }
+
+    /// Attach the decoded footprint snap, facing classification and `Misc/BuildingAngle`.
+    #[must_use]
+    pub fn with_footprint_geometry(mut self, geometry: FootprintGeometry) -> Self {
+        self.footprint = Some(geometry);
+        self
+    }
+
+    pub fn footprint_geometry(&self) -> Option<&FootprintGeometry> {
+        self.footprint.as_ref()
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -418,6 +437,8 @@ pub struct Grid {
 pub struct Footprint {
     pub origin: AssetIdentity,
     pub cells: Vec<[i32; 2]>,
+    /// Native texture dimensions `[+0x8, +0xc]`: the TGA height, then the TGA width.
+    pub dimensions: [u32; 2],
 }
 
 /// Source-derived placement flags in the original texture's pixel order.
@@ -568,6 +589,8 @@ impl Movement {
 #[derive(Clone, Copy)]
 struct Candidate {
     creation: bool,
+    /// A `CreateUnit` request, whose position `0x687ca0` snaps by `Misc/BuildingAngle`.
+    create_unit: bool,
     movement: Movement,
 }
 
@@ -1301,27 +1324,27 @@ impl Placement {
             .footprints
             .get(&key)
             .ok_or_else(|| fail(format!("missing selected footprint {path}")))?;
-        let cell: [f64; 2] = std::array::from_fn(|axis| {
-            ((f64::from(point[axis]) - f64::from(self.grid.origin[axis]))
-                / f64::from(self.rules.cell_size()))
-            .round_ties_even()
-        });
-        if cell.iter().any(|v| v.abs() > f64::from(i32::MAX)) {
-            return Err(fail("stationary cell range"));
-        }
         let quarter = (f64::from(face) / 90.0).round_ties_even().rem_euclid(4.0) as u8;
+        let anchor = stationary_anchor(
+            self.rules.footprint_geometry(),
+            self.world_bounds(),
+            self.rules.cell_size(),
+            point,
+            footprint.dimensions,
+            quarter,
+        )
+        .map_err(fail)?;
         let mut cells = Vec::new();
         cells
             .try_reserve_exact(footprint.cells.len())
             .map_err(|_| fail("stationary cell allocation"))?;
-        for &[x, y] in &footprint.cells {
-            let (x, y) = match quarter {
-                0 => (i64::from(x), i64::from(y)),
-                1 => (-i64::from(y) - 1, i64::from(x)),
-                2 => (-i64::from(x) - 1, -i64::from(y) - 1),
-                _ => (i64::from(y), -i64::from(x) - 1),
-            };
-            let (x, y) = (cell[0] as i64 + x, cell[1] as i64 + y);
+        for &offset in &footprint.cells {
+            let [x, y] = rotate_offset(offset, footprint.dimensions, quarter);
+            let [x, y] = clamp_cell(
+                [anchor[0] + i64::from(x), anchor[1] + i64::from(y)],
+                self.grid.pathing.width,
+                self.grid.pathing.height,
+            );
             if let Some(i) = self.index(x, y) {
                 cells.push(i);
             }
@@ -1386,6 +1409,17 @@ impl Placement {
         }
         self.footprints.insert(key, input);
         Ok(())
+    }
+
+    fn footprint_dimensions(&self, path: &str) -> Result<Option<[u32; 2]>, Error> {
+        if matches!(path, "" | "_" | "none") {
+            return Ok(None);
+        }
+        let key = Self::footprint_key(path)?;
+        self.footprints
+            .get(&key)
+            .map(|footprint| Some(footprint.dimensions))
+            .ok_or_else(|| fail(format!("missing selected footprint {path}")))
     }
 
     fn footprint_key(path: &str) -> Result<String, Error> {
@@ -1587,6 +1621,11 @@ impl Placement {
         if input.cells.is_empty() {
             return Err(fail("construction requires an authored footprint"));
         }
+        if input.dimensions.iter().any(|d| !d.is_multiple_of(2)) {
+            return Err(fail(
+                "construction of an odd-dimension footprint is not decoded",
+            ));
+        }
         let turns = face / 90.;
         if !face.is_finite() || turns.fract() != 0. || turns.abs() > 4. {
             return Err(fail("construction requires quarter-turn facing"));
@@ -1716,6 +1755,7 @@ impl Placement {
             None,
             Candidate {
                 creation: true,
+                create_unit: true,
                 movement,
             },
         )?
@@ -1774,10 +1814,26 @@ impl Placement {
         exclude: Option<&Prepared>,
         options: Candidate,
     ) -> Result<Option<Prepared>, Error> {
-        let Candidate { creation, movement } = options;
+        let Candidate {
+            creation,
+            create_unit,
+            movement,
+        } = options;
         if request.iter().any(|v| !v.is_finite()) {
             return Err(fail("nonfinite unit position"));
         }
+        let dimensions = self.footprint_dimensions(path)?;
+        let request = match (self.rules.footprint_geometry(), dimensions) {
+            (Some(geometry), Some(dimensions)) if create_unit => geometry
+                .snap(
+                    request,
+                    self.world_bounds(),
+                    dimensions,
+                    geometry.building_quarter(),
+                )
+                .map_err(fail)?,
+            _ => request,
+        };
         let start = self.cell(request)?;
         let wanted = self.grid.domains[self
             .index(i64::from(start[0]), i64::from(start[1]))
@@ -1903,11 +1959,33 @@ impl Placement {
             if !face.is_finite() {
                 return Err(fail("finite facing required"));
             }
-            let turns = f64::from(face) / 90.0;
-            if turns.fract() != 0.0 || turns.abs() > 4.0 {
-                return Err(fail("only quarter-turn footprint facing is admitted"));
-            }
-            let quarter = turns.rem_euclid(4.0) as u8;
+            let dimensions = input.dimensions;
+            let (quarter, cell) = if let Some(geometry) = self.rules.footprint_geometry() {
+                let quarter = geometry.facing_quarter(face).map_err(fail)?;
+                let snapped = geometry
+                    .snap(position, self.world_bounds(), dimensions, quarter)
+                    .map_err(fail)?;
+                (quarter, self.cell(snapped)?)
+            } else {
+                let turns = f64::from(face) / 90.0;
+                if turns.fract() != 0.0 || turns.abs() > 4.0 {
+                    return Err(fail("only quarter-turn footprint facing is admitted"));
+                }
+                (turns.rem_euclid(4.0) as u8, cell)
+            };
+            let place = |offset: [i32; 2]| -> Result<usize, Error> {
+                let [x, y] = rotate_offset(offset, dimensions, quarter);
+                let [x, y] = clamp_cell(
+                    [
+                        i64::from(cell[0]) + i64::from(x),
+                        i64::from(cell[1]) + i64::from(y),
+                    ],
+                    self.grid.pathing.width,
+                    self.grid.pathing.height,
+                );
+                self.index(x, y)
+                    .ok_or_else(|| fail("footprint cell outside the map grid"))
+            };
             if self.spatial.is_some()
                 && let Some(texture) = self
                     .footprint_loader
@@ -1918,19 +1996,17 @@ impl Placement {
                 pixels
                     .try_reserve_exact(texture.flags.len())
                     .map_err(|_| fail("native footprint allocation"))?;
+                if [u32::from(texture.height), u32::from(texture.width)] != dimensions {
+                    return Err(fail("native texture dimensions differ from the footprint"));
+                }
                 for (i, &flags) in texture.flags.iter().enumerate() {
-                    let x = (i / usize::from(texture.width)) as i64 - i64::from(texture.height) / 2;
-                    let y = (i % usize::from(texture.width)) as i64 - i64::from(texture.width) / 2;
-                    let (x, y) = match quarter {
-                        0 => (x, y),
-                        1 => (-y - 1, x),
-                        2 => (-x - 1, -y - 1),
-                        _ => (y, -x - 1),
-                    };
                     if flags != 0 {
-                        let index = self
-                            .index(i64::from(cell[0]) + x, i64::from(cell[1]) + y)
-                            .ok_or_else(|| fail("native footprint outside map"))?;
+                        let row = i / usize::from(texture.width);
+                        let column = i % usize::from(texture.width);
+                        let index = place([
+                            row as i32 - i32::from(texture.height) / 2,
+                            column as i32 - i32::from(texture.width) / 2,
+                        ])?;
                         pixels.push((
                             u32::try_from(index)
                                 .map_err(|_| fail("native footprint index overflow"))?,
@@ -1940,18 +2016,8 @@ impl Placement {
                 }
                 native_footprint = Some(pixels);
             }
-            // shortcut: quarter-turn footprint orientation; qualify arbitrary facing before supporting it.
-            for &[x, y] in &input.cells {
-                let (x, y) = match quarter {
-                    0 => (i64::from(x), i64::from(y)),
-                    1 => (-i64::from(y) - 1, i64::from(x)),
-                    2 => (-i64::from(x) - 1, -i64::from(y) - 1),
-                    _ => (i64::from(y), -i64::from(x) - 1),
-                };
-                footprint.push(
-                    self.index(i64::from(cell[0]) + x, i64::from(cell[1]) + y)
-                        .ok_or_else(|| fail("footprint outside map"))?,
-                );
+            for &offset in &input.cells {
+                footprint.push(place(offset)?);
             }
         }
         footprint.sort_unstable();
@@ -2049,6 +2115,7 @@ impl Placement {
             None,
             Candidate {
                 creation: false,
+                create_unit: false,
                 movement,
             },
         )? {
@@ -2062,6 +2129,7 @@ impl Placement {
             None,
             Candidate {
                 creation: true,
+                create_unit: false,
                 movement,
             },
         )?
@@ -2093,6 +2161,7 @@ impl Placement {
             Some(stamp),
             Candidate {
                 creation: true,
+                create_unit: false,
                 movement,
             },
         )?
@@ -2122,6 +2191,7 @@ impl Placement {
             Some(stamp),
             Candidate {
                 creation: false,
+                create_unit: false,
                 movement: stamp.movement,
             },
         )

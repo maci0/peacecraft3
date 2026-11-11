@@ -103,91 +103,130 @@ learn of an ability outside the list grants nothing.
 Test (pcx-play `unit_hero_tests`): `absent_hero_ability_cell_is_an_empty_list`.
 It failed before the fix at `CreateUnit`.
 
-## Open
+## Footprint placement
 
-### Arbitrary facing
+Decoded from `Warcraft III.exe` 1.29.2.9231 (SHA-256 checked before reading). "Observed"
+means read from the machine code; "inferred" is marked as such.
 
-Refused by `unit_placement::candidate` (`only quarter-turn footprint facing is
-admitted`) for a CreateUnit whose pathing texture is set and whose facing is not a
-multiple of 90. Affects RoC NightElf04, TFT UndeadX01, NightElfX07 and NightElfX08.
+### Routines CreateUnit reaches
 
-Decoded from `Warcraft III.exe` 1.29.2.9231 (SHA-256 checked before reading):
+- `CreateUnit` (`0x48ee00`, name `0xe719e8`, registered at `0x49d20f`) multiplies the facing
+  by the degree-to-radian constant `0x10db0f8` (`0x99ffe0`) without normalizing, then calls
+  `0x663ca0` and `0x687ca0` (observed).
+- `0x687ca0` takes the unit type's pathing texture (`0x5c3150`). With a texture it snaps the
+  creation position with `0x4e00f0`, using the `Misc/BuildingAngle` quarter (below), and stores
+  the snapped position in the creation record. The facing radians go into the record unchanged
+  (observed).
+- `0x66efc0`, CUnit vtable slot `0x1ac`, calls slot `0x148` (`0x6bd2a0`), the footprint
+  registration (observed). It reads the facing from the unit's pose (`this+0x26c`, slot `0xb8`,
+  then slot `0x1c`; `GetUnitFacing` at `0x497650` reads the same slot and multiplies by
+  `0x10db11c`), classifies it with `0x4c6ab0`, snaps the pose position again with `0x4e00f0` and
+  that quarter, walks the texture with `0x4dfb40` (callback `0x6bff00`) and registers with
+  `0x805090` (observed). `0x6c06e0` (`0x6c0883`, `0x6c09a1`) contains the same sequence; its
+  callers were not traced.
 
-- CreateUnit native `0x48ee00` (name `0xe719e8`, registered at `0x49d20f`) calls
-  `0x663ca0`, which calls the creation routine `0x687ca0` (observed).
-- `0x687ca0` takes the unit's pathing texture object from `0x5c3150`, then takes
-  the quarter from `Misc/BuildingAngle` through `0x46dea0`. That routine truncates
-  the value to a multiple of 90 toward zero, adds 360 when negative, and the
-  classifier compares it with the constants 0, 90 and 180 (observed). Those
-  constants are set at startup by initializers `0x401300`, `0x401740` and `0x401430`
-  (observed). The quarter is BuildingAngle / 90.
-- The unit's facing is converted by `0x99ffe0` and written to the fourth
-  component of the pose record at `var_1a8`, which is passed to the unit's virtual
-  method at vtable slot `0x1ac` (observed). It does not select the footprint
-  quarter in `0x687ca0`.
-- The per-unit pathing rotation in the stationary-grid routine at `0x4e1130`
-  (stamp loop `0x4e1500` to `0x4e16b2`) takes its quarter from BuildingAngle through
-  the same classifier, then calls `0x4dffc0` with that quarter (observed). Its
-  caller `0x603850` is a unit-position update path (inferred from its field
-  accesses).
+### Two quarters
 
-Inferred: a structure's footprint orientation follows `Misc/BuildingAngle`, and
-the facing argument does not affect it.
+- Creation snap quarter: `0x46dea0` reads `Misc/BuildingAngle`, truncates it to an integer,
+  reduces it modulo 360 (`mov ecx,0x168` at `0x46dec3`), rounds toward zero to a multiple of
+  90 (`push 0x5a` at `0x401740`) and adds 360 when negative. `0x687ca0` maps 0, 90, 180 to
+  quarters 0, 1, 2 and everything else to 3 (observed). The shipped value 270 gives 3.
+- Registered footprint quarter: `0x4c6ab0` takes the facing in radians. Within 0.001
+  (`0x10db054`) of 0 gives 0, of pi/2 (`0x10db10c`) gives 1, of pi (`0x10db110`) gives 2, and any
+  other angle gives 3, with no test for 3 pi/2 (observed). A facing of 45 or 270 degrees therefore
+  registers quarter 3, and a created unit's facing selects the quarter, unlike the snap.
+- That the pose slot `0x1c` returns the creation facing unchanged is inferred from
+  `GetUnitFacing` reading it. How the pose normalizes an angle outside one turn is not decoded.
 
-Not decoded: the quarter passed to the final traversal `0x4dfb40` at `0x4e1725`
-is the caller's `0x9c(%esi)` field (observed), and no writer of that field is
-traced. A footprint orientation rule cannot be finalized until that is known.
+### The `0x9c(%esi)` field (open item 1)
 
-Needed for implementation: (a) read `Misc/BuildingAngle` in production, (b) the
-CreateUnit position snap of `0x687ca0` (below), (c) the source of `+0x9c`.
+`0x4e1130` is not a CreateUnit routine. Its only caller `0x603850` is slot 2 of the
+`CPlacementBox` vtable (`0xe94028`, RTTI `.?AVCPlacementBox@@`), the building cursor box of the
+placement UI. `+0x9c` is written once, by the constructor `0x5f7c50` (`0x5f7cb4`, fourth
+argument), whose only caller is `0x6627c5` in `0x662520` (reached from `0x661590` and
+`0x5fb52f`). `0x662520` takes the value from slot `0x234` of the ordering build ability, or
+from `0x46dea0` when there is none. Every build ability vtable (`CAbilityBaseBuild`,
+`CAbilityBuild`, Human, Orc, NightElf, Undead, Naga, Neutral, Item) has `0x46ab40` in slot
+`0x234`, which calls `0x46dea0` and returns its value (observed). The cursor box quarter is
+`BuildingAngle` in every path, with the same 0, 90, 180, else 3 classification.
 
-### Odd-dimension pathing texture
+### Snap `0x4e00f0` and the clamp object (open item 2)
 
-`PathTextures\24x24Unflyable.tga` (War3.mpq) has a TGA header of width 29, height 24,
-24 bpp, uncompressed. `campaign_placement::decode_kind` refuses odd width or height
-with `footprint cell budget or unsupported empty/odd dimensions`.
+- Arguments: texture (ecx), pointer to x, pointer to y, quarter. Native dimensions are
+  `[+0x8, +0xc]`. `0x4deb67` loads the texture transposed: `+0x8` is the TGA height and `+0xc`
+  the TGA width, with pixel index `height * column + row` (observed). The first axis is world x.
+  For quarters 0 and 2 the x axis uses `+0x8` and y uses `+0xc`; for 1 and 3 they exchange.
+- Per axis: clamp with `0x7f4a60`, truncate to an integer, remove the C remainder modulo 64
+  (`and ecx,0x8000003f` at `0x4e01a1`), add 32 (`shl 5` at `0x4e01cf`, `0x4e01e6`) when bit 1 of
+  the axis dimension is set, then add 16 (`push 0x10` at `0x403b40`) when the dimension is odd.
+  Both additions take the sign of the clamped coordinate (negative only when below zero; zero
+  and positive coordinates add) (observed).
+- Clamp `0x7f4a60`: x to `[o+0x70, o+0x78 - 32]`, y to `[o+0x74, o+0x7c - 32]`; the margin is
+  the real built by `push 0x20` at `0x4015b2` (observed).
+- `o` is the 0x90-byte singleton `0x115e9ec`, allocated and constructed by `0x7f5520`
+  (constructor `0x7f3600`, vtable `0xebcf64`; stored at `0x7f557c`). Its minimum fields start at
+  zero (`0x7f369a`, `0x7f36a2`). The rectangle is written only by `0x7f4fe0` (`0x7f5039` to
+  `0x7f504a`; `[+0x70]` from `rect[1]`, `[+0x74]` from `rect[0]`, `[+0x78]` from `rect[3]`,
+  `[+0x7c]` from `rect[2]`), called once from `0x704c7e` with the rectangle `0x733c40` builds from
+  the first and last records of the `+0xe0` array of the object `0x707750` returns. Not decoded: the numeric derivation
+  inside `0x733c40` (packed 9-bit fields scaled by 128 through `0x11403cc`).
+- Inferred: the same rectangle is the cell origin in `0x804be0` (cell = `(clamped position - [o+0x70]) / 32`),
+  so it equals the pathing grid origin, and its upper corner the grid's far edge. The
+  recreation uses the pathing grid extent.
+- Traversal `0x4dfb40`: with `hx = (w - 1) * 16` and `hy = (h - 1) * 16` (constant 16 from
+  `0x403b40`, step 32 from `0x403b30`) the start and steps per quarter are: 0: start
+  `(x - hx, y - hy)`, along `+x`, rows `+y`; 1: `(x + hy, y - hx)`, along `+y`, rows `-x`;
+  2: `(x + hx, y + hy)`, along `-x`, rows `-y`; 3: `(x - hy, y + hx)`, along `-y`, rows `+x`
+  (observed, `w = +0x8`, `h = +0xc`). Texel centres sit at `(index - (dimension - 1) / 2)` cells
+  from the snapped position: whole cells for an odd dimension, half cells for an even one.
 
-Decoded for the CreateUnit path:
+### Texel outside the map (open item 3)
 
-- Snap `0x4e00f0` (called from `0x687ca0` when a pathing texture exists, with the
-  BuildingAngle quarter). Quarter 0 and 2: the x axis uses texture height and the y
-  axis uses width. Quarter 1 and 3: the swap applies (observed, `0x4e0109` to
-  `0x4e0128`). Per axis: clamp, truncate to a multiple of 64 toward zero, add 32
-  when the axis dimension has bit 1 set, add 16 when it is odd. Both offsets take
-  sign -1 when the coordinate is above 0 and +1 otherwise (observed,
-  `0x4e01c1` to `0x4e0272`).
-- Clamp `0x7f4a60`: x in `[o+0x70, o+0x78 - 32]`, y in `[o+0x74, o+0x7c - 32]`, where
-  `o = [0x115e9ec]` and the margin 32 is set by `0x4015b0` (observed). The writer of
-  `o` (`0x7f557c`) is not traced. Equivalence to the recreation's world bounds is
-  unverified.
-- Stationary traversal `0x4dfb40`: texel offsets are scaled by `(w - 1) * 16`, with
-  the constant 16 at `0x113bde4` set by `0x403b40` (observed). For odd `w` that is a
-  whole number of 32-unit cells, `(w - 1) / 2` texels.
+`0x804cba` is an instruction inside `0x804be0`, the pixel linker called by the texture callback
+`0x6bff00` for every texel with nonzero flags. `0x804be0` first clamps the texel position with
+`0x7f4a60`, then divides by the cell size and links the pixel to each entry whose mask matches
+(observed). A texel outside the map is linked to the nearest border cell, green or not. Neither
+refusal nor dropping is native.
 
-Inferred: the odd-width footprint is centred at a half cell, so texel `t` maps to
-cell offset `t - (w - 1) / 2`, which is `t - w / 2` in integer division. The float
-to cell rounding after the traversal is not decoded.
+## Footprint placement in the recreation
 
-Needed: the clamp object writer, the final quarter source (above), and the cell
-rounding. Until then odd dimensions stay refused.
+- `footprint_geometry.rs` holds the decoded rules. The snap operands (`0x4e01a1`, `0x4e01cf`,
+  `0x4e01e6`, `0x403b40`, `0x4015b0`), the turn constants (`0x46dec3`, `0x401740`) and the facing
+  constants are read from the fingerprinted image; `Misc/BuildingAngle` is read from the stock
+  and map Misc profiles and is required. `Rules::with_footprint_geometry` attaches them
+  (`campaign_inputs::prepare_new_game`).
+- `CreateUnit` snaps the request by the BuildingAngle quarter, orients the registered
+  footprint by the facing quarter, snaps the position again with that quarter and anchors the
+  texels on the containing cell. Texel offsets rotate by the doubled-centre rule
+  (`rotate_offset`), which reproduces the previous even-dimension formulas and handles odd and
+  mixed dimensions. Texel cells outside the map clamp to the border (`clamp_cell`) in the unit
+  path, the stationary path and the native pixel projection.
+- A facing outside `[0, 360)` is refused (pose normalization not decoded).
+- Map-loaded destructables and doodads keep the nearest-quarter rule and the rounded anchor on
+  even axes. An odd axis is snapped first (`stationary_anchor`) and anchored on the cell that
+  contains the snapped coordinate. `0x6bd2a0` is slot `0x148` of CWidget, CUnit, CDestructable and
+  CItem alike (observed), so destructables take the snap; shipped HumanX04Interlude and NightElf07
+  place the 29-wide texture on multiples of 64, which the snap moves by 16.
+- Construction footprints (`building_raster`, `construction_position_live`) still refuse odd
+  dimensions: the construction anchor and its snap parity are not decoded.
+- Without the attached geometry (synthetic fixtures) the previous quarter-turn facing refusal
+  stays.
+- The plain footprint raster links a texel when the red channel has the bit that `0x4deb57`
+  tests (`TexturePolicy::blocks_movement`), replacing the former 0 or 255 refusal.
+  `PathTextures\24x24Unflyable.tga` (29 by 24, bottom-left origin) carries red values such as
+  3, 0x4b and 0x17 in some texels, so it relies on this.
 
-Affects HumanX04Interlude and RoC NightElf07.
+### Not decoded
 
-### Green texel outside the map
+- The quarter a map-loaded destructable or doodad registers with (the pose facing through
+  `0x4c6ab0`, as for units); they keep the nearest-quarter rule.
+- The pose's normalization of a facing outside `[0, 360)`; `0x733c40`'s numeric derivation; and
+  the equality of the clamp rectangle with the pathing grid (inferred above).
+- The AI and player construction anchor for odd footprints.
+- That the texture's pixel order reaches the recreation's flags in the transposed order the
+  loader uses. The recreation's existing row-by-column mapping agrees with the traversal above;
+  no native capture checks it.
 
-`campaign_placement::project_native_texture` refuses when a texel with the green
-flag projects outside the map. `unit_placement::candidate` refuses with
-`native footprint outside map` for any nonzero texel outside the grid. The two
-paths disagree: the campaign path silently drops non-green texels outside the map.
-
-Decoded: the texture constructor `0x4deb67` marks a texture green when any source
-pixel has nonzero green, and the registration selector `0x6c0943` picks three or
-four entry masks from that mark (earlier notes). Not decoded: how the entry linker
-`0x804cba` treats a texel outside the grid, so neither refusal policy is
-established. The behaviour is unchanged in this pass. Reconciling the two paths
-needs the linker decode.
-
-Affects HumanX06 and NightElfX05.
 
 ## Probe results
 
@@ -259,21 +298,20 @@ The Repair and Town Bell evidence is in `ability-autocast-off.md`.
 | RoC NightElf03 | `IssueImmediateOrder` `innerfireon` (`war3map.j:675`) refused: autocast ON | unchanged: ON refused |
 | TFT UndeadX07a | `IssueImmediateOrder` `webon` (`war3map.j:1469`, class `ACwb`) refused: autocast ON | unchanged: ON refused |
 
-## Probe results (2026-11-11, placement decode)
+## Probe results (2026-11-11, footprint placement)
 
-No recreation code changed in this pass, so before and after are the same. Each
-row is the first refusal of `selected_install_locked_chapter_startup_probe`.
+Each row is the first refusal of `selected_install_locked_chapter_startup_probe`.
 
 | Chapter | Before | After |
 |---|---|---|
-| RoC NightElf04 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
-| TFT UndeadX01 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
-| TFT NightElfX07 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
-| TFT NightElfX08 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
-| TFT HumanX04Interlude | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | unchanged |
-| RoC NightElf07 | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | unchanged |
-| TFT NightElfX05 | `CreateUnit`: native texture green channel outside map | unchanged |
-| TFT HumanX06 | `CreateUnit`: native texture green channel outside map | unchanged |
+| RoC NightElf04 | `CreateUnit`: only quarter-turn footprint facing is admitted | passes `CreateUnit`; `IssueImmediateOrder` `unroot` (`war3map.j:1150`) unsupported by this host |
+| TFT UndeadX01 | `CreateUnit`: only quarter-turn footprint facing is admitted | passes `CreateUnit`; `UnitAddItemToSlotById` refused: unsupported passive ability `AIdf` with code `AIsb` on `odef` (orb refusal) |
+| TFT NightElfX07 | `CreateUnit`: only quarter-turn footprint facing is admitted | passes `CreateUnit`; `IssueImmediateOrder` `unroot` (`war3map.j:1157`) unsupported by this host |
+| TFT NightElfX08 | `CreateUnit`: only quarter-turn footprint facing is admitted | passes `CreateUnit`; `IssueImmediateOrder` `unroot` (`war3map.j:1094`) unsupported by this host |
+| TFT HumanX04Interlude | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | exit 0 (probe passes, `executed_units=26`) |
+| RoC NightElf07 | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | passes `CreateUnit`; `UnitAddItemToSlotById` (`war3map.j:1037`) refused: unsupported passive ability `AIrc` on `ankh` |
+| TFT NightElfX05 | `CreateUnit`: native texture green channel outside map | passes `CreateUnit`; `UnitAddItemToSlotById` refused: unsupported passive ability `AIgd` with code `AIfb` on `gldo` |
+| TFT HumanX06 | `CreateUnit`: native texture green channel outside map | passes `CreateUnit`; `UnitAddItem` refused: unsupported passive ability `AIgd` with code `AIfb` on `gldo` |
 
 ## Probe results (2026-11-11, max life, animation properties, alt icon)
 

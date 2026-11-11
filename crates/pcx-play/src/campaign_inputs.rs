@@ -330,7 +330,9 @@ pub fn prepare_new_game(
             upgrades: upgrades.clone(),
             group_orders: Some(group_orders),
             research: Some(research),
-            placement_rules: Some(placement_rules),
+            placement_rules: Some(placement_rules.with_footprint_geometry(
+                crate::footprint_geometry::FootprintGeometry::read(image, &day_profiles, 8 << 20)?,
+            )),
             blight_growth: Some(crate::terrain_blight::GrowthRules::reviewed_legacy(image)?),
             unit_range_event: Some("EVENT_UNIT_TARGET_IN_RANGE".into()),
             day_cycle: Some(day_cycle),

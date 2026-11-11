@@ -379,6 +379,7 @@ fn public_fixture_configured(
                 host.construction_test_footprint_loader(|path| {
                     assert_eq!(path, "build.tga");
                     Ok(crate::unit_placement::Footprint {
+                        dimensions: [2, 2],
                         origin: crate::scripts::AssetIdentity {
                             source: "synthetic build footprint".into(),
                             edition: "fixture".into(),
@@ -1587,6 +1588,7 @@ fn linked_mine_fixture() -> (Vm, HandleId, HandleId) {
             host.construction_test_footprint_loader(|path| {
                 assert_eq!(path, "build.tga");
                 Ok(crate::unit_placement::Footprint {
+                    dimensions: [2, 2],
                     origin: crate::scripts::AssetIdentity {
                         source: "synthetic build footprint".into(),
                         edition: "fixture".into(),
