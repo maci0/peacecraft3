@@ -84,6 +84,25 @@ fn parse_doodads(doodad_bytes: Vec<u8>) -> Result<pcx_map::Doodads, String> {
     pcx_map::Doodads::from_bytes(doodad_bytes).map_err(|e| e.to_string())
 }
 
+/// The map's destructable and doodad overlays. `war3map.w3b` carries destructables (base ids such
+/// as `LTe3`, `BTtw`); `war3map.w3h` is the buff family (`BHwe`) and never supplies destructable
+/// stats.
+fn stationary_overlays(
+    extract: impl Fn(&'static str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<(Overlay, Overlay), String> {
+    let overlay = |member: &'static str| -> Result<Overlay, String> {
+        extract(member)?
+            .map(|raw| {
+                pcx_objects::ObjectFile::parse(member, &raw)
+                    .map(|f| Overlay::of(&f))
+                    .map_err(|e| e.to_string())
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    Ok((overlay("war3map.w3b")?, overlay("war3map.w3d")?))
+}
+
 impl Catalog {
     pub fn read(
         context: &ParsedMapContext,
@@ -105,30 +124,7 @@ impl Catalog {
             .map_err(|e| e.to_string())
         };
         let doodads = parse_doodads(extract("war3map.doo")?.ok_or("missing placement doodads")?)?;
-        let overlay = |member: &'static str| -> Result<Overlay, String> {
-            extract(member)?
-                .map(|raw| {
-                    pcx_objects::ObjectFile::parse(member, &raw)
-                        .map(|f| Overlay::of(&f))
-                        .map_err(|e| e.to_string())
-                })
-                .transpose()
-                .map(Option::unwrap_or_default)
-        };
-        let destructables = {
-            // `war3map.w3h` carries destructables; `war3map.w3b` is the buff
-            // family and must not supply destructable stats. Older community
-            // notes conflate the two, so a legacy `w3b` destructable-shaped
-            // member is merged only when `w3h` is absent, and a buff-shaped
-            // `w3b` never reaches the destructable catalog.
-            let primary = overlay("war3map.w3h")?;
-            if !primary.mods.is_empty() || !primary.custom.is_empty() {
-                primary
-            } else {
-                overlay("war3map.w3b")?
-            }
-        };
-        let decorations = overlay("war3map.w3d")?;
+        let (destructables, decorations) = stationary_overlays(extract)?;
         Ok(Self {
             objects: DestructableCatalog::new(tables, destructables.clone(), decorations.clone()),
             doodads: doodads.instances().to_vec(),
@@ -1014,6 +1010,46 @@ fn stamp(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A version-1 plain object file with one custom record carrying one `unreal` modification.
+    fn plain_object_file(original: &[u8; 4], custom: &[u8; 4], field: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(original);
+        bytes.extend(custom);
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(field);
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(2.5f32.to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn destructables_come_from_w3b_and_never_from_the_buff_member() {
+        let w3b = plain_object_file(b"LTe3", b"B000", b"bmas");
+        let w3h = plain_object_file(b"BHwe", b"B001", b"fnam");
+        let w3d = plain_object_file(b"LTb1", b"D000", b"dmas");
+        let (destructables, decorations) = stationary_overlays(|member| {
+            Ok(match member {
+                "war3map.w3b" => Some(w3b.clone()),
+                "war3map.w3h" => Some(w3h.clone()),
+                "war3map.w3d" => Some(w3d.clone()),
+                other => panic!("unexpected member {other}"),
+            })
+        })
+        .unwrap();
+        assert_eq!(destructables.new_object("B000").unwrap().0, "LTe3");
+        assert!(destructables.new_object("B001").is_none());
+        assert_eq!(decorations.new_object("D000").unwrap().0, "LTb1");
+        let (none, _) = stationary_overlays(|_| Ok(None)).unwrap();
+        assert!(none.mods.is_empty() && none.custom.is_empty());
+        let error = stationary_overlays(|_| Ok(Some(w3b[..10].to_vec()))).unwrap_err();
+        assert!(!error.is_empty());
+    }
+
     #[test]
     fn domains_follow_the_selected_grid_ratio_and_corner_words() {
         let mut bytes = pcx_map::TERRAIN_MAGIC.to_vec();

@@ -441,7 +441,7 @@ pub fn prepare(
     }
     let progression = pcx_objects::editor::hero::Progression::read(&progression, 8 << 20)?;
     // Ability overrides prefer the admitted overlays (`war3map.w3a`); buff
-    // (`w3b`), doodad (`w3d`), destructable (`w3h`) and item/unit families are
+    // (`w3h`), doodad (`w3d`), destructable (`w3b`) and item/unit families are
     // retained in `object_overlays` for their own consumers. Direct member
     // reads remain only for callers that bypass admission.
     let abilities = match context.object_overlays.get("war3map.w3a") {
