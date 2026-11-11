@@ -219,6 +219,8 @@ pub struct NewGameInput {
     pub upgrades: pcx_objects::editor::Overlay,
     /// Selected client's group-order rules; absent leaves group orders unsupported.
     pub group_orders: Option<crate::group_order_rules::Rules>,
+    /// `GetGameTypeSelected` for the launch route (`game_type_rules`); None leaves it unsupported.
+    pub game_type: Option<i32>,
     /// None leaves research queries unsupported rather than installing defaults.
     pub research: Option<crate::upgrade_research::Rules>,
     /// Source rules for a deferred placement cache, after stationary creations.
@@ -1002,6 +1004,9 @@ fn assemble_inner(
         }
         if let Some(rules) = input.group_orders {
             object = object.with_group_orders(rules)?;
+        }
+        if let Some(selected) = input.game_type {
+            object = object.with_game_type(selected)?;
         }
         placement_rules = input.placement_rules;
         if let (Some(rules), Some(_)) = (&placement_rules, &input.hero_vitals) {

@@ -8,7 +8,8 @@ use pcx_play::{
 use peacecraft3::{
     browser_configuration::SelectedMapSources,
     campaign_startup::{
-        CampaignHostSupply, CampaignSeed, CampaignStartup, CampaignStartupSet, StartupError,
+        CampaignHostSupply, CampaignLaunch, CampaignSeed, CampaignStartup, CampaignStartupSet,
+        StartupError,
     },
     map_requests::{MapBindings, MapRequestSet, MapRequests},
 };
@@ -24,6 +25,7 @@ struct Prepared {
 struct PrepareSources<'w> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
+    launch: Option<Res<'w, CampaignLaunch>>,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -43,7 +45,12 @@ fn prepare(
     mut seed: ResMut<CampaignSeed>,
     mut input: ResMut<CampaignInput>,
 ) {
-    let PrepareSources { requests, sources } = selected;
+    let PrepareSources {
+        requests,
+        sources,
+        launch,
+    } = selected;
+    let route = launch.and_then(|launch| launch.route);
     let (Some(bindings), Some(outcome), Some(context)) = (
         requests.bindings.as_ref(),
         requests.last_outcome.as_ref(),
@@ -88,7 +95,10 @@ fn prepare(
                 image,
                 pcx_play::campaign_inputs::client_identity(image, source),
                 chosen_seed,
-                matches!(reader.mode().addon, pcx_assets::Addon::Tft),
+                pcx_play::campaign_inputs::Launch {
+                    expansion: matches!(reader.mode().addon, pcx_assets::Addon::Tft),
+                    route,
+                },
             )
         };
         let inputs = if let Some(recipe) = sources.campaign_for_receipts(&bindings.receipts) {

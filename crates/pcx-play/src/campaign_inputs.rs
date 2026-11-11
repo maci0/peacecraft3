@@ -35,6 +35,13 @@ pub fn client_identity(image: &[u8], source: &str) -> AssetIdentity {
 /// Zoom index the application camera also selects for its near clip.
 const GAME_CAMERA_ZOOM: usize = 0;
 
+/// How the new game was started: the selected edition and, when decoded, the launch route.
+#[derive(Clone, Copy, Debug)]
+pub struct Launch {
+    pub expansion: bool,
+    pub route: Option<crate::game_type_rules::LaunchRoute>,
+}
+
 /// Fresh single-player policy: the sole authored human slot is the local client.
 /// Explicit seed and selected edition are game inputs, not map-derived defaults.
 #[cfg_attr(
@@ -48,7 +55,7 @@ pub fn prepare_new_game(
     image: &[u8],
     client: AssetIdentity,
     seed: i32,
-    expansion: bool,
+    launch: Launch,
 ) -> Result<MapStartupInputs, String> {
     let mut humans = context.world.info.human_players();
     let local = humans
@@ -87,6 +94,13 @@ pub fn prepare_new_game(
     )?);
     let activity = crate::campaign_client::unit_activity(image, client.clone(), &orders)?;
     let group_orders = crate::group_order_rules::Rules::reviewed_legacy(image, client.clone())?;
+    let game_type = launch
+        .route
+        .map(|route| {
+            crate::game_type_rules::Rules::reviewed_legacy(image, client.clone())
+                .map(|rules| rules.selected(route))
+        })
+        .transpose()?;
     inputs.budgets.unit_in_range = Some(65536);
     inputs.trigger_runtime = Some(crate::playercolor_host::TriggerRuntimeInput {
         initial_enabled: triggers.initial_enabled,
@@ -335,6 +349,7 @@ pub fn prepare_new_game(
             activity: Some(activity),
             upgrades: upgrades.clone(),
             group_orders: Some(group_orders),
+            game_type,
             research: Some(research),
             placement_rules: Some(placement_rules.with_footprint_geometry(
                 crate::footprint_geometry::FootprintGeometry::read(image, &day_profiles, 8 << 20)?,
@@ -367,7 +382,7 @@ pub fn prepare_new_game(
             native_fallback: default_difficulty_fallback,
         }),
         version_global: Some(
-            if expansion {
+            if launch.expansion {
                 "VERSION_FROZEN_THRONE"
             } else {
                 "VERSION_REIGN_OF_CHAOS"

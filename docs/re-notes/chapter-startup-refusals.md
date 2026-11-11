@@ -989,3 +989,46 @@ Stays refused: `GetGameTypeSelected` (campaign launch value open), `AIad`/`AHad`
 `SaveGame`/`SaveGameExists`/`LoadGame` and the revisit of a zone, `R2S` and the other string natives.
 The credits map's `0x47afb7` start-up check and the effect of `0x5ac290` on UI object 13 are decoded only as far as
 stated above.
+
+## `GetGameTypeSelected` launch flags and `ANss`
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`); supersedes the open value above.
+
+- Credits button: `CreditsButton` (`0x56a140`) calls the launch-request setter `0x576f50` with flags
+  `1` (`push 1` at `0x56a1b3`). The setter loads its argument at `0x576f6c` and stores it at
+  request `+0xc` (`0x576fd9`). The menu's message handler `0x568160` (dispatched at `0x56f434`)
+  passes `[request+0xc]` as the flags argument of the local-game creation call `0x51ee70`
+  (`push [edi+0xc]` at `0x568258`). `0x51f0d0` ORs `8` into the flags for some maps and builds the
+  creation packet; the host side (`0x51eaa0`) keeps `flags & 0x3ff` (`0x51eb4f`) and
+  `0x479700` stores it at game info `+0x34`. The only later writer is `or [info+0x34], 8`
+  (`0x479694`). `GetGameTypeSelected` (`0x492810`) clears bit 8 (`and eax, 0xfffffff7`), so the
+  credits launch returns `1`, `GAME_TYPE_MELEE`. `InitGenericPlayerSlots` then runs
+  `MeleeInitPlayerSlots`, as `WarCraftIIICredits` `config` calls it.
+- Single-player start command (`0x5799e0` -> `0x58e050`, also used by the command-line map load
+  `0x560d46` and the lobby start `0x579c3f`): the same setter with flags `0x100` (`push 0x100`
+  at `0x58e0b4`), so the value is `0x100`, which is no `ConvertGameType` constant. Inference: that
+  the campaign mission buttons start through this command was not traced (the other local launches,
+  `0x569b05`, also push `0x100`). No campaign map calls the native, so nothing depends on it.
+- Not decoded: the `ChangeLevel` continuation. `0x476c90` passes the current info flags (or `0x200`
+  when a score screen is requested) to `0x480040`, and the handler `0x479ce0` ORs `4` before
+  `0x51ee70`. Its value depends on the parent chain, so the native stays unsupported there.
+- Recreation: `game_type_rules::Rules` reads these windows from the image, `LaunchRoute` selects
+  the value, `CampaignLaunch` records the route (the `ChangeLevel` transition clears it) and
+  `ObjectHost::with_game_type` installs the native before `config`. A value outside the
+  `ConvertGameType` constants fails at the call.
+- `ANss`: decoded and admitted as a retained held class; see `passive-held-items.md`, "`ANss`".
+  Hosted curse spells refuse where an enemy's spell would reach a held shield.
+
+### Probe results after this change
+
+One run each, headless, `chapter-sweep.sh` over the last 18 rows of `routes.tsv` with the real parents.
+
+| Map | Route | Result |
+|---|---|---|
+| WarCraftIIICredits | credits button | passes, `executed_units=2` (was `GetGameTypeSelected`) |
+| BonusCredits | `ChangeLevel` from NightElf07 | passes, 271 |
+| War3XRegularCreditsIce | credits button | passes, 6 |
+| War3XBonusCredits | `ChangeLevel` from UndeadX08 | passes, 34 |
+| OrcX01_02 / _03 / _04 / _05 | from OrcX01 | pass, 84 / 101 / 265 / 68 |
+| OrcX02_02 / _03 / _04 / _05 / _06 / _07 / _08 / _09 / _10 | from OrcX02 | pass, 325 / 305 / 355 / 206 / 300 / 68 / 53 / 127 / 16 (`_03` was `ANss`) |
+| OrcX03b | from OrcX03a | parent runs; child refuses `IsUnitIdType` (unsupported native, `war3map.j:2015`) |

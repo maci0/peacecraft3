@@ -35,6 +35,13 @@ pub struct CampaignSeed {
     pub prepared: Option<i32>,
 }
 
+/// How the map being prepared was started. A route whose game type is not decoded, such as
+/// the `ChangeLevel` continuation, is `None`, and `GetGameTypeSelected` stays unsupported.
+#[derive(Resource, Default)]
+pub struct CampaignLaunch {
+    pub route: Option<pcx_play::game_type_rules::LaunchRoute>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
     #[error("host inputs are for binding revision {supply}; the admitted revision is {binding}")]
@@ -58,6 +65,7 @@ pub fn install(app: &mut App) {
     app.init_resource::<CampaignStartup>()
         .init_resource::<CampaignHostSupply>()
         .init_resource::<CampaignSeed>()
+        .init_resource::<CampaignLaunch>()
         .init_resource::<MapScriptSession<MapStartupHost>>()
         .add_systems(
             Update,

@@ -21,6 +21,7 @@ use pcx_objects::editor::campaign_index::{CampaignSlot, IndexLimits, parse_campa
 use pcx_objects::editor::{EditorReadLimits, SlkId};
 use pcx_play::MapScriptBudget;
 use pcx_play::campaign_data_set::{CampaignRecipe, ImageRules};
+use pcx_play::game_type_rules::LaunchRoute;
 use pcx_play::install_source::{MAX_AGGREGATE_BYTES, MAX_ASSET_BYTES, MAX_LISTED_PATHS};
 use pcx_play::map_admission::MapAdmissionBudget;
 use pcx_play::scripts::AssetIdentity;
@@ -30,6 +31,7 @@ use peacecraft3::browser_configuration::{
 use peacecraft3::campaign_loading::{
     CampaignLoading, CampaignLoadingSet, LastRules, LoadingRequest,
 };
+use peacecraft3::campaign_startup::CampaignLaunch;
 use peacecraft3::map_binding::{BindingLimits, OverlayLimits};
 use peacecraft3::map_requests::MapBindings;
 use peacecraft3::map_requests::{MapRequestSet, MapRequests};
@@ -517,6 +519,8 @@ fn enqueue_chapter(
     launcher: &crate::launch_gui::Launcher,
     inbox: &ConfigurationInbox,
     chapters: &mut Chapters,
+    launch: &mut CampaignLaunch,
+    route: LaunchRoute,
     chapter: &Chapter,
 ) {
     let Some(dir) = crate::launch_gui::selected_install(launcher) else {
@@ -540,6 +544,7 @@ fn enqueue_chapter(
     {
         Ok(id) => {
             chapters.pending = Some((id, revision));
+            launch.route = Some(route);
             // A screen that cannot be built is reported; the mission still loads.
             match screen {
                 Ok(screen) => chapters.loading = screen,
@@ -782,6 +787,7 @@ fn launch(
     launcher: Res<crate::launch_gui::Launcher>,
     inbox: Res<ConfigurationInbox>,
     mut chapters: ResMut<Chapters>,
+    mut launch: ResMut<CampaignLaunch>,
 ) {
     for entity in &actions.entities {
         let Ok(button) = buttons.get(*entity) else {
@@ -793,7 +799,14 @@ fn launch(
         let Some(chapter) = chapters.entries.get(button.0).cloned() else {
             continue;
         };
-        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+        enqueue_chapter(
+            &launcher,
+            &inbox,
+            &mut chapters,
+            &mut launch,
+            LaunchRoute::SinglePlayerStart,
+            &chapter,
+        );
     }
 }
 
@@ -863,6 +876,7 @@ fn launch_mission(
     launcher: Res<crate::launch_gui::Launcher>,
     inbox: Res<ConfigurationInbox>,
     mut chapters: ResMut<Chapters>,
+    mut launch: ResMut<CampaignLaunch>,
     navigation: Option<Res<crate::menu_screens::Navigation>>,
 ) {
     if navigation.is_some_and(|navigation| navigation.transition_active) {
@@ -890,7 +904,14 @@ fn launch_mission(
             name: mission.name.clone(),
             map: mission.map.clone(),
         };
-        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+        enqueue_chapter(
+            &launcher,
+            &inbox,
+            &mut chapters,
+            &mut launch,
+            LaunchRoute::SinglePlayerStart,
+            &chapter,
+        );
     }
 }
 
@@ -902,6 +923,7 @@ fn launch_credits(
     launcher: Res<crate::launch_gui::Launcher>,
     inbox: Res<ConfigurationInbox>,
     mut chapters: ResMut<Chapters>,
+    mut launch: ResMut<CampaignLaunch>,
     navigation: Option<Res<crate::menu_screens::Navigation>>,
 ) {
     if navigation.is_some_and(|navigation| navigation.transition_active) {
@@ -939,7 +961,14 @@ fn launch_credits(
             name: "Credits".to_string(),
             map: map.to_string(),
         };
-        enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+        enqueue_chapter(
+            &launcher,
+            &inbox,
+            &mut chapters,
+            &mut launch,
+            LaunchRoute::CreditsButton,
+            &chapter,
+        );
     }
 }
 
@@ -2263,7 +2292,8 @@ pub(crate) mod tests {
             .run_system_once(
                 move |launcher: Res<crate::launch_gui::Launcher>,
                       inbox: Res<ConfigurationInbox>,
-                      mut chapters: ResMut<Chapters>| {
+                      mut chapters: ResMut<Chapters>,
+                      mut launch: ResMut<CampaignLaunch>| {
                     let entry = &chapters.campaigns[campaign];
                     let source = &entry.missions[mission];
                     let chapter = Chapter {
@@ -2272,7 +2302,14 @@ pub(crate) mod tests {
                         name: source.name.clone(),
                         map: source.map.clone(),
                     };
-                    enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+                    enqueue_chapter(
+                        &launcher,
+                        &inbox,
+                        &mut chapters,
+                        &mut launch,
+                        LaunchRoute::SinglePlayerStart,
+                        &chapter,
+                    );
                 },
             )
             .expect("probe system runs");

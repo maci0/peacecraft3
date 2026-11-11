@@ -94,6 +94,7 @@ pub mod file_sounds;
 pub mod font_pair_policy;
 pub mod footprint_geometry;
 pub mod game_cache;
+pub mod game_type_rules;
 pub mod generator;
 pub mod group_order_rules;
 pub mod group_panel_layout;

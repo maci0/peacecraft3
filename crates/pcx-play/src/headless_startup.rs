@@ -364,7 +364,10 @@ pub fn start(
         &image,
         client,
         seed,
-        expansion_of(mode),
+        campaign_inputs::Launch {
+            expansion: expansion_of(mode),
+            route: None,
+        },
     )
     .map_err(StartupError::Inputs)?;
     // Allied shared data is retained for provenance but has no measured

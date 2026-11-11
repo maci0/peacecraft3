@@ -51,6 +51,7 @@ fn fresh_roster_keeps_executed_controllers_and_only_occupies_selected_slots() {
             activity: None,
             upgrades: pcx_objects::editor::Overlay::default(),
             group_orders: None,
+            game_type: None,
             seed: 0,
             research: None,
             placement_rules: None,

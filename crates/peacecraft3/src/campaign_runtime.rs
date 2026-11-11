@@ -657,6 +657,7 @@ fn apply_transition(
     mut requests: ResMut<MapRequests>,
     mut sources: ResMut<SelectedMapSources>,
     startup: Option<Res<crate::campaign_startup::CampaignStartup>>,
+    mut launch: Option<ResMut<crate::campaign_startup::CampaignLaunch>>,
 ) {
     for request in continuation.read() {
         let mut candidate = request.clone();
@@ -680,6 +681,10 @@ fn apply_transition(
         state.last_next_level = Some(request.next_level.clone());
         match transition_to_next_level(&mut requests, &mut sources, &candidate) {
             Ok(()) => {
+                // The continuation's game type is not decoded (`CampaignLaunch`).
+                if let Some(launch) = launch.as_mut() {
+                    launch.route = None;
+                }
                 state.last_error = None;
                 state.pending = Some((
                     request.clone(),

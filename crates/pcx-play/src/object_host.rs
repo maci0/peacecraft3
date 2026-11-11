@@ -67,6 +67,7 @@ pub struct ObjectHost {
     inner: EnumHost,
     group_limit: Option<usize>,
     group_orders: Option<crate::group_order_rules::Rules>,
+    game_type: Option<i32>,
     members: Vec<(HandleId, HandleId)>,
     config: Option<MapConfig>,
     players: Option<players::Players>,
@@ -265,6 +266,7 @@ impl ObjectHost {
             inner,
             group_limit: None,
             group_orders: None,
+            game_type: None,
             members: Vec::new(),
             config: None,
             players: None,
@@ -1218,6 +1220,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.group_order_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.game_type_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1717,6 +1722,12 @@ mod localized_queries;
 
 #[path = "group_order_host.rs"]
 mod group_orders;
+
+#[path = "game_type_host.rs"]
+mod game_type;
+
+#[path = "spell_shield_host.rs"]
+mod spell_shield;
 
 #[path = "game_exit_host.rs"]
 mod game_exit;

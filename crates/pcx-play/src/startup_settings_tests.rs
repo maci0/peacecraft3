@@ -441,5 +441,8 @@ fn optional_speed_setter_requires_its_own_source_and_contract() {
 #[path = "startup_version_tests.rs"]
 mod version;
 
+#[path = "game_type_tests.rs"]
+mod game_type;
+
 #[path = "speed_lock_tests.rs"]
 mod speed_lock;
