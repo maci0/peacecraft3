@@ -985,8 +985,7 @@ parent, which starts. That run shows only each child's own refusals. It is not t
 | OrcX02_03 | `ChangeLevel` from OrcX02 | parent refuses `AIad`; from OrcX01: `UnitAddItemToSlotById`, unsupported passive ability `ANss` on `spsh` (`ANss` is an item row with Cool 40 and no passive class, a castable shield; not decoded) |
 | OrcX03b | `ChangeLevel` from OrcX03a | parent and child both refuse `AIad` on `blba` |
 
-Stays refused: `GetGameTypeSelected` (campaign launch value open), `AIad`/`AHad` and `ANss` held abilities,
-`SaveGame`/`SaveGameExists`/`LoadGame` and the revisit of a zone, `R2S` and the other string natives.
+Stays refused: `SaveGame`/`SaveGameExists`/`LoadGame` and the revisit of a zone, `R2S` and the other string natives.
 The credits map's `0x47afb7` start-up check and the effect of `0x5ac290` on UI object 13 are decoded only as far as
 stated above.
 
