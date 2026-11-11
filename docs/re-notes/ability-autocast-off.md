@@ -171,3 +171,26 @@ attack effects, the cost or cooldown, and the return for an already-uprooted
 unit. A native trace or runtime probe must establish these before `unroot` is
 bound. Until then the order stays refused. No full autocast or interlude
 completion is claimed by these parser and synthetic host tests.
+
+## Town Bell (`Amic`) immediate order: native decode (not implemented)
+
+Reviewed exe 1.29.2.9231. Town Bell is not an autocast class; `townbelloff` is an immediate order.
+
+Observed:
+
+- `Amic` is class `CAbilityMilitiaConvert` (name at `0xd1908c`, constructor `0xbf6fa0`, vtable
+  `0xf6aa60`). Its class code getter `0xbf62b0` returns `Amic`.
+- Order IDs: `townbellon` `0xd0072` (getter `0xbf62c0`), `townbelloff` `0xd0073` (getter `0xbf62d0`).
+- Slots `+0x328` to `+0x334` call one routine, `0xbf6b40(dryRun, toMilitia)`. It scans the issuer's
+  owner's units carrying ability `Amil` (`0x416d696c`) through `0x7f4ba0` with callback `0xbf7740`.
+- The dry-run off check (`+0x32c`, dry-run mode) returns error `0xb3` when no militia is found. The
+  match flag is written only when a unit matches, so with no militia nothing changes.
+
+Inferred: with no militia active, `townbelloff` is refused with `0xb3` and changes no state. The
+script's `IssueImmediateOrder` return value is not checked by the map.
+
+Not decoded: the militia conversion callback (`0xbf72f0`, `[Amil+0x338]`/`[Amil+0x33c]`), the range
+check `0xbf7640`, and the dispatcher that consumes `+0x328`/`+0x32c`.
+
+Repo: still refused, `IssueImmediateOrder townbelloff is not bound`. Implementing the no-militia branch
+needs a per-unit ability scan for `Amil` that the host does not have, so it is not done.
