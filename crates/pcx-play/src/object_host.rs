@@ -1415,10 +1415,10 @@ pub use item_use::{UseCheck, UseCommit, UseGrant};
 #[path = "trigger_host.rs"]
 mod trigger_admission;
 pub use trigger_admission::{
-    DeathEventRegistration, GameStateEventRegistration, PlayerEventRegistration,
-    PlayerStateEventRegistration, PlayerUnitEventRegistration, TimerEventRegistration,
-    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, UnitEventRegistration,
-    UnitInRangeRegistration, UnitStateEventRegistration,
+    DeathEventRegistration, GameStateEventRegistration, PlayerChatRegistration,
+    PlayerEventRegistration, PlayerStateEventRegistration, PlayerUnitEventRegistration,
+    TimerEventRegistration, TriggerActionRecord, TriggerBudget, TriggerConditionRegistration,
+    UnitEventRegistration, UnitInRangeRegistration, UnitStateEventRegistration,
 };
 
 #[cfg(test)]

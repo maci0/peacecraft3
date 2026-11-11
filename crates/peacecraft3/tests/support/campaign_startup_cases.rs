@@ -333,6 +333,7 @@ fn budgets() -> MapStartupBudgets {
         death_events: None,
         unit_in_range: None,
         player_events: None,
+        player_chat_events: None,
         regions: None,
         timer_events: 4,
         game_state_events: 4,

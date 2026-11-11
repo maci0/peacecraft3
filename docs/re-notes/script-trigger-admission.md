@@ -428,3 +428,20 @@ hashes are local in `.scratch/death-event-root-20261017/`. No new original-clien
 render or public-site run was performed. Original random-stream behavior, event
 delivery, the application world/clock, full chapter completion and the
 100-consecutive original baseline remain open.
+
+## Player-chat subscriptions
+
+`ObjectHost::with_player_chat_events(max_records)` admits the loaded non-constant
+`TriggerRegisterPlayerChatEvent(trigger, player, string, boolean) -> event`
+after trigger admission. `CreateTrigger`, `Player` and the registration must share
+one declaration source, and `player` must derive from `agent`. The factory's
+`MapStartupBudgets.player_chat_events` is optional; `None` keeps registration
+unsupported.
+
+A call with a created trigger, an existing player, a string and a boolean retains
+the trigger, player, copied message and match flag under one arena identity. A
+zero-budget or full registration refuses before allocation. No chat is delivered:
+the host has no typed-chat source, so nothing fires. `GetEventPlayerChatString` and
+`GetEventPlayerChatStringMatched` stay unsupported. `HumanX01.w3x` (`war3map.j:7343`,
+message `"A"`) registers and never calls them; its next first refusal is
+`UnitSetUsesAltIcon` (`Scripts\Blizzard.j:4270`), which has no repo evidence yet.

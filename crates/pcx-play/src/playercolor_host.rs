@@ -347,6 +347,7 @@ enum Entry {
     },
     RegisteredPlayerUnitEvent(objects::PlayerUnitEventRegistration),
     RegisteredPlayerEvent(objects::PlayerEventRegistration),
+    RegisteredPlayerChat(objects::PlayerChatRegistration),
     RegisteredGameEvent {
         trigger: HandleId,
         gameevent: HandleId,
@@ -846,6 +847,7 @@ impl EnumHost {
             | Entry::RegisteredUnitEvent { .. }
             | Entry::RegisteredPlayerUnitEvent(_)
             | Entry::RegisteredPlayerEvent(_)
+            | Entry::RegisteredPlayerChat(_)
             | Entry::RegisteredGameEvent { .. }
             | Entry::RegisteredDeathEvent(_)
             | Entry::RegisteredUnitInRange(_)

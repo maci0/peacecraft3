@@ -124,6 +124,8 @@ impl ObjectHost {
             // game_event_host.rs
             "ConvertGameEvent",
             "TriggerRegisterGameEvent",
+            // player_chat_event_host.rs
+            "TriggerRegisterPlayerChatEvent",
             // group_iteration_host.rs
             "ForGroup",
             "GetEnumUnit",

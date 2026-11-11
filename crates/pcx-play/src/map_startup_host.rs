@@ -86,6 +86,8 @@ pub struct MapStartupBudgets {
     pub unit_in_range: Option<usize>,
     /// None keeps player-event registration unsupported.
     pub player_events: Option<usize>,
+    /// None keeps player-chat registration unsupported.
+    pub player_chat_events: Option<usize>,
     /// None keeps region creation, rectangle requests and subscriptions unsupported.
     pub regions: Option<RegionBudget>,
     pub timer_events: usize,
@@ -884,6 +886,9 @@ fn assemble_inner(
     }
     if let Some(limit) = budgets.player_events {
         object = object.with_player_events(limit)?;
+    }
+    if let Some(limit) = budgets.player_chat_events {
+        object = object.with_player_chat_events(limit)?;
     }
     if context
         .scripts

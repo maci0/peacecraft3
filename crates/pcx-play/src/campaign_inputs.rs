@@ -1026,6 +1026,7 @@ fn budgets(shop: crate::playercolor_host::ShopCapacity) -> MapStartupBudgets {
         death_events: Some(65536),
         unit_in_range: None,
         player_events: Some(65536),
+        player_chat_events: Some(65536),
         regions: Some(RegionBudget {
             max_regions: 10000,
             max_rect_additions: 65536,

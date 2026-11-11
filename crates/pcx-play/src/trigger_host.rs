@@ -33,6 +33,9 @@ pub use player_unit_events::PlayerUnitEventRegistration;
 #[path = "player_event_host.rs"]
 mod player_events;
 pub use player_events::PlayerEventRegistration;
+#[path = "player_chat_event_host.rs"]
+mod player_chat_events;
+pub use player_chat_events::PlayerChatRegistration;
 #[path = "game_event_host.rs"]
 mod game_events;
 
@@ -106,6 +109,8 @@ pub(super) struct Admission {
     retained_unit_in_range: usize,
     player_event_limit: Option<usize>,
     retained_player_events: usize,
+    player_chat_event_limit: Option<usize>,
+    retained_player_chat_events: usize,
     game_events: bool,
     timer_event_limit: Option<usize>,
     retained_timer_events: usize,
@@ -252,6 +257,8 @@ impl ObjectHost {
             retained_unit_in_range: 0,
             player_event_limit: None,
             retained_player_events: 0,
+            player_chat_event_limit: None,
+            retained_player_chat_events: 0,
             game_events: false,
             timer_event_limit: None,
             retained_timer_events: 0,
@@ -322,6 +329,11 @@ impl ObjectHost {
             }
             player_events::REGISTER if self.triggers.as_ref()?.player_event_limit.is_some() => {
                 Some(self.register_player_event(args))
+            }
+            player_chat_events::REGISTER
+                if self.triggers.as_ref()?.player_chat_event_limit.is_some() =>
+            {
+                Some(self.register_player_chat_event(args))
             }
             player_unit_events::REGISTER
                 if self.triggers.as_ref()?.player_unit_event_limit.is_some() =>
