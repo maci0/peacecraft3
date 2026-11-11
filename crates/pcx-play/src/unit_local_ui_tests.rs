@@ -195,6 +195,8 @@ native TimerGetRemaining takes timer t returns real
 native TimerGetTimeout takes timer t returns real
 native GetExpiredTimer takes nothing returns timer
 native SetCameraTargetController takes unit whichUnit, real xoffset, real yoffset, boolean inheritOrientation returns nothing
+constant native GetCameraField takes camerafield f returns real
+native SetCameraField takes camerafield whichField, real value, real duration returns nothing
 ";
 
 const CAMERA_FIELDS: &str = "globals
@@ -368,4 +370,63 @@ fn a_set_controller_makes_target_reads_and_pans_refuse_instead_of_guessing() {
         let error = host.native(name, &args).unwrap_err();
         assert!(error.contains("target controller unit is set"), "{error}");
     }
+}
+
+#[test]
+fn set_camera_field_applies_the_value_immediately_in_degrees() {
+    let mut s = open_camera();
+    s.vm.init_globals().unwrap();
+    let host = &mut s.vm.host().inner;
+    let field = |host: &mut ObjectHost, selector: i32| {
+        host.native("ConvertCameraField", &[Value::Int(selector)])
+            .unwrap()
+    };
+    let distance = field(host, 0);
+    let read = |host: &mut ObjectHost, field: &Value| {
+        host.native("GetCameraField", std::slice::from_ref(field))
+            .unwrap()
+    };
+    assert_eq!(read(host, &distance), Value::Real(1650.));
+    let set = |host: &mut ObjectHost, field: &Value, value: f32, duration: f32| {
+        host.native(
+            "SetCameraField",
+            &[field.clone(), Value::Real(value), Value::Real(duration)],
+        )
+    };
+    assert_eq!(set(host, &distance, 2000., 0.).unwrap(), Value::Null);
+    assert_eq!(read(host, &distance), Value::Real(2000.));
+    // A negative duration is an immediate set.
+    set(host, &distance, 1800., -1.).unwrap();
+    assert_eq!(read(host, &distance), Value::Real(1800.));
+    // An angle field is stored in degrees and read back in radians.
+    let rotation = field(host, 5);
+    set(host, &rotation, 180., 0.).unwrap();
+    let Value::Real(radians) = read(host, &rotation) else {
+        panic!("real")
+    };
+    assert!((radians - std::f32::consts::PI).abs() < 1e-5, "{radians}");
+}
+
+#[test]
+fn set_camera_field_refuses_bad_calls_without_a_write() {
+    let mut s = open_camera();
+    s.vm.init_globals().unwrap();
+    let host = &mut s.vm.host().inner;
+    let distance = host.native("ConvertCameraField", &[Value::Int(0)]).unwrap();
+    for args in [
+        vec![distance.clone(), Value::Real(f32::NAN), Value::Real(0.)],
+        vec![
+            distance.clone(),
+            Value::Real(1.),
+            Value::Real(f32::INFINITY),
+        ],
+        vec![distance.clone(), Value::Real(1.)],
+        vec![Value::Int(0), Value::Real(1.), Value::Real(0.)],
+    ] {
+        assert!(host.native("SetCameraField", &args).is_err());
+    }
+    let Value::Handle(id) = distance else {
+        panic!("field")
+    };
+    assert_eq!(host.camera_field(id).unwrap(), Some(1650.));
 }

@@ -64,6 +64,7 @@ impl ObjectHost {
             "GetCameraTargetPositionX",
             "PanCameraToTimed",
             "ResetToGameCamera",
+            "SetCameraField",
             "SetCameraQuickPosition",
             "SetCameraTargetController",
             // campaign_flee_host.rs

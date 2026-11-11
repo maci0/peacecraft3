@@ -69,3 +69,21 @@ The recreation stores the state each native writes. It renders none of it.
   is open. Source: `camera_view_host.rs`.
 - Chapter that calls it: RoC `Orc03`, through `SetCameraTargetControllerNoZForPlayer`
   (`Scripts\Blizzard.j:1321`) with offsets `0.0`, `0.0` and orientation `false`.
+
+## SetCameraField
+
+- Registration push at `0x4a02e6` (name `0xe76298`), handler `0x4a71a0`.
+- The handler takes the camera as `SetCameraTargetController` does (null camera: last
+  error `0x57`) and calls `0x5e30e0(field, value, duration, 1)`. The last argument
+  marks the value as degrees: angle fields are scaled by the degree to radian pair at
+  `0xe92320` and `0xe92328` before they are stored.
+- `0x5e30e0` first calls `0x5e43a0(field)`, which releases a running ramp on that
+  field. Selectors above 9 (compared unsigned) do nothing. For selectors 0 to 9, a
+  duration whose magnitude is below the constant at `0xe8df60` sets the field at once
+  (`0x800ff0` or `0x803930`); a longer one starts a timed change. The timed branch
+  was not read in detail.
+- Recreation: `camera_view_host.rs` applies the value through the same field ramp that
+  `CameraSetupApplyForceDuration` uses (stored in degrees, linear easing on the
+  game clock, a recreation choice). The selector domain the host admits comes from
+  the script constants, so the selector guard cannot be reached with the stock names.
+- Chapter that calls it: RoC `Orc03` (first refusal after the target controller).

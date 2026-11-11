@@ -7,7 +7,7 @@ use pcx_objects::editor::camera::GameCamera;
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
-const NATIVES: [(&str, &[&str], &str, bool); 11] = [
+const NATIVES: [(&str, &[&str], &str, bool); 12] = [
     (
         "PanCameraToTimed",
         &["real", "real", "real"],
@@ -34,9 +34,18 @@ const NATIVES: [(&str, &[&str], &str, bool); 11] = [
         "nothing",
         false,
     ),
+    (
+        SET_FIELD,
+        &["camerafield", "real", "real"],
+        "nothing",
+        false,
+    ),
 ];
 
 const TARGET_CONTROLLER: &str = "SetCameraTargetController";
+const SET_FIELD: &str = "SetCameraField";
+/// `0x5e30e0` and `0x5e43a0` switch on selectors 0 to 9 and do nothing for others.
+const LAST_CAMERA_FIELD_SELECTOR: i32 = 9;
 const CONTROLLER_SET: &str = "a target controller unit is set; how the camera follows it and when a pan releases it are not decoded";
 
 /// Fields whose `GetCameraField` result is in radians. The selected `Blizzard.j`
@@ -258,6 +267,41 @@ impl ObjectHost {
         self.camera_view.as_ref()?.source_noise
     }
 
+    /// `SetCameraField` (`0x4a71a0`) calls `0x5e30e0(field, value, duration, 1)` on the
+    /// camera: the flag marks the value as degrees. The routine drops any ramp on that
+    /// field (`0x5e43a0`), then sets the field at once when the duration is below an
+    /// epsilon (`0xe8df60`) or ramps it. Selectors above 9 do nothing. The easing is
+    /// the same recreation choice `CameraSetupApplyForceDuration` uses.
+    fn set_camera_field(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = SET_FIELD;
+        let [
+            Value::Handle(field),
+            Value::Real(value),
+            Value::Real(duration),
+        ] = args
+        else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        if !value.is_finite() || !duration.is_finite() {
+            return Err(self.inner.error(
+                name,
+                Failure::CameraSetupObject("finite value and duration required"),
+            ));
+        }
+        let Entry::Symbolic { kind, enumerand } = self.inner.entry(*field)? else {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        };
+        if kind != "camerafield" {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        }
+        let enumerand = *enumerand;
+        if !(0..=LAST_CAMERA_FIELD_SELECTOR).contains(&enumerand) {
+            return Ok(Value::Null);
+        }
+        self.apply_camera_view(&[(enumerand, *value)], None, *duration);
+        Ok(Value::Null)
+    }
+
     /// Last accepted `SetCameraTargetController` call, if any.
     pub fn camera_target_controller(&self) -> Option<TargetController> {
         self.camera_view.as_ref()?.controller
@@ -417,6 +461,9 @@ impl ObjectHost {
             }
             if name == TARGET_CONTROLLER {
                 return self.set_target_controller(args);
+            }
+            if name == SET_FIELD {
+                return self.set_camera_field(args);
             }
             let reals = args
                 .iter()
