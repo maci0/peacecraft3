@@ -366,6 +366,12 @@ updates at capacity reuse the retained key. Invalid arguments, wrong or unknown
 handles, out-of-domain settings and capacity failures preserve earlier records.
 No new arena identity is allocated by the setter.
 
+A null `player` argument is accepted and retains nothing. The shipped TFT
+UndeadX07c `war3map.j` never assigns `udg_AP3_Nerubians` and passes it through
+`SetPlayerAllianceStateBJ` (`Scripts\Blizzard.j:4841`), and the original runs that
+map. The native's effect for a null player is unverified; only the refusal is ruled
+out by that evidence. A null `alliancetype` still refuses.
+
 The unchanged Human01 completes globals and `config`, then retains 26 directed
 alliance tuples matching its executed calls. Previous state checks still pass:
 155 units, 142 rectangles, three unit events and seven stacked sound requests on

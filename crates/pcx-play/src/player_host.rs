@@ -618,8 +618,8 @@ impl ObjectHost {
         let [source, target, Value::Handle(setting), Value::Bool(value)] = args else {
             return Err(fail(Failure::PlayerArguments));
         };
-        let source = self.player_index(source, SET_ALLIANCE)?;
-        let target = self.player_index(target, SET_ALLIANCE)?;
+        let source = self.optional_player_index(source, SET_ALLIANCE)?;
+        let target = self.optional_player_index(target, SET_ALLIANCE)?;
         let enumerand = self
             .inner
             .symbolic_value(*setting, ALLIANCE_KIND)
@@ -636,11 +636,17 @@ impl ObjectHost {
             .players
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("not admitted")))?;
-        let target = players.rows[target].identity;
         let limits = players
             .alliance
             .as_mut()
             .ok_or_else(|| fail(Failure::PlayerState("alliances not admitted")))?;
+        // A null player has no row to hold the directed assignment. The original
+        // runs shipped scripts that pass one (UndeadX07c `udg_AP3_Nerubians`, never
+        // assigned), so this is a no-op, not a refusal. Its native effect is unverified.
+        let (Some(source), Some(target)) = (source, target) else {
+            return Ok(Value::Null);
+        };
+        let target = players.rows[target].identity;
         let assignments = &mut players.rows[source].alliances;
         if let Some(stored) = assignments
             .iter_mut()
@@ -1438,6 +1444,13 @@ impl ObjectHost {
             .rows
             .iter()
             .any(|row| row.start_is_forced && row.start_location == Some(index)))
+    }
+    /// `None` is the null `player` value, which JASS accepts for any player parameter.
+    fn optional_player_index(&self, value: &Value, name: &str) -> Result<Option<usize>, Error> {
+        match value {
+            Value::Null => Ok(None),
+            _ => self.player_index(value, name).map(Some),
+        }
     }
     fn player_index(&self, value: &Value, name: &str) -> Result<usize, Error> {
         let Value::Handle(id) = value else {

@@ -327,3 +327,38 @@ fn alliance_admission_requires_selected_contract_source_and_domain() {
             .is_err()
     );
 }
+#[test]
+fn null_player_arguments_retain_no_assignment_and_other_shapes_still_refuse() {
+    let common = common();
+    let (_, host) = fixture(&common, "// map", true);
+    let mut host = host
+        .with_player_alliances(PlayerAllianceBudget { max_records: 1 })
+        .unwrap();
+    let a = host.native("Player", &[Value::Int(0)]).unwrap();
+    let x = host
+        .native("ConvertAllianceType", &[Value::Int(-17)])
+        .unwrap();
+    let handles = host.inner().handles();
+    // The shipped UndeadX07c script passes an unassigned `player` global as the other player.
+    for args in [
+        vec![Value::Null, a.clone(), x.clone(), Value::Bool(true)],
+        vec![a.clone(), Value::Null, x.clone(), Value::Bool(true)],
+        vec![Value::Null, Value::Null, x.clone(), Value::Bool(false)],
+    ] {
+        assert!(matches!(
+            host.native("SetPlayerAlliance", &args),
+            Ok(Value::Null)
+        ));
+    }
+    assert!(host.player_settings(id(&a)).unwrap().alliances.is_empty());
+    assert_eq!(host.inner().handles(), handles);
+    for args in [
+        vec![Value::Int(0), a.clone(), x.clone(), Value::Bool(true)],
+        vec![a.clone(), Value::Bool(false), x.clone(), Value::Bool(true)],
+        vec![a.clone(), Value::Null, Value::Null, Value::Bool(true)],
+        vec![Value::Null, a.clone(), x.clone(), Value::Int(1)],
+    ] {
+        assert!(host.native("SetPlayerAlliance", &args).is_err());
+    }
+    assert!(host.player_settings(id(&a)).unwrap().alliances.is_empty());
+}
