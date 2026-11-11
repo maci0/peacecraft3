@@ -3402,6 +3402,30 @@ fn position_host_admitting_placed(
     placed: &[crate::playercolor_host::PlacedDestructable],
     before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> ObjectHost {
+    position_host_with_placement_rules(
+        queries,
+        memberships,
+        map,
+        declarations,
+        selected,
+        placed,
+        crate::unit_placement::tests::rules(2, -8192.25),
+        before_catalog,
+    )
+}
+
+/// [`position_host_admitting_placed`] with the placement rules supplied by the caller.
+#[allow(clippy::too_many_arguments)]
+fn position_host_with_placement_rules(
+    queries: usize,
+    memberships: usize,
+    map: &str,
+    declarations: &str,
+    selected: &[([u8; 4], ObjectField)],
+    placed: &[crate::playercolor_host::PlacedDestructable],
+    placement_rules: crate::unit_placement::Rules,
+    before_catalog: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> ObjectHost {
     let mut extra = String::from(
         "type rect extends agent\ntype group extends agent\ntype boolexpr extends agent\ntype destructable extends widget\nnative CreateDestructable takes integer id, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
@@ -3579,8 +3603,12 @@ fn position_host_admitting_placed(
             })
             .unwrap();
     }
-    host.admit_unit_placement(crate::unit_placement::tests::placement(source(), queries))
-        .unwrap();
+    host.admit_unit_placement(crate::unit_placement::tests::placement_with_rules(
+        source(),
+        queries,
+        placement_rules,
+    ))
+    .unwrap();
     host
 }
 

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "ability_cooldown_tests.rs"]
 mod ability_cooldowns;
+#[path = "ability_order_tests.rs"]
+mod ability_orders;
 #[path = "unit_acquire_range_tests.rs"]
 mod acquire_range;
 #[path = "attack_ground_tests.rs"]

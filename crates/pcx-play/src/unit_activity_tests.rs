@@ -193,6 +193,14 @@ pub(super) fn rules_with_darkconversion() -> (
     rules_with_extra_order("darkconversion")
 }
 
+/// The fixture registry with a fifth order, `load`.
+pub(super) fn rules_with_load() -> (
+    Arc<crate::order_registry::Registry>,
+    crate::unit_activity::Rules,
+) {
+    rules_with_extra_order("load")
+}
+
 pub(super) fn rules_with_repair() -> (
     Arc<crate::order_registry::Registry>,
     crate::unit_activity::Rules,

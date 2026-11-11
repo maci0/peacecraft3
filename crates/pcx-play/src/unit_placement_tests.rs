@@ -809,6 +809,11 @@ pub(crate) fn rules(exponent: u32, initial: f32) -> Rules {
 }
 
 pub(crate) fn placement(source: Source, queries: usize) -> Placement {
+    placement_with_rules(source, queries, rules(2, -8192.25))
+}
+
+/// [`placement`] over caller-built rules, for a test that needs the decoded footprint geometry.
+pub(crate) fn placement_with_rules(source: Source, queries: usize, rules: Rules) -> Placement {
     Placement::new(
         Grid {
             source,
@@ -821,7 +826,7 @@ pub(crate) fn placement(source: Source, queries: usize) -> Placement {
             },
             domains: vec![5; 1024],
         },
-        rules(2, -8192.25),
+        rules,
         BTreeMap::new(),
         Budget {
             cells: 1024,
