@@ -674,3 +674,32 @@ base ON/OFF handlers. Its data authors only `Order=recharge`, so the toggle ids 
 `[unit+0x16c]`. Enabling with the flag clear passes the unit type's food cost (`0x6902a0`) to the
 owner-side routine `0x4b57d0` (the counter it adjusts is not decoded) and sets `0x300`. Disabling with the flag set passes it negated
 and clears `0x300`. The unit's initial flag state and the player food model are not decoded here.
+
+## 2026-11-11 skill points, Ahrl harvest, unit user data
+
+Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`). Decodes:
+[hero-skill-points.md](hero-skill-points.md), [ghoul-harvest.md](ghoul-harvest.md),
+[unit-user-data.md](unit-user-data.md).
+
+- `UnitModifySkillPoints` (`0x4af4b0` -> `0x697730` -> `0xb3f670`): a decrease is limited to the
+  unspent points, an increase to the unlearned ranks of the hero skill slots, and the result is
+  true whenever the first limit leaves a nonzero delta. `UnitStripHeroLevel` (`0x4af870` ->
+  `0x69ea60` -> `0xb40c10`) is not decoded and stays unsupported.
+- `autoharvestlumber` in RoC Undead05 is issued to a `ugho` (Ghoul, `Acan,Ahrl,Aiun`). `Ahrl` is
+  `CAbilityHarvestLumber` (vtable `0xf2ba54`, loader `0xb771a0`): `DataA` damage, `DataB` lumber
+  capacity, no `DataC`. `Ahar` (loader `0xb77c40`) extends it with the gold capacity. The immediate
+  validator `0xb75d00` accepts `autoharvestlumber` on the lumber capacity only.
+- OrcX01 reached `SetUnitUserData` next: `0x497d50` and `0x4abcf0` read and write `[unit+0x488]`.
+  A read of a never-written value refuses (creation default not traced).
+
+First refusal of `selected_install_locked_chapter_startup_probe`; "before" is `4f8724e5`.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead05 | `autoharvestlumber`: unit `ugho` has no `Ahar` harvest capability | pass (`executed_units=194`) |
+| TFT OrcX01 | `UnitModifySkillPoints` unsupported by this host | pass (`executed_units=239`) |
+| TFT OrcX02 | `UnitModifySkillPoints` unsupported by this host | `UnitAddItem`: damage metadata does not admit ability `AItx` |
+
+`AItx` ("AttackBonus +20", item, code `AIat`) is not in the damage metadata alias list of
+`inventory_powerup.rs`; whether the class reads `DataA` for it was not decoded, so OrcX02 stays
+refused there.
