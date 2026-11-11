@@ -5,6 +5,8 @@ use pcx_objects::editor::Overlay;
 
 const NATIVES: &str = "native SelectHeroSkill takes unit u, integer ability returns nothing\nconstant native GetHeroLevel takes unit u returns integer\nconstant native GetHeroSkillPoints takes unit u returns integer\nconstant native GetUnitAbilityLevel takes unit u, integer ability returns integer\n";
 const MAP: &str = "globals\nunit H=null\nunit N=null\nendglobals\nfunction setup takes nothing returns nothing\nset H=CreateUnit(Player(4),'H001',1.0,2.0,3.0)\nset N=CreateUnit(Player(4),'h001',4.0,5.0,6.0)\nendfunction\nfunction learn takes integer ability returns nothing\ncall SelectHeroSkill(H,ability)\nendfunction\n";
+/// `Catalog` list value for a row whose `heroAbilList` cell is absent from the SLK.
+const ABSENT_HERO_LIST: &str = "<absent heroAbilList cell>";
 struct Catalog {
     list: String,
 }
@@ -17,6 +19,9 @@ impl ObjectCatalog for Catalog {
         );
         let mut heroes = ability_field("heroAbilList", &self.list);
         heroes.metadata.as_mut().unwrap().fourcc = *b"uhab";
+        if self.list == ABSENT_HERO_LIST {
+            heroes.value = Err(pcx_sim::world::FieldProblem::Missing);
+        }
         if code == *b"Hbad" {
             heroes.metadata.as_mut().unwrap().kind = FieldKind::Int;
         }
@@ -981,6 +986,19 @@ fn raise(vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectH
             &[hero, Value::Int(level), Value::Bool(false)],
         )
         .unwrap();
+}
+
+#[test]
+fn absent_hero_ability_cell_is_an_empty_list() {
+    // A row without a heroAbilList cell has no learnable abilities; creation succeeds and
+    // learning L001 grants nothing.
+    let mut vm = host(NATIVES, ABSENT_HERO_LIST, Overlay::default(), "", 8);
+    vm.call("setup", &[]).unwrap();
+    let before = query(&mut vm, "GetHeroSkillPoints", None);
+    vm.call("learn", &[Value::Int(i32::from_be_bytes(*b"L001"))])
+        .unwrap();
+    assert_eq!(query(&mut vm, "GetUnitAbilityLevel", Some(*b"L001")), 0);
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), before);
 }
 
 #[test]

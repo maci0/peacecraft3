@@ -1734,6 +1734,8 @@ fn ability_list(
         Ok(FieldValue::Override(pcx_objects::Value::Str(text))) => {
             std::str::from_utf8(text).map_err(|_| "invalid ability-list UTF8")?
         }
+        // An SLK row without this cell has an empty list, as the other list readers take it.
+        Err(pcx_sim::world::FieldProblem::Missing) => return Ok(Vec::new()),
         _ => return Err(format!("unsupported UnitAbilities/{column}")),
     };
     if matches!(text.trim(), "" | "_" | "-") {

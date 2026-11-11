@@ -88,6 +88,21 @@ actors and failures by row index.
 Test (pcx-play `doodad_host_tests`): `duplicate_creation_numbers_are_distinct_placements`.
 It failed before the fix with `duplicate placed creation number`.
 
+### Absent hero ability list cell
+
+TFT HumanX06Finale `war3map.j:191` creates `N000`, a custom `Nklj` (Kil'jaeden).
+The base `Units\UnitAbilities.slk` row for `Nklj` has no `heroAbilList` cell at
+all, while its `abilList` cell is `_`. The probe reported the wrapped
+`ability tables ...` message; the inner error is `hero skills: unsupported
+UnitAbilities/heroAbilList`, from `ability_list` refusing a missing cell.
+
+Fix: a missing cell is the empty list, as `training_command` and
+`unit_animation_rarity` already read a missing list cell. Creation succeeds; a
+learn of an ability outside the list grants nothing.
+
+Test (pcx-play `unit_hero_tests`): `absent_hero_ability_cell_is_an_empty_list`.
+It failed before the fix at `CreateUnit`.
+
 ## Open
 
 ### Odd-dimension pathing texture
@@ -158,6 +173,8 @@ on the selected install, before and after this batch.
 | RoC Undead03 | `CreateUnit` (`war3map.j:1016`): `unit field dmgpt1 is empty` | passes `CreateUnit`; `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported by this host |
 | TFT UndeadX02 | `CreateUnit` (`war3map.j:2431`): `unit decay: unit animation: text placement field required` | passes `CreateUnit`; `UnitAddItemToSlotById` (`war3map.j:2470`) refused: unsupported passive ability `AIfb` on `ofir` (orb refusal, see passive-held-items.md) |
 | TFT UndeadX07a | `Doodad("duplicate placed creation number")` at startup | passes doodad admission; `IssueImmediateOrder` (`war3map.j:1469`) refused: `autocast enabling/effects not implemented for [65, 67, 119, 98]` (`ACwb`) |
+| TFT HumanX06Finale | `CreateUnit` (`war3map.j:191`): hero skills `unsupported UnitAbilities/heroAbilList` | passes `CreateUnit`; `ForceCampaignSelectScreen` (`Blizzard.j:6915`) unsupported |
+| RoC NightElf03 | (not previously probed) | `IssueImmediateOrder` `innerfireon` (`war3map.j:675`) refused: `autocast enabling/effects not implemented for [65, 105, 110, 102]` (`Ainf`) |
 
 `HeroFarSeer.mdx` (War3.mpq, 133,824 bytes) SEQS record 0 is named `nothing`,
 with interval start `0xFFFFFF59` (signed -167) and end `0`. Every other record
