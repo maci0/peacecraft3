@@ -190,6 +190,52 @@ fn ranked_nonstock_operands_and_malformed_or_other_modes() {
     }
 }
 
+#[test]
+fn a_form_without_the_immediate_bit_reads_only_its_cost_and_duration() {
+    // `0xbafb00` arms the change with `Dur` alone; `Cast` and the altitude cells feed the
+    // flight stages, so an empty `DataC`/`DataD` (`-` in the shipped Burrow row) is not read.
+    let class = Class {
+        code: *b"X001",
+        on: 7,
+        off: 8,
+        uninterruptible: 1,
+        immediate_takeoff: 4,
+    };
+    let spec = Spec::read(&class, |key, _| match key {
+        "DataA" => Ok("u001".into()),
+        "UnitID" => Ok("u002".into()),
+        "DataB" => Ok("1".into()),
+        "Cost" => Ok("0".into()),
+        "Dur" => Ok("1.45".into()),
+        other => Err(format!("unexpected read of {other}")),
+    })
+    .unwrap();
+    assert!(!spec.immediate);
+    assert_eq!(spec.duration, 1.45);
+    for flags in [0u32, 2, 4, 8, 9, 17] {
+        let error = Spec::read(&class, |key, _| match key {
+            "DataA" => Ok("u001".into()),
+            "UnitID" => Ok("u002".into()),
+            "DataB" => Ok(flags.to_string()),
+            _ => Ok("0".into()),
+        })
+        .unwrap_err();
+        assert!(
+            error.contains(&format!("morph flags {flags:#x} of class X001")),
+            "{error}"
+        );
+        assert!(error.contains("are qualified"), "{error}");
+    }
+    let immediate = Spec::read(&class, |key, _| match key {
+        "DataA" => Ok("u001".into()),
+        "UnitID" => Ok("u002".into()),
+        "DataB" => Ok("5".into()),
+        _ => Ok("1".into()),
+    })
+    .unwrap();
+    assert!(immediate.immediate);
+}
+
 fn flight_fixture(shift: u32, minimum: f32) -> Vec<(u32, Vec<u8>, bool)> {
     let mut m = Vec::new();
     let set = shift + 0x1000u32;

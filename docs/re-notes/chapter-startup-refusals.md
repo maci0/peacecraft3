@@ -634,3 +634,19 @@ First refusal of `selected_install_locked_chapter_startup_probe`; "before" is `2
 
 Still open: BLP pathing texture sizes for doodads (`0x71a7c0` `.blp` branch), the `0x1000000`/`+0x14c`
 alive-or-dead path choice in `0x75b150`, and the unit-side caller of the sprite model setter.
+
+## 2026-11-11 delayed `Abur` burrow
+
+First refusal of `selected_install_locked_chapter_startup_probe`; "before" is this branch's base
+`2822f6bc`, run with `.scratch/chapter-sweep.sh`. Decode, poster of event `0xd01c4` and the
+custom unit `u000`: [unit-root-burrow.md](unit-root-burrow.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX02 | `IssueImmediateOrder` `burrow` (`war3map.j:2600`): morph flags `0x1` of class `Abur` not decoded | the burrow orders at `war3map.j:2600` to `2607` are accepted; `UnitAddItemToSlotById` (`war3map.j:2621`) refused: passive ability `AIdf` (code `AIsb`) on `odef`, the wrapped orb ability is not modeled. The orders at `2644` to `2653` follow it and were not reached. |
+| TFT UndeadX04 | `IssueImmediateOrder` `burrow` on `u000` (`war3map.j:1607`): same refusal | passes (`executed_units=298`, published) |
+| TFT UndeadX07b | `native sight wide occluder unsupported: DTrf` | unchanged |
+| RoC Human02Interlude (Raven Form, immediate path) | passes (`executed_units=40`) | passes (`executed_units=40`) |
+
+Whether the probe advances the game clock past `Dur` (`1.45` s) was not checked; the swap is covered
+by unit tests (`burrow_*` in `unit_morph_host_tests.rs`).

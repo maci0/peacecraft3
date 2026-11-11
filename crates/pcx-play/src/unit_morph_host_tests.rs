@@ -74,6 +74,9 @@ endfunction
 function burrow_order takes nothing returns boolean
 return IssueImmediateOrder(U,"burrow")
 endfunction
+function unburrow_order takes nothing returns boolean
+return IssueImmediateOrder(U,"unburrow")
+endfunction
 function move_order takes nothing returns boolean
 return IssuePointOrder(U,"gamma",72.,16.)
 endfunction
@@ -187,7 +190,8 @@ fn registry_numeric() -> (
     (registry, activity, numeric)
 }
 
-struct Forms(Arc<dyn ObjectCatalog + Send + Sync>, String);
+/// The catalog, the animation property key and whether the alternate form `u002` flies.
+struct Forms(Arc<dyn ObjectCatalog + Send + Sync>, String, bool);
 impl ObjectCatalog for Forms {
     fn resolve(&self, code: [u8; 4]) -> Result<pcx_sim::world::Definition, ResolutionProblem> {
         let mut d = self.0.resolve(code)?;
@@ -200,17 +204,37 @@ impl ObjectCatalog for Forms {
             {
                 if column == "movetp" {
                     f.value = Ok(FieldValue::Cell(
-                        if code == *b"u002" { "fly" } else { "foot" }.into(),
+                        if code == *b"u002" && self.2 {
+                            "fly"
+                        } else {
+                            "foot"
+                        }
+                        .into(),
                     ));
                 }
                 if column == "moveHeight" {
                     // The alternate form carries its height as an unreal override,
                     // the shape of the Human02 interlude's authored form record.
-                    f.value = Ok(if code == *b"u002" {
+                    f.value = Ok(if code == *b"u002" && self.2 {
                         FieldValue::Override(pcx_objects::Value::Unreal(73.))
                     } else {
                         FieldValue::Cell("0".into())
                     });
+                }
+            }
+            // A ground alternate form regenerates faster and lists one more ability.
+            if code == *b"u002"
+                && !self.2
+                && let FieldSource::Column { slk, column } = &m.source
+            {
+                if *slk == SlkId::UnitBalance && column == "regenHP" {
+                    f.value = Ok(FieldValue::Cell("7".into()));
+                }
+                if *slk == SlkId::UnitAbilities
+                    && column == "abilList"
+                    && let Ok(FieldValue::Cell(list)) = &f.value
+                {
+                    f.value = Ok(FieldValue::Cell(format!("{list},X001")));
                 }
             }
             if let FieldSource::Profile { key, .. } = &m.source
@@ -259,6 +283,16 @@ fn tables(cast: &str, duration: &str) -> DefaultTables {
             &[
                 "X004", "R987", "1", "0", "0", "0", "2", "1", "0", "0", "u002", "0", "0", "2.5",
                 "0",
+            ],
+            // A burrow class whose source form is not the unit's type `u001`.
+            &[
+                "X005", "Z987", "1", "0", "0", "0", "u003", "1", "0", "0", "u002", "0", "0",
+                "1.45", "0",
+            ],
+            // The same delayed change as `X003`, but the harness gives `u002` air movement.
+            &[
+                "X006", "Z987", "1", "0", "0", "0", "u001", "1", "0", "0", "u002", "0", "0",
+                "1.45", "0",
             ],
         ],
     );
@@ -566,7 +600,11 @@ fn open_with_attack(
     let mut rarity = crate::unit_animation_rarity::tests::rules();
     rarity.image_sha256 = [0; 32];
     h.admit_unit_animation_rarity(Ok(rarity)).unwrap();
-    h.construction_test_catalog(Arc::new(Forms(h.unit_catalog().unwrap(), property_key)));
+    h.construction_test_catalog(Arc::new(Forms(
+        h.unit_catalog().unwrap(),
+        property_key,
+        !abilities.contains("X003") && !abilities.contains("X005"),
+    )));
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
@@ -1139,13 +1177,147 @@ fn unroot_with_issued_order_listeners_is_refused_before_any_change() {
     assert!(!vm.host().inner.unit_uprooted(u));
 }
 
+fn rawcode(vm: &mut Vm, u: HandleId) -> [u8; 4] {
+    vm.host().inner.executed_unit(u).unwrap().definition.rawcode
+}
+
 #[test]
-fn burrow_class_form_without_immediate_change_is_refused_with_its_flags() {
+fn burrow_changes_the_form_dur_seconds_after_the_order_and_not_before() {
+    let (mut vm, u) = open_with("X003", "0.125", "0.375");
+    vm.call("listen", &[]).unwrap();
+    let ordered = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    // The order itself changes nothing, and neither the order nor the opposite order is
+    // accepted while the change is pending (`0xb4adf0`: the ability's busy counter).
+    assert_eq!(rawcode(&mut vm, u), *b"u001");
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(false));
+    advance(&mut vm, ordered + 1.4);
+    assert_eq!(rawcode(&mut vm, u), *b"u001");
+    assert_eq!(vm.global("Finishes"), Value::Int(0));
+    advance(&mut vm, ordered + 1.46);
+    assert_eq!(rawcode(&mut vm, u), *b"u002");
+    assert_eq!(vm.global("Finishes"), Value::Int(1));
+    assert_eq!(vm.global("Ends"), Value::Int(1));
+    assert_eq!(vm.host().inner.test_morph_active_count(), 0);
+    // Unburrow runs the same delay and changes the form back at its end.
+    let ordered = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(rawcode(&mut vm, u), *b"u002");
+    advance(&mut vm, ordered + 1.4);
+    assert_eq!(rawcode(&mut vm, u), *b"u002");
+    advance(&mut vm, ordered + 1.46);
+    assert_eq!(rawcode(&mut vm, u), *b"u001");
+    assert!(vm.host().inner.executed_unit(u).unwrap().morph.is_none());
+    assert_eq!(vm.global("Finishes"), Value::Int(2));
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(false));
+}
+
+#[test]
+fn burrow_swap_keeps_the_unit_and_its_pools() {
     let (mut vm, u) = open_with("X003", "0.125", "0.375");
     let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, 1.5);
+    let after = vm.host().inner.executed_unit(u).unwrap();
+    assert_eq!(after.owner, before.owner);
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.vitals.unwrap().life, before.vitals.unwrap().life);
+    assert_eq!(
+        after.vitals.unwrap().max_life,
+        before.vitals.unwrap().max_life
+    );
+    assert_eq!(after.vitals.unwrap().mana, before.vitals.unwrap().mana);
+    assert_eq!(after.definition_revision, before.definition_revision + 1);
+}
+
+#[test]
+fn burrow_swap_takes_the_new_forms_ability_list_and_life_regeneration_and_back() {
+    let (mut vm, u) = open_with("X003", "0.125", "0.375");
+    let levels = |vm: &mut Vm| {
+        vm.host()
+            .inner
+            .executed_unit(u)
+            .unwrap()
+            .abilities
+            .as_ref()
+            .unwrap()
+            .levels()
+            .map(|(alias, _)| alias)
+            .collect::<Vec<_>>()
+    };
+    let regen = |vm: &mut Vm| {
+        vm.host()
+            .inner
+            .executed_unit(u)
+            .unwrap()
+            .vitals
+            .unwrap()
+            .regen
+            .life_per_second
+    };
+    let (base_abilities, base_regen) = (levels(&mut vm), regen(&mut vm));
+    assert_eq!(base_abilities, [*b"X003"]);
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(regen(&mut vm), base_regen);
+    advance(&mut vm, 1.5);
+    assert_eq!(levels(&mut vm), [*b"X003", *b"X001"]);
+    assert_eq!(regen(&mut vm), 7.);
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, 3.);
+    assert_eq!(levels(&mut vm), base_abilities);
+    assert_eq!(regen(&mut vm), base_regen);
+}
+
+#[test]
+fn burrow_of_a_unit_that_is_not_the_source_form_runs_the_phase_without_a_type_change() {
+    // `0xbaf580` changes the type only when it equals the source form of the direction; a
+    // custom type such as UndeadX04's `u000` takes the order, the delay and the events.
+    let (mut vm, u) = open_with("X005", "0.125", "0.375");
+    vm.call("listen", &[]).unwrap();
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(false));
+    advance(&mut vm, 1.4);
+    assert_eq!(vm.global("Finishes"), Value::Int(0));
+    advance(&mut vm, 1.5);
+    assert_eq!(vm.global("Finishes"), Value::Int(1));
+    let record = vm.host().inner.executed_unit(u).unwrap();
+    assert_eq!(record.definition, before.definition);
+    assert_eq!(record.definition_revision, before.definition_revision);
+    assert_eq!(
+        record.morph.as_ref().map(|m| m.phase),
+        Some(crate::playercolor_host::MorphPhase::Alternate)
+    );
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, 3.);
+    assert!(vm.host().inner.executed_unit(u).unwrap().morph.is_none());
+    assert_eq!(vm.global("Finishes"), Value::Int(2));
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+}
+
+#[test]
+fn burrow_class_form_with_an_air_form_is_refused_before_any_change() {
+    let (mut vm, u) = open_with("X006", "0.125", "0.375");
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
     let error = vm.call("burrow_order", &[]).unwrap_err().to_string();
-    assert!(error.contains("morph flags 0x1 of class Z987"), "{error}");
+    assert!(
+        error.contains("air movement and no immediate form change"),
+        "{error}"
+    );
     assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+}
+
+#[test]
+fn burrow_pending_swap_is_dropped_when_the_unit_is_removed() {
+    let (mut vm, u) = open_with("X003", "0.125", "0.375");
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(u)])
+        .unwrap();
+    advance(&mut vm, 2.);
+    assert_eq!(vm.host().inner.test_morph_active_count(), 0);
 }
 
 #[test]

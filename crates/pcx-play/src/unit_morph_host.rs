@@ -19,11 +19,25 @@ pub struct UnitMorph {
     flight: Option<Flight>,
 }
 
-use super::{Entry, Error, EventSubject, Failure, ObjectHost};
+use super::{Entry, Error, EventSubject, Failure, ObjectHost, UnitAbilities};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, RealOps, ScriptCall, Value, ast::BinOp};
 use pcx_sim::world::Definition;
 use pcx_sim::world::FieldValue;
+
+/// `UnitBalance` columns an immediate form change keeps equal across the forms.
+const POOL_COLUMNS: [&str; 5] = ["HP", "manaN", "fused", "fmade", "isbldg"];
+/// A delayed change also keeps the unit's armor, defense type and mana regeneration.
+const SWAP_COLUMNS: [&str; 8] = [
+    "HP",
+    "manaN",
+    "fused",
+    "fmade",
+    "isbldg",
+    "def",
+    "defType",
+    "regenMana",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Flight {
@@ -57,11 +71,34 @@ struct Pending {
     finish: f64,
     cast: Option<f64>,
     spec: crate::unit_morph_rules::Spec,
+    change: Change,
+}
+/// When and how the unit becomes the other form.
+#[derive(Clone, Debug, PartialEq)]
+enum Change {
+    /// Immediate-form-change bit set: the unit changes at the order and the altitude phases follow.
+    Immediate(Box<Immediate>),
+    /// Bit clear: `0xbafb00` posts event `0xd01c4` after `Dur` and `0xbaf580` changes the unit
+    /// then. `None` when the unit's type is not the source form of the direction; `0xbaf580`
+    /// skips the type change for such a unit (`docs/re-notes/unit-root-burrow.md`).
+    Delayed(Option<Box<Swap>>),
+}
+#[derive(Clone, Debug, PartialEq)]
+struct Immediate {
     normal: Form,
     alternate: Form,
     normal_height: f32,
     alternate_height: f32,
     normal_movement: crate::unit_placement::Movement,
+}
+/// The prepared target form of a delayed change and the ability list it replaces.
+#[derive(Clone, Debug, PartialEq)]
+struct Swap {
+    form: Form,
+    /// The target type's ability list, from its `abilList`.
+    abilities: Option<UnitAbilities>,
+    /// The unit's list at the order; a different list at the swap refuses the change.
+    source_abilities: Option<UnitAbilities>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventPhase {
@@ -78,17 +115,12 @@ pub struct Context {
 
 impl UnitMorph {
     pub(super) fn movement(&self) -> Option<crate::unit_placement::Movement> {
-        (self.phase == MorphPhase::Landing
-            && self
-                .pending
-                .as_ref()
-                .is_some_and(|p| p.stage != EventPhase::Begin))
-        .then(|| {
-            self.pending
-                .as_ref()
-                .expect("landing request")
-                .normal_movement
-        })
+        let pending = self.pending.as_ref()?;
+        let Change::Immediate(change) = &pending.change else {
+            return None;
+        };
+        (self.phase == MorphPhase::Landing && pending.stage != EventPhase::Begin)
+            .then_some(change.normal_movement)
     }
     fn order(&self) -> Option<i32> {
         self.pending
@@ -397,6 +429,15 @@ impl ObjectHost {
         if !on && source.morph.is_none() {
             return Ok(false);
         }
+        // A delayed change holds the ability's busy counter (`0x46e130`, released by the `0xd01c4`
+        // handler), and the order check answers `0xb9` while it is above zero (`0xb4adf0`).
+        if source.morph.as_ref().is_some_and(|m| {
+            m.pending
+                .as_ref()
+                .is_some_and(|p| matches!(p.change, Change::Delayed(_)))
+        }) {
+            return Ok(false);
+        }
         if source.morph.as_ref().is_some_and(|m| m.pending.is_some()) {
             return Err(self
                 .morph_error("opposite form request during an unfinished phase is not qualified"));
@@ -405,8 +446,17 @@ impl ObjectHost {
             self.hero_ability_level_cell(*ability, key, *rank, kind)
         })
         .map_err(|e| self.morph_error(e))?;
-        if source.definition.rawcode != if on { spec.normal } else { spec.alternate } {
+        if spec.immediate
+            && source.definition.rawcode != if on { spec.normal } else { spec.alternate }
+        {
             return Err(self.morph_error("current definition does not match source form"));
+        }
+        // A delayed change takes any other type through the same path without the type change,
+        // but a unit created as the alternate form starts in the alternate state (`0xbacd75`).
+        if !spec.immediate && on && source.definition.rawcode == spec.alternate {
+            return Err(self.morph_error(
+                "a unit created as the alternate form starts in the alternate state; not modelled",
+            ));
         }
         let now = self
             .timer_game_time()
@@ -456,30 +506,60 @@ impl ObjectHost {
             Value::Real(v) if v.is_finite() && v >= 0. => v,
             _ => return Err(self.morph_error("invalid mana debit")),
         };
-        let normal = self.prepare_morph_form(unit, spec.normal)?;
-        let alternate = self.prepare_morph_form(unit, spec.alternate)?;
-        self.validate_morph_forms(&normal, &alternate)?;
-        self.project_form_upgrades(
-            unit,
-            if on {
-                &alternate.definition
+        let (change, height_target) = if spec.immediate {
+            let normal = self.prepare_morph_form(unit, spec.normal)?;
+            let alternate = self.prepare_morph_form(unit, spec.alternate)?;
+            self.validate_morph_forms(&normal.definition, &alternate.definition, &POOL_COLUMNS)?;
+            self.project_form_upgrades(
+                unit,
+                if on {
+                    &alternate.definition
+                } else {
+                    &normal.definition
+                },
+            )?;
+            let normal_height = self.morph_height(&normal.definition)?;
+            let alternate_height = self.morph_height(&alternate.definition)?;
+            let normal_movement = super::unit_positions::geometry(&normal.definition)
+                .map_err(|e| self.morph_error(e))?
+                .movement;
+            (
+                Change::Immediate(Box::new(Immediate {
+                    normal,
+                    alternate,
+                    normal_height,
+                    alternate_height,
+                    normal_movement,
+                })),
+                if on { normal_height } else { alternate_height },
+            )
+        } else {
+            let swap = if source.definition.rawcode == if on { spec.normal } else { spec.alternate }
+            {
+                Some(Box::new(
+                    self.prepare_delayed_swap(unit, &source, &spec, on)?,
+                ))
             } else {
-                &normal.definition
-            },
-        )?;
-        let normal_height = self.morph_height(&normal.definition)?;
-        let alternate_height = self.morph_height(&alternate.definition)?;
-        let normal_movement = super::unit_positions::geometry(&normal.definition)
-            .map_err(|e| self.morph_error(e))?
-            .movement;
-        let finish = now
-            + f64::from(spec.duration)
-            + if on {
-                0.
-            } else {
-                f64::from(spec.landing_delay)
+                None
             };
-        let cast = on.then_some(now + f64::from(spec.cast));
+            (
+                Change::Delayed(swap),
+                self.morph_height(&source.definition)?,
+            )
+        };
+        let (finish, cast) = if spec.immediate {
+            (
+                now + f64::from(spec.duration)
+                    + if on {
+                        0.
+                    } else {
+                        f64::from(spec.landing_delay)
+                    },
+                on.then_some(now + f64::from(spec.cast)),
+            )
+        } else {
+            (now + f64::from(spec.duration), None)
+        };
         if !finish.is_finite() || cast.is_some_and(|t| !t.is_finite()) {
             return Err(self.morph_error("phase clock overflow"));
         }
@@ -536,11 +616,7 @@ impl ObjectHost {
             finish,
             cast,
             spec: spec.clone(),
-            normal,
-            alternate,
-            normal_height,
-            alternate_height,
-            normal_movement,
+            change,
         };
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
             record.vitals.as_mut().expect("checked pools").mana = debit;
@@ -555,7 +631,7 @@ impl ObjectHost {
                 } else {
                     MorphPhase::Landing
                 },
-                height_target: if on { normal_height } else { alternate_height },
+                height_target,
                 flight: None,
                 pending: Some(Box::new(pending)),
             });
@@ -615,13 +691,18 @@ impl ObjectHost {
         }
         Ok(value)
     }
-    fn validate_morph_forms(&self, normal: &Form, alternate: &Form) -> Result<(), Error> {
+    fn validate_morph_forms(
+        &self,
+        normal: &Definition,
+        alternate: &Definition,
+        columns: &[&str],
+    ) -> Result<(), Error> {
         // Ordinary source forms preserve pools/food/technology. Other morph economies
         // require their own admitted transition instead of factory side effects.
-        for column in ["HP", "manaN", "fused", "fmade", "isbldg"] {
-            let a = super::combat::column(&normal.definition, SlkId::UnitBalance, column)
+        for column in columns {
+            let a = super::combat::column(normal, SlkId::UnitBalance, column)
                 .map_err(|e| self.morph_error(e))?;
-            let b = super::combat::column(&alternate.definition, SlkId::UnitBalance, column)
+            let b = super::combat::column(alternate, SlkId::UnitBalance, column)
                 .map_err(|e| self.morph_error(e))?;
             if a.is_none() || b.is_none() || a != b {
                 return Err(
@@ -629,13 +710,57 @@ impl ObjectHost {
                 );
             }
         }
-        if super::unit_types::structure(&normal.definition).map_err(|e| self.morph_error(e))?
-            || super::unit_types::structure(&alternate.definition)
-                .map_err(|e| self.morph_error(e))?
+        if super::unit_types::structure(normal).map_err(|e| self.morph_error(e))?
+            || super::unit_types::structure(alternate).map_err(|e| self.morph_error(e))?
         {
             return Err(self.morph_error("structure morph is not qualified"));
         }
         Ok(())
+    }
+    /// Prepares the delayed change to the form the direction leads to: both forms must be ground
+    /// (`0xbaec20` sends an air form to the flight stages), the pools, armor and mana regeneration
+    /// must agree because the replacement keeps them, and the unit's ability list must be its
+    /// type's own, since the swap replaces it with the target type's list.
+    fn prepare_delayed_swap(
+        &mut self,
+        unit: HandleId,
+        source: &super::ExecutedUnit,
+        spec: &crate::unit_morph_rules::Spec,
+        on: bool,
+    ) -> Result<Swap, Error> {
+        let to = if on { spec.alternate } else { spec.normal };
+        let target = self.resolve_form_definition(to)?;
+        for definition in [&source.definition, &target] {
+            let movement = super::unit_positions::geometry(definition)
+                .map_err(|e| self.morph_error(e))?
+                .movement;
+            if movement == crate::unit_placement::Movement::Air {
+                return Err(self.morph_error(
+                    "a form with air movement and no immediate form change runs the flight stages, which are not decoded",
+                ));
+            }
+        }
+        self.validate_morph_forms(&source.definition, &target, &SWAP_COLUMNS)?;
+        if self.morph_height(&source.definition)? != self.morph_height(&target)? {
+            return Err(
+                self.morph_error("a form change that moves the unit's height is not decoded")
+            );
+        }
+        let source_abilities = self.prepare_unit_abilities(&source.definition)?;
+        let levels = |a: &Option<UnitAbilities>| a.as_ref().map(|a| a.levels().collect::<Vec<_>>());
+        if levels(&source_abilities) != levels(&source.abilities) {
+            return Err(self.morph_error(
+                "form change of a unit whose ability list differs from its type's is not modelled",
+            ));
+        }
+        let form =
+            self.prepare_form(unit, target, super::unit_creation::FormChange::Replacement)?;
+        let abilities = self.prepare_unit_abilities(&form.definition)?;
+        Ok(Swap {
+            form,
+            abilities,
+            source_abilities,
+        })
     }
     pub(super) fn morph_current_order(&self, unit: HandleId) -> Option<i32> {
         self.executed_unit(unit).ok()?.morph.as_ref()?.order()
@@ -675,34 +800,43 @@ impl ObjectHost {
             .ok_or_else(|| self.morph_error("settlement clock missing"))?;
         match c.phase {
             EventPhase::Begin => {
+                let Change::Immediate(change) = &pending.change else {
+                    // A delayed change waits for the `0xd01c4` timer: nothing moves at the order.
+                    if let Entry::Unit { record } = self.inner.entry_mut(c.unit)? {
+                        let m = record.morph.as_mut().expect("same revision");
+                        m.pending.as_mut().expect("pending").stage = EventPhase::Running;
+                    }
+                    self.retire_morph_index(c.unit);
+                    return Ok(());
+                };
                 if morph.phase == MorphPhase::TakingOff {
-                    self.commit_morph_form(c.unit, &pending.alternate, true)?;
+                    self.commit_morph_form(c.unit, &change.alternate, true)?;
                 }
                 if morph.phase == MorphPhase::Landing {
-                    self.commit_morph_placement(c.unit, &pending.normal.definition)?;
+                    self.commit_morph_placement(c.unit, &change.normal.definition)?;
                 }
                 if let Entry::Unit { record } = self.inner.entry_mut(c.unit)? {
                     let record = &mut **record;
-                    let from = record.flight_height.unwrap_or(pending.alternate_height);
+                    let from = record.flight_height.unwrap_or(change.alternate_height);
                     if morph.phase == MorphPhase::Landing {
                         let m = record.morph.as_mut().expect("same revision");
                         m.flight = Some(Flight {
                             from,
-                            to: pending.normal_height,
+                            to: change.normal_height,
                             start: now,
                             finish: now + f64::from(pending.spec.altitude_duration),
                         });
                     }
                     record.flight_height = Some(if morph.phase == MorphPhase::TakingOff {
-                        pending.alternate_height
+                        change.alternate_height
                     } else {
-                        pending.normal_height
+                        change.normal_height
                     });
                     let m = record.morph.as_mut().expect("same revision");
                     m.height_target = if morph.phase == MorphPhase::TakingOff {
-                        pending.alternate_height
+                        change.alternate_height
                     } else {
-                        pending.normal_height
+                        change.normal_height
                     };
                     if let Some(flight) = m.flight {
                         record.flight_height = Some(flight.sample(now));
@@ -794,15 +928,16 @@ impl ObjectHost {
                 self.forget_morph_unit(unit);
                 continue;
             }
-            if p.cast.is_some_and(|t| t <= now)
+            if let (Some(cast), Change::Immediate(change)) = (p.cast, &p.change)
+                && cast <= now
                 && let Entry::Unit { record } = self.inner.entry_mut(unit)?
             {
-                let from = record.flight_height.unwrap_or(p.alternate_height);
+                let from = record.flight_height.unwrap_or(change.alternate_height);
                 let state = record.morph.as_mut().expect("active");
-                state.height_target = p.alternate_height;
+                state.height_target = change.alternate_height;
                 state.flight = Some(Flight {
                     from,
-                    to: p.alternate_height,
+                    to: change.alternate_height,
                     start: now,
                     finish: now + f64::from(p.spec.altitude_duration),
                 });
@@ -820,8 +955,14 @@ impl ObjectHost {
                         .checked_add(end.len())
                         .ok_or_else(|| self.morph_error("completion event overflow"))?,
                 )?;
-                if m.phase == MorphPhase::Landing {
-                    self.commit_morph_form(unit, &p.normal, true)?;
+                match &p.change {
+                    Change::Immediate(change) => {
+                        if m.phase == MorphPhase::Landing {
+                            self.commit_morph_form(unit, &change.normal, true)?;
+                        }
+                    }
+                    Change::Delayed(Some(swap)) => self.commit_delayed_swap(unit, swap)?,
+                    Change::Delayed(None) => {}
                 }
                 let c = Context {
                     unit,
@@ -849,6 +990,53 @@ impl ObjectHost {
                 self.settle_morph_event(Some(c));
             }
             self.retire_morph_index(unit);
+        }
+        Ok(())
+    }
+    /// The `0xd01c4` handler's type change (`0xbaf580` to `0xbaed20`): the unit becomes the target
+    /// form with its pools, armor and defense type (equal in both forms, checked at the order).
+    /// Regeneration runs to the swap on the old form's rates and continues on the new form's
+    /// life rate and type; the type change refreshes both regeneration operations
+    /// (`0x680b1a`, `0x680b21`), read here as taking the new type row.
+    fn commit_delayed_swap(&mut self, unit: HandleId, swap: &Swap) -> Result<(), Error> {
+        let record = self.executed_unit(unit)?;
+        let levels = |a: &Option<UnitAbilities>| a.as_ref().map(|a| a.levels().collect::<Vec<_>>());
+        if levels(&record.abilities) != levels(&swap.source_abilities) {
+            return Err(self.morph_error(
+                "the unit's ability list changed during the form change; not modelled",
+            ));
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.morph_error("form swap clock missing"))?;
+        let next = self
+            .prepare_unit_vitals(&swap.form.definition, record.health_handicap)?
+            .ok_or_else(|| self.morph_error("form swap requires admitted vitals"))?;
+        let mut vitals = match self.project_form_upgrades(unit, &swap.form.definition)? {
+            Some(projected) => projected,
+            None => {
+                let mut vitals = record
+                    .vitals
+                    .ok_or_else(|| self.morph_error("form swap requires unit vitals"))?;
+                let bonuses = self
+                    .vitals_bonuses()
+                    .ok_or_else(|| self.morph_error("form swap requires admitted vitals"))?;
+                let mut work = usize::MAX;
+                if let Some((life, mana)) =
+                    self.project_regen_unit(unit, &bonuses, now, None, &mut work)?
+                {
+                    vitals.life = life;
+                    vitals.mana = mana;
+                    vitals.regen.through = now;
+                }
+                vitals
+            }
+        };
+        vitals.regen.life_per_second = next.regen.life_per_second;
+        vitals.regen.life_type = next.regen.life_type;
+        self.commit_replacement_form(unit, swap.form.clone(), swap.abilities.clone())?;
+        if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
+            record.vitals = Some(vitals);
         }
         Ok(())
     }

@@ -110,9 +110,74 @@ Observed:
   `Cast` (`0xbafdc9`), or calls stage 2 `0xbaf2b0` at once. Stage 2 calls `+0x400` only without the
   immediate bit (`0xbaf35b`). Event `0xd01c4` (`0xbaf000`) also applies `0xbaf580`.
 
-Not decoded: who posts `0xd01c4`, hence the instant of the form swap and the use of `Dur` for a
-form with the immediate bit clear (Burrow); the effect of unit bit `0x4000000`; the
-`DataC`/`DataD` defaults for empty cells.
+### Poster of event `0xd01c4` and the delayed swap (observed in code, nothing run)
+
+- Poster: `0xbafb00`, at `0xbafc19` (`push 0xd01c4`, then the timer arm `0x7fbe90` on the member
+  `[ability+0xe8]`). It is the last step of both start routines: forward `0xbafc30` (`0xbafd0f`)
+  and reverse `0xbaf750` (`0xbaf7f9`, `0xbaf80e`). The Raven dispatcher `0xbadd40` maps
+  `event - 0xd01a0` through a byte table (`0xbadec4`) and a jump table (`0xbadeac`); index `0x24`
+  (event `0xd01c4`) reaches `0xbadd65`, which calls `0xbaf000`. Other classes push the same id
+  at `0x6ba484`, `0xac3193`, `0xb1e30f`, `0xb8089c`, `0xbfdf14` and others, each handled by its own
+  dispatcher; the id is generic. No other push of it lies in the Raven or Burrow code.
+- Direction: `0xbad740` (vtable `+0x3c8`) calls reverse `0xbaf750` when the unit's type
+  (`[unit+0x34]`) equals the alternate form `[ability+0x194]` (`UnitID`), and forward `0xbafc30` for
+  every other type. `[ability+0x190]` is `DataA` (normal form). Forward sets ability bit `0x8000`,
+  virtual `+0x410`, then `0xbaec20`: when the type equals the normal form and exactly one of the
+  two forms has movement type 2 (`0x689490`, UnitData `movetp` air) it takes the flight stages
+  (`0xbaf820` landing, `0xbafd30` take-off); otherwise virtual `+0x400` (`0xbad830`, animation tag
+  `0x67a900(0xb)` and unit virtuals `+0x8c`/`+0x90`; effects not decoded). A type that is neither
+  form skips the air test and takes `+0x400` directly.
+- `0xbafb00`: if ability bit `0x80000` (set only for a unit with `[unit+0x164]` bit `0x10`, which
+  `docs/re-notes/input-control-groups.md` and `0x6d8cd7` give as the loaded-in-a-container flag) it calls `0xbaf000` at once. Otherwise
+  it counts the ability busy counter `[ability+0x44]` up (`0x46e130`; `0xb4adf0` answers `0xb9`,
+  so `IssueImmediateOrder` returns false, while it is above zero) and the unit counter
+  `[unit+0x3a4]` up (`0x694c10`), then arms the timer with no epsilon test. Delay, by the float
+  add `0x9a01c0` (`0xbafbd6`..`0xbafc08`): `Dur` (`0x46f3a0`, level `[ability+0x50]`)
+  `+ [ability+0xa0] + (DataC if ability bit 0x40000 else 0.0)`. `[ability+0xa0]` is the value of a
+  base-class float member (`+0x9c`, initialised to `0.0` at `0xb2ae0e`); no Raven or Burrow routine
+  writes it. Bit `0x40000` is set only at `0xbaf832` (landing stage `0xbaf820`). So a ground form
+  waits exactly `Dur`; `Cast`, `HeroDur`, `DataC` and `DataD` are not read. `0xbad740` stores the
+  same sum in the member at `+0x94` (`0xbad7e3`). `Abur`: `Dur=1.45`, `DataC=DataD=-`.
+  Nothing reads the `morph` sequence length: the delay comes from the ability row only.
+- `0xbaf000` (the `0xd01c4` handler): clears the timer, releases both counters
+  (`0x46e6c0`, `0x688710`), then `0xbaf580`. `0xbaf580` with state bit `0x8000` calls the swap
+  `0xbaed20(ability, alternate, normal)` only when the unit's type equals `[ability+0x190]`
+  (normal) and the unit is not dead (`[unit+0x164]` bit `0x100`, unless ability bit `0x8000000`);
+  with `0x10000` it swaps back only when the type equals `[ability+0x194]`. Then `0xbaf190` (or
+  `0xbaeef0`) runs the completion virtuals (`+0x408`/`+0x414`, or `+0x40c`/`+0x41c`) and clears the
+  state bit. Ability bit `0x80` (the "alternate" state the order check reads) is set at order
+  acceptance by the base routine `0xb99a80` (`0xb99af1`) and cleared by the off order `0xb99b50`
+  (`0xb99b85`), each followed by the queueing virtual (`+0x348`, `+0x34c`, through `+0x380`
+  `0xb49ce0`, internal orders `0xd0148` and others). The chain from that queue to `0xbad740` was not
+  traced and is read as synchronous for an idle unit, as for `unroot`; a unit with
+  `[unit+0x164]` bit `0x100000` or `0x200000`, or `[unit+0x15c] > 0`, takes the deferred branch
+  (`0xb99b0b`; it queues the order with `0x6994a0` when `[unit+0x3a4] > 0`), not decoded. The
+  opposite order during the delay is refused by the busy counter.
+- `0xbaed20`: type change `0x6805e0(unit, flags 0x522, new type)` (flags `+0xb00` when virtual
+  `+0x430` is nonzero), then life and mana are rescaled by the new/old maxima ratio
+  (`0x67b6c0`, `0x67b740`, `0x9a00b0`, `0x6be8c0`, `0x680350`). `0x6805e0` re-adds abilities
+  (`0x6d4560`) and calls the life and mana regeneration refreshes (`0x6a0f20`, `0x6a1070`); that
+  these read the new type's rates is inferred. Ability bit `0x4000000` (`DataB` bit `0x10`) adds an
+  extra pair of calls (`0x4b5820`, `0x4b5860`) that the Burrow row does not use.
+- Burrow's `+0x410` sets unit word `[unit+0x20] |= 0x4000000` (`0xc518fc`); `+0x418` clears it
+  (`0xc5197d`) and is called only by the reverse path. The consumers of that unit bit are not decoded.
+
+### The custom unit `u000` and `Abur`
+
+UndeadX04's `u000` (`war3map.w3u`: base `ucry`, `unsf`, `ua1b`, `ua1d`, `ua1s` set; no `uabi`)
+keeps `ucry`'s `abilList` (`Aweb,Aspa,Abur,Aiun`), so it owns the stock `Abur`, whose `DataA` is
+`ucry`. Its type id `u000` is neither `DataA` nor `UnitID`, so:
+
+- `burrow` and `unburrow` are both accepted (ability bit `0x80` toggles at acceptance) and both run
+  the forward start routine (`0xbad740` tests the alternate form only), including the `Dur` delay,
+  the busy counters, the `0xd01c4` event and the completion virtuals.
+- `0xbaf580` skips the type change at the end of each, so `u000` never becomes `ucrm`.
+- Unit bit `0x4000000` stays set after `unburrow` (`+0x418` runs only on the reverse path); its
+  consumers are not decoded, so no effect of it is modelled.
+
+UndeadX02 uses the stock `ucry` and takes the swap. `ucry` and `ucrm` differ in model, ability list
+(`ucrm` lacks `Aweb`) and life regeneration (`regenType` `blight`, `regenHP` 2 against `always`, 5);
+`HP` 550, `manaN`, armor and defense type are equal.
 
 ## Recreation
 
@@ -135,6 +200,25 @@ form with the immediate bit clear (Burrow); the effect of unit bit `0x4000000`; 
   `cool2=2`, `dice2=1`, `sides2=10`, `dmgplus2=44` and its own splash, which the model dropped
   because it read splash for attack 1 only. The only other shipped row with a single-attack-2
   `weapsOn` is `echm` (`weapsOn=2`), which previously had no weapon.
-- `burrow` on a unit with no `Abur` returns false (`morph_inactive`). On `Abur` the morph path
-  refuses at `Spec::read` ("morph flags 0x1 of class Abur ..."): the swap time for a form without
-  the immediate bit is not decoded.
+- `burrow` on a unit with no `Abur` returns false (`morph_inactive`).
+- `Spec::read` (`unit_morph_rules.rs`) admits `DataB` equal to the uninterruptible bit alone
+  (delayed change) beside the existing uninterruptible-plus-immediate value; any other value
+  refuses with the flags named. The delayed change reads `Cost` and `Dur` only.
+- `unit_morph_host.rs`, `Change::Delayed`: the order is accepted like an immediate form (mana
+  debit, `morph` animation, issued-order and spell events at once), nothing else changes at the
+  order, and the form changes at `now + Dur`. The finish and end-cast events follow the change;
+  that Burrow posts them as Raven does is inferred from the shared vtable, not observed. While
+  the change is pending both orders return false (the busy counter, `0xb9`) and other orders to
+  the unit refuse through `require_morph_interruption`, as for the immediate form.
+- The swap (`commit_delayed_swap`) uses the replacement path of Polymorph (`FormChange::Replacement`,
+  `commit_replacement_form`): new definition, model animation, movement profile, weapon and
+  the target type's ability list; life, mana, armor and defense type stay. Life and mana regenerate
+  to the swap on the old rates, then take the new form's life rate and regeneration type. It
+  is prepared at the order, so a failing form refuses before any change: the forms must both have
+  non-air movement (`0xbaec20`; an air form without the immediate bit runs the flight stages, not
+  decoded), equal `HP`, `manaN`, `fused`, `fmade`, `isbldg`, `def`, `defType`, `regenMana` and
+  `moveHeight`, and the unit's ability list must equal its type's own (the swap replaces it).
+  The ratio rescale of `0xbaed20` is the identity for equal maxima and is not implemented.
+- A unit whose type is not the source form of the direction (UndeadX04's `u000`) takes the same
+  phase without the swap, as `0xbaf580` does. A unit created as the alternate form is refused
+  (its initial burrowed state, `0xbacd75`, is not modelled).

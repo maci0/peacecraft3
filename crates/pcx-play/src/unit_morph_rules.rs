@@ -177,6 +177,8 @@ mod tests;
 pub struct Spec {
     pub normal: [u8; 4],
     pub alternate: [u8; 4],
+    /// Immediate-form-change bit set: the form changes at the order. Clear: `duration` after it.
+    pub immediate: bool,
     pub mana_cost: f32,
     pub cast: f32,
     pub duration: f32,
@@ -207,13 +209,18 @@ impl Spec {
         let flags = cell("DataB", FieldKind::Int)?
             .parse::<u32>()
             .map_err(|_| "morph malformed source flags")?;
-        let qualified = u32::from(class.uninterruptible | class.immediate_takeoff);
-        if flags != qualified {
+        let uninterruptible = u32::from(class.uninterruptible);
+        let with_immediate = uninterruptible | u32::from(class.immediate_takeoff);
+        let immediate = if flags == with_immediate {
+            true
+        } else if flags == uninterruptible {
+            false
+        } else {
             return Err(format!(
-                "morph flags {flags:#x} of class {}: only {qualified:#x} (uninterruptible with an immediate form change) is qualified; a form that changes at the second phase is not decoded",
+                "morph flags {flags:#x} of class {}: only {uninterruptible:#x} (form change after `Dur`) and {with_immediate:#x} (uninterruptible with an immediate form change) are qualified",
                 String::from_utf8_lossy(&class.code),
             ));
-        }
+        };
         let mut number = |key, kind| -> Result<f32, String> {
             let value = cell(key, kind)?
                 .parse::<f32>()
@@ -223,12 +230,29 @@ impl Spec {
             }
             Ok(value)
         };
+        let mana_cost = number("Cost", FieldKind::Int)?;
+        let duration = number("Dur", FieldKind::Unreal)?;
+        if !immediate {
+            // `Cast` and the altitude cells feed only the flight stages (`0xbafd30`,
+            // `0xbaf820`); the delayed change uses `Dur` alone (`0xbafb00`).
+            return Ok(Self {
+                normal,
+                alternate,
+                immediate,
+                mana_cost,
+                cast: 0.,
+                duration,
+                altitude_duration: 0.,
+                landing_delay: 0.,
+            });
+        }
         Ok(Self {
             normal,
             alternate,
-            mana_cost: number("Cost", FieldKind::Int)?,
+            immediate,
+            mana_cost,
             cast: number("Cast", FieldKind::Unreal)?,
-            duration: number("Dur", FieldKind::Unreal)?,
+            duration,
             altitude_duration: number("DataC", FieldKind::Unreal)?,
             landing_delay: number("DataD", FieldKind::Unreal)?,
         })
