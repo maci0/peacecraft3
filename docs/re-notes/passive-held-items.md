@@ -107,8 +107,8 @@ diagnostic instead of applying a silent wrong stat.
   removal are measured in the controlled RoC mana probes.
 - The source of the revival current-mana value is not qualified.
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `Arel` and `AIrm`: mana (`AIrn`
-  auras and other classes), armor (`AIsb`), attack speed (`AIas`), and the rest of the refused
+- Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `AImm`, `Arel`, `AIrm` and the orbs: mana (`AIrn`
+  auras and other classes), attack speed (`AIas`), and the rest of the refused
   rows.
 - Non-hero passive equip: pure intelligence is accepted with no modeled effect, while strength
   and agility still refuse. Armor, flat damage and maximum life are accepted for any unit with
@@ -499,3 +499,118 @@ probe passed.
 | TFT UndeadX02 | `AIfb` on `ofir` | `AIpb` on `oven` |
 
 All eight chapters are past the orb pickups; the new stops are other families or natives.
+
+## Maximum-mana family (`AImm`, Item Mana Bonus): implemented and tested
+
+All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objdump` and `rizin`.
+Items: Pendant of Mana (`pmna`, ability `AIbm`, `DataA1` 250).
+
+- Registration (observed): window `0xbc9f80` (`push 0x11b6848`, `push "APbo"`, `push "AImm"`,
+  `call 0x7f6360`), same layout and base as `AIml`. `Rules::read` decodes it and requires a class
+  distinct from every other held class.
+- Class (observed): descriptor `0xf4c718`, slot 0 factory `0xbbecb0`, constructor `0xbc7c60`, vtable
+  `0xf55b94`. Against the `APbo` vtable `0xf4f884` it overrides slots 1, 7 (`0xbc75e0`, returns
+  `AImm`), 22, 32 (`+0x80`, attach `0xbc75f0`), 41 (`+0xa4`, `0xbc7690`) and 182 (`+0x2d8`,
+  `0xbc76d0`, copies `[this+0x8c]` to a result field, the UI value).
+- Effect (observed): attach calls `0x680350(unit, &[this+0x8c], 1)` and slot 41 calls it with the
+  value's sign bit flipped. `0x680350` is the unit mana-pool routine documented for the `rmnx`
+  upgrade effect in `upgrade-effects.md`: mode 1 moves the maximum and sets the current pool to
+  `round(current / old maximum * new maximum)`. `[this+0x8c]` is the same `DataA1` instance value
+  `AIde` and `AIat` read. The class code has no hero test.
+- Amount: metadata row `Iman` (field `Data`, `AbilityData`, integer, `useSpecific`
+  `AImm,AImb,AIbm`), read at level 1 with the same typed W3A override rule as `Ilif`. Negative or
+  unadmitted amounts refuse.
+- Implementation: `AttributeBonus.max_mana`, summed over held items. Equip, drop, transfer, death
+  cleanup and the cached-unit restore apply it through the same pool function the upgrade effect
+  uses (`reprice_max_mana`), on any unit with vitals, and after the intelligence change when both
+  apply. The order between an intelligence change and a maximum-mana change inside one equip is
+  inferred (sequential), since a single item never carries both.
+- Tests: parser (`max_mana_points_come_from_the_admitted_iman_row`,
+  `max_mana_w3a_override_wins_and_a_wrong_pointer_refuses`,
+  `negative_or_unadmitted_max_mana_refuses`,
+  `max_mana_registration_requires_the_passive_base_and_a_distinct_class`); host
+  (`held_max_mana_moves_the_maximum_and_rounds_the_retained_ratio`,
+  `held_max_mana_applies_to_a_non_hero_and_transfers_the_pool`).
+
+## Open held classes (decoded in part, still refused at pickup)
+
+Each class below is registered in the reviewed image and its first-level structure is read. The
+effect is not fully decoded or its host mechanism is absent, so the pickup refuses with the reason
+in `UNMODELED_PASSIVE_CLASSES` (`crates/pcx-play/src/inventory_powerup.rs`), test
+`decoded_but_unmodeled_classes_refuse_with_their_reason`.
+
+### `AIsb` (Orb of Slow, Orb of Darkness `AIdf`, Orb of Lightning `AIll`)
+
+- Registration (observed): window `0xca6e20` (`push 0x11b98a4`, `push "AIDB"`, `push "AIsb"`),
+  base `AIDB` (the orb base). Descriptor `0xfbf6b4`, factory `0xc9dff0`, constructor `0xca3e70`
+  (calls the shared base constructor `0xbc7870`, adds a list at `+0xa8` and fields at `+0xbc..+0xdc`),
+  vtable `0xfc026c`. It overrides slots 1, 7 (`0xc9edf0`, `AIsb`), 10, 17, 18, 19, 22, 32, 34, 35,
+  41, 44, 46, 73, 74, 83, 84, 85, 185, 186, 203, 204 of the `AIDB` vtable.
+- Attach (slot 32, `0xc9ee50`, observed): runs the `AIat` attach `0xbc2a20`, sets flag `0x200`,
+  runs the same `DataE1` air switch as the other orbs, then `0xca70c0`, which builds the ability
+  whose raw code is `UnitID1` of the orb row (`0x46fb50`), stores its handle at `+0xc8` and sets
+  flag word `0x6000000` on it. Detach (slot 41, `0xc9ee00`) releases it.
+- Unit-target handler (slot 85, `0xc9f3d0`, observed): when the orb is armed (`0x100`) and flag
+  `0x400` is set, it asks the wrapped ability's virtuals `+0x354`, `+0x3e4`, `+0x3f4` and the
+  routine `0xbebae0` whether it may act on the target, ORs `0x10000` into the wrapped ability,
+  calls `0xca7060` and `0xb4a940` on it, then applies the attack record through the unit virtual
+  `+0x120`. Where flag `0x400` is set is not traced.
+- Shipped rows: `AIsb` `UnitID1` `AIos` (code `Aslo`), `AIdf` `ANbs` (Black Arrow, summon `ndr1`,
+  buffs `BNba`, `BNdm`), `AIll` `AIpg` (code `Aprg`, Purge). `DataA1` is the orb damage (6, 6, 5).
+  `DataB1`..`DataD1` (15/5/35, 100/100/100, 35/10/35) are read by the wrapper or the wrapped
+  ability; which is not decoded.
+- Why it stays refused: the effect is the wrapped ability (slow, Purge, Black Arrow with its
+  summon). The recreation has a slow buff but no Purge, no Black Arrow and no summon-on-kill, and
+  the roles of `DataB1`..`DataD1` are open.
+
+### `AIpb` (Orb of Venom `oven`, with `Apo2`)
+
+- Registration (observed): window `0xca6e00` (`push 0x11b98bc`, `push "AIDB"`, `push "AIpb"`).
+  Descriptor `0xfc0eb4`, allocator `0xca6620`, vtable `0xfc1848`. It differs from `AIDB` only in
+  slots 1, 7 (`0xca2a80`), 22, 83, 84, 85 and 203 (`0xca2ca0`, returns `0x4000000`), the same slot
+  set as `AIfb` and `AIcb`.
+- Handler (slot 85, `0xca2ab0`, observed): when armed it runs `0x4705f0`, clears the flag and, unless
+  the owner flag `0x40000000` is set, runs the callback `0xca6bf0` over the owner's abilities with the
+  target and attack record (`0x6d6460`). The callback is not decoded; it is how the poison reaches
+  the target. `oven` also lists `Apo2` (code `Apo2`, `Dur1` 6, `DataA1` 9, `DataD1` 1, buffs
+  `BIpb`, `BIpd`), a second class that is not decoded.
+- Why it stays refused: poison damage over time and its stacking and kill rules are not decoded or
+  hosted. `DataA1` (5) is the flat orb damage and `DataE1` (2) the air switch, which are the
+  already-implemented orb parts.
+
+### `AIrc` (Ankh of Reincarnation `ankh`)
+
+- Registration (observed): window `0xb8c1e0` (`push 0x11b5a5c`, `call 0x46f5b0` which returns
+  `abil`, `push "AIrc"`). Descriptor `0xf34978`, factory `0xb8a9b0`, vtable `0xf35200`, slot 7
+  `0xb8b7c0` (`AIrc`).
+- Reincarnation entry (slot 161, `+0x284`, `0xb8b870`, observed): resolves the item that carries the
+  ability from the handle at `+0x70`, requires its use count (`[item+0x18c]`) to be nonzero, the
+  owner's flag word `[owner+0x164]` bit `0x40000000` clear, no pending reincarnation marker (an
+  object lookup for `XOre`), a location test (`0x7f6a00`), then reads `DataB1` (`0x46ee20`, clamped
+  against the float at `0x112d810`) and `DataC1` (`0x46eed0`, negative selects a unit-derived
+  value via `0xb20d20`), creates a revive record (`0xb8bfc0`), calls its virtual `+0x78` with the
+  unit and the level values, sets owner flag `0x1000` and calls `0x682c80`. Shipped row `AIrc`:
+  `DataA1` 7, `DataB1` 500, `DataC1` -1, `EfctID1` `XOre`.
+- Why it stays refused: the delay, the restored life and mana, where the hero returns, the item
+  charge use and the death path that calls slot 161 are not decoded, and the recreation has no
+  reincarnation host.
+
+### `AIms` (Boots of Speed `bspd`)
+
+- Registration (observed): window `0xbc9fc0` (`push 0x11b6860`, `push "APbo"`, `push "AIms"`).
+  Descriptor `0xf4cf18`, factory `0xbbf6b0`, constructor `0xbc7cd0`, vtable `0xf4c7b4`. It overrides
+  slots 1, 3, 7 (`0xbbee70`, `AIms`), 14, 15, 22, 32, 41, 97, 181, 182, 185, 186 and 199 of the `APbo`
+  vtable.
+- Value (observed): slot 97 (`+0x184`, `0xbbf220`) returns `[this+0x8c]` (`DataA1`, 60) where the
+  base returns 0.0 (`0x46a810`). `0x6d91f0` walks the list headed by the handle at `unit+0x3e8`
+  (next handle at `+0x24` of each member), calls `+0x184` on every member and keeps the maximum,
+  starting from 0.0. Several speed bonuses therefore do not stack: the largest applies.
+- Consumer (observed): the movement class getter at `0xb681b0` (class code `Amov`, `0xb681a0`)
+  computes `(maximum + [this+0x74]) * [this+0x7c]` (the add is `0x9a01c0`, the multiply `0x99ffe0`),
+  then limits the result with the globals at `0x113e...` and the unit-type fields at `+0x1d8` and
+  `+0x1dc` (`0x6975b0`, `0x697410`). Attach (`0xbbeee0`) and detach (`0xbbefc0`) call the recompute
+  `0xb69430` on the movement object at `unit+0x3f8`.
+- Why it stays refused: what `[this+0x74]` and `[this+0x7c]` hold for a unit (the stored speed, and
+  what scales it), the limit values, and the interaction with the slow buff (the recreation
+  slows `base * (1 - factor)` from a stored base) are not established. A bonus applied before or
+  after the slow would give different speeds, so the multiplier source must be decoded first.

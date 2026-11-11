@@ -9,7 +9,8 @@ use super::unit_creation::ExecutedUnit;
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::inventory_powerup::AttributeBonus;
 use crate::inventory_powerup_host::{
-    reprice_life_scaled, reprice_mana, reprice_max_life, round_life, scale_life_component,
+    reprice_life_scaled, reprice_mana, reprice_max_life, reprice_max_mana, round_life,
+    scale_life_component,
 };
 use pcx_objects::editor::FieldSource;
 use pcx_objects::editor::misc::HeroVitals;
@@ -315,6 +316,7 @@ impl ObjectHost {
                 (&mut combined.armor, passive.armor),
                 (&mut combined.damage, passive.damage),
                 (&mut combined.max_life, passive.max_life),
+                (&mut combined.max_mana, passive.max_mana),
                 (&mut combined.life_regen, passive.life_regen),
             ] {
                 *total = total
@@ -349,6 +351,11 @@ impl ObjectHost {
                     passive.intelligence,
                 )
                 .map_err(fail)?;
+            }
+            if passive.max_mana != 0 {
+                (vitals.mana, vitals.max_mana) =
+                    reprice_max_mana(vitals.mana, vitals.max_mana, passive.max_mana)
+                        .map_err(fail)?;
             }
             vitals.life = vitals.max_life;
             vitals.mana = vitals.max_mana;

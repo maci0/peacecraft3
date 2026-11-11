@@ -4,7 +4,7 @@ use crate::inventory::{InventoryBudget, Policy, Rules};
 use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
 use crate::inventory_powerup_host::{
     clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life_scaled, reprice_mana,
-    reprice_max_life,
+    reprice_max_life, reprice_max_mana,
 };
 use crate::item_heal::heal_life;
 
@@ -13,6 +13,7 @@ use crate::item_heal::heal_life;
 struct PassiveDelta {
     strength: i32,
     max_life: i32,
+    max_mana: i32,
     intelligence: i32,
     health_handicap: f32,
 }
@@ -439,6 +440,7 @@ impl ObjectHost {
             armor: 0,
             damage: 0,
             max_life: 0,
+            max_mana: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,
@@ -477,6 +479,10 @@ impl ObjectHost {
             bonus.max_life = bonus
                 .max_life
                 .checked_add(passive.max_life)
+                .ok_or_else(overflow)?;
+            bonus.max_mana = bonus
+                .max_mana
+                .checked_add(passive.max_mana)
                 .ok_or_else(overflow)?;
             bonus.life_regen = bonus
                 .life_regen
@@ -535,6 +541,10 @@ impl ObjectHost {
         self.removal_delta(max_life, "max-life")
     }
 
+    fn max_mana_removal_delta(&self, max_mana: i32) -> Result<i32, Error> {
+        self.removal_delta(max_mana, "max-mana")
+    }
+
     fn intelligence_removal_delta(&self, intelligence: i32) -> Result<i32, Error> {
         self.removal_delta(intelligence, "intelligence")
     }
@@ -585,6 +595,12 @@ impl ObjectHost {
             .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
     }
 
+    /// Project `delta` maximum mana onto already-selected mana pools.
+    fn project_max_mana(&self, pools: (f32, f32), delta: i32) -> Result<(f32, f32), Error> {
+        reprice_max_mana(pools.0, pools.1, delta)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+    }
+
     fn project_held_pools(
         &self,
         pools: VitalPools,
@@ -614,6 +630,10 @@ impl ObjectHost {
         if is_hero && delta.intelligence != 0 {
             mana = self.project_intelligence_mana(mana, delta.intelligence)?;
         }
+        // Maximum mana is a pool change on any unit, not an attribute.
+        if delta.max_mana != 0 {
+            mana = self.project_max_mana(mana, delta.max_mana)?;
+        }
         mana = clamp_mana_pools(mana.0, mana.1);
         Ok(VitalPools {
             life: life.0,
@@ -630,9 +650,10 @@ impl ObjectHost {
         unit: HandleId,
         strength: i32,
         max_life: i32,
+        max_mana: i32,
         intelligence: i32,
     ) -> Result<Option<VitalPools>, Error> {
-        if strength == 0 && max_life == 0 && intelligence == 0 {
+        if strength == 0 && max_life == 0 && max_mana == 0 && intelligence == 0 {
             return Ok(None);
         }
         let record = self.executed_unit(unit)?;
@@ -656,6 +677,7 @@ impl ObjectHost {
             PassiveDelta {
                 strength,
                 max_life,
+                max_mana,
                 intelligence,
                 health_handicap: record.health_handicap,
             },
@@ -679,12 +701,17 @@ impl ObjectHost {
         } else {
             self.max_life_removal_delta(passive.max_life)?
         };
+        let max_mana = if passive.max_mana == 0 {
+            0
+        } else {
+            self.max_mana_removal_delta(passive.max_mana)?
+        };
         let intelligence = if passive.intelligence == 0 {
             0
         } else {
             self.intelligence_removal_delta(passive.intelligence)?
         };
-        self.held_pools(unit, strength, max_life, intelligence)
+        self.held_pools(unit, strength, max_life, max_mana, intelligence)
     }
 
     fn set_vital_pools(&mut self, unit: HandleId, pools: Option<VitalPools>) -> Result<(), Error> {
@@ -974,12 +1001,17 @@ impl ObjectHost {
                 } else {
                     self.max_life_removal_delta(passive.max_life)?
                 };
+                let max_mana = if passive.max_mana == 0 {
+                    0
+                } else {
+                    self.max_mana_removal_delta(passive.max_mana)?
+                };
                 let intelligence = if passive.intelligence == 0 {
                     0
                 } else {
                     self.intelligence_removal_delta(passive.intelligence)?
                 };
-                if strength != 0 || max_life != 0 || intelligence != 0 {
+                if strength != 0 || max_life != 0 || max_mana != 0 || intelligence != 0 {
                     let Some(current) = pools else {
                         return Err(self.inner.error(
                             "inventory",
@@ -993,6 +1025,7 @@ impl ObjectHost {
                         PassiveDelta {
                             strength,
                             max_life,
+                            max_mana,
                             intelligence,
                             health_handicap,
                         },
@@ -1042,6 +1075,7 @@ impl ObjectHost {
             (held.armor, passive.armor),
             (held.damage, passive.damage),
             (held.max_life, passive.max_life),
+            (held.max_mana, passive.max_mana),
             (held.life_regen, passive.life_regen),
         ] {
             current.checked_add(incoming).ok_or_else(|| {
@@ -1081,6 +1115,7 @@ impl ObjectHost {
             unit,
             passive.strength,
             passive.max_life,
+            passive.max_mana,
             passive.intelligence,
         )?;
         self.require_passive_regen_projection(

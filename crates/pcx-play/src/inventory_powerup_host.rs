@@ -129,6 +129,17 @@ pub(crate) fn reprice_mana(
     change_mana_pools(mana, max_mana, change).map_err(|e| format!("intelligence mana change: {e}"))
 }
 
+/// Mana pools after a signed change of the maximum, keeping the current/max ratio rounded with
+/// half upward (the mana pool routine `0x680350`, mode 1).
+pub(crate) fn reprice_max_mana(
+    mana: f32,
+    max_mana: f32,
+    max_mana_delta: i32,
+) -> Result<(f32, f32), String> {
+    change_mana_pools(mana, max_mana, max_mana_delta as f32)
+        .map_err(|e| format!("maximum mana change: {e}"))
+}
+
 /// Final pools prepared by a projection: a living holder keeps at least one hit point, while a
 /// dead holder stays at zero. The write stores the prepared projection as-is, so a pool whose
 /// delta was zero is not re-clamped.

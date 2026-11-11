@@ -757,6 +757,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             armor: 3,
             damage: 0,
             max_life: 0,
+            max_mana: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,
@@ -936,6 +937,174 @@ fn max_life_registration_requires_the_passive_base_and_a_distinct_class() {
     assert!(duplicate.contains("distinct class"), "{duplicate}");
 }
 
+/// Maximum-mana fixture: `pmna` holds `AIbm` (code `AImm`) admitted by `Iman`; `pmnx` holds
+/// `AIbx`, which is not. `Iman` maps to Data column 2, so DataA is a decoy.
+fn max_mana_rules_with(amount: &str, overlay: Overlay) -> Rules {
+    let items = sylk(
+        &[
+            "itemID",
+            "abilList",
+            "powerup",
+            "usable",
+            "perishable",
+            "uses",
+        ],
+        &[
+            &["pmna", "AIbm", "0", "0", "0", "-"],
+            &["pmnx", "AIbx", "0", "0", "0", "-"],
+        ],
+    );
+    let abilities = sylk(
+        &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
+        &[
+            &["AIbm", "AImm", "1", "11", amount, "0"],
+            &["AIbx", "AImm", "1", "9", "0", "0"],
+        ],
+    );
+    let meta = sylk(
+        &["ID", "field", "slk", "index", "type", "data", "useSpecific"],
+        &[
+            &["Iagi", "Data", "AbilityData", "-1", "int", "1", "AIsm,AIxm"],
+            &["Iint", "Data", "AbilityData", "-1", "int", "2", "AIsm,AIxm"],
+            &["Istr", "Data", "AbilityData", "-1", "int", "3", "AIsm,AIxm"],
+            &["Idef", "Data", "AbilityData", "-1", "int", "1", "AId1"],
+            &["Iatt", "Data", "AbilityData", "-1", "int", "1", "AIat,AItf"],
+            &["Iman", "Data", "AbilityData", "-1", "int", "2", "AIbm"],
+        ],
+    );
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic max mana".into(),
+                edition_version: "fixture".into(),
+            },
+            &[
+                (SlkId::ItemData.path(), &items),
+                (SlkId::AbilityData.path(), &abilities),
+                (SlkId::AbilityMetaData.path(), &meta),
+            ],
+            &[],
+            EditorReadLimits {
+                max_listed_paths: 4,
+                max_asset_bytes: 65536,
+                max_aggregate_input_bytes: 131072,
+            },
+        )
+        .unwrap(),
+    );
+    Rules::decode(
+        tables,
+        overlay,
+        AssetIdentity {
+            source: "synthetic".into(),
+            edition: "synthetic".into(),
+            version: "test".into(),
+        },
+        [0; 32],
+        [
+            &window("AIsm", "AIxm"),
+            &window("AIab", "APbo"),
+            &window("AIde", "APbo"),
+            &window("AIat", "APbo"),
+        ],
+    )
+    .unwrap()
+    .with_max_mana(&window("AImm", "APbo"))
+    .unwrap()
+}
+
+#[test]
+fn max_mana_points_come_from_the_admitted_iman_row() {
+    let held = max_mana_rules_with("250", Overlay::default())
+        .held_attributes(&catalog_item("pmna"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_mana, 250);
+    assert_eq!(held.max_life, 0);
+    assert_eq!(held.intelligence, 0);
+}
+
+#[test]
+fn max_mana_w3a_override_wins_and_a_wrong_pointer_refuses() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIbm".into(), vec![int_mod(b"Iman", Some([1, 2]), 300)]);
+    let held = max_mana_rules_with("250", overlay)
+        .held_attributes(&catalog_item("pmna"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_mana, 300);
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIbm".into(), vec![int_mod(b"Iman", Some([1, 1]), 300)]);
+    let err = max_mana_rules_with("250", overlay)
+        .held_attributes(&catalog_item("pmna"))
+        .unwrap_err();
+    assert!(
+        err.contains("does not match metadata data column 2"),
+        "{err}"
+    );
+}
+
+#[test]
+fn negative_or_unadmitted_max_mana_refuses() {
+    let err = max_mana_rules_with("-5", Overlay::default())
+        .held_attributes(&catalog_item("pmna"))
+        .unwrap_err();
+    assert!(err.contains("negative max-mana"), "{err}");
+    let err = max_mana_rules_with("250", Overlay::default())
+        .held_attributes(&catalog_item("pmnx"))
+        .unwrap_err();
+    assert!(
+        err.contains("max-mana metadata does not admit ability AIbx"),
+        "{err}"
+    );
+}
+
+#[test]
+fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
+    let wrong_base = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_mana(&window("AImm", "AIxn"))
+        .unwrap_err();
+    assert!(wrong_base.contains("base APbo"), "{wrong_base}");
+    let duplicate = rules(&Tome::default(), Overlay::default(), "AIsm")
+        .unwrap()
+        .with_max_mana(&window("AIsm", "APbo"))
+        .unwrap_err();
+    assert!(duplicate.contains("distinct class"), "{duplicate}");
+}
+
+#[test]
+fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
+    for (class, expected) in [
+        ("AIsb", "wrapped ability"),
+        ("AIpb", "poison"),
+        ("AIrc", "death handler"),
+        ("AIms", "multiplier"),
+        ("AIzz", ""),
+    ] {
+        let tome = Tome {
+            alias: "AIxx",
+            code: class,
+            abilities: "AIxx",
+            powerup: "0",
+            usable: "0",
+            ..Tome::default()
+        };
+        let err = rules(&tome, Overlay::default(), "AIsm")
+            .unwrap()
+            .held_attributes(&tstr())
+            .unwrap_err();
+        let prefix = format!("unsupported passive ability AIxx with code {class} on tstr");
+        assert!(err.starts_with(&prefix), "{err}");
+        assert_eq!(err.len() > prefix.len(), !expected.is_empty(), "{err}");
+        assert!(err.contains(expected), "{err}");
+    }
+}
+
 fn damage_tome<'a>(amount: &'a str) -> Tome<'a> {
     Tome {
         alias: "AItf",
@@ -1060,6 +1229,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             armor: 0,
             damage: 15,
             max_life: 0,
+            max_mana: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
             orb: None,

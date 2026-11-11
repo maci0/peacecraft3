@@ -157,6 +157,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["pman", "AIrm", "0", "0", "0", "-"],
             &["pmax", "AImx", "0", "0", "0", "-"],
             &["plif", "AIl1", "0", "0", "0", "-"],
+            &["pmna", "AIbm", "0", "0", "0", "-"],
             &["plsm", "AIl2", "0", "0", "0", "-"],
             &["plmx", "AIl3", "0", "0", "0", "-"],
             &["plon", "AIl4", "0", "0", "0", "-"],
@@ -247,6 +248,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             "_",
         ],
         &["AIl1", "AIml", "1", "37", "0", "0", "0", "0", "-", "-", "_"],
+        &["AIbm", "AImm", "1", "75", "0", "0", "0", "0", "-", "-", "_"],
         &["AIl2", "AIml", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
         &[
             "AIl3",
@@ -389,6 +391,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "AIl1,AIl2,AIl3,AIl4,AIl5",
                 "",
             ],
+            &["Iman", "Data", "AbilityData", "-1", "int", "1", "AIbm", ""],
         ],
     );
     Arc::new(
@@ -727,6 +730,8 @@ fn open_with_regens_overlays_extra(
     .with_mana_regen(&registration("AIrm", "Arem"))
     .unwrap()
     .with_max_life(&registration("AIml", "APbo"))
+    .unwrap()
+    .with_max_mana(&registration("AImm", "APbo"))
     .unwrap()
     .with_orbs(
         &orb_base_registration(),
@@ -1707,6 +1712,47 @@ fn held_max_life_keeps_a_living_holder_at_one_life() {
     assert_eq!(add(&mut h, hero, item), Ok(Value::Bool(true)));
     assert_eq!(max_life_of(&h, hero), HERO_LIFE + 37.0);
     assert_eq!(life_of(&h, hero), 1.0);
+}
+
+#[test]
+fn held_max_mana_moves_the_maximum_and_rounds_the_retained_ratio() {
+    let Fixture { mut h, hero, .. } = open();
+    let max = max_mana_of(&h, hero);
+    set_mana(&mut h, hero, max / 2.0);
+    let life = (life_of(&h, hero), max_life_of(&h, hero));
+    let pendant = item(&mut h, b"pmna", 0.0);
+    assert_eq!(add(&mut h, hero, pendant), Ok(Value::Bool(true)));
+    assert_eq!(max_mana_of(&h, hero), max + 75.0);
+    assert_eq!(mana_of(&h, hero), ((max + 75.0) / 2.0 + 0.5).floor());
+    assert_eq!(
+        (life_of(&h, hero), max_life_of(&h, hero)),
+        life,
+        "mana-only items leave both life pools"
+    );
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(pendant)],
+    )
+    .unwrap();
+    assert_eq!(max_mana_of(&h, hero), max);
+}
+
+#[test]
+fn held_max_mana_applies_to_a_non_hero_and_transfers_the_pool() {
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let (hero_max, ordinary_max) = (max_mana_of(&h, hero), max_mana_of(&h, ordinary));
+    let pendant = item(&mut h, b"pmna", 0.0);
+    assert_eq!(add(&mut h, hero, pendant), Ok(Value::Bool(true)));
+    assert_eq!(max_mana_of(&h, hero), hero_max + 75.0);
+    assert_eq!(add(&mut h, ordinary, pendant), Ok(Value::Bool(true)));
+    assert_eq!(max_mana_of(&h, hero), hero_max);
+    assert_eq!(max_mana_of(&h, ordinary), ordinary_max + 75.0);
+    h.forget_inventory_unit(ordinary, false).unwrap();
+    assert_eq!(max_mana_of(&h, ordinary), ordinary_max);
 }
 
 #[test]

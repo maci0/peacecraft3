@@ -349,3 +349,22 @@ Open after this lane:
 - The `WaygateActivate` native (RoC Undead05): not started.
 
 The orb refusals above (`AIfb`, `AIgd`, `AIcb`) no longer occur: orbs are admitted, and the eight chapters now stop at other refusals, listed in the locked-chapter probe table of [passive-held-items.md](passive-held-items.md).
+
+## Held-item passive probe (2026-11-11, `AImm` lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe` before (sweep6 logs) and after.
+`AImm` (Pendant of Mana `pmna`) is admitted, see "Maximum-mana family" in
+[passive-held-items.md](passive-held-items.md). The other four classes stay refused with a reason;
+their decode is under "Open held classes" in the same file.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX03a | `AIbm` (code `AImm`) on `pmna` | `AIob` on `ofro` (orb of frost, not a decoded class) |
+| TFT HumanX06 | `AIbm` (code `AImm`) on `pmna` | `AIsr` on `brac` (not a decoded class) |
+| TFT UndeadX01 | `AIdf` (code `AIsb`) on `odef` | unchanged, now with the wrapped-ability reason |
+| TFT UndeadX01Interlude | `AIdf` (code `AIsb`) on `odef` | unchanged, now with the wrapped-ability reason |
+| TFT HumanX05 | `AIll` (code `AIsb`) on `oli2` | unchanged, now with the wrapped-ability reason |
+| RoC NightElf07 | `AIrc` on `ankh` | unchanged, now with the reincarnation reason |
+| RoC Human09 | `AIrc` on `ankh` | unchanged, now with the reincarnation reason |
+| RoC Undead02 | `AIms` on `bspd` | unchanged, now with the speed-multiplier reason |
+| TFT UndeadX02 | `AIpb` on `oven` | unchanged, now with the poison reason |

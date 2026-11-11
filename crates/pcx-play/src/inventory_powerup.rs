@@ -21,6 +21,8 @@ const PASSIVE_WINDOW: u32 = 0xbc9ce0;
 const ARMOR_WINDOW: u32 = 0xbc9d40;
 /// Registration call for the held maximum-life class (source `AIml`, base `APbo`).
 const MAX_LIFE_WINDOW: u32 = 0xbc9f40;
+/// Registration call for the held maximum-mana class (source `AImm`, base `APbo`).
+const MAX_MANA_WINDOW: u32 = 0xbc9f80;
 /// Registration call for the passive flat attack-damage class (source `AIat`, base `APbo`).
 const DAMAGE_WINDOW: u32 = 0xbc9c80;
 /// Registration call for the life-regeneration class (source `Arel`, base `AREB`).
@@ -40,6 +42,31 @@ const FIRE_ORB_WINDOW: u32 = 0xca6d40;
 const CORRUPTION_ORB_WINDOW: u32 = 0xca6ce0;
 /// `AbilityData` `DataE` value that enables the unit's second attack, the only orb value decoded.
 const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
+/// Held-item classes whose class was decoded from the reviewed client but whose effect is not
+/// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
+/// classes".
+const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
+    (
+        "AIsb",
+        "the orb creates the ability named by its UnitID1 and casts it on each armed hit; \
+         that wrapped ability (slow, purge or black arrow) is not modeled",
+    ),
+    (
+        "AIpb",
+        "the venom orb adds damage and the air attack switch, and its poison comes from \
+         a second ability whose class is not modeled",
+    ),
+    (
+        "AIrc",
+        "reincarnation runs from the death handler (revive delay, life and mana restore, \
+         charge use) and is not modeled",
+    ),
+    (
+        "AIms",
+        "the speed bonus is the maximum of the unit's bonus abilities added to the stored \
+         speed before a multiplier, and the multiplier's source is not decoded",
+    ),
+];
 const BASE_FN_LEN: usize = 6;
 pub(crate) const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
@@ -116,6 +143,8 @@ pub struct AttributeBonus {
     pub armor: i32,
     pub damage: i32,
     pub max_life: i32,
+    /// Flat maximum mana, applied to any unit with vitals.
+    pub max_mana: i32,
     /// Life points per game second while held, separate from base regeneration eligibility.
     pub life_regen: i32,
     /// Fraction of the unit's normal mana regeneration added while held.
@@ -156,6 +185,8 @@ pub struct Rules {
     damage: Column,
     /// Held maximum-life registration, attached by `with_max_life`.
     max_life: Option<AmountClass>,
+    /// Held maximum-mana registration, attached by `with_max_mana`.
+    max_mana: Option<AmountClass>,
     /// Healing registration, attached by `with_heal`. Absent until the healing window is read.
     heal: Option<AmountClass>,
     life_regen: Option<AmountClass>,
@@ -218,6 +249,7 @@ impl Rules {
         let armor = window(ARMOR_WINDOW)?;
         let damage = window(DAMAGE_WINDOW)?;
         let max_life = window(MAX_LIFE_WINDOW)?;
+        let max_mana = window(MAX_MANA_WINDOW)?;
         let life_regen = window(LIFE_REGEN_WINDOW)?;
         let mana_regen = window(MANA_REGEN_WINDOW)?;
         let heal = pe
@@ -256,6 +288,7 @@ impl Rules {
             [&powerup, &passive, &armor, &damage],
         )
         .and_then(|rules| rules.with_max_life(&max_life))
+        .and_then(|rules| rules.with_max_mana(&max_mana))
         .and_then(|rules| rules.with_life_regen(&life_regen))
         .and_then(|rules| rules.with_mana_regen(&mana_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
@@ -289,6 +322,7 @@ impl Rules {
             Some(&self.armor_class),
             Some(&self.damage_class),
             self.max_life.as_ref().map(|c| &c.class),
+            self.max_mana.as_ref().map(|c| &c.class),
             self.life_regen.as_ref().map(|c| &c.class),
             self.mana_regen.as_ref().map(|c| &c.class),
             self.heal.as_ref().map(|c| &c.class),
@@ -327,6 +361,10 @@ impl Rules {
                 .mana_regen
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
+            || self
+                .max_mana
+                .as_ref()
+                .is_some_and(|max_mana| max_mana.class == class)
         {
             return Err("healing registration must name a distinct class".into());
         }
@@ -367,6 +405,33 @@ impl Rules {
         Ok(self)
     }
 
+    /// Attaches the held maximum-mana class. Its registration must name the passive base `APbo`,
+    /// and its amount comes from the integer `Iman` metadata column.
+    pub(crate) fn with_max_mana(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != "APbo" {
+            return Err("maximum-mana registration must name base APbo".into());
+        }
+        if self.max_mana.is_some()
+            || [
+                &self.powerup_class,
+                &self.passive_class,
+                &self.armor_class,
+                &self.damage_class,
+            ]
+            .contains(&&class)
+            || self
+                .max_life
+                .as_ref()
+                .is_some_and(|max_life| max_life.class == class)
+        {
+            return Err("maximum-mana registration must name a distinct class".into());
+        }
+        let amount = column(&self.tables, b"Iman")?;
+        self.max_mana = Some(AmountClass { class, amount });
+        Ok(self)
+    }
+
     pub(crate) fn with_life_regen(mut self, window: &[u8]) -> Result<Self, String> {
         let (class, _) = class_from_window(window)?;
         if self.life_regen.is_some()
@@ -386,6 +451,10 @@ impl Rules {
                 .max_life
                 .as_ref()
                 .is_some_and(|max_life| max_life.class == class)
+            || self
+                .max_mana
+                .as_ref()
+                .is_some_and(|max_mana| max_mana.class == class)
         {
             return Err("life regeneration registration must name a distinct class".into());
         }
@@ -413,6 +482,10 @@ impl Rules {
                 .max_life
                 .as_ref()
                 .is_some_and(|max_life| max_life.class == class)
+            || self
+                .max_mana
+                .as_ref()
+                .is_some_and(|max_mana| max_mana.class == class)
             || self.heal.as_ref().is_some_and(|heal| heal.class == class)
         {
             return Err("mana regeneration registration must name a distinct class".into());
@@ -555,6 +628,7 @@ impl Rules {
             armor_class,
             damage_class,
             max_life: None,
+            max_mana: None,
             heal: None,
             life_regen: None,
             mana_regen: None,
@@ -663,6 +737,22 @@ impl Rules {
                     .ok_or("passive max-life overflows")?;
                 continue;
             }
+            if let Some(max_mana) = &self.max_mana
+                && code == max_mana.class
+            {
+                if !max_mana.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!("max-mana metadata does not admit ability {alias}"));
+                }
+                let points = self.amount(alias, &max_mana.amount)?;
+                if points < 0 {
+                    return Err(format!("negative max-mana on {}", item.rawcode()));
+                }
+                held.max_mana = held
+                    .max_mana
+                    .checked_add(points)
+                    .ok_or("passive max-mana overflows")?;
+                continue;
+            }
             if let Some(regen) = &self.life_regen
                 && code == regen.class
             {
@@ -718,8 +808,12 @@ impl Rules {
                 continue;
             }
             if code != self.passive_class {
+                let reason = UNMODELED_PASSIVE_CLASSES
+                    .iter()
+                    .find(|(class, _)| *class == code)
+                    .map_or(String::new(), |(_, reason)| format!(": {reason}"));
                 return Err(format!(
-                    "unsupported passive ability {alias} with code {code} on {}",
+                    "unsupported passive ability {alias} with code {code} on {}{reason}",
                     item.rawcode()
                 ));
             }
