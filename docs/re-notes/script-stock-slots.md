@@ -81,15 +81,33 @@ clearing of cells beyond the new count. The same unsigned clamp and the 12-cell 
 
 Recreation: the stock table of a unit is keyed by unit and kind, so `AddUnitToStock` and
 `SetUnitTypeSlots` act on a second table that shares the item rules and the record budget
-(`stock unit records` on overflow). `ObjectHost::unit_stock` reads a cell. A unit with no
-`SetUnitTypeSlots` record refuses with `shop slot count is not assigned`.
+(`stock unit records` on overflow). `ObjectHost::unit_stock` reads a cell.
 
-Open: the `Asud` constructor writes `0xb` to `+0x480` (`0xb353d8`), so a shop that never
-got `SetUnitTypeSlots` starts with 11 unit slots in the original. The recreation does not
-read that constructor immediate from the executable yet and refuses instead. TFT
-`UndeadX03` adds units to two `nmrk` marketplaces that only received `SetItemTypeSlots`, so it
-stops at that refusal. The constructor sits in a vtable slot (`0xf1b9b4`); the class
-factory (`0xaf585d`) selects it by the `Asud` code.
+### Default slot count
+
+Both component initializers store a default into the slot count field (`+0x480`): the `Asud`
+class (name stub `0xb35380`, vtable at `0xf1b950`) at `0xb353d8`, and the `Asid` class (name
+stub `0xb36140`) at `0xb36198`. Each is `mov dword [esi+0x480], 0xb`, so a shop that never
+got a setter holds 11 cells of each kind. The initializers (`0xb35390`, `0xb36150`) sit in
+the vtables (`0xf1b9b4`, `0xf1c058`). Observed: no other function of either class writes an
+immediate into `+0x480`; the other writers are the slot setters (`0xb38340`, `0xb38260`) and
+the save loaders (`0xb35474`, `0xb36234`). No code of either class reads a `UnitData` or
+`ItemData` column into the count, and the helpers `0xb37430`, `0xb37690` and `0xb38340` are
+called only by the natives and by `0xb380f7`..`0xb3818c`, so no data column overrides the
+default.
+
+Recreation: `shop_table::derive` reads the default from the executable. From the add handler
+(`0x489690`, `0x489dc0`) it takes the class-code stub callee (`mov eax, code; ret`) and the
+count field of the helper's `cmp [ebx+disp32], edi`, finds the vtable slot holding the second
+copy of that stub, and takes the one vtable function that stores an immediate to that field.
+`ShopTable::item` and `ShopTable::unit` each carry `slot_ceiling`, `entries` and
+`default_slots` (`0xb`, `0xc`, `0xb` for both in 1.29.2.9231). A shop with no setter record
+uses `default_slots` of its kind. TFT `UndeadX03` adds units to two `nmrk` marketplaces that
+only received `SetItemTypeSlots` and now passes startup.
+
+Open: the native returns silently for a unit that has no `Asid` or `Asud` ability (`0x6d6570`
+finds none). The recreation does not check the ability list, so a unit without the ability
+still stores stock.
 
 `UpdateStockAvailability` (Blizzard.j 9944) reads only `GetItemType` and
 `GetItemLevel`, which were already admitted, and is not affected by this slice.

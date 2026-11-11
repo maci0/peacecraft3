@@ -8,8 +8,16 @@ fn shop() -> crate::playercolor_host::ShopCapacity {
             source: "synthetic".into(),
         },
         image_sha256: [0; 32],
-        slot_ceiling: 11,
-        entries: 12,
+        item: crate::shop_table::SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 3,
+        },
+        unit: crate::shop_table::SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 2,
+        },
     })
 }
 use crate::playercolor_host::{Failure, ObjectHost, StockBudget, UnitBudget};
@@ -184,19 +192,6 @@ fn item_stock_cells_evict_by_age_and_removal_and_shrink_follow_the_engine() {
     vm.call("place", &[]).unwrap();
     let unit = handle(&vm.global("U"));
     let placed = vm.host().inner().handles();
-    let refused = vm
-        .host()
-        .native(
-            "AddItemToStock",
-            &[
-                Value::Handle(unit),
-                Value::Int(1),
-                Value::Int(1),
-                Value::Int(1),
-            ],
-        )
-        .unwrap_err();
-    assert!(refused.contains("slot count is not assigned"), "{refused}");
     vm.host()
         .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(2)])
         .unwrap();
@@ -259,13 +254,6 @@ fn unit_stock_cells_follow_the_item_rules_on_a_separate_table() {
                 ],
             )
         };
-    let refused = add(&mut vm, "AddUnitToStock", 1, 3, 3).unwrap_err();
-    assert!(refused.contains("slot count is not assigned"), "{refused}");
-    // An item slot count does not stand in for the unit slot count.
-    vm.host()
-        .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(2)])
-        .unwrap();
-    assert!(add(&mut vm, "AddUnitToStock", 1, 3, 3).is_err());
     vm.host()
         .native("SetUnitTypeSlots", &[Value::Handle(unit), Value::Int(2)])
         .unwrap();
@@ -294,6 +282,44 @@ fn unit_stock_cells_follow_the_item_rules_on_a_separate_table() {
         .unwrap();
     assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), None);
     assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((4, 4)));
+}
+
+#[test]
+fn a_shop_without_a_setter_record_opens_with_the_executable_default_per_kind() {
+    let mut vm = opened(16);
+    vm.init_globals().unwrap();
+    vm.call("place", &[]).unwrap();
+    let unit = handle(&vm.global("U"));
+    for (native, id) in [
+        ("AddItemToStock", 1),
+        ("AddItemToStock", 2),
+        ("AddItemToStock", 3),
+        ("AddItemToStock", 4),
+        ("AddUnitToStock", 1),
+        ("AddUnitToStock", 2),
+        ("AddUnitToStock", 3),
+    ] {
+        vm.host()
+            .native(
+                native,
+                &[
+                    Value::Handle(unit),
+                    Value::Int(id),
+                    Value::Int(id),
+                    Value::Int(id),
+                ],
+            )
+            .unwrap();
+    }
+    // The fixture default is 3 item cells and 2 unit cells, so the fourth item and the third
+    // unit each evict the oldest cell.
+    assert_eq!(vm.host().item_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().item_stock(unit, 4).unwrap(), Some((4, 4)));
+    assert_eq!(vm.host().unit_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().unit_stock(unit, 3).unwrap(), Some((3, 3)));
+    // No setter ran, so no slot record exists.
+    assert_eq!(vm.host().unit_item_type_slots(unit).unwrap(), None);
+    assert_eq!(vm.host().unit_type_slots(unit).unwrap(), None);
 }
 
 #[test]

@@ -26,8 +26,52 @@ fn original_executable_yields_the_shop_capacity() {
     };
     let exe = std::fs::read(&path).expect("readable executable");
     let table = derive(&exe, origin()).expect("capacity in original executable");
-    assert_eq!((table.slot_ceiling, table.entries), (11, 12));
+    assert_eq!(
+        table.item,
+        SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 11
+        }
+    );
+    assert_eq!(
+        table.unit,
+        SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 11
+        }
+    );
     assert_eq!(table.image_sha256, <[u8; 32]>::from(Sha256::digest(&exe)));
+}
+
+/// The default slot count is the immediate the component initializer stores into the count
+/// field, so patching those stores changes it and nothing else.
+#[test]
+fn the_default_slot_count_is_read_from_the_initializer_store() {
+    let Some(path) = std::env::var_os("PCX_WAR3_EXE") else {
+        return;
+    };
+    let mut exe = std::fs::read(&path).expect("readable executable");
+    let real = derive(&exe, origin()).expect("capacity");
+    let store = [0xc7, 0x86, 0x80, 0x04, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00];
+    let at: Vec<usize> = exe
+        .windows(store.len())
+        .enumerate()
+        .filter(|(_, w)| *w == store)
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(at.len(), 2, "the item and the unit initializer");
+    for at in at {
+        exe[at + 6] = 0x07;
+    }
+    let patched = derive(&exe, origin()).expect("capacity after patch");
+    assert_eq!(real.item.default_slots, 11);
+    assert_eq!(
+        (patched.item.default_slots, patched.unit.default_slots),
+        (7, 7)
+    );
+    assert_eq!(patched.item.slot_ceiling, real.item.slot_ceiling);
 }
 
 #[test]
@@ -50,6 +94,9 @@ fn the_clamp_immediate_is_read_from_the_image_bytes() {
         exe[at + 1] = 0x0a;
     }
     let patched = derive(&exe, origin()).expect("capacity after patch");
-    assert_eq!(real.slot_ceiling, 11);
-    assert_eq!((patched.slot_ceiling, patched.entries), (10, real.entries));
+    assert_eq!(real.item.slot_ceiling, 11);
+    assert_eq!(
+        (patched.item.slot_ceiling, patched.item.entries),
+        (10, real.item.entries)
+    );
 }

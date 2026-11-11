@@ -21,7 +21,8 @@
 //! `AddUnitToStock` runs the same add on a second table of the same unit, the one
 //! `SetUnitTypeSlots` sizes. The native pair, the slot setter and the add helper are
 //! byte-identical apart from the component class (`Asud` for units, `Asid` for items).
-//! A unit with no `SetUnitTypeSlots` record has no slot count here, so the add refuses.
+//! A shop with no setter record holds the default count the component initializer stores,
+//! read per kind from the executable (`ShopTable::item` and `ShopTable::unit`, `default_slots`).
 //!
 //! `RemoveItemFromStock` clears the first cell, over all cells, whose item id matches.
 //! With no match it does nothing, as the native remove does.
@@ -31,7 +32,7 @@
 //! measured stock state.
 use super::super::{Error, Failure, below};
 use super::ObjectHost;
-use crate::shop_table::ShopTable;
+use crate::shop_table::{ShopTable, SlotTable};
 use pcx_script::{HandleId, Value};
 use std::sync::Arc;
 
@@ -73,12 +74,24 @@ impl ShopCapacity {
         &self.table
     }
 
-    fn cells(&self) -> usize {
-        self.table.entries as usize
+    fn table_of(&self, kind: SlotKind) -> &SlotTable {
+        match kind {
+            SlotKind::Item => &self.table.item,
+            SlotKind::Unit => &self.table.unit,
+        }
     }
 
-    fn slot_ceiling(&self) -> u32 {
-        self.table.slot_ceiling
+    fn cells(&self, kind: SlotKind) -> usize {
+        self.table_of(kind).entries as usize
+    }
+
+    fn slot_ceiling(&self, kind: SlotKind) -> u32 {
+        self.table_of(kind).slot_ceiling
+    }
+
+    /// Cells a shop of this kind opens with, before any setter ran.
+    fn default_slots(&self, kind: SlotKind) -> usize {
+        self.table_of(kind).default_slots as usize
     }
 }
 
@@ -144,11 +157,15 @@ impl State {
                 .count()
     }
 
-    fn slots_of(&self, unit: HandleId, kind: SlotKind) -> Option<usize> {
+    /// Cells in play: the executed setter record, else the component default.
+    fn slots_of(&self, unit: HandleId, kind: SlotKind) -> usize {
         self.units
             .iter()
             .find(|row| row.unit == unit && row.kind == kind)
-            .map(|row| effective_count(row.slots, self.shop.slot_ceiling()))
+            .map_or_else(
+                || self.shop.default_slots(kind),
+                |row| effective_count(row.slots, self.shop.slot_ceiling(kind)),
+            )
     }
 
     fn shop_index(&self, unit: HandleId, kind: SlotKind) -> Option<usize> {
@@ -158,7 +175,7 @@ impl State {
     }
 
     fn set_slots(&mut self, unit: HandleId, kind: SlotKind, slots: i32) {
-        let count = effective_count(slots, self.shop.slot_ceiling());
+        let count = effective_count(slots, self.shop.slot_ceiling(kind));
         if let Some(at) = self.shop_index(unit, kind) {
             for cell in self.shops[at].cells.iter_mut().skip(count) {
                 cell.stock = None;
@@ -183,21 +200,20 @@ impl State {
         item: i32,
         stock: (i32, i32),
     ) -> Result<(), Failure> {
-        let count = self
-            .slots_of(unit, kind)
-            .ok_or(Failure::StockState("shop slot count is not assigned"))?;
+        let count = self.slots_of(unit, kind);
+        let cell_count = self.shop.cells(kind);
         let at = match self.shop_index(unit, kind) {
             Some(at) => at,
             None => {
                 let mut cells = Vec::new();
                 cells
-                    .try_reserve_exact(self.shop.cells())
+                    .try_reserve_exact(cell_count)
                     .map_err(|_| Failure::Capacity)?;
-                cells.resize(self.shop.cells(), Cell::default());
+                cells.resize(cell_count, Cell::default());
                 let mut ages = Vec::new();
-                ages.try_reserve_exact(self.shop.cells())
+                ages.try_reserve_exact(cell_count)
                     .map_err(|_| Failure::Capacity)?;
-                ages.resize(self.shop.cells(), 0);
+                ages.resize(cell_count, 0);
                 self.shops.push(Shop {
                     unit,
                     kind,
@@ -268,8 +284,14 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<UnitSlots>(budget.max_records)
             .map_err(|_| fail(Failure::Capacity))?;
-        if budget.shop.cells() == 0 || budget.shop.slot_ceiling() as usize > budget.shop.cells() {
-            return Err(fail(Failure::StockState("shop capacity")));
+        for kind in [SlotKind::Item, SlotKind::Unit] {
+            let cells = budget.shop.cells(kind);
+            if cells == 0
+                || budget.shop.slot_ceiling(kind) as usize > cells
+                || budget.shop.default_slots(kind) > cells
+            {
+                return Err(fail(Failure::StockState("shop capacity")));
+            }
         }
         if !below(&self.inner.program, "unit", "handle") {
             return Err(fail(Failure::Signature));

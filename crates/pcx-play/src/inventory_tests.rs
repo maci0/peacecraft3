@@ -1559,8 +1559,16 @@ fn open_sale(price: i32, item_budget: usize) -> ObjectHost {
     let shop = crate::shop_table::ShopTable {
         origin,
         image_sha256: [0; 32],
-        slot_ceiling: 11,
-        entries: 12,
+        item: crate::shop_table::SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 11,
+        },
+        unit: crate::shop_table::SlotTable {
+            slot_ceiling: 11,
+            entries: 12,
+            default_slots: 11,
+        },
     };
     let h = h
         .with_order_registry(registry)

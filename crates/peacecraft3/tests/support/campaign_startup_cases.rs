@@ -1485,8 +1485,16 @@ fn local_file_source_label_and_explicit_stock_profile_reach_the_same_session() {
                 source: "synthetic".into(),
             },
             image_sha256: [0; 32],
-            slot_ceiling: 1,
-            entries: 1,
+            item: pcx_play::shop_table::SlotTable {
+                slot_ceiling: 1,
+                entries: 1,
+                default_slots: 1,
+            },
+            unit: pcx_play::shop_table::SlotTable {
+                slot_ceiling: 1,
+                entries: 1,
+                default_slots: 1,
+            },
         }),
     });
     let bytes = bound.catalog_map_bytes.clone();
@@ -1685,8 +1693,16 @@ fn corrected_host_inputs_retry_a_refused_candidate_without_redelivery() {
                 source: "synthetic".into(),
             },
             image_sha256: [0; 32],
-            slot_ceiling: 1,
-            entries: 1,
+            item: pcx_play::shop_table::SlotTable {
+                slot_ceiling: 1,
+                entries: 1,
+                default_slots: 1,
+            },
+            unit: pcx_play::shop_table::SlotTable {
+                slot_ceiling: 1,
+                entries: 1,
+                default_slots: 1,
+            },
         }),
     });
     app.insert_resource(CampaignHostSupply {
