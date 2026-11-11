@@ -590,3 +590,47 @@ touched, because the Purge slow stays refused.
 
 The "next" refusals above were recorded before `AIpb` (Orb of Venom) and `AIsx` (Gloves of Haste)
 landed on main; both are implemented there now, and these chapters were not re-probed after the merge.
+
+## 2026-11-11 footprint doodad selection and absent unit models
+
+Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`). Footprint decode:
+[script-doodads.md](script-doodads.md).
+
+### `IntentionallyLeftBlank.mdx`
+
+- Unit `nzin` (UnitUI row `z3`, `file` `Doodads\Terrain\LOSBlocker\IntentionallyLeftBlank`) is
+  created by OrcX01 and OrcX02 from stock data (no map edit of `nzin`). `mpqxtract show` for the
+  `.mdx` and `.mdl` spelling finds no entry in the install's `War3.mpq`, `War3x.mpq`,
+  `War3xLocal.mpq`, `War3Local.mpq`, `Deprecated.mpq`, nor in the 1.28c `wc3/game/app` `war3.mpq`,
+  `War3x.mpq`, `War3xlocal.mpq`, `War3Patch.mpq`, nor in the two map archives. Only
+  `LOSBlocker.mdx` ships in that directory (`War3.mpq`, 1296 bytes). The file is absent, not
+  misspelled.
+- Model loader `0x913660` (path stripped of its extension, cache lookup `0x915370`, file reader
+  `0x8ec3c0` -> `0x8ec840`): `0x8ec840` opens the `.mdx`, retries the other extension (`0x8ec7d0`),
+  and when both fail formats a system message through the error sink (virtual `+0x10`,
+  `0x8ec475`) and returns 0. The cache node keeps a null model (`0x9137e8`) and `0x914590`
+  returns 0 for it (`0x9145c4`..`0x9145da`). Observed.
+- The sprite model setter `0x967210` stores that result at `[sprite+0x20]` (`0x967306`) and returns
+  without error on null (`0x96731a` -> `0x96746e`); accessors on a sprite without a model return
+  early (`0x967490`: `[+0x20]` null). Observed.
+- Not traced: the CUnit path that reaches `0x967210` with the unit's `file` string. That unit
+  creation continues is inferred from the null-tolerant setter and from OrcX01/OrcX02 creating
+  `nzin` from stock data; no runtime observation of the original exists.
+- Recreation: `UnitModels` (`campaign_assets.rs`) treats a name no layer holds as "no model": the
+  unit is created without animation and the renderer skips it. A missing `.mdx` whose `.mdl`
+  exists, and every layer, budget and read failure, still refuse.
+
+### Probe results
+
+First refusal of `selected_install_locked_chapter_startup_probe`; "before" is `2822f6bc`.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Orc07 | `SetDoodadAnimationRect`: footprint doodad rectangle selection undecoded | pass (`executed_units=136`) |
+| RoC Undead05 | same `SetDoodadAnimationRect` refusal | `autoharvestlumber`: unit has no `Ahar` harvest capability |
+| TFT NightElfX03 | same `SetDoodadAnimationRect` refusal | pass (`executed_units=214`) |
+| TFT OrcX01 | `CreateUnit`: `IntentionallyLeftBlank.mdx` absent from every mounted layer | `UnitModifySkillPoints` unsupported by this host |
+| TFT OrcX02 | same `CreateUnit` refusal | `UnitModifySkillPoints` unsupported by this host |
+
+Still open: BLP pathing texture sizes for doodads (`0x71a7c0` `.blp` branch), the `0x1000000`/`+0x14c`
+alive-or-dead path choice in `0x75b150`, and the unit-side caller of the sprite model setter.
