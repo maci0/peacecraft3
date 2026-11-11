@@ -54,15 +54,13 @@ fn user_data_is_kept_per_unit_and_overwritten_by_the_last_write() {
 }
 
 #[test]
-fn an_unwritten_value_refuses_and_a_null_unit_reads_zero() {
+fn an_unwritten_value_and_a_null_unit_read_zero() {
     let (mut s, a, _) = setup();
     let host = &mut s.vm.host().inner;
-    let error = host
-        .native("GetUnitUserData", std::slice::from_ref(&a))
-        .unwrap_err();
-    assert!(
-        error.contains("unit user data was never written"),
-        "{error}"
+    assert_eq!(
+        host.native("GetUnitUserData", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Int(0)
     );
     assert_eq!(
         host.native("GetUnitUserData", &[Value::Null]).unwrap(),

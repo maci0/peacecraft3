@@ -1,8 +1,7 @@
 //! `GetUnitUserData` and `SetUnitUserData`: one script-owned integer per unit, stored at
 //! `[unit+0x488]` by the original (`docs/re-notes/unit-user-data.md`).
 //!
-//! The original's value for a unit nothing has written is not derived here, so a read of an
-//! unwritten value refuses instead of returning a default.
+//! A unit nothing has written reads 0: the unit constructor stores 0 there.
 
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::Value;
@@ -56,17 +55,10 @@ impl ObjectHost {
                     let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
                         return Err(self.inner.error(name, Failure::WrongFamily));
                     };
-                    record.user_data = Some(data);
+                    record.user_data = data;
                     Ok(Value::Null)
                 }
-                None => self
-                    .executed_unit(unit)?
-                    .user_data
-                    .map(Value::Int)
-                    .ok_or_else(|| {
-                        self.inner
-                            .error(name, Failure::UnitState("unit user data was never written"))
-                    }),
+                None => Ok(Value::Int(self.executed_unit(unit)?.user_data)),
             }
         })())
     }

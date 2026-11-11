@@ -718,3 +718,28 @@ above for the chapter, "after" is a probe on this branch with `.scratch/run-asse
 The Sentinel order is accepted without the missile flight: the owl's sight circle (`DataB`) attaches
 at the cast, not at impact, and the in-flight radius (`DataA`) is not modeled. A target that is not a
 live tree, a tree beyond `Rng1`, and an exhausted Sentinel still refuse.
+
+## 2026-11-11 AItx and the unit user data default
+
+Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`).
+
+- `AItx` ("AttackBonus +20", code `AIat`, `DataA1` 20) is the only `AIat`-code row that the `Iatt`
+  `useSpecific` list omits (`AbilityMetaData.slk`, War3.mpq and War3x.mpq identical). The `AIat`
+  attach `0xbc2a20` formats `"%s%d"` with `DataA` and level 1 and reads that cell through
+  `0x6b06a0`; it never consults the metadata list. The damage branch of `held_attributes` now admits
+  by class code, so `AItx` holds +20. The `DataA` column and the W3A override pointer still come
+  from `Iatt`. Other classes with the same gap, still refused by their alias lists: `AIde` rows
+  `AId0`, `AId7`, `AId8`; `AIab` rows `AIx3`, `AIx4`; `AIml` row `AIlz`; `AImm` rows `AI2m`, `AImv`,
+  `AImz`. Not decoded whether each is held by a shipped item.
+- Unit user data: the CUnit constructor `0x6756d0` stores `eax` (zeroed by `xor eax,eax` at
+  `0x675cc6`) to `[unit+0x488]` at `0x675d0d`. The store at `0x6a7cda` belongs to another class
+  (constructor `0x6a71e0`, allocation size `0x8fc`, vtable `0xea0388`). An unwritten unit reads 0;
+  the refusal is gone. The only other CUnit accesses are the getter `0x497d64` and setter `0x4abd05`,
+  so nothing clears the field before the handle stops resolving.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `UnitAddItem`: damage metadata does not admit ability `AItx` | `UnitAddItem`: unsupported passive ability `AIva` with code `AIva` on `klmm` |
+
+`AIva` (an item vampiric aura, also behind OrcX03a) needs the aura and life-steal classes decoded
+and stays refused.

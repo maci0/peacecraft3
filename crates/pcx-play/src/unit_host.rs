@@ -206,8 +206,8 @@ pub struct ExecutedUnit {
     /// Waygate destination and active flag, meaningful only on a unit whose
     /// `abilList` names `Awrp`. See `docs/re-notes/waygate.md`.
     pub waygate: waygate::Waygate,
-    /// Executed `SetUnitUserData` integer. `None` means it has not run on this unit.
-    pub user_data: Option<i32>,
+    /// Executed `SetUnitUserData` integer; the constructor stores 0 (`0x675d0d`).
+    pub user_data: i32,
     /// Admitted immediate-order class on this unit.
     ///
     /// `None` means the unit ability list does not name the admitted alias,
@@ -2660,7 +2660,7 @@ impl ObjectHost {
                 linked_mine: None,
                 invulnerable: None,
                 waygate: waygate::Waygate::default(),
-                user_data: None,
+                user_data: 0,
                 admitted_order,
                 abilities: None,
                 animation: None,
