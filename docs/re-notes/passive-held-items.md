@@ -1265,7 +1265,7 @@ removal, and each refusal); `terrain_pathing_host_tests.rs` covers the raster qu
   polymorphed holder. Tests: `inventory_speed_host_tests.rs` (`stacking_rule_sets_*`) and the
   `speed_bonus_*` tests in `inventory_orb_tests.rs`.
 
-### `AIau` (Legion Doom-Horn `lgdh`, code `AUau`): decoded in part, still refused
+### `AIau` (Legion Doom-Horn `lgdh`, code `AUau`), `AIad` (Devotion Aura) and `AIba` (Brilliance Aura): implemented
 
 Decoded from the image (no runtime capture). Rows (shipped, same in root and `Custom_V0`): `Area1` 900,
 `targs1` `air,ground,friend,self,vuln,invu`, `DataA1` 0.1, `DataB1` 0.5, `DataC1` 0, `BuffID1` `BUau`,
@@ -1300,9 +1300,8 @@ Aura base mechanics (observed, labelled where inferred):
 - Target test (`0xb90c10`): reject when virtual `+0x348` (`0xb90440`) returns nonzero. That routine calls
   `0x682450(owner, unit, this+0x4c)`, which forwards to `0x6adb90` (the allowed-target test against the
   ability's `targs` mask; the body of `0x6adb90` is not read) and returns its result when nonzero, else
-  returns `0xdd` when `0x682180(unit, slot 202 value)` is nonzero (a scan of the unit's abilities through
-  their virtual `+0x26c`; not decoded, inferred to be the no-stacking test against the group id
-  `0xd00f7`). Also reject: target flag `[+0x20] & 0x4000000`; owner flag `[+0x164] & 0x10`; owner flag
+  returns `0xdd` when `0x682180(unit, slot 202 value)` is nonzero (an immunity and ability veto, not a
+  stacking test; see "Held auras"). Also reject: target flag `[+0x20] & 0x4000000`; owner flag `[+0x164] & 0x10`; owner flag
   `[+0x164]` bit 31 while `Misc/AnimatedUnitsBestowAuras` is 0; owner `[+0x20] & 0x4000000` while
   `BurrowedUnitsBestowAuras` is 0; for a target other than the owner, owner `[+0x164] & 0x40000000`
   while `IllusionsBestowAuras` is 0 and owner `[+0x164] & 0x1000000` while `InvisibleUnitsBestowAuras` is
@@ -1335,17 +1334,9 @@ Aura base mechanics (observed, labelled where inferred):
 - Buff end (observed): buff slot 209 (`0xc64a20`) removes the speed half (`0xc65890`) and then the
   regeneration half (`0xc65810`).
 
-Not decoded, so `AUau` stays refused (`UNMODELED_PASSIVE_CLASSES`):
-
-- Whether the range registration fires `0xd01c7` again for a unit that stays in range, and what its
-  flag bit 2 changes (set by the 2.0 s event `0xd01c1` through `0x803840`, cleared by a consumer not
-  found). See "Aura buff lifetime" below.
-- The body of the allowed-target test `0x6adb90` and the stacking test `0x682180`/`0x682210`/`0x6822e0`
-  against the hero `AUau` (the item text says the two do not stack).
-- The target virtual `+0x130` used by the percent mode.
-
-Recreation consequence: an aura host needs the removal and lifetime rule; none is built, because the rule
-is not decoded.
+Still open for the item: the percent mode (`+0x130`) and the body of `0x6adb90`; the recreation
+refuses those. The scan cadence, the stacking question and the Devotion class are decoded under "Held
+auras" below.
 
 #### Aura buff lifetime (decoded 2026-11-11, observed in the image)
 
@@ -1368,13 +1359,136 @@ The `BUau` buff ends by a timer, not by a leave event, and no read of `Dur1` or 
 - Slot 199 (`0xc64a40`) removes both halves at once and schedules event `0xd01c1` on the buff after
   `0.1` s (`0x10db078`), whose handler (slot 3, `0xc64a90`) applies them again.
 
-What stays open: the aura needs a refresh every 2 s or faster to keep the buff alive for a unit that
-stays in range, since the buff lasts 4.0 s. The ability's own 2.0 s timer refreshes only the owner
-(`0xb90c10(this, owner)`). Whether the range registration repeats `0xd01c7` for units that stay in
-range (the 0.5 s argument at `0x8bc260`, and flag bit 2 of the registration object at `+0x54`, set by
-`0x803840`) was not decoded: the JASS range event, which shares the registration class, was observed
-to fire on entry only (`script-unit-world.md`), and the consumer of bit 2 was not found. Until that is
-read, an aura host would guess the refresh cadence, so `AUau` stays refused.
+The 2.0 s ability timer refreshes only the owner; units that stay in range are refreshed by the range
+scan after each tick (decoded under "Held auras").
+
+#### Held auras: range registration, refresh, target veto, Devotion (decoded 2026-11-11, observed in the image)
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`, `objdump`/`rizin`) and the shipped rows; no
+runtime capture. Observed unless marked inferred.
+
+**The range registration scans on a period and reports stays only after the ability timer.**
+
+- `0x800070` builds the registration `CRangeEventReg` (vtable `0xe7d854`). Its constructors `0x8035e0` and `0x8030e0` create a scan entity
+  (inferred to be the `PoPoInterfLis` class, vtable `0xeca740`, whose constructor `0x8bae60` keeps the
+  radius at `+0x50`, flags at `+0x54` and the period at `+0x44`, and sets repeat bit 16 of `+0x4c` through
+  the flags `0x190400`; the entity made by `0x8a0660` was not traced to a class, but this class owns the
+  handler `0x8bb120` and the member list below) and bind
+  event `0xd01c7` (entity `+0x48`) to the ability. `0x8bc260` stores the period argument (2.0 / 4.0 = 0.5 s,
+  from `0xb8fd88`) at `+0x44`, and `0x8b7ea0` schedules the entity's timer entry at game time plus the
+  period (never below `0x10db050`) with the entity's repeat bit as the entry's repeat flag. The entry's
+  firing handler `0x8b8ae0` posts the signal `sig^` to the entity and cancels an entry that is not
+  repeating. The aura registration is created with the repeat bit set, so it fires every 0.5 s from the
+  start.
+- The signal handler `0x8bb120` reads bit 1 of `+0x54` (the "bit 2" of the registration flags), clears it,
+  and calls `0x8bb420(bit)` when the radius is nonzero. That runs the spatial query for radius `+0x50`
+  (`0x8bbc90`) and `0x8bb4a0(query, bit)` over the entity's member list (`+0x64`, 12-byte entries, count
+  `+0x74`). The routine: marks every member the query still finds; appends every query result that is
+  not a member and reports it (`eip`` event, class `0x60706965`); then walks the old members: a dead or
+  destroyed one is dropped silently, a marked one is reported again only when `bit` is set, an unmarked one
+  is dropped (a leave event `oep`` is posted only for an entry with its own flag bit 1, which nothing in
+  this routine sets). The report becomes event `0xd01c7` through `0x7f2b40`/`0x7f2200`, which stores the
+  event id and the unit in the globals `0x10dfdec` and `0x10dfdf4` for the ability's handler.
+- The ability's own timer (event `0xd01c1`, period 2.0, repeating, created before the registration) runs
+  `0x803840(1)`, which sets bit 1 of `+0x54`, and then applies to the owner (`0xb90c10`). So a unit that
+  enters range is reported on the next scan (within 0.5 s) and a unit that stays is reported again on the
+  first scan after each timer tick, every 2.0 s. Leaving reports nothing. Which of two events due at
+  the same instant runs first is not read; the host runs the timer first (inferred from its earlier
+  creation).
+- The reach of the query (`0x8bbc90`) was not read. The recreation uses `Area1` plus the unit's
+  collision radius, the reach the orb splash and the observed range event (`script-unit-world.md`) share.
+- While the ability's active flag (`0x80`) is clear, the handlers for `0xd01c1` and `0xd01c7` do nothing
+  (`0xb90571`, `0xb9059a`); the timer and the scan keep running. The flag follows virtual `+0x268`
+  (`0x46ac20`, event `0x80261`), which tests the owner. The recreation reads it as "the holder lives".
+- The only `push 0xd01c7` sites are `0xb8fda2` (this ability) and `0xc3304f` (another class's registration
+  through the same `0x800070`); nothing posts the event by hand, the entity's binding (`+0x48`) does.
+
+**The vetoes are not stacking tests.** `0x682180(unit, group, ability)` (called by `0xb90440` with the
+ability's own `+0x328` value) runs the immunity vetoes `0x682210` (counter `unit+0x264`/`+0x268`) and
+`0x6822e0` (counter `unit+0x260`), and then asks every ability and buff on the unit through virtual
+`+0x26c`. For the aura classes the ability virtuals those read (`+0xd8`, `+0xdc`, `+0x1d8`, `+0x1dc`,
+`+0x1f0`, `+0x1f4`, `+0x1f8`, `+0x1fc`, `+0x20c`) are the base defaults (all return 0), so the immunity
+vetoes return 0. `+0x26c` is the base default (`0x46ad80`, returns 0) in every aura ability and buff class;
+only 14 other classes override it (Morph, Ghost, Locust, Cyclone, Tornado and its spin, Unsummon, Phoenix,
+Freezing Breath, Liquid Fire, Impale, Soul Preservation, Plague Ward, and similar), and the recreation
+models none of them. The text of the item that says two auras of one code do not stack is carried by the
+buff itself: `0x6d6570` finds the buff of the same id on the target, so there is one `BUau` (or `BHad`)
+per unit however many sources apply it.
+
+**Refresh arithmetic (`BUau`, buff `+0x37c`, `0xc64860`).** With stored `A`, `B` (`DataA`, `DataB`) and new
+`a`, `b`, and the tolerance `0x10db054` (0.001): the whole refresh is skipped when `A > a` and `A - a >=
+tolerance` and `B > b` and `B - b >= tolerance`. Otherwise the source is stored and the timer restarts
+(4.0 s). Then `A` is replaced by `a` (speed half removed and re-applied) when `a > A` and `a - A >=
+tolerance`, and `B` by `b` (regeneration half) under the same rule. A stored value never falls while the
+buff lasts.
+
+**`AHad` (Devotion Aura, `AIad` on `blba`).** Ability `CAbilityAuraDevotion` (vtable `0xf6d6dc`, class
+getter `0xbfaff0`, registration `0xbfb7a0` over `aura`), buff `CBuffAuraDevotion` (vtable `0xf6d360`,
+class `BHad`, registration `0xbfb7c0`). Rows: `AIad` `Area1` 900, `DataA1` 1, `DataB1` 0,
+`BuffID1` `BHad`, `targs1` as `AIau`; the hero `AHad` has `DataA` 1.5/3/4.5, `DataB` 0. The buff class bits are
+positive (`0x1e4` returns 1), not negative (`0x1e0`), aura (`0x1e8` returns 1) and not timed-life, the
+same as `BUau`.
+
+- New buff: ability slot 214 (`0xbfb010`) builds the buff, sets its source (`+0x32c`, `0x6f6900`), reads
+  `DataB` and calls buff `+0x374` (`0xbfab70`) with "`DataB != 0`": that starts the 4.0 s timer
+  (`0x6f2aa0`, `push 4` at `0x6f2ab6`) and sets buff flag `0x100` (percent). The base slot 212
+  (`0xb90600`) then hands `DataA` to buff `+0x368` (`0xbfaba0`), which stores it at `+0xd4` and applies
+  it (`0xbfb500`).
+- Apply (`0xbfb500`): once per buff (flag `0x200`); skipped for a target with unit flag `0x40000000`
+  while `Misc/IllusionsGetDefenseBonus` is 0. With flag `0x100` the amount is a product with
+  `0x67b640(unit+0x34)`, not decoded; otherwise it is `DataA` as is. `0x680070(unit, &amount)` adds it to
+  the unit's armor bonus. Remove (`0xbfb7e0`) adds the negated amount the same way.
+- Refresh (base slot 213 `0xb90630` calling buff `+0x358`, `0x6f2d60`): skipped when the stored
+  amount exceeds the new one by at least the tolerance; otherwise the timer restarts (`0x6f6c30`,
+  4.0 s), and the amount is replaced (`+0x370`, `0xbfabd0`: remove, store, apply) when the new one exceeds the
+  stored one by at least the tolerance. An equal amount only restarts the timer.
+- The scan, timer, active flag and target test are the base aura's (`CAbilityAura`), not overridden.
+
+**`AHab` (Brilliance Aura, `AIba` on `mnsf`).** Ability `CAbilityAuraBrilliance` (vtable `0xf6cfb0`, class
+getter `0xbfa170`, registration `0xbfaa90` over `aura`), buff `CBuffAuraBrilliance` (vtable `0xf6cc34`,
+class `BHab`). Row `AIba`: `Area1` 900, `DataA1` 0.75, `DataB1` 0, `BuffID1` `BHab`, `targs1` as `AIau`. It has
+the Devotion layout: ability slot 214 (`0xbfa1e0`) builds the buff and reads `DataB` as the percent flag
+(buff flag `0x200` through `+0x374`, `0xbf9dd0`), the buff keeps the amount at `+0xd4` and shares the
+refresh `0x6f2d60`. Apply (`0xbfa7a0`, once per buff, flag `0x100`) is skipped for a target with unit flag
+`0x40000000` while `Misc/IllusionsCanRestoreMana` is 0, and creates a permanent extra rate operation on
+the mana pool at `unit+0x1c0` (`0x697300` calling `0x800f40` with duration 0, the constructor the life
+half of `BUau` uses) with the amount as is, or, in percent mode, scaled by a value read from the pool
+(`0x800e20`, not decoded). Its end (`0xbfaad0`) releases the operation through the handle's virtual
+`+0x8`. The recreation adds the amount to the unit's mana rate after the held mana fraction
+(`regen_rates`).
+
+**Recreation (2026-11-11).** `inventory_aura.rs` reads the two registrations, the three integers (timer
+`push 2` at `0xb8fd4b`, buff `push 4` at `0x6f2ab6`, scan divisor `push 4` at `0x401610`) and the tolerance
+from the image and admits the rows (`Rules::held_aura`); `aura_host.rs` runs one source per held aura
+item from the pickup: timer, scan, report, refresh and expiry as above, driven by game time from the
+combat step. The speed half shifts the unit speed multiplier (`unit_speed.rs`), the regeneration is a
+fractional extra rate added to the held-regeneration rate in `regen_rates` (the pool is integrated to
+the change time first), and the armor is added in `victim_armor` beside the held and orb terms. Dropping
+the item or losing the holder stops the source and removes no buff; a dead holder's source stays
+but applies nothing; a dying or removed unit loses its aura buffs.
+Admission refuses: a nonzero `Misc` key of `AnimatedUnitsBestowAuras`, `BurrowedUnitsBestowAuras`,
+`IllusionsBestowAuras`, `InvisibleUnitsBestowAuras`, `PolymorphedUnitsBestowAuras`,
+`IllusionsGetMoveSpeedBonus`, `IllusionsCanRestoreLife`, `IllusionsCanRestoreMana` or
+`IllusionsGetDefenseBonus` (all zero in every shipped rule set); a percent flag (`DataC1` of `AUau`,
+`DataB1` of `AHad` and `AHab`); a `targs1` that is not the
+shipped `air`/`ground`/`structure` classes plus `friend`, `self`, `vuln`, `invu`; a map-modified row;
+two aura abilities on one item; a polymorphed target when a speed amount applies.
+With the keys at zero the host implements: a polymorphed or dead holder bestows nothing, an illusion
+holder bestows only on itself, an illusion target keeps the buff but gets no speed, life or armor.
+
+Open: the flag tests of the target test that the recreation has no state for (`[unit+0x164] & 0x10`,
+burrowed, animated and invisible holders, `[unit+0x20] & 0x4000000`); the body of `0x6adb90` (the
+`targs1` tokens are read by their names); the reach formula of `0x8bbc90`; which of two simultaneous
+events runs first; the `+0x26c` vetoes of the 14 classes above; the percent modes (`+0x130`,
+`0x67b640`); the armor shown in the unit panel (`0xc64b20`, `0xbfacc0` write display data; the
+recreation's panel does not include the aura armor); the hero spells `AUau` and `AHad` (leveled rows,
+the same classes, not hosted); reviving a dead holder (the source persists, the timers keep running).
+Tests: `inventory_aura_host_tests.rs` (enter at the first scan, stay across 12 s, leave and the 4.0 s end,
+return, holder pickup, timer refresh, drop, holder death, target death, two sources and weaker/stronger
+order, regeneration rate, devotion armor, brilliance mana rate, script removal, the percent and
+two-ability refusals) and
+`inventory_aura.rs` (target tokens).
+
 
 ### Held classes are admitted by class code, not by `useSpecific`
 

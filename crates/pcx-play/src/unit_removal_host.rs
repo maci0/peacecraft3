@@ -107,6 +107,7 @@ impl ObjectHost {
         self.clear_unit_cooldowns(unit);
         self.forget_curse_unit(unit);
         self.forget_orb_unit(unit);
+        self.forget_aura_unit(unit)?;
         self.forget_purge_unit(unit)?;
         self.forget_reincarnation_unit(unit);
         self.forget_unit_buffs(unit);

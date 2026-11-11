@@ -260,7 +260,8 @@ pub fn prepare_new_game(
         )?
         .with_frost_slow(&game_profiles, 8 << 20)?
         .with_move_speed_stacking(&game_profiles, 8 << 20)?
-        .with_life_steal_misc(&game_profiles, 8 << 20)?,
+        .with_life_steal_misc(&game_profiles, 8 << 20)?
+        .with_aura_misc(&game_profiles, 8 << 20)?,
     );
     inputs.budgets.inventory = Some(crate::inventory::InventoryBudget {
         max_slots_per_unit: 4096,

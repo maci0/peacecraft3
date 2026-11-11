@@ -1,7 +1,7 @@
 use super::super::EventSubject;
 use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
-use crate::inventory_powerup::{AttributeBonus, OrbKind, Rules as PowerupRules};
+use crate::inventory_powerup::{AttributeBonus, HeldAura, OrbKind, Rules as PowerupRules};
 use crate::inventory_powerup_host::{
     clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life_scaled, reprice_mana,
     reprice_max_life, reprice_max_mana,
@@ -435,6 +435,25 @@ impl ObjectHost {
         Ok(held.unwrap_or_default())
     }
 
+    /// The aura of a held item, `None` without one or without admitted aura rules.
+    pub(crate) fn item_aura(&self, item: HandleId) -> Result<Option<HeldAura>, Error> {
+        let Some(rules) = self
+            .items
+            .as_ref()
+            .and_then(|s| s.inventory.as_ref())
+            .and_then(|s| s.attributes.as_ref())
+        else {
+            return Ok(None);
+        };
+        let record = self.live_item(item)?.ok_or_else(|| {
+            self.inner
+                .error("inventory", Failure::ItemState("item not live"))
+        })?;
+        rules
+            .held_aura(&record.definition)
+            .map_err(|e| self.inner.error("inventory", Failure::UnitActivity(e)))
+    }
+
     /// Whether `class` is a hero reincarnation class (`AOre`, `ACrn`) of the admitted rules.
     pub(crate) fn hero_reincarnation_class(&self, class: &str) -> bool {
         self.items
@@ -830,6 +849,10 @@ impl ObjectHost {
         }
         // Passive refusals and pool changes are staged before any slot, event or state write.
         let passive = self.held_attributes(item)?;
+        let aura = self.item_aura(item)?;
+        if aura.is_some() {
+            self.require_aura_host(unit)?;
+        }
         let pools = self.stage_held_passive(unit, passive)?;
         let Some(slot) = (0..policy.slots).find(|&s| self.held_slot(unit, s).is_none()) else {
             return Ok(false);
@@ -861,6 +884,9 @@ impl ObjectHost {
         self.orb_item_acquired(item);
         if let Some(bonus) = passive.move_speed_bonus {
             self.set_unit_speed_bonus(unit, item, Some(bonus))?;
+        }
+        if let Some(aura) = aura {
+            self.start_item_aura(unit, item, aura)?;
         }
         self.item_event(unit, item, true)?;
         Ok(true)
@@ -989,6 +1015,7 @@ impl ObjectHost {
         if passive.move_speed_bonus.is_some() {
             self.set_unit_speed_bonus(unit, item, None)?;
         }
+        self.stop_item_aura(item);
         self.item_event(unit, item, false)
     }
     pub(crate) fn forget_inventory_unit(

@@ -1170,12 +1170,7 @@ fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
 
 #[test]
 fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
-    for (class, expected) in [
-        ("AIlb", ""),
-        ("AIrc", ""),
-        ("AUau", "buff BUau"),
-        ("AIzz", ""),
-    ] {
+    for (class, expected) in [("AIlb", ""), ("AIrc", ""), ("AUau", ""), ("AIzz", "")] {
         let tome = Tome {
             alias: "AIxx",
             code: class,

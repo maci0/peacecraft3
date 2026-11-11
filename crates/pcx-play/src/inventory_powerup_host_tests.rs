@@ -365,6 +365,22 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             "",
         ],
     ]);
+    // Held auras: `DataA1` is the speed or armor, `DataB1` the regeneration (unholy) or the
+    // percent flag (devotion), `DataC1` the unholy percent flag.
+    let aura_targs = "air,ground,friend,self,vuln,invu";
+    for (alias, code, a, b, c, buff) in [
+        ("AIau", "AUau", "0.1", "0.5", "0", "BUau"),
+        ("AIa2", "AUau", "0.05", "0.25", "0", "BUau"),
+        ("AIad", "AHad", "1", "0", "-", "BHad"),
+        ("AIa3", "AHad", "0.5", "0", "-", "BHad"),
+        ("AIba", "AHab", "0.75", "0", "-", "BHab"),
+        ("AIp1", "AUau", "0.1", "0.5", "1", "BUau"),
+        ("AIp2", "AHad", "1", "1", "-", "BHad"),
+    ] {
+        rows.push(vec![
+            alias, code, "1", a, b, c, "-", "-", "-", "-", aura_targs, "50", "0", "0", buff,
+        ]);
+    }
     for row in rows.iter_mut().skip(plain_rows) {
         row.extend(["-", "-"]);
     }
@@ -453,6 +469,14 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["olix", "AIlx", "0", "0", "0", "-"],
             &["ankh", "AIrc", "0", "0", "1", "1"],
             &["olig", "AIlb,AIlp", "0", "0", "0", "-"],
+            &["ugdh", "AIau", "0", "0", "0", "-"],
+            &["ugd2", "AIa2", "0", "0", "0", "-"],
+            &["ublb", "AIad", "0", "0", "0", "-"],
+            &["ubl2", "AIa3", "0", "0", "0", "-"],
+            &["u2au", "AIau,AIa2", "0", "0", "0", "-"],
+            &["umna", "AIba", "0", "0", "0", "-"],
+            &["upc1", "AIp1", "0", "0", "0", "-"],
+            &["upc2", "AIp2", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[
@@ -1176,6 +1200,16 @@ fn open_fixture(
         &[(
             "synthetic MiscGame",
             b"[Misc]\nIllusionsCanRestoreLife=0\n".as_slice(),
+        )],
+        4096,
+    )
+    .unwrap()
+    .with_auras(&crate::inventory_powerup::aura::fixture::image())
+    .unwrap()
+    .with_aura_misc(
+        &[(
+            "synthetic MiscGame",
+            b"[Misc]\nIllusionsBestowAuras=0\n".as_slice(),
         )],
         4096,
     )
@@ -4351,3 +4385,6 @@ fn slot_input_from_another_player_changes_nothing() {
 
 #[path = "inventory_orb_host_tests.rs"]
 mod orb;
+
+#[path = "inventory_aura_host_tests.rs"]
+mod aura;

@@ -1562,6 +1562,7 @@ impl ObjectHost {
         self.forget_morph_unit(unit);
         self.forget_curse_unit(unit);
         self.forget_orb_unit(unit);
+        self.forget_aura_unit(unit)?;
         self.forget_purge_unit(unit)?;
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
@@ -1882,7 +1883,7 @@ impl ObjectHost {
     }
 
     /// The victim's armor (with hero and held bonuses) and defense type.
-    pub(super) fn victim_armor(&self, target: HandleId) -> Result<(f32, usize), Error> {
+    pub(crate) fn victim_armor(&self, target: HandleId) -> Result<(f32, usize), Error> {
         let combat = self.executed_unit(target)?.combat.as_ref().ok_or_else(|| {
             self.inner
                 .error("combat damage", Failure::UnitState("combat missing"))
@@ -1890,6 +1891,7 @@ impl ObjectHost {
         let armor = combat.armor
             + self.hero_combat_bonuses(target)?.armor
             + self.held_armor_bonus(target)? as f32
+            + self.aura_armor_bonus(target)
             - self.orb_armor_penalty(target);
         Ok((armor, combat.defense))
     }
@@ -1983,6 +1985,7 @@ impl ObjectHost {
         self.advance_chain_lightning(now)?;
         self.advance_curses(now)?;
         self.advance_orbs(now)?;
+        self.advance_auras(now)?;
         self.advance_purges(now)?;
         self.advance_reincarnations(now)?;
         self.advance_unit_expirations(now)?;

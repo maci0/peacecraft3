@@ -280,6 +280,7 @@ impl ObjectHost {
         for rawcode in removed {
             self.curse_buff_removed(unit, rawcode)?;
             self.orb_buff_removed(unit, rawcode)?;
+            self.aura_buff_removed(unit, rawcode)?;
         }
         Ok(())
     }

@@ -28,6 +28,7 @@ pub struct ObjectHost {
     chain_lightning: Option<chain_lightning::Rules>,
     curses: Option<unit_curse::State>,
     orbs: orb::State,
+    auras: aura::State,
     purges: purge::State,
     reincarnation: reincarnation::State,
     summoning: Option<unit_summon::State>,
@@ -340,6 +341,7 @@ impl ObjectHost {
             chain_lightning: None,
             curses: None,
             orbs: orb::State::default(),
+            auras: aura::State::default(),
             purges: purge::State::default(),
             reincarnation: reincarnation::State::default(),
             summoning: None,
@@ -1753,6 +1755,9 @@ mod unit_curse;
 
 #[path = "orb_host.rs"]
 mod orb;
+
+#[path = "aura_host.rs"]
+mod aura;
 
 #[path = "purge_host.rs"]
 mod purge;

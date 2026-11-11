@@ -79,14 +79,7 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// Held-item classes whose class was decoded from the reviewed client but whose effect is not
 /// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
 /// classes".
-const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 1] = [(
-    "AUau",
-    "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
-     DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate and \
-     ends 4.0 s after its last application, but whether the range registration fires again \
-     for a unit that stays in range, and the stacking test against the hero aura, are not \
-     decoded",
-)];
+const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 0] = [];
 const BASE_FN_LEN: usize = 6;
 pub(crate) const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
@@ -289,6 +282,8 @@ pub struct Rules {
     life_steal: Option<LifeStealClass>,
     /// The `Adet` class, attached by `with_detector`.
     detector: Option<DetectorClass>,
+    /// `AUau` and `AHad`, attached by `with_auras`.
+    auras: Option<AuraClasses>,
 }
 
 /// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
@@ -463,6 +458,7 @@ impl Rules {
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
         let life_steal = window(LIFE_STEAL_WINDOW)?;
+        let aura = AuraImage::read(&pe).map_err(|e| fail(&e))?;
         let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
         let reincarnation = ReincarnationImage::read(&pe).map_err(|e| fail(&e))?;
         let detector = DetectorImage::read(&pe).map_err(|e| fail(&e))?;
@@ -490,6 +486,7 @@ impl Rules {
         .and_then(|rules| rules.with_reincarnation(&reincarnation))
         .and_then(|rules| rules.with_life_steal(&life_steal))
         .and_then(|rules| rules.with_detector(&detector))
+        .and_then(|rules| rules.with_auras(&aura))
         .map_err(|e| fail(&e))
     }
 
@@ -580,6 +577,7 @@ impl Rules {
                 .life_steal
                 .as_ref()
                 .is_some_and(|steal| steal.class == class)
+            || self.is_aura_class(class)
             || self
                 .attack_speed
                 .as_ref()
@@ -1106,6 +1104,7 @@ impl Rules {
             reincarnation: None,
             life_steal: None,
             detector: None,
+            auras: None,
         })
     }
 
@@ -1393,6 +1392,12 @@ impl Rules {
                 }
                 let value = self.move_speed_bonus_value(alias)?;
                 held.move_speed_bonus = Some(held.move_speed_bonus.map_or(value, |v| v.max(value)));
+                continue;
+            }
+            if self.is_aura_class(&code) {
+                // The aura is hosted per item by `aura_host.rs`; the row is read there through
+                // `held_aura`, and an unsupported row refuses the pickup here.
+                self.aura_row(alias)?;
                 continue;
             }
             if code != self.passive_class {
@@ -2079,6 +2084,11 @@ pub(crate) mod reincarnation;
 pub use reincarnation::Reincarnation;
 use reincarnation::ReincarnationClasses;
 pub(crate) use reincarnation::ReincarnationImage;
+#[path = "inventory_aura.rs"]
+pub(crate) mod aura;
+use aura::AuraClasses;
+pub(crate) use aura::AuraImage;
+pub use aura::{AuraEffect, AuraTiming, HeldAura};
 #[path = "inventory_purge.rs"]
 pub(crate) mod purge;
 use purge::PurgeClasses;

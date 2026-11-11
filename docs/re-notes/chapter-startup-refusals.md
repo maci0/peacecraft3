@@ -817,3 +817,24 @@ texture footprint for `fatLOS` types. Not reached by a startup probe, so open: a
 Raven form phase (still refused), a unit death during a delayed form change (still refused), the
 effect of the `0xd0005` command that `0x694a90` builds, and a native height plane dump to compare
 the footprint against.
+
+## 2026-11-11 Held auras `AIau`, `AIad`, `AIba`
+
+Same exe (SHA-256 `3f2ed012...0eed`). The range registration scans every 0.5 s and reports units that
+stay in range after each 2.0 s ability timer tick; buffs last 4.0 s; `0x682180` is a veto chain, not a
+stacking test. Decode, addresses and open items: [passive-held-items.md](passive-held-items.md) ("Held
+auras"). `AUau` (`lgdh`), `AHad` (`blba`) and `AHab` (`mnsf`, the next refusal on the same chapters) are
+hosted with the unit speed multiplier, the life and mana regeneration rates and the armor term.
+
+First refusal of `selected_install_locked_chapter_startup_probe` (`.scratch/chapter-sweep.sh`, one run
+each, selected Legacy install, headless):
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `UnitAddItem`: unsupported passive ability `AIad` (code `AHad`) on `blba` | `UnitAddItem`: unsupported passive ability `AIcd` (code `AOac`, Command Aura) on `shhn` |
+| TFT OrcX03a | same `AIad` on `blba` | same `AIcd` on `shhn` |
+| TFT HumanX06 | `UnitAddItem`: `AIau` (code `AUau`) on `lgdh` | timer-driven `vision` native: sight wide occluder `DTrx` unsupported (`destructable-occluder-height.md`) |
+
+`AIba` on `mnsf` appeared between the two (the first run after `AIad` was admitted) and is admitted as a
+third class of the same base. Not attempted: `AOac` (a damage-bonus aura on the attack damage path) and
+the sight occluder.
