@@ -420,3 +420,27 @@ Open after this lane:
 | TFT OrcX03a | `AIob` on `ofro` | `AIms` on `bspd` (speed-multiplier reason) |
 | TFT HumanX06 | `AIsr` on `brac` | `AIau` (code `AUau`) on `lgdh` (not a decoded class) |
 | RoC Undead02 | `AIms` on `bspd` | unchanged |
+
+## Probe results (2026-11-11, local UI, camera, guard and stock natives)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the sweep on
+`c8032ac5`, "after" is the final commit of this lane. Decodes are in
+[local-ui-natives.md](local-ui-natives.md), [script-unit-guards.md](script-unit-guards.md),
+[script-stock-slots.md](script-stock-slots.md) and
+[script-immediate-orders.md](script-immediate-orders.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT HumanX01 | `SetAltMinimapIcon` unsupported (`war3map.j:7476`) | passes startup (189 units) |
+| TFT UndeadX08 | `SetAltMinimapIcon` unsupported (`war3map.j:8396`) | passes startup (280 units); the `RecycleGuardPosition` calls are admitted |
+| TFT UndeadX06 | `SetReservedLocalHeroButtons` unsupported (`war3map.j:2182`) | `UnitAddItem`: unsupported passive ability `AIsx` with code `AIas` on `gcel` |
+| RoC Orc03 | `SetCameraTargetController` unsupported (`Blizzard.j:1321`) | passes startup (222 units) after `SetCameraField` |
+| TFT NightElfX05 | `RecycleGuardPosition` unsupported (`war3map.j:2473`) | `IssueTargetOrder` `autoharvestlumber`: worker lacks the attack work sequence |
+| TFT UndeadX03 | `AddUnitToStock` unsupported (`Blizzard.j:3847`) | `AddUnitToStock`: shop slot count is not assigned (no `SetUnitTypeSlots`; the constructor default is not read from the image) |
+| TFT HumanX03 | `IssueImmediateOrder` `defend` on `hfoo` unsupported | passes startup (182 units) after `SetUnitCreepGuard` |
+
+Open after this lane:
+
+- Unit shop default slot count: the `Asud` constructor writes `0xb` at `0xb353d8`; deriving it from the image is not done.
+- `RecycleGuardPosition` ability list flag (`0x68e1a0`) and the global option word tested by `0x46e030` (mask `0x100`) are undecoded.
+- Camera target controller: per-frame follow and the calls that release it are undecoded; target reads refuse while one is set.
