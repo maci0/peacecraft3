@@ -95,3 +95,32 @@ Exact commands, failures and corrected results stay local in
 `.scratch/sound-params-root/`. Original scripts, tables, PCM and executable
 payloads are neither committed nor uploaded. Native runtime, audio-device,
 browser playback and campaign completion remain unverified.
+
+## Label lookup case (native decode)
+
+Reviewed exe 1.29.2.9231. `SetSoundParamsFromLabel` name at VA `0xe76970`, registered at
+`0x4a0778` with handler `0x4a9cf0`. A second registration at `0xcbba60` pushes a stub at
+`0xcbda30`, not decoded.
+
+Observed:
+
+- `0x4a9cf0` resolves the sound handle, reads the label, and calls `0x4f7000` → `0x5da690`
+  (table object `[+0x13c]`). `0x5da690` calls the hash lookup `0x5cf970` on the tables at
+  VA `0x113d4ac`, then `0x113d31c`; the first hit wins.
+- `0x5cf970` hashes the label with `0x433890` and `0x4347f0`. `0x433890` folds bytes `'a'..'z'` to
+  uppercase (`0x4338c0`–`0x4338d3`) and maps `/` to `\` for the hash only.
+- A hash match is confirmed by `0x433490` → `_strnicmp` (`0xa77598`) → `0xa99c10`, which folds
+  `'A'..'Z'` on both sides before comparing.
+
+So the label match is ASCII case-insensitive. `felhoundYes` matches the row `FelhoundYes`.
+
+Not decoded: the locale branch of `_strnicmp` (`0xa77604`, selected when `0x11b4454` is nonzero),
+the stub at `0xcbda30`, and what sets the log flag at `0x113d1c4`. On a miss, `0x5da6d6` logs
+`Warning, unrecognized sound label %s!` only when that flag is set, and returns without an error.
+The repo still refuses a miss with `MissingSoundLabel`; that miss behavior is open.
+
+Repo: parameter label matching is ASCII case-insensitive (`same_label` in
+`crates/pcx-play/src/sound_parameters.rs`), used by the bank lookup, the duplicate check, and the
+table source lookup in `campaign_assets.rs` (`source` and `label_sound`). `label_sounds.rs` keeps its
+exact row filter: its label-sound path is not part of the decoded `SetSoundParamsFromLabel` path.
+Test: `label_selection_matches_ascii_case_like_the_native_lookup`.

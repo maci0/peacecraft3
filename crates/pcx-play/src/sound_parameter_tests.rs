@@ -1106,6 +1106,17 @@ fn actual_vm_keeps_dialogue_receipt_and_typed_full_refusal_at_next_native_failur
     assert_eq!(vm.host().inner().handles(), handles);
 }
 
+#[test]
+fn label_selection_matches_ascii_case_like_the_native_lookup() {
+    let d = table(&rows());
+    let bank = read(&d, &["voice"], budget()).unwrap();
+    let a = bank.get(0).unwrap();
+    assert_eq!((a.label, a.row), ("Voice", 2));
+    assert_eq!(bank.find("VOICE"), Some(0));
+    assert_eq!(bank.find("Voicex"), None);
+    assert!(read(&d, &["Voice", "VOICE"], budget()).is_err());
+}
+
 fn selected_parameters(label: &str) -> Banks {
     let bytes = if label == "Speech" {
         table(&dialogue_rows())

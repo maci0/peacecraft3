@@ -5,6 +5,12 @@ use crate::neutral_player::{Sha256Digest, sha256};
 use crate::scripts::{AssetIdentity, ScriptAsset};
 use pcx_slq::{CoordinateLimits, Row, Table};
 
+/// Label equality for `SetSoundParamsFromLabel`: ASCII case-insensitive, as the native
+/// label hash and `_strnicmp` compare (see `docs/re-notes/script-sound-parameters.md`).
+pub(crate) fn same_label(stored: &str, wanted: &str) -> bool {
+    stored.eq_ignore_ascii_case(wanted)
+}
+
 #[derive(Clone, Copy)]
 pub struct Budget {
     pub table_bytes: usize,
@@ -125,7 +131,7 @@ fn preflight(
         })
         .ok_or_else(|| fail(Problem::Budget))?;
     for (i, label) in labels.iter().enumerate() {
-        if labels[..i].contains(label) {
+        if labels[..i].iter().any(|old| same_label(old, label)) {
             return Err(fail(Problem::Ambiguous));
         }
     }
@@ -168,9 +174,10 @@ impl Bank {
             .try_reserve_exact(labels.len())
             .map_err(|_| fail(Problem::Budget))?;
         for label in labels {
-            let mut rows = table
-                .data_rows()
-                .filter(|r| r.by_name(label_column) == Some(label));
+            let mut rows = table.data_rows().filter(|r| {
+                r.by_name(label_column)
+                    .is_some_and(|v| same_label(v, label))
+            });
             let row = rows.next().ok_or_else(|| fail(Problem::Missing))?;
             if rows.next().is_some() {
                 return Err(fail(Problem::Ambiguous));
@@ -214,9 +221,11 @@ impl Bank {
         })
     }
     pub(crate) fn find(&self, label: &str) -> Option<usize> {
-        self.definitions
-            .iter()
-            .position(|d| self.table.by_name(d.row, &self.label_column) == Some(label))
+        self.definitions.iter().position(|d| {
+            self.table
+                .by_name(d.row, &self.label_column)
+                .is_some_and(|v| same_label(v, label))
+        })
     }
     pub(crate) fn label_limit(&self) -> usize {
         self.label_limit
@@ -334,7 +343,7 @@ impl DialogueBank {
         for label in labels {
             let mut rows = table
                 .data_rows()
-                .filter(|row| row.by_name(column) == Some(label));
+                .filter(|row| row.by_name(column).is_some_and(|v| same_label(v, label)));
             let row = rows.next().ok_or_else(|| fail(Problem::Missing))?;
             if rows.next().is_some() {
                 return Err(fail(Problem::Ambiguous));
@@ -487,10 +496,11 @@ impl SourceBank {
     fn find(&self, label: &str) -> Option<usize> {
         match self {
             Self::Full(bank) => bank.find(label),
-            Self::Dialogue(bank) => bank
-                .definitions
-                .iter()
-                .position(|d| bank.table.by_name(d.row, &bank.label_column) == Some(label)),
+            Self::Dialogue(bank) => bank.definitions.iter().position(|d| {
+                bank.table
+                    .by_name(d.row, &bank.label_column)
+                    .is_some_and(|v| same_label(v, label))
+            }),
         }
     }
 }
@@ -683,8 +693,8 @@ impl Banks {
             .try_reserve_exact(count)
             .map_err(|_| fail(Problem::Budget))?;
         labels.extend(inputs.iter().flat_map(|input| input.labels.iter().copied()));
-        labels.sort_unstable();
-        if labels.windows(2).any(|pair| pair[0] == pair[1]) {
+        labels.sort_unstable_by_key(|label| label.to_ascii_lowercase());
+        if labels.windows(2).any(|pair| same_label(pair[0], pair[1])) {
             return Err(fail(Problem::Ambiguous));
         }
         let mut banks = Vec::new();

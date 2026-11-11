@@ -298,10 +298,10 @@ impl SoundSources {
         }
         let mut owners = self.tables.iter().filter(|source| {
             (!pcm || source.table.headers().any(|(_, name)| name == "FileNames"))
-                && source
-                    .table
-                    .data_rows()
-                    .any(|row| row.by_name(&source.column) == Some(label))
+                && source.table.data_rows().any(|row| {
+                    row.by_name(&source.column)
+                        .is_some_and(|v| crate::sound_parameters::same_label(v, label))
+                })
         });
         let source = owners
             .next()
@@ -320,10 +320,10 @@ impl SoundSources {
         budget: crate::label_sounds::Budget,
     ) -> Result<crate::label_sounds::SoundBank, String> {
         let source = self.source(label, budget.metadata_bytes, true)?;
-        let mut rows = source
-            .table
-            .data_rows()
-            .filter(|r| r.by_name(&source.column) == Some(label));
+        let mut rows = source.table.data_rows().filter(|r| {
+            r.by_name(&source.column)
+                .is_some_and(|v| crate::sound_parameters::same_label(v, label))
+        });
         let row = rows.next().ok_or("missing label row")?;
         if rows.next().is_some() {
             return Err(format!("ambiguous sound label row: {label}"));
