@@ -194,3 +194,13 @@ check `0xbf7640`, and the dispatcher that consumes `+0x328`/`+0x32c`.
 
 Repo: still refused, `IssueImmediateOrder townbelloff is not bound`. Implementing the no-militia branch
 needs a per-unit ability scan for `Amil` that the host does not have, so it is not done.
+
+## Town Bell off: no-militia branch implemented (2026-11-11)
+
+`townbelloff` on a unit listing `Amic` scans the owner's units. The callback `0xbf7740` skips a carrier
+unless it belongs to the issuer's owner, and for the off request (`[ctx+4] == 0`) matches only a
+carrier whose type is the militia form (`Amil` `DataB1`, `[ability+0x74]`; the base form is
+`DataA1`, `+0x70`). With no match the dry run returns `0xb3`, the order is refused and nothing changes,
+so the native returns false. `unit_host.rs` `town_bell_off_order` implements this scan over live
+units whose type is the militia form and which list `Amil`. When one exists the call refuses: the
+conversion callback `0xbf72f0` and the current-order tests at `0xbf77e2`..`0xbf78a7` are not decoded.

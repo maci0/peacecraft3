@@ -61,6 +61,8 @@ const KIND: &str = "unit";
 const RESOURCE_ALIAS: &str = "Agld";
 /// Authored ability class for the source-backed Call to Arms off slice.
 const MILITIA_ALIAS: &str = "Amil";
+/// Town Bell (`CAbilityMilitiaConvert`, class code `Amic`).
+const TOWN_BELL_ALIAS: &str = "Amic";
 /// Caller bounds. Not a world, population, or rendering limit.
 #[derive(Clone, Copy, Debug)]
 pub struct UnitBudget {
@@ -252,6 +254,8 @@ struct MilitiaAbility {
     alias: String,
     off: String,
     base: [u8; 4],
+    /// `DataB1`: the militia form.
+    active: [u8; 4],
 }
 
 struct UnitStateLimits {
@@ -1450,6 +1454,9 @@ impl ObjectHost {
         }
         if name == ORDER {
             if let Some(result) = self.militia_immediate_order(args) {
+                return Some(result);
+            }
+            if let Some(result) = self.town_bell_off_order(args) {
                 return Some(result);
             }
             if self.admitted_units().ok()?.order.is_some() {
@@ -2825,6 +2832,46 @@ impl ObjectHost {
         )
     }
 
+    /// `townbelloff` on a unit listing `Amic` (`docs/re-notes/ability-autocast-off.md`).
+    ///
+    /// `0xbf6b40` scans the issuer's owner's `Amil` carriers with callback `0xbf7740`; the
+    /// dry-run off check returns error `0xb3` when none matches, so the order is refused and
+    /// nothing changes. An off request matches only a carrier in the militia form (`DataB1`).
+    /// With such a unit present the callback's conversion (`0xbf72f0`) is not decoded.
+    fn town_bell_off_order(&self, args: &[Value]) -> Option<Result<Value, Error>> {
+        let militia = self.units.as_ref()?.militia.as_ref()?;
+        let [Value::Handle(unit), Value::Str(text)] = args else {
+            return None;
+        };
+        let bell = one_fourcc(TOWN_BELL_ALIAS).expect("named ability rawcode");
+        let off = self.hero_ability_profiles(bell, "Unorder").ok()?;
+        if !off.iter().any(|name| name == text) {
+            return None;
+        }
+        let issuer = self.executed_unit(*unit).ok()?;
+        if !lists_admitted_alias(&issuer.definition, TOWN_BELL_ALIAS) {
+            return None;
+        }
+        let owner = issuer.owner;
+        let militia_alive = self.executed_units().any(|(_, record)| {
+            record.owner == owner
+                && record.definition.rawcode == militia.active
+                && lists_admitted_alias(&record.definition, MILITIA_ALIAS)
+                && !record.combat.as_ref().is_some_and(|state| state.dead)
+        });
+        Some(if militia_alive {
+            Err(self.inner.error(
+                ORDER,
+                Failure::UnitActivity(
+                    "town bell off with militia present: the conversion callback is not decoded"
+                        .into(),
+                ),
+            ))
+        } else {
+            Ok(Value::Bool(false))
+        })
+    }
+
     fn issue_immediate_order(&mut self, args: &[Value]) -> Option<Result<Value, Error>> {
         let (on, off, tech, required_level, ability) = {
             let order = self.units.as_ref()?.order.as_ref()?;
@@ -2964,6 +3011,7 @@ fn read_militia_ability(tables: &DefaultTables) -> Result<MilitiaAbility, &'stat
         alias: alias.to_string(),
         off,
         base,
+        active,
     })
 }
 
@@ -3165,7 +3213,7 @@ fn column_problem(column: &'static str, problem: &'static str) -> &'static str {
     }
 }
 
-fn lists_admitted_alias(definition: &Definition, alias: &str) -> bool {
+pub(super) fn lists_admitted_alias(definition: &Definition, alias: &str) -> bool {
     definition.fields.values().any(|field| {
         ability_list_text(field).is_some_and(|text| {
             text.split(',').any(|token| {
