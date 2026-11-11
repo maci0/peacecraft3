@@ -119,3 +119,31 @@ ability-tooltip code, so WASM Clippy did not run. The earlier offscreen replay
 remains exit 101 and still records the old parented refusal plus sight
 occlusion. This does not establish complete original-client particle parity,
 dynamic lights, sound events or world visibility fidelity.
+
+## SetDoodadAnimationRect selection (native decode)
+
+Reviewed exe 1.29.2.9231. Name at VA `0xe77600`, registered at `0x4a0f94` with handler `0x4a7cc0`.
+The handler reads the rectangle's four floats (rect `+0x24`, `+0x28`, `+0x2c`, `+0x30`) and calls
+`0x7056e0`, which calls selector `0x751d90` and applies `0x75d370` to each hit in array order.
+
+Observed selection:
+
+- Records have stride `0x188` (array at `+0x10`, count at `+0xc`). The record type at `+4` must equal
+  the requested kind; `-1` selects every kind. Visibility and life are not tested, so hidden doodads
+  are selected.
+- Footprint cell count at `+0xa0` at or below zero (no pathing footprint): the point `(+0xc, +0x10)`
+  is selected when it lies inside the rectangle with inclusive bounds.
+- Count above zero: the box is the position ± half-extents, each half-extent is cells × 16
+  (`0x10dd5b8` is 32.0, halved), and a facing at `+0x18` normalised to `[0, 2π)` with an odd quarter
+  turn swapping the two extents. The doodad is selected only when the box overlaps the rectangle
+  strictly on both axes (`hi > lo`), so touching edges do not select.
+- The rectangle floats at `+0x24`/`+0x2c` pair with record `+0x10`, and `+0x28`/`+0x30` with `+0xc`.
+  Which of `+0xc` and `+0x10` is world X is inferred from the existing point test, not decoded.
+
+Effect (`0x75d370`): `soundon`/`soundoff` control a loop sound; `show`/`hide` set or clear flag bit
+`0x08000000` at `+0x84`; any other name requests an animation stored once on the selected doodad.
+
+Not decoded: the origin of the `+0xa0`/`+0xa4` cell counts (likely the pathing texture size, not
+established), and the meaning of the `+0x150` value (5 in this path). Until the cell counts are
+decoded, a footprint doodad of the requested kind refuses the call, and point doodads select by the
+inclusive rule above.

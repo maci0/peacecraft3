@@ -109,7 +109,7 @@ impl ObjectHost {
                     return Err(self.inner.error(
                         name,
                         Failure::Doodad(
-                            "footprint-overlap doodad rectangle selection is not admitted".into(),
+                            "footprint doodad rectangle selection needs the native footprint cell-count origin, not decoded (script-doodads.md)".into(),
                         ),
                     ));
                 }
