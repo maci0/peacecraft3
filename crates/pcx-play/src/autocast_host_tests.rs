@@ -38,6 +38,12 @@ endfunction
 function off takes nothing returns boolean
 return IssueImmediateOrder(U,"delta")
 endfunction
+function on takes nothing returns boolean
+return IssueImmediateOrder(U,"repair")
+endfunction
+function onpeer takes nothing returns boolean
+return IssueImmediateOrder(U,"gamma")
+endfunction
 function offid takes nothing returns boolean
 return IssueImmediateOrderById(U,OrderId("delta"))
 endfunction
@@ -57,14 +63,35 @@ function callback_pause takes nothing returns nothing
 set CallbackMode=4
 endfunction
 "#;
+const PROFILE: &[u8] = b"[X002]\nOrderon=repair\nOrderoff=delta\n";
+/// Same-group peer ability `X004` of class `X003`, toggled by `gamma`/`beta`.
+const PEER_PROFILE: &[u8] =
+    b"[X002]\nOrderon=repair\nOrderoff=delta\n[X004]\nOrderon=gamma\nOrderoff=beta\n";
+const FIRST_TICK: f32 = 0.5;
+const GROUP: u32 = 1;
+fn enable() -> Option<crate::autocast_rules::Enable> {
+    Some(crate::autocast_rules::Enable {
+        group: GROUP,
+        first_tick: FIRST_TICK,
+    })
+}
 fn open(default: &str, present: bool) -> (Vm, HandleId) {
-    open_with_profile(
-        default,
-        present,
-        b"[X002]\nOrderon=repair\nOrderoff=delta\n",
-    )
+    open_with_profile(default, present, PROFILE)
 }
 fn open_with_profile(default: &str, present: bool, profile: &[u8]) -> (Vm, HandleId) {
+    open_setup(
+        default,
+        if present { "X002" } else { "_" },
+        profile,
+        enable(),
+    )
+}
+fn open_setup(
+    default: &str,
+    abilities: &str,
+    profile: &[u8],
+    enable: Option<crate::autocast_rules::Enable>,
+) -> (Vm, HandleId) {
     let mut fields = hero_fields("STR");
     fields.retain(|(id, _)| id != b"A008");
     fields.push(column(
@@ -72,7 +99,7 @@ fn open_with_profile(default: &str, present: bool, profile: &[u8]) -> (Vm, Handl
         SlkId::UnitAbilities,
         "abilList",
         FieldKind::Token,
-        if present { "X002" } else { "_" },
+        abilities,
     ));
     fields.push(column(
         b"A010",
@@ -82,21 +109,37 @@ fn open_with_profile(default: &str, present: bool, profile: &[u8]) -> (Vm, Handl
         default,
     ));
     let (registry, activity) = super::super::activity::rules_with_repair();
+    let class = |code: &[u8; 4], on: &str, off: &str| crate::autocast_rules::Class {
+        code: *code,
+        on: registry.id(on).unwrap(),
+        off: registry.id(off).unwrap(),
+        enable,
+    };
     let autocast = crate::autocast_rules::Rules {
         origin: registry.binding().origin.clone(),
         image_sha256: registry.binding().image_sha256,
-        classes: vec![crate::autocast_rules::Class {
-            code: *b"X001",
-            on: registry.id("repair").unwrap(),
-            off: registry.id("delta").unwrap(),
-        }],
+        classes: [
+            Some(class(b"X001", "repair", "delta")),
+            // The peer class is registered only when a unit carries it: `gamma` and `beta` are
+            // ordinary orders in the other tests.
+            abilities
+                .contains("X004")
+                .then(|| class(b"X003", "gamma", "beta")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        groups: vec![(*b"X001", GROUP), (*b"X003", GROUP)],
     };
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = autocast.image_sha256;
     let rules = rules.with_autocast(Ok(autocast));
     let data = sylk(
         &["alias", "code", "levels", "reqLevel", "levelSkip", "hero"],
-        &[&["X002", "X001", "1", "0", "0", "0"]],
+        &[
+            &["X002", "X001", "1", "0", "0", "0"],
+            &["X004", "X003", "1", "0", "0", "0"],
+        ],
     );
     let tables = DefaultTables::from_bytes(
         Identity {
@@ -251,8 +294,8 @@ fn frame_preflight_refusal_and_no_change_paths_do_not_mutate_units_or_events() {
     );
 }
 #[test]
-fn enable_refuses_and_pause_or_retirement_preserves_typed_contracts() {
-    let (mut vm, u) = open("X001", true);
+fn undecoded_enable_refuses_and_pause_or_retirement_preserves_typed_contracts() {
+    let (mut vm, u) = open_setup("_", "X002", PROFILE, None);
     let before = vm.host().inner.executed_unit(u).unwrap().clone();
     let error = vm
         .host()
@@ -262,8 +305,9 @@ fn enable_refuses_and_pause_or_retirement_preserves_typed_contracts() {
             &[Value::Handle(u), Value::Str("repair".into())],
         )
         .unwrap_err();
-    assert!(error.contains("enabling/effects not implemented"));
+    assert!(error.contains("enabling of"), "{error}");
     assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    let (mut vm, u) = open("X001", true);
     vm.host()
         .inner
         .native("PauseUnit", &[Value::Handle(u), Value::Bool(true)])
@@ -386,4 +430,136 @@ fn enable_on_a_unit_without_the_ability_issues_nothing() {
         )
         .unwrap();
     assert_eq!(issued, Value::Bool(false));
+}
+
+fn state(vm: &mut Vm, u: HandleId, alias: &[u8; 4]) -> Option<bool> {
+    vm.host().inner.unit_autocast_enabled(u, *alias).unwrap()
+}
+fn advance(vm: &mut Vm, now: f64) -> Result<usize, String> {
+    let h = &mut vm.host().inner;
+    assert!(h.next_timer_expiry(now, &mut 1000).unwrap().is_none());
+    h.advance_unit_activity(now, &mut 65536)
+        .map_err(|e| format!("{e:?}"))
+}
+fn modified(vm: &mut Vm, u: HandleId) -> bool {
+    let record = vm.host().inner.executed_unit(u).unwrap();
+    record.abilities.as_ref().unwrap().autocast_modified()
+}
+#[test]
+fn enable_flips_state_emits_the_order_callbacks_and_reports_false_when_repeated() {
+    let (mut vm, u) = open("_", true);
+    vm.call("listen", &[]).unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.global("Seen"), Value::Int(2));
+    let on = order(&mut vm, "repair");
+    assert_eq!(vm.global("Issued"), Value::Int(on));
+    assert_eq!(vm.global("Current"), Value::Int(on));
+    assert_eq!(vm.global("Response"), Value::Handle(u));
+    assert_eq!(current(&mut vm, u), 0);
+    assert_eq!(state(&mut vm, u, b"X002"), Some(true));
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.global("Seen"), Value::Int(2));
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(state(&mut vm, u, b"X002"), Some(false));
+    assert!(!modified(&mut vm, u));
+}
+#[test]
+fn enable_after_off_restores_the_authored_default_without_a_state_override() {
+    let (mut vm, u) = open("X001", true);
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(state(&mut vm, u, b"X002"), Some(false));
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(state(&mut vm, u, b"X002"), Some(true));
+    assert!(!modified(&mut vm, u));
+}
+#[test]
+fn enable_interrupts_motion_like_off() {
+    let (mut vm, u) = open("_", true);
+    assert_eq!(vm.call("move", &[]).unwrap(), Value::Bool(true));
+    assert_ne!(current(&mut vm, u), 0);
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(current(&mut vm, u), 0);
+}
+#[test]
+fn armed_first_tick_refuses_when_game_time_reaches_it() {
+    let (mut vm, _) = open("_", true);
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, start + f64::from(FIRST_TICK) / 2.).unwrap();
+    let error = advance(&mut vm, start + f64::from(FIRST_TICK)).unwrap_err();
+    assert!(error.contains("automatic cast"), "{error}");
+    assert!(error.contains("not implemented"), "{error}");
+}
+#[test]
+fn off_or_removal_before_the_first_tick_disarms_it() {
+    let (mut vm, u) = open("_", true);
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, start + 10.).unwrap();
+    assert_eq!(state(&mut vm, u, b"X002"), Some(false));
+    let (mut vm, u) = open("_", true);
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(u)])
+        .unwrap();
+    advance(&mut vm, start + 10.).unwrap();
+}
+#[test]
+fn enable_switches_same_group_peers_off_without_their_own_events() {
+    let (mut vm, u) = open_setup("X003", "X002,X004", PEER_PROFILE, enable());
+    vm.call("listen", &[]).unwrap();
+    assert_eq!(state(&mut vm, u, b"X002"), Some(false));
+    assert_eq!(state(&mut vm, u, b"X004"), Some(true));
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.global("Seen"), Value::Int(2));
+    assert_eq!(state(&mut vm, u, b"X002"), Some(true));
+    assert_eq!(state(&mut vm, u, b"X004"), Some(false));
+    // Enabling the peer switches the first ability off and restores the peer's authored default.
+    assert_eq!(vm.call("onpeer", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.global("Seen"), Value::Int(4));
+    assert_eq!(state(&mut vm, u, b"X002"), Some(false));
+    assert_eq!(state(&mut vm, u, b"X004"), Some(true));
+    assert!(!modified(&mut vm, u));
+}
+#[test]
+fn enable_of_a_switched_off_peer_is_disarmed() {
+    let (mut vm, _) = open_setup("X003", "X002,X004", PEER_PROFILE, enable());
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.call("onpeer", &[]).unwrap(), Value::Bool(true));
+    // The second ON re-armed the peer; the first ability's tick is gone with its OFF.
+    let error = advance(&mut vm, start + f64::from(FIRST_TICK)).unwrap_err();
+    assert!(error.contains("X004"), "{error}");
+}
+#[test]
+fn enabled_state_is_refused_by_the_cache_like_disabled_state() {
+    let (mut vm, u) = open("_", true);
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    let h = &mut vm.host().inner;
+    let memory = Arc::new(crate::game_cache::tests::Memory::default());
+    h.admit_game_caches(memory.clone(), crate::game_cache::tests::budget())
+        .unwrap();
+    let cache = h
+        .native("InitGameCache", &[Value::Str("fixture".into())])
+        .unwrap();
+    let error = h
+        .native(
+            "StoreUnit",
+            &[
+                cache,
+                Value::Str("mission".into()),
+                Value::Str("hero".into()),
+                Value::Handle(u),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("does not encode altered autocast state"),
+        "{error}"
+    );
 }

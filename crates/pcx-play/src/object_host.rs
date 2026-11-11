@@ -54,6 +54,8 @@ pub struct ObjectHost {
     timer_dialogs: bool,
     unit_activity: Option<unit_activity::State>,
     harvest: Option<harvest_runtime::State>,
+    /// Automatic-cast evaluations armed by an ON order: unit, ability alias, game time of the first tick.
+    autocast_ticks: Vec<(HandleId, [u8; 4], f64)>,
     order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     inner: EnumHost,
@@ -303,6 +305,7 @@ impl ObjectHost {
             order_registry: None,
             unit_activity: None,
             harvest: None,
+            autocast_ticks: Vec::new(),
             order_queue: None,
             locations: false,
             time_of_day: None,

@@ -382,3 +382,14 @@ is this lane. Decode and rules: [entangle-mine-conversion.md](entangle-mine-conv
 | RoC NightElf02 | `IssueTargetOrder` `load`: only the attack target order is supported | passes `load` (returns false: the Orc Burrow has no cargo-load ability); native `UnitId` unsupported (`Blizzard.j:2998`) |
 | TFT NightElfX06 | `autoharvestlumber`: worker lacks the attack work sequence | passes the work animation; wisp harvest refused: unit has no `Ahar` harvest capability (`Awha` is a different harvest class, not started) |
 | RoC Undead03 | `IssueImmediateOrder` `townbelloff` unsupported | passes `townbelloff` (no militia, returns false); `SetUnitState` refused: arguments do not match the unit native declaration |
+
+## 2026-11-11 autocast ON orders
+
+`IssueImmediateOrder` ON orders for the decoded classes now bind (`ability-autocast-on.md`; `CAbilityBlackArrow` and `CAbilityCurse` joined the bound classes). Probe: `selected_install_locked_chapter_startup_probe`, first refusal before and after.
+
+| Chapter | Before | After |
+| --- | --- | --- |
+| RoC NightElf03 | `innerfireon` (`Ainf`) | passes `innerfireon`; `curseon` (`ACcs`, `Acrs`) then bound too; `SetUnitState` refused: arguments do not match the unit native declaration (`Scripts\common.j:91204`) |
+| RoC Undead02Interlude | `raisedeadon` (`ACrd`, code `Arai`) | passes; `UnitAddItemToSlotById` refused: unsupported passive ability `AIlb` on `olig` |
+| TFT UndeadX07a | `webon` (`ACwb`) | passes; probe exits 0 (`executed_units=64`) |
+| TFT NightElfX03 | `blackarrowon` unsupported immediate order | passes; `SetDoodadAnimationRect` refused: footprint doodad rectangle selection needs the native footprint cell-count origin (`script-doodads.md`) |

@@ -1082,6 +1082,7 @@ impl ObjectHost {
             return Ok(0);
         }
         self.advance_unit_decay(now, work)?;
+        self.advance_autocast(now)?;
         self.advance_training(now, work)?;
         let starts: Vec<_> = if self.initial_blight.is_some() {
             self.executed_units()

@@ -9,8 +9,9 @@ code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
 (`CAbilityRenew`, code `Aren`), Bloodlust (`CAbilityBloodlust`, code `Ablo`), Frost
 Armor (`CAbilityFrostArmorAuto`, code `AUfu`), Restoration (`CAbilityRestoration`,
 code `Arst`), Mana Shield (`CAbilityManaShield`, code `ANms`) and Immolation
-(`CAbilityImmolation`, code `AEim`) and Repair (`CAbilityRepair`, code `Arep`). The
-reader decodes all fourteen with the same OFF handler checks and refuses the image
+(`CAbilityImmolation`, code `AEim`), Repair (`CAbilityRepair`, code `Arep`) and Black
+Arrow (`CAbilityBlackArrow`, code `ANba`). The
+reader decodes all fifteen with the same OFF handler checks and refuses the image
 otherwise. Each OFF order name is the `Orderoff` (or, for Immolation, the `Unorder`)
 of an ability section in the `*AbilityFunc.txt` members, and each section's `code`
 (from `Units\AbilityData.slk`) selects the class: `repairoff` in `[Ahrp]`
@@ -67,9 +68,9 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic effects of the fourteen
-bound classes, their default-enabled automatic operation, and the later
-`ravenform` transformation remain required work.
+slice. ON orders for the classes whose ON handler decodes are implemented (see
+`ability-autocast-on.md`). Mana Shield and Immolation ON, default-enabled automatic
+operation and the later `ravenform` transformation remain refused or unmodelled.
 
 ## Mana Shield and Immolation toggles
 
@@ -88,16 +89,17 @@ The host picks the toggle key pair per ability: `Orderon`/`Orderoff` when
 Default state: `UnitAbilities.slk` `auto` (column `X4`) lists no `ANms` or `AEim`
 in any of its 837 rows, so both toggles start inactive. The host's
 `unit_autocast_enabled` derives state from `auto` and the explicit disabled list.
-An ON order never takes effect, so an inactive toggle stays inactive and its OFF
+Their ON orders are refused, so an inactive toggle stays inactive and its OFF
 returns false without a state change, the same return the shared handler
 measured for an authored-disabled Inner Fire (Arm A above). That return is
 measured for the shared handler on Inner Fire, not for `ANms` or `AEim`
 individually; the per-class return is the recreation choice, following the
 autocast precedent.
 
-ON orders (`manashieldon`, `immolation`) refuse with `autocast enabling/effects
-not implemented for class <code>` for any live unit of the class, whether or not
-the unit has the ability. Their effects are not modelled: Mana Shield absorption
+ON orders (`manashieldon`, `immolation`) refuse with `autocast enabling of <alias>
+not implemented: its ON handler differs from the decoded shape` for a live unit that
+has the ability (`ANms` and `AEim` override the update hook that `ability-autocast-on.md`
+decodes). Their effects are not modelled: Mana Shield absorption
 (damage, mana cost and timing) and Immolation's burn aura and mana drain.
 Missing evidence for the ON effects: absorption/drain formulas and timing.
 
@@ -122,10 +124,11 @@ instruction differs at 0`). Town Bell stays refused. Whether `Amic` is an autoca
 ability is unverified.
 
 `innerfireon` (`[Ainf]`, code `Ainf`, `CAbilityInnerFire`) and `webon` (`[ACwb]`
-and `[Aweb]`, code `Aweb`, `CAbilityWeb`) are recognized and refused. Inventory:
+and `[Aweb]`, code `Aweb`, `CAbilityWeb`) are decoded and implemented as state
+changes by `ability-autocast-on.md`; their automatic cast is not. Inventory of
+what that leaves:
 
-- Present: both OFF classes bind; the ON orders are recognized and refused before any
-  mutation (`autocast_host.rs`); the `auto` defaults below are in the tables.
+- Present: both classes bind with ON and OFF; the `auto` defaults below are in the tables.
 - Default-enabled automatic casting in `UnitAbilities.slk` `auto` (column X4):
   `Ainf` on `ntks`, `Aweb` on `ucry` and `nnwl`.
 - Missing: any cast host for the `innerfire` or `web` orders (no `crates` reference to
@@ -133,8 +136,8 @@ and `[Aweb]`, code `Aweb`, `CAbilityWeb`) are recognized and refused. Inventory:
   `[Binf]` and `[Bweb]` buff sections (no host reads them); mana cost, cooldown and
   target filters for either cast; the native automatic target-selection rule for either
   class, which no `docs/re-notes` file records.
-- Consequence: flipping the state bit alone would leave `ntks`, `ucry` and `nnwl`
-  without their automatic casts, silently. ON stays refused.
+- Consequence: `ntks`, `ucry` and `nnwl` have no automatic casts. A tick armed by an
+  ON order refuses when game time reaches it instead of skipping the cast silently.
 
 ## Frost Armor base class and Burrow (not bound)
 

@@ -78,6 +78,7 @@ mod cached_tests {
             levels: vec![(*b"B001", 1)],
             cooldowns: vec![],
             autocast_disabled: Vec::new(),
+            autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
             learnable: vec![Skill {
@@ -158,6 +159,7 @@ mod cached_tests {
             levels: vec![(*b"B001", 1)],
             cooldowns: vec![],
             autocast_disabled: vec![],
+            autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
             learnable: vec![],
@@ -243,7 +245,10 @@ struct Skill {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitAbilities {
+    /// Aliases switched OFF from their `UnitAbilities.auto` default.
     pub(super) autocast_disabled: Vec<[u8; 4]>,
+    /// Aliases switched ON from a default of off.
+    pub(super) autocast_enabled: Vec<[u8; 4]>,
     pub(super) autocast_revision: u64,
     pub(super) autocast_order: Option<(u64, i32)>,
     pub hero: Option<HeroProgress>,
@@ -254,7 +259,7 @@ pub struct UnitAbilities {
 }
 impl UnitAbilities {
     pub(crate) fn autocast_modified(&self) -> bool {
-        !self.autocast_disabled.is_empty()
+        !self.autocast_disabled.is_empty() || !self.autocast_enabled.is_empty()
     }
     pub(crate) fn autocast_current_order(&self) -> Option<i32> {
         self.autocast_order.map(|(_, order)| order)
@@ -270,6 +275,7 @@ impl UnitAbilities {
             learnable: Vec::new(),
             cooldowns: Vec::new(),
             autocast_disabled: Vec::new(),
+            autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
         }
@@ -317,10 +323,11 @@ impl UnitAbilities {
     fn is_learnable(&self, ability: [u8; 4]) -> bool {
         self.learnable.iter().any(|skill| skill.alias == ability)
     }
-    /// Cooldown overrides or an autocast-off record keyed by `ability`.
+    /// Cooldown overrides or autocast state keyed by `ability`.
     fn has_alias_overrides(&self, ability: [u8; 4]) -> bool {
         self.cooldowns.iter().any(|(alias, _, _)| *alias == ability)
             || self.autocast_disabled.contains(&ability)
+            || self.autocast_enabled.contains(&ability)
     }
     fn capacity(&self) -> Result<i32, String> {
         self.learnable.iter().try_fold(0i32, |sum, skill| {
@@ -656,6 +663,7 @@ impl ObjectHost {
                 learnable: Vec::new(),
                 cooldowns: Vec::new(),
                 autocast_disabled: Vec::new(),
+                autocast_enabled: Vec::new(),
                 autocast_revision: 0,
                 autocast_order: None,
             };
@@ -901,7 +909,7 @@ impl ObjectHost {
             if state.has_alias_overrides(alias) {
                 return Err(self.hero_error(
                     name,
-                    format!("cooldown or autocast-off record of {alias_text} is not withdrawn"),
+                    format!("cooldown or autocast state of {alias_text} is not withdrawn"),
                 ));
             }
         }
