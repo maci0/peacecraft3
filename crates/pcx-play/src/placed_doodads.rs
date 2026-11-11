@@ -6,8 +6,81 @@ use crate::unit_model::{Animation, Model};
 pub struct PlacedDoodad {
     pub source: pcx_map::Doodad,
     pub shown: bool,
-    pub point_selection: bool,
+    pub selection: RectangleSelection,
     pub appearance: Result<DoodadAppearance, String>,
+}
+
+/// How `SetDoodadAnimationRect` tests an instance against its rectangle. Native
+/// selector `0x751d90`; evidence in `docs/re-notes/script-doodads.md`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RectangleSelection {
+    /// Instance record `+0xa0` is not positive: the position is tested with
+    /// inclusive rectangle edges.
+    Point,
+    /// Pathing texture size, record `+0xa0` (TGA width) and `+0xa4` (TGA
+    /// height): the footprint box must overlap the rectangle strictly.
+    Footprint { width: u16, height: u16 },
+    /// The footprint size could not be read; selecting this instance refuses.
+    Unresolved(String),
+}
+
+/// Half a pathing cell in world units: `0x10dd5b8` (32.0) times `0xe6957c` (0.5).
+const HALF_PATHING_CELL: f32 = 16.;
+/// A quarter turn, `0xe9231c`, and a full turn, `0xe92324` (f32 bit patterns
+/// `0x3fc90fdb` and `0x40c90fdb`).
+const QUARTER_TURN: f32 = std::f32::consts::FRAC_PI_2;
+const FULL_TURN: f32 = std::f32::consts::TAU;
+/// Bound on the native `while facing < 0 { facing += 2 pi }` loop, which does
+/// not terminate for huge negative angles.
+const MAX_TURN_STEPS: u32 = 1 << 16;
+
+impl PlacedDoodad {
+    /// The native selection test against `[min x, min y, max x, max y]`.
+    pub fn rectangle_selects(&self, bounds: [f32; 4]) -> Result<bool, String> {
+        let [min_x, min_y, max_x, max_y] = bounds;
+        let [x, y, _] = self.source.position;
+        let (width, height) = match &self.selection {
+            RectangleSelection::Point => {
+                return Ok((min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y));
+            }
+            RectangleSelection::Unresolved(reason) => return Err(reason.clone()),
+            RectangleSelection::Footprint { width, height } => (*width, *height),
+        };
+        if width == 0 {
+            return Ok((min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y));
+        }
+        let mut facing = self.source.angle;
+        if !facing.is_finite() {
+            return Err("non-finite doodad facing".into());
+        }
+        let mut steps = 0;
+        while facing < 0. {
+            steps += 1;
+            if steps > MAX_TURN_STEPS || facing + FULL_TURN == facing {
+                return Err("doodad facing outside the normalizable range".into());
+            }
+            facing += FULL_TURN;
+        }
+        let turns = facing / QUARTER_TURN + 0.5;
+        // x86 `cvttss2si` yields i32::MIN when the value does not fit.
+        let quarter = if turns.abs() < i32::MAX as f32 {
+            turns as i32
+        } else {
+            i32::MIN
+        };
+        let (mut half_x, mut half_y) = (
+            f32::from(width) * HALF_PATHING_CELL,
+            f32::from(height) * HALF_PATHING_CELL,
+        );
+        if quarter & 1 != 0 {
+            std::mem::swap(&mut half_x, &mut half_y);
+        }
+        let low_x = (x - half_x).max(min_x);
+        let high_x = (x + half_x).min(max_x);
+        let low_y = (y - half_y).max(min_y);
+        let high_y = (y + half_y).min(max_y);
+        Ok(high_x > low_x && high_y > low_y)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +103,7 @@ impl Catalog {
             .map_err(|_| "doodad instance allocation")?;
         let mut models = BTreeMap::<String, Arc<Model>>::new();
         let mut remaining = 128usize << 20;
+        let mut footprints = BTreeMap::<String, Result<(u16, u16), String>>::new();
         for instance in &self.doodads {
             if self.role(instance)? != PlacedRole::Decoration {
                 continue;
@@ -69,20 +143,70 @@ impl Catalog {
                     animation: Animation::new(model, now)?,
                 })
             })();
-            let point_selection = self
-                .path(&tables, instance.type_id, instance.life == 0)
-                .is_ok_and(|p| matches!(p.as_str(), "" | "_" | "none"));
+            let selection = self.selection(&tables, reader, instance, &mut footprints);
             rows.push(PlacedDoodad {
                 source: *instance,
                 // shortcut: documented low flag states drive visibility; extra flag bits still need a native render comparison.
                 shown: instance.flags & 3 != 0,
-                point_selection,
+                selection,
                 appearance,
             });
         }
         Ok(rows)
     }
 }
+
+impl Catalog {
+    /// Record `+0xa0`/`+0xa4`: `0x753240` takes the type's pathing texture path
+    /// (`0x75b150`, `pathTex`; empty, `none` and `_` mean no footprint), strips
+    /// its extension and reads the size of `<stem>.tga` (`0x71abc0`, `0x71a7c0`).
+    fn selection(
+        &self,
+        tables: &DefaultTables,
+        reader: &Resolver,
+        instance: &pcx_map::Doodad,
+        sizes: &mut BTreeMap<String, Result<(u16, u16), String>>,
+    ) -> RectangleSelection {
+        let path = match self.path(tables, instance.type_id, false) {
+            Ok(path) => path,
+            Err(error) => return RectangleSelection::Unresolved(error),
+        };
+        if matches!(path.as_str(), "" | "_" | "none") {
+            return RectangleSelection::Point;
+        }
+        let size = sizes
+            .entry(path.clone())
+            .or_insert_with(|| footprint_size(reader, &path))
+            .clone();
+        match size {
+            Ok((width, height)) => RectangleSelection::Footprint { width, height },
+            Err(error) => RectangleSelection::Unresolved(error),
+        }
+    }
+}
+
+/// The member the native size reader opens: the path up to its last `.` after
+/// the final separator (`0x71abc0`), then `.tga`.
+fn footprint_member(path: &str) -> String {
+    let stem = path
+        .rfind(['.', '\\', '/'])
+        .filter(|&at| path.as_bytes()[at] == b'.')
+        .map_or(path, |at| &path[..at]);
+    format!("{stem}.tga")
+}
+
+fn footprint_size(reader: &Resolver, path: &str) -> Result<(u16, u16), String> {
+    let member = footprint_member(path);
+    let asset = reader
+        .resolve_bounded(&member, FOOTPRINT_READ_BYTES)
+        .map_err(|e| format!("doodad pathing texture {member}: {e}"))?;
+    let header = pcx_tga::Header::parse(&asset.bytes)
+        .map_err(|e| format!("doodad pathing texture {member}: {e}"))?;
+    Ok((header.width, header.height))
+}
+
+/// Upper bound for reading one pathing texture, the limit placement uses.
+const FOOTPRINT_READ_BYTES: u64 = 1 << 20;
 
 fn appearance_source<'a>(
     tables: &DefaultTables,

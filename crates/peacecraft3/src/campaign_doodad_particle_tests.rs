@@ -91,7 +91,7 @@ fn app() -> App {
             creation_number: 71,
         },
         shown: true,
-        point_selection: true,
+        selection: pcx_play::campaign_placement::RectangleSelection::Point,
         appearance: Ok(DoodadAppearance {
             tint: [255.; 3],
             animation: Animation::new(model, 0.).unwrap(),

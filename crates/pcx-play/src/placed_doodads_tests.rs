@@ -180,3 +180,22 @@ fn a_single_variation_model_must_be_an_unambiguous_source_member() {
         .is_err()
     );
 }
+
+#[test]
+fn footprint_member_replaces_the_extension_after_the_last_separator() {
+    for (path, member) in [
+        (
+            "PathTextures\\4x4Default.tga",
+            "PathTextures\\4x4Default.tga",
+        ),
+        (
+            "PathTextures\\4x4Default.blp",
+            "PathTextures\\4x4Default.tga",
+        ),
+        ("PathTextures\\4x4Default", "PathTextures\\4x4Default.tga"),
+        ("Dir.v2/Plain", "Dir.v2/Plain.tga"),
+        ("a.b.tga", "a.b.tga"),
+    ] {
+        assert_eq!(footprint_member(path), member, "{path}");
+    }
+}

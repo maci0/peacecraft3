@@ -167,7 +167,7 @@ mod tests {
                 creation_number: 71,
             },
             shown: true,
-            point_selection: true,
+            selection: pcx_play::campaign_placement::RectangleSelection::Point,
             appearance: Err("model not needed by pose projection".into()),
         };
         let pose = transform(&row).unwrap();

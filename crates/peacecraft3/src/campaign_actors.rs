@@ -2930,7 +2930,10 @@ mod tests {
                 creation_number: 71,
             },
             shown: true,
-            point_selection: false,
+            selection: pcx_play::campaign_placement::RectangleSelection::Footprint {
+                width: 1,
+                height: 1,
+            },
             appearance: Err("model not needed by empty-slot resolution".into()),
         };
         let appearance = pcx_play::campaign_placement::DoodadAppearance {

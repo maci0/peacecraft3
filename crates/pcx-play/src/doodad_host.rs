@@ -104,17 +104,11 @@ impl ObjectHost {
             })?;
             for (i, row) in rows.iter().enumerate() {
                 let selected_type = *kind == -1 || row.source.type_id == kind.to_be_bytes();
-                // shortcut: footprint-overlap selection refuses until its source rectangle mapping is admitted.
-                if selected_type && !row.point_selection {
-                    return Err(self.inner.error(
-                        name,
-                        Failure::Doodad(
-                            "footprint doodad rectangle selection needs the native footprint cell-count origin, not decoded (script-doodads.md)".into(),
-                        ),
-                    ));
-                }
-                let [x, y, _] = row.source.position;
-                if selected_type && (x0..=x1).contains(&x) && (y0..=y1).contains(&y) {
+                let selected = selected_type
+                    && row
+                        .rectangle_selects([x0, y0, x1, y1])
+                        .map_err(|e| self.inner.error(name, Failure::Doodad(e)))?;
+                if selected {
                     if clip.eq_ignore_ascii_case("show") || clip.eq_ignore_ascii_case("hide") {
                         changes.push((i, None, Some(clip.eq_ignore_ascii_case("show"))));
                         continue;

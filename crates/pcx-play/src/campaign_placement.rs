@@ -22,7 +22,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[path = "placed_doodads.rs"]
 mod decorative;
 pub(crate) use decorative::model_member;
-pub use decorative::{DoodadAppearance, PlacedDoodad};
+pub use decorative::{DoodadAppearance, PlacedDoodad, RectangleSelection};
 
 const CELLS: usize = 4 << 20;
 const FOOTPRINT_CELLS: usize = 1 << 16;

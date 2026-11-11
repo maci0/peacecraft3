@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    campaign_placement::{DoodadAppearance, PlacedDoodad},
+    campaign_placement::{DoodadAppearance, PlacedDoodad, RectangleSelection},
     playercolor_host::{EnumHost, Limits},
     unit_model::{Animation, Model},
 };
@@ -91,7 +91,7 @@ fn row(id: u32, kind: [u8; 4], x: f32) -> PlacedDoodad {
     });
     PlacedDoodad {
         shown: true,
-        point_selection: true,
+        selection: RectangleSelection::Point,
         source: pcx_map::Doodad {
             type_id: kind,
             variation: 0,
@@ -236,4 +236,88 @@ fn duplicate_creation_numbers_are_distinct_placements() {
         .map(|row| (row.source.creation_number, row.source.position[0]))
         .collect();
     assert_eq!(placed, [(1, 0.), (1, 5.)]);
+}
+
+fn footprint(
+    id: u32,
+    kind: [u8; 4],
+    position: [f32; 2],
+    angle: f32,
+    size: [u16; 2],
+) -> PlacedDoodad {
+    let mut placed = row(id, kind, position[0]);
+    placed.source.position[1] = position[1];
+    placed.source.angle = angle;
+    placed.selection = RectangleSelection::Footprint {
+        width: size[0],
+        height: size[1],
+    };
+    placed
+}
+
+fn selected_by(rows: Vec<PlacedDoodad>) -> Vec<u32> {
+    let mut h = host(COMMON);
+    h.admit_placed_doodads(rows).unwrap();
+    let rect = rectangle(&mut h);
+    animate(&mut h, rect, *b"Zx91", "death").unwrap();
+    h.placed_doodads()
+        .filter(|r| r.appearance.as_ref().unwrap().animation.started != 0.)
+        .map(|r| r.source.creation_number)
+        .collect()
+}
+
+#[test]
+fn footprint_boxes_overlap_the_rectangle_strictly_and_turn_with_the_facing() {
+    // Rectangle (-2, -7) to (3, 5); a 2 by 1 footprint has half extents 32 and 16.
+    let half_turn = std::f32::consts::FRAC_PI_2;
+    let selected = selected_by(vec![
+        footprint(1, *b"Zx91", [30., -4.], 0., [2, 1]),
+        // The box edge touches maximum x exactly, so it does not overlap.
+        footprint(2, *b"Zx91", [35., -4.], 0., [2, 1]),
+        // A quarter turn exchanges the half extents: the edge is now at 19 - 16 = 3.
+        footprint(3, *b"Zx91", [19., -4.], half_turn, [2, 1]),
+        footprint(4, *b"Zx91", [18., -4.], half_turn, [2, 1]),
+        // Along y the unturned half extent is 16: 21 - 16 = 5 touches maximum y.
+        footprint(5, *b"Zx91", [0., 21.], 0., [2, 1]),
+        footprint(6, *b"Zx91", [0., 20.], 0., [2, 1]),
+        // Negative facings normalize: -pi/2 is the quarter turn that swaps.
+        footprint(7, *b"Zx91", [18., -4.], -half_turn, [2, 1]),
+        // Nearest quarter: 40 degrees stays unturned, 50 degrees turns (edge at 3).
+        footprint(8, *b"Zx91", [19., -4.], 40f32.to_radians(), [2, 1]),
+        footprint(9, *b"Zx91", [19., -4.], 50f32.to_radians(), [2, 1]),
+    ]);
+    assert_eq!(selected, [1, 4, 6, 7, 8]);
+}
+
+#[test]
+fn a_point_doodad_keeps_inclusive_edges_beside_footprint_doodads() {
+    let selected = selected_by(vec![
+        row(1, *b"Zx91", 3.),
+        row(2, *b"Zx91", 3.5),
+        footprint(3, *b"Zx91", [-2., 30.], 0., [0, 5]),
+    ]);
+    assert_eq!(selected, [1]);
+}
+
+#[test]
+fn an_unreadable_footprint_refuses_only_when_its_type_is_selected() {
+    let mut unread = row(1, *b"Zx92", 0.);
+    unread.selection = RectangleSelection::Unresolved("synthetic missing texture".into());
+    let mut h = host(COMMON);
+    h.admit_placed_doodads(vec![unread]).unwrap();
+    let rect = rectangle(&mut h);
+    animate(&mut h, rect.clone(), *b"Zx91", "death").unwrap();
+    let error = animate(&mut h, rect, *b"Zx92", "death").unwrap_err();
+    assert!(error.contains("synthetic missing texture"), "{error}");
+}
+
+#[test]
+fn a_non_finite_facing_refuses_instead_of_looping() {
+    for angle in [f32::NEG_INFINITY, f32::NAN, -1.0e30] {
+        let mut h = host(COMMON);
+        h.admit_placed_doodads(vec![footprint(1, *b"Zx91", [0., 0.], angle, [1, 1])])
+            .unwrap();
+        let rect = rectangle(&mut h);
+        assert!(animate(&mut h, rect, *b"Zx91", "death").is_err(), "{angle}");
+    }
 }

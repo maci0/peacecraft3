@@ -66,8 +66,7 @@ clip changes retain live particles, the random stream, fractional emission and
 global-sequence time. Scene placement and simulation are separate from the
 native's internal object layout.
 
-Random playback, loop-sound control and footprint-overlap rectangle selection
-remain contextual refusals. The radius/nearest native is still unsupported.
+Random playback and loop-sound control remain contextual refusals. The radius/nearest native is still unsupported.
 Dynamic doodad lights, model-event sounds, fog visibility policy and a complete
 original-rendered comparison remain open. Do not count this slice as complete
 doodad presentation or complete scripting support.
@@ -134,16 +133,46 @@ Observed selection:
 - Footprint cell count at `+0xa0` at or below zero (no pathing footprint): the point `(+0xc, +0x10)`
   is selected when it lies inside the rectangle with inclusive bounds.
 - Count above zero: the box is the position ± half-extents, each half-extent is cells × 16
-  (`0x10dd5b8` is 32.0, halved), and a facing at `+0x18` normalised to `[0, 2π)` with an odd quarter
-  turn swapping the two extents. The doodad is selected only when the box overlaps the rectangle
+  (`0x10dd5b8` is 32.0, halved), and the facing at `+0x18` rounded to the nearest quarter turn, an odd quarter
+  swapping the two extents. The doodad is selected only when the box overlaps the rectangle
   strictly on both axes (`hi > lo`), so touching edges do not select.
 - The rectangle floats at `+0x24`/`+0x2c` pair with record `+0x10`, and `+0x28`/`+0x30` with `+0xc`.
-  Which of `+0xc` and `+0x10` is world X is inferred from the existing point test, not decoded.
+  `GetRectMinX` (`0x495080`) reads rect `+0x28`, `GetRectMinY` (`0x4950a0`) `+0x24` and
+  `GetRectMaxX` (`0x495040`) `+0x30`, so `+0x24`/`+0x2c` are min and max Y, `+0x28`/`+0x30` min and
+  max X, and record `+0xc` is world X, `+0x10` world Y (observed).
+- The box helper `0x753040` returns an empty box unless `[+0xa0] > 0`. The facing is raised by
+  `0xe92324` (2 pi) while negative, divided by `0xe9231c` (pi/2) with `0xe6957c` (0.5) added and
+  truncated (`cvttss2si`); an odd result swaps the half extents. The intersection is
+  `max(low, rect low)` against `min(high, rect high)` per axis (`0x751e1f`..`0x751e51`).
+
+### Footprint cell counts `+0xa0`/`+0xa4` (observed, 2026-11-11)
+
+- `0x754450` builds the instance record with both fields zero (`0x754806`, `0x75480c`), then
+  `0x753240(record)` fills them when the type id at `+4` is nonzero.
+- `0x753240` calls CDoodads vtable slot `0xa4` (`0x75b150`, vtable `0xeaf308`, RTTI `CDoodads`).
+  For a type in the map's object edits it uses `0x76aba0`, else the stock database `0x769810`; both
+  read the type's `pathTex` string (string field index `0xa` in the stock table, `7` or `8` for an
+  edited alive or dead variant) and return
+  false when it is empty, `none` (`0xe9dda4`) or `_` (`0xe92074`). With no path `0x753339` stores
+  zero in both fields.
+- With a path, `0x71abc0(path, &+0xa0, &+0xa4, &pixels)` strips the extension after the last
+  separator, appends each of `.tga`, `.blp` (`0xea9710`, 5-byte stride) and calls `0x71a7c0`. The
+  TGA branch (`0x71a8d7`..`0x71a8f7`) stores header bytes 12 (width) in `+0xa0` and 14 (height) in
+  `+0xa4`; the descriptor byte 17 bit `0x20` and bits per pixel (byte 16) are read at
+  `0x71a90d`/`0x71a8d7`. A failed read leaves the fields zero and logs through the error sink
+  (`0x7532b2`), which selects the point branch.
+- Native half extents are width * 16 and height * 16 world units (`0x10dd5b8` 32.0 times 0.5), not
+  the texel order the unit footprint loader (`0x4deb67`) uses: the box here is not transposed.
+
+Recreation: `RectangleSelection` (`placed_doodads.rs`) carries `Point`, `Footprint { width, height }`
+read from `<stem>.tga` of the resolved `pathTex`, or `Unresolved(reason)`. A missing, unreadable or
+non-TGA texture (the `.blp` branch is not decoded) refuses only when the doodad's type is selected
+by the call. The loop bound on the negative-facing normalisation is a recreation guard: the native
+loop does not terminate for a huge negative angle. Tests use synthetic doodads and rectangles.
+
+Not decoded: the meaning of the `+0x150` value (5 in this path); the `0x1000000` flag and `+0x14c`
+test that choose the alive/dead path in `0x75b150` (the recreation never selects the dead path for
+a doodad, since `Doodads.slk` has no dead texture column); BLP size reading.
 
 Effect (`0x75d370`): `soundon`/`soundoff` control a loop sound; `show`/`hide` set or clear flag bit
 `0x08000000` at `+0x84`; any other name requests an animation stored once on the selected doodad.
-
-Not decoded: the origin of the `+0xa0`/`+0xa4` cell counts (likely the pathing texture size, not
-established), and the meaning of the `+0x150` value (5 in this path). Until the cell counts are
-decoded, a footprint doodad of the requested kind refuses the call, and point doodads select by the
-inclusive rule above.
