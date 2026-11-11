@@ -232,6 +232,9 @@ pub struct AttributeBonus {
     pub reincarnation: Option<Reincarnation>,
     /// The held vampiric attack (`AIva`), `None` without one.
     pub life_steal: Option<LifeSteal>,
+    /// The detection an `Adet` ability on this item grants (Gem of True Seeing), `None` without
+    /// one. Read per item and not aggregated; the recreation has no invisible units to apply it to.
+    pub detector: Option<Detector>,
 }
 
 #[derive(Clone, Debug)]
@@ -284,6 +287,8 @@ pub struct Rules {
     reincarnation: Option<ReincarnationClasses>,
     /// Life-steal registration, attached by `with_life_steal`.
     life_steal: Option<LifeStealClass>,
+    /// The `Adet` class, attached by `with_detector`.
+    detector: Option<DetectorClass>,
 }
 
 /// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
@@ -460,6 +465,7 @@ impl Rules {
         let life_steal = window(LIFE_STEAL_WINDOW)?;
         let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
         let reincarnation = ReincarnationImage::read(&pe).map_err(|e| fail(&e))?;
+        let detector = DetectorImage::read(&pe).map_err(|e| fail(&e))?;
         let purge = PurgeImage::read(&pe).map_err(|e| fail(&e))?;
         Self::decode(
             tables,
@@ -483,6 +489,7 @@ impl Rules {
         .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
         .and_then(|rules| rules.with_reincarnation(&reincarnation))
         .and_then(|rules| rules.with_life_steal(&life_steal))
+        .and_then(|rules| rules.with_detector(&detector))
         .map_err(|e| fail(&e))
     }
 
@@ -542,6 +549,9 @@ impl Rules {
     /// Whether `class` is one of the registrations already attached.
     fn is_registered(&self, class: &str) -> bool {
         let amount = |c: &Option<AmountClass>| c.as_ref().is_some_and(|c| c.class == class);
+        if self.detector.as_ref().is_some_and(|d| d.class == class) {
+            return true;
+        }
         if self.reincarnation.as_ref().is_some_and(|classes| {
             [&classes.ankh, &classes.hero, &classes.creep]
                 .iter()
@@ -1095,6 +1105,7 @@ impl Rules {
             move_speed_bonus: None,
             reincarnation: None,
             life_steal: None,
+            detector: None,
         })
     }
 
@@ -1311,6 +1322,18 @@ impl Rules {
                     .checked_add(damage)
                     .ok_or("passive damage overflows")?;
                 held.spell_damage_taken = Some(held.spell_damage_taken.unwrap_or(1.0) * taken);
+                continue;
+            }
+            if let Some(class) = &self.detector
+                && code == class.class
+            {
+                if held.detector.is_some() {
+                    return Err(format!(
+                        "two detector abilities on {} are unsupported",
+                        item.rawcode()
+                    ));
+                }
+                held.detector = Some(self.detector_row(alias, class)?);
                 continue;
             }
             if let Some(classes) = &self.reincarnation
@@ -2046,6 +2069,11 @@ fn fraction_column(
     })
 }
 
+#[path = "inventory_detector.rs"]
+pub(crate) mod detector;
+pub use detector::Detector;
+use detector::DetectorClass;
+pub(crate) use detector::DetectorImage;
 #[path = "inventory_reincarnation.rs"]
 pub(crate) mod reincarnation;
 pub use reincarnation::Reincarnation;

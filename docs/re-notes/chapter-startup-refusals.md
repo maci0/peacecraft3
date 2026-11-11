@@ -781,3 +781,20 @@ First refusal of `selected_install_locked_chapter_startup_probe` (`.scratch/run-
 | TFT OrcX02 | `UnitAddItem`: unsupported passive ability `AIva` on `klmm` | `UnitAddItem`: unsupported passive ability `AIad` (code `AHad`) on `blba` |
 | TFT OrcX03a | `UnitAddItemToSlotById`: unsupported passive ability `AIva` on `modt` | same `AIad` on `blba` |
 | TFT HumanX06 | `UnitAddItem`: `AIau` (code `AUau`) on `lgdh` | same item, message now names the 4.0 s buff lifetime and the open range repeat |
+
+## Probe results (2026-11-11, Gem of True Seeing, several orbs and multiboard lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" was probed on this
+branch's base `35ef818a` (a build of the unmodified tree), "after" on this branch. Decode and
+addresses: [passive-held-items.md](passive-held-items.md) ("Several orbs on one holder", "`Adet`"),
+[multiboard-suppress-display.md](multiboard-suppress-display.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf07 | `UnitAddItemToSlotById` (`war3map.j:1041`): unsupported passive ability `Adt1` with code `Adet` on `gemt` | passes (`executed_units=162`) |
+| RoC Undead02Interlude | `UnitAddItemToSlotById` (`war3map.j:251`): a second orb on one holder is unsupported | passes (`executed_units=13`) |
+| TFT HumanX05 | `MultiboardSuppressDisplay` (`Blizzard.j:5911`) unsupported by this host | passes (`executed_units=263`) |
+
+Open: the gem is retained and nothing reads it, because the recreation has no invisible units
+to reveal. `MultiboardSuppressDisplay` stores its flag and the recreation draws no multiboard. Two
+spell orbs on one holder, and one item with two orb abilities, stay refused.

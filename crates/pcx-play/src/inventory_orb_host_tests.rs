@@ -2,6 +2,7 @@
 //! penalty, the second attack against air, and the admission refusals. The rules under test are
 //! the ones decoded in `docs/re-notes/passive-held-items.md`.
 use super::*;
+use crate::playercolor_host::{ItemCommand, ItemDrop};
 
 /// Weapon base plus the fixture weapon's single die: `dmgplus1` 4 and `1d1`.
 const WEAPON_ROLL: f32 = 5.0;
@@ -314,11 +315,11 @@ fn corruption_lasts_the_hero_duration_on_a_hero_target() {
 }
 
 #[test]
-fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
-    let (Fixture { mut h, hero, .. }, _, _) = armed_hero(b"ofir");
-    let second = item(&mut h, b"ocor", 0.0);
+fn two_spell_orbs_on_one_holder_are_refused_without_moving_the_item() {
+    let (Fixture { mut h, hero, .. }, _, _) = armed_hero(b"odef");
+    let second = item(&mut h, b"odef", 0.0);
     let err = add(&mut h, hero, second).unwrap_err();
-    assert!(err.contains("second orb"), "{err}");
+    assert!(err.contains("two spell orbs"), "{err}");
     assert!(
         h.executed_items()
             .find(|(id, _)| *id == second)
@@ -327,8 +328,92 @@ fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
             .held_by
             .is_none()
     );
-    let both = item(&mut h, b"oboo", 0.0);
-    assert!(add(&mut h, hero, both).is_err());
+}
+
+/// The hero holding `first`, then `second`, with an enemy target in melee reach and a second enemy
+/// inside the fire splash area of the target.
+fn orb_pair(first: &[u8; 4], second: &[u8; 4]) -> (Fixture, [HandleId; 2], HandleId, HandleId) {
+    let mut f = open_orb(&[]);
+    let items = [first, second].map(|raw| {
+        let orb = item(&mut f.h, raw, 0.0);
+        assert_eq!(add(&mut f.h, f.hero, orb), Ok(Value::Bool(true)));
+        orb
+    });
+    let target = unit_for(&mut f.h, b"u001", 5, 30.0);
+    let at = position(&f.h, target);
+    let bystander = unit_at(&mut f.h, b"u001", 5, [at[0] + 12.0, at[1]]);
+    (f, items, target, bystander)
+}
+
+/// What the first hit did: whether the corruption lowered the target's armor and whether the fire
+/// splash reached the bystander.
+fn first_hit_effects(f: &mut Fixture, target: HandleId, bystander: HandleId) -> (bool, bool) {
+    let untouched = life_of(&f.h, bystander);
+    attack(&mut f.h, f.hero, target);
+    run(&mut f.h, 0.3);
+    (
+        f.h.orb_armor_penalty(target) == ORB_PENALTY,
+        life_of(&f.h, bystander) < untouched,
+    )
+}
+
+fn move_to(f: &mut Fixture, from: usize, to: usize) {
+    let owner = f.h.executed_unit(f.hero).unwrap().owner;
+    let local = f.h.player_settings(owner).unwrap().number;
+    let done =
+        f.h.player_move_item(local, f.hero, from, ItemDrop::Slot(to));
+    assert!(matches!(done, Ok(ItemCommand::Done)), "{done:?}");
+}
+
+#[test]
+fn the_newest_orb_arms_first_and_the_other_does_not_fire() {
+    // Neither item was dragged, so both carry slot value 0 and the ability list head, the newer
+    // item, comes first.
+    let (mut f, _, target, bystander) = orb_pair(b"ofir", b"ocor");
+    assert_eq!(first_hit_effects(&mut f, target, bystander), (true, false));
+    let (mut f, _, target, bystander) = orb_pair(b"ocor", b"ofir");
+    assert_eq!(first_hit_effects(&mut f, target, bystander), (false, true));
+}
+
+#[test]
+fn both_orbs_still_add_their_flat_damage() {
+    let (mut f, _, target, bystander) = orb_pair(b"ofir", b"ocor");
+    let lowered = BASE_ARMOR - ORB_PENALTY;
+    first_hit_effects(&mut f, target, bystander);
+    assert_life(
+        &f.h,
+        target,
+        attack_damage(WEAPON_ROLL, 2.0 * ORB_DAMAGE, lowered),
+        "each orb adds its own DataA1 to the one hit",
+    );
+}
+
+#[test]
+fn dragging_items_gives_each_the_slot_value_it_ends_in() {
+    // The fixture hero has two slots: the fire orb sits in slot 0 and the newer corruption orb in
+    // slot 1, both with slot value 0, so the corruption orb leads. One drag trades the slots: the
+    // fire orb takes value 1 and the corruption orb 0, and the corruption orb still leads.
+    let (mut f, _, target, bystander) = orb_pair(b"ofir", b"ocor");
+    move_to(&mut f, 0, 1);
+    assert_eq!(first_hit_effects(&mut f, target, bystander), (true, false));
+    // A second drag trades back: the corruption orb now has value 1 and the older fire orb 0, so
+    // the fire orb leads although it was acquired first.
+    let (mut f, _, target, bystander) = orb_pair(b"ofir", b"ocor");
+    move_to(&mut f, 0, 1);
+    move_to(&mut f, 0, 1);
+    assert_eq!(first_hit_effects(&mut f, target, bystander), (false, true));
+}
+
+#[test]
+fn a_dropped_orb_is_acquired_anew_at_the_head_of_the_list() {
+    let (mut f, [fire, _], target, bystander) = orb_pair(b"ofir", b"ocor");
+    f.h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(f.hero), Value::Handle(fire)],
+    )
+    .unwrap();
+    assert_eq!(add(&mut f.h, f.hero, fire), Ok(Value::Bool(true)));
+    assert_eq!(first_hit_effects(&mut f, target, bystander), (false, true));
 }
 
 #[path = "inventory_frost_host_tests.rs"]

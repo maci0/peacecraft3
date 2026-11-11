@@ -94,8 +94,20 @@ struct BlackArrowMark {
     count: i32,
 }
 
+/// Where an item's abilities stand in the unit's orb walk.
+#[derive(Clone, Copy, Default)]
+struct OrbOrder {
+    /// The slot value of the item's abilities (`[ability+0xa4]`): the slot of the latest drag
+    /// move, zero until one.
+    slot: usize,
+    /// Counts up as items enter inventories; the newest ability is the head of the ability list.
+    acquired: u64,
+}
+
 #[derive(Default)]
 pub(super) struct State {
+    order: BTreeMap<HandleId, OrbOrder>,
+    acquired: u64,
     penalties: BTreeMap<HandleId, ActivePenalty>,
     frosts: BTreeMap<HandleId, ActiveFrost>,
     poisons: BTreeMap<HandleId, ActivePoison>,
@@ -132,18 +144,61 @@ impl ObjectHost {
         self.orbs.frosts.contains_key(&unit)
     }
 
-    /// The orb the attacker's hit on `target` arms, if any: the held orb whose `targs1` lists
-    /// the target's class.
+    /// An item enters a unit's inventory (pickup, creation into a slot, purchase, restore): its
+    /// abilities are new objects, so the slot value they carry is back to zero and they join the
+    /// head of the unit's ability list.
+    pub(super) fn orb_item_acquired(&mut self, item: HandleId) {
+        self.orbs.acquired += 1;
+        self.orbs.order.insert(
+            item,
+            OrbOrder {
+                slot: 0,
+                acquired: self.orbs.acquired,
+            },
+        );
+    }
+
+    /// The inventory drag order moved `item` to `slot` and `other`, when the slot was occupied,
+    /// to `other_slot`: each item's abilities take the new slot value (`0x6c6ad0`, called from
+    /// `0xb46fe4` and `0xb47007`).
+    pub(super) fn orb_items_traded(
+        &mut self,
+        (item, slot): (HandleId, usize),
+        other: Option<(HandleId, usize)>,
+    ) {
+        for (held, slot) in std::iter::once((item, slot)).chain(other) {
+            self.orbs.order.entry(held).or_default().slot = slot;
+        }
+    }
+
+    /// The orb the attacker's hit on `target` arms, if any. The client walks the unit's orb
+    /// abilities by tier, the item's slot value plus a constant, and within a tier from the
+    /// newest ability to the oldest, and the first whose arm check passes arms and ends the
+    /// walk (`0x697620`, `0xc9e440`, `0xc9e4a0`): one orb arms per hit. The arm check is the
+    /// target class test against the orb row's `targs1`.
     pub(super) fn orb_for_hit(
         &self,
         source: HandleId,
         target: HandleId,
     ) -> Result<Option<Orb>, Error> {
-        let Some(orb) = self.unit_hero_bonus(source)?.orb else {
-            return Ok(None);
-        };
-        let covered = self.targets_cover(&orb.targets, &self.executed_unit(target)?.definition)?;
-        Ok(covered.then_some(orb))
+        let mut held = Vec::new();
+        for (item, record) in self.executed_items() {
+            if record.held_by.is_none_or(|(owner, _)| owner != source) {
+                continue;
+            }
+            if let Some(orb) = self.held_attributes(item)?.orb {
+                let order = self.orbs.order.get(&item).copied().unwrap_or_default();
+                held.push((order.slot, std::cmp::Reverse(order.acquired), orb));
+            }
+        }
+        held.sort_by_key(|&(slot, acquired, _)| (slot, acquired));
+        let victim = &self.executed_unit(target)?.definition;
+        for (_, _, orb) in held {
+            if self.targets_cover(&orb.targets, victim)? {
+                return Ok(Some(orb));
+            }
+        }
+        Ok(None)
     }
 
     /// The weapon `unit` attacks `target` with. A held orb enables the unit's second attack

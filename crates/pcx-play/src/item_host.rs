@@ -153,6 +153,7 @@ impl ObjectHost {
                 .inner
                 .allocate(Entry::Item { record }, "RestoreUnit")
                 .expect("preflighted cached item identities");
+            self.orb_item_acquired(item);
             self.commit_cached_charges(item, charges);
         }
         if count != 0 {
@@ -475,6 +476,9 @@ impl ObjectHost {
         };
         let id = self.inner.allocate(Entry::Item { record }, CREATE)?;
         self.items.as_mut().expect("admission retained").records += 1;
+        if held_by.is_some() {
+            self.orb_item_acquired(id);
+        }
         Ok(id)
     }
 }

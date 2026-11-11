@@ -1,12 +1,16 @@
 use super::super::EventSubject;
 use super::*;
 use crate::inventory::{InventoryBudget, Policy, Rules};
-use crate::inventory_powerup::{AttributeBonus, Rules as PowerupRules};
+use crate::inventory_powerup::{AttributeBonus, OrbKind, Rules as PowerupRules};
 use crate::inventory_powerup_host::{
     clamp_life_pools, clamp_mana_pools, grant_strength, reprice_life_scaled, reprice_mana,
     reprice_max_life, reprice_max_mana,
 };
 use crate::item_heal::heal_life;
+
+/// The proc state of a spell orb is kept once per holder, so a second one is refused.
+const TWO_SPELL_ORBS: &str =
+    "two spell orbs on one holder are unsupported: the proc counters are kept once per holder";
 
 /// Passive item or powerup deltas applied to one unit's pools.
 #[derive(Clone, Copy)]
@@ -459,6 +463,7 @@ impl ObjectHost {
             move_speed_refresh_skipped: false,
             reincarnation: None,
             life_steal: None,
+            detector: None,
         };
         for (item, _) in self
             .executed_items()
@@ -520,13 +525,21 @@ impl ObjectHost {
                 bonus.move_speed_refresh_skipped |= passive.move_speed_refresh_skipped;
             }
             if let Some(orb) = passive.orb {
-                if bonus.orb.is_some() {
-                    return Err(self.inner.error(
-                        "inventory",
-                        Failure::UnitActivity("two held orbs are unsupported".into()),
-                    ));
-                }
-                bonus.orb = Some(orb);
+                // The aggregate says whether an orb is held; the orb a hit arms is chosen per
+                // hit. A spell orb is kept in preference, because its proc state is the one
+                // that is per holder.
+                bonus.orb = match bonus.orb {
+                    Some(held) if matches!(held.kind, OrbKind::Spell(_)) => {
+                        if matches!(orb.kind, OrbKind::Spell(_)) {
+                            return Err(self
+                                .inner
+                                .error("inventory", Failure::UnitActivity(TWO_SPELL_ORBS.into())));
+                        }
+                        Some(held)
+                    }
+                    Some(held) if !matches!(orb.kind, OrbKind::Spell(_)) => Some(held),
+                    _ => Some(orb),
+                };
             }
             if let Some(steal) = passive.life_steal {
                 if bonus.life_steal.is_some() {
@@ -845,6 +858,7 @@ impl ObjectHost {
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = Some((unit, slot));
         }
+        self.orb_item_acquired(item);
         if let Some(bonus) = passive.move_speed_bonus {
             self.set_unit_speed_bonus(unit, item, Some(bonus))?;
         }
@@ -1139,15 +1153,16 @@ impl ObjectHost {
         if passive.move_speed_bonus.is_some() {
             self.require_speed_bonus_host(unit, passive.move_speed_refresh_skipped)?;
         }
-        if held.orb.is_some() && passive.orb.is_some() {
-            return Err(self.inner.error(
-                "inventory",
-                Failure::UnitActivity(
-                    "a second orb on one holder is unsupported: the order in which several orbs \
-                     fire on one hit is not decoded"
-                        .into(),
-                ),
-            ));
+        if held
+            .orb
+            .is_some_and(|orb| matches!(orb.kind, OrbKind::Spell(_)))
+            && passive
+                .orb
+                .is_some_and(|orb| matches!(orb.kind, OrbKind::Spell(_)))
+        {
+            return Err(self
+                .inner
+                .error("inventory", Failure::UnitActivity(TWO_SPELL_ORBS.into())));
         }
         if (held.life_steal.is_some() && passive.life_steal.is_some())
             || ((held.life_steal.is_some() || passive.life_steal.is_some())
@@ -1498,6 +1513,7 @@ impl ObjectHost {
                     record.held_by = Some((unit, slot));
                 }
             }
+            self.orb_items_traded((item, to), other.map(|other| (other, from)));
         }
         Ok(ItemCommand::Done)
     }

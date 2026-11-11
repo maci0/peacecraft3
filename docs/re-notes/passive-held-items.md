@@ -29,7 +29,10 @@ derived on demand from the held slots, so no add/remove state exists.
 - Orbs (`AIfb`, `AIgd`, `AIcb`, `AIob`, `AIpb`) add their flat damage and run their on-hit effect; see
   "Orb families" below. The spell orbs (`AIsb`) roll a proc per swing and cast Black Arrow or
   Purge, and the lightning orb (`AIlb`) casts Purge on every armed hit; see "Spell orbs" below. A
-  holder takes at most one orb.
+  holder may hold several orbs and one arms per hit; see "Several orbs on one holder" below. An
+  item with two orb abilities and a holder with two spell orbs refuse.
+- A held Gem of True Seeing (`Adt1`, class `Adet`) is read and retained, and nothing consumes it;
+  see "`Adet`" below.
 - A held Ankh of Reincarnation (`AIrc`) revives its holder at the place it died `DataA1` seconds
   after the death and spends its charge; see "`AIrc`" below.
 - A vampiric attack (`AIva`) heals the holder on its attack hits; see "`AIva`" below. A holder takes
@@ -464,7 +467,7 @@ Parser: `crates/pcx-play/src/inventory_orb_tests.rs` (`fire_orb_reads_damage_are
 `without_the_orb_registration_an_orb_row_stays_refused`). Combat host:
 `crates/pcx-play/src/inventory_orb_host_tests.rs` (splash area, collision reach, allies, spells row
 and no armor, Kil'jaeden amount, drop, structure targets, corruption timing, refresh without
-stacking, hero duration, second-orb refusal, missile impact for both orbs, second weapon against
+stacking, hero duration, several orbs, missile impact for both orbs, second weapon against
 air, no second weapon, no orb). All inputs are synthetic rows built in the tests.
 
 ### Open (not decoded, so not modeled)
@@ -475,8 +478,7 @@ air, no second weapon, no orb). All inputs are synthetic rows built in the tests
 - Slots `+0x14c` and `+0x150` (`AIfb` `0xc9fcb0`, `0xc9fba0`; `AIcb` `0xc9d8d0`, `0xc9d750`) run the
   same arming test with a different damage call (`[ebx+0xc8]`); the target kinds they serve were not
   identified. Orb attacks on destructables and items are outside the recreation's combat.
-- How several orbs on one unit fire on one hit. A second orb refuses at pickup, so no ordering is
-  guessed.
+- How several orbs on one unit fire on one hit: decoded, see "Several orbs on one holder".
 - Damage modifiers after the armor step in `0x6677c0` (calls `0x6a0630` and the ethereal and
   hero tables) beyond the damage-bonus matrix.
 - The selected-unit panel armor does not show the corruption penalty.
@@ -1400,3 +1402,95 @@ by its class code. The shipped rows the lists omit (`AItx`, `AId0`, `AId7`, `AId
 `AIlz`, `AI2m`, `AImv`, `AImz`) are held like the listed ones. The metadata rows stay as the
 source of the `Data` column and of the W3A override pointer; the alias lists are not read.
 Observed in the image; not observed at runtime.
+
+## Several orbs on one holder: decoded and implemented
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`, `objdump`/`rizin`); no runtime capture. Observed
+means read from the image, inferred means a reading of it.
+
+- Arm walk (observed): the attack launch (`0xb1cf1a`, which builds the attack record with `0x6a9940`)
+  calls `0x697620` on the attacker. It scans the unit's ability list (head `[unit+0x3e8]`, next link
+  `[ability+0x24]`) once per tier, tiers `0xb` to `0x19` in ascending order and then `0x1a`. In each
+  tier it calls slot 77 (`+0x134`) of every ability whose slot 76 (`+0x130`) returns that tier, and it
+  returns at the first ability whose slot 77 returns non-zero. Orb abilities never get asked after the
+  first one that arms, so one orb arms per attack.
+- Hit walk (observed): `0x68f950` does the same over tiers `0x1b` to `0x29`, asking slot 78 (`+0x138`)
+  for the tier and calling slot 85 (`+0x154`), the on-hit handler, until one returns non-zero. An armed
+  orb's handler clears its armed bit first and returns 1 once it applied the attack record (`0xc9fa10`
+  returns the flag set at `0xc9fb5f`). A spell orb returns 1 only when its proc is held
+  (`0xc9f3d0`), so a spell orb that armed without a proc leaves the hit to the ordinary path.
+- Tier (observed): every orb class (`AIfb`, `AIcb`, `AIob`, `AIpb`, `AIsb`, `AIlb`) shares the `AIDB`
+  slots 76 `0xc9e440` (`[this+0xa4] + 0x12`), 77 `0xc9e4a0` (the arm test of "What runs on a hit") and
+  78 `0xc9e540` (`[this+0xa4] + 0x22`). `[this+0xa4]` is zero from the `AIDB` factory (`0xca6259`).
+  Its only writer is slot 35 (`0xc9e410`), reached through the item method `0x6c6ad0`, which passes
+  its argument to slot 35 of each ability of the item. `0x6c6ad0` has two call sites, `0xb46fe4` and
+  `0xb47007`, both in the inventory move order (`0xb46ce0`, order id minus `0xd0022` is the
+  destination slot, slots stored at `(3*slot + 0x1d)*4` of the inventory ability): the moved item's
+  abilities get the destination slot, and the item that was in that slot, if any, gets the origin
+  slot. Nothing else writes it (`UnitAddItemToSlotById` is `0x4aeba0` into `0x67a310` and the add
+  `0xb45660`, and none of them calls `0x6c6ad0`). So an orb's tier is `0x12 + s`, with `s` the slot
+  of the item's latest drag and 0 until one.
+- Ties (observed): the unit's ability add (`0x6d4590`..`0x6d4630`) links the new ability to the old
+  head and stores it as the head, so within one tier the newest ability is asked first.
+- Inferred: the abilities of an item that is dropped and picked up again are new objects, so the
+  slot value returns to 0 and the item is the newest. Every orb adds its own `DataA1` to the
+  attack damage whichever orb arms (each is an `AIat`-derived ability, see "Rules decoded", 1).
+
+Recreation: `ObjectHost::orb_for_hit` (`crates/pcx-play/src/orb_host.rs`) sorts the held orb items by
+(slot value, newest first) and arms the first whose `targs1` covers the target. The slot value and
+the acquisition counter live in the orb host state (`orb_item_acquired` on pickup, creation into a
+slot, purchase and cache restore; `orb_items_traded` on an inventory drag). A holder with two spell
+orbs still refuses (the proc counters are kept once per holder), and so does an item with two orb
+abilities. Not decoded and not modeled: the arm test's flag `0x80` and veto `0x682180` (above), an
+armed bit left set when a swing never lands, and orbs other than the stock item orbs (no ability
+list order for unit abilities). Tests: `inventory_orb_host_tests.rs`
+(`the_newest_orb_arms_first_and_the_other_does_not_fire`,
+`dragging_items_gives_each_the_slot_value_it_ends_in`,
+`a_dropped_orb_is_acquired_anew_at_the_head_of_the_list`, `both_orbs_still_add_their_flat_damage`,
+`two_spell_orbs_on_one_holder_are_refused_without_moving_the_item`).
+
+## `Adet` (Gem of True Seeing `gemt`, ability `Adt1`): read and retained, not consumed
+
+Decoded from the same image; no runtime capture.
+
+- Class (observed): `CAbilityDetector` (RTTI name at `0xf2f108`), class getter slot 7 `0xb7c550`
+  returns `Adet`, vtable `0xf2c314` (stored by the constructor `0xb7f140` at `0xb7f1b0`), factory
+  `0xb7df60`. Registration window `0xb80a20` (`push 0x11b575c`, `call 0xbbebf0` which returns `APas`,
+  `push eax`, `push "Adet"`, `call 0x7f6360`). The classes `Abdt`, `Agyv`, `Adts` and `Atru`
+  register over `Adet` (windows `0xb809e0`, `0xb80a60`, `0xb80ae0`, `0xb80b40`). Rows: `Adt1` has code `Adet`,
+  `Rng1` 1100, `DataA1` 3, `Area1` unset, one level, `targs1` `vuln,invu`. `Det1` is the metadata
+  field `detectionType` over `DataA`.
+- Radius (observed): the attach slot 32 (`0xb7c560`) builds the key with `snprintf(buf, 20, "%s%d",
+  name, 1)` where `name` is the string at the pointer `[0x10dce18]` (`push` at `0xb7c5a8`), which is
+  `Rng`, and level 1. So the detection radius is `Rng1`, not `Area1`, and it is read at level 1
+  whatever the level. The value is stored at `[ability+0x90]` and drives the range-event
+  registration around the holder (`0xb7fa50` creates it with events `0xd01b4` enter and `0xd01b5`
+  leave, radius `[this+0x90]`). `Rules::read` reads the pointer and the name from the image
+  (`DetectorImage::read`).
+- What it detects (observed): for each unit the registration reports, `0xb801f0` (enter) calls
+  `0x6947c0(unit, player, type)`, and `0xb80cb0` (leave) calls `0x688310`, the removal. `player` is
+  `[ability+0x94]`, the owning player of the holder (`vtable +0xec` of the holder at attach
+  `0xb7c591`, and again when the owner changes, `0xb80960` on event `0xd01a2`). `type` is `DataA1`
+  (`0x46ed70`, level record `+0x20`, truncated by `0x9a07b0`). The enter handler only requires the
+  reported object to be a unit (class test `0x7f55f0`); `targs1` is not consulted, so allies and
+  enemies are covered alike. `0x694750(player, type)` adds a count per player for each set bit of
+  `type`: bit 0 in `[unit+0x2c+4*player]` with the first count setting bit `player` of the mask
+  `[unit+0x24]`, bit 1 in `[unit+0xa4+4*player]` with the mask `[unit+0x9c]`. When a count becomes
+  active and the unit has flag `0x1000000` the unit's visibility is refreshed (`0x6bf040`,
+  `0x6a0da0`), and with flag `0x40000000` its virtual `+0xb4` runs. So it is per-player detection by the
+  holder's owner of every unit within `Rng1` of the holder, the same mechanism as the detector
+  classes that register over it (`Adts` sentry ward, `Atru`), which share these counters.
+- Holder state (observed): the attach `0xb7fa50` does nothing when the holder's flag word
+  `[unit+0x164]` has bit `0x100` set, and also stops when bit `0x2000000` is set without
+  `0x4000000` and the ability's own enable slot (`+0x268`) answers zero. The meaning of those flags is
+  not decoded.
+- Recreation: the pickup is admitted. `Rules::detector_row` reads `Rng1` (the name taken from the
+  image) and `DataA1` and returns `Detector { radius, types }` on `AttributeBonus::detector`, read per
+  item and not aggregated. A row with `DataA1` outside 0 to 3, a negative or non-finite radius,
+  several levels, a map modification, or two `Adet` abilities on one item refuses. The recreation has
+  no invisibility and no per-player detection counters (`rg -n "invisib|detect" crates/pcx-play/src`
+  finds none), so there is nothing the detector can reveal and nothing consumes the value: unlike
+  the client, a unit within the radius is not revealed. A future invisibility system must read
+  `AttributeBonus::detector`, count per owning player and apply it to every unit within `radius`
+  of the holder. Tests: `inventory_detector_tests.rs` (rows, the radius column read from the image,
+  refusals, registration) and an ignored test against the real image (`PEACECRAFT3_INSTALL`).
