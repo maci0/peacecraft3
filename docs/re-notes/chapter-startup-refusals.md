@@ -105,37 +105,87 @@ It failed before the fix at `CreateUnit`.
 
 ## Open
 
+### Arbitrary facing
+
+Refused by `unit_placement::candidate` (`only quarter-turn footprint facing is
+admitted`) for a CreateUnit whose pathing texture is set and whose facing is not a
+multiple of 90. Affects RoC NightElf04, TFT UndeadX01, NightElfX07 and NightElfX08.
+
+Decoded from `Warcraft III.exe` 1.29.2.9231 (SHA-256 checked before reading):
+
+- CreateUnit native `0x48ee00` (name `0xe719e8`, registered at `0x49d20f`) calls
+  `0x663ca0`, which calls the creation routine `0x687ca0` (observed).
+- `0x687ca0` takes the unit's pathing texture object from `0x5c3150`, then takes
+  the quarter from `Misc/BuildingAngle` through `0x46dea0`. That routine truncates
+  the value to a multiple of 90 toward zero, adds 360 when negative, and the
+  classifier compares it with the constants 0, 90 and 180 (observed). Those
+  constants are set at startup by initializers `0x401300`, `0x401740` and `0x401430`
+  (observed). The quarter is BuildingAngle / 90.
+- The unit's facing is converted by `0x99ffe0` and written to the fourth
+  component of the pose record at `var_1a8`, which is passed to the unit's virtual
+  method at vtable slot `0x1ac` (observed). It does not select the footprint
+  quarter in `0x687ca0`.
+- The per-unit pathing rotation in the stationary-grid routine at `0x4e1130`
+  (stamp loop `0x4e1500` to `0x4e16b2`) takes its quarter from BuildingAngle through
+  the same classifier, then calls `0x4dffc0` with that quarter (observed). Its
+  caller `0x603850` is a unit-position update path (inferred from its field
+  accesses).
+
+Inferred: a structure's footprint orientation follows `Misc/BuildingAngle`, and
+the facing argument does not affect it.
+
+Not decoded: the quarter passed to the final traversal `0x4dfb40` at `0x4e1725`
+is the caller's `0x9c(%esi)` field (observed), and no writer of that field is
+traced. A footprint orientation rule cannot be finalized until that is known.
+
+Needed for implementation: (a) read `Misc/BuildingAngle` in production, (b) the
+CreateUnit position snap of `0x687ca0` (below), (c) the source of `+0x9c`.
+
 ### Odd-dimension pathing texture
 
-`PathTextures\24x24Unflyable.tga` (War3.mpq) despite its name has a TGA header of
-width 29, height 24, 24 bpp, uncompressed. `campaign_placement::decode_kind`
-refuses odd width or height with `footprint cell budget or unsupported empty/odd dimensions`.
-The refusal is deliberate: `ai-construction.md` (odd texture dimensions "still
-refuse rather than gaining invented behavior") records it.
+`PathTextures\24x24Unflyable.tga` (War3.mpq) has a TGA header of width 29, height 24,
+24 bpp, uncompressed. `campaign_placement::decode_kind` refuses odd width or height
+with `footprint cell budget or unsupported empty/odd dimensions`.
 
-The native construction transform `0x4e00f0` adds 16 toward the sign for an odd
-dimension when it places a building (`ai-construction.md`). Nothing decoded
-shows how the CreateUnit stationary footprint (texel traversal `0x4dfb40`)
-centres an odd width. Centring with `width / 2` would invent that rule.
+Decoded for the CreateUnit path:
 
-Needed: decode the centre arithmetic on the stationary footprint path, or
-observe the original's collision cells for an odd-width texture.
+- Snap `0x4e00f0` (called from `0x687ca0` when a pathing texture exists, with the
+  BuildingAngle quarter). Quarter 0 and 2: the x axis uses texture height and the y
+  axis uses width. Quarter 1 and 3: the swap applies (observed, `0x4e0109` to
+  `0x4e0128`). Per axis: clamp, truncate to a multiple of 64 toward zero, add 32
+  when the axis dimension has bit 1 set, add 16 when it is odd. Both offsets take
+  sign -1 when the coordinate is above 0 and +1 otherwise (observed,
+  `0x4e01c1` to `0x4e0272`).
+- Clamp `0x7f4a60`: x in `[o+0x70, o+0x78 - 32]`, y in `[o+0x74, o+0x7c - 32]`, where
+  `o = [0x115e9ec]` and the margin 32 is set by `0x4015b0` (observed). The writer of
+  `o` (`0x7f557c`) is not traced. Equivalence to the recreation's world bounds is
+  unverified.
+- Stationary traversal `0x4dfb40`: texel offsets are scaled by `(w - 1) * 16`, with
+  the constant 16 at `0x113bde4` set by `0x403b40` (observed). For odd `w` that is a
+  whole number of 32-unit cells, `(w - 1) / 2` texels.
+
+Inferred: the odd-width footprint is centred at a half cell, so texel `t` maps to
+cell offset `t - (w - 1) / 2`, which is `t - w / 2` in integer division. The float
+to cell rounding after the traversal is not decoded.
+
+Needed: the clamp object writer, the final quarter source (above), and the cell
+rounding. Until then odd dimensions stay refused.
 
 Affects HumanX04Interlude and RoC NightElf07.
 
 ### Green texel outside the map
 
 `campaign_placement::project_native_texture` refuses when a texel with the green
-flag projects outside the map. Native evidence in `ai-construction.md`: the
-texture constructor `0x4deb67` marks a texture green when any source pixel has
-nonzero green (texture level), and the registration selector `0x6c0943` picks
-three or four entry masks from that mark. Not decoded: how the entry linker
-`0x804cba` treats a texel outside the grid. The notes record this refusal as
-deliberate because clipping "would hide the selector input".
+flag projects outside the map. `unit_placement::candidate` refuses with
+`native footprint outside map` for any nonzero texel outside the grid. The two
+paths disagree: the campaign path silently drops non-green texels outside the map.
 
-Needed: decode the linker's out-of-range behaviour, and confirm the selector
-reads the texture-level mark rather than linked cells. Only then can clipping
-keep the entry mask.
+Decoded: the texture constructor `0x4deb67` marks a texture green when any source
+pixel has nonzero green, and the registration selector `0x6c0943` picks three or
+four entry masks from that mark (earlier notes). Not decoded: how the entry linker
+`0x804cba` treats a texel outside the grid, so neither refusal policy is
+established. The behaviour is unchanged in this pass. Reconciling the two paths
+needs the linker decode.
 
 Affects HumanX06 and NightElfX05.
 
@@ -208,3 +258,19 @@ The Repair and Town Bell evidence is in `ability-autocast-off.md`.
 | RoC Undead03 | `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported | pass `repairoff`; `IssueImmediateOrder` `townbelloff` (`war3map.j:1020`) unsupported: Town Bell not bound |
 | RoC NightElf03 | `IssueImmediateOrder` `innerfireon` (`war3map.j:675`) refused: autocast ON | unchanged: ON refused |
 | TFT UndeadX07a | `IssueImmediateOrder` `webon` (`war3map.j:1469`, class `ACwb`) refused: autocast ON | unchanged: ON refused |
+
+## Probe results (2026-11-11, placement decode)
+
+No recreation code changed in this pass, so before and after are the same. Each
+row is the first refusal of `selected_install_locked_chapter_startup_probe`.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf04 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
+| TFT UndeadX01 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
+| TFT NightElfX07 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
+| TFT NightElfX08 | `CreateUnit`: only quarter-turn footprint facing is admitted | unchanged |
+| TFT HumanX04Interlude | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | unchanged |
+| RoC NightElf07 | `CreateUnit`: `PathTextures\24x24Unflyable.tga` odd dimensions | unchanged |
+| TFT NightElfX05 | `CreateUnit`: native texture green channel outside map | unchanged |
+| TFT HumanX06 | `CreateUnit`: native texture green channel outside map | unchanged |
