@@ -1115,6 +1115,24 @@ impl Placement {
         self
     }
 
+    /// Native dimensions `[+0x8, +0xc]` of a destructable type's live pathing texture, loading
+    /// it when needed. `None` when its `pathTex` is empty or `_`, which the destructable data
+    /// loader (`0x6b3815`..`0x6b3836`) stores as no texture.
+    pub(crate) fn destructable_pathing_dimensions(
+        &mut self,
+        objectid: i32,
+    ) -> Result<Option<[u32; 2]>, Error> {
+        let path = self
+            .script_paths
+            .as_ref()
+            .ok_or_else(|| fail("script stationary path resolver is missing"))?(
+            objectid, false
+        )
+        .map_err(fail)?;
+        self.ensure_footprint(&path)?;
+        self.footprint_dimensions(&path)
+    }
+
     /// Preflight one script-created stationary layer against the existing base
     /// raster and budgets. No handle, collision cell or layer is changed until
     /// [`Self::publish_script_destructable`].

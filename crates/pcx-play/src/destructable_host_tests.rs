@@ -2263,7 +2263,7 @@ fn sight_grid_takes_the_stored_occluder_height_over_the_catalog_height() {
     let grid = |host: &ObjectHost| {
         let mut work = Work::new(1000);
         let mut grid = HeightGrid::new(&flat, 1., &rules, &mut work).unwrap();
-        host.occlude_destructables(&mut grid, &rules, &mut work)
+        host.occlude_destructables(&mut grid, &rules, &mut work, &Default::default())
             .unwrap();
         grid.heights().to_vec()
     };
@@ -2284,4 +2284,65 @@ fn sight_grid_takes_the_stored_occluder_height_over_the_catalog_height() {
         [0, 0, 0, 0],
         "a stored zero removes the occluder"
     );
+}
+
+#[test]
+fn a_fatlos_destructable_writes_its_pathing_texture_footprint_into_the_sight_grid() {
+    use crate::native_sight::{
+        HeightGrid, Work,
+        tests::{rules, terrain},
+    };
+    let mut metadata = tree_metadata();
+    metadata.push(&["Aocc", "occH", "DestructableData", "real", "0", "stats"]);
+    metadata.push(&["Afat", "fatLOS", "DestructableData", "bool", "0", "stats"]);
+    let catalog = catalog_from(
+        &[&["LTlt", "50", "tree,ground", "0", "1"]],
+        &metadata,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    );
+    let declarations = format!(
+        "{}native SetDestructableOccluderHeight takes destructable d, real height returns nothing\n",
+        life_declarations()
+    );
+    let mut host = host_from(&declarations, "", 8)
+        .with_destructables(DestructableBudget { max_records: 2 })
+        .unwrap();
+    host.admit_destructable_catalog(catalog).unwrap();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(tree) = host
+        .native("CreateDestructable", &payload_at(objectid, 8.5, 8.5))
+        .unwrap()
+    else {
+        panic!("destructable handle");
+    };
+    host.native(
+        "SetDestructableOccluderHeight",
+        &[Value::Handle(tree), Value::Real(12.0)],
+    )
+    .unwrap();
+    // The type is `fatLOS` with a positive height but no placement can supply its texture.
+    let error = host.wide_occluder_sizes().unwrap_err();
+    assert!(error.contains("placement absent"), "{error}");
+    host.test_attach_placement(script_placement(16, 1 << 20, Vec::new()));
+    let sizes = host.wide_occluder_sizes().unwrap();
+    assert_eq!(sizes.get(&objectid), Some(&Some([2, 2])));
+    // The synthetic texture is 2 by 2 pathing cells; the fixture lattice cell is 2 pathing cells.
+    // The creation at world (8.5, 8.5) is in lattice cell (4, 4), facing 0 (quadrant 0), so the
+    // offsets -1 and 0 reach cells 3 and 4 on each axis, each written (0 + 12 + 4) & !7 = 16.
+    let rules = rules();
+    let flat = terrain(8, 8, &[0; 81]);
+    let mut work = Work::new(10_000);
+    let mut grid = HeightGrid::new(&flat, 1., &rules, &mut work).unwrap();
+    host.occlude_destructables(&mut grid, &rules, &mut work, &sizes)
+        .unwrap();
+    let written: Vec<_> = grid
+        .heights()
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| **h != 0)
+        .map(|(i, h)| (i % 8, i / 8, *h))
+        .collect();
+    assert_eq!(written, [(3, 3, 16), (4, 3, 16), (3, 4, 16), (4, 4, 16)]);
 }

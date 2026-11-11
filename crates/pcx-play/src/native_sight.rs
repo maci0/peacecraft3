@@ -25,6 +25,25 @@ pub struct Rules {
     excluded_owner: i32,
     player_mask: u32,
     unblocked_movement: String,
+    footprint: FootprintRules,
+}
+
+/// Operands of the height plane footprint write (`0x4c5770`, callback `0x4c56e0`) and of the
+/// facing test that picks the footprint quadrant (`0x4c6ab0`), read from the selected image.
+#[derive(Clone, Copy, Debug)]
+struct FootprintRules {
+    /// Pathing-cell offsets shift right by this to give lattice-cell offsets (`0x4c56e6`, `0x4c56fd`).
+    shift: u8,
+    /// Added to the 16-bit height before the mask (`0x2040` less `0x2000`, `0x4c571f`, `0x4c5734`).
+    bias: u16,
+    /// `and ax, imm8` after the bias (`0x4c5739`), sign-extended.
+    mask: u16,
+    /// A facing within this of a turn angle selects it (`0x4c6ac6`).
+    epsilon: f32,
+    quarter_turn: f32,
+    half_turn: f32,
+    /// `CreateDestructable` multiplies its facing in degrees by this (`0x48de75`).
+    radians_per_degree: f32,
 }
 
 impl Rules {
@@ -153,7 +172,47 @@ impl Rules {
             }
         }
         let unblocked_movement = unblocked_movement.ok_or("unblocked sight movement absent")?;
+        let float = |address: u32| -> Result<f32, String> {
+            Ok(f32::from_le_bytes(
+                read(address, 4, false)?
+                    .try_into()
+                    .map_err(|_| "native sight footprint constant")?,
+            ))
+        };
+        let footprint_shift = operand(0x4c56e6, &[0xc1, 0xe8], 1)?[0];
+        if operand(0x4c56fd, &[0xc1, 0xe8], 1)?[0] != footprint_shift {
+            return Err("native sight footprint shifts differ".into());
+        }
+        let biased = word(0x4c571f, &[0xba])?;
+        let bias = biased
+            .checked_sub(word(0x4c5734, &[0xba])?)
+            .and_then(|v| u16::try_from(v).ok())
+            .ok_or("native sight footprint bias")?;
+        // `and ax, imm8` sign-extends its operand to the 16-bit mask.
+        let mask = operand(0x4c5739, &[0x66, 0x83, 0xe0], 1)?[0] as i8 as i16 as u16;
+        let footprint = FootprintRules {
+            shift: footprint_shift,
+            bias,
+            mask,
+            epsilon: float(word(0x4c6ac6, &[0xf3, 0x0f, 0x10, 0x05])?)?,
+            quarter_turn: float(word(0x4c6ae7, &[0x68])?)?,
+            half_turn: float(word(0x4c6b1d, &[0x68])?)?,
+            radians_per_degree: float(word(0x48de75, &[0x68])?)?,
+        };
 
+        if footprint.shift >= 16
+            || ![
+                footprint.epsilon,
+                footprint.quarter_turn,
+                footprint.half_turn,
+                footprint.radians_per_degree,
+            ]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.)
+            || footprint.half_turn <= footprint.quarter_turn
+        {
+            return Err("native sight invalid footprint operands".into());
+        }
         if grid_shift == 0
             || grid_shift >= 16
             || height_shift >= 15
@@ -179,6 +238,7 @@ impl Rules {
             excluded_owner,
             player_mask,
             unblocked_movement,
+            footprint,
         })
     }
 
@@ -205,6 +265,22 @@ impl Rules {
             real::add(previous.to_bits(), delta).map(f32::from_bits)
         };
         integrate().map_err(|e| format!("native sight transition: {e}"))
+    }
+
+    /// Footprint quadrant of a destructable facing given in degrees (`0x4c6ab0`): `0`, `1` or `2`
+    /// within the epsilon of 0, a quarter turn or a half turn radians, else `3`.
+    pub fn facing_quadrant(&self, degrees: f32) -> u8 {
+        let f = &self.footprint;
+        let radians = degrees * f.radians_per_degree;
+        if (radians - 0.).abs() < f.epsilon {
+            0
+        } else if (radians - f.quarter_turn).abs() < f.epsilon {
+            1
+        } else if (radians - f.half_turn).abs() < f.epsilon {
+            2
+        } else {
+            3
+        }
     }
 
     pub fn cell_world(&self, pathing_cell: f32) -> Result<f32, String> {
@@ -519,11 +595,16 @@ impl HeightGrid {
             .then(|| y as usize * self.width + x as usize)
     }
     fn eye(&self, position: [f32; 2], rules: &Rules) -> Result<i16, String> {
-        let vertex: [i64; 2] = std::array::from_fn(|i| {
-            (((position[i] - self.origin[i]) / self.pathing_cell).floor() as i64
-                + i64::from(rules.vertex_bias))
-                >> rules.grid_shift
-        });
+        self.layer_height(self.path_cell(position), rules)
+    }
+    /// Pathing cell of a world position, the integer the height plane writer derives.
+    fn path_cell(&self, position: [f32; 2]) -> [i64; 2] {
+        std::array::from_fn(|i| ((position[i] - self.origin[i]) / self.pathing_cell).floor() as i64)
+    }
+    /// Terrain layer height at the nearest lattice vertex of a pathing cell.
+    fn layer_height(&self, path: [i64; 2], rules: &Rules) -> Result<i16, String> {
+        let vertex: [i64; 2] =
+            std::array::from_fn(|i| (path[i] + i64::from(rules.vertex_bias)) >> rules.grid_shift);
         if vertex[0] < 0
             || vertex[1] < 0
             || vertex[0] as usize > self.width
@@ -558,6 +639,65 @@ impl HeightGrid {
         let value = i32::from(self.eye(position, rules)?) + height as i32;
         self.heights[at] = self.heights[at]
             .max(i16::try_from(value).map_err(|_| "native sight occluder height overflow")?);
+        Ok(())
+    }
+    /// A positive height under a pathing-texture footprint (`0x4c5770` with a texture and the
+    /// object's `0x10` flag): every texture cell writes the lattice cell at its offset from the
+    /// centre, `(terrain layer of that pathing cell << height shift) + height`, rounded by the
+    /// bias and mask, keeping the larger value. `size` is the native texture dimensions
+    /// `[+0x8, +0xc]` (TGA height, TGA width); the offsets follow `0x4dfe50` for the facing
+    /// `quadrant` (`Rules::facing_quadrant`).
+    pub fn occlude_footprint(
+        &mut self,
+        position: [f32; 2],
+        height: f32,
+        size: [u32; 2],
+        quadrant: u8,
+        rules: &Rules,
+        work: &mut Work,
+    ) -> Result<(), String> {
+        if !height.is_finite() || height < 0. || height > f32::from(i16::MAX) {
+            return Err("native sight unsupported occluder height".into());
+        }
+        let cells = (size[0] as usize)
+            .checked_mul(size[1] as usize)
+            .ok_or("native sight footprint size overflow")?;
+        work.charge(cells.max(1))?;
+        if height == 0. || cells == 0 {
+            return Ok(());
+        }
+        let centre = self
+            .point(position)
+            .ok_or("native sight occluder outside map")?;
+        let path = self.path_cell(position);
+        let [p, q] = size.map(i64::from);
+        let (a, b) = ((p + 1) >> 1, (q + 1) >> 1);
+        let rise = u32::from(height as i16 as u16);
+        for i in 0..q {
+            for j in 0..p {
+                let offset = match quadrant {
+                    0 => [-a + j, -b + i],
+                    1 => [b - i, -a + j],
+                    2 => [a - j, b - i],
+                    3 => [-b + i, a - j],
+                    _ => return Err("native sight invalid footprint quadrant".into()),
+                };
+                let cell =
+                    [0, 1].map(|k| i64::from(centre[k]) + (offset[k] >> rules.footprint.shift));
+                let at = i32::try_from(cell[0])
+                    .ok()
+                    .zip(i32::try_from(cell[1]).ok())
+                    .and_then(|(x, y)| self.index([x, y]))
+                    .ok_or("native sight occluder footprint outside map")?;
+                let terrain = u32::from(
+                    self.layer_height([path[0] + offset[0], path[1] + offset[1]], rules)? as u16,
+                );
+                let value = (terrain + rise + u32::from(rules.footprint.bias))
+                    & 0xffff
+                    & u32::from(rules.footprint.mask);
+                self.heights[at] = self.heights[at].max(value as u16 as i16);
+            }
+        }
         Ok(())
     }
 }
@@ -716,6 +856,20 @@ pub(crate) mod tests {
         put(0x691a9b, &[0xb8, 0, 0x20, 0, 0]);
         put(0x2000, &[0, 0x30, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         put(0x3000, b"synthetic-air\0");
+        // Footprint write: shift 1, bias 4 and mask 0xfff8 for the synthetic height shift 3.
+        put(0x4c56e6, &[0xc1, 0xe8, 1]);
+        put(0x4c56fd, &[0xc1, 0xe8, 1]);
+        put(0x4c571f, &[0xba, 4, 0x20, 0, 0]);
+        put(0x4c5734, &[0xba, 0, 0x20, 0, 0]);
+        put(0x4c5739, &[0x66, 0x83, 0xe0, 0xf8]);
+        put(0x4c6ac6, &[0xf3, 0x0f, 0x10, 0x05, 0x10, 0x10, 0, 0]);
+        put(0x4c6ae7, &[0x68, 0x14, 0x10, 0, 0]);
+        put(0x4c6b1d, &[0x68, 0x18, 0x10, 0, 0]);
+        put(0x48de75, &[0x68, 0x1c, 0x10, 0, 0]);
+        put(0x1010, &0.001f32.to_le_bytes());
+        put(0x1014, &std::f32::consts::FRAC_PI_2.to_le_bytes());
+        put(0x1018, &std::f32::consts::PI.to_le_bytes());
+        put(0x101c, &0.017_453_292f32.to_le_bytes());
 
         bytes
     }
@@ -769,6 +923,115 @@ pub(crate) mod tests {
         bytes.insert(0x4c632a, 0);
         assert!(decode(&bytes).is_err());
         assert!(Rules::reviewed_legacy(b"not a client", identity()).is_err());
+    }
+    #[test]
+    fn footprint_operands_come_from_the_image_and_pick_the_facing_quadrant() {
+        let r = rules();
+        assert_eq!(r.footprint.shift, 1);
+        assert_eq!(r.footprint.bias, 4);
+        assert_eq!(r.footprint.mask, 0xfff8);
+        for (degrees, quadrant) in [
+            (0., 0),
+            (0.05, 0),
+            (90., 1),
+            (180., 2),
+            (270., 3),
+            (360., 3),
+            (-90., 3),
+            (45., 3),
+        ] {
+            assert_eq!(r.facing_quadrant(degrees), quadrant, "{degrees}");
+        }
+        let mut bytes = fixture();
+        bytes.insert(0x4c56fd + 2, 2);
+        assert!(decode(&bytes).is_err(), "unequal shifts");
+        let mut bytes = fixture();
+        bytes.insert(0x4c5734 + 2, 0x40);
+        assert!(decode(&bytes).is_err(), "bias below the base");
+        let mut bytes = fixture();
+        bytes.insert(0x4c5739, 0x25);
+        assert!(decode(&bytes).is_err(), "changed mask instruction");
+        let mut bytes = fixture();
+        for va in 0x1010..0x1014 {
+            bytes.insert(va, 0);
+        }
+        assert!(decode(&bytes).is_err(), "zero epsilon");
+    }
+    #[test]
+    fn footprint_writes_the_rotated_rectangle_with_rounded_terrain_height() {
+        let r = rules();
+        // Lattice cells are 2 pathing cells wide (shift 1); 8x8 lattice, flat terrain.
+        let t = terrain(8, 8, &[0; 81]);
+        let cells = |size, quadrant, height| {
+            let mut w = Work::new(100_000);
+            let mut g = HeightGrid::new(&t, 1., &r, &mut w).unwrap();
+            // Pathing cell (8, 8) lies in lattice cell (4, 4).
+            g.occlude_footprint([8.5, 8.5], height, size, quadrant, &r, &mut w)
+                .unwrap();
+            g.heights()
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| **h != 0)
+                .map(|(i, h)| ((i % 8) as i32, (i / 8) as i32, *h))
+                .collect::<Vec<_>>()
+        };
+        // Texture dimensions [+8, +0xc] = [P, Q] = [4, 2]. Quadrant 0 offsets run x in
+        // [-2, 1], y in [-1, 0]; the lattice cell is centre + (offset >> 1).
+        assert_eq!(
+            cells([4, 2], 0, 12.),
+            [(3, 3, 16), (4, 3, 16), (3, 4, 16), (4, 4, 16),],
+            "height 12 plus bias 4 reaches 16"
+        );
+        // Quadrant 1 swaps the axes: x in [B-Q+1, B] = [0, 1], y in [-2, 1].
+        assert_eq!(cells([4, 2], 1, 12.), [(4, 3, 16), (4, 4, 16)],);
+        // Quadrant 2 offsets x in [A-P+1, A] = [-1, 2], y in [B-Q+1, B] = [0, 1].
+        assert_eq!(cells([4, 2], 2, 4.), [(3, 4, 8), (4, 4, 8), (5, 4, 8)],);
+        // Quadrant 3: x in [-B, Q-1-B] = [-1, 0], y in [A-P+1, A] = [-1, 2].
+        assert_eq!(
+            cells([4, 2], 3, 4.),
+            [
+                (3, 3, 8),
+                (4, 3, 8),
+                (3, 4, 8),
+                (4, 4, 8),
+                (3, 5, 8),
+                (4, 5, 8)
+            ],
+        );
+        assert!(cells([4, 2], 0, 0.).is_empty());
+        assert!(cells([0, 2], 0, 12.).is_empty());
+    }
+    #[test]
+    fn footprint_refuses_bad_input_without_changing_the_grid() {
+        let r = rules();
+        let t = terrain(8, 8, &[0; 81]);
+        let mut w = Work::new(100_000);
+        let mut g = HeightGrid::new(&t, 1., &r, &mut w).unwrap();
+        let before = g.clone();
+        for (position, height, size, quadrant) in [
+            ([8.5, 8.5], f32::NAN, [4, 2], 0),
+            ([8.5, 8.5], -1., [4, 2], 0),
+            ([8.5, 8.5], 40_000., [4, 2], 0),
+            ([8.5, 8.5], 10., [4, 2], 4),
+            ([1., 1.], 10., [8, 8], 0),
+            ([-1., 1.], 10., [4, 2], 0),
+        ] {
+            assert!(
+                g.occlude_footprint(position, height, size, quadrant, &r, &mut w)
+                    .is_err(),
+                "{position:?} {height} {size:?} {quadrant}"
+            );
+        }
+        let mut tiny = Work::new(1);
+        assert!(
+            g.occlude_footprint([8.5, 8.5], 10., [4, 2], 0, &r, &mut tiny)
+                .is_err()
+        );
+        assert!(
+            g.occlude_footprint([8.5, 8.5], 10., [u32::MAX, u32::MAX], 0, &r, &mut w)
+                .is_err()
+        );
+        assert_eq!(g.heights(), before.heights());
     }
     #[test]
     fn completed_transition_uses_source_duration_and_numeric_policy() {

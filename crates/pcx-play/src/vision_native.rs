@@ -104,6 +104,7 @@ impl ObjectHost {
         &self,
         rules: &Rules,
         work: &mut Work,
+        sizes: &BTreeMap<i32, Option<[u32; 2]>>,
     ) -> Result<HeightGrid, String> {
         let context = self
             .player_context()
@@ -134,7 +135,7 @@ impl ObjectHost {
         {
             return Err("native sight map/placement extents differ".into());
         }
-        self.occlude_destructables(&mut grid, rules, work)?;
+        self.occlude_destructables(&mut grid, rules, work, sizes)?;
         for (_, unit) in self.executed_units() {
             work.charge(1)?;
             if !unit.shown
@@ -160,17 +161,15 @@ impl ObjectHost {
         Ok(grid)
     }
 
-    /// Raise the cell under each live destructable to its occluder height: the catalog `occH`,
-    /// or the height `SetDestructableOccluderHeight` stored for that destructable.
-    pub(crate) fn occlude_destructables(
+    /// Live, shown destructables with their occluder height (the catalog `occH`, or the height
+    /// `SetDestructableOccluderHeight` stored for that destructable) and whether the type is
+    /// `fatLOS`, which sets object flag `0x10` at creation (`0x6bdb96`..`0x6bdba5`).
+    fn live_occluders(
         &self,
-        grid: &mut HeightGrid,
-        rules: &Rules,
-        work: &mut Work,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(crate::playercolor_host::DestructableCreation, f32, bool)>, String> {
         let mut definitions = BTreeMap::new();
+        let mut occluders = Vec::new();
         for (handle, creation, state) in self.destructables_with_handles() {
-            work.charge(1)?;
             if state.dead || state.hidden || !state.life.is_some_and(|v| v > 0.) {
                 continue;
             }
@@ -186,19 +185,68 @@ impl ObjectHost {
                 value
             };
             if let Some((catalog_height, wide)) = value {
-                // `SetDestructableOccluderHeight` replaces the catalog `occH` of one destructable.
                 let height = self
                     .destructable_occluder
                     .get(&handle)
                     .copied()
                     .unwrap_or(catalog_height);
-                if height > 0. && wide {
-                    return Err(format!(
-                        "native sight wide occluder unsupported: {:?}: the footprint is the 0x4c5770 pathing rectangle, but its gate and rectangle source are undecoded (docs/re-notes/destructable-occluder-height.md)",
+                occluders.push((creation, height, wide));
+            }
+        }
+        Ok(occluders)
+    }
+
+    /// Native pathing texture dimensions of each `fatLOS` type that has a positive occluder
+    /// height; `None` for a type without a texture, whose occluder is the single centre cell.
+    pub(crate) fn wide_occluder_sizes(
+        &mut self,
+    ) -> Result<BTreeMap<i32, Option<[u32; 2]>>, String> {
+        let mut sizes = BTreeMap::new();
+        for (creation, height, wide) in self.live_occluders()? {
+            if !wide || height <= 0. || sizes.contains_key(&creation.objectid) {
+                continue;
+            }
+            let size = self
+                .unit_placement
+                .as_mut()
+                .ok_or("native sight placement absent")?
+                .destructable_pathing_dimensions(creation.objectid)
+                .map_err(|e| {
+                    format!(
+                        "native sight wide occluder {:?}: {e}",
                         creation.objectid.to_be_bytes()
-                    ));
-                }
-                grid.occlude([creation.x, creation.y], height, rules, work)?;
+                    )
+                })?;
+            sizes.insert(creation.objectid, size);
+        }
+        Ok(sizes)
+    }
+
+    /// Raise the cells under each live destructable to its occluder height. A `fatLOS` type with
+    /// a pathing texture writes the texture's footprint (`0x4c5770`), otherwise one centre cell.
+    pub(crate) fn occlude_destructables(
+        &self,
+        grid: &mut HeightGrid,
+        rules: &Rules,
+        work: &mut Work,
+        sizes: &BTreeMap<i32, Option<[u32; 2]>>,
+    ) -> Result<(), String> {
+        for (creation, height, wide) in self.live_occluders()? {
+            work.charge(1)?;
+            let position = [creation.x, creation.y];
+            match wide
+                .then(|| sizes.get(&creation.objectid).copied().flatten())
+                .flatten()
+            {
+                Some(size) => grid.occlude_footprint(
+                    position,
+                    height,
+                    size,
+                    rules.facing_quadrant(creation.face),
+                    rules,
+                    work,
+                )?,
+                None => grid.occlude(position, height, rules, work)?,
             }
         }
         Ok(())

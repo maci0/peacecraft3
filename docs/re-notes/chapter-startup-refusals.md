@@ -798,3 +798,22 @@ addresses: [passive-held-items.md](passive-held-items.md) ("Several orbs on one 
 Open: the gem is retained and nothing reads it, because the recreation has no invisible units
 to reveal. `MultiboardSuppressDisplay` stores its flag and the recreation draws no multiboard. Two
 spell orbs on one holder, and one item with two orb abilities, stay refused.
+
+## Probe results (2026-11-11, pause during burrow and wide occluder lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the refusal named at
+lane start (base `35ef818a`), "after" is this branch. Decode and addresses:
+[unit-root-burrow.md](unit-root-burrow.md) (unit pause and the delayed form timer) and
+[destructable-occluder-height.md](destructable-occluder-height.md) (record columns, footprint).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX02 | `PauseUnit` during an unfinished form phase is not qualified | passes (`executed_units=230`) |
+| TFT UndeadX07b | `fatLOS` `DTrf` (Elevator) with a positive occluder height: wide occluder unsupported | passes (`executed_units=92`) |
+
+Unit pause does not stop the `0xd01c4` swap timer, so `PauseUnit` during a burrow delay is
+accepted and the form still changes `Dur` after the order. The wide occluder writes the pathing
+texture footprint for `fatLOS` types. Not reached by a startup probe, so open: a pause during a
+Raven form phase (still refused), a unit death during a delayed form change (still refused), the
+effect of the `0xd0005` command that `0x694a90` builds, and a native height plane dump to compare
+the footprint against.

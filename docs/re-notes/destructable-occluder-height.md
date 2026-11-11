@@ -35,10 +35,10 @@ Addresses are virtual. "Observed" is read from the assembly or shipped data.
   `0.0`. `SetDestructableOccluderHeight` stores the height per handle (`destructable_occluder`);
   a null destructable is ignored. A missing catalog or an unresolved record refuses.
 - `vision_native.rs` takes the stored height over the catalog `occH` for that destructable, and the
-  existing refusals still apply to the stored value: a negative or non-finite height, a height above
-  the `i16` range and a positive height on a `fatLOS` destructable.
+  existing refusals still apply to the stored value: a negative or non-finite height and a height
+  above the `i16` range. A `fatLOS` destructable takes the footprint write (last section).
 
-## Height plane write and wide footprint (2026-11-11, partial)
+## Height plane write and wide footprint (2026-11-11)
 
 Same exe. The height plane writer is `0x4c5770(sight map, destructable, skip, entry, assign)`,
 called with `(obj, 0, 0, 0)` after placement (`0x6d0f2f`) and with `(obj, 0, entry, 1)` by the
@@ -64,24 +64,85 @@ Observed:
   used. The callback (`0x4c56e0`) writes lattice cell `centre + (offset >> 2)` per axis
   (`shr 2` at `0x4c56e6` and `0x4c56fd`; equality with the grid shift at `0x4c632a` is not checked) with
   `((terrain(path cell) << 7) + occH + 0x40) & ~0x7f`, honoring the same skip/assign modes.
-- `fatLOS` is read from the destructable record at `[rec+0x48]` (`0x6ce300`, `0x6d1c9f`): when
-  nonzero creation registers the object in the list behind `0x6faea0` (0x2c-byte records keyed
-  by object, rectangle filled by `0x6ff290` from the same entry's `[+8]`, `[+0xc]`) and sets
-  flag `0x400`. The setter never reads it.
+- The record read at `[rec+0x48]` (`0x6ce300`, `0x6d1c9f`) is `walkable`, not `fatLOS` (corrected
+  below): when nonzero creation registers the object in the list behind `0x6faea0` (0x2c-byte
+  records keyed by object, rectangle filled by `0x6ff290` from the same entry's `[+8]`, `[+0xc]`)
+  and sets flag `0x400`. The setter never reads it.
 - Creation copies `[spawn+0x50]` to `[obj+0x148]` and sets `[obj+0x20] |= 0x10` when
   `[spawn+0x54] != 0` (`0x6bdb96`..`0x6bdba5`); the spawn struct is filled from the destructable
   record at `+0x88` and `+0x8c` (`0x6d0ac7`, `0x6d0afd`).
 
-Not decoded, so wide occluders still refuse:
+## Record columns, gate and footprint source (2026-11-11, decoded)
 
-- Which `DestructableData` columns `+0x88`/`+0x8c` and flag `0x10` are. The record layout read
-  from the loader (`0x6b28a0`..`0x6b3300`: `occH` at `+0xb0`, `pathTexDeath` at `+0x88`) does
-  not match the creation code's use of `+0x88` as an occluder height, so the gate is unresolved.
-- Where `entry[+8]`/`[+0xc]` come from for a destructable id (UnitUIDef entry; the pathing
-  texture size is the likely source and is unverified).
-- Whether the footprint branch applies to `fatLOS` destructables at all: the gate does not read
-  `fatLOS`, and the consumer of the `0x6faea0` list was not located.
+Same exe. The destructable data table is the hash table at `0x113f2c8` (`0x6d25f0` finds a
+record by id). `0x6cfb70`..`0x6cfe00` fills each record from the SLK row; every field is one
+loader accessor on a column-index object built by `0x6b26e0`, whose slots (`[this+off]` column
+index, `[this+off+4]` metadata) name the columns in order: `0x10` `DestructableID`, `0x38` `HP`,
+`0x40` `lightweight`, `0x48` `fatLOS`, `0x50` `numVar`, `0x58` `maxPitch`, `0x60` `maxRoll`,
+`0x68` `radius`, `0x80` `pathTex`, `0x88` `pathTexDeath`, `0xb0` `occH`, `0xc0` `walkable`,
+`0xd0` `fixedRot`. Record fields that follow from the accessors read there:
 
-The recreation keeps refusing a positive height on a `fatLOS` destructable. The override path
-inside the sight grid is covered by `sight_grid_takes_the_stored_occluder_height_over_the_catalog_height`
-(`destructable_host_tests.rs`).
+- `[rec+0x88]` (`0x6b7ad0`, column slot `0xb0`) is `occH` (float, default `0.0`).
+- `[rec+0x8c]` (`0x6aebb0`, column slot `0x48`) is `fatLOS`.
+- `[rec+0x48]` (`0x6b9550`, slot `0xc0`) is `walkable`, `[rec+0x90]` (`0x6aed60`, slot `0xd0`) is
+  `fixedRot`, `[rec+0x50]` (`0x6b7f60`, slot `0x68`) is `radius`, `[rec+0x6c]` (`0x6b7490`, slot
+  `0x38`) is `HP`.
+
+So the creation code (`0x6d0ac7`, `0x6d0afd`; `0x6bdb96`..`0x6bdba5`) sets `[obj+0x148] = occH`
+and object flag `0x10` exactly when the type has `fatLOS != 0`. The footprint branch of
+`0x4c5770` (gate `entry != 0 && [obj+0x20] & 0x10`) therefore applies to `fatLOS` types.
+
+`entry` (argument 4 of `0x4c5770`): when it is 0 the routine looks it up itself with
+`0x5c3150([obj+0x34])` (`0x4c57a0`), so the creation call `(obj, 0, 0, 0)` and the setter call
+`(obj, 0, entry, 1)` both use the footprint. `0x5c3150` returns `[uidef+0xcc]`, the type's live
+pathing texture; `[uidef+0xd0]` (`0x5c31b0`) is the dead one. The destructable data pass at
+`0x6b3815`..`0x6b38aa` reads `pathTex` and `pathTexDeath`, maps an empty string or `_`
+(`0xe92074`) to no texture, and stores each through `0x5d26e0` (`0x4dfa70`, which opens the
+texture). A destructable whose `pathTex` is empty or `_` has `entry = 0`: the centre cell only.
+
+The texture object (`0x4de9f0`, vtable `0xe7a89c`) reads the TGA with `0x71abc0` and `0x71a7c0`,
+which return the header width through the first out pointer and the height through the second;
+`0x4de9f0` passes `&[tex+0xc]` first and `&[tex+8]` second. So `[tex+0xc]` is the TGA width and
+`[tex+8]` the TGA height (the same reading as `Footprint::dimensions` in `unit_placement.rs`).
+The iterator `0x4dfe50` calls the callback with (first, second) offsets; the first runs over
+`[tex+8]` values and the second over `[tex+0xc]` values (quadrant 0), and the callback
+`0x4c56e0` uses them as x and y (`0x4c570f`..`0x4c5717` add them to the pathing cell x and y).
+`0x4c5770` takes the quadrant from `0x4c6ab0` of the object's facing (`[obj]+0xb8` then `+0x1c`
+returns the angle; `0x48de75` multiplies `CreateDestructable`'s degrees by `0x3c8efa35`, so the
+angle is radians): within `0x10db054` (`0.001`) of `0`, of `0x10db10c` (pi/2) or of `0x10db110`
+(pi) selects 0, 1, 2, else 3.
+
+Footprint cell value (callback `0x4c571f`..`0x4c573d`, 16-bit arithmetic):
+`((terrain << 7) + h + 0x40) & 0xff80`, where `terrain` is the layer height at the pathing cell
+`centre path cell + offset` (`0x7044b0`, the same nearest-vertex lookup as the centre cell) and
+`h` is `occH` truncated by `0x9a07b0` (`[obj+0x148]`); the cell is `centre lattice cell + (offset
+>> 2)` per axis, written with the larger of the old and new value when `assign` is 0 (creation)
+and unconditionally when it is 1 (the setter). The row pitch of the plane is `[map+0x68]`, the
+power of two at or above the width, with `[map+0x6c]` its log (`0x4c4c1a`..`0x4c4c44`), so the
+callback and the centre pointer index the same array. Cells outside the plane are not bounds
+checked in the callback.
+
+## Recreation (wide occluder)
+
+- `Rules` (`native_sight.rs`) reads the footprint shift (`0x4c56e6`, `0x4c56fd`), bias and mask
+  (`0x4c571f`, `0x4c5734`, `0x4c5739`), epsilon, quarter and half turn (`0x4c6ac6`, `0x4c6ae7`,
+  `0x4c6b1d`) and the degrees factor (`0x48de75`) from the image and refuses a changed
+  instruction. `Rules::facing_quadrant` is `0x4c6ab0`.
+- `HeightGrid::occlude_footprint` writes the rectangle per quadrant. Offsets follow the
+  iterator's four start points and steps exactly; the work budget is charged for the texture's
+  cell count before any write, and a cell outside the lattice, a terrain vertex outside the map or
+  a quadrant above 3 refuses without a write.
+- `Placement::destructable_pathing_dimensions` resolves the type's live `pathTex` through the
+  existing script path resolver and footprint loader; `ObjectHost::wide_occluder_sizes`
+  (`vision_native.rs`) collects the sizes before each sample, and a `fatLOS` type with a positive
+  height and no placement refuses. A type with an empty or `_` texture keeps the centre cell.
+- Deviations: a height of 0 writes nothing (the original writes terrain-only values, which can
+  raise a cell only where the nearest vertex layer exceeds the cell's own layer maximum); `assign`
+  mode is not modelled, the grid is rebuilt each sample from the live objects with the larger of
+  overlapping values; the string `none` is read as no texture (the original would try
+  `none.tga`, find nothing and keep an empty rectangle, which writes nothing as well).
+- Covered by `footprint_writes_the_rotated_rectangle_with_rounded_terrain_height`,
+  `footprint_refuses_bad_input_without_changing_the_grid`,
+  `footprint_operands_come_from_the_image_and_pick_the_facing_quadrant` (`native_sight.rs`) and
+  `a_fatlos_destructable_writes_its_pathing_texture_footprint_into_the_sight_grid`
+  (`destructable_host_tests.rs`). No test compares a native height plane dump.

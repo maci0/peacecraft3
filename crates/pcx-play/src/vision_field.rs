@@ -1364,6 +1364,12 @@ impl ObjectHost {
     /// Refuses without changing the previous ledger when the stamp budget is
     /// exceeded. An unchanged source list performs no cell writes.
     pub fn sample_shared_vision(&mut self, work_limit: usize) -> Result<VisionSampleStats, Error> {
+        // The footprint sizes load pathing textures, which needs the host mutably.
+        let wide_sizes = if self.native_sight.is_some() {
+            self.wide_occluder_sizes()
+        } else {
+            Ok(Default::default())
+        };
         let fail = |detail: String| self.inner.error("vision", Failure::UnitActivity(detail));
         if !self.shared_vision_admitted() {
             return Err(fail(
@@ -1421,7 +1427,10 @@ impl ObjectHost {
         if let Some(rules) = self.native_sight.clone() {
             let mut work = crate::native_sight::Work::new(work_limit);
             let sight_updates = self.native_sight_updates(night, &mut work).map_err(fail)?;
-            let heights = self.native_height_grid(&rules, &mut work).map_err(fail)?;
+            let wide_sizes = wide_sizes.map_err(fail)?;
+            let heights = self
+                .native_height_grid(&rules, &mut work, &wide_sizes)
+                .map_err(fail)?;
             let mut unblocked = std::collections::BTreeSet::new();
             for (viewer, sources) in &mut plans {
                 let number = self.player_settings(*viewer)?.number;
