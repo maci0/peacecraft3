@@ -708,6 +708,31 @@ fn create_unit_for(vm: &mut Vm, owner: i32, rawcode: [u8; 4], x: f32, y: f32) ->
 }
 
 #[test]
+fn autoharvestlumber_target_form_issues_nothing_and_returns_false() {
+    let (mut vm, tree) = open_harvest();
+    let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);
+    let before = vm.host().inner.executed_unit(worker).unwrap().clone();
+    assert_eq!(
+        vm.host()
+            .inner
+            .native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(worker),
+                    Value::Str("autoharvestlumber".into()),
+                    Value::Handle(tree)
+                ]
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    let after = vm.host().inner.executed_unit(worker).unwrap();
+    assert_eq!(after.activity, before.activity);
+    assert_eq!(after.position, before.position);
+    assert_eq!(vm.host().inner.harvest_worker_count(worker), 0);
+}
+
+#[test]
 fn autoharvest_claims_a_tree_deposits_source_capacity_and_repeats() {
     let (mut vm, tree) = open_harvest();
     let worker = create_unit(&mut vm, *b"hpea", 32.0, 32.0);

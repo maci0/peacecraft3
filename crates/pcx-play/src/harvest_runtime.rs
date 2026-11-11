@@ -245,6 +245,11 @@ impl ObjectHost {
                 Err(self.inner.error(name, Failure::Signature))
             });
         }
+        if target && order == Some(self.harvest.as_ref()?.autoharvestlumber_order) {
+            // The native target validator refuses the autoharvest order with any target
+            // (0xb75d70 returns 0xdd), so no order issues. See worker-harvest-orders.md.
+            return Some(Ok(Value::Bool(false)));
+        }
         if target && order == Some(self.harvest.as_ref()?.harvest_order) {
             let [_, _, Value::Handle(mine)] = args else {
                 return None;

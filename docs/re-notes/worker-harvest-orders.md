@@ -425,3 +425,27 @@ Not established, so unchanged or refused: gold return distance (no gold probe; t
 the choice among several depots (nearest by straight distance, ties by handle, is the recreation's),
 whether the nearest means path or straight distance, a worker with no depot at all (refused
 loudly), and behavior past 4400.
+
+## Target form of autoharvestlumber (native decode)
+
+Reviewed exe 1.29.2.9231. `autoharvestlumber` is order `0xd0036`, class `CAbilityHarvestBase`
+(class name `CAbilityHarvestBase`; vtable near `0xf2b52c`; order registration `0xb75a9d`).
+
+Observed:
+
+- The target-order validator `0xb75d70` accepts only `0xd0003`, `0xd0002`, `0xd0032` (harvest) and
+  `0xd0033`. For any other order it returns `0xdd` (refused) before reading the target. The
+  caller at `0xb76ab7` returns that code, so a target-form `autoharvestlumber` issues no order.
+- The immediate form, no target, goes through `0xb7a3f0`. It returns without effect when the
+  worker cannot harvest lumber (virtual `+0x314`). Otherwise it searches for a tree around the
+  worker (`0xb79c00`) and starts the harvest on the tree it finds (`0xb7a2e0`).
+- Immediate validator `0xb75d00` returns `0xdd` for `0xd0036` when the lumber virtual is false.
+
+Repo rule: `IssueTargetOrder` with `autoharvestlumber` returns false and changes nothing. The immediate
+form keeps its existing harvest start. Inferred: the false return is the caller's reading of the
+`0xdd` refusal (not traced through the script call). The search radius and tie policy of `0xb79c00`
+and the invalid-target path of `0xb7a2e0` are not decoded.
+
+Repo: `harvest_runtime.rs` returns false for a target-form `autoharvestlumber` before any harvest
+branch. Test: `autoharvestlumber_target_form_issues_nothing_and_returns_false` (fails before the
+change with `IssueTargetOrder is unsupported`).
