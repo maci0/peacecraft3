@@ -7,36 +7,61 @@ use std::sync::Arc;
 const NATIVE: &str = "SetCampaignAI";
 
 impl ObjectHost {
-    pub(super) fn player_structure_count(&self, args: &[Value]) -> Result<Value, Error> {
-        const NAME: &str = "GetPlayerStructureCount";
-        let fail = |detail| self.inner.error(NAME, Failure::ConfigState(detail));
+    /// `GetPlayerStructureCount` (`0x494af0`) and `GetPlayerUnitCount` (`0x494cd0`) read the
+    /// owner's count manager (`0x513600`, `0x513760`): completed, plus incomplete when
+    /// `includeIncomplete` is true. A type with `isbldg` set is a structure; any other
+    /// `UnitData` type is a unit, heroes included. Incomplete covers sites under construction
+    /// and every queued training or structure-upgrade slot, waiting or active.
+    pub(super) fn player_count(&self, name: &'static str, args: &[Value]) -> Result<Value, Error> {
+        let structures = name == "GetPlayerStructureCount";
+        let fail = |detail| self.inner.error(name, Failure::ConfigState(detail));
         let [owner, Value::Bool(include_incomplete)] = args else {
-            return Err(self.inner.error(NAME, Failure::PlayerArguments));
+            return Err(self.inner.error(name, Failure::PlayerArguments));
         };
         let owner = match owner {
             Value::Null => return Ok(Value::Int(0)),
             Value::Handle(owner) => *owner,
-            _ => return Err(self.inner.error(NAME, Failure::WrongFamily)),
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         };
         self.player_settings(owner)
-            .map_err(|e| self.inner.error(NAME, e.failure))?;
-        self.executed_units()
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let mut count = self
+            .executed_units()
             .filter(|(_, record)| record.owner == owner)
             .try_fold(0i32, |count, (_, record)| {
                 if !counted_unit_live(record).map_err(fail)? {
                     return Ok(count);
                 }
-                if !super::unit_types::structure(&record.definition)
-                    .map_err(|detail| self.inner.error(NAME, Failure::UnitActivity(detail)))?
+                if super::unit_types::structure(&record.definition)
+                    .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))?
+                    != structures
                     || (!include_incomplete && record.construction.is_some())
                 {
                     return Ok(count);
                 }
                 count
                     .checked_add(1)
-                    .ok_or_else(|| fail("structure count exceeds integer range"))
-            })
-            .map(Value::Int)
+                    .ok_or_else(|| fail("count exceeds integer range"))
+            })?;
+        if *include_incomplete {
+            let catalog = self
+                .unit_catalog()
+                .map_err(|e| self.inner.error(name, e.failure))?;
+            for kind in self.pending_production_kinds(owner) {
+                let definition = catalog
+                    .resolve(kind.to_be_bytes())
+                    .map_err(|_| fail("queued unit type is not in the catalog"))?;
+                if super::unit_types::structure(&definition)
+                    .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))?
+                    == structures
+                {
+                    count = count
+                        .checked_add(1)
+                        .ok_or_else(|| fail("count exceeds integer range"))?;
+                }
+            }
+        }
+        Ok(Value::Int(count))
     }
     pub fn admit_campaign_mode(
         &mut self,

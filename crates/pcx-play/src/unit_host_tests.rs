@@ -2000,6 +2000,23 @@ fn owned_vm_set_unit_state_retains_the_domain_handle_and_exact_finite_value() {
         ordinal.contains("arguments do not match the unit native declaration"),
         "{ordinal}"
     );
+    let Value::Handle(null_state_player) = vm.global("P") else {
+        panic!("player");
+    };
+    assert_eq!(
+        vm.host()
+            .native(
+                "SetUnitState",
+                &[
+                    Value::Null,
+                    Value::Handle(null_state_player),
+                    Value::Real(5.0)
+                ],
+            )
+            .unwrap(),
+        Value::Null,
+        "a null unit is a no-op"
+    );
     let unknown_state = vm
         .host()
         .native(

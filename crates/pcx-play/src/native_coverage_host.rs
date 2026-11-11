@@ -304,6 +304,7 @@ impl ObjectHost {
             "GetFoodMade",
             "GetFoodUsed",
             "GetPlayerStructureCount",
+            "GetPlayerUnitCount",
             "QueueUnitAnimation",
             "SetUnitAnimation",
             "SetUnitAnimationWithRarity",

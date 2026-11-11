@@ -50,6 +50,8 @@ const SET_HERO_LEVEL: &str = "SetHeroLevel";
 const SET_INVULNERABLE: &str = "SetUnitInvulnerable";
 const GET_INVULNERABLE: &str = "BlzIsUnitInvulnerable";
 const SET_STATE: &str = "SetUnitState";
+/// Natives that read the player's count manager with a `(player, includeIncomplete)` signature.
+const PLAYER_COUNT_NATIVES: [&str; 2] = ["GetPlayerStructureCount", "GetPlayerUnitCount"];
 const CONVERT_STATE: &str = "ConvertUnitState";
 const SET_RESOURCE: &str = "SetResourceAmount";
 const ADD_RESOURCE: &str = "AddResourceAmount";
@@ -433,35 +435,27 @@ impl ObjectHost {
         self.unit_buff_declarations(&declaration_source)?;
         self.unit_removal_declaration(&declaration_source)?;
         self.unit_cooldown_reset_declaration(&declaration_source)?;
-        if self
-            .inner
-            .program
-            .natives()
-            .get("GetPlayerStructureCount")
-            .is_some()
-            || self
-                .inner
-                .program
-                .natives()
-                .ambiguous("GetPlayerStructureCount")
-                .is_some()
-        {
-            Self::contract(
-                &self.inner,
-                "GetPlayerStructureCount",
-                &["player", "boolean"],
-                "integer",
-                true,
-                Some("player"),
-            )?;
-            if self
-                .inner
-                .program
-                .natives()
-                .get("GetPlayerStructureCount")
-                .is_none_or(|n| n.source != declaration_source)
+        for name in PLAYER_COUNT_NATIVES {
+            if self.inner.program.natives().get(name).is_some()
+                || self.inner.program.natives().ambiguous(name).is_some()
             {
-                return Err(self.inner.error("GetPlayerStructureCount", Failure::Source));
+                Self::contract(
+                    &self.inner,
+                    name,
+                    &["player", "boolean"],
+                    "integer",
+                    true,
+                    Some("player"),
+                )?;
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .is_none_or(|n| n.source != declaration_source)
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
             }
         }
         for name in ["GetFoodMade", "GetFoodUsed"] {
@@ -1341,8 +1335,10 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.units.as_ref()?;
-        if name == "GetPlayerStructureCount" && self.inner.program.natives().get(name).is_some() {
-            return Some(self.player_structure_count(args));
+        if let Some(&native) = PLAYER_COUNT_NATIVES.iter().find(|&&n| n == name)
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return Some(self.player_count(native, args));
         }
         if matches!(name, "GetFoodMade" | "GetFoodUsed")
             && self.inner.program.natives().get(name).is_some()
@@ -2051,6 +2047,10 @@ impl ObjectHost {
     }
 
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
+        // Handler `0x4abba0` resolves the unit first and returns when it is null.
+        if matches!(args, [Value::Null, Value::Handle(_), Value::Real(_)]) {
+            return Ok(Value::Null);
+        }
         let (unit, state, value, enumerand) = {
             let fail = |reason| self.inner.error(SET_STATE, reason);
             // `0x4abba0` resolves the unit through `0x483940`, which answers a zero handle with

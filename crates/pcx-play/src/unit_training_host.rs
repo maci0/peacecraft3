@@ -1578,6 +1578,16 @@ impl ObjectHost {
             })
     }
 
+    /// Unit types `owner` has queued for training or structure upgrade, active or waiting.
+    /// Research jobs are excluded: they carry an upgrade id, not a unit type.
+    pub(super) fn pending_production_kinds(&self, owner: HandleId) -> impl Iterator<Item = i32> {
+        self.training
+            .jobs
+            .iter()
+            .filter(move |j| j.owner == owner && j.research.is_none())
+            .map(|j| j.kind)
+    }
+
     pub(super) fn pending_training_count(&self, owner: HandleId, kind: i32) -> Result<i32, Error> {
         i32::try_from(
             self.training

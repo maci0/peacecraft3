@@ -2,6 +2,7 @@ use super::*;
 
 const EVENTS: &str = r#"
 constant native GetPlayerStructureCount takes player p, boolean includeIncomplete returns integer
+constant native GetPlayerUnitCount takes player p, boolean includeIncomplete returns integer
 constant native GetConstructingStructure takes nothing returns unit
 constant native GetConstructedStructure takes nothing returns unit
 constant native GetCancelledStructure takes nothing returns unit
@@ -2293,4 +2294,94 @@ fn ai_structure_requests_answer_false_without_a_builder_and_refuse_missing_place
         h.native("KillUnit", &[Value::Handle(unit)]).unwrap();
     }
     assert!(!h.set_ai_produce(4, 1, structure, -1).unwrap());
+}
+
+fn player_count(h: &mut ObjectHost, name: &str, owner: HandleId, incomplete: bool) -> i32 {
+    let Value::Int(count) = h
+        .native(name, &[Value::Handle(owner), Value::Bool(incomplete)])
+        .unwrap()
+    else {
+        panic!("{name} returns an integer")
+    };
+    count
+}
+
+/// Counts as `(completed, with incomplete)` for the unit and structure natives while three
+/// `u001` slots are queued, one finishes, and the actor dies. `isbldg` is 0 for every type of
+/// the fixture catalog, so the actor, the producer and the queued type are all units.
+fn queued_counts() -> Vec<[(i32, i32); 2]> {
+    let (mut vm, actor, producer) = fixture_with_capacity(
+        &[
+            column(b"F001", SlkId::UnitBalance, "isbldg", FieldKind::Bool, "0"),
+            column(
+                b"T003",
+                SlkId::UnitBalance,
+                "goldcost",
+                FieldKind::Int,
+                "13",
+            ),
+        ],
+        8,
+    );
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    let observe = |h: &mut ObjectHost| {
+        ["GetPlayerUnitCount", "GetPlayerStructureCount"].map(|n| {
+            (
+                player_count(h, n, owner, false),
+                player_count(h, n, owner, true),
+            )
+        })
+    };
+    let mut seen = vec![observe(h)];
+    let order = [
+        Value::Handle(producer),
+        Value::Int(i32::from_be_bytes(*b"u001")),
+    ];
+    for _ in 0..3 {
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(true)
+        );
+    }
+    seen.push(observe(h));
+    step(&mut vm, 9.);
+    let h = &mut vm.host().inner;
+    seen.push(observe(h));
+    h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+    seen.push(observe(h));
+    assert_eq!(
+        h.native("GetPlayerUnitCount", &[Value::Null, Value::Bool(true)])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert!(
+        h.native(
+            "GetPlayerUnitCount",
+            &[Value::Handle(actor), Value::Bool(true)]
+        )
+        .is_err()
+    );
+    assert!(
+        h.native("GetPlayerUnitCount", &[Value::Handle(owner), Value::Int(1)])
+            .is_err()
+    );
+    seen
+}
+
+#[test]
+fn queued_slots_are_incomplete_units_until_they_finish() {
+    // Actor and producer are units; every queued slot adds one incomplete unit.
+    assert_eq!(
+        queued_counts(),
+        [
+            [(2, 2), (0, 0)],
+            [(2, 5), (0, 0)],
+            [(3, 5), (0, 0)],
+            [(2, 4), (0, 0)]
+        ]
+    );
 }

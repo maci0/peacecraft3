@@ -1158,8 +1158,8 @@ excludes the existing construction marker; true includes a live canonical site.
 Pending requests without a site contribute nothing. Completion, cancellation,
 owner transfer and death need no duplicate count cache or mutation hooks.
 The existing campaign type-count queries share only the unchanged liveness
-predicate; their other semantics were not expanded. GetPlayerUnitCount remains
-a separate unsupported native.
+predicate; their other semantics were not expanded. GetPlayerUnitCount is
+decoded in "Player unit count" below.
 
 Optional admission validates exact signature/constantness, player handle family
 and the CreateUnit declaration source before catalog reads. An omitted native
@@ -1293,3 +1293,54 @@ exactly, and `from_ground_normal` derives bounded pitch/bank from a
 caller-supplied ground normal. `transform_for_oriented` positions exactly
 like `transform_for` and only changes rotation. Native orientation parity
 and the trajectory playback consumer remain open.
+
+## Player unit count (2026-11-11)
+
+Reviewed exe `Warcraft III.exe` 1.29.2.9231 (SHA-256 `3f2ed012...9570eed`). Observed from
+the assembly unless marked otherwise.
+
+- Registration table (`0x8ccc80`): `0x49e63d` pushes `GetPlayerUnitCount` with handler
+  `0x494cd0`; `0x49e651` pushes `GetPlayerTypedUnitCount` with `0x494c50`; `0x49e665` pushes
+  `GetPlayerStructureCount` with `0x494af0`.
+- `0x494cd0(player, includeIncomplete)` and `0x494af0` are the same wrapper: resolve the player
+  with `0x482770`, return 0 for null or when `[player+0x390]` (the count manager) is null,
+  else call the manager with `includeIncomplete`.
+- Manager getters: `0x513760` returns `[mgr+0x68] + (includeIncomplete ? [mgr+0x64] : 0)`;
+  `0x513600` (structures) returns `[mgr+0x60] + (includeIncomplete ? [mgr+0x5c] : 0)`.
+  `+0x60`/`+0x68` count completed, `+0x5c`/`+0x64` incomplete.
+- Counter class of a type id is chosen once per id by `0x513470` (flags in `[entry+0x30]`):
+  `0x6e0580` true gives flag 2 (no manager counter; its table is `Units\UpgradeData`, so
+  research ids, `0x6b1b60`), else `0x5cc9f0` true (the UnitUI `[+0xb4]` structure field, also
+  IsUnitIdType's structure case) gives flag 4, else a `UnitData` member (`0x696d50`, table
+  `0x113e8d8`) gives flag 8. A unit counts in `+0x64`/`+0x68` when flag 8, a structure in
+  `+0x5c`/`+0x60` when flag 4. Heroes are `UnitData` members, so they count as units.
+  Identity of `0x6e0580` as "UpgradeData row" is read from its table call; the flag-2 role is
+  inferred from that and from the research ids the queue passes through the same path.
+- Counter writers (player methods): add incomplete `0x4c0f40` -> `0x5149d0` (`+0x5c`/`+0x64`),
+  complete incomplete `0x4bcfc0` -> `0x513510` (move incomplete to completed), add completed
+  `0x4b5af0` -> `0x513000`, cancel incomplete `0x4b62a0` -> `0x5130d0`, remove completed
+  `0x4be2e0` -> `0x513ff0`.
+- Unit creation `0x687ca0` registers by its flags argument: bit 1 add incomplete, bit 2 add
+  completed (`0x687fa4`..`0x687fe8`); the unit remembers it in `[unit+0x16c]` (`|8` incomplete,
+  `|0x10` completed) so a later owner change or death removes it (`0x6800b0`, `0x69d28e`).
+- The production queue slot writer `0xb56a90(type, kind, ..., slot)` calls add incomplete
+  (`0xb56b1f`, `kind != 0` is the upgrade flag) for every slot it writes, including waiting
+  slots, so queued training and structure upgrades are incomplete counts. `0xb58079`/`0xb58137`
+  call it for the active and the waiting slots.
+
+Rule implemented (`campaign_mode_host.rs`, `player_count`): completed is every live unit of the
+owner by `isbldg` class (units for `GetPlayerUnitCount`, structures for
+`GetPlayerStructureCount`); `includeIncomplete` adds units still under construction and one for
+every queued training or structure-upgrade slot of that class, waiting or active; research jobs
+add nothing. A null player reads 0. The incomplete rule for slots is observed; that a finished
+slot stops counting exactly when the unit appears is implied by the queue writer pair (cancel on
+completion) and not separately observed.
+
+Not decoded and not implemented:
+
+- `GetPlayerTypedUnitCount`: the handler flags (`0x16` incomplete, `|8` upgrades) and the per-type
+  recursion (`0x513620`, `0x5c16b0`, `0x5c7ab0`) are read, but the name string is resolved
+  through `0x4770c0`/`0x47b180`, a string-keyed table of the map object whose contents were not
+  decoded (its link to the `UnitId` native is unverified; neither is implemented), so the native
+  stays refused with the generic unimplemented-native error.
+- Hero revival queue slots: the host does not admit hero revival, so they add no incomplete count.
