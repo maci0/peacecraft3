@@ -125,3 +125,21 @@ passes (`executed_units=279`).
 
 Inferred, not measured: the ON order stops the unit and emits the issued-order events exactly as the
 runtime-probed OFF does (same validation, order creation and issue path); no ON runtime probe exists.
+
+## `CAbilityManaBattery` (`Ambt`, Moon Well) uses the same ON handler (observed)
+
+The class name string is `0xf2ffb4` (`CAbilityManaBattery`), its getter `0xb813a0` and its name
+slot `0xf2fb48`, so the vtable is `0xf2faf0`. Its slots equal Inner Fire's: ON wrapper `+0x338`
+`0xb81080`, OFF wrapper `+0x33c` `0xb2a310`, handlers `0xb99a80`/`0xb99b50`, hooks `0xbdb5e0`/
+`0xbdb5f0`, activate/deactivate `0xb9c590`/`0xb9c5c0`, acquire target `0xb9c8e0`. Only the ON id
+getter `+0x310` (`0xb81610`), OFF id getter `+0x320` (`0xb81620`) and the group getter `+0x1b8`
+(`0xb81160`, group 1) are class specific. The class was only missing from the bound list
+(`CLASS_NAMES`); there is no different handler shape.
+
+`Units\NightElfAbilityFunc.txt` (`Ambt`) and `UndeadAbilityFunc.txt` (`Amb2`, same class code)
+author only `Order=recharge`, the cast order. No `Orderon`, `Orderoff` or `Unorder` key exists, so
+the data cross-check of the toggle keys has nothing to compare and the ON and OFF ids come from the
+class getters alone (`rechargeon`, `rechargeoff` are the strings the order registry maps to them).
+
+The same vtable shape holds for `CAbilityReplenishLife` (`Arpl`, vtable `0xfc37bc`) and
+`CAbilityReplenishMana` (`Arpm`, `0xfc3c48`), which are not bound (not needed by any probed chapter).

@@ -16,7 +16,7 @@ const SHARED_UPDATE: u32 = 0x20200;
 const SHARED_ACTIVATE: u32 = 0x20300;
 const SHARED_DELAY: u32 = 0x21000;
 /// Tables of vtables that share the ON handler but are not in `CLASS_NAMES`.
-const EXTRA_TABLES: u32 = 0x60000;
+const EXTRA_TABLES: u32 = 0x380000;
 const DELAY: f32 = 0.0625;
 const GROUP_SLOT: usize = 0x1b8;
 const HOOK_SLOT: usize = 0x348;
@@ -96,9 +96,9 @@ fn fixture(shift: u32, mask: u8) -> Vec<(u32, Vec<u8>, bool)> {
         (shift + SHARED_DELAY, DELAY.to_le_bytes().to_vec(), false),
     ];
     for (i, name) in CLASS_NAMES.iter().enumerate() {
-        let n = shift + 0x30000 + i as u32 * 0x1000;
-        let f = shift + 0x10000 + i as u32 * 0x1000;
-        let table = shift + 0x40000 + i as u32 * 0x1000;
+        let n = shift + 0x330000 + 0x14 + i as u32 * 0x1000;
+        let f = shift + 0x300000 + 0x28 + i as u32 * 0x1000;
+        let table = shift + 0x350000 + i as u32 * 0x1000;
         memory.push((n, format!("{name}\0").into_bytes(), false));
         memory.push((f, constant(n), true));
         memory.push((
@@ -292,14 +292,14 @@ fn selected_original_autocast_classes_bind() {
     let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
     for code in [
         b"Aweb", b"Afae", b"Aren", b"Ablo", b"AUfu", b"Arst", b"ANms", b"AEim", b"Arep", b"ANba",
-        b"Acrs",
+        b"Acrs", b"Ambt",
     ] {
         assert!(codes.contains(code), "missing autocast class {code:?}");
     }
     let class = |code: &[u8; 4]| rules.classes.iter().find(|c| c.code == *code).unwrap();
     // Inner Fire, Web, Raise Dead, Black Arrow and Heal share the decoded ON handler;
     // Mana Shield and Immolation override the update hook and stay undecoded.
-    for code in [b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea"] {
+    for code in [b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt"] {
         assert!(class(code).enable.is_some(), "no ON decode for {code:?}");
     }
     for code in [b"ANms", b"AEim"] {
@@ -309,6 +309,7 @@ fn selected_original_autocast_classes_bind() {
         );
     }
     assert_eq!(class(b"Ainf").enable.unwrap().group, 1);
+    assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);
     assert_eq!(class(b"Ainf").enable.unwrap().first_tick, 0.02);
     for pair in [(*b"Ahea", 1), (*b"Aslo", 1), (*b"AHfa", 2), (*b"ANba", 2)] {

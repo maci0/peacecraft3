@@ -417,6 +417,19 @@ fn toggle_keys_fall_back_to_order_unorder_when_no_orderoff_is_authored() {
 }
 
 #[test]
+fn toggle_ids_come_from_the_class_when_only_a_cast_order_is_authored() {
+    // The Mana Battery authors `Order=recharge` and no Orderon, Orderoff or Unorder.
+    let profile = b"[X002]\nOrder=repair\n";
+    let (mut vm, u) = open_with_profile("X001", true, profile);
+    vm.call("listen", &[]).unwrap();
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(
+        vm.host().inner.unit_autocast_enabled(u, *b"X002").unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
 fn enable_on_a_unit_without_the_ability_issues_nothing() {
     // The unit lacks the class ability, so the order is not issued rather than
     // refused as an unmodelled enable.

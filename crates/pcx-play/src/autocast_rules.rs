@@ -31,7 +31,7 @@ pub struct Rules {
     pub groups: Vec<([u8; 4], u32)>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
-const CLASS_NAMES: [&str; 16] = [
+const CLASS_NAMES: [&str; 17] = [
     "CAbilitySlow",
     "CAbilityInnerFire",
     "CAbilityHeal",
@@ -48,6 +48,7 @@ const CLASS_NAMES: [&str; 16] = [
     "CAbilityRepair",
     "CAbilityBlackArrow",
     "CAbilityCurse",
+    "CAbilityManaBattery",
 ];
 const SCANS_PER_CLASS: usize = 3;
 /// One data scan for the vtables that share an ON handler.

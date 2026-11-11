@@ -200,19 +200,22 @@ impl ObjectHost {
             if code.as_bytes() != class.code {
                 continue;
             }
-            // Most toggles author Orderon/Orderoff; Immolation authors only Order/Unorder.
-            let (on_key, off_key) =
-                if crate::ability_profile::profiles(tables, overlay, alias, "Orderoff")
-                    .map_err(fail)?
-                    .is_empty()
-                {
-                    ("Order", "Unorder")
-                } else {
-                    ("Orderon", "Orderoff")
-                };
-            for (key, wanted) in [(on_key, class.on), (off_key, class.off)] {
-                let profile =
-                    crate::ability_profile::profiles(tables, overlay, alias, key).map_err(fail)?;
+            // Most toggles author Orderon/Orderoff; Immolation authors only Order/Unorder; the Mana
+            // Battery authors neither (only its cast order `recharge`), so its ON and OFF ids come
+            // from the class alone.
+            let authored = |key| crate::ability_profile::profiles(tables, overlay, alias, key);
+            let keys = if !authored("Orderoff").map_err(fail)?.is_empty() {
+                Some(("Orderon", "Orderoff"))
+            } else if !authored("Unorder").map_err(fail)?.is_empty() {
+                Some(("Order", "Unorder"))
+            } else {
+                None
+            };
+            for (key, wanted) in keys
+                .into_iter()
+                .flat_map(|(on_key, off_key)| [(on_key, class.on), (off_key, class.off)])
+            {
+                let profile = authored(key).map_err(fail)?;
                 if profile.len() != 1
                     || self.order_registry.as_ref().and_then(|r| r.id(&profile[0])) != Some(wanted)
                 {
