@@ -25,7 +25,7 @@ limit refuses before `try_reserve`. Slot calls do not allocate handles.
 A per-unit record does not read the global integer, and a global assignment
 does not rewrite per-unit records. That separation is the retained state, not
 a measured rule about defaults, ceilings, or existing marketplace units.
-`AddUnitToStock`, the all-stock natives, `RemoveUnitFromStock`, restock
+The all-stock natives, `RemoveUnitFromStock`, restock
 delays, item categories, and marketplace enumeration stay unsupported.
 
 ## Item stock records
@@ -65,6 +65,31 @@ Unqualified, so not modelled as native: the exact write of `currentStock` and
 helpers `0x9a1620`, `0x9a00b0` and virtual calls not yet read), the eviction key
 meaning, whether a non-shop unit ever reaches a non-zero `0x6d6570` result, and
 the effect of `currentStock` and `stockMax` on sale and restock.
+
+## AddUnitToStock
+
+Registration push at `0x49e1ab` (name `0xe72dfc`), handler `0x489dc0`. It differs from
+`AddItemToStock` (`0x489690`) only in the component class: `0xb37bc0` returns `Asud`
+(`0x41737564`), where `0xb37ba0` returns `Asid` (`0x41736964`) for items. A null unit or a
+unit without that component returns silently. Otherwise it calls `0xb37690`, which
+compared instruction by instruction with the item add `0xb37430` has the same scan,
+eviction, stock write and age update at the same offsets (`+0x480` count, `+0xd0`
+cells, `+0x484` ages). `SetUnitTypeSlots` (`0x4abc30` to `0xb38340`) likewise mirrors
+`SetItemTypeSlots` (`0x4a9160` to `0xb38260`), including the clamp to `0xb` and the
+clearing of cells beyond the new count. The same unsigned clamp and the 12-cell table of
+`shop_table` therefore apply.
+
+Recreation: the stock table of a unit is keyed by unit and kind, so `AddUnitToStock` and
+`SetUnitTypeSlots` act on a second table that shares the item rules and the record budget
+(`stock unit records` on overflow). `ObjectHost::unit_stock` reads a cell. A unit with no
+`SetUnitTypeSlots` record refuses with `shop slot count is not assigned`.
+
+Open: the `Asud` constructor writes `0xb` to `+0x480` (`0xb353d8`), so a shop that never
+got `SetUnitTypeSlots` starts with 11 unit slots in the original. The recreation does not
+read that constructor immediate from the executable yet and refuses instead. TFT
+`UndeadX03` adds units to two `nmrk` marketplaces that only received `SetItemTypeSlots`, so it
+stops at that refusal. The constructor sits in a vtable slot (`0xf1b9b4`); the class
+factory (`0xaf585d`) selects it by the `Asud` code.
 
 `UpdateStockAvailability` (Blizzard.j 9944) reads only `GetItemType` and
 `GetItemLevel`, which were already admitted, and is not affected by this slice.

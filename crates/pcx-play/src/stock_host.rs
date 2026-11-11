@@ -18,6 +18,11 @@
 //! and the touched cell's age becomes 0. Eviction is not a refusal. A new stock record
 //! past `StockBudget::max_records` refuses before any cell changes.
 //!
+//! `AddUnitToStock` runs the same add on a second table of the same unit, the one
+//! `SetUnitTypeSlots` sizes. The native pair, the slot setter and the add helper are
+//! byte-identical apart from the component class (`Asud` for units, `Asid` for items).
+//! A unit with no `SetUnitTypeSlots` record has no slot count here, so the add refuses.
+//!
 //! `RemoveItemFromStock` clears the first cell, over all cells, whose item id matches.
 //! With no match it does nothing, as the native remove does.
 //!
@@ -35,6 +40,7 @@ const SET_ALL_UNIT: &str = "SetAllUnitTypeSlots";
 const SET_ITEM: &str = "SetItemTypeSlots";
 const SET_UNIT: &str = "SetUnitTypeSlots";
 const ADD_ITEM: &str = "AddItemToStock";
+const ADD_UNIT: &str = "AddUnitToStock";
 const REMOVE_ITEM: &str = "RemoveItemFromStock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +100,7 @@ struct Cell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Shop {
     unit: HandleId,
+    kind: SlotKind,
     cells: Vec<Cell>,
     ages: Vec<u32>,
 }
@@ -137,20 +144,22 @@ impl State {
                 .count()
     }
 
-    fn item_slots_of(&self, unit: HandleId) -> Option<usize> {
+    fn slots_of(&self, unit: HandleId, kind: SlotKind) -> Option<usize> {
         self.units
             .iter()
-            .find(|row| row.unit == unit && row.kind == SlotKind::Item)
+            .find(|row| row.unit == unit && row.kind == kind)
             .map(|row| effective_count(row.slots, self.shop.slot_ceiling()))
     }
 
-    fn shop_index(&self, unit: HandleId) -> Option<usize> {
-        self.shops.iter().position(|s| s.unit == unit)
+    fn shop_index(&self, unit: HandleId, kind: SlotKind) -> Option<usize> {
+        self.shops
+            .iter()
+            .position(|s| s.unit == unit && s.kind == kind)
     }
 
-    fn set_item_slots(&mut self, unit: HandleId, slots: i32) {
+    fn set_slots(&mut self, unit: HandleId, kind: SlotKind, slots: i32) {
         let count = effective_count(slots, self.shop.slot_ceiling());
-        if let Some(at) = self.shop_index(unit) {
+        if let Some(at) = self.shop_index(unit, kind) {
             for cell in self.shops[at].cells.iter_mut().skip(count) {
                 cell.stock = None;
             }
@@ -158,22 +167,26 @@ impl State {
         match self
             .units
             .iter_mut()
-            .find(|row| row.unit == unit && row.kind == SlotKind::Item)
+            .find(|row| row.unit == unit && row.kind == kind)
         {
             Some(row) => row.slots = slots,
-            None => self.units.push(UnitSlots {
-                unit,
-                kind: SlotKind::Item,
-                slots,
-            }),
+            None => self.units.push(UnitSlots { unit, kind, slots }),
         }
     }
 
-    fn add_item(&mut self, unit: HandleId, item: i32, stock: (i32, i32)) -> Result<(), Failure> {
+    /// The add shared by `AddItemToStock` and `AddUnitToStock`. `id` is the item or
+    /// unit type integer.
+    fn add_stock(
+        &mut self,
+        unit: HandleId,
+        kind: SlotKind,
+        item: i32,
+        stock: (i32, i32),
+    ) -> Result<(), Failure> {
         let count = self
-            .item_slots_of(unit)
+            .slots_of(unit, kind)
             .ok_or(Failure::StockState("shop slot count is not assigned"))?;
-        let at = match self.shop_index(unit) {
+        let at = match self.shop_index(unit, kind) {
             Some(at) => at,
             None => {
                 let mut cells = Vec::new();
@@ -185,7 +198,12 @@ impl State {
                 ages.try_reserve_exact(self.shop.cells())
                     .map_err(|_| Failure::Capacity)?;
                 ages.resize(self.shop.cells(), 0);
-                self.shops.push(Shop { unit, cells, ages });
+                self.shops.push(Shop {
+                    unit,
+                    kind,
+                    cells,
+                    ages,
+                });
                 self.shops.len() - 1
             }
         };
@@ -196,7 +214,10 @@ impl State {
             None => oldest_cell(&shop.ages[..count]),
         };
         if shop.cells[victim].stock.is_none() && self.records() >= self.max_records {
-            return Err(Failure::Budget("stock item records"));
+            return Err(Failure::Budget(match kind {
+                SlotKind::Item => "stock item records",
+                SlotKind::Unit => "stock unit records",
+            }));
         }
         let shop = &mut self.shops[at];
         shop.cells[victim] = Cell {
@@ -211,7 +232,7 @@ impl State {
     }
 
     fn remove_item(&mut self, unit: HandleId, item: i32) {
-        let Some(at) = self.shop_index(unit) else {
+        let Some(at) = self.shop_index(unit, SlotKind::Item) else {
             return;
         };
         if let Some(cell) = self.shops[at]
@@ -227,7 +248,7 @@ impl State {
 fn stock_native_name(name: &str) -> bool {
     matches!(
         name,
-        SET_ALL_ITEM | SET_ALL_UNIT | SET_ITEM | SET_UNIT | ADD_ITEM | REMOVE_ITEM
+        SET_ALL_ITEM | SET_ALL_UNIT | SET_ITEM | SET_UNIT | ADD_ITEM | ADD_UNIT | REMOVE_ITEM
     )
 }
 
@@ -268,7 +289,12 @@ impl ObjectHost {
             (SET_UNIT, &["unit", "integer"][..]),
             (ADD_ITEM, &["unit", "integer", "integer", "integer"][..]),
             (REMOVE_ITEM, &["unit", "integer"][..]),
+            (ADD_UNIT, &["unit", "integer", "integer", "integer"][..]),
         ] {
+            // Programs that predate the unit add declare no `AddUnitToStock`.
+            if name == ADD_UNIT && self.inner.program.natives().get(name).is_none() {
+                continue;
+            }
             Self::contract(&self.inner, name, parameters, "nothing", false, None)?;
             if self
                 .inner
@@ -331,11 +357,26 @@ impl ObjectHost {
         self.admitted_stock(ADD_ITEM)?;
         self.stock_unit(&Value::Handle(unit), ADD_ITEM)?;
         let state = self.admitted_stock(ADD_ITEM)?;
-        Ok(state.shop_index(unit).and_then(|at| {
+        Ok(state.shop_index(unit, SlotKind::Item).and_then(|at| {
             state.shops[at]
                 .cells
                 .iter()
                 .find(|c| c.item == Some(item))
+                .and_then(|c| c.stock)
+        }))
+    }
+
+    /// `(current, max)` integers that filled the cell holding one unit type in one unit's
+    /// unit shop. A missing record is `Ok(None)`.
+    pub fn unit_stock(&self, unit: HandleId, unit_type: i32) -> Result<Option<(i32, i32)>, Error> {
+        self.admitted_stock(ADD_UNIT)?;
+        self.stock_unit(&Value::Handle(unit), ADD_UNIT)?;
+        let state = self.admitted_stock(ADD_UNIT)?;
+        Ok(state.shop_index(unit, SlotKind::Unit).and_then(|at| {
+            state.shops[at]
+                .cells
+                .iter()
+                .find(|c| c.item == Some(unit_type))
                 .and_then(|c| c.stock)
         }))
     }
@@ -390,12 +431,16 @@ impl ObjectHost {
         if self.stock.is_none() || !stock_native_name(name) {
             return None;
         }
+        if name == ADD_UNIT && self.inner.program.natives().get(name).is_none() {
+            return None;
+        }
         Some(match name {
             SET_ALL_ITEM => self.set_all_slots(name, args, true),
             SET_ALL_UNIT => self.set_all_slots(name, args, false),
             SET_ITEM => self.set_unit_slots(name, args, SlotKind::Item),
             SET_UNIT => self.set_unit_slots(name, args, SlotKind::Unit),
-            ADD_ITEM => self.add_item_stock(name, args),
+            ADD_ITEM => self.add_stock(name, args, SlotKind::Item),
+            ADD_UNIT => self.add_stock(name, args, SlotKind::Unit),
             REMOVE_ITEM => self.remove_item_stock(name, args),
             _ => Err(self.inner.error(name, Failure::Signature)),
         })
@@ -434,36 +479,16 @@ impl ObjectHost {
         }
         let failure = {
             let state = self.stock.as_mut().expect("stock admitted");
-            if kind == SlotKind::Item {
-                let known = state
-                    .units
-                    .iter()
-                    .any(|row| row.unit == id && row.kind == kind);
-                if !known && state.records() >= state.max_records {
-                    Some(Failure::Budget("stock unit slots"))
-                } else if !known && state.units.try_reserve(1).is_err() {
-                    Some(Failure::Capacity)
-                } else {
-                    state.set_item_slots(id, slots);
-                    None
-                }
-            } else if let Some(row) = state
+            let known = state
                 .units
-                .iter_mut()
-                .find(|row| row.unit == id && row.kind == kind)
-            {
-                row.slots = slots;
-                None
-            } else if state.records() >= state.max_records {
+                .iter()
+                .any(|row| row.unit == id && row.kind == kind);
+            if !known && state.records() >= state.max_records {
                 Some(Failure::Budget("stock unit slots"))
-            } else if state.units.try_reserve(1).is_err() {
+            } else if !known && state.units.try_reserve(1).is_err() {
                 Some(Failure::Capacity)
             } else {
-                state.units.push(UnitSlots {
-                    unit: id,
-                    kind,
-                    slots,
-                });
+                state.set_slots(id, kind, slots);
                 None
             }
         };
@@ -473,7 +498,7 @@ impl ObjectHost {
         }
     }
 
-    fn add_item_stock(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn add_stock(&mut self, name: &str, args: &[Value], kind: SlotKind) -> Result<Value, Error> {
         let [unit, Value::Int(item), Value::Int(current), Value::Int(max)] = args else {
             return Err(self.inner.error(name, Failure::StockState("arguments")));
         };
@@ -482,7 +507,7 @@ impl ObjectHost {
             .stock
             .as_mut()
             .expect("stock admitted")
-            .add_item(unit, *item, (*current, *max))
+            .add_stock(unit, kind, *item, (*current, *max))
             .err();
         match failure {
             None => Ok(Value::Null),
@@ -533,7 +558,7 @@ impl ObjectHost {
         self.admitted_stock(ADD_ITEM)?;
         self.stock_unit(&Value::Handle(shop), SELL)?;
         let state = self.admitted_stock(ADD_ITEM)?;
-        Ok(state.shop_index(shop).and_then(|at| {
+        Ok(state.shop_index(shop, SlotKind::Item).and_then(|at| {
             state.shops[at]
                 .cells
                 .iter()

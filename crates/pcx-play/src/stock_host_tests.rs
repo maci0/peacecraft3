@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-const DECL: &str = "type widget extends agent\ntype unit extends widget\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\nnative AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing\nnative RemoveItemFromStock takes unit whichUnit, integer itemId returns nothing\n";
+const DECL: &str = "type widget extends agent\ntype unit extends widget\nnative CreateUnit takes player id, integer unitid, real x, real y, real face returns unit\nnative SetAllItemTypeSlots takes integer slots returns nothing\nnative SetAllUnitTypeSlots takes integer slots returns nothing\nnative SetItemTypeSlots takes unit whichUnit, integer slots returns nothing\nnative SetUnitTypeSlots takes unit whichUnit, integer slots returns nothing\nnative AddItemToStock takes unit whichUnit, integer itemId, integer currentStock, integer stockMax returns nothing\nnative RemoveItemFromStock takes unit whichUnit, integer itemId returns nothing\nnative AddUnitToStock takes unit whichUnit, integer unitId, integer currentStock, integer stockMax returns nothing\n";
 
 const MAP: &str = "globals\ninteger slots = 0\nplayer P = null\nunit U = null\nunit U2 = null\ntimer T = null\nendglobals\nfunction clear takes nothing returns nothing\ncall SetAllUnitTypeSlots(0)\nendfunction\nfunction main takes nothing returns nothing\nset slots = -4\ncall SetAllItemTypeSlots(slots)\ncall SetAllUnitTypeSlots(slots - 3)\nendfunction\nfunction place takes nothing returns nothing\nset P = Player(1)\nset U = CreateUnit(P, 1, 0.0, 0.0, 0.0)\nset U2 = CreateUnit(P, 1, 1.0, 0.0, 0.0)\nset T = CreateTimer()\nendfunction\nfunction configure takes nothing returns nothing\ncall SetItemTypeSlots(U, 0)\ncall SetItemTypeSlots(U, -1)\nendfunction\nfunction other_kind takes nothing returns nothing\ncall SetUnitTypeSlots(U, 5)\nendfunction\nfunction second takes nothing returns nothing\ncall SetItemTypeSlots(U2, 4)\nendfunction\nfunction replace takes nothing returns nothing\ncall SetAllItemTypeSlots(7)\nendfunction\nfunction bad_global takes nothing returns nothing\ncall SetAllItemTypeSlots(U)\nendfunction\nfunction bad_unit takes nothing returns nothing\ncall SetItemTypeSlots(T, 3)\nendfunction\nfunction stock_item takes nothing returns nothing\ncall AddItemToStock(U, 1, 1, 1)\nendfunction\nfunction stock_again takes nothing returns nothing\ncall AddItemToStock(U, 1, 4, 5)\nendfunction\nfunction stock_other takes nothing returns nothing\ncall AddItemToStock(U, 2, 1, 1)\nendfunction\nfunction stock_on_timer takes nothing returns nothing\ncall AddItemToStock(T, 1, 1, 1)\nendfunction\nfunction unstock_item takes nothing returns nothing\ncall RemoveItemFromStock(U, 1)\nendfunction\nfunction unstock_absent takes nothing returns nothing\ncall RemoveItemFromStock(U, 9)\nendfunction\n";
 
@@ -239,6 +239,152 @@ fn item_stock_cells_evict_by_age_and_removal_and_shrink_follow_the_engine() {
     assert_eq!(vm.host().item_stock(unit, 2).unwrap(), None);
     assert_eq!(vm.host().stock_item_records().unwrap(), 0);
     assert_eq!(vm.host().inner().handles(), placed);
+}
+
+#[test]
+fn unit_stock_cells_follow_the_item_rules_on_a_separate_table() {
+    let mut vm = opened(16);
+    vm.init_globals().unwrap();
+    vm.call("place", &[]).unwrap();
+    let unit = handle(&vm.global("U"));
+    let add =
+        |vm: &mut pcx_script::OwnedVm<ObjectHost>, kind: &str, id: i32, cur: i32, max: i32| {
+            vm.host().native(
+                kind,
+                &[
+                    Value::Handle(unit),
+                    Value::Int(id),
+                    Value::Int(cur),
+                    Value::Int(max),
+                ],
+            )
+        };
+    let refused = add(&mut vm, "AddUnitToStock", 1, 3, 3).unwrap_err();
+    assert!(refused.contains("slot count is not assigned"), "{refused}");
+    // An item slot count does not stand in for the unit slot count.
+    vm.host()
+        .native("SetItemTypeSlots", &[Value::Handle(unit), Value::Int(2)])
+        .unwrap();
+    assert!(add(&mut vm, "AddUnitToStock", 1, 3, 3).is_err());
+    vm.host()
+        .native("SetUnitTypeSlots", &[Value::Handle(unit), Value::Int(2)])
+        .unwrap();
+    assert_eq!(
+        add(&mut vm, "AddUnitToStock", 1, 3, 3).unwrap(),
+        Value::Null
+    );
+    add(&mut vm, "AddUnitToStock", 2, 2, 2).unwrap();
+    assert_eq!(vm.host().unit_stock(unit, 1).unwrap(), Some((3, 3)));
+    // The table is full: the oldest cell is evicted.
+    add(&mut vm, "AddUnitToStock", 3, 1, 1).unwrap();
+    assert_eq!(vm.host().unit_stock(unit, 1).unwrap(), None);
+    assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), Some((2, 2)));
+    assert_eq!(vm.host().unit_stock(unit, 3).unwrap(), Some((1, 1)));
+    // A repeated add replaces the integers in place.
+    add(&mut vm, "AddUnitToStock", 2, 7, 9).unwrap();
+    assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), Some((7, 9)));
+    // The item table of the same unit is untouched.
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), None);
+    add(&mut vm, "AddItemToStock", 2, 4, 4).unwrap();
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((4, 4)));
+    assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), Some((7, 9)));
+    // Shrinking the unit slot count clears the cells beyond it.
+    vm.host()
+        .native("SetUnitTypeSlots", &[Value::Handle(unit), Value::Int(1)])
+        .unwrap();
+    assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), None);
+    assert_eq!(vm.host().item_stock(unit, 2).unwrap(), Some((4, 4)));
+}
+
+#[test]
+fn unit_stock_refuses_bad_arguments_and_the_record_budget_without_a_write() {
+    let mut vm = opened(2);
+    vm.init_globals().unwrap();
+    vm.call("place", &[]).unwrap();
+    let unit = handle(&vm.global("U"));
+    let timer = handle(&vm.global("T"));
+    vm.host()
+        .native("SetUnitTypeSlots", &[Value::Handle(unit), Value::Int(3)])
+        .unwrap();
+    let wrong = vm
+        .host()
+        .native(
+            "AddUnitToStock",
+            &[
+                Value::Handle(timer),
+                Value::Int(1),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap_err();
+    assert!(wrong.contains("another family"), "{wrong}");
+    assert!(
+        vm.host()
+            .native("AddUnitToStock", &[Value::Handle(unit), Value::Int(1)])
+            .is_err()
+    );
+    // The slot record already takes one of the two records.
+    vm.host()
+        .native(
+            "AddUnitToStock",
+            &[
+                Value::Handle(unit),
+                Value::Int(1),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    let full = vm
+        .host()
+        .native(
+            "AddUnitToStock",
+            &[
+                Value::Handle(unit),
+                Value::Int(2),
+                Value::Int(1),
+                Value::Int(1),
+            ],
+        )
+        .unwrap_err();
+    assert!(full.contains("stock unit records"), "{full}");
+    assert_eq!(vm.host().unit_stock(unit, 1).unwrap(), Some((1, 1)));
+    assert_eq!(vm.host().unit_stock(unit, 2).unwrap(), None);
+}
+
+#[test]
+fn a_program_without_the_unit_add_declaration_leaves_it_unsupported() {
+    let decl = DECL.replace(
+        "native AddUnitToStock takes unit whichUnit, integer unitId, integer currentStock, integer stockMax returns nothing\n",
+        "",
+    );
+    let (host, ctx) = prepared(&decl, MAP, "synthetic:stock-no-unit-add");
+    let mut vm = host
+        .with_players(ctx, slots_rule(301, -3, 9), budget())
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(Fixture),
+            source(),
+            UnitBudget {
+                max_records: 4,
+                max_retained_fields: 1,
+                max_modifications: 0,
+            },
+        )
+        .unwrap()
+        .with_stock(StockBudget {
+            max_records: 4,
+            shop: shop(),
+        })
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    let error = vm
+        .host()
+        .native("AddUnitToStock", &[Value::Null])
+        .unwrap_err();
+    assert!(error.contains("unsupported"), "{error}");
 }
 
 #[test]
