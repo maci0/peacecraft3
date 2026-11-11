@@ -673,6 +673,12 @@ impl ObjectHost {
                 autocast_order: None,
             };
             for alias in ability_list(definition, "abilList", input.budget.abilities_per_unit)? {
+                // The unit creator (0x66ffda) ignores the result of the ability factory
+                // (0xaf3ba0), which returns no ability for an id without an object-data row.
+                // See `docs/re-notes/custom-object-resolution.md`.
+                if !input.defined(alias)? {
+                    continue;
+                }
                 // Resolve the same alias even when a custom row shares a stock code.
                 input.number(alias, "levels")?;
                 state
@@ -1328,6 +1334,14 @@ impl ObjectHost {
 }
 
 impl Admission {
+    /// Whether any object data defines the ability: a map record (custom or modified stock) or
+    /// a shipped row. An id with neither has no row to instantiate.
+    fn defined(&self, alias: [u8; 4]) -> Result<bool, String> {
+        let name = std::str::from_utf8(&alias).map_err(|_| "non-UTF8 ability alias")?;
+        Ok(self.overlay.new_object(name).is_some()
+            || !self.overlay.on(name).is_empty()
+            || self.tables.object(Family::Ability, name).is_ok())
+    }
     fn base(&self, alias: [u8; 4]) -> Result<(&str, &[pcx_objects::Mod]), String> {
         crate::ability_profile::base(&self.tables, &self.overlay, alias)
     }

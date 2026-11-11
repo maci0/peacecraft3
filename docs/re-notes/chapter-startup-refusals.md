@@ -453,3 +453,17 @@ First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is th
 |---|---|---|
 | TFT UndeadX07Interlude | `CreateUnit` refused: finite nonnegative unit `UnitBalance` `regenMana` required (`ubsp`, -3) | probe passes (`executed_units=42`) |
 | TFT NightElfX08 | `CreateUnit` at `war3map.j:1282` refused: `regenMana` required finite | passes; `SetReservedLocalHeroButtons` unsupported by this host (`war3map.j:2441`) |
+
+## Map-defined objects (2026-11-11)
+
+Details in [custom-object-resolution.md](custom-object-resolution.md). Probe run per chapter
+on the lane worktree, before is the `sweep6` log.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT HumanX02 | `CreateUnit` (`war3map.j:1969`): hero skills `Ability: no shipped object A001` (`nbal` lists an id with no object data) | passes; next `CreateUnit` for `ubsp` (`war3map.j:1987`): `UnitBalance regenMana` required finite nonnegative, shipped row is `-3` (drain rule undecoded) |
+| TFT UndeadX05 | `UnitAddItem` (`Blizzard.j:2640`): `Item: no shipped object I003` (custom item over `oven`) | passes the custom item; next `UnitAddItem` same call: `unsupported passive ability AIpb with code AIpb on oven` (Orb of Venom on-hit poison undecoded) |
+
+Also fixed without a probe change: the placement catalog read `w3h` (buffs) as the
+destructable member; it now reads `w3b`. Custom buffs (`w3h`) and custom item sale rows stay
+unresolved on their paths; no indexed chapter reaches them.

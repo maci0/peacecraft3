@@ -15,7 +15,14 @@ impl ObjectCatalog for Catalog {
         let mut fields = BTreeMap::new();
         fields.insert(
             *b"uabi",
-            ability_field("abilList", if code == *b"hypc" { "Yher" } else { "L000" }),
+            ability_field(
+                "abilList",
+                match &code {
+                    b"hypc" => "Yher",
+                    b"hund" => "L000,Zzzz",
+                    _ => "L000",
+                },
+            ),
         );
         let mut heroes = ability_field("heroAbilList", &self.list);
         heroes.metadata.as_mut().unwrap().fourcc = *b"uhab";
@@ -1772,4 +1779,55 @@ fn unit_ability_edits_change_the_listed_levels_and_refuse_hero_entries() {
         edit(&mut vm, "UnitRemoveAbility", hero, *b"Yher").is_err(),
         "the hero component refuses removal"
     );
+}
+
+fn create_unit(
+    vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+    rawcode: [u8; 4],
+) -> Result<Value, String> {
+    let player = vm.host().inner.native("Player", &[Value::Int(4)]).unwrap();
+    vm.host()
+        .inner
+        .native(
+            "CreateUnit",
+            &[
+                player,
+                Value::Int(i32::from_be_bytes(rawcode)),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[test]
+fn listed_ability_ids_without_object_data_are_skipped_at_creation() {
+    // `hund` lists `L000` and `Zzzz`; no table or map record defines `Zzzz`.
+    let mut vm = host(EDIT_NATIVES, "L001", Overlay::default(), "", 8);
+    let unit = create_unit(&mut vm, *b"hund").unwrap();
+    assert!(level_of(&mut vm, &unit, *b"L000") > 0);
+    assert_eq!(level_of(&mut vm, &unit, *b"Zzzz"), 0);
+}
+
+#[test]
+fn listed_ability_ids_defined_by_the_map_are_still_resolved() {
+    let mut overlay = Overlay::default();
+    overlay
+        .custom
+        .insert("Zzzz".into(), ("L000".into(), Vec::new()));
+    let mut vm = host(EDIT_NATIVES, "L001", overlay, "", 8);
+    let unit = create_unit(&mut vm, *b"hund").unwrap();
+    assert!(level_of(&mut vm, &unit, *b"Zzzz") > 0);
+}
+
+#[test]
+fn a_custom_ability_over_a_missing_base_still_refuses_creation() {
+    let mut overlay = Overlay::default();
+    overlay
+        .custom
+        .insert("Zzzz".into(), ("Qqqq".into(), Vec::new()));
+    let mut vm = host(EDIT_NATIVES, "L001", overlay, "", 8);
+    let error = create_unit(&mut vm, *b"hund").unwrap_err();
+    assert!(error.contains("no shipped object Qqqq"), "{error}");
 }
